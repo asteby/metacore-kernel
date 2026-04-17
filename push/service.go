@@ -3,14 +3,19 @@ package push
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
-	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -26,14 +31,17 @@ type Config struct {
 
 // Service is the transport-agnostic Push API.
 type Service struct {
-	db      *gorm.DB
-	pub     string
-	private string
-	subject string
-	client  *http.Client
+	db         *gorm.DB
+	pub        string
+	vapidPriv  *ecdh.PrivateKey  // for payload encryption
+	vapidECDSA *ecdsa.PrivateKey // for JWT signing
+	subject    string
+	client     *http.Client
 }
 
-// New returns a Service.
+// New returns a Service. If VAPIDPrivate is set it is parsed; if empty, Send
+// will still work but payloads are delivered unencrypted (useful in tests /
+// push services that don't require encryption).
 func New(cfg Config) *Service {
 	if cfg.DB == nil {
 		panic("push: Config.DB is required")
@@ -44,13 +52,24 @@ func New(cfg Config) *Service {
 	if cfg.VAPIDSubject == "" {
 		cfg.VAPIDSubject = "mailto:admin@example.com"
 	}
-	return &Service{
+	svc := &Service{
 		db:      cfg.DB,
 		pub:     cfg.VAPIDPublic,
-		private: cfg.VAPIDPrivate,
 		subject: cfg.VAPIDSubject,
 		client:  cfg.HTTPClient,
 	}
+	if cfg.VAPIDPrivate != "" {
+		privBytes, err := base64.RawURLEncoding.DecodeString(cfg.VAPIDPrivate)
+		if err == nil {
+			curve := ecdh.P256()
+			privKey, err := curve.NewPrivateKey(privBytes)
+			if err == nil {
+				svc.vapidPriv = privKey
+				svc.vapidECDSA, _ = ecdhToECDSA(privKey)
+			}
+		}
+	}
+	return svc
 }
 
 // PublicKey returns the VAPID public key the web client needs.
@@ -106,13 +125,18 @@ func (s *Service) Unsubscribe(ctx context.Context, endpoint string) error {
 
 // Payload is the notification envelope delivered to the service worker.
 type Payload struct {
-	Title string         `json:"title"`
-	Body  string         `json:"body"`
-	Icon  string         `json:"icon,omitempty"`
-	Badge string         `json:"badge,omitempty"`
-	URL   string         `json:"url,omitempty"`
-	Tag   string         `json:"tag,omitempty"`
-	Data  map[string]any `json:"data,omitempty"`
+	Title    string         `json:"title"`
+	Body     string         `json:"body"`
+	Icon     string         `json:"icon,omitempty"`
+	Badge    string         `json:"badge,omitempty"`
+	Image    string         `json:"image,omitempty"`
+	URL      string         `json:"url,omitempty"`
+	Tag      string         `json:"tag,omitempty"`
+	Data     map[string]any `json:"data,omitempty"`
+	Actions  []Action       `json:"actions,omitempty"`
+	Vibrate  []int          `json:"vibrate,omitempty"`
+	Silent   bool           `json:"silent,omitempty"`
+	Renotify bool           `json:"renotify,omitempty"`
 }
 
 // SendToUser fans out a payload to every subscription the user has.
@@ -130,21 +154,49 @@ func (s *Service) SendToSubscriptions(ctx context.Context, subs []PushSubscripti
 	return s.sendMany(ctx, subs, p)
 }
 
-// Send delivers to a single subscription. Returns the HTTP status observed.
+// Send delivers to a single subscription using AES128GCM payload encryption
+// and a proper VAPID JWT (RFC 8292). Returns the HTTP status observed.
 func (s *Service) Send(ctx context.Context, sub *PushSubscription, p Payload) (int, error) {
-	body, _ := json.Marshal(p)
+	plaintext, err := json.Marshal(p)
+	if err != nil {
+		return 0, err
+	}
+
+	var body []byte
+	contentType := "application/json"
+	contentEncoding := ""
+
+	if s.vapidPriv != nil && sub.P256DH != "" && sub.Auth != "" {
+		enc, err := encryptPayload(sub.P256DH, sub.Auth, plaintext)
+		if err != nil {
+			return 0, fmt.Errorf("push: encrypt: %w", err)
+		}
+		body = enc.ciphertext
+		contentType = "application/octet-stream"
+		contentEncoding = "aes128gcm"
+	} else {
+		body = plaintext
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, sub.Endpoint, bytes.NewReader(body))
 	if err != nil {
 		return 0, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("TTL", "86400")
-	// VAPID Authorization — a minimal implementation sufficient for most push
-	// services. Apps wanting AES128GCM encryption should plug a real webpush
-	// library via Config.HTTPClient's Transport.
-	if s.pub != "" {
-		req.Header.Set("Authorization", fmt.Sprintf(`vapid t="%s", k="%s"`, s.subject, s.pub))
+	req.Header.Set("Urgency", "high")
+	if contentEncoding != "" {
+		req.Header.Set("Content-Encoding", contentEncoding)
 	}
+
+	if s.vapidECDSA != nil && s.pub != "" {
+		token, err := s.createVAPIDToken(sub.Endpoint)
+		if err != nil {
+			return 0, fmt.Errorf("push: vapid jwt: %w", err)
+		}
+		req.Header.Set("Authorization", fmt.Sprintf("vapid t=%s, k=%s", token, s.pub))
+	}
+
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return 0, err
@@ -156,6 +208,45 @@ func (s *Service) Send(ctx context.Context, sub *PushSubscription, p Payload) (i
 		_ = s.Unsubscribe(ctx, sub.Endpoint)
 	}
 	return status, nil
+}
+
+// createVAPIDToken produces a signed ES256 JWT for the push endpoint's origin.
+func (s *Service) createVAPIDToken(endpoint string) (string, error) {
+	audience := endpoint
+	slashCount := 0
+	for i, c := range endpoint {
+		if c == '/' {
+			slashCount++
+			if slashCount == 3 {
+				audience = endpoint[:i]
+				break
+			}
+		}
+	}
+	claims := jwt.MapClaims{
+		"aud": audience,
+		"exp": time.Now().Add(12 * time.Hour).Unix(),
+		"sub": s.subject,
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+	return tok.SignedString(s.vapidECDSA)
+}
+
+// ecdhToECDSA converts a P-256 ECDH private key to an ECDSA key for JWT signing.
+func ecdhToECDSA(key *ecdh.PrivateKey) (*ecdsa.PrivateKey, error) {
+	privBytes := key.Bytes()
+	pubBytes := key.PublicKey().Bytes()
+	if len(pubBytes) != 65 || pubBytes[0] != 0x04 {
+		return nil, errors.New("push: unexpected public key format")
+	}
+	return &ecdsa.PrivateKey{
+		PublicKey: ecdsa.PublicKey{
+			Curve: elliptic.P256(),
+			X:     new(big.Int).SetBytes(pubBytes[1:33]),
+			Y:     new(big.Int).SetBytes(pubBytes[33:65]),
+		},
+		D: new(big.Int).SetBytes(privBytes),
+	}, nil
 }
 
 func (s *Service) sendMany(ctx context.Context, subs []PushSubscription, p Payload) error {
@@ -177,12 +268,3 @@ func (s *Service) Test(ctx context.Context, userID uuid.UUID) error {
 	})
 }
 
-// trim ensures a body is safe to log (dev aid).
-func trim(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return strings.TrimSpace(s[:max]) + "…"
-}
-
-var _ = trim // reserved for future logging use

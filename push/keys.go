@@ -1,8 +1,7 @@
 package push
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
 )
@@ -12,17 +11,16 @@ import (
 //
 //	pub, priv, _ := push.GenerateVAPIDKeys()
 //	// store pub/priv in your secret store, surface pub to the web client
+//
+// The public key is the 65-byte uncompressed point (0x04 || X || Y) which
+// browsers expect in navigator.serviceWorker PushSubscription.
 func GenerateVAPIDKeys() (publicKey, privateKey string, err error) {
-	curve := elliptic.P256()
-	priv, err := ecdsa.GenerateKey(curve, rand.Reader)
+	priv, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
 		return "", "", err
 	}
-	pub := elliptic.MarshalCompressed(curve, priv.PublicKey.X, priv.PublicKey.Y)
-	// webpush-go expects uncompressed point (0x04 | X | Y) — emit both forms.
-	uncompressed := elliptic.Marshal(curve, priv.PublicKey.X, priv.PublicKey.Y)
-	_ = pub
-	publicKey = base64.RawURLEncoding.EncodeToString(uncompressed)
-	privateKey = base64.RawURLEncoding.EncodeToString(priv.D.Bytes())
+	// PublicKey().Bytes() returns the uncompressed 65-byte point for P-256.
+	publicKey = base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes())
+	privateKey = base64.RawURLEncoding.EncodeToString(priv.Bytes())
 	return publicKey, privateKey, nil
 }

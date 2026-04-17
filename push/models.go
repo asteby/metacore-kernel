@@ -21,3 +21,10 @@ type PushSubscription struct {
 }
 
 func (PushSubscription) TableName() string { return "push_subscriptions" }
+
+// Action represents a notification action button shown by the service worker.
+type Action struct {
+	Action string `json:"action"`
+	Title  string `json:"title"`
+	Icon   string `json:"icon,omitempty"`
+}

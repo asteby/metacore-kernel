@@ -91,3 +91,77 @@ func TestGenerateToken_EmptySecret(t *testing.T) {
 		t.Fatal("expected error with empty secret")
 	}
 }
+
+// customClaims is a domain-specific claim set that extends jwt.RegisteredClaims.
+// This simulates what hub marketplace would use (Plan, Features, Audience).
+type customClaims struct {
+	jwt.RegisteredClaims
+	Plan     string   `json:"plan"`
+	Features []string `json:"features"`
+	Audience string   `json:"aud_key,omitempty"`
+}
+
+func TestGenerateTokenWithClaims_CustomRoundtrip(t *testing.T) {
+	secret := []byte("test-secret-custom")
+
+	now := time.Now()
+	c := &customClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+		},
+		Plan:     "pro",
+		Features: []string{"analytics", "export"},
+		Audience: "marketplace",
+	}
+
+	signed, err := GenerateTokenWithClaims(c, secret, 0)
+	if err != nil {
+		t.Fatalf("GenerateTokenWithClaims: %v", err)
+	}
+	if signed == "" {
+		t.Fatal("expected non-empty token")
+	}
+
+	var out customClaims
+	if err := ValidateTokenWithClaims(signed, secret, &out); err != nil {
+		t.Fatalf("ValidateTokenWithClaims: %v", err)
+	}
+	if out.Plan != "pro" {
+		t.Errorf("Plan mismatch: got %q want %q", out.Plan, "pro")
+	}
+	if len(out.Features) != 2 || out.Features[0] != "analytics" {
+		t.Errorf("Features mismatch: %v", out.Features)
+	}
+	if out.Audience != "marketplace" {
+		t.Errorf("Audience mismatch: got %q want %q", out.Audience, "marketplace")
+	}
+}
+
+func TestGenerateTokenWithClaims_EmptySecret(t *testing.T) {
+	if _, err := GenerateTokenWithClaims(&customClaims{}, nil, 0); err == nil {
+		t.Fatal("expected error with empty secret")
+	}
+}
+
+func TestValidateTokenWithClaims_MissingToken(t *testing.T) {
+	if err := ValidateTokenWithClaims("", []byte("x"), &customClaims{}); err != ErrMissingToken {
+		t.Fatalf("expected ErrMissingToken, got %v", err)
+	}
+}
+
+func TestValidateTokenWithClaims_WrongSecret(t *testing.T) {
+	c := &customClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		},
+		Plan: "free",
+	}
+	signed, err := GenerateTokenWithClaims(c, []byte("secret-a"), 0)
+	if err != nil {
+		t.Fatalf("GenerateTokenWithClaims: %v", err)
+	}
+	if err := ValidateTokenWithClaims(signed, []byte("secret-b"), &customClaims{}); err == nil {
+		t.Fatal("expected error with wrong secret")
+	}
+}

@@ -2,6 +2,7 @@ package ws
 
 import (
 	"log"
+	"sync"
 	"time"
 
 	"github.com/gofiber/websocket/v2"
@@ -21,6 +22,26 @@ type Client struct {
 	conn   *websocket.Conn
 	send   chan []byte
 	UserID uuid.UUID
+
+	// Context holds arbitrary app-level state (e.g. active conversation ID).
+	// Apps set this via SetContext; the hub reads it inside SendConditional.
+	// Access is protected by mu.
+	Context any
+	mu      sync.RWMutex
+}
+
+// SetContext stores arbitrary per-connection state for use in SendConditional predicates.
+func (c *Client) SetContext(ctx any) {
+	c.mu.Lock()
+	c.Context = ctx
+	c.mu.Unlock()
+}
+
+// GetContext retrieves the stored per-connection context.
+func (c *Client) GetContext() any {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Context
 }
 
 func (c *Client) readPump() {

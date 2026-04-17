@@ -1,6 +1,8 @@
 package host
 
 import (
+	"context"
+	"log/slog"
 	"os"
 	"time"
 
@@ -10,11 +12,14 @@ import (
 
 	"github.com/asteby/metacore-kernel/auth"
 	"github.com/asteby/metacore-kernel/dynamic"
+	kernellog "github.com/asteby/metacore-kernel/log"
 	"github.com/asteby/metacore-kernel/metadata"
+	"github.com/asteby/metacore-kernel/metrics"
+	"github.com/asteby/metacore-kernel/migrations"
 	"github.com/asteby/metacore-kernel/modelbase"
 	"github.com/asteby/metacore-kernel/permission"
-	metacorews "github.com/asteby/metacore-kernel/ws"
 	"github.com/asteby/metacore-kernel/push"
+	metacorews "github.com/asteby/metacore-kernel/ws"
 	"github.com/asteby/metacore-kernel/webhooks"
 )
 
@@ -45,6 +50,19 @@ type AppConfig struct {
 	// Permissions are optional — if nil, dynamic handler skips authz checks.
 	PermissionStore permission.PermissionStore
 
+	// Logger is the structured slog logger used by kernel middleware.
+	// If nil, a production-ready JSON logger is created automatically.
+	Logger *slog.Logger
+
+	// EnableMetrics mounts a Prometheus /metrics endpoint and request-level
+	// instrumentation middleware on the Fiber router passed to Mount.
+	EnableMetrics bool
+
+	// RunMigrations, when true, runs the versioned SQL migration runner
+	// (migrations.Runner) instead of GORM AutoMigrate during NewApp.
+	// Recommended for all production deployments.
+	RunMigrations bool
+
 	// Overrides
 	MetadataCacheTTL time.Duration // default 5m
 	JWTExpiry        time.Duration // default 24h
@@ -62,6 +80,9 @@ type App struct {
 	Push       *push.Service
 	Webhooks   *webhooks.Service
 	WSHub      *metacorews.Hub
+
+	// Metrics registry — non-nil when AppConfig.EnableMetrics is true.
+	Metrics *metrics.Registry
 
 	authHandler     *auth.Handler
 	metaHandler     *metadata.Handler
@@ -85,14 +106,28 @@ func NewApp(cfg AppConfig) *App {
 	if cfg.JWTExpiry == 0 {
 		cfg.JWTExpiry = 24 * time.Hour
 	}
-
-	// AutoMigrate kernel-owned tables so apps don't have to list them.
-	_ = cfg.DB.AutoMigrate(&modelbase.BaseUser{}, &modelbase.BaseOrganization{})
-	if cfg.EnableWebhooks {
-		_ = cfg.DB.AutoMigrate(&webhooks.Webhook{}, &webhooks.WebhookDelivery{})
+	if cfg.Logger == nil {
+		cfg.Logger = kernellog.Default()
 	}
-	if cfg.EnablePush {
-		_ = cfg.DB.AutoMigrate(&push.PushSubscription{})
+
+	if cfg.RunMigrations {
+		// Versioned migration runner — safe for production. Tracks applied
+		// versions in the goose_db_version table and is idempotent.
+		runner := migrations.Runner{}
+		if err := runner.Up(context.Background(), cfg.DB); err != nil {
+			panic("host: migration runner failed: " + err.Error())
+		}
+	} else {
+		// Deprecated: AutoMigrate is retained for local development and
+		// backward compatibility. Use AppConfig.RunMigrations=true in all
+		// production deployments to get versioned, auditable schema changes.
+		_ = cfg.DB.AutoMigrate(&modelbase.BaseUser{}, &modelbase.BaseOrganization{})
+		if cfg.EnableWebhooks {
+			_ = cfg.DB.AutoMigrate(&webhooks.Webhook{}, &webhooks.WebhookDelivery{})
+		}
+		if cfg.EnablePush {
+			_ = cfg.DB.AutoMigrate(&push.PushSubscription{})
+		}
 	}
 
 	authSvc := auth.New(cfg.DB, auth.Config{
@@ -123,6 +158,10 @@ func NewApp(cfg AppConfig) *App {
 		Metadata:   metaSvc,
 		Permission: permSvc,
 		Dynamic:    dynSvc,
+	}
+
+	if cfg.EnableMetrics {
+		a.Metrics = metrics.NewRegistry()
 	}
 
 	a.authHandler = auth.NewHandler(authSvc)
@@ -186,6 +225,15 @@ func (a *App) RegisterModel(key string, factory func() modelbase.ModelDefiner) *
 // Returns the authenticated sub-router so apps can add their own routes
 // (including the dynamic CRUD handler once that package is implemented).
 func (a *App) Mount(r fiber.Router) fiber.Router {
+	// Structured logging — injects request_id and logs every request.
+	r.Use(kernellog.FiberMiddleware(a.Config.Logger))
+
+	// Prometheus metrics — increments counters and observes latency.
+	if a.Metrics != nil {
+		r.Use(metrics.FiberMiddleware(a.Metrics))
+		r.Get("/metrics", metrics.Handler(a.Metrics))
+	}
+
 	mw := auth.Middleware(auth.MiddlewareConfig{
 		Secret:  a.Config.JWTSecret,
 		Skipper: a.Config.AuthMiddlewareSkipper,

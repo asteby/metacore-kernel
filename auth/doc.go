@@ -39,4 +39,26 @@
 //	}
 //
 // This matches what @asteby/metacore-auth on the frontend already expects.
+//
+// # Custom / domain-specific JWT claims
+//
+// The default Claims struct (UserID, OrganizationID, Email, Role) covers most
+// cases. When an app needs extra fields (e.g. Plan, Features, Audience), use
+// the generic helpers:
+//
+//	type MarketplaceClaims struct {
+//	    jwt.RegisteredClaims
+//	    Plan     string   `json:"plan"`
+//	    Features []string `json:"features"`
+//	}
+//
+//	// Signing
+//	signed, err := auth.GenerateTokenWithClaims(&mc, secret, 24*time.Hour)
+//
+//	// Validation
+//	var out MarketplaceClaims
+//	err = auth.ValidateTokenWithClaims(signed, secret, &out)
+//
+// The default GenerateToken/ValidateToken functions remain unchanged for full
+// backward compatibility.
 package auth
