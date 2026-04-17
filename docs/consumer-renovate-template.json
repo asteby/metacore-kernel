@@ -1,0 +1,35 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommits"],
+  "schedule": ["before 6am on monday"],
+  "packageRules": [
+    {
+      "matchManagers": ["gomod"],
+      "matchPackagePatterns": ["^github.com/asteby/metacore-kernel"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true,
+      "platformAutomerge": true,
+      "groupName": "metacore-kernel"
+    },
+    {
+      "matchManagers": ["gomod"],
+      "matchPackagePatterns": ["^github.com/asteby/metacore-kernel"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["breaking", "review-required"]
+    },
+    {
+      "matchManagers": ["gomod"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true,
+      "platformAutomerge": true
+    }
+  ],
+  "hostRules": [
+    {
+      "matchHost": "github.com",
+      "hostType": "go",
+      "token": "{{ secrets.RENOVATE_GITHUB_TOKEN }}"
+    }
+  ]
+}

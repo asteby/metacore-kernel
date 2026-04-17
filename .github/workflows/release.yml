@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Run tests
+        run: go test -race ./...
+
+      - name: Notify Go proxy
+        # Go proxy auto-indexa al hacer push de tag, pero acelera con goproxy request
+        run: |
+          MODULE="github.com/asteby/metacore-kernel"
+          TAG="${GITHUB_REF#refs/tags/}"
+          curl -s "https://proxy.golang.org/${MODULE}/@v/${TAG}.info" || true
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dispatch consumer bumps
+        # Opcional: dispara workflows en apps consumidoras para que corran Renovate ahora mismo
+        run: |
+          for REPO in asteby/ops asteby/link asteby/pilot asteby/doctores.lat asteby/p2p asteby/visor asteby/operador360; do
+            gh api -X POST "repos/${REPO}/dispatches" -f event_type=metacore-kernel-released || true
+          done
+        env:
+          GH_TOKEN: ${{ secrets.CROSSREPO_DISPATCH_TOKEN }}
+        continue-on-error: true
