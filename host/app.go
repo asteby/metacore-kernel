@@ -13,6 +13,7 @@ import (
 	"github.com/asteby/metacore-kernel/metadata"
 	"github.com/asteby/metacore-kernel/modelbase"
 	"github.com/asteby/metacore-kernel/permission"
+	metacorews "github.com/asteby/metacore-kernel/ws"
 	"github.com/asteby/metacore-kernel/push"
 	"github.com/asteby/metacore-kernel/webhooks"
 )
@@ -60,6 +61,7 @@ type App struct {
 	Dynamic    *dynamic.Service
 	Push       *push.Service
 	Webhooks   *webhooks.Service
+	WSHub      *metacorews.Hub
 
 	authHandler     *auth.Handler
 	metaHandler     *metadata.Handler
@@ -96,6 +98,10 @@ func NewApp(cfg AppConfig) *App {
 	authSvc := auth.New(cfg.DB, auth.Config{
 		JWTSecret: cfg.JWTSecret,
 		JWTExpiry: cfg.JWTExpiry,
+	}).WithUserModel(func() modelbase.AuthUser {
+		return &modelbase.BaseUser{}
+	}).WithOrgModel(func() modelbase.AuthOrg {
+		return &modelbase.BaseOrganization{}
 	})
 
 	metaSvc := metadata.New(metadata.Config{CacheTTL: cfg.MetadataCacheTTL})
@@ -121,7 +127,18 @@ func NewApp(cfg AppConfig) *App {
 
 	a.authHandler = auth.NewHandler(authSvc)
 	a.metaHandler = metadata.NewHandler(metaSvc)
-	a.dynHandler = dynamic.NewHandler(dynSvc, nil)
+	a.dynHandler = dynamic.NewHandler(dynSvc, func(c *fiber.Ctx) modelbase.AuthUser {
+		uid := auth.GetUserID(c)
+		orgID := auth.GetOrganizationID(c)
+		role := auth.GetRole(c)
+		email := auth.GetEmail(c)
+		u := &modelbase.BaseUser{}
+		u.ID = uid
+		u.OrganizationID = orgID
+		u.Role = string(role)
+		u.Email = email
+		return u
+	})
 
 	if cfg.EnablePush {
 		a.Push = push.New(push.Config{
@@ -146,6 +163,10 @@ func NewApp(cfg AppConfig) *App {
 		}
 		a.webhooksHandler = webhooks.NewHandler(a.Webhooks, resolver)
 	}
+
+	// WebSocket hub — always available
+	a.WSHub = metacorews.NewHub()
+	go a.WSHub.Run()
 
 	return a
 }
@@ -176,7 +197,7 @@ func (a *App) Mount(r fiber.Router) fiber.Router {
 	// Authenticated endpoints
 	api := r.Group("", mw)
 	a.metaHandler.Mount(api.Group("/metadata"))
-	a.dynHandler.Mount(api.Group("/admin"))
+	a.dynHandler.Mount(api.Group(""))
 
 	if a.pushHandler != nil {
 		a.pushHandler.Mount(api.Group("/push"))
@@ -184,6 +205,11 @@ func (a *App) Mount(r fiber.Router) fiber.Router {
 	if a.webhooksHandler != nil {
 		a.webhooksHandler.Mount(api.Group("/webhooks"))
 	}
+
+	// WebSocket — mounted with query-string auth (token in ?token=)
+	metacorews.Mount(r, a.WSHub, auth.Middleware(auth.MiddlewareConfig{
+		Secret: a.Config.JWTSecret,
+	}), "user_id")
 
 	return api
 }
