@@ -1,0 +1,216 @@
+package push
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+
+	"github.com/google/uuid"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+)
+
+func setupTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		DisableForeignKeyConstraintWhenMigrating: true,
+	})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	// SQLite does not support gen_random_uuid(), so we create the table manually
+	// and rely on the BeforeCreate hook to generate UUIDs.
+	db.Exec(`CREATE TABLE IF NOT EXISTS push_subscriptions (
+		id TEXT PRIMARY KEY,
+		organization_id TEXT,
+		created_by_id TEXT,
+		created_at DATETIME,
+		updated_at DATETIME,
+		deleted_at DATETIME,
+		user_id TEXT,
+		endpoint TEXT UNIQUE,
+		p256_dh TEXT,
+		auth TEXT,
+		device_type TEXT,
+		user_agent TEXT,
+		last_used_at DATETIME
+	)`)
+	return db
+}
+
+func setupService(t *testing.T, db *gorm.DB, client *http.Client) *Service {
+	t.Helper()
+	cfg := Config{DB: db}
+	if client != nil {
+		cfg.HTTPClient = client
+	}
+	return New(cfg)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+func TestSubscribe(t *testing.T) {
+	db := setupTestDB(t)
+	svc := setupService(t, db, nil)
+	userID := uuid.New()
+
+	sub, err := svc.Subscribe(context.Background(), userID, SubscriptionInput{
+		Endpoint:   "https://push.example.com/sub1",
+		P256DH:     "key1",
+		Auth:       "auth1",
+		DeviceType: "desktop",
+	})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if sub.ID == uuid.Nil {
+		t.Fatal("expected non-nil ID")
+	}
+	if sub.Endpoint != "https://push.example.com/sub1" {
+		t.Fatalf("endpoint = %q", sub.Endpoint)
+	}
+
+	var count int64
+	db.Model(&PushSubscription{}).Count(&count)
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
+	}
+}
+
+func TestSubscribeUpsert(t *testing.T) {
+	db := setupTestDB(t)
+	svc := setupService(t, db, nil)
+	userID := uuid.New()
+	endpoint := "https://push.example.com/upsert"
+
+	_, err := svc.Subscribe(context.Background(), userID, SubscriptionInput{Endpoint: endpoint, P256DH: "a", Auth: "a"})
+	if err != nil {
+		t.Fatalf("first subscribe: %v", err)
+	}
+
+	_, err = svc.Subscribe(context.Background(), userID, SubscriptionInput{Endpoint: endpoint, P256DH: "b", Auth: "b"})
+	if err != nil {
+		t.Fatalf("second subscribe: %v", err)
+	}
+
+	var count int64
+	db.Model(&PushSubscription{}).Count(&count)
+	if count != 1 {
+		t.Fatalf("count = %d, want 1 (upsert should not create duplicate)", count)
+	}
+}
+
+func TestUnsubscribe(t *testing.T) {
+	db := setupTestDB(t)
+	svc := setupService(t, db, nil)
+	userID := uuid.New()
+	endpoint := "https://push.example.com/unsub"
+
+	_, err := svc.Subscribe(context.Background(), userID, SubscriptionInput{Endpoint: endpoint, P256DH: "k", Auth: "a"})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	if err := svc.Unsubscribe(context.Background(), endpoint); err != nil {
+		t.Fatalf("unsubscribe: %v", err)
+	}
+
+	var count int64
+	db.Model(&PushSubscription{}).Count(&count)
+	if count != 0 {
+		t.Fatalf("count = %d, want 0 after unsubscribe", count)
+	}
+}
+
+func TestSend(t *testing.T) {
+	var received atomic.Value
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		received.Store(body)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer ts.Close()
+
+	db := setupTestDB(t)
+	svc := setupService(t, db, ts.Client())
+	userID := uuid.New()
+
+	sub, err := svc.Subscribe(context.Background(), userID, SubscriptionInput{
+		Endpoint: ts.URL + "/push",
+		P256DH:   "k",
+		Auth:     "a",
+	})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	status, err := svc.Send(context.Background(), sub, Payload{Title: "Hello", Body: "World"})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", status)
+	}
+
+	raw, ok := received.Load().([]byte)
+	if !ok || raw == nil {
+		t.Fatal("server did not receive payload")
+	}
+	var p Payload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if p.Title != "Hello" {
+		t.Fatalf("title = %q, want Hello", p.Title)
+	}
+}
+
+func TestAutoCleanup410(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusGone)
+	}))
+	defer ts.Close()
+
+	db := setupTestDB(t)
+	svc := setupService(t, db, ts.Client())
+	userID := uuid.New()
+
+	sub, err := svc.Subscribe(context.Background(), userID, SubscriptionInput{
+		Endpoint: ts.URL + "/gone",
+		P256DH:   "k",
+		Auth:     "a",
+	})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	status, err := svc.Send(context.Background(), sub, Payload{Title: "Bye"})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if status != http.StatusGone {
+		t.Fatalf("status = %d, want 410", status)
+	}
+
+	var count int64
+	db.Model(&PushSubscription{}).Count(&count)
+	if count != 0 {
+		t.Fatalf("count = %d, want 0 (410 should auto-delete subscription)", count)
+	}
+}
+
+func TestSubscribeEmptyEndpoint(t *testing.T) {
+	db := setupTestDB(t)
+	svc := setupService(t, db, nil)
+
+	_, err := svc.Subscribe(context.Background(), uuid.New(), SubscriptionInput{Endpoint: ""})
+	if err == nil {
+		t.Fatal("expected error for empty endpoint")
+	}
+}
