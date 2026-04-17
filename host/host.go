@@ -6,7 +6,7 @@ package host
 import (
 	"github.com/asteby/metacore-kernel/installer"
 	"github.com/asteby/metacore-kernel/lifecycle"
-	"github.com/asteby/metacore-sdk/pkg/manifest"
+	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/navigation"
 	"github.com/asteby/metacore-kernel/runtime/wasm"
 	"github.com/google/uuid"

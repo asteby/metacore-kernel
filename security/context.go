@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/asteby/metacore-sdk/pkg/manifest"
+	"github.com/asteby/metacore-kernel/manifest"
 )
 
 // Capabilities is the compiled policy derived from an addon's declared

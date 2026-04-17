@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/asteby/metacore-sdk/pkg/manifest"
+	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
 )

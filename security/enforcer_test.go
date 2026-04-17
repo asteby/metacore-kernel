@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/asteby/metacore-sdk/pkg/manifest"
+	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/security"
 )
 

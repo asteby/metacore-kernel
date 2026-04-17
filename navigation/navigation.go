@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/asteby/metacore-sdk/pkg/manifest"
+	"github.com/asteby/metacore-kernel/manifest"
 )
 
 // Item is the serialized sidebar entry returned to the frontend.

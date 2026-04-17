@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/asteby/metacore-sdk/pkg/manifest"
+	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
 	"github.com/tetratelabs/wazero"

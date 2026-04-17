@@ -9,7 +9,7 @@ package lifecycle
 import (
 	"sync"
 
-	"github.com/asteby/metacore-sdk/pkg/manifest"
+	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )

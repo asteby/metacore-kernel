@@ -5,8 +5,8 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/asteby/metacore-sdk/pkg/bundle"
-	"github.com/asteby/metacore-sdk/pkg/manifest"
+	"github.com/asteby/metacore-kernel/bundle"
+	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
 )
