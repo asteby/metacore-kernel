@@ -1,6 +1,8 @@
 package dynamic
 
 import (
+	"strconv"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 
@@ -38,6 +40,17 @@ func (h *Handler) Mount(r fiber.Router, middleware ...fiber.Handler) {
 	g.Get("/:model/:id", h.get)
 	g.Put("/:model/:id", h.update)
 	g.Delete("/:model/:id", h.delete)
+}
+
+// MountOptions attaches options + search lookups. These are mounted outside
+// the /dynamic prefix because existing apps expose them at /api/options/:model
+// and /api/search/:model, and preserving those paths avoids a frontend change.
+//
+//	GET    /options/:model    Options (by ?field=...)
+//	GET    /search/:model     Search  (by ?q=... or ?search=...)
+func (h *Handler) MountOptions(r fiber.Router, middleware ...fiber.Handler) {
+	r.Get("/options/:model", append(middleware, h.options)...)
+	r.Get("/search/:model", append(middleware, h.search)...)
 }
 
 func (h *Handler) user(c *fiber.Ctx) modelbase.AuthUser {
@@ -130,14 +143,62 @@ func (h *Handler) delete(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"success": true})
 }
 
+func (h *Handler) options(c *fiber.Ctx) error {
+	u := h.user(c)
+	q := OptionsQuery{
+		Model:       c.Params("model"),
+		Field:       c.Query("field"),
+		Q:           c.Query("q"),
+		FilterValue: c.Query("filter_value"),
+	}
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			q.Limit = n
+		}
+	}
+	if v := c.Query("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			q.Offset = n
+		}
+	}
+	res, err := h.service.Options(c.Context(), u, q)
+	if err != nil {
+		return h.handleError(c, err)
+	}
+	return c.JSON(fiber.Map{"success": true, "data": res.Options, "type": res.Type})
+}
+
+func (h *Handler) search(c *fiber.Ctx) error {
+	u := h.user(c)
+	q := SearchQuery{
+		Model: c.Params("model"),
+		Q:     c.Query("q"),
+	}
+	if q.Q == "" {
+		q.Q = c.Query("search")
+	}
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			q.Limit = n
+		}
+	}
+	hits, err := h.service.Search(c.Context(), u, q)
+	if err != nil {
+		return h.handleError(c, err)
+	}
+	return c.JSON(fiber.Map{"success": true, "data": hits})
+}
+
 func (h *Handler) handleError(c *fiber.Ctx, err error) error {
 	switch err {
-	case ErrModelNotFound:
-		return respondErr(c, fiber.StatusNotFound, err.Error())
-	case ErrRecordNotFound:
+	case ErrModelNotFound, ErrRecordNotFound, ErrSourceModelNotFound, ErrOptionsFieldNotFound:
 		return respondErr(c, fiber.StatusNotFound, err.Error())
 	case ErrForbidden:
 		return respondErr(c, fiber.StatusForbidden, err.Error())
+	case ErrFieldRequired, ErrInvalidInput:
+		return respondErr(c, fiber.StatusBadRequest, err.Error())
+	case ErrNoOptionsConfig, ErrNoSearchConfig:
+		return respondErr(c, fiber.StatusNotImplemented, err.Error())
 	default:
 		if err.Error() == "permission denied" {
 			return respondErr(c, fiber.StatusForbidden, err.Error())
