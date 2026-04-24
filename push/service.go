@@ -27,6 +27,13 @@ type Config struct {
 	VAPIDPrivate string
 	VAPIDSubject string // mailto:ops@example.com
 	HTTPClient   *http.Client
+
+	// OnExpiredEndpoint, if non-nil, is called instead of the default hard-delete
+	// when the push provider returns 404 Not Found or 410 Gone for a subscription.
+	// Apps that store their own subscription rows (e.g. with an is_active column
+	// or org-scoped soft-delete) can use this hook to flip their own state and
+	// skip the kernel's own Unsubscribe.
+	OnExpiredEndpoint func(ctx context.Context, sub *PushSubscription) error
 }
 
 // Service is the transport-agnostic Push API.
@@ -37,6 +44,7 @@ type Service struct {
 	vapidECDSA *ecdsa.PrivateKey // for JWT signing
 	subject    string
 	client     *http.Client
+	onExpired  func(ctx context.Context, sub *PushSubscription) error
 }
 
 // New returns a Service. If VAPIDPrivate is set it is parsed; if empty, Send
@@ -53,10 +61,11 @@ func New(cfg Config) *Service {
 		cfg.VAPIDSubject = "mailto:admin@example.com"
 	}
 	svc := &Service{
-		db:      cfg.DB,
-		pub:     cfg.VAPIDPublic,
-		subject: cfg.VAPIDSubject,
-		client:  cfg.HTTPClient,
+		db:        cfg.DB,
+		pub:       cfg.VAPIDPublic,
+		subject:   cfg.VAPIDSubject,
+		client:    cfg.HTTPClient,
+		onExpired: cfg.OnExpiredEndpoint,
 	}
 	if cfg.VAPIDPrivate != "" {
 		privBytes, err := base64.RawURLEncoding.DecodeString(cfg.VAPIDPrivate)
@@ -204,10 +213,22 @@ func (s *Service) Send(ctx context.Context, sub *PushSubscription, p Payload) (i
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	status := resp.StatusCode
-	if status == http.StatusNotFound || status == http.StatusGone {
-		_ = s.Unsubscribe(ctx, sub.Endpoint)
+	if IsExpiredStatus(status) {
+		if s.onExpired != nil {
+			_ = s.onExpired(ctx, sub)
+		} else {
+			_ = s.Unsubscribe(ctx, sub.Endpoint)
+		}
 	}
 	return status, nil
+}
+
+// IsExpiredStatus reports whether an HTTP response status from a push endpoint
+// means the subscription is permanently unavailable (404 Not Found or 410 Gone),
+// per RFC 8030. Useful for apps that call Send directly and want to react
+// without wiring the OnExpiredEndpoint hook.
+func IsExpiredStatus(status int) bool {
+	return status == http.StatusNotFound || status == http.StatusGone
 }
 
 // createVAPIDToken produces a signed ES256 JWT for the push endpoint's origin.
