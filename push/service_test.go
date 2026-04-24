@@ -205,6 +205,79 @@ func TestAutoCleanup410(t *testing.T) {
 	}
 }
 
+func TestOnExpiredEndpointHook(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusGone)
+	}))
+	defer ts.Close()
+
+	db := setupTestDB(t)
+
+	var hookCalled atomic.Bool
+	var capturedEndpoint atomic.Value
+	cfg := Config{
+		DB:         db,
+		HTTPClient: ts.Client(),
+		OnExpiredEndpoint: func(ctx context.Context, sub *PushSubscription) error {
+			hookCalled.Store(true)
+			capturedEndpoint.Store(sub.Endpoint)
+			return nil
+		},
+	}
+	svc := New(cfg)
+	userID := uuid.New()
+
+	sub, err := svc.Subscribe(context.Background(), userID, SubscriptionInput{
+		Endpoint: ts.URL + "/gone",
+		P256DH:   "k",
+		Auth:     "a",
+	})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	status, err := svc.Send(context.Background(), sub, Payload{Title: "Bye"})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if status != http.StatusGone {
+		t.Fatalf("status = %d, want 410", status)
+	}
+
+	if !hookCalled.Load() {
+		t.Fatal("OnExpiredEndpoint hook was not called")
+	}
+	if got := capturedEndpoint.Load(); got != ts.URL+"/gone" {
+		t.Fatalf("hook got endpoint = %v, want %q", got, ts.URL+"/gone")
+	}
+
+	// With hook set, the kernel must NOT perform its default Unsubscribe.
+	var count int64
+	db.Model(&PushSubscription{}).Count(&count)
+	if count != 1 {
+		t.Fatalf("count = %d, want 1 (hook owns the cleanup, kernel must not hard-delete)", count)
+	}
+}
+
+func TestIsExpiredStatus(t *testing.T) {
+	cases := []struct {
+		status int
+		want   bool
+	}{
+		{http.StatusOK, false},
+		{http.StatusCreated, false},
+		{http.StatusNotFound, true},
+		{http.StatusGone, true},
+		{http.StatusInternalServerError, false},
+		{http.StatusTooManyRequests, false},
+	}
+	for _, c := range cases {
+		if got := IsExpiredStatus(c.status); got != c.want {
+			t.Errorf("IsExpiredStatus(%d) = %v, want %v", c.status, got, c.want)
+		}
+	}
+}
+
 func TestSubscribeEmptyEndpoint(t *testing.T) {
 	db := setupTestDB(t)
 	svc := setupService(t, db, nil)
