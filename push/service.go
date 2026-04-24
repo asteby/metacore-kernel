@@ -13,6 +13,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -161,6 +162,47 @@ func (s *Service) SendToUser(ctx context.Context, userID uuid.UUID, p Payload) e
 // broadcast to an org by joining push_subscriptions with users).
 func (s *Service) SendToSubscriptions(ctx context.Context, subs []PushSubscription, p Payload) error {
 	return s.sendMany(ctx, subs, p)
+}
+
+// TenantResolver returns the subscriptions that belong to a tenant (org, team,
+// workspace, etc.) as of the current call. Apps that maintain their own
+// subscription tables — typically with an organization_id column and a soft-
+// delete flag — plug in here so the kernel can drive the fanout.
+type TenantResolver func(ctx context.Context, tenantID uuid.UUID) ([]PushSubscription, error)
+
+// BroadcastToOrg delivers a payload to every subscription the resolver returns
+// for a tenant, in parallel. Errors from individual sends are collected and
+// the first is returned, matching the sequential fanout semantics of
+// SendToUser / SendToSubscriptions while exploiting concurrency for
+// org-sized audiences.
+func (s *Service) BroadcastToOrg(ctx context.Context, tenantID uuid.UUID, resolver TenantResolver, p Payload) error {
+	if resolver == nil {
+		return errors.New("push: BroadcastToOrg requires a resolver")
+	}
+	subs, err := resolver(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	if len(subs) == 0 {
+		return nil
+	}
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(subs))
+	for i := range subs {
+		wg.Add(1)
+		go func(sub *PushSubscription) {
+			defer wg.Done()
+			if _, sendErr := s.Send(ctx, sub, p); sendErr != nil {
+				errCh <- sendErr
+			}
+		}(&subs[i])
+	}
+	wg.Wait()
+	close(errCh)
+	if firstErr, ok := <-errCh; ok {
+		return firstErr
+	}
+	return nil
 }
 
 // Send delivers to a single subscription using AES128GCM payload encryption
