@@ -57,7 +57,7 @@ func (s *Service) Options(ctx context.Context, user modelbase.AuthUser, q Option
 	if s.optsResolver == nil {
 		return nil, ErrNoOptionsConfig
 	}
-	instance, ok := modelbase.Get(q.Model)
+	instance, ok := s.lookupModel(ctx, q.Model)
 	if !ok {
 		return nil, ErrModelNotFound
 	}
@@ -112,7 +112,7 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 	if fieldCfg.Source == "" {
 		return nil, fmt.Errorf("%w: source required for dynamic options", ErrInvalidInput)
 	}
-	sourceInstance, ok := modelbase.Get(fieldCfg.Source)
+	sourceInstance, ok := s.lookupModel(ctx, fieldCfg.Source)
 	if !ok {
 		return nil, ErrSourceModelNotFound
 	}

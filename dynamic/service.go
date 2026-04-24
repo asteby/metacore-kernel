@@ -44,7 +44,18 @@ type Config struct {
 	//        return fmt.Sprintf("unaccent(%s) ILIKE unaccent(?)", col), "%" + q + "%"
 	//    }
 	SearchMatchClause SearchMatchClause
+
+	// ModelResolver returns a live instance of a registered model by name.
+	// Apps that keep their own model registry (e.g. meta-core/models with
+	// an addon-populated table) plug it here. When nil, modelbase.Get is
+	// used — which only covers models explicitly registered at package init.
+	ModelResolver ModelResolver
 }
+
+// ModelResolver lets apps supply their own model-name → instance lookup. The
+// returned instance must implement modelbase.ModelDefiner (for TableName +
+// DefineTable) so the CRUD paths keep working unchanged.
+type ModelResolver func(ctx context.Context, model string) (any, bool)
 
 // SearchMatchClause is the app-supplied builder used by Service.Search to
 // turn a (column, query) pair into a SQL predicate + bind value. Returning
@@ -68,6 +79,7 @@ type Service struct {
 	optsResolver   OptionsConfigResolver
 	searchResolver SearchConfigResolver
 	matchClause    SearchMatchClause
+	modelResolver  ModelResolver
 }
 
 // New constructs a dynamic Service.
@@ -93,7 +105,22 @@ func New(cfg Config) *Service {
 		optsResolver:   cfg.OptionsConfigResolver,
 		searchResolver: cfg.SearchConfigResolver,
 		matchClause:    cfg.SearchMatchClause,
+		modelResolver:  cfg.ModelResolver,
 	}
+}
+
+// lookupModel resolves a model name to an instance. Apps that wire a
+// ModelResolver get app-specific behaviour (e.g. addon-registered models);
+// otherwise we fall back to modelbase's package-init registry.
+func (s *Service) lookupModel(ctx context.Context, name string) (any, bool) {
+	if s.modelResolver != nil {
+		return s.modelResolver(ctx, name)
+	}
+	inst, ok := modelbase.Get(name)
+	if !ok {
+		return nil, false
+	}
+	return inst, true
 }
 
 // defaultSearchMatchClause is the portable LIKE matcher used when apps do not

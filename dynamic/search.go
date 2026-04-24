@@ -33,7 +33,7 @@ func (s *Service) Search(ctx context.Context, user modelbase.AuthUser, q SearchQ
 	if s.searchResolver == nil {
 		return nil, ErrNoSearchConfig
 	}
-	instance, ok := modelbase.Get(q.Model)
+	instance, ok := s.lookupModel(ctx, q.Model)
 	if !ok {
 		return nil, ErrModelNotFound
 	}
