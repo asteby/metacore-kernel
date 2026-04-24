@@ -1,59 +1,27 @@
 package dynamic
 
-// OptionsConfig describes how a model exposes option lists for its fields.
-// Apps return this from OptionsConfigResolver — e.g. from a HasMetadata
-// interface method on the model or from an addon registry.
-type OptionsConfig struct {
-	Fields map[string]FieldOptionsConfig `json:"fields"`
-}
+import "github.com/asteby/metacore-kernel/modelbase"
 
-// FieldOptionsConfig is the per-field description used by Service.Options to
-// either return a static list or query a related model.
-type FieldOptionsConfig struct {
-	// Type is either "static" (use Options verbatim) or "dynamic" (query Source).
-	Type string `json:"type"`
+// Config types live in modelbase alongside TableMetadata / ModalMetadata so
+// apps alias them into their own `models` package. Re-exported here as
+// type aliases so dynamic service/handler code can refer to them without
+// requiring every caller to also import modelbase.
 
-	// Static options — used when Type == "static".
-	Options []StaticOption `json:"options,omitempty"`
+// SearchConfig is a re-export of modelbase.SearchConfig.
+type SearchConfig = modelbase.SearchConfig
 
-	// Dynamic-source fields — used when Type == "dynamic".
-	Source      string `json:"source,omitempty"`
-	FilterBy    string `json:"filter_by,omitempty"`
-	Value       string `json:"value,omitempty"`
-	Label       string `json:"label,omitempty"`
-	Description string `json:"description,omitempty"`
-	Image       string `json:"image,omitempty"`
-	OrderBy     string `json:"orderBy,omitempty"`
-	OrderDir    string `json:"orderDir,omitempty"`
-}
+// OptionsConfig is a re-export of modelbase.OptionsConfig.
+type OptionsConfig = modelbase.OptionsConfig
 
-// StaticOption is an inline option.
-type StaticOption struct {
-	Value any    `json:"value"`
-	Label string `json:"label"`
-	Icon  string `json:"icon,omitempty"`
-	Color string `json:"color,omitempty"`
-}
+// FieldOptionsConfig is a re-export of modelbase.FieldOptionsConfig.
+type FieldOptionsConfig = modelbase.FieldOptionsConfig
 
-// SearchConfig describes how a model answers text-search queries, including
-// the columns to match against and how to project each hit into the common
-// {id,value,label,description,image,icon} envelope consumed by Dynamic*
-// frontend components.
-type SearchConfig struct {
-	SearchIn    []string `json:"searchIn"`
-	Value       string   `json:"value"`
-	Label       string   `json:"label"`
-	Description string   `json:"description,omitempty"`
-	Image       string   `json:"image,omitempty"`
-	Icon        string   `json:"icon,omitempty"`
-	Preload     []string `json:"preload,omitempty"`
-	OrderBy     string   `json:"orderBy,omitempty"`
-	OrderDir    string   `json:"orderDir,omitempty"`
-}
+// StaticOption is a re-export of modelbase.StaticOption.
+type StaticOption = modelbase.StaticOption
 
-// Option is the projected envelope returned by Options and Search. The dual
-// id/value and label/name fields are preserved for legacy frontend parity —
-// existing Dynamic* React components read either key.
+// Option is the runtime projection returned by Options and Search — purely
+// a response/DTO shape so it stays in the dynamic package. The dual
+// id/value and label/name fields are preserved for legacy frontend parity.
 type Option struct {
 	ID          any `json:"id"`
 	Value       any `json:"value"`
