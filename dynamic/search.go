@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 
+	"gorm.io/gorm"
+
 	"github.com/asteby/metacore-kernel/modelbase"
 )
 
@@ -46,7 +48,7 @@ func (s *Service) Search(ctx context.Context, user modelbase.AuthUser, q SearchQ
 		return nil, ErrNoSearchConfig
 	}
 
-	tableName, err := tableName(instance)
+	tableName, err := s.tableNameFor(instance)
 	if err != nil {
 		return nil, err
 	}
@@ -190,12 +192,18 @@ func projectSearch(results reflect.Value, cfg SearchConfig) []Option {
 	return out
 }
 
-// tableName returns the database table associated with a model. It relies on
-// the ModelDefiner contract already required elsewhere in kernel/dynamic.
-func tableName(instance any) (string, error) {
-	def, ok := instance.(modelbase.ModelDefiner)
-	if !ok {
-		return "", fmt.Errorf("%w: model must implement modelbase.ModelDefiner", ErrInvalidInput)
+// tableNameFor resolves the database table for a model instance. Models that
+// implement modelbase.ModelDefiner (TableName) take priority; otherwise we
+// fall back to gorm's own schema parsing so models that rely on the default
+// pluralized naming (and most do) keep working without implementing the
+// interface explicitly.
+func (s *Service) tableNameFor(instance any) (string, error) {
+	if def, ok := instance.(modelbase.ModelDefiner); ok {
+		return def.TableName(), nil
 	}
-	return def.TableName(), nil
+	stmt := &gorm.Statement{DB: s.db}
+	if err := stmt.Parse(instance); err != nil {
+		return "", fmt.Errorf("%w: resolve table name for %T: %v", ErrInvalidInput, instance, err)
+	}
+	return stmt.Schema.Table, nil
 }
