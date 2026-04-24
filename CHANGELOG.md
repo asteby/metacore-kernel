@@ -5,6 +5,82 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.2.0] - 2026-04-24
+
+Major feature release. Consolidates the second wave of ecosystem migration:
+anything two or more apps were reimplementing is now owned by the kernel.
+
+### feat(dynamic): Options + Search
+
+- `Service.Options(ctx, user, OptionsQuery) *OptionsResult` and
+  `Service.Search(ctx, user, SearchQuery) []Option` replace the
+  hand-rolled handlers every app kept in `backend/handlers/options.go`
+  and `backend/handlers/search.go`.
+- Configurable via `OptionsConfigResolver`, `SearchConfigResolver`,
+  `ModelResolver` and `SearchMatchClause` hooks. Default matcher is
+  portable (`<col> LIKE ?`); Postgres apps override with
+  `unaccent(<col>) ILIKE unaccent(?)`.
+- `Handler.MountOptions(r)` exposes `/options/:model` and `/search/:model`
+  with the same response envelope legacy handlers returned.
+- Option projection DTO (id/value/label/name/description/image/color/icon)
+  unified so `DynamicSelect` frontend components consume one shape.
+- Model lookup falls back to `gorm.Statement.Parse` when a model does
+  not override `TableName()` — no more forcing every gorm model to
+  implement `modelbase.ModelDefiner`.
+
+### feat(modelbase): SearchConfig / OptionsConfig types
+
+- `SearchConfig`, `OptionsConfig`, `FieldOptionsConfig` and
+  `StaticOption` now live in `modelbase` alongside `TableMetadata`,
+  `ModalMetadata`, `FieldDef`, `ActionDef` and friends. Apps alias them
+  the same way — `type SearchConfig = modelbase.SearchConfig` — and
+  drop their parallel struct definitions.
+- Re-exported from `kernel/dynamic` for service callers that prefer the
+  behavioural package path.
+
+### feat(httpx): framework-agnostic context extraction
+
+- New `kernel/httpx` package with `ContextLookup` interface (single
+  `Locals(key string) any` method) + `ExtractOrgID`, `ExtractUserID`
+  and a reflection-based `GetFieldValue`. Apps plug their framework via
+  a minimal adapter (`fiberLookup{c}.Locals`) and drop ~60 LOC of
+  duplicated extraction helpers.
+
+### feat(push): BroadcastToOrg + OnExpiredEndpoint hook
+
+- `Service.BroadcastToOrg(ctx, tenantID, TenantResolver, Payload)`
+  drives concurrent fanout when the resolver returns org-scoped
+  subscriptions; apps stop reimplementing WaitGroup loops.
+- `Config.OnExpiredEndpoint` hook fires when the provider returns
+  404/410, replacing the legacy per-app post-Send `isExpiredEndpoint`
+  check that never actually fired (status was returned separately from
+  the error). Soft-delete semantics are now the app's choice.
+- `IsExpiredStatus(status int) bool` exported helper.
+
+### feat(strings): TitleCase helper
+
+- New `kernel/strings` package with `TitleCase`, replacing a 96-LOC
+  `utils/helpers.go` that was byte-for-byte identical between ops and
+  link.
+
+### feat(migrations): AutoMigrate + toposort + reset
+
+- `AutoMigrate(db, models)` two-pass FK-safe migration,
+  `AutoMigrateSorted(db, map)` with topological sort by `foreignKey:`
+  gorm tags, `TopoSort(map) []any` exposed for inspection, and
+  `ResetDatabase(db)` DESTRUCTIVE drop-all (Postgres CASCADE / SQLite
+  per-table). All library-only, CLI-invoked from the app — never at
+  boot time.
+- Apps' `cmd/seed/main.go` shrinks by ~60% after adoption.
+
+### docs(architecture): Law 0
+
+- Codifies the criterion for kernel vs SDK vs app: "would a fresh
+  e-commerce/CRM/SaaS app need this on day one?" Yes → kernel.
+  "Nice to have" → SDK. "Only this app" → app.
+
+---
+
 ## [0.1.0] - 2026-04-17
 
 ### feat(migrations): configurable Dialect field
