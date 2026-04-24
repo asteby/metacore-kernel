@@ -32,7 +32,11 @@
 // Recovery: a poller sweeps the DB every PollInterval for pending entries
 // whose next_retry has elapsed, so crashed workers don't lose deliveries.
 //
-// The package intentionally does NOT include rule evaluation, template
-// rendering tied to a specific domain, or channel handlers.  Those live in
-// the consuming app where domain knowledge belongs.
+// The package intentionally does NOT include rule evaluation or channel
+// handlers — those live in the consuming app where domain knowledge belongs.
+//
+// A small generic Render() helper is provided for templates with the very
+// common shape of {{var}} interpolation plus {{#var}}body{{/var}} sections.
+// Apps that want a richer template language should bring their own renderer
+// and pass the already-rendered string into EnqueueRequest.Message.
 package notifications
