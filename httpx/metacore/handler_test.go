@@ -133,22 +133,15 @@ func TestListManifests_EmptyForNewOrg(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", resp.StatusCode, body)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	var out struct {
-		Success       bool          `json:"success"`
-		KernelVersion string        `json:"kernel_version"`
-		Data          []interface{} `json:"data"`
-	}
+	var out []interface{}
 	if err := json.Unmarshal(body, &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !out.Success {
-		t.Fatal("expected success=true")
+	if len(out) != 0 {
+		t.Fatalf("expected empty array, got %v", out)
 	}
-	if out.KernelVersion == "" {
-		t.Fatal("expected kernel_version to be populated")
-	}
-	if len(out.Data) != 0 {
-		t.Fatalf("expected empty data, got %v", out.Data)
+	if v := resp.Header.Get("X-Metacore-Kernel-Version"); v == "" {
+		t.Fatal("expected X-Metacore-Kernel-Version header to be populated")
 	}
 }
 

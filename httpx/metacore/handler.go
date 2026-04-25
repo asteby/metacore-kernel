@@ -30,6 +30,7 @@ import (
 	"github.com/asteby/metacore-kernel/bundle"
 	"github.com/asteby/metacore-kernel/httpx"
 	"github.com/asteby/metacore-kernel/installer"
+	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/navigation"
 	kerneltool "github.com/asteby/metacore-kernel/tool"
 	"github.com/gofiber/fiber/v2"
@@ -125,11 +126,11 @@ func (h *Handler) ListManifests(c *fiber.Ctx) error {
 			"message": err.Error(),
 		})
 	}
-	return c.JSON(fiber.Map{
-		"success":        true,
-		"kernel_version": h.deps.Bridge.KernelVersion(),
-		"data":           manifests,
-	})
+	if manifests == nil {
+		manifests = []manifest.Manifest{}
+	}
+	c.Set("X-Metacore-Kernel-Version", h.deps.Bridge.KernelVersion())
+	return c.JSON(manifests)
 }
 
 // Navigation returns the merged sidebar for the caller's organization.
@@ -152,12 +153,10 @@ func (h *Handler) Navigation(c *fiber.Ctx) error {
 			"message": err.Error(),
 		})
 	}
-	return c.JSON(fiber.Map{
-		"success": true,
-		"data": fiber.Map{
-			"groups": groups,
-		},
-	})
+	if groups == nil {
+		groups = []navigation.Group{}
+	}
+	return c.JSON(groups)
 }
 
 // Install installs (or re-installs) an addon for the caller's organization.
