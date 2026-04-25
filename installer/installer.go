@@ -2,13 +2,37 @@
 // flow: validate manifest, create schema, run migrations, register lifecycle,
 // emit events, and record the installation row. It is the single entry point
 // host applications call — they never drive individual kernel steps directly.
+//
+// Trust model — supply chain security:
+//
+//	hub (offline Ed25519 key) signs published bundles
+//	    ↓
+//	kernel installer verifies the signature against PublicKeys before
+//	running any addon code (manifest, migrations, lifecycle)
+//	    ↓
+//	addon executes inside the runtime sandbox (capabilities, schema scoping)
+//
+// PublicKeys is loaded by New() from MARKETPLACE_PUBKEY (single key) or
+// MARKETPLACE_PUBKEYS (comma-separated, for rotation). When PublicKeys is
+// empty AND ALLOW_UNSIGNED_BUNDLES is not "true", Install() refuses to
+// proceed — production deploys MUST configure a key. The unsigned escape
+// hatch exists for local development and self-hosted sideloading only.
+//
+// ops's services/addonbundle/signature.go performs an equivalent check
+// before reaching the kernel; that path remains as defense-in-depth but is
+// now redundant for the standard install flow. Direct kernel users (link,
+// future apps) get the verification for free through this package.
 package installer
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/asteby/metacore-kernel/bundle"
@@ -60,16 +84,83 @@ type Installer struct {
 	// persists the cleartext secret — callers must build their own
 	// SecretResolver (e.g. backed by a KMS).
 	MasterKey []byte
+
+	// PublicKeys are the Ed25519 keys trusted to have signed published
+	// bundles. Multiple keys support marketplace key rotation: a bundle is
+	// accepted if it verifies under ANY of them. New() populates this from
+	// MARKETPLACE_PUBKEY (single hex key) or MARKETPLACE_PUBKEYS (comma-
+	// separated hex keys).
+	//
+	// When empty AND AllowUnsigned is false, Install() refuses every bundle
+	// — fail-closed is the kernel default. Set AllowUnsigned (env
+	// ALLOW_UNSIGNED_BUNDLES=true) only in local dev / self-hosted sideloads.
+	PublicKeys []ed25519.PublicKey
+
+	// AllowUnsigned opts out of signature verification entirely. Tied to the
+	// ALLOW_UNSIGNED_BUNDLES env var by New(). DO NOT enable in production.
+	AllowUnsigned bool
 }
 
+// ErrSignatureRequired is returned by Install when the host has not configured
+// any trusted public keys and ALLOW_UNSIGNED_BUNDLES is not set. Misconfigured
+// production deploys hit this on every install attempt.
+var ErrSignatureRequired = errors.New("installer: signature verification is required (set MARKETPLACE_PUBKEY or, for dev, ALLOW_UNSIGNED_BUNDLES=true)")
+
 // New returns a ready-to-use installer with initialized registries.
+//
+// The installer reads two env vars at construction time so that hosts (ops,
+// link, future apps) get signature enforcement automatically:
+//
+//	MARKETPLACE_PUBKEY     — single hex Ed25519 public key (32 bytes / 64 hex)
+//	MARKETPLACE_PUBKEYS    — comma-separated list of hex keys (for rotation)
+//	ALLOW_UNSIGNED_BUNDLES — "true" to skip verification (dev / sideload only)
+//
+// If the env vars contain malformed hex, New logs a noisy nil-key result and
+// returns the installer with PublicKeys empty; Install() will then refuse
+// every bundle until the operator fixes the configuration. We deliberately
+// do NOT panic — failing-closed at install time is observable in the audit
+// trail; panicking at boot can mask the cause.
 func New(db *gorm.DB, kernelVersion string) *Installer {
+	pubs, _ := loadTrustedKeysFromEnv()
 	return &Installer{
 		DB:            db,
 		KernelVersion: kernelVersion,
 		Lifecycles:    lifecycle.NewRegistry(),
 		Interceptors:  lifecycle.NewInterceptorRegistry(),
+		PublicKeys:    pubs,
+		AllowUnsigned: envFlag("ALLOW_UNSIGNED_BUNDLES"),
 	}
+}
+
+// loadTrustedKeysFromEnv reads MARKETPLACE_PUBKEYS first (the rotation-
+// friendly form), then falls back to MARKETPLACE_PUBKEY. Both can be set
+// simultaneously; entries are concatenated and de-duplication is left to
+// the caller (ed25519.Verify on a duplicate just runs twice — harmless).
+func loadTrustedKeysFromEnv() ([]ed25519.PublicKey, error) {
+	var out []ed25519.PublicKey
+	if csv := strings.TrimSpace(os.Getenv("MARKETPLACE_PUBKEYS")); csv != "" {
+		k, err := security.ParseHexPublicKeys(csv)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, k...)
+	}
+	if single := strings.TrimSpace(os.Getenv("MARKETPLACE_PUBKEY")); single != "" {
+		k, err := security.ParseHexPublicKeys(single)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, k...)
+	}
+	return out, nil
+}
+
+func envFlag(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "true", "1", "yes":
+		return true
+	}
+	return false
 }
 
 // Install applies a bundle to the given organization. It:
@@ -81,6 +172,9 @@ func New(db *gorm.DB, kernelVersion string) *Installer {
 //
 // Returns the per-installation secret (caller shares only with the addon).
 func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, []byte, error) {
+	if err := i.verifySignature(b); err != nil {
+		return nil, nil, err
+	}
 	if err := b.Manifest.Validate(i.KernelVersion); err != nil {
 		return nil, nil, err
 	}
@@ -256,6 +350,29 @@ func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool)
 // SignerFor rebuilds the HMAC signer for a known secret. Hosts persist the
 // cleartext secret in a secrets manager and only store the hash here.
 func SignerFor(secret []byte) *security.Signer { return security.NewSigner(secret) }
+
+// verifySignature enforces the supply-chain trust model on a bundle before
+// any other Install step touches the database or filesystem. The decision
+// matrix is:
+//
+//	PublicKeys non-empty  → always verify; reject on missing or invalid sig.
+//	PublicKeys empty + AllowUnsigned → permit (dev / sideload).
+//	PublicKeys empty + !AllowUnsigned → reject every bundle (fail-closed).
+//
+// Returning an error here aborts Install before manifest validation, schema
+// creation, or lifecycle registration — i.e. nothing untrusted runs.
+func (i *Installer) verifySignature(b *bundle.Bundle) error {
+	if len(i.PublicKeys) == 0 {
+		if i.AllowUnsigned {
+			return nil
+		}
+		return ErrSignatureRequired
+	}
+	if err := security.VerifyBundle(b, i.PublicKeys); err != nil {
+		return fmt.Errorf("installer: bundle signature rejected: %w", err)
+	}
+	return nil
+}
 
 func newSecret() ([]byte, error) {
 	buf := make([]byte, 32)

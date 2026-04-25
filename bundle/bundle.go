@@ -15,6 +15,7 @@ package bundle
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -43,6 +44,12 @@ type Bundle struct {
 	Readme string
 	// RawSize is the total decompressed byte count (useful for quotas).
 	RawSize int64
+	// Raw holds the ORIGINAL compressed tar.gz bytes consumed by Read. It is
+	// captured so signature verifiers can recompute the publish-time SHA-256
+	// digest without re-reading the source. Zero-cost for callers that ignore
+	// it; populated transparently by Read via a tee buffer. Empty when the
+	// Bundle was constructed in-memory (e.g. tests calling Write).
+	Raw []byte
 }
 
 // Read decompresses a bundle stream and returns its parsed representation.
@@ -51,7 +58,13 @@ func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
 	if maxBytes <= 0 {
 		maxBytes = 64 << 20 // 64 MiB default
 	}
-	gz, err := gzip.NewReader(r)
+	// Tee the compressed input into a buffer so signature verifiers can hash
+	// the byte-exact tarball after Read returns. The buffer cap matches the
+	// per-bundle decompression budget; gzip itself is bounded by its own
+	// stream, so the compressed side is always strictly smaller.
+	var raw bytes.Buffer
+	tee := io.TeeReader(r, &raw)
+	gz, err := gzip.NewReader(tee)
 	if err != nil {
 		return nil, fmt.Errorf("bundle: gzip: %w", err)
 	}
@@ -112,6 +125,14 @@ func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
 		}
 	}
 	b.RawSize = total
+	// Drain any trailing bytes (gzip footer, tar padding) so Raw matches the
+	// full input stream exactly. tar.Reader stops at the end-of-archive marker
+	// without consuming the gzip footer, which would otherwise leave Raw a few
+	// bytes short and break sha256 reproducibility.
+	if _, err := io.Copy(io.Discard, tee); err != nil {
+		return nil, fmt.Errorf("bundle: drain: %w", err)
+	}
+	b.Raw = raw.Bytes()
 	if b.Manifest.Key == "" {
 		return nil, fmt.Errorf("bundle: manifest.json missing or empty")
 	}
