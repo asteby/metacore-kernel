@@ -156,7 +156,7 @@ Allowed column types are: `string` (varchar with `size`), `text`, `uuid`,
 
 ### 2. Install the addon
 
-A host (link, ops, ...) calls the installer with a parsed bundle:
+A host application calls the installer with a parsed bundle:
 
 ```go
 inst, secret, err := h.Installer.Install(orgID, bundle)

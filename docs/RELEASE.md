@@ -95,9 +95,8 @@ git push --tags
    - Automatic `prerelease: true` when the tag carries a SemVer suffix
      (`-alpha`, `-beta`, `-rc`).
 5. **Consumer dispatch** — `POST /repos/{owner}/{repo}/dispatches` to every
-   consumer repo (`asteby/ops`, `asteby/link`, …) with
-   `event_type=metacore-kernel-released`. Each consumer can subscribe via
-   `on: repository_dispatch` to run Renovate immediately.
+   consumer repo with `event_type=metacore-kernel-released`. Each consumer
+   can subscribe via `on: repository_dispatch` to run Renovate immediately.
 
 The dispatch token (`CROSSREPO_DISPATCH_TOKEN`) needs `repo` scope on every
 consumer organisation. The step uses `continue-on-error: true` so a failed
@@ -119,7 +118,7 @@ open https://pkg.go.dev/github.com/asteby/metacore-kernel@v0.2.0
 
 ## 5. Consume from a host application
 
-In any consumer repository (`ops`, `link`, …):
+In any consumer repository:
 
 ```bash
 go env -w GOPRIVATE="github.com/asteby/*"   # one time per machine

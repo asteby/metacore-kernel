@@ -58,9 +58,9 @@ should re-implement:
   primitives every multi-tenant web application eventually needs, framework-
   agnostic at the service layer and Fiber-native at the handler layer.
 
-The kernel is **embeddable**, not a server. It compiles into the host binary
-(`link`, `ops`, …); there is no `metacore` daemon. All public contracts are
-behind interfaces, so adding fields to base structs is a non-breaking change
+The kernel is **embeddable**, not a server. It compiles into the host
+binary; there is no `metacore` daemon. All public contracts are behind
+interfaces, so adding fields to base structs is a non-breaking change
 (see [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the four-laws statement).
 
 `metacore-kernel` consumes the public [`metacore-sdk`](https://github.com/asteby/metacore-sdk)
@@ -125,7 +125,6 @@ end-to-end walkthrough,
 ```
                     ┌──────────────────────────────────────────────┐
                     │                Host application              │
-                    │            (link, ops, pilot, …)             │
                     │                                              │
                     │  fiber.App  ──►  host.App.Mount(/api)        │
                     └──────┬───────────────────────────────────────┘
@@ -255,8 +254,9 @@ domain handlers on top of the kernel-provided ones.
 ### Option 2 — `host.Host` (addon-platform mode)
 
 When the binary needs to **host WASM addons** (install, enable, lifecycle
-hooks, navigation merge), construct a `host.Host` instead. This is what `link`
-uses to load conversational addons; `ops` uses it for marketplace integrations.
+hooks, navigation merge), construct a `host.Host` instead. This is the mode
+host applications use to load addons such as conversational extensions or
+marketplace integrations.
 
 ```go
 h, err := host.New(host.Config{

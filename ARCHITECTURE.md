@@ -1,8 +1,8 @@
 # metacore-kernel — Architecture Principles
 
 This document codifies the four laws of the kernel. Every module added here must
-respect them. Apps (ops, link, pilot, doctores.lat, p2p, etc.) consume this
-kernel as a semver Go module — breakage in the kernel breaks every app at once.
+respect them. Host applications consume this kernel as a semver Go module —
+breakage in the kernel breaks every host at once.
 
 ## Law 0 — What belongs in the kernel
 
@@ -56,8 +56,8 @@ module. Today they're kernel because they're the product thesis.
 
 ### Things that explicitly DO NOT belong in the kernel
 
-- Templates / template renderers with domain conventions (link's Mustache
-  aliases, autovars, fallback chains)
+- Templates / template renderers with domain conventions (e.g. Mustache
+  aliases, autovars, fallback chains tailored to a specific app)
 - Rule engines tied to specific entity types (`AgentTool`, `Conversation`,
   `Ticket`, `Contact`)
 - Channel implementations with provider-specific protocols (WhatsApp/Baileys,
