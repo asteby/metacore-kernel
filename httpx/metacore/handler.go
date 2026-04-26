@@ -111,13 +111,17 @@ func (f fiberLookup) Locals(key string) any { return f.c.Locals(key) }
 // for the caller's organization.
 //
 // GET /api/metacore/manifests
+//
+// Returns the empty array when the request has no organization context
+// (anonymous / unauthenticated). The SDK frontend boots before auth has
+// hydrated and calls this endpoint; returning [] keeps the bootstrap clean
+// instead of forcing every host to wrap the route in an auth middleware
+// just for the empty case.
 func (h *Handler) ListManifests(c *fiber.Ctx) error {
+	c.Set("X-Metacore-Kernel-Version", h.deps.Bridge.KernelVersion())
 	orgID, ok := orgIDFromCtx(c)
 	if !ok {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"success": false,
-			"message": "organization context required",
-		})
+		return c.JSON([]manifest.Manifest{})
 	}
 	manifests, err := h.deps.Bridge.Host().InstalledManifests(orgID)
 	if err != nil {
@@ -129,7 +133,6 @@ func (h *Handler) ListManifests(c *fiber.Ctx) error {
 	if manifests == nil {
 		manifests = []manifest.Manifest{}
 	}
-	c.Set("X-Metacore-Kernel-Version", h.deps.Bridge.KernelVersion())
 	return c.JSON(manifests)
 }
 
@@ -138,13 +141,15 @@ func (h *Handler) ListManifests(c *fiber.Ctx) error {
 // kernel's registry.
 //
 // GET /api/metacore/navigation
+//
+// Returns the empty array when the request has no organization context
+// (anonymous / unauthenticated). Mirrors ListManifests — both endpoints
+// are safe to expose without auth and the SDK bootstrap fires before
+// auth state has hydrated.
 func (h *Handler) Navigation(c *fiber.Ctx) error {
 	orgID, ok := orgIDFromCtx(c)
 	if !ok {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"success": false,
-			"message": "organization context required",
-		})
+		return c.JSON([]navigation.Group{})
 	}
 	groups, err := h.deps.Bridge.Navigation(orgID, h.deps.CoreNavigation)
 	if err != nil {

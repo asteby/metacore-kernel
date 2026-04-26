@@ -79,9 +79,11 @@ func TestNewHandler_DefaultsRegistry(t *testing.T) {
 	}
 }
 
-// TestListManifests_RequiresOrg verifies the route returns 401 when no
-// organization context is wired into the Fiber locals.
-func TestListManifests_RequiresOrg(t *testing.T) {
+// TestListManifests_AnonymousReturnsEmpty verifies the route returns an
+// empty array (not 401) when no organization context is wired into the
+// Fiber locals. The SDK frontend bootstrap calls this endpoint before
+// auth state has hydrated; returning [] keeps that path clean.
+func TestListManifests_AnonymousReturnsEmpty(t *testing.T) {
 	db := setupTestDB(t)
 	b, err := bridge.New(bridge.Config{DB: db})
 	if err != nil {
@@ -98,8 +100,16 @@ func TestListManifests_RequiresOrg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("app.Test: %v", err)
 	}
-	if resp.StatusCode != 401 {
-		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var out []interface{}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out) != 0 {
+		t.Fatalf("expected empty array, got %v", out)
 	}
 }
 
