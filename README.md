@@ -15,6 +15,8 @@
   <img alt="License" src="https://img.shields.io/badge/license-proprietary-lightgrey" />
 </p>
 
+> 📚 **Documentation:** Full docs live at **[asteby.github.io/metacore](https://asteby.github.io/metacore/)**. The `docs/` folder in this repo is kept for offline reference only.
+
 ---
 
 ## Table of contents
