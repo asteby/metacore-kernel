@@ -38,22 +38,3 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Dispatch consumer bumps
-        # Optional: fire repository_dispatch on consumer repositories so they can
-        # subscribe via `on: repository_dispatch` and run Renovate immediately
-        # after a kernel release.
-        #
-        # The list of consumer repositories is read from the `CONSUMER_REPOS`
-        # repository variable (NOT a secret). Configure it in:
-        #   Settings -> Secrets and variables -> Actions -> Variables
-        # Format: space-separated `owner/repo` entries, e.g.
-        #   owner/app-one owner/app-two
-        # Leave the variable unset/empty to skip the dispatch.
-        run: |
-          for REPO in ${{ vars.CONSUMER_REPOS }}; do
-            gh api -X POST "repos/${REPO}/dispatches" -f event_type=metacore-kernel-released || true
-          done
-        env:
-          GH_TOKEN: ${{ secrets.CROSSREPO_DISPATCH_TOKEN }}
-        continue-on-error: true

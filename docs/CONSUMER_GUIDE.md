@@ -460,28 +460,13 @@ Prerequisites in the consumer repository:
    via `hostRules` (Renovate Cloud) or `secrets.RENOVATE_GITHUB_TOKEN`
    (self-hosted).
 
-### On-demand dispatch
+### Update cadence
 
-The kernel's release workflow fires `repository_dispatch` with
-`event_type=metacore-kernel-released` to every consumer when a tag is
-published. Add the following to consumer repos to trigger Renovate
-immediately instead of waiting for the next cron tick:
-
-```yaml
-# .github/workflows/renovate-trigger.yml
-name: Renovate on kernel release
-on:
-  repository_dispatch:
-    types: [metacore-kernel-released]
-jobs:
-  trigger:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: renovatebot/github-action@v40
-        with:
-          token: ${{ secrets.RENOVATE_TOKEN }}
-          configurationFile: renovate.json
-```
+The kernel does not push notifications to consumers. Renovate / Dependabot
+poll the Go proxy on their own schedule (Renovate default: hourly) and open
+a PR when a new tag is indexed. If you want faster pickup, lower the
+`schedule` in `renovate.json` or run a manual rerun from the Renovate
+dashboard after cutting a kernel release.
 
 ## 10. SemVer policy
 
@@ -513,10 +498,13 @@ public struct, or changing a function signature is always a major bump (see
 [Kernel] git tag vX.Y.Z && git push --tags
        │
        ▼
-[Kernel] Release workflow: tests → proxy ping → GoReleaser → dispatch
+[Kernel] Release workflow: tests → proxy ping → GoReleaser
        │
        ▼
-[Consumer] repository_dispatch received → Renovate runs
+[Go proxy] indexes the new tag (`proxy.golang.org`)
+       │
+       ▼
+[Consumer] Renovate / Dependabot polls the proxy → detects new version
        │
        ▼
 [Consumer] PR "chore(deps): update github.com/asteby/metacore-kernel to vX.Y.Z"
