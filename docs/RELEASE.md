@@ -98,6 +98,11 @@ git push --tags
    consumer repo with `event_type=metacore-kernel-released`. Each consumer
    can subscribe via `on: repository_dispatch` to run Renovate immediately.
 
+The list of consumer repositories is read from the `CONSUMER_REPOS` repository
+variable (Settings → Secrets and variables → Actions → Variables). Format:
+space-separated `owner/repo` entries. Leave it unset/empty to disable the
+dispatch step entirely.
+
 The dispatch token (`CROSSREPO_DISPATCH_TOKEN`) needs `repo` scope on every
 consumer organisation. The step uses `continue-on-error: true` so a failed
 dispatch never blocks the release itself.

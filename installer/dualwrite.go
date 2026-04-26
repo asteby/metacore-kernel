@@ -1,10 +1,10 @@
-// Package installer — dualwrite.go supports F1.5 coexistence: while ops keeps
-// writing to its legacy `addon_installations` table, the kernel keeps the
-// canonical record in `metacore_installations`. SyncFromLegacy copies rows
-// one-way (legacy → kernel) idempotently so the two tables stay converged
-// until F1.6 drops the legacy table. BackfillSecrets fills in HMAC secret
-// hashes for installations that were copied over before the kernel owned
-// secret generation.
+// Package installer — dualwrite.go supports F1.5 coexistence: while a legacy
+// host keeps writing to its legacy `addon_installations` table, the kernel
+// keeps the canonical record in `metacore_installations`. SyncFromLegacy
+// copies rows one-way (legacy → kernel) idempotently so the two tables stay
+// converged until F1.6 drops the legacy table. BackfillSecrets fills in HMAC
+// secret hashes for installations that were copied over before the kernel
+// owned secret generation.
 //
 // Nothing here mutates the legacy table. The migration is additive only.
 package installer
@@ -17,9 +17,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// legacyInstallation mirrors the columns ops writes to `addon_installations`.
-// We read into this struct via a raw query so we don't couple the kernel to
-// the ops models package. Column names match the ops GORM tags exactly.
+// legacyInstallation mirrors the columns a legacy host writes to
+// `addon_installations`. We read into this struct via a raw query so we don't
+// couple the kernel to any host's models package. Column names match the
+// legacy GORM tags exactly.
 type legacyInstallation struct {
 	ID             uuid.UUID  `gorm:"column:id"`
 	OrganizationID uuid.UUID  `gorm:"column:organization_id"`

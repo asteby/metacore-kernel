@@ -22,8 +22,8 @@ const (
 //	    BranchID *uuid.UUID `json:"branch_id,omitempty" gorm:"type:uuid;index"`
 //	}
 //
-// The GORM tags match the ops backend exactly so AutoMigrate remains
-// interchangeable between kernel-consumers.
+// The GORM tags are stable so AutoMigrate remains interchangeable between
+// kernel-consumers.
 type BaseUser struct {
 	BaseUUIDModel
 	Name         string     `json:"name" gorm:"size:255"`

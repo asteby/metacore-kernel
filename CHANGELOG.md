@@ -60,8 +60,8 @@ anything two or more apps were reimplementing is now owned by the kernel.
 ### feat(strings): TitleCase helper
 
 - New `kernel/strings` package with `TitleCase`, replacing a 96-LOC
-  `utils/helpers.go` that was byte-for-byte identical between ops and
-  link.
+  `utils/helpers.go` that was byte-for-byte identical across multiple
+  host applications.
 
 ### feat(migrations): AutoMigrate + toposort + reset
 
@@ -87,8 +87,8 @@ anything two or more apps were reimplementing is now owned by the kernel.
 
 - `Runner` now has a `Dialect goose.Dialect` field. Defaults to
   `goose.DialectSQLite3` when zero-value for full backward compatibility.
-- Consumers (hub, ops, link) can set `Runner{Dialect: goose.DialectPostgres}`
-  without any other change.
+- Consumers can set `Runner{Dialect: goose.DialectPostgres}` without any
+  other change.
 - New unit test `TestRunnerDialect_SQLite3Explicit` covers explicit dialect.
 - New integration test `TestRunnerDialect_Postgres` (build tag `integration`,
   skipped unless `TEST_POSTGRES_DSN` is set) covers a real Postgres round-trip.
@@ -96,7 +96,7 @@ anything two or more apps were reimplementing is now owned by the kernel.
 ### feat(log): net/http HTTPMiddleware
 
 - Added `log.HTTPMiddleware(logger *slog.Logger) func(http.Handler) http.Handler`
-  for chi / net/http consumers (hub). Mirrors FiberMiddleware behaviour:
+  for chi / net/http consumers. Mirrors FiberMiddleware behaviour:
   reads/generates `X-Request-ID`, injects child logger via `WithLogger`, logs
   method/path/status/duration/request_id after each request.
 - Package docstring updated to note Fiber and net/http middlewares coexist.
@@ -114,7 +114,7 @@ anything two or more apps were reimplementing is now owned by the kernel.
 
 - Added `GenerateTokenWithClaims(claims jwt.Claims, secret []byte, ttl time.Duration) (string, error)`
   and `ValidateTokenWithClaims(token string, secret []byte, claims jwt.Claims) error`
-  for domain-specific claim structs (e.g. hub marketplace Plan/Features).
+  for domain-specific claim structs (e.g. marketplace Plan/Features).
 - Default `Claims` struct and `GenerateToken`/`ValidateToken` are unchanged —
   zero breaking changes.
 - Package docstring documents the custom-claims pattern.
@@ -172,12 +172,12 @@ anything two or more apps were reimplementing is now owned by the kernel.
   plain JSON delivery, preserving backwards compatibility for tests.
 - New `push/crypto.go` package-private helper: `encryptPayload` implements the
   `aes128gcm` content-encoding used by all modern push services.
-- `push.GenerateVAPIDKeys` migrated to `crypto/ecdh` (matches ops/link); the
-  public key is now the canonical 65-byte uncompressed P-256 point browsers
-  expect from `PushManager.subscribe`.
+- `push.GenerateVAPIDKeys` migrated to `crypto/ecdh`; the public key is now
+  the canonical 65-byte uncompressed P-256 point browsers expect from
+  `PushManager.subscribe`.
 - `push.Payload` extended with `Image`, `Actions []Action`, `Vibrate`,
-  `Silent`, `Renotify` — matching the full Web Notification API surface used
-  by ops and link.
+  `Silent`, `Renotify` — matching the full Web Notification API surface
+  required by typical host applications.
 - New `push.Action` type in `models.go`.
 - New unit tests: `TestGenerateVAPIDKeys`, `TestVAPIDJWT`, `TestEncryptPayload`
   (all in `push/crypto_test.go`).
@@ -192,21 +192,21 @@ anything two or more apps were reimplementing is now owned by the kernel.
   This was confirmed correct and documented in the package-level docstring.
 - Added `Hub.SendConditional(userID, predicate, primary, fallback)`: delivers
   different messages to a user's connections based on a per-connection
-  predicate.  This is the generic equivalent of link's conversation-aware
-  "smart broadcast" (`SendSmartMessage`) — the predicate receives
-  `Client.Context` (any), which apps set via `Client.SetContext(v any)`.
+  predicate.  This is the generic equivalent of a conversation-aware
+  "smart broadcast" — the predicate receives `Client.Context` (any), which
+  apps set via `Client.SetContext(v any)`.
 - Added `Client.Context any` field + `SetContext` / `GetContext` helpers
   (mutex-protected) for per-connection app state.
-- `Hub.SendToUsers([]uuid.UUID, msg)` was already the generic equivalent of
-  ops/link's `SendToOrganization` — callers query their own DB for user IDs
-  and pass the slice; the hub stays ORM-free.
-- `OnNotification` hook covers notification persistence (ops/link handled this
-  inline in the hub against their own models; the kernel delegates it).
+- `Hub.SendToUsers([]uuid.UUID, msg)` is the generic equivalent of an
+  org-scoped broadcast — callers query their own DB for user IDs and pass
+  the slice; the hub stays ORM-free.
+- `OnNotification` hook covers notification persistence (the kernel delegates
+  it; hosts handle persistence inline against their own models).
 - Keepalive: `client.go` ping/pong with 60 s pong-wait + (54 s) ping-period
-  already matches ops/link behavior.
-- **Coverage verdict**: the kernel ws hub covers all routing patterns ops and
-  link require (user routing, batch/org broadcast, keepalive, custom message
-  types, persistence hook, conditional routing).
+  matches typical browser-friendly defaults.
+- **Coverage verdict**: the kernel ws hub covers all routing patterns host
+  applications typically require (user routing, batch/org broadcast,
+  keepalive, custom message types, persistence hook, conditional routing).
 
 ### Stable packages (no API changes this cycle)
 

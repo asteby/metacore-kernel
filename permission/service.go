@@ -26,8 +26,7 @@ type Config struct {
 	SuperRoles []Role
 }
 
-// DefaultCacheTTL is the cache TTL used when Config.CacheTTL is zero. Matches
-// the ops permission service default.
+// DefaultCacheTTL is the cache TTL used when Config.CacheTTL is zero.
 const DefaultCacheTTL = 5 * time.Minute
 
 // Service is the framework-agnostic authorization entry point. It composes a

@@ -93,7 +93,7 @@ func TestGenerateToken_EmptySecret(t *testing.T) {
 }
 
 // customClaims is a domain-specific claim set that extends jwt.RegisteredClaims.
-// This simulates what hub marketplace would use (Plan, Features, Audience).
+// This simulates what a marketplace host would use (Plan, Features, Audience).
 type customClaims struct {
 	jwt.RegisteredClaims
 	Plan     string   `json:"plan"`

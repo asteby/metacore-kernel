@@ -97,7 +97,7 @@ type FlowNode struct {
 
 // FlowNodeData is the configuration bundle for a single node. Both keys are
 // kept (Config for regular nodes, TriggerConfig for trigger nodes) to match
-// the existing editor contract used by the ops/link frontends.
+// the editor contract used by host frontends.
 type FlowNodeData struct {
 	Label           string
 	Description     string
@@ -159,8 +159,8 @@ type FlowExecution struct {
 	TriggerData    map[string]interface{}
 
 	// Opaque app context carried through the execution (e.g. contact_id,
-	// conversation_id for link). The engine never inspects this — node
-	// executors do.
+	// conversation_id for a messaging host). The engine never inspects
+	// this — node executors do.
 	AppContext map[string]interface{}
 
 	Variables      map[string]interface{}

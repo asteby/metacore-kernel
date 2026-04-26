@@ -11,8 +11,9 @@ import (
 //
 //	{ "success": bool, "data": {...} | null, "message": "..." }
 //
-// This is intentionally identical to what ops/link currently emit so the
-// frontend @asteby/metacore-auth package does not need to change.
+// This shape is intentionally aligned with what the @asteby/metacore-auth
+// frontend package expects, so hosts can adopt the kernel without changing
+// their frontend wire format.
 type Handler struct {
 	service *Service
 }

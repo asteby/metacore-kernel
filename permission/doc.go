@@ -40,6 +40,6 @@
 // # Design rules (ARCHITECTURE.md)
 //
 // service.go MUST NOT import Fiber — only middleware.go does. Apps that want
-// custom storage (e.g. branch-scoped permissions, the ops use case) implement
-// PermissionStore themselves. The kernel stays app-agnostic.
+// custom storage (e.g. branch-scoped permissions) implement PermissionStore
+// themselves. The kernel stays app-agnostic.
 package permission

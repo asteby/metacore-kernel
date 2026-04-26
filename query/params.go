@@ -34,7 +34,7 @@ type Params struct {
 }
 
 // ParseFromMap parses a url.Values-style map into Params. It accepts the
-// exact parameter names used historically by the ops/link frontends:
+// canonical parameter names used by host frontends:
 //
 //	page, per_page, sortBy, order, search, f_<col>
 //

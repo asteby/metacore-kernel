@@ -3,7 +3,7 @@
 //
 // An addon's manifest.ToolDef is declarative (what the tool accepts, which
 // endpoint answers, what it does). Package tool turns that declaration into
-// runtime-usable artifacts shared across hosts (ops, link):
+// runtime-usable artifacts shared across hosts:
 //
 //   - Tool interface: host-agnostic contract for a registered tool.
 //   - Registry: thread-safe map of installed tools, keyed by addon+tool id.
@@ -13,6 +13,6 @@
 //     with HMAC signing via security.WebhookDispatcher.
 //
 // Hosts import this package to stop reinventing the same three patterns on
-// their own. An addon published to the hub marketplace and installed on ops,
-// link, or any future host dispatches through the same Registry+Dispatcher.
+// their own. Any addon installed on any host dispatches through the same
+// Registry+Dispatcher.
 package tool

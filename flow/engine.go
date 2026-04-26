@@ -118,8 +118,8 @@ func NewEngine(cfg Config) *Engine {
 func (e *Engine) Registry() *Registry { return e.registry }
 
 // RegisterNode installs an app-provided executor. This is the primary hook
-// apps use to extend the engine (link registers Message, AIChat,
-// CreateTicket, …).
+// apps use to extend the engine (e.g. registering Message, AIChat,
+// CreateTicket nodes from a messaging host).
 func (e *Engine) RegisterNode(nodeType NodeType, executor NodeExecutor) {
 	e.registry.Register(nodeType, executor)
 }

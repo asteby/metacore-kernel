@@ -9,8 +9,8 @@ import (
 )
 
 // ActionContext is the runtime context passed to action interceptors.
-// Kernel consumers (ops, link) embed their concrete types via the Extras map
-// so the kernel stays thin.
+// Kernel consumers embed their concrete types via the Extras map so the
+// kernel stays thin.
 type ActionContext struct {
 	Ctx       context.Context
 	DB        *gorm.DB

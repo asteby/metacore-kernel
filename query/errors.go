@@ -15,16 +15,14 @@ var (
 	ErrNoSearchColumns = errors.New("query: no search columns defined")
 )
 
-// Defaults and hard limits. The limits come from the ops/link audit: 200
-// rows per page comfortably covers dashboards without letting a client
-// exhaust a worker on a single request.
+// Defaults and hard limits. The 200-row per-page cap comfortably covers
+// dashboards without letting a client exhaust a worker on a single request.
 const (
 	// DefaultPage is the 1-indexed default page when no page parameter is
 	// supplied by the client.
 	DefaultPage = 1
 
-	// DefaultPerPage is the default page size. Chosen to match the ops/link
-	// historical behaviour.
+	// DefaultPerPage is the default page size.
 	DefaultPerPage = 15
 
 	// MaxPerPage caps the page size. Requests above this are clamped

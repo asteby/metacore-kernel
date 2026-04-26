@@ -1,7 +1,7 @@
 // Package installer orchestrates the full install/enable/disable/uninstall
 // flow: validate manifest, create schema, run migrations, register lifecycle,
 // emit events, and record the installation row. It is the single entry point
-// hosts (ops, link) call — they never drive individual kernel steps directly.
+// host applications call — they never drive individual kernel steps directly.
 package installer
 
 import (

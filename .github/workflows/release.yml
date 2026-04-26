@@ -40,9 +40,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Dispatch consumer bumps
-        # Opcional: dispara workflows en apps consumidoras para que corran Renovate ahora mismo
+        # Optional: fire repository_dispatch on consumer repositories so they can
+        # subscribe via `on: repository_dispatch` and run Renovate immediately
+        # after a kernel release.
+        #
+        # The list of consumer repositories is read from the `CONSUMER_REPOS`
+        # repository variable (NOT a secret). Configure it in:
+        #   Settings -> Secrets and variables -> Actions -> Variables
+        # Format: space-separated `owner/repo` entries, e.g.
+        #   owner/app-one owner/app-two
+        # Leave the variable unset/empty to skip the dispatch.
         run: |
-          for REPO in asteby/ops asteby/link asteby/pilot asteby/doctores.lat asteby/p2p asteby/visor asteby/operador360; do
+          for REPO in ${{ vars.CONSUMER_REPOS }}; do
             gh api -X POST "repos/${REPO}/dispatches" -f event_type=metacore-kernel-released || true
           done
         env:

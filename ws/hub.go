@@ -63,7 +63,7 @@ type batchMsg struct {
 }
 
 // conditionalMsg routes different messages to a user based on a per-client predicate.
-// This is the generic equivalent of link's "smart broadcast" (conversation-aware routing).
+// This is the generic equivalent of a "smart broadcast" (conversation-aware routing).
 type conditionalMsg struct {
 	UserID    uuid.UUID
 	Predicate func(clientCtx any) bool // called with Client.Context; true → primary
@@ -162,7 +162,7 @@ func (h *Hub) SendToUsers(userIDs []uuid.UUID, msg Message) {
 }
 
 // SendConditional delivers different messages to a user's connections based on
-// a per-connection predicate.  This is the generic equivalent of link's
+// a per-connection predicate. This is the generic equivalent of a
 // "smart broadcast" (conversation-aware routing).
 //
 // Each active connection for userID has its Context examined; if predicate

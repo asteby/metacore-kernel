@@ -6,11 +6,11 @@
 //   - LLM tools projection (manifest.Tools → host's agent-tool table).
 //   - Process-global tool.Registry hydration for /tools/execute.
 //
-// The kernel does NOT import host model packages (e.g. ops' meta-core/models
-// or link's database). Instead, hosts wire concrete implementations of the
-// interfaces below. ports.go is the contract; bridge.go and friends consume
-// it. *gorm.DB freely crosses the boundary because other kernel packages
-// (installer, dynamic, navigation) already depend on it.
+// The kernel does NOT import host model packages. Instead, hosts wire
+// concrete implementations of the interfaces below. ports.go is the contract;
+// bridge.go and friends consume it. *gorm.DB freely crosses the boundary
+// because other kernel packages (installer, dynamic, navigation) already
+// depend on it.
 package bridge
 
 import (
@@ -19,9 +19,9 @@ import (
 )
 
 // ActionContext is the kernel-owned struct passed to ActionInterceptor calls.
-// It mirrors what UI hosts (ops) populate for their action runner without
-// pulling host-specific model packages into the kernel. Hosts may carry a
-// richer context internally and shim into this struct at the boundary.
+// It mirrors what UI hosts populate for their action runner without pulling
+// host-specific model packages into the kernel. Hosts may carry a richer
+// context internally and shim into this struct at the boundary.
 type ActionContext struct {
 	OrgID     uuid.UUID
 	UserID    uuid.UUID
@@ -45,9 +45,9 @@ type ActionInterceptorRegistry interface {
 }
 
 // Tool is the host-side projection of a manifest.ToolDef into the host's
-// agent-tool storage layer. Each host has its own row shape (link uses
-// AgentTool with MarketplaceSlug, ops uses AgentTool with a `_metacore`
-// header marker), so the kernel only knows the addon-keyed identity.
+// agent-tool storage layer. Each host has its own row shape (e.g. some hosts
+// key by MarketplaceSlug, others use a header-marker convention), so the
+// kernel only knows the addon-keyed identity.
 type Tool struct {
 	OrgID    uuid.UUID
 	AddonKey string
@@ -61,7 +61,7 @@ type Tool struct {
 //   - DeleteByAddon to drain rows on uninstall.
 //
 // Implementations decide how to materialize a Tool — including resolving the
-// host-specific AgentID (link binds to the org's default agent in ops, etc).
+// host-specific AgentID (e.g. binding to the org's default agent).
 type ToolStore interface {
 	LoadByAddon(orgID uuid.UUID, addonKey string) ([]Tool, error)
 	Upsert(tools []Tool) error
@@ -69,16 +69,16 @@ type ToolStore interface {
 }
 
 // AgentResolver returns the default agent UUID for an org. Hosts that bind
-// agent_tools to a parent agent (ops, link) implement this; hosts without
-// agents (none today) can return uuid.Nil.
+// agent_tools to a parent agent implement this; hosts without agents can
+// return uuid.Nil.
 type AgentResolver interface {
 	DefaultAgent(orgID uuid.UUID) (uuid.UUID, error)
 }
 
 // LegacyLifecycle is the minimum surface the bridge needs to mirror
 // compiled-in (pre-bundle) addons into the kernel's lifecycle registry.
-// Hosts that ship a parallel "legacy" addon system (ops) implement this;
-// hosts that only consume kernel-native addons can return an empty map.
+// Hosts that ship a parallel "legacy" addon system implement this; hosts
+// that only consume kernel-native addons can return an empty map.
 type LegacyLifecycle interface {
 	Manifest() manifest.Manifest
 }

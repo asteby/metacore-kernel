@@ -1,6 +1,6 @@
-// Package host is the single object a consuming app (ops, link) mounts to
-// get the whole kernel wired together: lifecycles, interceptors, installer,
-// navigation, and on-boot service injection.
+// Package host is the single object a consuming app mounts to get the whole
+// kernel wired together: lifecycles, interceptors, installer, navigation,
+// and on-boot service injection.
 package host
 
 import (
