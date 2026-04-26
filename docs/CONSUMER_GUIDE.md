@@ -18,10 +18,16 @@ instead — this kernel only executes what the SDK produces.
 5. [Storage and migrations](#5-storage-and-migrations)
 6. [Capability model and security modes](#6-capability-model-and-security-modes)
 7. [WebSocket hub](#7-websocket-hub)
-8. [Renovate template](#8-renovate-template)
-9. [SemVer policy](#9-semver-policy)
-10. [End-to-end release flow](#10-end-to-end-release-flow)
-11. [FAQ](#11-faq)
+8. [Real-time updates](#8-real-time-updates)
+9. [Renovate template](#9-renovate-template)
+10. [SemVer policy](#10-semver-policy)
+11. [End-to-end release flow](#11-end-to-end-release-flow)
+12. [FAQ](#12-faq)
+
+> Looking for a single-page walkthrough? Try
+> [`embedding-quickstart.md`](embedding-quickstart.md). Looking for the dynamic
+> CRUD framework spec? See [`dynamic-system.md`](dynamic-system.md). For
+> permission details, [`permissions.md`](permissions.md).
 
 ---
 
@@ -135,8 +141,31 @@ type Product struct {
     Price float64 `json:"price"`
 }
 
-// ModelDefiner is the contract metadata/dynamic uses to introspect a type.
-func (Product) Definition() modelbase.Definition { /* … */ return modelbase.Definition{} }
+// modelbase.ModelDefiner is the contract dynamic / metadata use to introspect
+// a model. It has three methods — TableName, DefineTable, DefineModal.
+func (Product) TableName() string { return "products" }
+
+func (Product) DefineTable() modelbase.TableMetadata {
+    return modelbase.TableMetadata{
+        Title: "Products",
+        Columns: []modelbase.ColumnDef{
+            {Key: "name",  Label: "Name",  Type: "text",   Sortable: true},
+            {Key: "price", Label: "Price", Type: "number", Sortable: true},
+        },
+        SearchColumns:     []string{"name"},
+        EnableCRUDActions: true,
+    }
+}
+
+func (Product) DefineModal() modelbase.ModalMetadata {
+    return modelbase.ModalMetadata{
+        Title: "Product",
+        Fields: []modelbase.FieldDef{
+            {Key: "name",  Label: "Name",  Type: "text",   Required: true},
+            {Key: "price", Label: "Price", Type: "number"},
+        },
+    }
+}
 
 func main() {
     db, err := gorm.Open(postgres.Open(os.Getenv("DATABASE_URL")), &gorm.Config{})
@@ -165,6 +194,28 @@ func main() {
     log.Fatal(fiberApp.Listen(":3000"))
 }
 ```
+
+`App.RegisterModel(key, factory)` ([`host/app.go`](../host/app.go)) wires a
+factory into the kernel registry. The factory MUST return a fresh,
+zero-valued instance on every call — `dynamic.Service` instantiates one per
+request and mutates it. The returned value MUST satisfy
+`modelbase.ModelDefiner`:
+
+```go
+type ModelDefiner interface {
+    TableName() string
+    DefineTable() TableMetadata
+    DefineModal() ModalMetadata
+}
+```
+
+`TableName` selects the database table (must match the table the kernel
+created — see [`dynamic-system.md`](dynamic-system.md) for declarative
+addons whose tables are produced by the installer). `DefineTable` and
+`DefineModal` drive the metadata endpoints and, by extension, the
+runtime-react UI. Any change to the JSON tags on `TableMetadata` /
+`ModalMetadata` is a MAJOR version bump — they are part of the wire
+contract.
 
 What you get for free:
 
@@ -281,6 +332,12 @@ audit usage before flipping to enforce.
 The complete list of capabilities and the format of the manifest section that
 declares them lives in the SDK documentation (`docs/manifest.md`).
 
+The kernel also ships a **user-level** capability system
+(`permission.Service`) that gates every dynamic CRUD request on
+`<resource>.<action>` capabilities. Wire `host.AppConfig.PermissionStore` to
+turn it on. See [`permissions.md`](permissions.md) for the full model
+(stores, super-roles, Fiber gate middleware, addon vs user gates).
+
 ## 7. WebSocket hub
 
 The hub is mounted automatically by `host.App.Mount` at `/api/ws`. Auth is
@@ -303,7 +360,68 @@ app.WSHub.SendToUsers(userIDs, ws.Message{
 without forking the package. The hub does not persist anything — wire the
 optional `OnNotification` hook if your app needs durable storage.
 
-## 8. Renovate template
+## 8. Real-time updates
+
+The dynamic CRUD layer **does not** broadcast row changes automatically.
+The kernel ships the hub; the host decides who receives a message. The
+recommended pattern is to wrap the dynamic service so every mutation
+publishes a typed message to the affected users:
+
+```go
+import (
+    "context"
+
+    "github.com/asteby/metacore-kernel/dynamic"
+    "github.com/asteby/metacore-kernel/modelbase"
+    "github.com/asteby/metacore-kernel/ws"
+    "github.com/google/uuid"
+)
+
+const MsgTicketCreated ws.MessageType = "TICKET_CREATED"
+
+type ticketRealtime struct {
+    dyn  *dynamic.Service
+    hub  *ws.Hub
+    orgUserIDs func(context.Context, uuid.UUID) []uuid.UUID
+}
+
+func (t *ticketRealtime) Create(ctx context.Context, user modelbase.AuthUser, in map[string]any) (map[string]any, error) {
+    out, err := t.dyn.Create(ctx, "tickets", user, in)
+    if err != nil {
+        return nil, err
+    }
+    t.hub.SendToUsers(
+        t.orgUserIDs(ctx, user.GetOrganizationID()),
+        ws.Message{Type: MsgTicketCreated, Payload: out},
+    )
+    return out, nil
+}
+```
+
+`Hub.SendToUsers` ([`ws/hub.go`](../ws/hub.go)) is fire-and-forget,
+non-blocking, and per-process. For multi-replica deployments, fan out via
+the addon event bus ([`events/`](../events/)) and have each replica
+subscribe to a forwarder that re-publishes to its local hub — the hub is
+a process-local primitive on purpose.
+
+For per-model hooks, register on a `dynamic.HookRegistry` and pass it into
+`dynamic.Config.Hooks` (the registry is keyed by model name):
+
+```go
+hooks := dynamic.NewHookRegistry()
+hooks.RegisterAfterCreate("tickets", func(ctx context.Context, hc dynamic.HookContext, record any) error {
+    hub.SendToUsers(
+        orgUserIDs(ctx, hc.User.GetOrganizationID()),
+        ws.Message{Type: MsgTicketCreated, Payload: record},
+    )
+    return nil
+})
+```
+
+See [`dynamic-system.md`](dynamic-system.md), section *Real-time updates*,
+for the rationale and trade-offs.
+
+## 9. Renovate template
 
 Copy [`docs/consumer-renovate-template.json`](./consumer-renovate-template.json)
 to the root of your consumer repository as `renovate.json`. The template
@@ -366,7 +484,7 @@ jobs:
           configurationFile: renovate.json
 ```
 
-## 9. SemVer policy
+## 10. SemVer policy
 
 The kernel follows [SemVer 2.0](https://semver.org/) strictly. When Renovate
 opens a bump PR, read the version delta:
@@ -390,7 +508,7 @@ public struct, or changing a function signature is always a major bump (see
 - **Pre-1.0 minor (`v0.5` → `v0.6`)** — treat as potentially breaking even
   though it is technically minor; `v0.x` releases retain the right to break.
 
-## 10. End-to-end release flow
+## 11. End-to-end release flow
 
 ```
 [Kernel] git tag vX.Y.Z && git push --tags
@@ -414,7 +532,7 @@ public struct, or changing a function signature is always a major bump (see
 End-to-end latency is typically 5–15 minutes from `git push --tags` to every
 consumer's `main`.
 
-## 11. FAQ
+## 12. FAQ
 
 **Can I bypass the Go proxy?**
 Yes. `GOPROXY=direct go get github.com/asteby/metacore-kernel@<branch-or-sha>`

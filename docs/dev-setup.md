@@ -20,6 +20,14 @@ instead.
 
 ---
 
+> Embedding the kernel in a host? You want
+> [`CONSUMER_GUIDE.md`](CONSUMER_GUIDE.md) and
+> [`embedding-quickstart.md`](embedding-quickstart.md). Working on the
+> dynamic CRUD framework? Read [`dynamic-system.md`](dynamic-system.md)
+> first — fixtures, handler tests, and migration helpers in
+> `dynamic/*_test.go`, `metadata/*_test.go`, and `installer/*_test.go`
+> assume the contracts documented there.
+
 ## 1. Prerequisites
 
 | Tool       | Version                          |
@@ -203,7 +211,38 @@ off when diagnosing addon failures:
   global 256 MiB ceiling on the runtime config. Override per-addon via
   `manifest.BackendSpec`.
 
-## 9. Releasing
+## 9. Working on the dynamic CRUD framework
+
+Most kernel changes that affect consumer apps land in `dynamic/`,
+`metadata/`, `permission/`, `installer/`, or `manifest/`. A few patterns
+that pay off when iterating there:
+
+- **End-to-end fixture per package.** `dynamic/service_test.go` builds an
+  in-memory SQLite DB, registers a fake model, and exercises Create / Get /
+  List / Update / Delete. Copy that fixture to add a regression test for
+  a new code path; do not stand up Postgres unless you are testing RLS or
+  a Postgres-only feature.
+- **Handler tests use `app.Test()`.** `metadata/handler_test.go` shows the
+  pattern: build a Fiber app, mount the handler, send `httptest`-style
+  requests, assert the JSON envelope. Keep handler tests as thin as
+  possible — service-level tests cover correctness, handler tests cover
+  status codes and the wire envelope.
+- **Manifest fixtures live in tests.** `manifest/validate_test.go` and
+  `installer/dualwrite_test.go` declare manifests inline. There is no
+  separate fixture directory; if you need a complex one, add it next to
+  the test that uses it.
+- **Schema-affecting changes touch three places.** Adding a column type
+  to `dynamic/model.go:columnGoType` also requires `dynamic/schema.go:pgColumnType`
+  and a corresponding entry in [`dynamic-system.md`](dynamic-system.md)
+  *Allowed column types*. Renaming or removing a column type is a MAJOR
+  bump because addon manifests in the wild depend on it.
+- **Public response shapes are wire contracts.** The JSON tags on
+  `modelbase.TableMetadata`, `modelbase.ModalMetadata`, the
+  `dynamic.Handler` envelope (`{success, data, meta}`) and `query.PageMeta`
+  are stable across minors. Adding a field is fine; removing or renaming
+  one is a MAJOR.
+
+## 10. Releasing
 
 The release process — version selection, tag publication, GoReleaser,
 consumer dispatch, retract — is documented end-to-end in
