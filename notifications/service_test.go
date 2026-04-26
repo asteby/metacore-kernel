@@ -18,12 +18,23 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	// Using a unique shared-cache URI ensures all connections from the gorm
 	// pool see the same tables (sqlite :memory: is per-connection otherwise).
-	dsn := fmt.Sprintf("file:notif_%d?mode=memory&cache=shared", time.Now().UnixNano())
+	// _busy_timeout makes SQLite wait for write locks instead of returning
+	// "database is locked" instantly — critical under the worker pool's
+	// concurrent UPDATEs on slow CI runners.
+	dsn := fmt.Sprintf("file:notif_%d?mode=memory&cache=shared&_busy_timeout=5000", time.Now().UnixNano())
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		DisableForeignKeyConstraintWhenMigrating: true,
 	})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
+	}
+	// SQLite shared-cache + multi-conn pools deadlock under concurrent writes
+	// (the worker pool's UPDATEs vs the producers' INSERTs). Pinning the pool
+	// to a single connection serializes access at the driver layer and lets
+	// the busy_timeout actually do its job. In-memory DB so the bottleneck is
+	// negligible for tests.
+	if sqlDB, sqlErr := db.DB(); sqlErr == nil {
+		sqlDB.SetMaxOpenConns(1)
 	}
 	// GORM's soft-delete requires deleted_at; AutoMigrate would work too but
 	// sqlite dialect + BaseUUIDModel's default:gen_random_uuid() don't mix,
@@ -96,7 +107,7 @@ func TestEnqueueAndDeliver(t *testing.T) {
 		t.Fatal("expected entry id")
 	}
 
-	waitUntil(t, 1*time.Second, func() bool { return delivered.Load() == 1 })
+	waitUntil(t, 3*time.Second, func() bool { return delivered.Load() == 1 })
 
 	var entry QueueEntry
 	db.First(&entry, "id = ?", res.EntryID)
@@ -133,7 +144,7 @@ func TestDedupWithinWindow(t *testing.T) {
 		t.Fatal("first enqueue must not be dedup")
 	}
 	// let worker pick up the first entry
-	waitUntil(t, 500*time.Millisecond, func() bool { return delivered.Load() == 1 })
+	waitUntil(t, 2*time.Second, func() bool { return delivered.Load() == 1 })
 
 	r2, err := svc.Enqueue(context.Background(), req)
 	if err != nil {
@@ -209,7 +220,7 @@ func TestRetryUntilMax(t *testing.T) {
 		t.Fatalf("enqueue: %v", err)
 	}
 
-	waitUntil(t, 2*time.Second, func() bool {
+	waitUntil(t, 5*time.Second, func() bool {
 		var entry QueueEntry
 		db.First(&entry, "id = ?", r.EntryID)
 		return entry.Status == StatusFailed
@@ -242,7 +253,7 @@ func TestPermanentFailureNoRetry(t *testing.T) {
 		t.Fatalf("enqueue: %v", err)
 	}
 
-	waitUntil(t, 500*time.Millisecond, func() bool {
+	waitUntil(t, 2*time.Second, func() bool {
 		var entry QueueEntry
 		db.First(&entry, "id = ?", r.EntryID)
 		return entry.Status == StatusFailed
@@ -266,7 +277,7 @@ func TestNoHandlerFailsImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	waitUntil(t, 500*time.Millisecond, func() bool {
+	waitUntil(t, 2*time.Second, func() bool {
 		var entry QueueEntry
 		db.First(&entry, "id = ?", r.EntryID)
 		return entry.Status == StatusFailed
