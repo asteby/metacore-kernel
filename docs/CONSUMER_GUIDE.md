@@ -1,69 +1,101 @@
-# Consumer Guide — metacore-kernel
+# Consumer Guide
 
-Guía para apps que consumen el kernel como library Go: `ops`, `link`, `pilot`, `doctores.lat`, `p2p`, `visor`, `operador360`.
+This guide is for engineers integrating `metacore-kernel` into a Go backend.
+It assumes you are building one of the host applications in the Asteby
+ecosystem (`ops`, `link`, `pilot`, `doctores.lat`, `p2p`, `visor`,
+`operador360`) or a comparable embedder. Frontend addon authors should read
+the [`metacore-sdk`](https://github.com/asteby/metacore-sdk) documentation
+instead — this kernel only executes what the SDK produces.
 
 ---
 
-## 1. Instalación
+## Table of contents
 
-```bash
-go get github.com/asteby/metacore-kernel@v0.1.0
-go mod tidy
-```
+1. [Installing the module](#1-installing-the-module)
+2. [Private-module access](#2-private-module-access)
+3. [Quickstart — `host.App`](#3-quickstart--hostapp)
+4. [Adding the addon plane — `host.Host`](#4-adding-the-addon-plane--hosthost)
+5. [Storage and migrations](#5-storage-and-migrations)
+6. [Capability model and security modes](#6-capability-model-and-security-modes)
+7. [WebSocket hub](#7-websocket-hub)
+8. [Renovate template](#8-renovate-template)
+9. [SemVer policy](#9-semver-policy)
+10. [End-to-end release flow](#10-end-to-end-release-flow)
+11. [FAQ](#11-faq)
 
-En `go.mod` aparecerá:
+---
 
-```go
-require github.com/asteby/metacore-kernel v0.1.0
-```
-
-Para traer `latest` durante desarrollo:
+## 1. Installing the module
 
 ```bash
 go get github.com/asteby/metacore-kernel@latest
+go mod tidy
 ```
 
----
-
-## 2. Acceso a repo privado
-
-El kernel vive en un repo privado (`github.com/asteby/metacore-kernel`). Configuración única por máquina de desarrollador:
-
-### 2.1. Variables de entorno
+Pin a specific tag in production:
 
 ```bash
-# Añadir al shell rc (~/.zshrc, ~/.bashrc):
-go env -w GOPRIVATE="github.com/asteby/*"
-go env -w GONOSUMCHECK="github.com/asteby/*"
+go get github.com/asteby/metacore-kernel@v0.2.0
 ```
 
-Equivalente temporal en una sesión:
+Once the module is in your `go.mod`:
+
+```go
+require github.com/asteby/metacore-kernel v0.2.0
+```
+
+For local development against an in-progress kernel, drop a `replace`
+directive into your app's `go.mod`:
+
+```go
+replace github.com/asteby/metacore-kernel => ../metacore-kernel
+```
+
+Run `go mod edit -dropreplace github.com/asteby/metacore-kernel` and `go mod
+tidy` before you commit, so production builds resolve to a tagged version.
+
+## 2. Private-module access
+
+The kernel lives in a private repository. Configure each developer machine
+and CI runner once.
+
+### Environment
+
+```bash
+go env -w GOPRIVATE="github.com/asteby/*"
+go env -w GOSUMDB=off                            # private modules skip sumdb
+```
+
+Per-shell equivalent:
 
 ```bash
 export GOPRIVATE="github.com/asteby/*"
-export GONOSUMCHECK="github.com/asteby/*"
+export GOSUMDB=off
 ```
 
-### 2.2. Auth vía SSH (recomendado para devs)
+### SSH (developers)
 
 ```bash
 git config --global url."git@github.com:".insteadOf "https://github.com/"
 ```
 
-Requiere clave SSH cargada en GitHub (`ssh-keygen -t ed25519 -C "you@example.com"` + añadir `.pub` en https://github.com/settings/keys).
+Requires an SSH key registered with GitHub
+(`ssh-keygen -t ed25519 -C "you@example.com"` and add the `.pub` at
+[github.com/settings/keys](https://github.com/settings/keys)).
 
-### 2.3. Auth vía token (CI / headless)
+### Token (CI / headless)
 
 ```bash
 cat > ~/.netrc <<EOF
 machine github.com
   login x-access-token
-  password $GITHUB_TOKEN
+  password ${GITHUB_TOKEN}
 EOF
 chmod 600 ~/.netrc
 ```
 
-En GitHub Actions de consumidoras, usar un PAT con scope `repo:read`:
+In GitHub Actions for consumer repositories, mint a fine-grained token with
+read access to `asteby/metacore-kernel` and bind it before `go mod download`:
 
 ```yaml
 - name: Configure netrc
@@ -76,67 +108,206 @@ En GitHub Actions de consumidoras, usar un PAT con scope `repo:read`:
     chmod 600 ~/.netrc
 ```
 
----
+## 3. Quickstart — `host.App`
 
-## 3. Quickstart
-
-Ejemplo mínimo montando auth + metadata + dynamic CRUD con Fiber:
+`host.App` is the recommended entry point. It wires `auth + metadata + dynamic
+CRUD + WebSocket hub` and, when enabled, `permission`, `push`, `webhooks` and
+Prometheus metrics. The minimal embedder is two screens long:
 
 ```go
 package main
 
 import (
     "log"
+    "os"
 
     "github.com/gofiber/fiber/v2"
     "gorm.io/driver/postgres"
     "gorm.io/gorm"
 
-    "github.com/asteby/metacore-kernel/auth"
-    "github.com/asteby/metacore-kernel/dynamic"
-    "github.com/asteby/metacore-kernel/metadata"
+    "github.com/asteby/metacore-kernel/host"
+    "github.com/asteby/metacore-kernel/modelbase"
 )
 
+type Product struct {
+    modelbase.BaseUUIDModel
+    Name  string  `gorm:"size:120;not null" json:"name"`
+    Price float64 `json:"price"`
+}
+
+// ModelDefiner is the contract metadata/dynamic uses to introspect a type.
+func (Product) Definition() modelbase.Definition { /* … */ return modelbase.Definition{} }
+
 func main() {
-    db, err := gorm.Open(postgres.Open(mustEnv("DATABASE_URL")), &gorm.Config{})
+    db, err := gorm.Open(postgres.Open(os.Getenv("DATABASE_URL")), &gorm.Config{})
     if err != nil {
         log.Fatalf("db: %v", err)
     }
 
-    app := fiber.New()
-
-    // 1. Auth: login/refresh/logout + middleware JWT
-    authSvc := auth.NewService(auth.Config{
-        DB:           db,
-        JWTSecret:    mustEnv("JWT_SECRET"),
-        RefreshTTLh:  720,
-        AccessTTLmin: 15,
+    app := host.NewApp(host.AppConfig{
+        DB:             db,
+        JWTSecret:      []byte(os.Getenv("JWT_SECRET")),
+        RunMigrations:  true,
+        EnableMetrics:  true,
+        EnableWebhooks: true,
+    }).RegisterModel("products", func() modelbase.ModelDefiner {
+        return &Product{}
     })
-    authSvc.MountRoutes(app.Group("/auth"))
+    defer app.Stop()
 
-    // 2. Metadata: registro de entidades + catálogo expuesto
-    md := metadata.New(db)
-    md.Register(metadata.Entity{
-        Name:   "invoice",
-        Fields: []metadata.Field{{Name: "amount", Type: "decimal"}},
-    })
-    md.MountRoutes(app.Group("/metadata"))
+    fiberApp := fiber.New()
 
-    // 3. Dynamic: CRUD genérico sobre las entidades registradas
-    dyn := dynamic.New(db, md)
-    dyn.MountRoutes(app.Group("/api"), authSvc.Middleware())
+    // app.Mount returns the authenticated sub-router so apps can append
+    // their own domain routes on top of the kernel-provided ones.
+    api := app.Mount(fiberApp.Group("/api"))
+    api.Get("/me", func(c *fiber.Ctx) error { /* … */ return nil })
 
-    log.Fatal(app.Listen(":3000"))
+    log.Fatal(fiberApp.Listen(":3000"))
 }
 ```
 
-Ver `ARCHITECTURE.md` en la raíz del kernel para el catálogo completo de módulos (`host`, `events`, `navigation`, `permission`, `query`, `security`, `workflows`).
+What you get for free:
 
----
+| Mount point                | Source        | Notes                                                  |
+| -------------------------- | ------------- | ------------------------------------------------------ |
+| `POST /api/auth/login`     | `auth/`       | JWT issuance, password verification                    |
+| `POST /api/auth/refresh`   | `auth/`       | Rotate access token                                    |
+| `GET  /api/metadata/:name` | `metadata/`   | Cached `TableMetadata` / `ModalMetadata`               |
+| CRUD `GET/POST/PUT/DELETE` | `dynamic/`    | Generic over every registered model                    |
+| `GET  /api/push/*`         | `push/`       | Web Push (when `EnablePush=true`)                      |
+| `GET  /api/webhooks/*`     | `webhooks/`   | When `EnableWebhooks=true`                             |
+| `GET  /api/ws?token=…`     | `ws/`         | WebSocket upgrade                                      |
+| `GET  /metrics`            | `metrics/`    | Prometheus exposition (`EnableMetrics=true`)           |
 
-## 4. Renovate — template de config
+## 4. Adding the addon plane — `host.Host`
 
-Copia `docs/consumer-renovate-template.json` del kernel a la raíz de tu repo consumidor como `renovate.json`. Snippet clave:
+If your app should host federated WASM addons (install/enable/disable,
+lifecycle hooks, navigation merge), build a `host.Host` next to the
+`host.App`. Both share the same `*gorm.DB`.
+
+```go
+import (
+    "github.com/asteby/metacore-kernel/host"
+    "github.com/asteby/metacore-kernel/lifecycle"
+)
+
+h, err := host.New(host.Config{
+    DB:            db,
+    KernelVersion: "0.2.0",
+    Services: map[string]any{
+        "eventbus": bus,
+        "fiscal":   fiscalSvc,
+    },
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+// Compiled-in addons (Go code linked into the host binary)
+h.RegisterCompiled("billing", &billing.Addon{})
+
+// Run every addon's Boot() hook with the shared services.
+if err := h.Boot(); err != nil {
+    log.Fatal(err)
+}
+
+// Render the merged sidebar for an organization.
+groups, err := h.Navigation(orgID, coreGroups)
+```
+
+Addon types:
+
+- **Compiled** — Go code linked into the host. Highest trust, fastest
+  invocation; registered via `RegisterCompiled`.
+- **Declarative** — manifest-only. Behavior wired through webhooks and
+  interceptors registered at `Boot()`.
+- **Federated WASM** — `bundle.tgz` produced by `metacore-sdk`,
+  installed via `installer.Installer`. The kernel verifies the manifest
+  signature, materialises any frontend assets under `FrontendBasePath`, and
+  hands the WASM module to `runtime/wasm.Host` for execution under the
+  capability enforcer.
+
+## 5. Storage and migrations
+
+The kernel ships **versioned SQL migrations** for its own tables (`auth`,
+`webhooks`, `push`, `installer`, `eventlog`, `notifications`).
+
+```go
+host.NewApp(host.AppConfig{
+    DB:            db,
+    JWTSecret:     secret,
+    RunMigrations: true, // recommended for production
+})
+```
+
+`RunMigrations: true` invokes `migrations.Runner` (Goose-based, tracks state
+in `goose_db_version`). Setting it to `false` falls back to GORM `AutoMigrate`
+for the same set of tables — convenient locally, but unsafe across kernel
+upgrades. Treat AutoMigrate as a development-only path.
+
+PostgreSQL is the supported production driver. The kernel also tests against
+SQLite (`gorm.io/driver/sqlite`) for embedded scenarios; mileage on dialect-
+specific features may vary.
+
+## 6. Capability model and security modes
+
+Every addon-issued operation that touches the host (DB read, event publish,
+HTTP call out) goes through `security.Enforcer`. The enforcer has two modes:
+
+- `ModeShadow` — log violations, never block. Default during rollout.
+- `ModeEnforce` — return an error on violations.
+
+Operators flip the mode at runtime via the `METACORE_ENFORCE` environment
+variable (`1`, `true`, `yes` enable enforce). No redeploy required.
+
+```go
+enf := security.NewEnforcer(security.ModeFromEnv())
+```
+
+Capabilities are declared per addon in its manifest and resolved into a
+compiled `Capabilities` set at install time. Examples:
+
+| Capability         | Granted to                                      |
+| ------------------ | ----------------------------------------------- |
+| `event:emit`       | Addons that need to publish on the in-process bus |
+| `event:subscribe`  | Addons that consume events (wildcard supported) |
+| `db:read`          | Read access through the dynamic CRUD service    |
+| `http:fetch`       | Outbound HTTP from inside the WASM sandbox      |
+
+Violations are reported via the kernel's structured logger; in shadow mode
+they appear as `level=warn category=enforcer mode=shadow` so operators can
+audit usage before flipping to enforce.
+
+The complete list of capabilities and the format of the manifest section that
+declares them lives in the SDK documentation (`docs/manifest.md`).
+
+## 7. WebSocket hub
+
+The hub is mounted automatically by `host.App.Mount` at `/api/ws`. Auth is
+JWT-based, taken from the `?token=` query string at upgrade time:
+
+```
+wss://api.example.com/api/ws?token=<jwt>
+```
+
+Send messages from your domain code:
+
+```go
+app.WSHub.SendToUsers(userIDs, ws.Message{
+    Type:    ws.MsgNotification,
+    Payload: payload,
+})
+```
+
+`MessageType` is a plain string; declare your own constants in app code
+without forking the package. The hub does not persist anything — wire the
+optional `OnNotification` hook if your app needs durable storage.
+
+## 8. Renovate template
+
+Copy [`docs/consumer-renovate-template.json`](./consumer-renovate-template.json)
+to the root of your consumer repository as `renovate.json`. The template
+encodes the policy the ecosystem agreed on:
 
 ```json
 {
@@ -163,18 +334,24 @@ Copia `docs/consumer-renovate-template.json` del kernel a la raíz de tu repo co
 }
 ```
 
-### Requisitos en el repo consumidor
+Prerequisites in the consumer repository:
 
-1. **Instalar Renovate GitHub App** con acceso al repo.
-2. **Habilitar `Allow auto-merge`** en Settings -> General del repo (para que `platformAutomerge` funcione).
-3. **Branch protection** en `main` con "Require status checks to pass before merging" -> CI debe pasar antes del auto-merge.
-4. **GITHUB_TOKEN / RENOVATE_GITHUB_TOKEN** con acceso al módulo privado. En Renovate Cloud, configurar `hostRules` con token PAT.
+1. **Renovate GitHub App** installed with access to the repo.
+2. **Allow auto-merge** in Settings → General (enables `platformAutomerge`).
+3. **Branch protection** on `main` requiring CI to pass before merge.
+4. A token with `repo:read` on `asteby/metacore-kernel`, exposed to Renovate
+   via `hostRules` (Renovate Cloud) or `secrets.RENOVATE_GITHUB_TOKEN`
+   (self-hosted).
 
-### Dispatch on-demand
+### On-demand dispatch
 
-El workflow de release del kernel dispara `repository_dispatch` con `event_type=metacore-kernel-released` en cada consumidora. Añade en tu repo `.github/workflows/renovate-trigger.yml`:
+The kernel's release workflow fires `repository_dispatch` with
+`event_type=metacore-kernel-released` to every consumer when a tag is
+published. Add the following to consumer repos to trigger Renovate
+immediately instead of waiting for the next cron tick:
 
 ```yaml
+# .github/workflows/renovate-trigger.yml
 name: Renovate on kernel release
 on:
   repository_dispatch:
@@ -189,72 +366,75 @@ jobs:
           configurationFile: renovate.json
 ```
 
----
+## 9. SemVer policy
 
-## 5. Política SemVer — cómo leer el changelog
+The kernel follows [SemVer 2.0](https://semver.org/) strictly. When Renovate
+opens a bump PR, read the version delta:
 
-Cuando Renovate abra un PR bumpeando el kernel:
+| Bump                           | Meaning                                                 | Default action     |
+| ------------------------------ | ------------------------------------------------------- | ------------------ |
+| `vX.Y.Z` → `vX.Y.(Z+1)`        | Patch — bug fixes only                                  | Auto-merge on green CI |
+| `vX.Y.Z` → `vX.(Y+1).0`        | Minor — new symbols, backward-compatible                | Auto-merge if your CI exercises kernel routes |
+| `vX.Y.Z` → `v(X+1).0.0`        | Major — breaking API changes; import path changes (`/v2`) | Manual review required |
 
-### Patch (`v0.1.0` -> `v0.1.1`)
+What we never do: silently change the meaning of an exported symbol within
+the same major. Adding a method to an interface, removing a field from a
+public struct, or changing a function signature is always a major bump (see
+`ARCHITECTURE.md`, *Semver discipline*).
 
-- Sólo bug fixes. Auto-merge es seguro siempre que el CI pase.
-- Revisar el changelog toma <30s; busca "Bug fixes".
+### Risk signals on a Renovate PR
 
-### Minor (`v0.1.0` -> `v0.2.0`)
+- **CI fails on the consumer** — do not merge; open an upstream issue.
+- **Changelog mentions schema change** — verify your migration runner is
+  configured (`RunMigrations: true`).
+- **Pre-1.0 minor (`v0.5` → `v0.6`)** — treat as potentially breaking even
+  though it is technically minor; `v0.x` releases retain the right to break.
 
-- Nuevas features, nuevos símbolos públicos. Backward-compatible.
-- Auto-merge es seguro **si tu CI cubre las rutas de integración con kernel** (auth, metadata, dynamic).
-- Si tu repo usa kernel de forma superficial (sólo un módulo), revisa si añadieron deprecaciones (`// Deprecated:`).
-
-### Major (`v1.x` -> `v2.x`)
-
-- **NO auto-merge**. Breaking changes en API.
-- El import path cambia: `github.com/asteby/metacore-kernel/v2`. Renovate no puede hacer ese rewrite automáticamente — requiere intervención manual con `gopls rename` o `go mod edit -replace`.
-- Revisar `docs/MIGRATIONS.md` en el kernel (si existe) antes de hacer el upgrade.
-
-### Señales de riesgo en un PR de Renovate
-
-- **Falla el CI de la consumidora** -> no hacer merge, abrir issue upstream.
-- **Changelog menciona "schema change"** -> revisar si tu app corre migraciones automáticas.
-- **Bump cruza un major minor (`v0.5` -> `v0.6`)** en pre-1.0 -> tratar como posible breaking aunque sea técnicamente minor.
-
----
-
-## 6. Flujo completo esperado
+## 10. End-to-end release flow
 
 ```
-[Kernel] git tag v0.1.1 && git push --tags
-       |
-       v
-[Kernel] Release workflow: tests -> proxy ping -> GoReleaser -> dispatch
-       |
-       v
-[Consumer] repository_dispatch recibido -> Renovate corre
-       |
-       v
-[Consumer] PR "chore(deps): update github.com/asteby/metacore-kernel to v0.1.1"
-       |
-       v
-[Consumer] CI pasa -> Renovate auto-merge -> main actualizado
-       |
-       v
-[Consumer] Deploy automatizado (si aplica)
+[Kernel] git tag vX.Y.Z && git push --tags
+       │
+       ▼
+[Kernel] Release workflow: tests → proxy ping → GoReleaser → dispatch
+       │
+       ▼
+[Consumer] repository_dispatch received → Renovate runs
+       │
+       ▼
+[Consumer] PR "chore(deps): update github.com/asteby/metacore-kernel to vX.Y.Z"
+       │
+       ▼
+[Consumer] CI green → Renovate auto-merge → main updated
+       │
+       ▼
+[Consumer] Deploy pipeline (out of scope for this repo)
 ```
 
-Tiempo típico end-to-end: 5-15 minutos entre `git push --tags` y `main` actualizado en todas las consumidoras.
+End-to-end latency is typically 5–15 minutes from `git push --tags` to every
+consumer's `main`.
 
----
+## 11. FAQ
 
-## 7. FAQ
+**Can I bypass the Go proxy?**
+Yes. `GOPROXY=direct go get github.com/asteby/metacore-kernel@<branch-or-sha>`
+fetches straight from GitHub. Useful for testing un-tagged work.
 
-**Q: ¿Puedo saltar el proxy y usar el repo directo?**
-A: Sí — `GOPROXY=direct go get ...`. Útil para probar branches sin tag.
+**How do I pin to a specific commit?**
+`go get github.com/asteby/metacore-kernel@<sha>` resolves to a pseudo-version
+(`v0.0.0-YYYYMMDDhhmmss-<sha12>`) — fine for development branches, do not
+use in production releases.
 
-**Q: ¿Cómo uso un commit específico?**
-A: `go get github.com/asteby/metacore-kernel@<commit-sha>` -> `go.mod` usa una pseudo-version (`v0.0.0-YYYYMMDDhhmmss-<sha12>`).
+**Can I fork the kernel?**
+Forking breaks Renovate for your consumer (you stop receiving upstream bumps)
+and forks your security model. Open an issue or a PR upstream instead.
 
-**Q: ¿Y si necesito una feature que todavía no está tageada?**
-A: Pide al maintainer que release. Para desarrollo local, usa `replace`: `go mod edit -replace github.com/asteby/metacore-kernel=../metacore-kernel`.
+**Where is the WASM ABI documented?**
+Single source of truth lives in the SDK at `docs/wasm-abi.md`. The
+implementation is `runtime/wasm/abi.go` in this repo.
 
-**Q: ¿Puedo forkear el kernel?**
-A: Técnicamente sí, pero rompe Renovate (dejarías de recibir bumps upstream). Preferir contribuir un PR o abrir issue.
+**My handler imports `fiber`. Is the kernel framework-locked?**
+Services (`*.Service` types) are framework-agnostic and accept
+`context.Context`. Handlers (`*.Handler`) are Fiber-specific by convention.
+If you switch transports (gRPC, Echo, Lambda), consume the services directly
+and write your own handler — see `ARCHITECTURE.md`, *Law 3*.

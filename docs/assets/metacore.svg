@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Logo_AstebyMetacore" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96.8 96.8">
+  <defs>
+    <linearGradient id="metacore-gradient" x1="0%" y1="0%" x2="100%" y2="0%" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#14b8a6"/>
+      <stop offset="100%" stop-color="#0d9488"/>
+    </linearGradient>
+
+    <linearGradient id="shine-gradient" x1="0" y1="0" x2="100" y2="0" gradientUnits="userSpaceOnUse" gradientTransform="skewX(-30)">
+      <stop offset="0" stop-color="white" stop-opacity="0"/>
+      <stop offset="0.25" stop-color="white" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="white" stop-opacity="0.8"/>
+      <stop offset="0.75" stop-color="white" stop-opacity="0"/>
+      <stop offset="1" stop-color="white" stop-opacity="0"/>
+      <animateTransform attributeName="gradientTransform" type="translate" from="-200 0" to="400 0" dur="3s" repeatCount="indefinite" additive="sum" />
+    </linearGradient>
+  </defs>
+
+  <g id="logo-shape">
+    <path d="M74.3,96.8h-25.9C21.6,96.8,0,75,0,48.4S21.6,0,48.4,0s48.4,26.2,48.4,48.4v48.4h-22.5"/>
+  </g>
+
+  <use href="#logo-shape" fill="url(#metacore-gradient)"/>
+  <use href="#logo-shape" fill="url(#shine-gradient)" />
+
+  <!-- Icon: Prism (diamond cut) - outline + girdle for minimal depth -->
+  <g transform="translate(48.4, 48.4)">
+    <!-- Girdle: single horizontal line connecting the side vertices -->
+    <line x1="-27" y1="-4" x2="27" y2="-4"
+          stroke="white" stroke-width="6" stroke-linecap="round"/>
+
+    <!-- Outer diamond outline -->
+    <polygon points="0,-28 28,-4 0,28 -28,-4"
+             fill="none" stroke="white" stroke-width="6"
+             stroke-linejoin="round" stroke-linecap="round"/>
+  </g>
+</svg>
