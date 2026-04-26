@@ -171,7 +171,7 @@ func TestRender_StrayCloseTag(t *testing.T) {
 
 // TestRender_VoucherTemplate replays the exact production template that
 // regressed during the kernel migration so this test failing is the same
-// as the link-side smoke test failing.
+// as the host-side smoke test failing.
 func TestRender_VoucherTemplate(t *testing.T) {
 	tmpl := "Recibí tu comprobante de *{{order_number}}*.{{#detected_amount}} Monto: {{currency_symbol}}{{detected_amount}}.{{/detected_amount}} Lo revisamos y te confirmamos."
 
@@ -196,9 +196,9 @@ func TestRender_VoucherTemplate(t *testing.T) {
 	}
 }
 
-// TestRender_TicketStatusChanged is the kernel-side mirror of the
-// link/backend test that was skipped during the kernel migration.  Keeping a
-// copy here lets the kernel's CI catch regressions independently of link.
+// TestRender_TicketStatusChanged is the kernel-side mirror of a host-side
+// backend test that was skipped during the kernel migration. Keeping a copy
+// here lets the kernel's CI catch regressions independently of the host.
 func TestRender_TicketStatusChanged(t *testing.T) {
 	tmpl := "Tu ticket *{{ticket_number}}* cambió a *{{status_label}}*{{#priority_label}} — prioridad {{priority_label}}{{/priority_label}}: *{{title}}*."
 

@@ -119,8 +119,8 @@ func TestConvertLegacyInstallation_Validation(t *testing.T) {
 // TestSyncFromLegacy_DBIntegration is intentionally skipped: the metacore
 // module doesn't pull in a SQLite GORM driver (kernel stays Postgres-only to
 // avoid CGO / extra deps), and this is a unit test suite. The full round-trip
-// behaviour of SyncFromLegacy + BackfillSecrets is covered by the runbook
-// staging exercise documented in docs/migration-from-ops.md.
+// behaviour of SyncFromLegacy + BackfillSecrets is covered by the host-side
+// staging runbook.
 //
 // TODO(metacore-f1.5): re-enable once a non-CGO SQLite or an ephemeral
 // Postgres helper lands in the test harness.

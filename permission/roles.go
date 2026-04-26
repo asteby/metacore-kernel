@@ -33,9 +33,9 @@ func NormalizeRole(r string) Role {
 }
 
 // DefaultSuperRoles is the out-of-the-box list of roles that bypass every
-// capability check. RoleOwner is included to match the behaviour of the ops
-// and link permission services (both of which hardcoded owner/admin/superadmin
-// as unconditional wildcards).
+// capability check. RoleOwner is included to match the behaviour of typical
+// host permission services (which hardcode owner/admin/superadmin as
+// unconditional wildcards).
 //
 // Apps that want "admin also bypasses" pass their own via Config.SuperRoles.
 func DefaultSuperRoles() []Role {

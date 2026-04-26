@@ -1,8 +1,8 @@
 // Package flow is the Metacore workflow engine: a generic DAG executor with a
 // pluggable node registry, template interpolation, and optional persistence.
 //
-// Hosts (ops, link, future web apps) import flow to stop re-implementing the
-// same engine/registry/context patterns in every app. The kernel ships with a
+// Host applications import flow to stop re-implementing the same
+// engine/registry/context patterns in every app. The kernel ships with a
 // set of domain-free built-in nodes (HTTP, Webhook, Condition, Switch, Delay,
 // Loop, Filter, Set-Variable, Transform, Split, Merge, Error-Handler, Note,
 // Trigger); apps layer domain nodes on top via Engine.RegisterNode.
@@ -52,8 +52,8 @@
 //   - Dispatch / DispatchAll invoke the engine for matches
 //
 // The kernel ships with pass-through matchers for manual / webhook / api /
-// schedule / event. Apps register custom matchers (link provides keyword,
-// welcome, menu, fallback) on top.
+// schedule / event. Apps register custom matchers (e.g. keyword, welcome,
+// menu, fallback for a conversational host) on top.
 //
 // # What the kernel does NOT do
 //

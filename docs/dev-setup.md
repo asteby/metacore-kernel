@@ -245,7 +245,8 @@ that pay off when iterating there:
 ## 10. Releasing
 
 The release process — version selection, tag publication, GoReleaser,
-consumer dispatch, retract — is documented end-to-end in
-[`RELEASE.md`](./RELEASE.md). In short: `git push origin vX.Y.Z` runs the
-release workflow, which runs the test suite, indexes the proxy, publishes a
-GitHub Release and notifies every consumer repository.
+retract — is documented end-to-end in [`RELEASE.md`](./RELEASE.md). In
+short: `git push origin vX.Y.Z` runs the release workflow, which runs the
+test suite, indexes the proxy and publishes a GitHub Release. Consumers
+discover the new version through Renovate / Dependabot polling the Go
+proxy on their own schedule.

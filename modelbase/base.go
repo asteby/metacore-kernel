@@ -9,7 +9,7 @@ import (
 
 // ContextKeyCreatedByUserID is the gorm.DB context key that, if set to a
 // non-nil *uuid.UUID, will be copied into BaseUUIDModel.CreatedByID by the
-// BeforeCreate hook. This mirrors the ops backend convention.
+// BeforeCreate hook.
 const ContextKeyCreatedByUserID = "activity_log:user_id"
 
 // BaseUUIDModel provides common fields for every tenant-scoped record in the

@@ -8,8 +8,8 @@ import (
 )
 
 // OwnerResolver extracts (ownerType, ownerID) from the request context.
-// Apps wire their own: for ops this pulls device_id from URL params; for link
-// this pulls organization_id from JWT claims.
+// Apps wire their own: e.g. one host may pull device_id from URL params,
+// another may pull organization_id from JWT claims.
 type OwnerResolver func(c *fiber.Ctx) (string, uuid.UUID, error)
 
 // Handler exposes the webhook CRUD over Fiber.

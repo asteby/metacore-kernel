@@ -19,8 +19,8 @@ type Manifest struct {
 	// slug). Prefer the explicit triplet below for richer rendering.
 	Icon string `json:"icon,omitempty"`
 	// IconType: "brand" (simple-icons slug), "lucide" (PascalCase icon
-	// name) or "url" (absolute URL). Mirrors link/MarketplaceIntegration so
-	// the hub frontend consumes them identically.
+	// name) or "url" (absolute URL). Mirrors the host MarketplaceIntegration
+	// shape so frontends consume them identically.
 	IconType  string `json:"icon_type,omitempty"`
 	IconSlug  string `json:"icon_slug,omitempty"`
 	IconColor string `json:"icon_color,omitempty"`
@@ -47,9 +47,9 @@ type Manifest struct {
 	Settings         []SettingDef           `json:"settings,omitempty"`
 	Hooks            map[string]string      `json:"hooks,omitempty"`
 	Actions          map[string][]ActionDef `json:"actions,omitempty"`
-	// Tools are LLM-facing actions. Conversational hosts (link) sync these
-	// into their agent-tool registry on install so an AI can trigger them
-	// from a user message. Unlike Actions (UI-triggered record ops) Tools
+	// Tools are LLM-facing actions. Conversational hosts sync these into
+	// their agent-tool registry on install so an AI can trigger them from a
+	// user message. Unlike Actions (UI-triggered record operations) Tools
 	// are semantic and carry extraction hints for parameter inference.
 	Tools            []ToolDef              `json:"tools,omitempty"`
 	ModelDefinitions []ModelDefinition      `json:"model_definitions,omitempty"`
@@ -181,8 +181,8 @@ type Option struct {
 }
 
 // ToolDef is an LLM-callable function the addon exposes. Hosts with
-// conversational AI (link) register these into their agent-tool registry
-// so a user message can trigger them. The endpoint receives an HMAC-signed
+// conversational AI register these into their agent-tool registry so a
+// user message can trigger them. The endpoint receives an HMAC-signed
 // webhook produced by kernel/security.WebhookDispatcher.
 type ToolDef struct {
 	ID              string           `json:"id"`                         // unique within the addon

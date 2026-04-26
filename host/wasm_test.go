@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestHost_WASM_EndToEnd wires the minimal path a real host (ops/link) uses:
+// TestHost_WASM_EndToEnd wires the minimal path a real host uses:
 // EnableWASM → LoadWASMFromBundle(bundle with backend/backend.wasm) →
 // InvokeWASM(export). Uses a hand-crafted module with `alloc` + `echo` so the
 // test is pure stdlib + wazero (no tinygo required).

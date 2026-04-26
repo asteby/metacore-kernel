@@ -79,8 +79,8 @@ func (d *WebhookDispatcher) Dispatch(ctx context.Context, installationID uuid.UU
 		req.Header.Set("X-Metacore-Event", ev)
 	}
 	// Host-supplied context (X-Metacore-Host, X-Metacore-Tenant, and per-host
-	// keys like X-Link-Phone or X-Ops-Branch-ID) lets the same addon backend
-	// serve multiple hosts by reading whichever headers it understands.
+	// keys defined by each host) lets the same addon backend serve multiple
+	// hosts by reading whichever headers it understands.
 	if hc, ok := ctx.Value(hostCtxKey{}).(map[string]string); ok {
 		for k, v := range hc {
 			if v == "" {
@@ -148,10 +148,10 @@ func WithEvent(ctx context.Context, event string) context.Context {
 type eventKey struct{}
 
 // HostContext wraps the headers a host attaches to every outbound webhook so
-// the addon backend can branch on source (link vs ops) without the addon
-// having to hard-code host identifiers into its manifest.
+// the addon backend can branch on source without the addon having to
+// hard-code host identifiers into its manifest.
 type HostContext struct {
-	Host    string            // "ops" | "link" | any host-defined ID
+	Host    string            // any host-defined identifier
 	Tenant  string            // organization UUID string
 	Extras  map[string]string // any "X-<Host>-<Key>" headers
 }

@@ -4,9 +4,9 @@
 // builds a shared *security.WebhookDispatcher, and lazily compiles the
 // capability *security.Enforcer.
 //
-// The bridge is intentionally thin: it never talks to host model packages
-// (e.g. ops' meta-core/models). Instead it consumes the interfaces declared
-// in ports.go. ops and link supply concrete implementations at startup.
+// The bridge is intentionally thin: it never talks to host model packages.
+// Instead it consumes the interfaces declared in ports.go. Each host supplies
+// concrete implementations at startup.
 package bridge
 
 import (

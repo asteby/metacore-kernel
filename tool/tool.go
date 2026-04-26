@@ -9,10 +9,9 @@ import (
 
 // Tool is the runtime face of a manifest.ToolDef installed on a host.
 //
-// Hosts with conversational AI (link) register these into their agent-tool
-// registry so a user message can trigger them. Hosts with action-triggered
-// UI (ops) also use this contract so a click in the UI resolves to the same
-// dispatch path.
+// Hosts with conversational AI register these into their agent-tool registry
+// so a user message can trigger them. Hosts with action-triggered UI also
+// use this contract so a click in the UI resolves to the same dispatch path.
 type Tool interface {
 	// ID returns the addon-scoped tool identifier (ToolDef.ID).
 	ID() string

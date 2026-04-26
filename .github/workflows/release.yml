@@ -38,13 +38,3 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Dispatch consumer bumps
-        # Opcional: dispara workflows en apps consumidoras para que corran Renovate ahora mismo
-        run: |
-          for REPO in asteby/ops asteby/link asteby/pilot asteby/doctores.lat asteby/p2p asteby/visor asteby/operador360; do
-            gh api -X POST "repos/${REPO}/dispatches" -f event_type=metacore-kernel-released || true
-          done
-        env:
-          GH_TOKEN: ${{ secrets.CROSSREPO_DISPATCH_TOKEN }}
-        continue-on-error: true

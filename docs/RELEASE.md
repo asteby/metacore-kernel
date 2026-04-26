@@ -94,13 +94,9 @@ git push --tags
    - Checksums.
    - Automatic `prerelease: true` when the tag carries a SemVer suffix
      (`-alpha`, `-beta`, `-rc`).
-5. **Consumer dispatch** — `POST /repos/{owner}/{repo}/dispatches` to every
-   consumer repo with `event_type=metacore-kernel-released`. Each consumer
-   can subscribe via `on: repository_dispatch` to run Renovate immediately.
-
-The dispatch token (`CROSSREPO_DISPATCH_TOKEN`) needs `repo` scope on every
-consumer organisation. The step uses `continue-on-error: true` so a failed
-dispatch never blocks the release itself.
+Consumers are not notified by the kernel. They discover new versions on
+their own through Renovate / Dependabot polling the Go proxy — see
+section 6.
 
 ## 4. Verify the release
 
@@ -127,8 +123,7 @@ go mod tidy
 ```
 
 Renovate, configured per [`CONSUMER_GUIDE.md`](./CONSUMER_GUIDE.md#8-renovate-template),
-opens the PR automatically on the next schedule tick — or immediately when
-the `repository_dispatch` event arrives.
+opens the PR automatically on the next schedule tick.
 
 ## 6. Renovate in consumer repositories
 
@@ -183,7 +178,7 @@ Steps:
 
 1. Land the retract directive (and the actual fix) on `main`.
 2. Tag a new patch version that includes both (`v0.2.1`).
-3. Push the tag — the release workflow indexes it and dispatches consumers.
+3. Push the tag — the release workflow indexes it on the Go proxy.
 4. Consumers running `go get -u` will see a warning and resolve to the next
    non-retracted version.
 
@@ -200,7 +195,6 @@ retract [v0.2.0, v0.2.4]
 | `go get` reports `unknown revision`       | Proxy not indexed yet                 | `GOPROXY=direct go get …` or wait 5 minutes                          |
 | Release workflow fails on tests           | Recent race condition                 | Fix on `main`, re-tag with the next patch version                    |
 | `pkg.go.dev` does not show the new version | Index lag                             | Open `https://pkg.go.dev/github.com/asteby/metacore-kernel@vX.Y.Z` to force the fetch |
-| Consumer dispatch step fails              | Token missing scope                   | Regenerate `CROSSREPO_DISPATCH_TOKEN` with `repo`                    |
 | Consumer never receives a Renovate PR     | Renovate disabled or `GOPRIVATE` mis-configured | Inspect `renovate.json` and `hostRules.token`                       |
 
 ## 10. References

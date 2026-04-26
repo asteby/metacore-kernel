@@ -1,9 +1,9 @@
 // tools.go projects manifest.Tools into the host's agent-tool store so an
 // LLM-facing tool declared in a manifest becomes a first-class row the
-// host's agent can invoke. This is the kernel-promoted version of what
-// ops' SyncAddonTools used to do directly against models.AgentTool — now
-// the host hides its row shape behind ToolStore and the bridge stays
-// host-agnostic.
+// host's agent can invoke. This is the kernel-promoted version of a
+// host-side SyncAddonTools that used to talk directly to a host's agent-tool
+// model — now the host hides its row shape behind ToolStore and the bridge
+// stays host-agnostic.
 //
 // Idempotency: SyncAddonTools loads the existing rows for (org, addon),
 // upserts the manifest's tools, and lets the host drop orphans through

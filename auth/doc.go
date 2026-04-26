@@ -1,7 +1,7 @@
 // Package auth provides a reusable authentication module for Metacore apps
 // built on Fiber + GORM. It is deliberately free of app-specific concerns
-// (no X-Branch-ID, no hardcoded plans, no country lookup) so that ops, link,
-// and new apps can consume it without duplicating code.
+// (no X-Branch-ID, no hardcoded plans, no country lookup) so any host
+// application can consume it without duplicating code.
 //
 // # Quick start
 //
@@ -9,13 +9,13 @@
 //
 //	svc := auth.New(db, auth.Config{
 //	    JWTSecret: []byte(os.Getenv("JWT_SECRET")),
-//	    JWTIssuer: "ops",
+//	    JWTIssuer: "myapp",
 //	    JWTExpiry: 24 * time.Hour,
 //	}).
 //	    WithUserModel(func() modelbase.AuthUser { return &myapp.User{} }).
 //	    WithOrgModel(func() modelbase.AuthOrg { return &myapp.Organization{} }).
 //	    WithPostLoginHook(func(ctx context.Context, u modelbase.AuthUser, _ modelbase.AuthOrg, _ string) error {
-//	        // e.g. load the active branch for ops
+//	        // e.g. load app-specific session state
 //	        return nil
 //	    })
 //

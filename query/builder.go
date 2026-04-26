@@ -59,9 +59,8 @@ func New(meta *modelbase.TableMetadata) *Builder {
 // separately via Paginate so Count can run on the un-paginated query.
 //
 // Apply never returns an error: every validation failure (unknown column,
-// unsafe identifier) drops the offending clause silently. This matches
-// the historical ops/link behaviour — a garbage sort param produces a
-// default-sorted list, not a 400.
+// unsafe identifier) drops the offending clause silently — a garbage sort
+// param produces a default-sorted list, not a 400.
 func (b *Builder) Apply(db *gorm.DB, params Params) *gorm.DB {
 	db = b.applyFilters(db, params)
 	db = b.applySearch(db, params)

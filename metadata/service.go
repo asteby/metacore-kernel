@@ -11,8 +11,7 @@ import (
 )
 
 // DefaultCacheTTL is the fallback TTL when Config.CacheTTL is not set.
-// Chosen to match the historical ops/link behaviour where metadata was
-// considered cheap-to-recompute but still cached briefly to absorb bursts
+// Metadata is cheap-to-recompute but still cached briefly to absorb bursts
 // during frontend warm-up.
 const DefaultCacheTTL = 5 * time.Minute
 

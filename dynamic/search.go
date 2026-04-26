@@ -136,8 +136,8 @@ func (s *Service) Search(ctx context.Context, user modelbase.AuthUser, q SearchQ
 
 // buildNestedJoins translates a dotted path like "patient.user.name" into
 // LEFT JOIN statements plus the final (alias, column) to match against. The
-// convention matches the ops/link original: each relation name pluralises
-// trivially to its table and is linked via <parent>.<relation>_id = <alias>.id.
+// convention is: each relation name pluralises trivially to its table and is
+// linked via <parent>.<relation>_id = <alias>.id.
 func buildNestedJoins(rootTable, field string) (alias, column string, joins []string) {
 	parts := strings.Split(field, ".")
 	if len(parts) < 2 {

@@ -27,9 +27,10 @@ type ExecutionContext struct {
 	TriggerData map[string]interface{}
 
 	// AppContext is an opaque map that hosts use to thread app-specific state
-	// through the engine (e.g. contact ID, conversation ID, device ID in link).
-	// The engine never reads or writes AppContext — only app-provided node
-	// executors do. It is copied verbatim into FlowExecution.AppContext.
+	// through the engine (e.g. contact ID, conversation ID, device ID for a
+	// messaging host). The engine never reads or writes AppContext — only
+	// app-provided node executors do. It is copied verbatim into
+	// FlowExecution.AppContext.
 	AppContext map[string]interface{}
 
 	Variables map[string]interface{}

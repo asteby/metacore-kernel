@@ -226,8 +226,8 @@ func (h *Handler) Install(c *fiber.Ctx) error {
 				"message": err.Error(),
 			})
 		}
-		// Host-specific tool projection (link's AgentTool, ops' agent_tools).
-		// Non-fatal — the installation already succeeded.
+		// Host-specific tool projection (each host maps tools into its own
+		// agent-tool table). Non-fatal — the installation already succeeded.
 		if h.deps.ToolStore != nil {
 			_ = bridge.SyncAddonTools(h.deps.ToolStore, orgID, b.Manifest)
 		}

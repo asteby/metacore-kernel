@@ -99,8 +99,7 @@ func createIndexes(db *gorm.DB, schema string, def manifest.ModelDefinition, has
 
 // enableRLS turns on row-level security and installs a policy that scopes
 // every SELECT / UPDATE / DELETE to `current_setting('app.current_org')`.
-// Hosts must run `SET LOCAL app.current_org = '<uuid>'` per request — see
-// docs/migration-from-ops.md "RLS setup".
+// Hosts must run `SET LOCAL app.current_org = '<uuid>'` per request.
 func enableRLS(db *gorm.DB, schema, table string) error {
 	policy := "rls_org_isolation"
 	stmts := []string{

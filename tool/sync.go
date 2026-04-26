@@ -1,7 +1,7 @@
 // sync.go hosts the helpers that hydrate / drain a Registry from a
-// manifest.Manifest. They were promoted from ops/services.metacore_tool_registry
-// when the bridge layer moved into the kernel — see kernel/bridge for the
-// host-side glue that calls them.
+// manifest.Manifest. They were promoted from a host-side tool registry
+// service when the bridge layer moved into the kernel — see kernel/bridge
+// for the host-side glue that calls them.
 //
 // Rationale: the Registry is a process-global runtime mirror of the addon's
 // declared tools, used by /api/metacore/tools/execute to dispatch in O(1).
@@ -63,9 +63,9 @@ func SyncFromManifest(m manifest.Manifest, inst installer.Installation, dispatch
 	registry.UnregisterAddon(m.Key)
 
 	// installer.Installation has no BaseURL column — tools must declare
-	// absolute endpoints (same contract as link). Leaving BaseURL empty
-	// surfaces a clear error from resolveEndpoint when an addon ships a
-	// relative endpoint, instead of silently dispatching to /endpoint.
+	// absolute endpoints. Leaving BaseURL empty surfaces a clear error from
+	// resolveEndpoint when an addon ships a relative endpoint, instead of
+	// silently dispatching to /endpoint.
 	baseURL := ""
 
 	count := 0

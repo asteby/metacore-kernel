@@ -2,10 +2,11 @@
 // native action-interceptor registry so they show up as buttons / modals in
 // the host UI automatically on install, and are cleaned up on uninstall.
 //
-// This is the host-agnostic mirror of what link's tools_bridge does for
-// LLM-facing tools: each host consumes the plane of the manifest it
-// understands (link → Tools, ops → Actions). The kernel stays neutral and
-// only delegates to whichever ActionInterceptorRegistry the host wires.
+// This is the host-agnostic mirror of what a tools-bridge does for LLM-facing
+// tools: each host consumes the plane of the manifest it understands
+// (conversational hosts → Tools, UI hosts → Actions). The kernel stays
+// neutral and only delegates to whichever ActionInterceptorRegistry the
+// host wires.
 package bridge
 
 import (
@@ -34,10 +35,10 @@ type ActionsBridge struct {
 }
 
 // NewActionsBridge builds the bridge. registry is the host's
-// ActionInterceptorRegistry (ops wraps its package-level functions in a
-// thin adapter; link can supply a no-op if it has no UI actions).
-// dispatcher is used to send HMAC-signed webhook calls when an action's
-// hook targets a remote addon backend.
+// ActionInterceptorRegistry (UI hosts typically wrap their package-level
+// functions in a thin adapter; conversational-only hosts can supply a no-op
+// if they have no UI actions). dispatcher is used to send HMAC-signed
+// webhook calls when an action's hook targets a remote addon backend.
 func NewActionsBridge(db *gorm.DB, registry ActionInterceptorRegistry, disp *security.WebhookDispatcher) *ActionsBridge {
 	return &ActionsBridge{
 		db:         db,
@@ -182,8 +183,8 @@ func signedActionInterceptor(db *gorm.DB, disp *security.WebhookDispatcher, addo
 }
 
 // marshalActionBody builds the JSON the addon backend receives. Keys match
-// what link sends for tools so a single addon can treat action + tool
-// uniformly.
+// the canonical tool-call body shape so a single addon can treat action +
+// tool uniformly.
 func marshalActionBody(recordID interface{}, payload map[string]interface{}, hookKey string, ctx *ActionContext) ([]byte, error) {
 	wrapped := map[string]interface{}{
 		"record_id": recordID,
