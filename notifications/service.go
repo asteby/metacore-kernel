@@ -64,7 +64,6 @@ type Service struct {
 
 	startOnce sync.Once
 	stopOnce  sync.Once
-	started   bool
 }
 
 // New creates a Service.  Call Service.Start() to launch background workers,
@@ -115,7 +114,8 @@ func (s *Service) Register(channel string, h ChannelHandler) {
 	s.channels.set(channel, h)
 }
 
-// Start launches workers and the recovery poller.  Idempotent.
+// Start launches workers and the recovery poller.  Idempotent (safe to call
+// multiple times and concurrently — sync.Once gates the actual launch).
 func (s *Service) Start() {
 	s.startOnce.Do(func() {
 		for i := 0; i < s.cfg.WorkerCount; i++ {
@@ -124,7 +124,6 @@ func (s *Service) Start() {
 		}
 		s.wg.Add(1)
 		go s.recoveryPoller()
-		s.started = true
 		s.logger.Printf("notifications: started (%d workers, poll=%s)", s.cfg.WorkerCount, s.cfg.PollInterval)
 	})
 }
@@ -181,10 +180,9 @@ func (s *Service) Enqueue(ctx context.Context, req EnqueueRequest) (EnqueueResul
 		return EnqueueResult{}, errors.New("notifications: message is required")
 	}
 
-	// Lazy start so naive callers don't have to remember Start().
-	if !s.started {
-		s.Start()
-	}
+	// Lazy start so naive callers don't have to remember Start(). Start() is
+	// gated by sync.Once so unconditional invocation is cheap and race-free.
+	s.Start()
 
 	dedupKey := req.DedupKey
 	if dedupKey == "" {
