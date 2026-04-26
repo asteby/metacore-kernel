@@ -20,6 +20,7 @@
 ## Table of contents
 
 - [What is `metacore-kernel`](#what-is-metacore-kernel)
+- [Dynamic CRUD framework](#dynamic-crud-framework)
 - [Architecture](#architecture)
 - [Embedding](#embedding)
 - [Subsystems](#subsystems)
@@ -65,6 +66,58 @@ for manifest, bundle and dynamic-table type definitions; it does **not**
 publish addons of its own. Addons are authored against the SDK CLI
 (`metacore build` / `compile-wasm`) and executed by this kernel.
 
+## Dynamic CRUD framework
+
+> **Zero-glue CRUD.** Declare a model in `manifest.json`, install the
+> addon, get a working API and admin UI. No handlers, no migrations, no
+> per-model React.
+
+When an addon ships `model_definitions[]` in its manifest, `installer.Install`
+creates the Postgres schema, runs DDL, registers metadata, and the kernel's
+`dynamic.Handler` starts serving live CRUD endpoints — all without addon code:
+
+```json
+{
+  "key": "tickets",
+  "model_definitions": [{
+    "table_name": "tickets",
+    "org_scoped": true,
+    "soft_delete": true,
+    "columns": [
+      { "name": "subject",  "type": "string", "size": 200, "required": true, "index": true },
+      { "name": "status",   "type": "string", "size": 24,  "default": "'open'" },
+      { "name": "priority", "type": "string", "size": 12 },
+      { "name": "due_at",   "type": "timestamp" }
+    ]
+  }],
+  "capabilities": [
+    { "kind": "db:read",  "target": "addon_tickets.*" },
+    { "kind": "db:write", "target": "addon_tickets.*" }
+  ]
+}
+```
+
+That manifest is the **only** code needed to expose:
+
+| Endpoint                                | Behaviour                                            |
+| --------------------------------------- | ---------------------------------------------------- |
+| `GET/POST /api/dynamic/tickets`         | Paginated list, filters, sort, search · create        |
+| `GET/PUT/DELETE /api/dynamic/tickets/:id` | Get, update (load-merge-save), soft delete           |
+| `GET /api/options/tickets`              | Select/lookup options (with resolver)                |
+| `GET /api/search/tickets`               | Full-text search over searchable columns             |
+| `GET /api/metadata/table/tickets`       | TableMetadata for the runtime-react `DynamicTable`   |
+| `GET /api/metadata/modal/tickets`       | ModalMetadata for the runtime-react form generator   |
+
+Per-request user capabilities (`tickets.read`, `tickets.create`, …) are
+gated by `permission.Service`; addon-level capabilities (`db:write
+addon_tickets.*`) are gated by `security.Enforcer` in either shadow or
+enforce mode.
+
+Read [`docs/dynamic-system.md`](./docs/dynamic-system.md) for the full
+end-to-end walkthrough,
+[`docs/dynamic-api.md`](./docs/dynamic-api.md) for the HTTP reference, and
+[`docs/permissions.md`](./docs/permissions.md) for the capability model.
+
 ## Architecture
 
 ```
@@ -105,6 +158,33 @@ publish addons of its own. Addons are authored against the SDK CLI
                     │   built with metacore-sdk CLI · sandboxed    │
                     │   exports: alloc(i32) · <fn>(ptr,len) i64    │
                     └──────────────────────────────────────────────┘
+```
+
+### Dynamic CRUD flow
+
+```
+manifest.json (model_definitions[], capabilities[])
+        │
+        ▼
+installer.Install
+   ├──► dynamic.EnsureSchema       (CREATE SCHEMA addon_<key>)
+   ├──► dynamic.Apply              (versioned SQL migrations)
+   ├──► dynamic.CreateTable        (CREATE TABLE + RLS policy)
+   ├──► dynamic.SyncSchema         (ADD COLUMN IF NOT EXISTS)
+   └──► lifecycle OnInstall/OnEnable
+        │
+        ▼
+modelbase.Register("<model>", factory)        ◄── host wires this
+        │
+        ▼
+host.App.Mount
+   ├──► metadata.Handler  ──►  GET /metadata/{table,modal,all}/:model
+   └──► dynamic.Handler   ──►  GET/POST/PUT/DELETE /dynamic/:model
+                                GET /options/:model · /search/:model
+        │                       ▲
+        │                       │ permission.Service.Check (per request)
+        ▼
+@asteby/metacore-runtime-react renders the table + modal from metadata
 ```
 
 Two transports talk to the frontend at the same time:
@@ -270,14 +350,18 @@ the implementer, the SDK is the reference).
 
 ## Documentation
 
-| Document                                                         | Audience                                  |
-| ---------------------------------------------------------------- | ----------------------------------------- |
-| [`ARCHITECTURE.md`](./ARCHITECTURE.md)                           | Maintainers — the four laws of the kernel |
-| [`docs/CONSUMER_GUIDE.md`](./docs/CONSUMER_GUIDE.md)             | App teams embedding the kernel            |
-| [`docs/dev-setup.md`](./docs/dev-setup.md)                       | Contributors working on the kernel itself |
-| [`docs/RELEASE.md`](./docs/RELEASE.md)                           | Release manager and consumers             |
+| Document                                                         | Audience                                              |
+| ---------------------------------------------------------------- | ----------------------------------------------------- |
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md)                           | Maintainers — the four laws of the kernel             |
+| [`docs/dynamic-system.md`](./docs/dynamic-system.md)             | App teams using the dynamic CRUD framework            |
+| [`docs/dynamic-api.md`](./docs/dynamic-api.md)                   | Anyone calling the dynamic / metadata HTTP endpoints  |
+| [`docs/permissions.md`](./docs/permissions.md)                   | Auth / capability model — user gates and addon gates  |
+| [`docs/embedding-quickstart.md`](./docs/embedding-quickstart.md) | First-time hosts — 10-minute walkthrough              |
+| [`docs/CONSUMER_GUIDE.md`](./docs/CONSUMER_GUIDE.md)             | App teams embedding the kernel (long form)            |
+| [`docs/dev-setup.md`](./docs/dev-setup.md)                       | Contributors working on the kernel itself             |
+| [`docs/RELEASE.md`](./docs/RELEASE.md)                           | Release manager and consumers                         |
 | [`docs/consumer-renovate-template.json`](./docs/consumer-renovate-template.json) | Drop-in Renovate config for consumers     |
-| [`CHANGELOG.md`](./CHANGELOG.md)                                 | Anyone consuming a new tag                |
+| [`CHANGELOG.md`](./CHANGELOG.md)                                 | Anyone consuming a new tag                            |
 
 ## Development
 
