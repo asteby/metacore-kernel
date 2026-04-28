@@ -20,6 +20,7 @@ import (
 	"github.com/asteby/metacore-kernel/modelbase"
 	"github.com/asteby/metacore-kernel/permission"
 	"github.com/asteby/metacore-kernel/push"
+	"github.com/asteby/metacore-kernel/vector"
 	metacorews "github.com/asteby/metacore-kernel/ws"
 	"github.com/asteby/metacore-kernel/webhooks"
 )
@@ -81,6 +82,26 @@ type AppConfig struct {
 	// string field (rare; usually you want the prefix guard).
 	I18nKeyPrefix string
 
+	// EnableVectorStore wires `app.VectorStore` (PGStore by default) and
+	// runs `CREATE EXTENSION IF NOT EXISTS vector` on boot. Requires the
+	// `pgvector/pgvector` Postgres image; vanilla `postgres:*` will panic
+	// on the CREATE EXTENSION call.
+	EnableVectorStore bool
+
+	// EnableEmbedder wires `app.Embedder` (RemoteEmbedder by default,
+	// reading BGE_EMBEDDING_URL / BGE_EMBEDDING_MODEL env vars). Set
+	// independent of EnableVectorStore — apps may have a vector backend
+	// (Qdrant, Pinecone) without using the kernel's embedder, or vice versa.
+	EnableEmbedder bool
+
+	// EmbeddingURL overrides the embedding endpoint when EnableEmbedder is
+	// true. Empty falls back to BGE_EMBEDDING_URL or the BGE-M3 default.
+	EmbeddingURL string
+
+	// EmbeddingModel overrides the embedding model name. Empty falls back
+	// to BGE_EMBEDDING_MODEL or "bge-m3".
+	EmbeddingModel string
+
 	// Overrides
 	MetadataCacheTTL time.Duration // default 5m
 	JWTExpiry        time.Duration // default 24h
@@ -101,6 +122,13 @@ type App struct {
 
 	// Metrics registry — non-nil when AppConfig.EnableMetrics is true.
 	Metrics *metrics.Registry
+
+	// VectorStore is non-nil when AppConfig.EnableVectorStore is true.
+	// Apps wire their semantic-search pipelines on top — see kernel/vector.
+	VectorStore vector.Store
+
+	// Embedder is non-nil when AppConfig.EnableEmbedder is true.
+	Embedder vector.Embedder
 
 	authHandler     *auth.Handler
 	metaHandler     *metadata.Handler
@@ -193,6 +221,21 @@ func NewApp(cfg AppConfig) *App {
 
 	if cfg.EnableMetrics {
 		a.Metrics = metrics.NewRegistry()
+	}
+
+	if cfg.EnableVectorStore {
+		// pgvector lives in an extension that must be created before any
+		// table tries to declare a `vector(N)` column. Idempotent.
+		if err := cfg.DB.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
+			panic("host: failed to enable pgvector extension: " + err.Error())
+		}
+		a.VectorStore = vector.NewPGStore(cfg.DB)
+	}
+	if cfg.EnableEmbedder {
+		a.Embedder = vector.NewRemoteEmbedder(vector.RemoteEmbedderConfig{
+			BaseURL: cfg.EmbeddingURL,
+			Model:   cfg.EmbeddingModel,
+		})
 	}
 
 	a.authHandler = auth.NewHandler(authSvc)
