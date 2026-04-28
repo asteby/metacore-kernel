@@ -37,6 +37,12 @@ func (h *Handler) Mount(r fiber.Router, middleware ...fiber.Handler) {
 	g := r.Group("/dynamic", middleware...)
 	g.Get("/:model", h.list)
 	g.Post("/:model", h.create)
+	// Export / import — register before /:model/:id so the static path
+	// segments aren't treated as record IDs.
+	g.Get("/:model/export", h.exportData)
+	g.Get("/:model/export/template", h.exportTemplate)
+	g.Post("/:model/import", h.importData)
+	g.Post("/:model/import/validate", h.importValidate)
 	g.Get("/:model/:id", h.get)
 	g.Put("/:model/:id", h.update)
 	g.Delete("/:model/:id", h.delete)
