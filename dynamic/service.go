@@ -166,6 +166,13 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	return items, builder.PageMeta(total, params), nil
 }
 
+// TableMetadata is a thin accessor over the metadata service so the export /
+// import handlers in this package can read column definitions without
+// pulling another dependency through the constructor.
+func (s *Service) TableMetadata(ctx context.Context, model string) (*modelbase.TableMetadata, error) {
+	return s.meta.GetTable(ctx, model)
+}
+
 // Get returns a single record by ID.
 func (s *Service) Get(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID) (map[string]any, error) {
 	instance, _, err := s.resolveModel(ctx, model)
