@@ -13,6 +13,7 @@ import (
 	"github.com/asteby/metacore-kernel/auth"
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/i18n"
+	"github.com/asteby/metacore-kernel/idempotency"
 	kernellog "github.com/asteby/metacore-kernel/log"
 	"github.com/asteby/metacore-kernel/metadata"
 	"github.com/asteby/metacore-kernel/metrics"
@@ -102,6 +103,22 @@ type AppConfig struct {
 	// to BGE_EMBEDDING_MODEL or "bge-m3".
 	EmbeddingModel string
 
+	// EnableIdempotencyKey wires the `Idempotency-Key` Stripe-style replay
+	// middleware on every state-mutating POST handler the kernel mounts
+	// (`/dynamic/:model` create, `/dynamic/:model/import`). Clients that
+	// retry a failed request with the same header get the original
+	// response replayed instead of producing duplicates. Off by default
+	// to keep the kernel lean for read-only deployments.
+	EnableIdempotencyKey bool
+
+	// IdempotencyStore overrides the backing store. Empty uses an in-memory
+	// LRU sized for single-replica apps; multi-replica deployments should
+	// drop in a Redis-backed implementation that satisfies idempotency.Store.
+	IdempotencyStore idempotency.Store
+
+	// IdempotencyTTL is the replay window. Defaults to 24h (Stripe-aligned).
+	IdempotencyTTL time.Duration
+
 	// Overrides
 	MetadataCacheTTL time.Duration // default 5m
 	JWTExpiry        time.Duration // default 24h
@@ -130,6 +147,12 @@ type App struct {
 	// Embedder is non-nil when AppConfig.EnableEmbedder is true.
 	Embedder vector.Embedder
 
+	// IdempotencyStore is non-nil when AppConfig.EnableIdempotencyKey is
+	// true. Apps can stick their own entries on top via Put — useful for
+	// custom POST routes that should also dedupe retries.
+	IdempotencyStore idempotency.Store
+
+	idempotencyMW   fiber.Handler
 	authHandler     *auth.Handler
 	metaHandler     *metadata.Handler
 	dynHandler      *dynamic.Handler
@@ -238,6 +261,24 @@ func NewApp(cfg AppConfig) *App {
 		})
 	}
 
+	if cfg.EnableIdempotencyKey {
+		store := cfg.IdempotencyStore
+		if store == nil {
+			store = idempotency.NewInMemoryStore(0)
+		}
+		a.IdempotencyStore = store
+		a.idempotencyMW = idempotency.Middleware(idempotency.Config{
+			Store: store,
+			TTL:   cfg.IdempotencyTTL,
+			UserKey: func(c *fiber.Ctx) string {
+				if uid := auth.GetUserID(c); uid != uuid.Nil {
+					return uid.String()
+				}
+				return c.IP()
+			},
+		})
+	}
+
 	a.authHandler = auth.NewHandler(authSvc)
 	a.metaHandler = metadata.NewHandler(metaSvc)
 	a.dynHandler = dynamic.NewHandler(dynSvc, func(c *fiber.Ctx) modelbase.AuthUser {
@@ -330,7 +371,14 @@ func (a *App) Mount(r fiber.Router) fiber.Router {
 	// Authenticated endpoints
 	api := r.Group("", mw)
 	a.metaHandler.Mount(api.Group("/metadata"))
-	a.dynHandler.Mount(api.Group(""))
+
+	// Wire the optional Idempotency-Key middleware over POST /create and
+	// POST /import — the two state-mutating endpoints the kernel hosts.
+	dynOpts := dynamic.MountOpts{}
+	if a.idempotencyMW != nil {
+		dynOpts.MutationMiddleware = []fiber.Handler{a.idempotencyMW}
+	}
+	a.dynHandler.MountWith(dynOpts)(api.Group(""))
 
 	if a.pushHandler != nil {
 		a.pushHandler.Mount(api.Group("/push"))
