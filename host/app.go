@@ -12,6 +12,7 @@ import (
 
 	"github.com/asteby/metacore-kernel/auth"
 	"github.com/asteby/metacore-kernel/dynamic"
+	"github.com/asteby/metacore-kernel/i18n"
 	kernellog "github.com/asteby/metacore-kernel/log"
 	"github.com/asteby/metacore-kernel/metadata"
 	"github.com/asteby/metacore-kernel/metrics"
@@ -62,6 +63,23 @@ type AppConfig struct {
 	// (migrations.Runner) instead of GORM AutoMigrate during NewApp.
 	// Recommended for all production deployments.
 	RunMigrations bool
+
+	// Translator, when set, localizes any string in TableMetadata /
+	// ModalMetadata that starts with `I18nKeyPrefix` (default "models.").
+	// The kernel auto-registers metadata transformers and the
+	// Accept-Language Fiber middleware. Hosts pick the bundle: see
+	// `github.com/asteby/metacore-kernel/i18n` for the contract.
+	Translator i18n.Translator
+
+	// I18nDefaultLanguage is the language tag used when the
+	// `Accept-Language` header is missing on incoming requests. Defaults
+	// to "en". Ignored when Translator is nil.
+	I18nDefaultLanguage string
+
+	// I18nKeyPrefix selects which strings the metadata transformers
+	// translate. Defaults to "models." — set to "" to translate every
+	// string field (rare; usually you want the prefix guard).
+	I18nKeyPrefix string
 
 	// Overrides
 	MetadataCacheTTL time.Duration // default 5m
@@ -140,6 +158,19 @@ func NewApp(cfg AppConfig) *App {
 	})
 
 	metaSvc := metadata.New(metadata.Config{CacheTTL: cfg.MetadataCacheTTL})
+
+	// Localized metadata: when a Translator is configured the kernel
+	// transparently rewrites every "models.*" string in TableMetadata /
+	// ModalMetadata before the response leaves the wire.
+	if cfg.Translator != nil {
+		prefix := cfg.I18nKeyPrefix
+		if t := metadata.NewLocalizedTableTransformer(cfg.Translator, prefix); t != nil {
+			metaSvc.WithTableTransformer(t)
+		}
+		if t := metadata.NewLocalizedModalTransformer(cfg.Translator, prefix); t != nil {
+			metaSvc.WithModalTransformer(t)
+		}
+	}
 
 	var permSvc *permission.Service
 	if cfg.PermissionStore != nil {
@@ -227,6 +258,17 @@ func (a *App) RegisterModel(key string, factory func() modelbase.ModelDefiner) *
 func (a *App) Mount(r fiber.Router) fiber.Router {
 	// Structured logging — injects request_id and logs every request.
 	r.Use(kernellog.FiberMiddleware(a.Config.Logger))
+
+	// Accept-Language extraction so metadata transformers (and any
+	// app-level handler that calls i18n.LanguageFromContext) get the
+	// caller's preferred language out of the box.
+	if a.Config.Translator != nil {
+		def := a.Config.I18nDefaultLanguage
+		if def == "" {
+			def = "en"
+		}
+		r.Use(i18n.FiberMiddleware(def))
+	}
 
 	// Prometheus metrics — increments counters and observes latency.
 	if a.Metrics != nil {

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/asteby/metacore-kernel/i18n"
 	"github.com/asteby/metacore-kernel/modelbase"
 )
 
@@ -117,7 +118,7 @@ func (s *Service) GetTable(ctx context.Context, modelKey string) (*modelbase.Tab
 	if modelKey == "" {
 		return nil, ErrModelNotFound
 	}
-	key := tableCacheKey(modelKey)
+	key := tableCacheKey(modelKey) + s.langSuffix(ctx)
 	if cached, ok := s.cache.Get(key); ok {
 		if meta, ok := cached.(*modelbase.TableMetadata); ok {
 			return meta, nil
@@ -150,7 +151,7 @@ func (s *Service) GetModal(ctx context.Context, modelKey string) (*modelbase.Mod
 	if modelKey == "" {
 		return nil, ErrModelNotFound
 	}
-	key := modalCacheKey(modelKey)
+	key := modalCacheKey(modelKey) + s.langSuffix(ctx)
 	if cached, ok := s.cache.Get(key); ok {
 		if meta, ok := cached.(*modelbase.ModalMetadata); ok {
 			return meta, nil
@@ -185,7 +186,8 @@ func (s *Service) GetModal(ctx context.Context, modelKey string) (*modelbase.Mod
 // hard error for the whole call: GetAll is all-or-nothing by design, so that
 // partial warming never leaves the frontend in a half-configured state.
 func (s *Service) GetAll(ctx context.Context) (*AllMetadata, error) {
-	if cached, ok := s.cache.Get(cacheKeyAll); ok {
+	allKey := cacheKeyAll + s.langSuffix(ctx)
+	if cached, ok := s.cache.Get(allKey); ok {
 		if all, ok := cached.(*AllMetadata); ok {
 			return all, nil
 		}
@@ -213,7 +215,7 @@ func (s *Service) GetAll(ctx context.Context) (*AllMetadata, error) {
 		Tables:  tables,
 		Modals:  modals,
 	}
-	s.cache.Set(cacheKeyAll, all)
+	s.cache.Set(allKey, all)
 	return all, nil
 }
 
@@ -252,6 +254,24 @@ func (s *Service) versionToken() string {
 	v := s.cacheVersion
 	s.mu.RUnlock()
 	return strconv.FormatInt(s.startedAt.UnixNano(), 36) + "." + strconv.FormatUint(v, 36)
+}
+
+// langSuffix appends the request language to a cache key when the
+// service has any transformer registered that may produce a
+// language-dependent result. Without the suffix every language would
+// share the same cache slot and the first request to warm the cache
+// would force its translation onto everyone else.
+func (s *Service) langSuffix(ctx context.Context) string {
+	s.mu.RLock()
+	hasTransformers := len(s.tableTransformers) > 0 || len(s.modalTransformers) > 0
+	s.mu.RUnlock()
+	if !hasTransformers {
+		return ""
+	}
+	if lang := i18n.LanguageFromContext(ctx); lang != "" {
+		return ":" + lang
+	}
+	return ""
 }
 
 func tableCacheKey(modelKey string) string { return "table:" + modelKey }
