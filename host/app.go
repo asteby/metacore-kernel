@@ -14,6 +14,7 @@ import (
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/i18n"
 	"github.com/asteby/metacore-kernel/idempotency"
+	"github.com/asteby/metacore-kernel/marketplace"
 	kernellog "github.com/asteby/metacore-kernel/log"
 	"github.com/asteby/metacore-kernel/metadata"
 	"github.com/asteby/metacore-kernel/metrics"
@@ -103,6 +104,13 @@ type AppConfig struct {
 	// to BGE_EMBEDDING_MODEL or "bge-m3".
 	EmbeddingModel string
 
+	// EnableMarketplace mounts the marketplace install endpoint
+	// (`POST /marketplace/install`) that records "user clicked Install"
+	// requests from the embedded Hub iframe in a `marketplace_installations`
+	// table. Off by default; set to true on apps that ship the Hub
+	// marketplace tab.
+	EnableMarketplace bool
+
 	// EnableIdempotencyKey wires the `Idempotency-Key` Stripe-style replay
 	// middleware on every state-mutating POST handler the kernel mounts
 	// (`/dynamic/:model` create, `/dynamic/:model/import`). Clients that
@@ -152,11 +160,12 @@ type App struct {
 	// custom POST routes that should also dedupe retries.
 	IdempotencyStore idempotency.Store
 
-	idempotencyMW   fiber.Handler
-	authHandler     *auth.Handler
-	metaHandler     *metadata.Handler
-	dynHandler      *dynamic.Handler
-	pushHandler     *push.Handler
+	idempotencyMW       fiber.Handler
+	authHandler         *auth.Handler
+	metaHandler         *metadata.Handler
+	dynHandler          *dynamic.Handler
+	pushHandler         *push.Handler
+	marketplaceHandler  *marketplace.Handler
 	webhooksHandler *webhooks.Handler
 }
 
@@ -318,6 +327,14 @@ func NewApp(cfg AppConfig) *App {
 		a.webhooksHandler = webhooks.NewHandler(a.Webhooks, resolver)
 	}
 
+	if cfg.EnableMarketplace {
+		mh, err := marketplace.NewHandler(cfg.DB)
+		if err != nil {
+			panic("host: marketplace.NewHandler: " + err.Error())
+		}
+		a.marketplaceHandler = mh
+	}
+
 	// WebSocket hub — always available
 	a.WSHub = metacorews.NewHub()
 	go a.WSHub.Run()
@@ -382,6 +399,9 @@ func (a *App) Mount(r fiber.Router) fiber.Router {
 
 	if a.pushHandler != nil {
 		a.pushHandler.Mount(api.Group("/push"))
+	}
+	if a.marketplaceHandler != nil {
+		a.marketplaceHandler.Mount(api)
 	}
 	if a.webhooksHandler != nil {
 		a.webhooksHandler.Mount(api.Group("/webhooks"))
