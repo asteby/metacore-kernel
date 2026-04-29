@@ -3,8 +3,8 @@ package ws
 import (
 	"log"
 
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/websocket/v2"
+	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/contrib/v3/websocket"
 	"github.com/google/uuid"
 )
 
@@ -46,7 +46,7 @@ func Handler(hub *Hub, userIDKey string) fiber.Handler {
 // Mount registers the WebSocket route on the given router.
 // The auth middleware MUST run before the upgrade to populate Locals[userIDKey].
 func Mount(router fiber.Router, hub *Hub, authMiddleware fiber.Handler, userIDKey string) {
-	router.Use("/ws", func(c *fiber.Ctx) error {
+	router.Use("/ws", func(c fiber.Ctx) error {
 		if websocket.IsWebSocketUpgrade(c) {
 			return c.Next()
 		}

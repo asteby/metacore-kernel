@@ -26,7 +26,7 @@
 //	    Query:       query.New(nil),
 //	})
 //
-//	h := dynamic.NewHandler(svc, func(c *fiber.Ctx) modelbase.AuthUser {
+//	h := dynamic.NewHandler(svc, func(c fiber.Ctx) modelbase.AuthUser {
 //	    // app-specific: pull the authenticated principal from c.Locals
 //	    return c.Locals("user").(modelbase.AuthUser)
 //	})

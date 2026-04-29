@@ -26,7 +26,7 @@ import (
 	"github.com/asteby/metacore-kernel/auth"
 	"github.com/asteby/metacore-kernel/bundle"
 	"github.com/asteby/metacore-kernel/installer"
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -112,7 +112,13 @@ func NewHandler(db *gorm.DB, opts ...HandlerOption) (*Handler, error) {
 //
 // `middleware` is layered first (typically the host's auth middleware).
 func (h *Handler) Mount(r fiber.Router, middleware ...fiber.Handler) {
-	g := r.Group("/marketplace", middleware...)
+	mws := make([]any, 0, len(middleware))
+	for _, mw := range middleware {
+		if mw != nil {
+			mws = append(mws, mw)
+		}
+	}
+	g := r.Group("/marketplace", mws...)
 	g.Post("/install", h.install)
 	g.Get("/installs", h.list)
 }
@@ -128,7 +134,7 @@ type installRequest struct {
 	Category  string `json:"category,omitempty"`
 }
 
-func (h *Handler) install(c *fiber.Ctx) error {
+func (h *Handler) install(c fiber.Ctx) error {
 	orgID := auth.GetOrganizationID(c)
 	userID := auth.GetUserID(c)
 	if orgID == uuid.Nil || userID == uuid.Nil {
@@ -139,7 +145,7 @@ func (h *Handler) install(c *fiber.Ctx) error {
 	}
 
 	var req installRequest
-	if err := c.BodyParser(&req); err != nil {
+	if err := c.Bind().Body(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"message": "invalid body: " + err.Error(),
@@ -165,7 +171,7 @@ func (h *Handler) install(c *fiber.Ctx) error {
 		Status:         "requested",
 		RequestedByID:  userID,
 	}
-	if err := h.db.WithContext(c.Context()).Create(&row).Error; err != nil {
+	if err := h.db.WithContext(c).Create(&row).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,
 			"message": "failed to record installation: " + err.Error(),
@@ -265,7 +271,7 @@ func truncateError(s string, max int) string {
 	return s[:max-1] + "…"
 }
 
-func (h *Handler) list(c *fiber.Ctx) error {
+func (h *Handler) list(c fiber.Ctx) error {
 	orgID := auth.GetOrganizationID(c)
 	if orgID == uuid.Nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
@@ -274,7 +280,7 @@ func (h *Handler) list(c *fiber.Ctx) error {
 		})
 	}
 	var rows []Installation
-	if err := h.db.WithContext(c.Context()).
+	if err := h.db.WithContext(c).
 		Where("organization_id = ?", orgID).
 		Order("requested_at DESC").
 		Limit(200).

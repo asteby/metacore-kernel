@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/asteby/metacore-kernel/modelbase"
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 )
 
 // registerHandlerModel is a handler-test-scoped variant of registerFakeModel
@@ -29,7 +29,7 @@ func newTestHandler(t *testing.T) (*fiber.App, *Service) {
 	svc := New(Config{CacheTTL: time.Minute})
 	h := NewHandler(svc)
 
-	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	app := fiber.New()
 	h.Mount(app.Group("/metadata"))
 	return app, svc
 }
@@ -43,7 +43,7 @@ type envelope struct {
 func doRequest(t *testing.T, app *fiber.App, method, path string) (int, envelope) {
 	t.Helper()
 	req := httptest.NewRequest(method, path, nil)
-	resp, err := app.Test(req, -1)
+	resp, err := app.Test(req, fiber.TestConfig{Timeout: 0})
 	if err != nil {
 		t.Fatalf("app.Test: %v", err)
 	}
@@ -155,12 +155,12 @@ func TestHandler_Mount_AppliesMiddleware(t *testing.T) {
 	h := NewHandler(svc)
 
 	var mwRan bool
-	mw := func(c *fiber.Ctx) error {
+	mw := func(c fiber.Ctx) error {
 		mwRan = true
 		return c.Next()
 	}
 
-	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	app := fiber.New()
 	h.Mount(app.Group("/metadata"), mw)
 
 	key := registerHandlerModel(t, "MW")
@@ -174,14 +174,14 @@ func TestHandler_Mount_MiddlewareCanBlock(t *testing.T) {
 	svc := New(Config{CacheTTL: time.Minute})
 	h := NewHandler(svc)
 
-	blockMW := func(c *fiber.Ctx) error {
+	blockMW := func(c fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"success": false,
 			"message": "blocked",
 		})
 	}
 
-	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	app := fiber.New()
 	h.Mount(app.Group("/metadata"), blockMW)
 
 	registerHandlerModel(t, "Blocked")

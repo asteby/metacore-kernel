@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
@@ -14,7 +14,7 @@ import (
 func newTestApp(secret []byte) *fiber.App {
 	app := fiber.New()
 	app.Use(Middleware(MiddlewareConfig{Secret: secret}))
-	app.Get("/protected", func(c *fiber.Ctx) error {
+	app.Get("/protected", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"user_id":         GetUserID(c).String(),
 			"organization_id": GetOrganizationID(c).String(),
@@ -104,9 +104,9 @@ func TestMiddleware_Skipper(t *testing.T) {
 	app := fiber.New()
 	app.Use(Middleware(MiddlewareConfig{
 		Secret:  []byte("s"),
-		Skipper: func(c *fiber.Ctx) bool { return c.Path() == "/public" },
+		Skipper: func(c fiber.Ctx) bool { return c.Path() == "/public" },
 	}))
-	app.Get("/public", func(c *fiber.Ctx) error { return c.SendString("ok") })
+	app.Get("/public", func(c fiber.Ctx) error { return c.SendString("ok") })
 
 	req := httptest.NewRequest("GET", "/public", nil)
 	resp, err := app.Test(req)

@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 )
 
@@ -72,10 +72,10 @@ func HTTPMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 // FiberMiddleware returns a Fiber middleware that:
 //   - Reads or generates a request_id (UUID) from/for the X-Request-ID header.
 //   - Injects a child logger (with request_id) into the Fiber context locals
-//     and into the standard context.Context stored in c.UserContext().
+//     and into the standard context.Context stored in c.
 //   - Logs every request after completion: method, path, status, duration, request_id.
 func FiberMiddleware(logger *slog.Logger) fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		start := time.Now()
 
 		// Resolve or generate request_id.
@@ -92,9 +92,9 @@ func FiberMiddleware(logger *slog.Logger) fiber.Handler {
 		c.Locals("logger", reqLogger)
 
 		// Store in the standard context so downstream service calls can use
-		// FromContext(c.UserContext()).
+		// FromContext(c).
 		ctx := WithLogger(context.Background(), reqLogger)
-		c.SetUserContext(ctx)
+		c.SetContext(ctx)
 
 		// Process the rest of the chain.
 		err := c.Next()
@@ -117,7 +117,7 @@ func FiberMiddleware(logger *slog.Logger) fiber.Handler {
 
 // FromFiberCtx returns the request-scoped logger stored by FiberMiddleware.
 // Falls back to the provided base logger if none was injected (e.g. in tests).
-func FromFiberCtx(c *fiber.Ctx, fallback *slog.Logger) *slog.Logger {
+func FromFiberCtx(c fiber.Ctx, fallback *slog.Logger) *slog.Logger {
 	if l, ok := c.Locals("logger").(*slog.Logger); ok && l != nil {
 		return l
 	}

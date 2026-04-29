@@ -9,7 +9,7 @@ import (
 
 	"github.com/asteby/metacore-kernel/bridge"
 	kerneltool "github.com/asteby/metacore-kernel/tool"
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -96,7 +96,7 @@ func TestListManifests_AnonymousReturnsEmpty(t *testing.T) {
 	app := fiber.New()
 	app.Get("/manifests", h.ListManifests)
 	req := httptest.NewRequest("GET", "/manifests", nil)
-	resp, err := app.Test(req, -1)
+	resp, err := app.Test(req, fiber.TestConfig{Timeout: 0})
 	if err != nil {
 		t.Fatalf("app.Test: %v", err)
 	}
@@ -128,13 +128,13 @@ func TestListManifests_EmptyForNewOrg(t *testing.T) {
 	}
 	app := fiber.New()
 	orgID := uuid.New()
-	app.Use(func(c *fiber.Ctx) error {
+	app.Use(func(c fiber.Ctx) error {
 		c.Locals("organization_id", orgID)
 		return c.Next()
 	})
 	app.Get("/manifests", h.ListManifests)
 	req := httptest.NewRequest("GET", "/manifests", nil)
-	resp, err := app.Test(req, -1)
+	resp, err := app.Test(req, fiber.TestConfig{Timeout: 0})
 	if err != nil {
 		t.Fatalf("app.Test: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestServeAddonFrontend_DisabledWhenBasePathEmpty(t *testing.T) {
 	app := fiber.New()
 	app.Get("/addons/:key/frontend/*", h.ServeAddonFrontend)
 	req := httptest.NewRequest("GET", "/addons/x/frontend/y.js", nil)
-	resp, err := app.Test(req, -1)
+	resp, err := app.Test(req, fiber.TestConfig{Timeout: 0})
 	if err != nil {
 		t.Fatalf("app.Test: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestExecuteTool_NotRegistered(t *testing.T) {
 	}
 	app := fiber.New()
 	orgID := uuid.New()
-	app.Use(func(c *fiber.Ctx) error {
+	app.Use(func(c fiber.Ctx) error {
 		c.Locals("organization_id", orgID)
 		return c.Next()
 	})
@@ -206,7 +206,7 @@ func TestExecuteTool_NotRegistered(t *testing.T) {
 	body := []byte(`{"addon_key":"x","tool_id":"y"}`)
 	req := httptest.NewRequest("POST", "/tools/execute", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := app.Test(req, -1)
+	resp, err := app.Test(req, fiber.TestConfig{Timeout: 0})
 	if err != nil {
 		t.Fatalf("app.Test: %v", err)
 	}

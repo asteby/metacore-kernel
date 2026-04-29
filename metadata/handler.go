@@ -3,7 +3,7 @@ package metadata
 import (
 	"errors"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 )
 
 // Handler is the Fiber adapter around Service. Response shape matches what
@@ -23,13 +23,13 @@ func NewHandler(service *Service) *Handler {
 }
 
 // GetTable handles GET /metadata/table/:model.
-func (h *Handler) GetTable(c *fiber.Ctx) error {
+func (h *Handler) GetTable(c fiber.Ctx) error {
 	modelKey := c.Params(paramModel)
 	if modelKey == "" {
 		return respondError(c, fiber.StatusBadRequest, MsgModelNotFound)
 	}
 
-	meta, err := h.service.GetTable(c.UserContext(), modelKey)
+	meta, err := h.service.GetTable(c, modelKey)
 	if err != nil {
 		return h.respondServiceError(c, err)
 	}
@@ -37,13 +37,13 @@ func (h *Handler) GetTable(c *fiber.Ctx) error {
 }
 
 // GetModal handles GET /metadata/modal/:model.
-func (h *Handler) GetModal(c *fiber.Ctx) error {
+func (h *Handler) GetModal(c fiber.Ctx) error {
 	modelKey := c.Params(paramModel)
 	if modelKey == "" {
 		return respondError(c, fiber.StatusBadRequest, MsgModelNotFound)
 	}
 
-	meta, err := h.service.GetModal(c.UserContext(), modelKey)
+	meta, err := h.service.GetModal(c, modelKey)
 	if err != nil {
 		return h.respondServiceError(c, err)
 	}
@@ -51,8 +51,8 @@ func (h *Handler) GetModal(c *fiber.Ctx) error {
 }
 
 // GetAll handles GET /metadata/all.
-func (h *Handler) GetAll(c *fiber.Ctx) error {
-	all, err := h.service.GetAll(c.UserContext())
+func (h *Handler) GetAll(c fiber.Ctx) error {
+	all, err := h.service.GetAll(c)
 	if err != nil {
 		return h.respondServiceError(c, err)
 	}
@@ -73,25 +73,40 @@ func (h *Handler) GetAll(c *fiber.Ctx) error {
 // Callers control the prefix by scoping router themselves, e.g.
 // `h.Mount(app.Group("/api/metadata"), authMW)`.
 func (h *Handler) Mount(router fiber.Router, middleware ...fiber.Handler) {
-	handlers := make([]fiber.Handler, 0, len(middleware)+1)
-	for _, mw := range middleware {
-		if mw != nil {
-			handlers = append(handlers, mw)
-		}
+	// Fiber v3 router.Get signature: Get(path, handler any, handlers ...any).
+	// Handlers execute in declaration order: the first arg runs first, then the
+	// variadic. So `Get(path, mw1, mw2, ..., final)` puts middleware before the
+	// final handler. When there is no middleware we just register the handler.
+	if len(middleware) == 0 {
+		router.Get("/table/:"+paramModel, h.GetTable)
+		router.Get("/modal/:"+paramModel, h.GetModal)
+		router.Get("/all", h.GetAll)
+		return
 	}
 
-	tableChain := append(append([]fiber.Handler(nil), handlers...), h.GetTable)
-	modalChain := append(append([]fiber.Handler(nil), handlers...), h.GetModal)
-	allChain := append(append([]fiber.Handler(nil), handlers...), h.GetAll)
-
-	router.Get("/table/:"+paramModel, tableChain...)
-	router.Get("/modal/:"+paramModel, modalChain...)
-	router.Get("/all", allChain...)
+	first, rest := mwHead(middleware)
+	router.Get("/table/:"+paramModel, first, append(rest, anyHandler(h.GetTable))...)
+	router.Get("/modal/:"+paramModel, first, append(rest, anyHandler(h.GetModal))...)
+	router.Get("/all", first, append(rest, anyHandler(h.GetAll))...)
 }
+
+// mwHead splits the middleware slice into (first, rest) for fiber v3's
+// Get(path, handler any, ...any) signature. middleware MUST be non-empty.
+func mwHead(middleware []fiber.Handler) (any, []any) {
+	rest := make([]any, 0, len(middleware)-1)
+	for _, mw := range middleware[1:] {
+		if mw != nil {
+			rest = append(rest, mw)
+		}
+	}
+	return middleware[0], rest
+}
+
+func anyHandler(h fiber.Handler) any { return h }
 
 // respondServiceError maps a service-layer error onto the right HTTP status.
 // Unknown errors become 500 so we never leak internal detail by accident.
-func (h *Handler) respondServiceError(c *fiber.Ctx, err error) error {
+func (h *Handler) respondServiceError(c fiber.Ctx, err error) error {
 	switch {
 	case errors.Is(err, ErrModelNotFound):
 		return respondError(c, fiber.StatusNotFound, err.Error())
@@ -102,14 +117,14 @@ func (h *Handler) respondServiceError(c *fiber.Ctx, err error) error {
 	}
 }
 
-func respondData(c *fiber.Ctx, status int, data interface{}) error {
+func respondData(c fiber.Ctx, status int, data interface{}) error {
 	return c.Status(status).JSON(fiber.Map{
 		"success": true,
 		"data":    data,
 	})
 }
 
-func respondError(c *fiber.Ctx, status int, msg string) error {
+func respondError(c fiber.Ctx, status int, msg string) error {
 	return c.Status(status).JSON(fiber.Map{
 		"success": false,
 		"message": msg,

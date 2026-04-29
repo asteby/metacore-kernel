@@ -9,14 +9,14 @@ import (
 	"time"
 
 	"github.com/asteby/metacore-kernel/idempotency"
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 )
 
 func newTestApp(handlerCalls *int32) *fiber.App {
 	app := fiber.New()
 	store := idempotency.NewInMemoryStore(0)
 	app.Use(idempotency.Middleware(idempotency.Config{Store: store, TTL: time.Minute}))
-	app.Post("/create", func(c *fiber.Ctx) error {
+	app.Post("/create", func(c fiber.Ctx) error {
 		atomic.AddInt32(handlerCalls, 1)
 		return c.Status(201).JSON(fiber.Map{"id": atomic.LoadInt32(handlerCalls)})
 	})

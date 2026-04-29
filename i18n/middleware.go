@@ -3,7 +3,7 @@ package i18n
 import (
 	"strings"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 )
 
 // FiberMiddleware reads the `Accept-Language` header on the incoming
@@ -18,10 +18,10 @@ import (
 // non-zero tag wins — the kernel does not reorder by q because real
 // clients almost never disagree with the natural list order.
 func FiberMiddleware(defaultLang string) fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		lang := pickLanguage(c.Get("Accept-Language"), defaultLang)
-		ctx := WithLanguage(c.UserContext(), lang)
-		c.SetUserContext(ctx)
+		ctx := WithLanguage(c, lang)
+		c.SetContext(ctx)
 		return c.Next()
 	}
 }

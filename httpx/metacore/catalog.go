@@ -11,7 +11,7 @@ import (
 
 	"github.com/asteby/metacore-kernel/bundle"
 	"github.com/asteby/metacore-kernel/manifest"
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 )
 
 // catalogEntry is the wire shape for /catalog rows.
@@ -28,7 +28,7 @@ type catalogEntry struct {
 // org's current install state.
 //
 // GET /api/metacore/catalog
-func (h *Handler) Catalog(c *fiber.Ctx) error {
+func (h *Handler) Catalog(c fiber.Ctx) error {
 	orgID, ok := orgIDFromCtx(c)
 	if !ok {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
