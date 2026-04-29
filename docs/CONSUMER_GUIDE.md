@@ -40,13 +40,13 @@ go mod tidy
 Pin a specific tag in production:
 
 ```bash
-go get github.com/asteby/metacore-kernel@v0.2.0
+go get github.com/asteby/metacore-kernel@v0.7.2
 ```
 
 Once the module is in your `go.mod`:
 
 ```go
-require github.com/asteby/metacore-kernel v0.2.0
+require github.com/asteby/metacore-kernel v0.7.2
 ```
 
 For local development against an in-progress kernel, drop a `replace`

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://go.dev/dl/"><img alt="Go 1.25" src="https://img.shields.io/badge/go-1.25-00ADD8?logo=go&logoColor=white" /></a>
+  <a href="https://go.dev/dl/"><img alt="Go 1.25.7" src="https://img.shields.io/badge/go-1.25.7-00ADD8?logo=go&logoColor=white" /></a>
   <a href="https://github.com/asteby/metacore-kernel/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/asteby/metacore-kernel/actions/workflows/ci.yml/badge.svg?branch=main" /></a>
   <a href="https://github.com/asteby/metacore-kernel/actions/workflows/release.yml"><img alt="Release" src="https://github.com/asteby/metacore-kernel/actions/workflows/release.yml/badge.svg" /></a>
   <img alt="License" src="https://img.shields.io/badge/license-proprietary-lightgrey" />
@@ -261,7 +261,7 @@ marketplace integrations.
 ```go
 h, err := host.New(host.Config{
     DB:            db,
-    KernelVersion: "0.2.0",
+    KernelVersion: "0.7.2",
     Services: map[string]any{
         "eventbus": bus,
     },

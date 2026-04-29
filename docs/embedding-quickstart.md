@@ -156,7 +156,7 @@ import "github.com/asteby/metacore-kernel/host"
 
 h, err := host.New(host.Config{
     DB:            db,
-    KernelVersion: "0.2.0",
+    KernelVersion: "0.7.2",
     Services: map[string]any{
         // Anything addon Boot() hooks need.
         // "eventbus": eventBus,
