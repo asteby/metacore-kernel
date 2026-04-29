@@ -41,6 +41,15 @@ type Installation struct {
 	ID             uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	OrganizationID uuid.UUID `gorm:"type:uuid;not null;index" json:"organization_id"`
 	AddonKey       string    `gorm:"size:120;not null;index:idx_org_addon,priority:2" json:"addon_key"`
+	// Name is the display title the Hub already localised to the user's
+	// language at install time. Sidebar / dashboard use it instead of the
+	// raw addon_key so users see "Activos Fijos" not "assets". Empty when
+	// the Hub didn't supply one (legacy installs).
+	Name           string    `gorm:"size:200" json:"name,omitempty"`
+	// Category is the Hub-supplied taxonomy bucket ("operations",
+	// "productivity", …) — useful for grouping installed addons in the
+	// sidebar.
+	Category       string    `gorm:"size:60" json:"category,omitempty"`
 	Version        string    `gorm:"size:40;not null" json:"version"`
 	BundleURL      string    `gorm:"size:512" json:"bundle_url,omitempty"`
 	// Status: requested → downloading → installing → installed | failed
@@ -112,6 +121,11 @@ type installRequest struct {
 	AddonKey  string `json:"addonKey"`
 	Version   string `json:"version"`
 	BundleURL string `json:"bundleURL"`
+	// Optional metadata the iframe already has from the Hub catalog —
+	// stored verbatim so the sidebar can render the addon by display
+	// name instead of falling back to the raw key.
+	Name      string `json:"name,omitempty"`
+	Category  string `json:"category,omitempty"`
 }
 
 func (h *Handler) install(c *fiber.Ctx) error {
@@ -144,6 +158,8 @@ func (h *Handler) install(c *fiber.Ctx) error {
 	row := Installation{
 		OrganizationID: orgID,
 		AddonKey:       req.AddonKey,
+		Name:           req.Name,
+		Category:       req.Category,
 		Version:        req.Version,
 		BundleURL:      req.BundleURL,
 		Status:         "requested",
