@@ -11,17 +11,16 @@ instead — this kernel only executes what the SDK produces.
 ## Table of contents
 
 1. [Installing the module](#1-installing-the-module)
-2. [Private-module access](#2-private-module-access)
-3. [Quickstart — `host.App`](#3-quickstart--hostapp)
-4. [Adding the addon plane — `host.Host`](#4-adding-the-addon-plane--hosthost)
-5. [Storage and migrations](#5-storage-and-migrations)
-6. [Capability model and security modes](#6-capability-model-and-security-modes)
-7. [WebSocket hub](#7-websocket-hub)
-8. [Real-time updates](#8-real-time-updates)
-9. [Renovate template](#9-renovate-template)
-10. [SemVer policy](#10-semver-policy)
-11. [End-to-end release flow](#11-end-to-end-release-flow)
-12. [FAQ](#12-faq)
+2. [Quickstart — `host.App`](#2-quickstart--hostapp)
+3. [Adding the addon plane — `host.Host`](#3-adding-the-addon-plane--hosthost)
+4. [Storage and migrations](#4-storage-and-migrations)
+5. [Capability model and security modes](#5-capability-model-and-security-modes)
+6. [WebSocket hub](#6-websocket-hub)
+7. [Real-time updates](#7-real-time-updates)
+8. [Renovate template](#8-renovate-template)
+9. [SemVer policy](#9-semver-policy)
+10. [End-to-end release flow](#10-end-to-end-release-flow)
+11. [FAQ](#11-faq)
 
 > Looking for a single-page walkthrough? Try
 > [`embedding-quickstart.md`](embedding-quickstart.md). Looking for the dynamic
@@ -59,61 +58,7 @@ replace github.com/asteby/metacore-kernel => ../metacore-kernel
 Run `go mod edit -dropreplace github.com/asteby/metacore-kernel` and `go mod
 tidy` before you commit, so production builds resolve to a tagged version.
 
-## 2. Private-module access
-
-The kernel lives in a private repository. Configure each developer machine
-and CI runner once.
-
-### Environment
-
-```bash
-go env -w GOPRIVATE="github.com/asteby/*"
-go env -w GOSUMDB=off                            # private modules skip sumdb
-```
-
-Per-shell equivalent:
-
-```bash
-export GOPRIVATE="github.com/asteby/*"
-export GOSUMDB=off
-```
-
-### SSH (developers)
-
-```bash
-git config --global url."git@github.com:".insteadOf "https://github.com/"
-```
-
-Requires an SSH key registered with GitHub
-(`ssh-keygen -t ed25519 -C "you@example.com"` and add the `.pub` at
-[github.com/settings/keys](https://github.com/settings/keys)).
-
-### Token (CI / headless)
-
-```bash
-cat > ~/.netrc <<EOF
-machine github.com
-  login x-access-token
-  password ${GITHUB_TOKEN}
-EOF
-chmod 600 ~/.netrc
-```
-
-In GitHub Actions for consumer repositories, mint a fine-grained token with
-read access to `asteby/metacore-kernel` and bind it before `go mod download`:
-
-```yaml
-- name: Configure netrc
-  run: |
-    cat > ~/.netrc <<EOF
-    machine github.com
-      login x-access-token
-      password ${{ secrets.METACORE_READ_TOKEN }}
-    EOF
-    chmod 600 ~/.netrc
-```
-
-## 3. Quickstart — `host.App`
+## 2. Quickstart — `host.App`
 
 `host.App` is the recommended entry point. It wires `auth + metadata + dynamic
 CRUD + WebSocket hub` and, when enabled, `permission`, `push`, `webhooks` and
@@ -229,7 +174,7 @@ What you get for free:
 | `GET  /api/ws?token=…`     | `ws/`         | WebSocket upgrade                                      |
 | `GET  /metrics`            | `metrics/`    | Prometheus exposition (`EnableMetrics=true`)           |
 
-## 4. Adding the addon plane — `host.Host`
+## 3. Adding the addon plane — `host.Host`
 
 If your app should host federated WASM addons (install/enable/disable,
 lifecycle hooks, navigation merge), build a `host.Host` next to the
@@ -277,7 +222,7 @@ Addon types:
   hands the WASM module to `runtime/wasm.Host` for execution under the
   capability enforcer.
 
-## 5. Storage and migrations
+## 4. Storage and migrations
 
 The kernel ships **versioned SQL migrations** for its own tables (`auth`,
 `webhooks`, `push`, `installer`, `eventlog`, `notifications`).
@@ -299,7 +244,7 @@ PostgreSQL is the supported production driver. The kernel also tests against
 SQLite (`gorm.io/driver/sqlite`) for embedded scenarios; mileage on dialect-
 specific features may vary.
 
-## 6. Capability model and security modes
+## 5. Capability model and security modes
 
 Every addon-issued operation that touches the host (DB read, event publish,
 HTTP call out) goes through `security.Enforcer`. The enforcer has two modes:
@@ -337,7 +282,7 @@ The kernel also ships a **user-level** capability system
 turn it on. See [`permissions.md`](permissions.md) for the full model
 (stores, super-roles, Fiber gate middleware, addon vs user gates).
 
-## 7. WebSocket hub
+## 6. WebSocket hub
 
 The hub is mounted automatically by `host.App.Mount` at `/api/ws`. Auth is
 JWT-based, taken from the `?token=` query string at upgrade time:
@@ -359,7 +304,7 @@ app.WSHub.SendToUsers(userIDs, ws.Message{
 without forking the package. The hub does not persist anything — wire the
 optional `OnNotification` hook if your app needs durable storage.
 
-## 8. Real-time updates
+## 7. Real-time updates
 
 The dynamic CRUD layer **does not** broadcast row changes automatically.
 The kernel ships the hub; the host decides who receives a message. The
@@ -420,7 +365,7 @@ hooks.RegisterAfterCreate("tickets", func(ctx context.Context, hc dynamic.HookCo
 See [`dynamic-system.md`](dynamic-system.md), section *Real-time updates*,
 for the rationale and trade-offs.
 
-## 9. Renovate template
+## 8. Renovate template
 
 Copy [`docs/consumer-renovate-template.json`](./consumer-renovate-template.json)
 to the root of your consumer repository as `renovate.json`. The template
@@ -468,7 +413,7 @@ a PR when a new tag is indexed. If you want faster pickup, lower the
 `schedule` in `renovate.json` or run a manual rerun from the Renovate
 dashboard after cutting a kernel release.
 
-## 10. SemVer policy
+## 9. SemVer policy
 
 The kernel follows [SemVer 2.0](https://semver.org/) strictly. When Renovate
 opens a bump PR, read the version delta:
@@ -492,7 +437,7 @@ public struct, or changing a function signature is always a major bump (see
 - **Pre-1.0 minor (`v0.5` → `v0.6`)** — treat as potentially breaking even
   though it is technically minor; `v0.x` releases retain the right to break.
 
-## 11. End-to-end release flow
+## 10. End-to-end release flow
 
 ```
 [Kernel] git tag vX.Y.Z && git push --tags
@@ -519,7 +464,7 @@ public struct, or changing a function signature is always a major bump (see
 End-to-end latency is typically 5–15 minutes from `git push --tags` to every
 consumer's `main`.
 
-## 12. FAQ
+## 11. FAQ
 
 **Can I bypass the Go proxy?**
 Yes. `GOPROXY=direct go get github.com/asteby/metacore-kernel@<branch-or-sha>`

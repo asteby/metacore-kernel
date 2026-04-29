@@ -12,7 +12,7 @@
   <a href="https://go.dev/dl/"><img alt="Go 1.25.7" src="https://img.shields.io/badge/go-1.25.7-00ADD8?logo=go&logoColor=white" /></a>
   <a href="https://github.com/asteby/metacore-kernel/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/asteby/metacore-kernel/actions/workflows/ci.yml/badge.svg?branch=main" /></a>
   <a href="https://github.com/asteby/metacore-kernel/actions/workflows/release.yml"><img alt="Release" src="https://github.com/asteby/metacore-kernel/actions/workflows/release.yml/badge.svg" /></a>
-  <img alt="License" src="https://img.shields.io/badge/license-proprietary-lightgrey" />
+  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache_2.0-blue" /></a>
 </p>
 
 > 📚 **Documentation:** Full docs live at **[asteby.github.io/metacore](https://asteby.github.io/metacore/)**. The `docs/` folder in this repo is kept for offline reference only.
@@ -31,7 +31,7 @@
 - [Documentation](#documentation)
 - [Development](#development)
 - [Release process](#release-process)
-- [Module path and private access](#module-path-and-private-access)
+- [Module path](#module-path)
 - [License](#license)
 
 ---
@@ -276,8 +276,8 @@ if err := h.Boot(); err != nil { log.Fatal(err) }
 The two facades compose: real apps build a `host.App` for HTTP plumbing and a
 `host.Host` for the addon plane, sharing the same `*gorm.DB`.
 
-For private-module access (`GOPRIVATE`, SSH/netrc) and a step-by-step
-walk-through, see [`docs/CONSUMER_GUIDE.md`](./docs/CONSUMER_GUIDE.md).
+For a step-by-step walk-through see
+[`docs/CONSUMER_GUIDE.md`](./docs/CONSUMER_GUIDE.md).
 
 ## Subsystems
 
@@ -341,7 +341,7 @@ and **executed by this kernel**. The split is intentional:
   `metacore validate`, `metacore build`, `metacore sign`, `metacore compile-wasm`,
   the manifest schema, the bundle layout, the TypeScript types for runtime
   React.
-- **Kernel** (this repo, private) owns the runtime: parses the manifest,
+- **Kernel** (this repo) owns the runtime: parses the manifest,
   verifies signatures, materialises bundles on disk, instantiates the WASM
   module, brokers every host import, runs lifecycle hooks, merges navigation,
   exposes installer endpoints.
@@ -403,42 +403,16 @@ on demand instead of waiting for the next cron tick.
 The full procedure — version selection, pre-releases, retract, troubleshooting
 — is in [`docs/RELEASE.md`](./docs/RELEASE.md).
 
-## Module path and private access
+## Module path
 
 ```
 github.com/asteby/metacore-kernel
 ```
 
-The repository is private. Configure Go to skip the public module proxy on
-every developer and CI machine:
-
-```bash
-go env -w GOPRIVATE="github.com/asteby/*"
-```
-
-For SSH-authenticated developers:
-
-```bash
-git config --global url."git@github.com:".insteadOf "https://github.com/"
-```
-
-For headless / CI:
-
-```bash
-cat > ~/.netrc <<EOF
-machine github.com
-  login x-access-token
-  password $GITHUB_TOKEN
-EOF
-chmod 600 ~/.netrc
-```
-
-Both flows are documented in [`docs/CONSUMER_GUIDE.md`](./docs/CONSUMER_GUIDE.md).
+Resolves through the public Go module proxy. See
+[`docs/CONSUMER_GUIDE.md`](./docs/CONSUMER_GUIDE.md) for the step-by-step
+embedding walk-through.
 
 ## License
 
-Proprietary — © Asteby. All rights reserved.
-
-This module is distributed under a closed-source license to repositories
-within the `asteby/*` GitHub organization. External redistribution is not
-permitted without prior written authorization.
+Licensed under the [Apache License, Version 2.0](./LICENSE).
