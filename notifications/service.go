@@ -276,8 +276,13 @@ func (s *Service) processEntry(entryID uuid.UUID) {
 	}
 
 	// Atomic claim — guards against multiple workers grabbing the same row.
+	// Only Pending is reclaimable: transient failures get bounced back to
+	// Pending in markFailed; StatusFailed is terminal (permanent error or
+	// max-retries hit) and must never be replayed, otherwise a permanent
+	// failure can be retried on a races where the recovery poller and the
+	// in-memory queue both signal the same entry.
 	res := s.db.WithContext(ctx).Model(&entry).
-		Where("status IN ?", []string{StatusPending, StatusFailed}).
+		Where("status = ?", StatusPending).
 		Update("status", StatusProcessing)
 	if res.RowsAffected == 0 {
 		return
