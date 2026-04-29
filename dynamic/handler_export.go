@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/asteby/metacore-kernel/query"
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 )
 
 // exportLimit caps the number of rows a single export request can stream.
@@ -23,7 +23,7 @@ const exportLimit = 100_000
 // to CSV; `columns` (optional) restricts the output to a subset and
 // preserves their order. Falls back to the model's TableMetadata column
 // order when omitted.
-func (h *Handler) exportData(c *fiber.Ctx) error {
+func (h *Handler) exportData(c fiber.Ctx) error {
 	u := h.user(c)
 	if u == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
@@ -40,7 +40,7 @@ func (h *Handler) exportData(c *fiber.Ctx) error {
 	}
 	params.Page = 1
 	params.PerPage = exportLimit
-	items, _, err := h.service.List(c.Context(), model, u, params)
+	items, _, err := h.service.List(c, model, u, params)
 	if err != nil {
 		return h.handleError(c, err)
 	}
@@ -72,7 +72,7 @@ func (h *Handler) exportData(c *fiber.Ctx) error {
 // exportTemplate handles GET /dynamic/:model/export/template — same format
 // as exportData but with no rows, so users can fill it in and feed it back
 // through importData.
-func (h *Handler) exportTemplate(c *fiber.Ctx) error {
+func (h *Handler) exportTemplate(c fiber.Ctx) error {
 	model := c.Params("model")
 	headers, err := exportHeaders(c, h, model)
 	if err != nil {
@@ -91,7 +91,7 @@ func (h *Handler) exportTemplate(c *fiber.Ctx) error {
 
 // importValidate handles POST /dynamic/:model/import/validate — parses the
 // uploaded CSV/JSON and reports row-by-row issues without touching the DB.
-func (h *Handler) importValidate(c *fiber.Ctx) error {
+func (h *Handler) importValidate(c fiber.Ctx) error {
 	if h.user(c) == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
 	}
@@ -113,7 +113,7 @@ func (h *Handler) importValidate(c *fiber.Ctx) error {
 // importData handles POST /dynamic/:model/import — parses the uploaded
 // CSV/JSON and creates one record per row through the regular dynamic
 // Service.Create pipeline (so permissions, hooks, validation all run).
-func (h *Handler) importData(c *fiber.Ctx) error {
+func (h *Handler) importData(c fiber.Ctx) error {
 	u := h.user(c)
 	if u == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
@@ -127,7 +127,7 @@ func (h *Handler) importData(c *fiber.Ctx) error {
 	created := 0
 	failures := make([]map[string]any, 0)
 	for i, row := range rows {
-		if _, err := h.service.Create(c.Context(), model, u, row); err != nil {
+		if _, err := h.service.Create(c, model, u, row); err != nil {
 			failures = append(failures, map[string]any{
 				"row":   i + 1,
 				"error": err.Error(),
@@ -155,7 +155,7 @@ func (h *Handler) importData(c *fiber.Ctx) error {
 // param wins (comma-separated). Falls back to the model's TableMetadata
 // columns. Always honours the order the caller provides — apps map this
 // 1:1 to spreadsheet columns.
-func exportHeaders(c *fiber.Ctx, h *Handler, model string) ([]string, error) {
+func exportHeaders(c fiber.Ctx, h *Handler, model string) ([]string, error) {
 	if raw := c.Query("columns"); raw != "" {
 		parts := strings.Split(raw, ",")
 		out := make([]string, 0, len(parts))
@@ -169,7 +169,7 @@ func exportHeaders(c *fiber.Ctx, h *Handler, model string) ([]string, error) {
 			return out, nil
 		}
 	}
-	meta, err := h.service.TableMetadata(c.Context(), model)
+	meta, err := h.service.TableMetadata(c, model)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +187,7 @@ func exportHeaders(c *fiber.Ctx, h *Handler, model string) ([]string, error) {
 // returns parsed rows as `[]map[string]any`. CSV rows are decoded with the
 // first record treated as the header. JSON accepts either an array of
 // objects or a `{ data: [...] }` envelope.
-func readImportRows(c *fiber.Ctx) ([]map[string]any, error) {
+func readImportRows(c fiber.Ctx) ([]map[string]any, error) {
 	contentType := strings.ToLower(c.Get(fiber.HeaderContentType))
 	if strings.HasPrefix(contentType, "multipart/form-data") {
 		fileHeader, err := c.FormFile("file")

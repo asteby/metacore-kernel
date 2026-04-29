@@ -22,7 +22,7 @@ import (
 
 // ContextLookup is the minimum surface httpx needs from a request context
 // to extract tenant/user identity set by upstream middleware. Apps wrap
-// their native context (e.g. *fiber.Ctx) with a tiny adapter that
+// their native context (e.g. fiber.Ctx) with a tiny adapter that
 // implements this interface.
 type ContextLookup interface {
 	// Locals returns a request-scoped value previously stored under key,

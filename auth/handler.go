@@ -3,7 +3,7 @@ package auth
 import (
 	"errors"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 )
 
@@ -42,16 +42,16 @@ type registerRequest struct {
 }
 
 // Login handles POST /auth/login.
-func (h *Handler) Login(c *fiber.Ctx) error {
+func (h *Handler) Login(c fiber.Ctx) error {
 	var req loginRequest
-	if err := c.BodyParser(&req); err != nil {
+	if err := c.Bind().Body(&req); err != nil {
 		return respondError(c, fiber.StatusBadRequest, MsgInvalidRequestFormat)
 	}
 	if req.Email == "" || req.Password == "" {
 		return respondError(c, fiber.StatusBadRequest, MsgMissingFields)
 	}
 
-	result, err := h.service.Login(c.UserContext(), LoginInput{Email: req.Email, Password: req.Password})
+	result, err := h.service.Login(c, LoginInput{Email: req.Email, Password: req.Password})
 	if err != nil {
 		if errors.Is(err, ErrInvalidCredentials) {
 			return respondError(c, fiber.StatusUnauthorized, MsgInvalidCredentials)
@@ -63,16 +63,16 @@ func (h *Handler) Login(c *fiber.Ctx) error {
 }
 
 // Register handles POST /auth/register.
-func (h *Handler) Register(c *fiber.Ctx) error {
+func (h *Handler) Register(c fiber.Ctx) error {
 	var req registerRequest
-	if err := c.BodyParser(&req); err != nil {
+	if err := c.Bind().Body(&req); err != nil {
 		return respondError(c, fiber.StatusBadRequest, MsgInvalidRequestFormat)
 	}
 	if req.Name == "" || req.Email == "" || req.Password == "" {
 		return respondError(c, fiber.StatusBadRequest, MsgMissingFields)
 	}
 
-	result, err := h.service.Register(c.UserContext(), RegisterInput{
+	result, err := h.service.Register(c, RegisterInput{
 		Name:             req.Name,
 		Email:            req.Email,
 		Password:         req.Password,
@@ -91,13 +91,13 @@ func (h *Handler) Register(c *fiber.Ctx) error {
 }
 
 // Me handles GET /auth/me. Expects Middleware to have validated the JWT.
-func (h *Handler) Me(c *fiber.Ctx) error {
+func (h *Handler) Me(c fiber.Ctx) error {
 	userID := GetUserID(c)
 	if userID == uuid.Nil {
 		return respondError(c, fiber.StatusUnauthorized, MsgUnauthorized)
 	}
 
-	user, err := h.service.Me(c.UserContext(), userID)
+	user, err := h.service.Me(c, userID)
 	if err != nil {
 		if errors.Is(err, ErrUserNotFound) {
 			return respondError(c, fiber.StatusNotFound, err.Error())
@@ -112,7 +112,7 @@ func (h *Handler) Me(c *fiber.Ctx) error {
 }
 
 // Logout handles POST /auth/logout. JWTs are stateless; we just signal success.
-func (h *Handler) Logout(c *fiber.Ctx) error {
+func (h *Handler) Logout(c fiber.Ctx) error {
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"success": true,
 		"message": MsgLoggedOut,
@@ -135,7 +135,7 @@ func (h *Handler) Mount(router fiber.Router, middleware fiber.Handler) {
 
 // respondLogin serializes a LoginResult using the shared wire shape. It does
 // NOT include a password field — the User type's JSON tags should hide that.
-func respondLogin(c *fiber.Ctx, status int, r *LoginResult) error {
+func respondLogin(c fiber.Ctx, status int, r *LoginResult) error {
 	data := fiber.Map{
 		"user":       r.User,
 		"token":      r.Token,
@@ -150,7 +150,7 @@ func respondLogin(c *fiber.Ctx, status int, r *LoginResult) error {
 	})
 }
 
-func respondError(c *fiber.Ctx, status int, msg string) error {
+func respondError(c fiber.Ctx, status int, msg string) error {
 	return c.Status(status).JSON(fiber.Map{
 		"success": false,
 		"message": msg,

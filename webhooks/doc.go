@@ -10,7 +10,7 @@
 //
 //	svc := webhooks.New(webhooks.Config{DB: db, WorkerCount: 5})
 //	svc.Start(ctx)
-//	h := webhooks.NewHandler(svc, func(c *fiber.Ctx) (string, uuid.UUID) {
+//	h := webhooks.NewHandler(svc, func(c fiber.Ctx) (string, uuid.UUID) {
 //	    return "organization", auth.GetOrganizationID(c)
 //	})
 //	h.Mount(api.Group("/webhooks"))

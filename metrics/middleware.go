@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 )
 
 // statusRecorder wraps http.ResponseWriter to capture the written status code.
@@ -46,7 +46,7 @@ func HTTPMiddleware(reg *Registry) func(http.Handler) http.Handler {
 // FiberMiddleware returns a Fiber middleware that records HTTP request counts
 // and latency into the provided Registry.
 func FiberMiddleware(reg *Registry) fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		start := time.Now()
 
 		err := c.Next()

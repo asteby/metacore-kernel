@@ -19,7 +19,7 @@ import (
 	"github.com/asteby/metacore-kernel/installer"
 	"github.com/asteby/metacore-kernel/manifest"
 	kerneltool "github.com/asteby/metacore-kernel/tool"
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 )
 
@@ -43,7 +43,7 @@ type toolListItem struct {
 // of ToolDef-shaped objects so SDK clients consume it as-is.
 //
 // GET /api/metacore/tools[?addon_key=X]
-func (h *Handler) ListTools(c *fiber.Ctx) error {
+func (h *Handler) ListTools(c fiber.Ctx) error {
 	registry := h.deps.ToolRegistry
 
 	filter := strings.TrimSpace(c.Query("addon_key"))
@@ -79,7 +79,7 @@ type executeToolRequest struct {
 // dispatch a tool against a different tenant's installation.
 //
 // POST /api/metacore/tools/execute
-func (h *Handler) ExecuteTool(c *fiber.Ctx) error {
+func (h *Handler) ExecuteTool(c fiber.Ctx) error {
 	orgID, ok := orgIDFromCtx(c)
 	if !ok {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
@@ -89,7 +89,7 @@ func (h *Handler) ExecuteTool(c *fiber.Ctx) error {
 	}
 
 	var req executeToolRequest
-	if err := c.BodyParser(&req); err != nil {
+	if err := c.Bind().Body(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"message": "invalid JSON body: " + err.Error(),
@@ -133,7 +133,7 @@ func (h *Handler) ExecuteTool(c *fiber.Ctx) error {
 		})
 	}
 
-	result, err := tool.Execute(c.Context(), req.Parameters)
+	result, err := tool.Execute(c, req.Parameters)
 	if err != nil {
 		// Shape-compatible with ToolExecutionResponse — the SDK client
 		// returns the JSON body verbatim as the response envelope.

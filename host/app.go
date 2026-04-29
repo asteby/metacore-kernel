@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
@@ -41,7 +41,7 @@ type AppConfig struct {
 	JWTSecret []byte
 
 	// AuthMiddlewareSkipper lets /auth/login and /auth/register remain public.
-	AuthMiddlewareSkipper func(*fiber.Ctx) bool
+	AuthMiddlewareSkipper func(fiber.Ctx) bool
 
 	// Optional integrations: omit to disable.
 	EnablePush     bool
@@ -279,7 +279,7 @@ func NewApp(cfg AppConfig) *App {
 		a.idempotencyMW = idempotency.Middleware(idempotency.Config{
 			Store: store,
 			TTL:   cfg.IdempotencyTTL,
-			UserKey: func(c *fiber.Ctx) string {
+			UserKey: func(c fiber.Ctx) string {
 				if uid := auth.GetUserID(c); uid != uuid.Nil {
 					return uid.String()
 				}
@@ -290,7 +290,7 @@ func NewApp(cfg AppConfig) *App {
 
 	a.authHandler = auth.NewHandler(authSvc)
 	a.metaHandler = metadata.NewHandler(metaSvc)
-	a.dynHandler = dynamic.NewHandler(dynSvc, func(c *fiber.Ctx) modelbase.AuthUser {
+	a.dynHandler = dynamic.NewHandler(dynSvc, func(c fiber.Ctx) modelbase.AuthUser {
 		uid := auth.GetUserID(c)
 		orgID := auth.GetOrganizationID(c)
 		role := auth.GetRole(c)
@@ -310,7 +310,7 @@ func NewApp(cfg AppConfig) *App {
 			VAPIDPrivate: cfg.VAPIDPrivate,
 			VAPIDSubject: cfg.VAPIDSubject,
 		})
-		a.pushHandler = push.NewHandler(a.Push, func(c *fiber.Ctx) uuid.UUID {
+		a.pushHandler = push.NewHandler(a.Push, func(c fiber.Ctx) uuid.UUID {
 			return auth.GetUserID(c)
 		})
 	}
@@ -320,7 +320,7 @@ func NewApp(cfg AppConfig) *App {
 		resolver := cfg.WebhookOwner
 		if resolver == nil {
 			// default: org-scoped via JWT claims
-			resolver = func(c *fiber.Ctx) (string, uuid.UUID, error) {
+			resolver = func(c fiber.Ctx) (string, uuid.UUID, error) {
 				return "organization", auth.GetOrganizationID(c), nil
 			}
 		}

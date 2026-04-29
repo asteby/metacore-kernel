@@ -13,6 +13,6 @@
 //	    VAPIDPrivate: os.Getenv("VAPID_PRIVATE_KEY"),
 //	    VAPIDSubject: "mailto:ops@example.com",
 //	})
-//	h := push.NewHandler(svc, func(c *fiber.Ctx) uuid.UUID { return auth.GetUserID(c) })
+//	h := push.NewHandler(svc, func(c fiber.Ctx) uuid.UUID { return auth.GetUserID(c) })
 //	h.Mount(api.Group("/push"))
 package push

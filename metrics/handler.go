@@ -1,7 +1,7 @@
 package metrics
 
 import (
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/valyala/fasthttp/fasthttpadaptor"
 )
@@ -11,8 +11,8 @@ import (
 func Handler(reg *Registry) fiber.Handler {
 	h := promhttp.HandlerFor(reg.Prometheus, promhttp.HandlerOpts{})
 	adapted := fasthttpadaptor.NewFastHTTPHandler(h)
-	return func(c *fiber.Ctx) error {
-		adapted(c.Context())
+	return func(c fiber.Ctx) error {
+		adapted(c.RequestCtx())
 		return nil
 	}
 }

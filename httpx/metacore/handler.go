@@ -33,7 +33,7 @@ import (
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/navigation"
 	kerneltool "github.com/asteby/metacore-kernel/tool"
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 )
 
@@ -94,7 +94,7 @@ func NewHandler(deps Deps) (*Handler, error) {
 // context. We use kernel/httpx's well-known key so any host that drops
 // "organization_id" (uuid.UUID) into Fiber locals via auth middleware
 // works out of the box.
-func orgIDFromCtx(c *fiber.Ctx) (uuid.UUID, bool) {
+func orgIDFromCtx(c fiber.Ctx) (uuid.UUID, bool) {
 	id, err := httpx.ExtractOrgID(fiberLookup{c})
 	if err != nil {
 		return uuid.UUID{}, false
@@ -102,8 +102,8 @@ func orgIDFromCtx(c *fiber.Ctx) (uuid.UUID, bool) {
 	return id, id != uuid.Nil
 }
 
-// fiberLookup adapts *fiber.Ctx to httpx.ContextLookup.
-type fiberLookup struct{ c *fiber.Ctx }
+// fiberLookup adapts fiber.Ctx to httpx.ContextLookup.
+type fiberLookup struct{ c fiber.Ctx }
 
 func (f fiberLookup) Locals(key string) any { return f.c.Locals(key) }
 
@@ -117,7 +117,7 @@ func (f fiberLookup) Locals(key string) any { return f.c.Locals(key) }
 // hydrated and calls this endpoint; returning [] keeps the bootstrap clean
 // instead of forcing every host to wrap the route in an auth middleware
 // just for the empty case.
-func (h *Handler) ListManifests(c *fiber.Ctx) error {
+func (h *Handler) ListManifests(c fiber.Ctx) error {
 	c.Set("X-Metacore-Kernel-Version", h.deps.Bridge.KernelVersion())
 	orgID, ok := orgIDFromCtx(c)
 	if !ok {
@@ -146,7 +146,7 @@ func (h *Handler) ListManifests(c *fiber.Ctx) error {
 // (anonymous / unauthenticated). Mirrors ListManifests — both endpoints
 // are safe to expose without auth and the SDK bootstrap fires before
 // auth state has hydrated.
-func (h *Handler) Navigation(c *fiber.Ctx) error {
+func (h *Handler) Navigation(c fiber.Ctx) error {
 	orgID, ok := orgIDFromCtx(c)
 	if !ok {
 		return c.JSON([]navigation.Group{})
@@ -180,7 +180,7 @@ func (h *Handler) Navigation(c *fiber.Ctx) error {
 //     for a new org.
 //
 // POST /api/metacore/installations/:key
-func (h *Handler) Install(c *fiber.Ctx) error {
+func (h *Handler) Install(c fiber.Ctx) error {
 	orgID, ok := orgIDFromCtx(c)
 	if !ok {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
@@ -320,7 +320,7 @@ func mimeForExt(ext string) string {
 // the resolved path stays under FrontendBasePath/<key>.
 //
 // GET /api/metacore/addons/:key/frontend/*path
-func (h *Handler) ServeAddonFrontend(c *fiber.Ctx) error {
+func (h *Handler) ServeAddonFrontend(c fiber.Ctx) error {
 	if h.deps.FrontendBasePath == "" {
 		return c.Status(fiber.StatusNotFound).SendString("frontend serving disabled")
 	}
@@ -364,7 +364,7 @@ func (h *Handler) ServeAddonFrontend(c *fiber.Ctx) error {
 
 	c.Set(fiber.HeaderContentType, mimeForExt(filepath.Ext(filePath)))
 	c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
-	return c.SendFile(filePath, false)
+	return c.SendFile(filePath)
 }
 
 // guard: ensure errors stays referenced if future refactors switch

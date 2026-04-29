@@ -3,7 +3,7 @@ package auth
 import (
 	"strings"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 )
 
@@ -24,10 +24,10 @@ type MiddlewareConfig struct {
 	// Skipper optionally skips the middleware for a request (public routes,
 	// health checks, etc.). If it returns true the middleware calls Next()
 	// without inspecting Authorization.
-	Skipper func(*fiber.Ctx) bool
+	Skipper func(fiber.Ctx) bool
 	// Unauthorized lets apps customize the 401 response. When nil the
 	// middleware responds with {"success": false, "message": "..."}.
-	Unauthorized func(c *fiber.Ctx, err error) error
+	Unauthorized func(c fiber.Ctx, err error) error
 }
 
 // Middleware returns a Fiber handler that validates a bearer (or ?token=)
@@ -40,7 +40,7 @@ func Middleware(config MiddlewareConfig) fiber.Handler {
 		unauthorized = defaultUnauthorized
 	}
 
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		if config.Skipper != nil && config.Skipper(c) {
 			return c.Next()
 		}
@@ -67,7 +67,7 @@ func Middleware(config MiddlewareConfig) fiber.Handler {
 
 // extractToken pulls a token from `Authorization: Bearer <token>` or the
 // `?token=` query parameter (useful for browser file downloads / websockets).
-func extractToken(c *fiber.Ctx) string {
+func extractToken(c fiber.Ctx) string {
 	if h := c.Get(fiber.HeaderAuthorization); h != "" {
 		parts := strings.SplitN(h, " ", 2)
 		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
@@ -79,7 +79,7 @@ func extractToken(c *fiber.Ctx) string {
 	return c.Query("token")
 }
 
-func defaultUnauthorized(c *fiber.Ctx, err error) error {
+func defaultUnauthorized(c fiber.Ctx, err error) error {
 	msg := MsgUnauthorized
 	if err == ErrMissingToken || err == ErrInvalidToken || err == ErrExpiredToken {
 		msg = MsgInvalidOrExpired
@@ -91,7 +91,7 @@ func defaultUnauthorized(c *fiber.Ctx, err error) error {
 }
 
 // GetClaims returns the claims attached by Middleware, or nil if none.
-func GetClaims(c *fiber.Ctx) *Claims {
+func GetClaims(c fiber.Ctx) *Claims {
 	v := c.Locals(LocalClaims)
 	if v == nil {
 		return nil
@@ -101,7 +101,7 @@ func GetClaims(c *fiber.Ctx) *Claims {
 }
 
 // GetUserID returns the authenticated user id or uuid.Nil if not set.
-func GetUserID(c *fiber.Ctx) uuid.UUID {
+func GetUserID(c fiber.Ctx) uuid.UUID {
 	v := c.Locals(LocalUserID)
 	if id, ok := v.(uuid.UUID); ok {
 		return id
@@ -110,7 +110,7 @@ func GetUserID(c *fiber.Ctx) uuid.UUID {
 }
 
 // GetOrganizationID returns the authenticated organization id or uuid.Nil.
-func GetOrganizationID(c *fiber.Ctx) uuid.UUID {
+func GetOrganizationID(c fiber.Ctx) uuid.UUID {
 	v := c.Locals(LocalOrganizationID)
 	if id, ok := v.(uuid.UUID); ok {
 		return id
@@ -119,7 +119,7 @@ func GetOrganizationID(c *fiber.Ctx) uuid.UUID {
 }
 
 // GetRole returns the authenticated role string (may be empty).
-func GetRole(c *fiber.Ctx) string {
+func GetRole(c fiber.Ctx) string {
 	if v, ok := c.Locals(LocalRole).(string); ok {
 		return v
 	}
@@ -127,7 +127,7 @@ func GetRole(c *fiber.Ctx) string {
 }
 
 // GetEmail returns the authenticated email (may be empty).
-func GetEmail(c *fiber.Ctx) string {
+func GetEmail(c fiber.Ctx) string {
 	if v, ok := c.Locals(LocalEmail).(string); ok {
 		return v
 	}

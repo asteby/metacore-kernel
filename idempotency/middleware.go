@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 )
 
 const (
@@ -32,7 +32,7 @@ type Config struct {
 	// users sending the same Idempotency-Key don't collide. Receives the
 	// fiber context and returns a stable per-user identifier (typically
 	// the JWT subject). When nil, the middleware namespaces by remote IP.
-	UserKey func(c *fiber.Ctx) string
+	UserKey func(c fiber.Ctx) string
 
 	// CacheStatus chooses which response statuses are stored. Default
 	// caches 2xx — clients should not see "200" once, "500" on retry.
@@ -62,10 +62,10 @@ func Middleware(cfg Config) fiber.Handler {
 	}
 	userKey := cfg.UserKey
 	if userKey == nil {
-		userKey = func(c *fiber.Ctx) string { return c.IP() }
+		userKey = func(c fiber.Ctx) string { return c.IP() }
 	}
 
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		clientKey := c.Get(HeaderKey)
 		if clientKey == "" {
 			// No header → skip the middleware entirely. Behaviour matches

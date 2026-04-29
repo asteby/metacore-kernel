@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/asteby/metacore-kernel/bridge"
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 )
 
@@ -26,7 +26,7 @@ func TestCatalog_RequiresOrg(t *testing.T) {
 	app := fiber.New()
 	app.Get("/catalog", h.Catalog)
 	req := httptest.NewRequest("GET", "/catalog", nil)
-	resp, err := app.Test(req, -1)
+	resp, err := app.Test(req, fiber.TestConfig{Timeout: 0})
 	if err != nil {
 		t.Fatalf("app.Test: %v", err)
 	}
@@ -51,13 +51,13 @@ func TestCatalog_EmptyWhenNoDir(t *testing.T) {
 	}
 	app := fiber.New()
 	orgID := uuid.New()
-	app.Use(func(c *fiber.Ctx) error {
+	app.Use(func(c fiber.Ctx) error {
 		c.Locals("organization_id", orgID)
 		return c.Next()
 	})
 	app.Get("/catalog", h.Catalog)
 	req := httptest.NewRequest("GET", "/catalog", nil)
-	resp, err := app.Test(req, -1)
+	resp, err := app.Test(req, fiber.TestConfig{Timeout: 0})
 	if err != nil {
 		t.Fatalf("app.Test: %v", err)
 	}

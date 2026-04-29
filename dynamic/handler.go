@@ -3,7 +3,7 @@ package dynamic
 import (
 	"strconv"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 
 	"github.com/asteby/metacore-kernel/modelbase"
@@ -12,7 +12,7 @@ import (
 
 // UserResolver extracts the authenticated user from the Fiber context.
 // Apps wire this to their auth middleware (e.g. using auth.GetClaims).
-type UserResolver func(c *fiber.Ctx) modelbase.AuthUser
+type UserResolver func(c fiber.Ctx) modelbase.AuthUser
 
 // Handler exposes dynamic CRUD over Fiber.
 type Handler struct {
@@ -57,7 +57,8 @@ type MountOpts struct {
 // touching every endpoint by hand.
 func (h *Handler) MountWith(opts MountOpts) func(r fiber.Router) {
 	return func(r fiber.Router) {
-		g := r.Group("/dynamic", opts.Middleware...)
+		mws := handlersToAny(opts.Middleware)
+		g := r.Group("/dynamic", mws...)
 
 		// Read paths — no mutation middleware.
 		g.Get("/:model", h.list)
@@ -65,10 +66,11 @@ func (h *Handler) MountWith(opts MountOpts) func(r fiber.Router) {
 		g.Get("/:model/export/template", h.exportTemplate)
 		g.Post("/:model/import/validate", h.importValidate)
 
-		// Mutation paths — receive the extra middleware chain.
-		mut := opts.MutationMiddleware
-		g.Post("/:model", chain(mut, h.create)...)
-		g.Post("/:model/import", chain(mut, h.importData)...)
+		// Mutation paths — receive the extra middleware chain. Fiber v3
+		// expects (handler, ...rest) where the first arg runs first; we
+		// front-load any mutation middleware before the final handler.
+		registerMut(g.Post, "/:model", opts.MutationMiddleware, h.create)
+		registerMut(g.Post, "/:model/import", opts.MutationMiddleware, h.importData)
 
 		// Read paths after dynamic ones (matters for Fiber router order).
 		g.Get("/:model/:id", h.get)
@@ -77,15 +79,37 @@ func (h *Handler) MountWith(opts MountOpts) func(r fiber.Router) {
 	}
 }
 
-// chain prepends the middleware chain to the final handler, returning the
-// slice fiber wants for `g.Post(path, handler...)`.
-func chain(mw []fiber.Handler, final fiber.Handler) []fiber.Handler {
+// registerMut wires a mutation route through fiber v3's
+// `Method(path, handler any, handlers ...any)` signature so that any provided
+// middleware runs before `final`. When there is no middleware we register the
+// final handler directly.
+func registerMut(register func(string, any, ...any) fiber.Router, path string, mw []fiber.Handler, final fiber.Handler) {
 	if len(mw) == 0 {
-		return []fiber.Handler{final}
+		register(path, final)
+		return
 	}
-	out := make([]fiber.Handler, 0, len(mw)+1)
-	out = append(out, mw...)
-	out = append(out, final)
+	rest := make([]any, 0, len(mw))
+	for _, h := range mw[1:] {
+		if h != nil {
+			rest = append(rest, h)
+		}
+	}
+	rest = append(rest, final)
+	register(path, mw[0], rest...)
+}
+
+// handlersToAny converts a typed []fiber.Handler slice to []any so it can be
+// spread into fiber v3 router methods (which take `any` for middleware).
+func handlersToAny(in []fiber.Handler) []any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]any, 0, len(in))
+	for _, h := range in {
+		if h != nil {
+			out = append(out, h)
+		}
+	}
 	return out
 }
 
@@ -96,18 +120,18 @@ func chain(mw []fiber.Handler, final fiber.Handler) []fiber.Handler {
 //	GET    /options/:model    Options (by ?field=...)
 //	GET    /search/:model     Search  (by ?q=... or ?search=...)
 func (h *Handler) MountOptions(r fiber.Router, middleware ...fiber.Handler) {
-	r.Get("/options/:model", append(middleware, h.options)...)
-	r.Get("/search/:model", append(middleware, h.search)...)
+	registerMut(r.Get, "/options/:model", middleware, h.options)
+	registerMut(r.Get, "/search/:model", middleware, h.search)
 }
 
-func (h *Handler) user(c *fiber.Ctx) modelbase.AuthUser {
+func (h *Handler) user(c fiber.Ctx) modelbase.AuthUser {
 	if h.resolver == nil {
 		return nil
 	}
 	return h.resolver(c)
 }
 
-func (h *Handler) list(c *fiber.Ctx) error {
+func (h *Handler) list(c fiber.Ctx) error {
 	u := h.user(c)
 	if u == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
@@ -116,14 +140,14 @@ func (h *Handler) list(c *fiber.Ctx) error {
 	if err != nil {
 		return respondErr(c, fiber.StatusBadRequest, err.Error())
 	}
-	items, meta, err := h.service.List(c.Context(), c.Params("model"), u, params)
+	items, meta, err := h.service.List(c, c.Params("model"), u, params)
 	if err != nil {
 		return h.handleError(c, err)
 	}
 	return c.JSON(fiber.Map{"success": true, "data": items, "meta": meta})
 }
 
-func (h *Handler) get(c *fiber.Ctx) error {
+func (h *Handler) get(c fiber.Ctx) error {
 	u := h.user(c)
 	if u == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
@@ -132,30 +156,30 @@ func (h *Handler) get(c *fiber.Ctx) error {
 	if err != nil {
 		return respondErr(c, fiber.StatusBadRequest, ErrInvalidID.Error())
 	}
-	record, err := h.service.Get(c.Context(), c.Params("model"), u, id)
+	record, err := h.service.Get(c, c.Params("model"), u, id)
 	if err != nil {
 		return h.handleError(c, err)
 	}
 	return c.JSON(fiber.Map{"success": true, "data": record})
 }
 
-func (h *Handler) create(c *fiber.Ctx) error {
+func (h *Handler) create(c fiber.Ctx) error {
 	u := h.user(c)
 	if u == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
 	}
 	var input map[string]any
-	if err := c.BodyParser(&input); err != nil {
+	if err := c.Bind().Body(&input); err != nil {
 		return respondErr(c, fiber.StatusBadRequest, "invalid body")
 	}
-	record, err := h.service.Create(c.Context(), c.Params("model"), u, input)
+	record, err := h.service.Create(c, c.Params("model"), u, input)
 	if err != nil {
 		return h.handleError(c, err)
 	}
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"success": true, "data": record})
 }
 
-func (h *Handler) update(c *fiber.Ctx) error {
+func (h *Handler) update(c fiber.Ctx) error {
 	u := h.user(c)
 	if u == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
@@ -165,17 +189,17 @@ func (h *Handler) update(c *fiber.Ctx) error {
 		return respondErr(c, fiber.StatusBadRequest, ErrInvalidID.Error())
 	}
 	var input map[string]any
-	if err := c.BodyParser(&input); err != nil {
+	if err := c.Bind().Body(&input); err != nil {
 		return respondErr(c, fiber.StatusBadRequest, "invalid body")
 	}
-	record, err := h.service.Update(c.Context(), c.Params("model"), u, id, input)
+	record, err := h.service.Update(c, c.Params("model"), u, id, input)
 	if err != nil {
 		return h.handleError(c, err)
 	}
 	return c.JSON(fiber.Map{"success": true, "data": record})
 }
 
-func (h *Handler) delete(c *fiber.Ctx) error {
+func (h *Handler) delete(c fiber.Ctx) error {
 	u := h.user(c)
 	if u == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
@@ -184,13 +208,13 @@ func (h *Handler) delete(c *fiber.Ctx) error {
 	if err != nil {
 		return respondErr(c, fiber.StatusBadRequest, ErrInvalidID.Error())
 	}
-	if err := h.service.Delete(c.Context(), c.Params("model"), u, id); err != nil {
+	if err := h.service.Delete(c, c.Params("model"), u, id); err != nil {
 		return h.handleError(c, err)
 	}
 	return c.JSON(fiber.Map{"success": true})
 }
 
-func (h *Handler) options(c *fiber.Ctx) error {
+func (h *Handler) options(c fiber.Ctx) error {
 	u := h.user(c)
 	q := OptionsQuery{
 		Model:       c.Params("model"),
@@ -208,14 +232,14 @@ func (h *Handler) options(c *fiber.Ctx) error {
 			q.Offset = n
 		}
 	}
-	res, err := h.service.Options(c.Context(), u, q)
+	res, err := h.service.Options(c, u, q)
 	if err != nil {
 		return h.handleError(c, err)
 	}
 	return c.JSON(fiber.Map{"success": true, "data": res.Options, "type": res.Type})
 }
 
-func (h *Handler) search(c *fiber.Ctx) error {
+func (h *Handler) search(c fiber.Ctx) error {
 	u := h.user(c)
 	q := SearchQuery{
 		Model: c.Params("model"),
@@ -229,14 +253,14 @@ func (h *Handler) search(c *fiber.Ctx) error {
 			q.Limit = n
 		}
 	}
-	hits, err := h.service.Search(c.Context(), u, q)
+	hits, err := h.service.Search(c, u, q)
 	if err != nil {
 		return h.handleError(c, err)
 	}
 	return c.JSON(fiber.Map{"success": true, "data": hits})
 }
 
-func (h *Handler) handleError(c *fiber.Ctx, err error) error {
+func (h *Handler) handleError(c fiber.Ctx, err error) error {
 	switch err {
 	case ErrModelNotFound, ErrRecordNotFound, ErrSourceModelNotFound, ErrOptionsFieldNotFound:
 		return respondErr(c, fiber.StatusNotFound, err.Error())
@@ -254,6 +278,6 @@ func (h *Handler) handleError(c *fiber.Ctx, err error) error {
 	}
 }
 
-func respondErr(c *fiber.Ctx, status int, msg string) error {
+func respondErr(c fiber.Ctx, status int, msg string) error {
 	return c.Status(status).JSON(fiber.Map{"success": false, "message": msg})
 }

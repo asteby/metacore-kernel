@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	"github.com/asteby/metacore-kernel/modelbase"
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 )
 
 // UserLookup resolves the authenticated user from a Fiber context. Apps
@@ -14,7 +14,7 @@ import (
 //
 // Returning nil means "no authenticated user"; the middleware maps that to
 // 401.
-type UserLookup func(*fiber.Ctx) modelbase.AuthUser
+type UserLookup func(fiber.Ctx) modelbase.AuthUser
 
 // GateConfig tunes the Fiber gate. Zero values use sensible defaults; most
 // callers just pass nil and rely on the standard JSON error shape.
@@ -25,12 +25,12 @@ type GateConfig struct {
 
 	// OnDenied lets apps customise the 403 body. Defaults to the standard
 	// {"success": false, "message": "Permission denied"} shape.
-	OnDenied func(c *fiber.Ctx, err error) error
+	OnDenied func(c fiber.Ctx, err error) error
 
 	// OnUnauthenticated lets apps customise the 401 body (fires when the
 	// UserLookup returns nil). Defaults to {"success": false,
 	// "message": "Unauthorized"}.
-	OnUnauthenticated func(c *fiber.Ctx, err error) error
+	OnUnauthenticated func(c fiber.Ctx, err error) error
 }
 
 // CheckMode enumerates the ways a gate combines multiple capabilities.
@@ -89,7 +89,7 @@ func gateWith(service *Service, userLookup UserLookup, cfg GateConfig, caps ...C
 		onUnauth = defaultOnUnauthenticated
 	}
 
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		user := userLookup(c)
 		if user == nil {
 			return onUnauth(c, ErrNoUser)
@@ -101,11 +101,11 @@ func gateWith(service *Service, userLookup UserLookup, cfg GateConfig, caps ...C
 			// No caps requested — the gate only asserts authentication.
 			err = nil
 		case len(caps) == 1:
-			err = service.Check(c.UserContext(), user, caps[0])
+			err = service.Check(c, user, caps[0])
 		case cfg.Mode == ModeAny:
-			err = service.CheckAny(c.UserContext(), user, caps...)
+			err = service.CheckAny(c, user, caps...)
 		default:
-			err = service.CheckAll(c.UserContext(), user, caps...)
+			err = service.CheckAll(c, user, caps...)
 		}
 
 		if err != nil {
@@ -118,14 +118,14 @@ func gateWith(service *Service, userLookup UserLookup, cfg GateConfig, caps ...C
 	}
 }
 
-func defaultOnDenied(c *fiber.Ctx, err error) error {
+func defaultOnDenied(c fiber.Ctx, err error) error {
 	return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 		"success": false,
 		"message": "Permission denied",
 	})
 }
 
-func defaultOnUnauthenticated(c *fiber.Ctx, err error) error {
+func defaultOnUnauthenticated(c fiber.Ctx, err error) error {
 	return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 		"success": false,
 		"message": "Unauthorized",
