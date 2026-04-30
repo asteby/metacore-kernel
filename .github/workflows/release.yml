@@ -31,7 +31,7 @@ jobs:
           TAG="${GITHUB_REF#refs/tags/}"
           curl -s "https://proxy.golang.org/${MODULE}/@v/${TAG}.info" || true
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: latest
