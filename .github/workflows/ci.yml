@@ -17,7 +17,7 @@ jobs:
           cache: true
       - run: go vet ./...
       - run: go test -race -coverprofile=coverage.out ./...
-      - uses: codecov/codecov-action@v4
+      - uses: codecov/codecov-action@v6
         with:
           files: coverage.out
         continue-on-error: true
