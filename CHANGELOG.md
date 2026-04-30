@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Removed
+
+- **`flow` package — extracted to consumer (link).** The workflow DAG engine
+  was domain-specific to link's conversation routing (no other host imported
+  it). Cross-repo recon confirmed link was the only consumer; the engine is
+  now part of `link/backend/internal/flow` (asteby-hq/link#129). Hosts that
+  need a similar primitive should fork from link or implement their own.
+  **Breaking change** — consumers upgrading past this version must remove
+  any import of `github.com/asteby/metacore-kernel/flow`.
+
+---
+
 ## [0.2.0] - 2026-04-24
 
 Major feature release. Consolidates the second wave of ecosystem migration:
