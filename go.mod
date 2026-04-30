@@ -3,6 +3,7 @@ module github.com/asteby/metacore-kernel
 go 1.25.7
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/semver/v3 v3.4.0
 	github.com/gofiber/contrib/v3/websocket v1.1.2
 	github.com/gofiber/fiber/v3 v3.2.0
