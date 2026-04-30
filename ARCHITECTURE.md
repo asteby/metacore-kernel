@@ -49,10 +49,15 @@ events trigger a push.
 ### What's an addon platform (kernel only if it's the product thesis)
 
 `tool`, `bundle`, `installer`, `manifest`, `security`, `runtime/wasm`,
-`events` (addon bus). These exist because metacore positions itself as an
-**addon platform** — apps assemble functionality from federated WASM addons.
-If a future direction makes addons opt-in, these would move to a separate
-module. Today they're kernel because they're the product thesis.
+`events` (addon bus), `bridge` (host-side glue). These exist because metacore
+positions itself as an **addon platform** — apps assemble functionality from
+federated WASM addons. If a future direction makes addons opt-in, these would
+move to a separate module. Today they're kernel because they're the product
+thesis.
+
+`bridge` is the single seam where each host (link, ops, visor, hub, ...) wires
+concrete implementations of the kernel's interfaces. Its public surface is
+stable under semver as of KernelVersion 2.0.0 — see `bridge/doc.go`.
 
 ### Things that explicitly DO NOT belong in the kernel
 
@@ -201,6 +206,7 @@ metacore-kernel/
 ├── manifest/        # addon manifest schema
 ├── bundle/          # addon bundle I/O contracts
 ├── security/        # HMAC signing + capability enforcement
+├── bridge/          # host-side glue: ports for ActionInterceptor / Tool / Agent / SecretResolver (stable v2.0+)
 ├── log/             # builder-style logger (legacy; new code uses obs)
 ├── metrics/         # Prometheus metrics helpers
 ├── migrations/      # GORM migration helpers
