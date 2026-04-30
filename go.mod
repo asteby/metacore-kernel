@@ -12,7 +12,7 @@ require (
 	github.com/pgvector/pgvector-go v0.3.0
 	github.com/pressly/goose/v3 v3.27.1
 	github.com/prometheus/client_golang v1.23.2
-	github.com/tetratelabs/wazero v1.8.0
+	github.com/tetratelabs/wazero v1.11.0
 	github.com/valyala/fasthttp v1.70.0
 	golang.org/x/crypto v0.50.0
 	golang.org/x/sync v0.20.0
