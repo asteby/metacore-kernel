@@ -7,7 +7,6 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"github.com/asteby/metacore-kernel/log"
 	"github.com/asteby/metacore-kernel/modelbase"
@@ -134,11 +133,18 @@ func (s *Service) Emit(ctx context.Context, orgID uuid.UUID, eventType string, d
 	}
 
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Per-org serialization. Postgres rejects FOR UPDATE on a SELECT with
+		// aggregate functions (SQLSTATE 0A000), so we use a transaction-scoped
+		// advisory lock keyed on a hash of the org id instead. Released auto-
+		// matically on commit/rollback. Other dialects (sqlite test fixtures)
+		// rely on the transaction's own isolation since they're single-writer.
+		if err := acquireOrgLock(tx, orgID); err != nil {
+			return err
+		}
 		var maxSeq struct {
 			Seq int64
 		}
 		if err := tx.Model(&Event{}).
-			Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("organization_id = ?", orgID).
 			Select("COALESCE(MAX(sequence_num), 0) as seq").
 			Scan(&maxSeq).Error; err != nil {
@@ -158,6 +164,21 @@ func (s *Service) Emit(ctx context.Context, orgID uuid.UUID, eventType string, d
 
 	s.broadcast(ctx, orgID, event)
 	return nil
+}
+
+// acquireOrgLock takes a Postgres transaction-scoped advisory lock keyed on
+// a hash of orgID, serializing Emit calls for the same tenant while leaving
+// other tenants unblocked. Postgres released it on tx commit or rollback,
+// no manual unlock needed.
+//
+// On non-Postgres dialects (eg sqlite used in unit tests) this is a no-op:
+// those backends are single-writer or otherwise serialize naturally, and
+// pg_advisory_xact_lock isn't portable.
+func acquireOrgLock(tx *gorm.DB, orgID uuid.UUID) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	return tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", orgID.String()).Error
 }
 
 // broadcast fan-outs event to every live subscriber for orgID under the
