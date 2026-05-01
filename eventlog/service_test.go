@@ -2,10 +2,13 @@ package eventlog
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/google/uuid"
+	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -236,6 +239,48 @@ func TestQuery_LimitClamping(t *testing.T) {
 	// Over-cap → clamped to 200 silently.
 	if _, _, err := svc.Query(ctx, orgID, QueryParams{Limit: 999}); err != nil {
 		t.Fatalf("limit=999: %v", err)
+	}
+}
+
+// TestEmit_PostgresQueryHasNoForUpdateWithAggregate is a regression test for
+// the SQLSTATE 0A000 error ("FOR UPDATE is not allowed with aggregate
+// functions") that production hit when the SELECT MAX(sequence_num) was
+// combined with clause.Locking{Strength: "UPDATE"}. The fix replaces row-
+// level locking with a transaction-scoped advisory lock, so the SELECT must
+// no longer carry FOR UPDATE.
+func TestEmit_PostgresQueryHasNoForUpdateWithAggregate(t *testing.T) {
+	t.Helper()
+	mockDB, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock new: %v", err)
+	}
+	t.Cleanup(func() { _ = mockDB.Close() })
+	dialector := postgres.New(postgres.Config{
+		Conn:                 mockDB,
+		WithoutQuotingCheck:  true,
+		PreferSimpleProtocol: true,
+	})
+	gormDB, err := gorm.Open(dialector, &gorm.Config{
+		SkipDefaultTransaction: true,
+		DryRun:                 true,
+	})
+	if err != nil {
+		t.Fatalf("gorm open: %v", err)
+	}
+
+	var maxSeq struct {
+		Seq int64
+	}
+	stmt := gormDB.Model(&Event{}).
+		Where("organization_id = ?", uuid.New()).
+		Select("COALESCE(MAX(sequence_num), 0) as seq").
+		Scan(&maxSeq).Statement
+	sql := strings.ToUpper(stmt.SQL.String())
+	if strings.Contains(sql, "FOR UPDATE") {
+		t.Fatalf("eventlog Emit SELECT contains FOR UPDATE — Postgres rejects this with aggregates: %s", stmt.SQL.String())
+	}
+	if !strings.Contains(sql, "MAX(SEQUENCE_NUM)") && !strings.Contains(sql, "COALESCE(MAX(SEQUENCE_NUM), 0)") {
+		t.Fatalf("expected MAX(sequence_num) in SQL, got: %s", stmt.SQL.String())
 	}
 }
 
