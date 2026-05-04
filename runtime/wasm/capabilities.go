@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
+	"gorm.io/gorm"
 )
 
 // eventEmit limits guard the bus fan-out from a runaway guest. They mirror
@@ -37,6 +38,16 @@ type invocation struct {
 	bus          *events.Bus
 	orgID        uuid.UUID
 	logger       *log.Logger
+	// db_query / db_exec plumbing. db is the standalone connection both
+	// imports fall back to; enforcer is the policy gate. tx is non-nil only
+	// when the host entered through Host.InvokeInTx — db_exec then runs on
+	// the action handler's open transaction so the guest's writes share the
+	// action's commit/rollback fate. When db is nil the db_query import
+	// returns a `db_unavailable` envelope; same for db_exec when both tx
+	// and db are nil.
+	db       *gorm.DB
+	tx       *gorm.DB
+	enforcer *security.Enforcer
 }
 
 type invKey struct{}
@@ -191,6 +202,43 @@ func registerHostModule(ctx context.Context, h *Host) error {
 			return 0
 		}).
 		Export("event_emit")
+
+	// db_query(sqlPtr, sqlLen, argsPtr, argsLen) -> i64 (ptr|len envelope)
+	// See docs/wasm-abi.md § 9. The envelope is always populated — guests
+	// distinguish success/failure by the JSON `success` flag.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			sqlPtr, sqlLen, argsPtr, argsLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			sqlText := readString(mod, sqlPtr, sqlLen)
+			argsJSON := readBytes(mod, argsPtr, argsLen)
+			env := executeDBQuery(ctx, inv.db, inv.addonKey, inv.enforcer, sqlText, argsJSON)
+			return writeToGuest(ctx, mod, env)
+		}).
+		Export("db_query")
+
+	// db_exec(sqlPtr, sqlLen, argsPtr, argsLen) -> i64 (ptr|len envelope)
+	// Mirrors db_query but for mutating SQL (INSERT/UPDATE/DELETE/MERGE),
+	// gated by `db:write addon_<key>.*`. When the host entered through
+	// InvokeInTx the import runs on `inv.tx` so the guest's writes commit
+	// or rollback with the surrounding action transaction; otherwise it
+	// opens its own short-lived transaction on `inv.db`.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			sqlPtr, sqlLen, argsPtr, argsLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			sqlText := readString(mod, sqlPtr, sqlLen)
+			argsJSON := readBytes(mod, argsPtr, argsLen)
+			env := executeDBExec(ctx, inv.tx, inv.db, inv.addonKey, inv.enforcer, sqlText, argsJSON)
+			return writeToGuest(ctx, mod, env)
+		}).
+		Export("db_exec")
 
 	if _, err := b.Instantiate(ctx); err != nil {
 		return fmt.Errorf("instantiate metacore_host: %w", err)
