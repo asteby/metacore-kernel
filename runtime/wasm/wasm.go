@@ -25,11 +25,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
+	"gorm.io/gorm"
 )
 
 // defaults used when BackendSpec leaves a knob at zero.
@@ -45,6 +47,9 @@ const (
 type Host struct {
 	rt       wazero.Runtime
 	caps     *security.Capabilities
+	bus      *events.Bus
+	db       *gorm.DB
+	enforcer *security.Enforcer
 	logger   *log.Logger
 	compiled sync.Map // addonKey -> *compiledEntry
 	modules  sync.Map // instanceKey(addonKey, installation) -> *Module
@@ -82,6 +87,32 @@ func NewHost(ctx context.Context, caps *security.Capabilities, logger *log.Logge
 	return h, nil
 }
 
+// WithBus binds an events.Bus to the host so guests can publish through the
+// `metacore_host.event_emit` import. When unset, the import returns a
+// `bus_unavailable` JSON error to the guest.
+func (h *Host) WithBus(b *events.Bus) *Host {
+	h.bus = b
+	return h
+}
+
+// WithDB binds the *gorm.DB the `metacore_host.db_query` import reads
+// through. When unset, the import returns a `db_unavailable` JSON error.
+// The host opens a fresh transaction per call so it can SET LOCAL
+// search_path without leaking state between invocations.
+func (h *Host) WithDB(db *gorm.DB) *Host {
+	h.db = db
+	return h
+}
+
+// WithEnforcer wires the policy gate the `metacore_host.db_query` import
+// consults before opening the transaction. When unset, db_query falls back
+// to search_path scoping alone — acceptable in tests and embedded harness
+// setups, but production hosts should always provide an Enforcer.
+func (h *Host) WithEnforcer(e *security.Enforcer) *Host {
+	h.enforcer = e
+	return h
+}
+
 // Load compiles wasmBytes for addonKey and caches the CompiledModule. Calling
 // Load again for the same addonKey replaces the prior compile and drops any
 // installation instances — use this on addon upgrade.
@@ -115,6 +146,20 @@ func (h *Host) Load(ctx context.Context, addonKey string, wasmBytes []byte, spec
 // bounds wall-clock time per BackendSpec.TimeoutMs, serialises access to the
 // module's memory, and returns the guest's result bytes.
 func (h *Host) Invoke(ctx context.Context, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) ([]byte, error) {
+	return h.invokeImpl(ctx, nil, installation, addonKey, funcName, payload, settings)
+}
+
+// InvokeInTx is the action-handler-aware sibling of Invoke. The tx is the
+// open *gorm.DB transaction the action bridge is running inside; the
+// `db_exec` host import piggy-backs on it so the guest's writes commit or
+// rollback atomically with the action's own row mutations. Passing a nil tx
+// is equivalent to plain Invoke — `db_exec` then opens its own short-lived
+// transaction via h.db, used in non-action callers and tests.
+func (h *Host) InvokeInTx(ctx context.Context, tx *gorm.DB, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) ([]byte, error) {
+	return h.invokeImpl(ctx, tx, installation, addonKey, funcName, payload, settings)
+}
+
+func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) ([]byte, error) {
 	ce, ok := h.compiled.Load(addonKey)
 	if !ok {
 		return nil, fmt.Errorf("wasm: addon %q not loaded", addonKey)
@@ -145,6 +190,10 @@ func (h *Host) Invoke(ctx context.Context, installation uuid.UUID, addonKey, fun
 		installation: installation,
 		settings:     settings,
 		caps:         h.caps,
+		bus:          h.bus,
+		db:           h.db,
+		tx:           tx,
+		enforcer:     h.enforcer,
 		logger:       h.logger,
 	})
 

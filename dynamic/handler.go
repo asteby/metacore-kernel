@@ -1,6 +1,7 @@
 package dynamic
 
 import (
+	"errors"
 	"strconv"
 
 	"github.com/gofiber/fiber/v3"
@@ -28,11 +29,12 @@ func NewHandler(service *Service, resolver UserResolver) *Handler {
 
 // Mount attaches the CRUD routes under the given router.
 //
-//	GET    /dynamic/:model           List (paginated + filtered)
-//	POST   /dynamic/:model           Create
-//	GET    /dynamic/:model/:id       Get
-//	PUT    /dynamic/:model/:id       Update
-//	DELETE /dynamic/:model/:id       Delete
+//	GET    /dynamic/:model                       List (paginated + filtered)
+//	POST   /dynamic/:model                       Create
+//	GET    /dynamic/:model/:id                   Get
+//	PUT    /dynamic/:model/:id                   Update
+//	DELETE /dynamic/:model/:id                   Delete
+//	POST   /dynamic/:model/:id/action/:key       Dispatch a per-row action
 func (h *Handler) Mount(r fiber.Router, middleware ...fiber.Handler) {
 	h.MountWith(MountOpts{Middleware: middleware})(r)
 }
@@ -71,6 +73,7 @@ func (h *Handler) MountWith(opts MountOpts) func(r fiber.Router) {
 		// front-load any mutation middleware before the final handler.
 		registerMut(g.Post, "/:model", opts.MutationMiddleware, h.create)
 		registerMut(g.Post, "/:model/import", opts.MutationMiddleware, h.importData)
+		registerMut(g.Post, "/:model/:id/action/:key", opts.MutationMiddleware, h.action)
 
 		// Read paths after dynamic ones (matters for Fiber router order).
 		g.Get("/:model/:id", h.get)
@@ -214,6 +217,41 @@ func (h *Handler) delete(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{"success": true})
 }
 
+func (h *Handler) action(c fiber.Ctx) error {
+	u := h.user(c)
+	if u == nil {
+		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
+	}
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return respondErr(c, fiber.StatusBadRequest, ErrInvalidID.Error())
+	}
+	var payload map[string]any
+	if len(c.Body()) > 0 {
+		if err := c.Bind().Body(&payload); err != nil {
+			return respondErr(c, fiber.StatusBadRequest, "invalid body")
+		}
+	}
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	res, err := h.service.ExecAction(c, c.Params("model"), u, id, c.Params("key"), payload)
+	if err != nil {
+		return h.handleError(c, err)
+	}
+	body := fiber.Map{"success": res.Success, "meta": res.Meta}
+	if res.Success {
+		body["data"] = res.Data
+	} else if res.Error != nil {
+		body["error"] = res.Error
+	}
+	status := res.HTTPStatus
+	if status == 0 {
+		status = fiber.StatusOK
+	}
+	return c.Status(status).JSON(body)
+}
+
 func (h *Handler) options(c fiber.Ctx) error {
 	u := h.user(c)
 	q := OptionsQuery{
@@ -261,14 +299,17 @@ func (h *Handler) search(c fiber.Ctx) error {
 }
 
 func (h *Handler) handleError(c fiber.Ctx, err error) error {
+	if errors.Is(err, ErrUnsupportedTriggerType) {
+		return respondErr(c, fiber.StatusNotImplemented, err.Error())
+	}
 	switch err {
-	case ErrModelNotFound, ErrRecordNotFound, ErrSourceModelNotFound, ErrOptionsFieldNotFound:
+	case ErrModelNotFound, ErrRecordNotFound, ErrSourceModelNotFound, ErrOptionsFieldNotFound, ErrActionNotFound:
 		return respondErr(c, fiber.StatusNotFound, err.Error())
 	case ErrForbidden:
 		return respondErr(c, fiber.StatusForbidden, err.Error())
 	case ErrFieldRequired, ErrInvalidInput:
 		return respondErr(c, fiber.StatusBadRequest, err.Error())
-	case ErrNoOptionsConfig, ErrNoSearchConfig:
+	case ErrNoOptionsConfig, ErrNoSearchConfig, ErrNoActionResolver:
 		return respondErr(c, fiber.StatusNotImplemented, err.Error())
 	default:
 		if err.Error() == "permission denied" {

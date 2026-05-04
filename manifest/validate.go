@@ -12,6 +12,72 @@ var (
 	keyRe    = regexp.MustCompile(`^[a-z][a-z0-9_]{1,63}$`)
 	modelRe  = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 	columnRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
+	// customValidatorRe matches "<namespace>.<symbol>" identifiers used by
+	// ValidationRule.Custom — keeps it injection-safe for log lines and
+	// future router lookups.
+	customValidatorRe = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+	// validVisibility is the closed set of ColumnDef.Visibility values.
+	// Empty string is also accepted at the call site as the legacy default.
+	validVisibility = map[string]struct{}{
+		"all":   {},
+		"table": {},
+		"modal": {},
+		"list":  {},
+	}
+	// validRelationKinds lists the shapes RelationDef supports today.
+	// New cardinalities (one_to_one, polymorphic) extend this map without
+	// touching the surrounding loop — the discriminator stays stable.
+	validRelationKinds = map[string]struct{}{
+		"one_to_many":  {},
+		"many_to_many": {},
+	}
+	// validTriggerTypes lists the dispatch shapes ActionTrigger supports.
+	// The set is closed: addon authors that need a custom dispatcher pick
+	// "wasm" (and ship the implementation as an exported function) rather
+	// than minting a new type.
+	validTriggerTypes = map[string]struct{}{
+		"wasm":    {},
+		"webhook": {},
+		"noop":    {},
+	}
+	// triggerExportRe matches a wasm export symbol. Same alphabet as a Go
+	// identifier (lower/upper letters, digits, underscore) so the validator
+	// can be used identically against TinyGo, Rust and AssemblyScript
+	// outputs. Re-declared (instead of reusing columnRe) because export
+	// names commonly start with uppercase or are CamelCase.
+	triggerExportRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+	// relationNameRe and pivotRe match the same alphabet as columnRe /
+	// modelRe respectively. Re-declared as aliases so the relation
+	// validator reads cleanly and a future tweak to the relation alphabet
+	// does not silently widen unrelated identifiers.
+	relationNameRe = columnRe
+	pivotRe        = modelRe
+	// validWidgets enumerates the widget slugs the UI knows how to render.
+	// Kept as a map so adding entries is cheap; addons that need a custom
+	// widget can ship it via a federated module and pick a slug we extend
+	// this list with — it is not meant to gate addon innovation, just to
+	// catch typos and reject undefined values at install time.
+	validWidgets = map[string]struct{}{
+		"text":         {},
+		"textarea":     {},
+		"select":       {},
+		"multi_select": {},
+		"search":       {},
+		"number":       {},
+		"date":         {},
+		"datetime":     {},
+		"email":        {},
+		"url":          {},
+		"boolean":      {},
+		"image":        {},
+		"file":         {},
+		"richtext":     {},
+		"json":         {},
+		"relation":     {},
+		"password":     {},
+		"slider":       {},
+		"rating":       {},
+	}
 	// defaultRe allows only safe DDL DEFAULT expressions:
 	//   numeric literal:   42 | 42.5 | -3
 	//   quoted string:     'pending' (no embedded quotes or semicolons)
@@ -64,6 +130,12 @@ func (m *Manifest) Validate(kernelVersion string) error {
 			if _, ok := DefaultLiteral(col.Default); !ok {
 				return fmt.Errorf("manifest.model_definitions[%d].columns[%d].default: %v not allowed (use numeric, 'quoted' literal, now(), gen_random_uuid(), true, false, null)", i, j, col.Default)
 			}
+			if err := validateColumnExtensions(col); err != nil {
+				return fmt.Errorf("manifest.model_definitions[%d].columns[%d]: %w", i, j, err)
+			}
+		}
+		if err := validateRelations(md.Relations); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
 	}
 	for i, c := range m.Capabilities {
@@ -86,6 +158,9 @@ func (m *Manifest) Validate(kernelVersion string) error {
 		}
 	}
 	if err := m.validateBackend(); err != nil {
+		return err
+	}
+	if err := m.validateActionTriggers(); err != nil {
 		return err
 	}
 	if m.Frontend != nil {
@@ -133,6 +208,178 @@ func (m *Manifest) validateBackend() error {
 				return fmt.Errorf("manifest.hooks[%q]: action %q is not listed in backend.exports", hookKey, action)
 			}
 		}
+	}
+	return nil
+}
+
+// validateActionTriggers walks every ActionDef carried by the manifest
+// (the Actions map keyed by model and the Actions slice on each
+// ModelExtension) and enforces ActionTrigger.validate against the union of
+// exports declared by Backend.Exports. The Backend exports set is hoisted
+// once so the per-trigger checks stay O(triggers) instead of O(triggers *
+// exports). Manifests without any Trigger field set are a no-op so the
+// legacy authoring style keeps validating.
+func (m *Manifest) validateActionTriggers() error {
+	exports := m.backendExportSet()
+	for model, defs := range m.Actions {
+		for i := range defs {
+			if err := validateActionTrigger(defs[i].Trigger, exports); err != nil {
+				return fmt.Errorf("manifest.actions[%q][%d].%w", model, i, err)
+			}
+		}
+	}
+	for i, ext := range m.Extensions {
+		for j := range ext.Actions {
+			if err := validateActionTrigger(ext.Actions[j].Trigger, exports); err != nil {
+				return fmt.Errorf("manifest.extensions[%d].actions[%d].%w", i, j, err)
+			}
+		}
+	}
+	return nil
+}
+
+// backendExportSet hoists Backend.Exports into a lookup-friendly map. A nil
+// Backend or empty Exports list both yield an empty (non-nil) map so callers
+// can probe with a single membership check.
+func (m *Manifest) backendExportSet() map[string]struct{} {
+	if m.Backend == nil || len(m.Backend.Exports) == 0 {
+		return map[string]struct{}{}
+	}
+	out := make(map[string]struct{}, len(m.Backend.Exports))
+	for _, e := range m.Backend.Exports {
+		out[e] = struct{}{}
+	}
+	return out
+}
+
+// validateActionTrigger enforces the ActionTrigger contract. The exports
+// argument is the Backend.Exports lookup hoisted by the caller so wasm
+// triggers can be cross-checked without re-walking the slice. A nil trigger
+// is a no-op (legacy ActionDefs validate exactly as before).
+func validateActionTrigger(t *ActionTrigger, exports map[string]struct{}) error {
+	if t == nil {
+		return nil
+	}
+	if _, ok := validTriggerTypes[t.Type]; !ok {
+		return fmt.Errorf("trigger.type: unknown %q (want wasm|webhook|noop)", t.Type)
+	}
+	switch t.Type {
+	case "wasm":
+		if strings.TrimSpace(t.Export) == "" {
+			return fmt.Errorf("trigger.export: required when type=wasm")
+		}
+		if !triggerExportRe.MatchString(t.Export) {
+			return fmt.Errorf("trigger.export: invalid symbol %q", t.Export)
+		}
+		if _, ok := exports[t.Export]; !ok {
+			return fmt.Errorf("trigger.export: %q not declared in backend.exports", t.Export)
+		}
+	case "webhook":
+		// Webhook triggers cannot honour RunInTx — the network hop escapes
+		// the request transaction, so the kernel would silently drop the
+		// guarantee. Reject the combination at authoring time.
+		if t.Export != "" {
+			return fmt.Errorf("trigger.export: not allowed when type=webhook")
+		}
+		if t.RunInTx {
+			return fmt.Errorf("trigger.run_in_tx: not allowed when type=webhook")
+		}
+	case "noop":
+		// noop is a UI-only marker; addon code does not run, so neither
+		// Export nor RunInTx make sense.
+		if t.Export != "" {
+			return fmt.Errorf("trigger.export: not allowed when type=noop")
+		}
+		if t.RunInTx {
+			return fmt.Errorf("trigger.run_in_tx: not allowed when type=noop")
+		}
+	}
+	return nil
+}
+
+// validateColumnExtensions enforces the optional metadata fields on
+// ColumnDef (Visibility, Searchable, Validation, Widget). The function is a
+// no-op for zero-valued columns so legacy manifests keep validating.
+func validateColumnExtensions(col ColumnDef) error {
+	if col.Visibility != "" {
+		if _, ok := validVisibility[col.Visibility]; !ok {
+			return fmt.Errorf("visibility %q not allowed (want table|modal|list|all)", col.Visibility)
+		}
+	}
+	if col.Widget != "" {
+		if _, ok := validWidgets[col.Widget]; !ok {
+			return fmt.Errorf("widget %q not allowed", col.Widget)
+		}
+	}
+	if col.Validation != nil {
+		if err := col.Validation.validate(); err != nil {
+			return fmt.Errorf("validation: %w", err)
+		}
+	}
+	return nil
+}
+
+// validateRelations enforces the RelationDef contract on a model. The slice
+// is optional — an empty / nil input is a no-op so manifests authored before
+// the relation field landed keep validating. Errors are returned with a
+// `relations[i]` prefix the caller stitches onto the model index for a
+// fully-qualified path the operator can grep.
+func validateRelations(rels []RelationDef) error {
+	if len(rels) == 0 {
+		return nil
+	}
+	seen := make(map[string]int, len(rels))
+	for i, r := range rels {
+		if !relationNameRe.MatchString(r.Name) {
+			return fmt.Errorf("relations[%d]: invalid name %q", i, r.Name)
+		}
+		if prev, dup := seen[r.Name]; dup {
+			return fmt.Errorf("relations[%d]: duplicate name %q (also at relations[%d])", i, r.Name, prev)
+		}
+		seen[r.Name] = i
+		if _, ok := validRelationKinds[r.Kind]; !ok {
+			return fmt.Errorf("relations[%d]: unknown kind %q (want one_to_many|many_to_many)", i, r.Kind)
+		}
+		if !modelRe.MatchString(r.Through) {
+			return fmt.Errorf("relations[%d]: invalid through %q", i, r.Through)
+		}
+		if !columnRe.MatchString(r.ForeignKey) {
+			return fmt.Errorf("relations[%d]: invalid foreign_key %q", i, r.ForeignKey)
+		}
+		if r.References != "" && !columnRe.MatchString(r.References) {
+			return fmt.Errorf("relations[%d]: invalid references %q", i, r.References)
+		}
+		switch r.Kind {
+		case "one_to_many":
+			if r.Pivot != "" {
+				return fmt.Errorf("relations[%d]: pivot %q not allowed for one_to_many", i, r.Pivot)
+			}
+		case "many_to_many":
+			if !pivotRe.MatchString(r.Pivot) {
+				return fmt.Errorf("relations[%d]: many_to_many requires a valid pivot, got %q", i, r.Pivot)
+			}
+		}
+	}
+	return nil
+}
+
+// validate checks a ValidationRule's internal consistency. The kernel does
+// NOT execute the rule here — that happens at write time — it only catches
+// authoring mistakes (bad regex, swapped bounds, malformed custom symbol).
+func (v *ValidationRule) validate() error {
+	if v == nil {
+		return nil
+	}
+	if v.Regex != "" {
+		if _, err := regexp.Compile(v.Regex); err != nil {
+			return fmt.Errorf("regex %q does not compile: %w", v.Regex, err)
+		}
+	}
+	if v.Min != nil && v.Max != nil && *v.Min > *v.Max {
+		return fmt.Errorf("min %g greater than max %g", *v.Min, *v.Max)
+	}
+	if v.Custom != "" && !customValidatorRe.MatchString(v.Custom) {
+		return fmt.Errorf("custom %q must be a dotted identifier (e.g. \"rfc.tax_id\")", v.Custom)
 	}
 	return nil
 }

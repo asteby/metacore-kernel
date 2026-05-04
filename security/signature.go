@@ -54,6 +54,13 @@ var ErrSignatureMismatch = errors.New("security: signature does not verify under
 // only "ed25519" is supported; future algorithms add new branches.
 var ErrUnsupportedAlgorithm = errors.New("security: unsupported signature algorithm")
 
+// ErrChecksumMismatch is returned when manifest.Signature.Checksums declares
+// a per-file SHA-256 that does not agree with the bundle entry actually read
+// (mismatch, missing entry, or extra unsigned entry). Surfaces as a 4xx in
+// hosts so admins can pinpoint the corrupted file rather than just learning
+// "the bundle is bad".
+var ErrChecksumMismatch = errors.New("security: per-file checksum mismatch")
+
 // VerifyBundle returns nil iff b carries a valid Ed25519 signature under any
 // of trustedKeys. It does NOT consult environment variables or global state
 // — pure function, easy to test.
@@ -113,15 +120,84 @@ func VerifyBundle(b *bundle.Bundle, trustedKeys []ed25519.PublicKey) error {
 
 	// Verify signature is over the raw 32-byte digest (matches hub Sign which
 	// passes digest[:] to ed25519.Sign).
+	verified := false
 	for _, pub := range trustedKeys {
 		if len(pub) != ed25519.PublicKeySize {
 			continue // skip malformed keys; another may still match
 		}
 		if ed25519.Verify(pub, sum[:], sigBytes) {
-			return nil
+			verified = true
+			break
 		}
 	}
-	return ErrSignatureMismatch
+	if !verified {
+		return ErrSignatureMismatch
+	}
+
+	// Optional per-file granularity. The Ed25519 above already covers the
+	// whole tarball, so failing here means the publisher signed a bundle
+	// whose declared Checksums do not agree with its own entries — either an
+	// internal pipeline bug or tampering between bundle assembly and signing.
+	// Either way it is an integrity failure the kernel should not paper over.
+	// Bundles published before per-file checksums were introduced leave
+	// Checksums empty and skip this branch (legacy compat).
+	if len(sig.Checksums) > 0 {
+		if err := verifyEntryChecksums(b, sig.Checksums); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// verifyEntryChecksums enforces that every declared per-file digest in
+// sig.Checksums matches the corresponding entry's SHA-256, AND that no
+// undeclared entry sneaked into the tarball (bar manifest.json itself, which
+// cannot self-checksum without a fixpoint cycle and is already covered by the
+// global Ed25519 over the tarball bytes).
+func verifyEntryChecksums(b *bundle.Bundle, want map[string]string) error {
+	if len(b.EntryDigests) == 0 {
+		// EntryDigests is populated by bundle.Read; an empty map here means
+		// the caller bypassed Read (e.g. constructed Bundle in memory). We
+		// can't check what we never hashed, so refuse rather than silently
+		// pass.
+		return errors.New("security: bundle.EntryDigests is empty (was the bundle constructed without bundle.Read?)")
+	}
+	for name, expected := range want {
+		if name == "manifest.json" {
+			// manifest.json holds the Checksums map itself; signing its hash
+			// inside it would require a fixpoint. The global digest already
+			// protects it.
+			continue
+		}
+		actual, ok := b.EntryDigests[name]
+		if !ok {
+			return fmt.Errorf("%w: entry %q listed in checksums but missing from bundle",
+				ErrChecksumMismatch, name)
+		}
+		if !strings.EqualFold(strings.TrimSpace(expected), actual) {
+			return fmt.Errorf("%w: entry %q (manifest=%s, computed=%s)",
+				ErrChecksumMismatch, name,
+				shortDigest(expected), shortDigest(actual))
+		}
+	}
+	for name := range b.EntryDigests {
+		if name == "manifest.json" {
+			continue
+		}
+		if _, ok := want[name]; !ok {
+			return fmt.Errorf("%w: entry %q present in bundle but not declared in checksums",
+				ErrChecksumMismatch, name)
+		}
+	}
+	return nil
+}
+
+func shortDigest(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) < 12 {
+		return s
+	}
+	return s[:12]
 }
 
 // ParseHexPublicKeys decodes a comma-separated list of hex-encoded Ed25519
