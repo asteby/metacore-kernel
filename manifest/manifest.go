@@ -1,6 +1,3 @@
-// Package manifest defines the declarative contract an addon ships.
-// This is the single source of truth — consumed by the kernel (Go) and
-// mirrored by the SDK (TS) via generated types.
 package manifest
 
 // APIVersion is the kernel contract version this package implements.
@@ -217,15 +214,55 @@ type ToolInputParam struct {
 
 // ActionDef is a declarative action the UI can invoke on a model row.
 type ActionDef struct {
-	Key            string      `json:"key"`
-	Name           string      `json:"name"`
-	Label          string      `json:"label"`
-	Icon           string      `json:"icon,omitempty"`
-	Fields         []FieldDef  `json:"fields,omitempty"`
-	RequiresState  []string    `json:"requiresState,omitempty"`
-	Confirm        bool        `json:"confirm,omitempty"`
-	ConfirmMessage string      `json:"confirmMessage,omitempty"`
-	Modal          string      `json:"modal,omitempty"` // slot name for a custom modal
+	Key            string     `json:"key"`
+	Name           string     `json:"name"`
+	Label          string     `json:"label"`
+	Icon           string     `json:"icon,omitempty"`
+	Fields         []FieldDef `json:"fields,omitempty"`
+	RequiresState  []string   `json:"requiresState,omitempty"`
+	Confirm        bool       `json:"confirm,omitempty"`
+	ConfirmMessage string     `json:"confirmMessage,omitempty"`
+	Modal          string     `json:"modal,omitempty"` // slot name for a custom modal
+
+	// Trigger declares how the action dispatches when invoked. Optional —
+	// when nil the legacy behaviour applies (the host resolves the action via
+	// the implicit Hooks map / webhook URL). See ActionTrigger for the per-
+	// type contract; consumers (bridge/actions.go, runtime/wasm) pick the
+	// new field up incrementally in follow-up PRs.
+	Trigger *ActionTrigger `json:"trigger,omitempty"`
+}
+
+// ActionTrigger declares how an ActionDef is dispatched when invoked from
+// the UI. It is union-discriminated by Type and intentionally minimal — the
+// goal of this revision is to land the contract so addon authors can declare
+// triggers ahead of the kernel learning to honour them.
+//
+//	Type = "wasm"    — invoke an exported function on the addon's wasm module.
+//	                   Export is required and MUST appear in Backend.Exports
+//	                   so the wasm host can resolve it at dispatch time. Use
+//	                   this for in-process actions that should reuse the
+//	                   addon's compiled module (and, when RunInTx=true, the
+//	                   request's open DB transaction).
+//
+//	Type = "webhook" — dispatch via the legacy HTTP webhook (Backend.URL or
+//	                   the implicit Hooks map). Export MUST be empty (the
+//	                   webhook target is encoded in the URL, not by symbol)
+//	                   and RunInTx MUST be false because the network hop
+//	                   escapes the request transaction.
+//
+//	Type = "noop"    — UI-only action. The kernel records the click for
+//	                   observability and bridge-side hooks can react to it,
+//	                   but no addon code runs and Export / RunInTx must
+//	                   stay empty / false.
+//
+// RunInTx is honoured only by Type=wasm and instructs the kernel to invoke
+// the export inside the same DB transaction as the row-level mutation that
+// prompted the action. This is what unlocks "stamp this invoice and write
+// the linked log entry atomically" without leaking partially-applied state.
+type ActionTrigger struct {
+	Type    string `json:"type"`              // "wasm" | "webhook" | "noop"
+	Export  string `json:"export,omitempty"`  // wasm export name; required when Type=wasm
+	RunInTx bool   `json:"run_in_tx,omitempty"`
 }
 
 // FieldDef is an input field used by action forms and model definitions.
@@ -271,11 +308,82 @@ type ModelDefinition struct {
 	OrgScoped  bool        `json:"org_scoped,omitempty"`
 	SoftDelete bool        `json:"soft_delete,omitempty"`
 	Columns    []ColumnDef `json:"columns"`
-	Table      interface{} `json:"table,omitempty"` // UI table spec (opaque)
-	Modal      interface{} `json:"modal,omitempty"` // UI modal spec (opaque)
+	// Relations declares model-to-model edges the kernel uses to derive
+	// joins, eager loading, REST sub-resources and SDK metadata. The slice
+	// is optional — addons that only expose flat tables can omit it and
+	// keep the legacy behaviour. See RelationDef for the supported shapes.
+	Relations []RelationDef `json:"relations,omitempty"`
+	Table     interface{}   `json:"table,omitempty"` // UI table spec (opaque)
+	Modal     interface{}   `json:"modal,omitempty"` // UI modal spec (opaque)
+}
+
+// RelationDef declares an inter-model relationship rooted at the owning
+// ModelDefinition. The kernel uses it to derive joins, eager-loading
+// hints, REST sub-resources and the metadata exposed to the TS SDK. Only
+// the two shapes below are supported in this revision; richer cardinalities
+// (one_to_one, polymorphic) can be added later without breaking existing
+// manifests because RelationDef.Kind is a discriminator.
+//
+//	Kind = "one_to_many"  — the owning model has many rows on Through.
+//	                        ForeignKey is the column on Through that points
+//	                        back at the owner. References is the owner
+//	                        column the FK targets (defaults to "id").
+//	                        Pivot MUST be empty.
+//
+//	Kind = "many_to_many" — Pivot is a join table between owner and Through.
+//	                        ForeignKey is the column on Pivot pointing at
+//	                        the owner. References is the column on the
+//	                        owner the pivot row holds (defaults to "id").
+//	                        Through and Pivot are both required.
+//
+// Field shapes are the same identifier rules as ColumnDef.Name and
+// ModelDefinition.TableName so the same regexes can validate them.
+//
+// Consumers (dynamic schema, modelbase metadata, the TS SDK) are NOT
+// updated in this revision — the types only land in the manifest contract
+// so addon authors can declare relations ahead of the kernel learning to
+// honour them. Follow-up PRs wire each consumer up incrementally.
+type RelationDef struct {
+	// Name is a stable identifier for the relation, scoped to the owning
+	// ModelDefinition. Lowercase snake_case, e.g. "tickets" or "tags".
+	// It is what the SDK and REST sub-resources address the relation by,
+	// so two relations on the same model cannot share a Name. Required.
+	Name string `json:"name"`
+
+	// Kind discriminates the relation shape: "one_to_many" | "many_to_many".
+	Kind string `json:"kind"`
+
+	// Through is the target model/table the relation points at. For
+	// one_to_many it is where the foreign key column lives; for
+	// many_to_many it is the model joined via Pivot. Required.
+	Through string `json:"through"`
+
+	// ForeignKey is the column carrying the relationship.
+	//   one_to_many : column on Through pointing back at the owner.
+	//   many_to_many: column on Pivot pointing at the owner.
+	// Required in both shapes.
+	ForeignKey string `json:"foreign_key"`
+
+	// References is the owner column the ForeignKey targets. Empty means
+	// "id" — the conventional primary key — so the common case stays
+	// terse. Validated as a column identifier when set.
+	References string `json:"references,omitempty"`
+
+	// Pivot is the join table for many_to_many relations. It MUST be
+	// empty for one_to_many (otherwise the relation shape is ambiguous)
+	// and required for many_to_many. The pivot table is expected to
+	// live in the addon schema; the kernel only needs the name here.
+	Pivot string `json:"pivot,omitempty"`
 }
 
 // ColumnDef is a column on an addon-installed table.
+//
+// Beyond the DDL plane (Name, Type, Size, Required, Index, Unique, Default,
+// Ref) the struct also carries metadata for the kernel to derive UI hints,
+// search endpoints and server-side validation from a single source of truth.
+// Every metadata field is optional — zero values keep the legacy behaviour
+// (column is visible everywhere, not searchable, no validation, widget
+// inferred from Type), so addons authored against older kernels keep working.
 type ColumnDef struct {
 	Name     string `json:"name"`
 	Type     string `json:"type"` // string, uuid, int, bigint, decimal, bool, timestamp, jsonb, text
@@ -285,8 +393,57 @@ type ColumnDef struct {
 	Unique   bool   `json:"unique,omitempty"`
 	// Default accepts string ("'pending'", "now()"), number (42), or bool
 	// literals from JSON. They are coerced to a DDL-safe string at install.
-	Default  any    `json:"default,omitempty"`
-	Ref      string `json:"ref,omitempty"` // foreign key target: "orders" or "addon_tickets.comments"
+	Default any    `json:"default,omitempty"`
+	Ref     string `json:"ref,omitempty"` // foreign key target: "orders" or "addon_tickets.comments"
+
+	// Visibility scopes where the column is rendered. Allowed values:
+	//   ""      — legacy / current behaviour (visible everywhere).
+	//   "all"   — same as empty, made explicit.
+	//   "table" — only the list/index page.
+	//   "modal" — only the create/edit modal.
+	//   "list"  — only API list payloads (omitted from detail/modal forms).
+	// Unknown values are rejected by Validate.
+	Visibility string `json:"visibility,omitempty"`
+
+	// Searchable opts the column into the model's full-text/contains search
+	// index. It is intentionally separate from Index (which is a DDL btree
+	// declaration) because UI search and DB indexing are independent
+	// concerns.
+	Searchable bool `json:"searchable,omitempty"`
+
+	// Validation declares server-side constraints applied before write.
+	// Pointer so the zero value is "no validation" rather than an empty
+	// rule that would still be evaluated.
+	Validation *ValidationRule `json:"validation,omitempty"`
+
+	// Widget hints which input/display component the UI should render. When
+	// empty the host infers it from Type (e.g. "text" for string, "number"
+	// for int). The whitelist lives in validate.go (validWidgets).
+	Widget string `json:"widget,omitempty"`
+}
+
+// ValidationRule expresses server-side input constraints. All fields are
+// optional and combine additively: a value must satisfy every populated rule
+// to pass. Min/Max apply to numeric values *and* to string/array length —
+// the consuming validator decides which based on the column Type.
+type ValidationRule struct {
+	// Regex is a Go regexp/syntax pattern. When set on a non-string column
+	// it is ignored. Validate compiles the pattern at manifest-load time so
+	// malformed expressions are caught before install.
+	Regex string `json:"regex,omitempty"`
+
+	// Min is the inclusive lower bound. For numeric columns it bounds the
+	// value; for string / array columns it bounds the length. Pointer so
+	// 0 is distinguishable from "unset".
+	Min *float64 `json:"min,omitempty"`
+
+	// Max is the inclusive upper bound (same dual meaning as Min).
+	Max *float64 `json:"max,omitempty"`
+
+	// Custom names a server-side validator the addon registered with the
+	// kernel (e.g. "rfc.tax_id"). Resolution and dispatch happens at write
+	// time; Validate only checks the identifier shape here.
+	Custom string `json:"custom,omitempty"`
 }
 
 // Signature is the cryptographic provenance info stamped by the marketplace.
