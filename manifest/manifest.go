@@ -217,15 +217,55 @@ type ToolInputParam struct {
 
 // ActionDef is a declarative action the UI can invoke on a model row.
 type ActionDef struct {
-	Key            string      `json:"key"`
-	Name           string      `json:"name"`
-	Label          string      `json:"label"`
-	Icon           string      `json:"icon,omitempty"`
-	Fields         []FieldDef  `json:"fields,omitempty"`
-	RequiresState  []string    `json:"requiresState,omitempty"`
-	Confirm        bool        `json:"confirm,omitempty"`
-	ConfirmMessage string      `json:"confirmMessage,omitempty"`
-	Modal          string      `json:"modal,omitempty"` // slot name for a custom modal
+	Key            string     `json:"key"`
+	Name           string     `json:"name"`
+	Label          string     `json:"label"`
+	Icon           string     `json:"icon,omitempty"`
+	Fields         []FieldDef `json:"fields,omitempty"`
+	RequiresState  []string   `json:"requiresState,omitempty"`
+	Confirm        bool       `json:"confirm,omitempty"`
+	ConfirmMessage string     `json:"confirmMessage,omitempty"`
+	Modal          string     `json:"modal,omitempty"` // slot name for a custom modal
+
+	// Trigger declares how the action dispatches when invoked. Optional —
+	// when nil the legacy behaviour applies (the host resolves the action via
+	// the implicit Hooks map / webhook URL). See ActionTrigger for the per-
+	// type contract; consumers (bridge/actions.go, runtime/wasm) pick the
+	// new field up incrementally in follow-up PRs.
+	Trigger *ActionTrigger `json:"trigger,omitempty"`
+}
+
+// ActionTrigger declares how an ActionDef is dispatched when invoked from
+// the UI. It is union-discriminated by Type and intentionally minimal — the
+// goal of this revision is to land the contract so addon authors can declare
+// triggers ahead of the kernel learning to honour them.
+//
+//	Type = "wasm"    — invoke an exported function on the addon's wasm module.
+//	                   Export is required and MUST appear in Backend.Exports
+//	                   so the wasm host can resolve it at dispatch time. Use
+//	                   this for in-process actions that should reuse the
+//	                   addon's compiled module (and, when RunInTx=true, the
+//	                   request's open DB transaction).
+//
+//	Type = "webhook" — dispatch via the legacy HTTP webhook (Backend.URL or
+//	                   the implicit Hooks map). Export MUST be empty (the
+//	                   webhook target is encoded in the URL, not by symbol)
+//	                   and RunInTx MUST be false because the network hop
+//	                   escapes the request transaction.
+//
+//	Type = "noop"    — UI-only action. The kernel records the click for
+//	                   observability and bridge-side hooks can react to it,
+//	                   but no addon code runs and Export / RunInTx must
+//	                   stay empty / false.
+//
+// RunInTx is honoured only by Type=wasm and instructs the kernel to invoke
+// the export inside the same DB transaction as the row-level mutation that
+// prompted the action. This is what unlocks "stamp this invoice and write
+// the linked log entry atomically" without leaking partially-applied state.
+type ActionTrigger struct {
+	Type    string `json:"type"`             // "wasm" | "webhook" | "noop"
+	Export  string `json:"export,omitempty"` // wasm export name; required when Type=wasm
+	RunInTx bool   `json:"run_in_tx,omitempty"`
 }
 
 // FieldDef is an input field used by action forms and model definitions.

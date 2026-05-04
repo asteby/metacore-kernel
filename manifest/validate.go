@@ -12,6 +12,21 @@ var (
 	keyRe    = regexp.MustCompile(`^[a-z][a-z0-9_]{1,63}$`)
 	modelRe  = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 	columnRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
+	// validTriggerTypes lists the dispatch shapes ActionTrigger supports.
+	// The set is closed: addon authors that need a custom dispatcher pick
+	// "wasm" (and ship the implementation as an exported function) rather
+	// than minting a new type.
+	validTriggerTypes = map[string]struct{}{
+		"wasm":    {},
+		"webhook": {},
+		"noop":    {},
+	}
+	// triggerExportRe matches a wasm export symbol. Same alphabet as a Go
+	// identifier (lower/upper letters, digits, underscore) so the validator
+	// can be used identically against TinyGo, Rust and AssemblyScript
+	// outputs. Re-declared (instead of reusing columnRe) because export
+	// names commonly start with uppercase or are CamelCase.
+	triggerExportRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 	// defaultRe allows only safe DDL DEFAULT expressions:
 	//   numeric literal:   42 | 42.5 | -3
 	//   quoted string:     'pending' (no embedded quotes or semicolons)
@@ -88,6 +103,9 @@ func (m *Manifest) Validate(kernelVersion string) error {
 	if err := m.validateBackend(); err != nil {
 		return err
 	}
+	if err := m.validateActionTriggers(); err != nil {
+		return err
+	}
 	if m.Frontend != nil {
 		switch m.Frontend.Format {
 		case "federation", "script", "":
@@ -132,6 +150,91 @@ func (m *Manifest) validateBackend() error {
 			if _, ok := exports[action]; !ok {
 				return fmt.Errorf("manifest.hooks[%q]: action %q is not listed in backend.exports", hookKey, action)
 			}
+		}
+	}
+	return nil
+}
+
+// validateActionTriggers walks every ActionDef carried by the manifest
+// (the Actions map keyed by model and the Actions slice on each
+// ModelExtension) and enforces ActionTrigger.validate against the union of
+// exports declared by Backend.Exports. The Backend exports set is hoisted
+// once so the per-trigger checks stay O(triggers) instead of O(triggers *
+// exports). Manifests without any Trigger field set are a no-op so the
+// legacy authoring style keeps validating.
+func (m *Manifest) validateActionTriggers() error {
+	exports := m.backendExportSet()
+	for model, defs := range m.Actions {
+		for i := range defs {
+			if err := validateActionTrigger(defs[i].Trigger, exports); err != nil {
+				return fmt.Errorf("manifest.actions[%q][%d].%w", model, i, err)
+			}
+		}
+	}
+	for i, ext := range m.Extensions {
+		for j := range ext.Actions {
+			if err := validateActionTrigger(ext.Actions[j].Trigger, exports); err != nil {
+				return fmt.Errorf("manifest.extensions[%d].actions[%d].%w", i, j, err)
+			}
+		}
+	}
+	return nil
+}
+
+// backendExportSet hoists Backend.Exports into a lookup-friendly map. A nil
+// Backend or empty Exports list both yield an empty (non-nil) map so callers
+// can probe with a single membership check.
+func (m *Manifest) backendExportSet() map[string]struct{} {
+	if m.Backend == nil || len(m.Backend.Exports) == 0 {
+		return map[string]struct{}{}
+	}
+	out := make(map[string]struct{}, len(m.Backend.Exports))
+	for _, e := range m.Backend.Exports {
+		out[e] = struct{}{}
+	}
+	return out
+}
+
+// validateActionTrigger enforces the ActionTrigger contract. The exports
+// argument is the Backend.Exports lookup hoisted by the caller so wasm
+// triggers can be cross-checked without re-walking the slice. A nil trigger
+// is a no-op (legacy ActionDefs validate exactly as before).
+func validateActionTrigger(t *ActionTrigger, exports map[string]struct{}) error {
+	if t == nil {
+		return nil
+	}
+	if _, ok := validTriggerTypes[t.Type]; !ok {
+		return fmt.Errorf("trigger.type: unknown %q (want wasm|webhook|noop)", t.Type)
+	}
+	switch t.Type {
+	case "wasm":
+		if strings.TrimSpace(t.Export) == "" {
+			return fmt.Errorf("trigger.export: required when type=wasm")
+		}
+		if !triggerExportRe.MatchString(t.Export) {
+			return fmt.Errorf("trigger.export: invalid symbol %q", t.Export)
+		}
+		if _, ok := exports[t.Export]; !ok {
+			return fmt.Errorf("trigger.export: %q not declared in backend.exports", t.Export)
+		}
+	case "webhook":
+		// Webhook triggers cannot honour RunInTx — the network hop escapes
+		// the request transaction, so the kernel would silently drop the
+		// guarantee. Reject the combination at authoring time.
+		if t.Export != "" {
+			return fmt.Errorf("trigger.export: not allowed when type=webhook")
+		}
+		if t.RunInTx {
+			return fmt.Errorf("trigger.run_in_tx: not allowed when type=webhook")
+		}
+	case "noop":
+		// noop is a UI-only marker; addon code does not run, so neither
+		// Export nor RunInTx make sense.
+		if t.Export != "" {
+			return fmt.Errorf("trigger.export: not allowed when type=noop")
+		}
+		if t.RunInTx {
+			return fmt.Errorf("trigger.run_in_tx: not allowed when type=noop")
 		}
 	}
 	return nil

@@ -7,6 +7,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`manifest.ActionTrigger` + `ActionDef.Trigger`** (GAP-3). Action
+  definitions can now declare an explicit dispatch shape instead of
+  relying on the implicit Hooks-map → webhook resolution. `Trigger.Type`
+  is one of `wasm` (in-process module export, optionally inside the
+  request DB transaction via `RunInTx`), `webhook` (legacy HTTP hop) or
+  `noop` (UI-only marker the kernel records for observability).
+  `Manifest.Validate` enforces the per-type contract: `wasm` requires
+  `Export` and the symbol MUST appear in `Backend.Exports`; `webhook`
+  and `noop` reject `Export`/`RunInTx` because the network hop and the
+  no-op shape cannot honour them. Additive: the field is a pointer and
+  manifests that omit it keep the legacy behaviour, so existing addons
+  validate unchanged. Consumers (`bridge/actions.go`, `runtime/wasm`)
+  pick the new field up incrementally in follow-up PRs.
+
 ### Removed
 
 - **`flow` package — extracted to consumer (link).** The workflow DAG engine
