@@ -50,6 +50,44 @@ type Config struct {
 	// an addon-populated table) plug it here. When nil, modelbase.Get is
 	// used — which only covers models explicitly registered at package init.
 	ModelResolver ModelResolver
+
+	// Bus is the in-process event bus where the service publishes canonical
+	// "<addonKey>.<model>.<created|updated|deleted>" events post-commit.
+	// nil disables emission — existing apps that do not wire a Bus keep the
+	// previous behaviour.
+	//
+	// The contract matches *events.Bus.Publish — pass *events.Bus directly,
+	// or any test double satisfying the Publisher interface. The decoupled
+	// interface is necessary because events → security → bundle → dynamic
+	// would close an import cycle.
+	Bus Publisher
+
+	// AddonKeyForModel resolves the addon owner of a model name. The result
+	// is used both as the producer addonKey passed to Bus.Publish and as
+	// the leading segment of the canonical event name. nil (or returning
+	// "") falls back to "kernel" — appropriate for core models and for hosts
+	// that have not yet wired an addon registry.
+	AddonKeyForModel func(ctx context.Context, model string) string
+
+	// ActionResolver returns the manifest.ActionDef declared for a
+	// (model, key) pair. nil disables the action endpoint — calls return
+	// ErrNoActionResolver. Hosts wire it from their addon registry: the
+	// kernel does not own a global Actions index because actions live
+	// inside the addon manifest.
+	ActionResolver ActionResolver
+
+	// ActionDispatchers maps Trigger.Type → ActionDispatcher. The built-in
+	// "noop" dispatcher is registered automatically when the host does not
+	// override it; "wasm" / "webhook" must be wired by the host (the
+	// kernel deliberately does not import runtime/wasm or net/http here to
+	// keep the dynamic package minimal).
+	ActionDispatchers map[string]ActionDispatcher
+}
+
+// Publisher is the minimal subset of events.Bus that dynamic.Service depends
+// on. *events.Bus satisfies it natively; tests can plug a stub.
+type Publisher interface {
+	Publish(ctx context.Context, addonKey, event string, orgID uuid.UUID, payload any) error
 }
 
 // ModelResolver lets apps supply their own model-name → instance lookup. The
@@ -71,15 +109,19 @@ type SearchConfigResolver func(ctx context.Context, model string, instance any) 
 
 // Service is the transport-agnostic dynamic CRUD engine.
 type Service struct {
-	db             *gorm.DB
-	meta           *metadata.Service
-	perms          *permission.Service
-	hooks          *HookRegistry
-	scope          TenantScoper
-	optsResolver   OptionsConfigResolver
-	searchResolver SearchConfigResolver
-	matchClause    SearchMatchClause
-	modelResolver  ModelResolver
+	db                *gorm.DB
+	meta              *metadata.Service
+	perms             *permission.Service
+	hooks             *HookRegistry
+	scope             TenantScoper
+	optsResolver      OptionsConfigResolver
+	searchResolver    SearchConfigResolver
+	matchClause       SearchMatchClause
+	modelResolver     ModelResolver
+	bus               Publisher
+	addonKeyForModel  func(ctx context.Context, model string) string
+	actionResolver    ActionResolver
+	actionDispatchers map[string]ActionDispatcher
 }
 
 // New constructs a dynamic Service.
@@ -96,16 +138,29 @@ func New(cfg Config) *Service {
 	if cfg.SearchMatchClause == nil {
 		cfg.SearchMatchClause = defaultSearchMatchClause
 	}
+	dispatchers := make(map[string]ActionDispatcher, len(cfg.ActionDispatchers)+1)
+	for k, d := range cfg.ActionDispatchers {
+		if d != nil {
+			dispatchers[k] = d
+		}
+	}
+	if _, ok := dispatchers["noop"]; !ok {
+		dispatchers["noop"] = NoopDispatcher{}
+	}
 	return &Service{
-		db:             cfg.DB,
-		meta:           cfg.Metadata,
-		perms:          cfg.Perms(),
-		hooks:          cfg.Hooks,
-		scope:          cfg.Scoper,
-		optsResolver:   cfg.OptionsConfigResolver,
-		searchResolver: cfg.SearchConfigResolver,
-		matchClause:    cfg.SearchMatchClause,
-		modelResolver:  cfg.ModelResolver,
+		db:                cfg.DB,
+		meta:              cfg.Metadata,
+		perms:             cfg.Perms(),
+		hooks:             cfg.Hooks,
+		scope:             cfg.Scoper,
+		optsResolver:      cfg.OptionsConfigResolver,
+		searchResolver:    cfg.SearchConfigResolver,
+		matchClause:       cfg.SearchMatchClause,
+		modelResolver:     cfg.ModelResolver,
+		bus:               cfg.Bus,
+		addonKeyForModel:  cfg.AddonKeyForModel,
+		actionResolver:    cfg.ActionResolver,
+		actionDispatchers: dispatchers,
 	}
 }
 
@@ -221,8 +276,12 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 		return nil, fmt.Errorf("dynamic: create: %w", err)
 	}
 
+	after := toMap(instance)
+	idStr, _ := after["id"].(string)
+	s.publishCanonical(ctx, model, "created", user, idStr, nil, after)
+
 	_ = s.hooks.runAfterCreate(ctx, hc, instance)
-	return toMap(instance), nil
+	return after, nil
 }
 
 // Update modifies a record by ID.
@@ -245,6 +304,11 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		return nil, err
 	}
 
+	// Snapshot the loaded record before BeforeUpdate hooks or input merging
+	// can mutate `instance` — the canonical event needs the pre-mutation row
+	// as `before`.
+	before := toMap(instance)
+
 	hc := HookContext{Model: model, User: user, DB: s.db}
 	if err := s.hooks.runBeforeUpdate(ctx, hc, id.String(), input); err != nil {
 		return nil, err
@@ -258,8 +322,11 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		return nil, fmt.Errorf("dynamic: update: %w", err)
 	}
 
+	after := toMap(instance)
+	s.publishCanonical(ctx, model, "updated", user, id.String(), before, after)
+
 	_ = s.hooks.runAfterUpdate(ctx, hc, instance)
-	return toMap(instance), nil
+	return after, nil
 }
 
 // Delete soft-deletes a record by ID.
@@ -280,9 +347,24 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 	db := s.db.WithContext(ctx).Table(instance.(modelbase.ModelDefiner).TableName())
 	db = s.scope.ScopeQuery(db, user)
 
+	// Snapshot the row before the delete so the canonical event can carry
+	// `before`. A miss here is tolerated: the delete itself drives the error
+	// semantics and subscribers see `before == nil` to mean the row was
+	// already gone (or out of tenant scope) at publish time.
+	var before map[string]any
+	if s.bus != nil {
+		loadDB := s.db.WithContext(ctx).Table(instance.(modelbase.ModelDefiner).TableName())
+		loadDB = s.scope.ScopeQuery(loadDB, user)
+		if err := loadDB.First(instance, "id = ?", id).Error; err == nil {
+			before = toMap(instance)
+		}
+	}
+
 	if err := db.Delete(instance, "id = ?", id).Error; err != nil {
 		return fmt.Errorf("dynamic: delete: %w", err)
 	}
+
+	s.publishCanonical(ctx, model, "deleted", user, id.String(), before, nil)
 
 	_ = s.hooks.runAfterDelete(ctx, hc, id.String())
 	return nil

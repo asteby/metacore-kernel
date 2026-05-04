@@ -420,6 +420,67 @@ counter for an audit feed.
 
 The full reference is in [`permissions.md`](permissions.md).
 
+## Action triggers
+
+`manifest.ActionDef` describes the row-level actions the UI surfaces (the
+"Escalate", "Mark paid", "Stamp invoice" buttons). Historically the dispatch
+target was implicit: the host resolved the action via the legacy `Hooks` map
+and fired a webhook. Starting with this revision an `ActionDef` can carry
+an optional `Trigger`:
+
+```jsonc
+{
+  "actions": {
+    "tickets": [
+      {
+        "key": "escalate",
+        "label": "Escalate",
+        "trigger": {
+          "type": "wasm",
+          "export": "escalateTicket",
+          "run_in_tx": true
+        }
+      }
+    ]
+  }
+}
+```
+
+| Field     | Type                            | Notes                                                                        |
+| --------- | ------------------------------- | ---------------------------------------------------------------------------- |
+| `type`    | `"wasm" \| "webhook" \| "noop"` | Required. Discriminates the dispatch shape.                                  |
+| `export`  | `string`                        | Required for `wasm`; forbidden for `webhook` / `noop`. Must appear in `Backend.Exports`. |
+| `run_in_tx` | `bool`                        | Honoured only by `wasm`. Forbidden for `webhook` (the hop escapes the tx) and `noop`. |
+
+What each type means:
+
+- **`wasm`** — invoke the named export on the addon's compiled wasm module.
+  When `run_in_tx: true` the export runs inside the same DB transaction as
+  the row-level mutation, so addon-side writes commit atomically with the
+  UI action.
+- **`webhook`** — keep the legacy HTTP dispatch. The webhook target is
+  resolved exactly as today (via `Backend.URL` or the `Hooks` map). RunInTx
+  is rejected at validation time because the network hop would silently
+  drop the guarantee.
+- **`noop`** — UI-only marker. The kernel records the click for
+  observability and bridge-side hooks can react to it, but no addon code
+  runs. Useful for actions whose effect is purely client-side (open a modal,
+  copy to clipboard) or that route to a separate ticketing flow.
+
+`Trigger` is **purely additive** — manifests that omit it keep the legacy
+behaviour. The validator enforces the per-type contract before install:
+
+```
+manifest.actions["tickets"][0].trigger.export: "escalateTicket" not declared in backend.exports
+```
+
+Consumers (`bridge/actions.go`, `runtime/wasm`) are not updated in this
+revision; they pick the new field up incrementally so existing addons keep
+shipping. The exact Go shape lives in
+[`manifest/manifest.go`](../manifest/manifest.go) (`ActionTrigger`); the
+validator in [`manifest/validate.go`](../manifest/validate.go)
+(`validateActionTrigger`).
+
 ## Real-time updates
 
 The dynamic CRUD layer does **not** automatically broadcast changes to
