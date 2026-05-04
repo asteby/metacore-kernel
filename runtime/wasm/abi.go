@@ -22,6 +22,8 @@ import (
 //	  - log(msgPtr, msgLen)
 //	  - env_get(keyPtr, keyLen) -> i64 (ptr|len, 0 if missing)
 //	  - http_fetch(urlPtr, urlLen, methodPtr, methodLen, bodyPtr, bodyLen) -> i64
+//	  - event_emit(eventPtr, eventLen, payloadPtr, payloadLen) -> i64
+//	      0 on success; ptr|len of a JSON {"error","message"} envelope on failure.
 
 // writeMem allocates `len(data)` bytes in the guest via its exported alloc
 // and copies data in. It returns the guest-side pointer.

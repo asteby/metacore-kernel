@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
@@ -45,6 +46,7 @@ const (
 type Host struct {
 	rt       wazero.Runtime
 	caps     *security.Capabilities
+	bus      *events.Bus
 	logger   *log.Logger
 	compiled sync.Map // addonKey -> *compiledEntry
 	modules  sync.Map // instanceKey(addonKey, installation) -> *Module
@@ -80,6 +82,14 @@ func NewHost(ctx context.Context, caps *security.Capabilities, logger *log.Logge
 		return nil, fmt.Errorf("wasm: register host module: %w", err)
 	}
 	return h, nil
+}
+
+// WithBus binds an events.Bus to the host so guests can publish through the
+// `metacore_host.event_emit` import. When unset, the import returns a
+// `bus_unavailable` JSON error to the guest.
+func (h *Host) WithBus(b *events.Bus) *Host {
+	h.bus = b
+	return h
 }
 
 // Load compiles wasmBytes for addonKey and caches the CompiledModule. Calling
@@ -145,6 +155,7 @@ func (h *Host) Invoke(ctx context.Context, installation uuid.UUID, addonKey, fun
 		installation: installation,
 		settings:     settings,
 		caps:         h.caps,
+		bus:          h.bus,
 		logger:       h.logger,
 	})
 
