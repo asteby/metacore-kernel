@@ -276,6 +276,13 @@ type ModelDefinition struct {
 }
 
 // ColumnDef is a column on an addon-installed table.
+//
+// Beyond the DDL plane (Name, Type, Size, Required, Index, Unique, Default,
+// Ref) the struct also carries metadata for the kernel to derive UI hints,
+// search endpoints and server-side validation from a single source of truth.
+// Every metadata field is optional — zero values keep the legacy behaviour
+// (column is visible everywhere, not searchable, no validation, widget
+// inferred from Type), so addons authored against older kernels keep working.
 type ColumnDef struct {
 	Name     string `json:"name"`
 	Type     string `json:"type"` // string, uuid, int, bigint, decimal, bool, timestamp, jsonb, text
@@ -285,8 +292,57 @@ type ColumnDef struct {
 	Unique   bool   `json:"unique,omitempty"`
 	// Default accepts string ("'pending'", "now()"), number (42), or bool
 	// literals from JSON. They are coerced to a DDL-safe string at install.
-	Default  any    `json:"default,omitempty"`
-	Ref      string `json:"ref,omitempty"` // foreign key target: "orders" or "addon_tickets.comments"
+	Default any    `json:"default,omitempty"`
+	Ref     string `json:"ref,omitempty"` // foreign key target: "orders" or "addon_tickets.comments"
+
+	// Visibility scopes where the column is rendered. Allowed values:
+	//   ""      — legacy / current behaviour (visible everywhere).
+	//   "all"   — same as empty, made explicit.
+	//   "table" — only the list/index page.
+	//   "modal" — only the create/edit modal.
+	//   "list"  — only API list payloads (omitted from detail/modal forms).
+	// Unknown values are rejected by Validate.
+	Visibility string `json:"visibility,omitempty"`
+
+	// Searchable opts the column into the model's full-text/contains search
+	// index. It is intentionally separate from Index (which is a DDL btree
+	// declaration) because UI search and DB indexing are independent
+	// concerns.
+	Searchable bool `json:"searchable,omitempty"`
+
+	// Validation declares server-side constraints applied before write.
+	// Pointer so the zero value is "no validation" rather than an empty
+	// rule that would still be evaluated.
+	Validation *ValidationRule `json:"validation,omitempty"`
+
+	// Widget hints which input/display component the UI should render. When
+	// empty the host infers it from Type (e.g. "text" for string, "number"
+	// for int). The whitelist lives in validate.go (validWidgets).
+	Widget string `json:"widget,omitempty"`
+}
+
+// ValidationRule expresses server-side input constraints. All fields are
+// optional and combine additively: a value must satisfy every populated rule
+// to pass. Min/Max apply to numeric values *and* to string/array length —
+// the consuming validator decides which based on the column Type.
+type ValidationRule struct {
+	// Regex is a Go regexp/syntax pattern. When set on a non-string column
+	// it is ignored. Validate compiles the pattern at manifest-load time so
+	// malformed expressions are caught before install.
+	Regex string `json:"regex,omitempty"`
+
+	// Min is the inclusive lower bound. For numeric columns it bounds the
+	// value; for string / array columns it bounds the length. Pointer so
+	// 0 is distinguishable from "unset".
+	Min *float64 `json:"min,omitempty"`
+
+	// Max is the inclusive upper bound (same dual meaning as Min).
+	Max *float64 `json:"max,omitempty"`
+
+	// Custom names a server-side validator the addon registered with the
+	// kernel (e.g. "rfc.tax_id"). Resolution and dispatch happens at write
+	// time; Validate only checks the identifier shape here.
+	Custom string `json:"custom,omitempty"`
 }
 
 // Signature is the cryptographic provenance info stamped by the marketplace.

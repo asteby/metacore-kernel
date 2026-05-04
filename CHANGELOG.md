@@ -7,6 +7,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`manifest.ColumnDef` UI/validation extension (GAP-1).** ColumnDef now
+  carries optional `Visibility` (`table` | `modal` | `list` | `all`),
+  `Searchable` (bool), `Widget` (whitelisted slug — `text`, `textarea`,
+  `select`, `email`, `datetime`, …) and `Validation` (`*ValidationRule`).
+  The new `manifest.ValidationRule` struct expresses server-side input
+  constraints with optional `Regex`, `Min`, `Max` and `Custom` (dotted
+  identifier) fields. `Manifest.Validate` rejects unknown visibility/widget
+  values, malformed regexes, swapped Min/Max bounds and malformed Custom
+  identifiers at install time. Every new field is optional and the zero
+  value preserves the previous behaviour, so addons authored against older
+  kernels keep validating without modification. Consumers (dynamic schema,
+  modelbase metadata, the TS SDK) are NOT updated in this revision —
+  follow-up PRs wire each consumer up incrementally. **Minor / additive.**
+
 ### Removed
 
 - **`flow` package — extracted to consumer (link).** The workflow DAG engine

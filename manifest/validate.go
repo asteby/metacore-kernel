@@ -12,6 +12,44 @@ var (
 	keyRe    = regexp.MustCompile(`^[a-z][a-z0-9_]{1,63}$`)
 	modelRe  = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 	columnRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
+	// customValidatorRe matches "<namespace>.<symbol>" identifiers used by
+	// ValidationRule.Custom — keeps it injection-safe for log lines and
+	// future router lookups.
+	customValidatorRe = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+	// validVisibility is the closed set of ColumnDef.Visibility values.
+	// Empty string is also accepted at the call site as the legacy default.
+	validVisibility = map[string]struct{}{
+		"all":   {},
+		"table": {},
+		"modal": {},
+		"list":  {},
+	}
+	// validWidgets enumerates the widget slugs the UI knows how to render.
+	// Kept as a map so adding entries is cheap; addons that need a custom
+	// widget can ship it via a federated module and pick a slug we extend
+	// this list with — it is not meant to gate addon innovation, just to
+	// catch typos and reject undefined values at install time.
+	validWidgets = map[string]struct{}{
+		"text":         {},
+		"textarea":     {},
+		"select":       {},
+		"multi_select": {},
+		"search":       {},
+		"number":       {},
+		"date":         {},
+		"datetime":     {},
+		"email":        {},
+		"url":          {},
+		"boolean":      {},
+		"image":        {},
+		"file":         {},
+		"richtext":     {},
+		"json":         {},
+		"relation":     {},
+		"password":     {},
+		"slider":       {},
+		"rating":       {},
+	}
 	// defaultRe allows only safe DDL DEFAULT expressions:
 	//   numeric literal:   42 | 42.5 | -3
 	//   quoted string:     'pending' (no embedded quotes or semicolons)
@@ -63,6 +101,9 @@ func (m *Manifest) Validate(kernelVersion string) error {
 			// across the union type (string | number | bool | nil).
 			if _, ok := DefaultLiteral(col.Default); !ok {
 				return fmt.Errorf("manifest.model_definitions[%d].columns[%d].default: %v not allowed (use numeric, 'quoted' literal, now(), gen_random_uuid(), true, false, null)", i, j, col.Default)
+			}
+			if err := validateColumnExtensions(col); err != nil {
+				return fmt.Errorf("manifest.model_definitions[%d].columns[%d]: %w", i, j, err)
 			}
 		}
 	}
@@ -133,6 +174,49 @@ func (m *Manifest) validateBackend() error {
 				return fmt.Errorf("manifest.hooks[%q]: action %q is not listed in backend.exports", hookKey, action)
 			}
 		}
+	}
+	return nil
+}
+
+// validateColumnExtensions enforces the optional metadata fields on
+// ColumnDef (Visibility, Searchable, Validation, Widget). The function is a
+// no-op for zero-valued columns so legacy manifests keep validating.
+func validateColumnExtensions(col ColumnDef) error {
+	if col.Visibility != "" {
+		if _, ok := validVisibility[col.Visibility]; !ok {
+			return fmt.Errorf("visibility %q not allowed (want table|modal|list|all)", col.Visibility)
+		}
+	}
+	if col.Widget != "" {
+		if _, ok := validWidgets[col.Widget]; !ok {
+			return fmt.Errorf("widget %q not allowed", col.Widget)
+		}
+	}
+	if col.Validation != nil {
+		if err := col.Validation.validate(); err != nil {
+			return fmt.Errorf("validation: %w", err)
+		}
+	}
+	return nil
+}
+
+// validate checks a ValidationRule's internal consistency. The kernel does
+// NOT execute the rule here — that happens at write time — it only catches
+// authoring mistakes (bad regex, swapped bounds, malformed custom symbol).
+func (v *ValidationRule) validate() error {
+	if v == nil {
+		return nil
+	}
+	if v.Regex != "" {
+		if _, err := regexp.Compile(v.Regex); err != nil {
+			return fmt.Errorf("regex %q does not compile: %w", v.Regex, err)
+		}
+	}
+	if v.Min != nil && v.Max != nil && *v.Min > *v.Max {
+		return fmt.Errorf("min %g greater than max %g", *v.Min, *v.Max)
+	}
+	if v.Custom != "" && !customValidatorRe.MatchString(v.Custom) {
+		return fmt.Errorf("custom %q must be a dotted identifier (e.g. \"rfc.tax_id\")", v.Custom)
 	}
 	return nil
 }
