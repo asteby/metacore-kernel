@@ -7,6 +7,101 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Per-file SHA-256 verification on bundle install
+  (`installer.verifySignature` / `security.VerifyBundle`).** When the
+  publisher stamps `manifest.Signature.Checksums` (a map keyed by in-archive
+  path), the kernel now compares each declared digest against the SHA-256 of
+  the corresponding entry as it was actually read from the tarball. The check
+  runs only after the global Ed25519 signature already verifies — Ed25519
+  remains the load-bearing supply-chain guarantee, the per-file pass adds the
+  granularity the audit
+  [`docs/audits/2026-05-04-bundle-checksums.md`](docs/audits/2026-05-04-bundle-checksums.md)
+  flagged as missing (post-mortem diagnostics, partial / streaming
+  verification, per-asset rotation). Mismatch, missing entry (declared in
+  `Checksums` but not present in the bundle) and extra entry (present but
+  not declared) all surface as the new `security.ErrChecksumMismatch` with
+  the offending path in the message. `manifest.json` is excluded from the
+  per-file check on both sides because it carries the `Checksums` map and
+  cannot self-checksum without a fixpoint cycle — its integrity is covered
+  transitively by the Ed25519 over the full tarball. Bundles published
+  before this release leave `Checksums` empty and are accepted unchanged
+  (legacy compat). `bundle.Bundle` gains an `EntryDigests map[string]string`
+  field, populated transparently by `bundle.Read` for every regular entry.
+  Tests cover happy path with checksums populated, single-entry tampering
+  (named offender in error), missing checksum target, undeclared extra entry
+  and the legacy empty-map path; an installer-level test exercises the same
+  flow through `verifySignature` end-to-end.
+- **`POST /dynamic/:model/:id/action/:key` — per-row action endpoint.** The
+  dynamic handler now mounts an action route alongside the CRUD verbs.
+  `Service.ExecAction` runs the four-step contract from
+  [`docs/dynamic-actions.md`](docs/dynamic-actions.md): load the row through
+  `service.Get` (org-scoped) → optionally open `db.Transaction` when
+  `Trigger.Type=="wasm" && Trigger.RunInTx` → dispatch to a registered
+  `ActionDispatcher` keyed by `Trigger.Type` → commit on `Success=true` /
+  rollback on `Success=false` (sentinel error consumed inside the call) →
+  reply with the kernel envelope `{success, data, meta}` (`error` block on
+  failure). Wired via three new `dynamic.Config` fields:
+  `ActionResolver func(ctx, model, key) (*manifest.ActionDef, bool)` (the
+  kernel does not own a global Actions index — hosts plug their addon
+  registry here), `ActionDispatchers map[string]ActionDispatcher` (one per
+  `Trigger.Type`; `wasm` and `webhook` must be wired by the host to keep
+  `dynamic` free of `runtime/wasm` / `net/http` imports), and an
+  auto-registered built-in `NoopDispatcher` for `Trigger.Type=="noop"`
+  (UI-only confirmations) that emits `meta.no_op:true`. Kernel-managed meta
+  keys (`model`, `action`, `trigger_type`, `rolled_back`) are merged on
+  top of dispatcher-supplied meta and always win on collision so guests
+  cannot fake them. Status codes: `200` on success, `422` when the
+  dispatcher returned `Success=false` (action declined for business
+  reasons), `404` on `ErrActionNotFound` / `ErrRecordNotFound` /
+  `ErrModelNotFound`, `400` on `ErrInvalidID`, `501` on
+  `ErrNoActionResolver` / `ErrUnsupportedTriggerType`. Tests cover the
+  noop happy path (built-in dispatcher), wasm + RunInTx commit (mutation
+  visible after commit), wasm + RunInTx rollback on `Success=false`
+  (mutation reverted), webhook (no tx handle threaded), dispatcher
+  returning a Go error (500 bubble), action-not-found (404),
+  record-not-found (404), invalid id (400), no resolver wired (501) and
+  unknown trigger type (501). New errors: `ErrActionNotFound`,
+  `ErrNoActionResolver`, `ErrUnsupportedTriggerType` — wired through
+  `handler.handleError` so the action endpoint shares the existing CRUD
+  status mapping.
+- **`dynamic.Service` emits canonical CRUD events post-commit.** Every
+  `Create / Update / Delete` routed through the dynamic engine now publishes
+  `<addonKey>.<model>.<created|updated|deleted>` on the in-process
+  `events.Bus`, with payload `*dynamic.CanonicalEvent`
+  (JSON shape `{id, before?, after?}`). `created` carries `{id, after}`,
+  `updated` carries `{id, before, after}` (snapshot loaded before the input
+  merge), `deleted` carries `{id, before}` (best-effort snapshot — `before`
+  is `nil` if the row was already gone or out of tenant scope at publish
+  time). Wired via two new optional `dynamic.Config` fields:
+  `Bus dynamic.Publisher` (`*events.Bus` satisfies the interface; an
+  internal `Publisher` interface decouples `dynamic` from `events` to avoid
+  a `dynamic → events → security → bundle → dynamic` cycle) and
+  `AddonKeyForModel func(ctx, model) string` (returns the addon owner of a
+  model; defaults to `"kernel"` for core models). Apps that do not wire a
+  `Bus` keep the previous behaviour — the publish step is a no-op. Bus
+  errors are swallowed because the DB has already committed; the bus logs
+  failures itself. `BulkExport / Import` paths in
+  `dynamic/handler_export.go` do **not** route through `Service.Create` and
+  therefore do not emit events — subscribers that need to track imported
+  rows must subscribe to the bulk handler separately. Tests cover happy-path
+  fan-out (`TestEvents_FanOut`), no-bus no-op (`TestEvents_NoBusIsNoop`),
+  and the default `kernel` namespace fallback
+  (`TestEvents_DefaultAddonKeyKernel`).
+- **`metacore_host.db_query` host import (WASM ABI v1.1, runtime/wasm).**
+  Read-only SQL surface for in-process addons. Each call opens a transaction,
+  issues `SET LOCAL search_path TO addon_<key>, public`, runs a single
+  `SELECT` (or `WITH … SELECT`), and returns the kernel `{success, data, meta}`
+  envelope to the guest. Mutations / multi-statement payloads /
+  `information_schema` lookups are rejected at the host layer. Capability
+  enforcement runs through `security.Enforcer.CheckCapability(addonKey,
+  "db:read", "addon_<key>.*")`. Wired via two new optional `Host` setters:
+  `WithDB(*gorm.DB)` and `WithEnforcer(*security.Enforcer)`. Tests cover the
+  happy path, mutation rejection, multi-statement rejection, introspection
+  rejection, capability denial, driver error rollback, typed args, and
+  literal-quoted keywords with `sqlmock`.
+
 ### Removed
 
 - **`flow` package — extracted to consumer (link).** The workflow DAG engine

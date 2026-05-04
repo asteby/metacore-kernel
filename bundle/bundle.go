@@ -17,6 +17,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -50,6 +52,15 @@ type Bundle struct {
 	// it; populated transparently by Read via a tee buffer. Empty when the
 	// Bundle was constructed in-memory (e.g. tests calling Write).
 	Raw []byte
+	// EntryDigests maps each regular entry path inside the tarball to its
+	// hex-encoded SHA-256 digest, computed over the decompressed bytes as the
+	// archive is read. It is the per-file granularity that the global Ed25519
+	// signature does NOT provide — the security package compares this against
+	// manifest.Signature.Checksums to detect tampering of individual entries.
+	// Keys match the in-archive path verbatim (e.g. "manifest.json",
+	// "migrations/0001_init.sql", "frontend/remoteEntry.js"). Empty when the
+	// Bundle was constructed in-memory.
+	EntryDigests map[string]string
 }
 
 // Read decompresses a bundle stream and returns its parsed representation.
@@ -70,7 +81,11 @@ func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
-	b := &Bundle{Frontend: map[string][]byte{}, Backend: map[string][]byte{}}
+	b := &Bundle{
+		Frontend:     map[string][]byte{},
+		Backend:      map[string][]byte{},
+		EntryDigests: map[string]string{},
+	}
 	var total int64
 	for {
 		h, err := tr.Next()
@@ -108,6 +123,11 @@ func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
 		if total > maxBytes {
 			return nil, fmt.Errorf("bundle: decompressed size exceeds %d bytes", maxBytes)
 		}
+		// Hash every regular entry (not just the ones we route into typed
+		// fields below) so the security package can spot extra files inserted
+		// post-signing as well as tampered known files.
+		sum := sha256.Sum256(data)
+		b.EntryDigests[h.Name] = hex.EncodeToString(sum[:])
 		switch {
 		case h.Name == "manifest.json":
 			if err := json.Unmarshal(data, &b.Manifest); err != nil {
