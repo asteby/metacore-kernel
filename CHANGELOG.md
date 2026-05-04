@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`manifest.RelationDef` + `ModelDefinition.Relations`.** Addons can now
+  declare model-to-model edges in the manifest contract. `Validate` enforces
+  the supported shapes — `one_to_many` and `many_to_many` — checks that
+  `Kind` is recognised, requires `Pivot` for `many_to_many` and refuses it
+  for `one_to_many`, and rejects duplicate relation names within a model.
+  The slice is optional; manifests authored before the field landed keep
+  validating unchanged. Consumers (dynamic schema, modelbase metadata, the
+  TS SDK) are NOT updated in this revision — the type only lands in the
+  contract so addon authors can declare relations ahead of the kernel
+  learning to honour them. Follow-up PRs wire each consumer up incrementally.
+
 ### Removed
 
 - **`flow` package — extracted to consumer (link).** The workflow DAG engine

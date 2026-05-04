@@ -12,6 +12,19 @@ var (
 	keyRe    = regexp.MustCompile(`^[a-z][a-z0-9_]{1,63}$`)
 	modelRe  = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 	columnRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
+	// validRelationKinds lists the shapes RelationDef supports today.
+	// New cardinalities (one_to_one, polymorphic) extend this map without
+	// touching the surrounding loop — the discriminator stays stable.
+	validRelationKinds = map[string]struct{}{
+		"one_to_many":  {},
+		"many_to_many": {},
+	}
+	// relationNameRe and pivotRe match the same alphabet as columnRe /
+	// modelRe respectively. Re-declared as aliases so the relation
+	// validator reads cleanly and a future tweak to the relation alphabet
+	// does not silently widen unrelated identifiers.
+	relationNameRe = columnRe
+	pivotRe        = modelRe
 	// defaultRe allows only safe DDL DEFAULT expressions:
 	//   numeric literal:   42 | 42.5 | -3
 	//   quoted string:     'pending' (no embedded quotes or semicolons)
@@ -64,6 +77,9 @@ func (m *Manifest) Validate(kernelVersion string) error {
 			if _, ok := DefaultLiteral(col.Default); !ok {
 				return fmt.Errorf("manifest.model_definitions[%d].columns[%d].default: %v not allowed (use numeric, 'quoted' literal, now(), gen_random_uuid(), true, false, null)", i, j, col.Default)
 			}
+		}
+		if err := validateRelations(md.Relations); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
 	}
 	for i, c := range m.Capabilities {
@@ -131,6 +147,50 @@ func (m *Manifest) validateBackend() error {
 			action := parts[1]
 			if _, ok := exports[action]; !ok {
 				return fmt.Errorf("manifest.hooks[%q]: action %q is not listed in backend.exports", hookKey, action)
+			}
+		}
+	}
+	return nil
+}
+
+// validateRelations enforces the RelationDef contract on a model. The slice
+// is optional — an empty / nil input is a no-op so manifests authored before
+// the relation field landed keep validating. Errors are returned with a
+// `relations[i]` prefix the caller stitches onto the model index for a
+// fully-qualified path the operator can grep.
+func validateRelations(rels []RelationDef) error {
+	if len(rels) == 0 {
+		return nil
+	}
+	seen := make(map[string]int, len(rels))
+	for i, r := range rels {
+		if !relationNameRe.MatchString(r.Name) {
+			return fmt.Errorf("relations[%d]: invalid name %q", i, r.Name)
+		}
+		if prev, dup := seen[r.Name]; dup {
+			return fmt.Errorf("relations[%d]: duplicate name %q (also at relations[%d])", i, r.Name, prev)
+		}
+		seen[r.Name] = i
+		if _, ok := validRelationKinds[r.Kind]; !ok {
+			return fmt.Errorf("relations[%d]: unknown kind %q (want one_to_many|many_to_many)", i, r.Kind)
+		}
+		if !modelRe.MatchString(r.Through) {
+			return fmt.Errorf("relations[%d]: invalid through %q", i, r.Through)
+		}
+		if !columnRe.MatchString(r.ForeignKey) {
+			return fmt.Errorf("relations[%d]: invalid foreign_key %q", i, r.ForeignKey)
+		}
+		if r.References != "" && !columnRe.MatchString(r.References) {
+			return fmt.Errorf("relations[%d]: invalid references %q", i, r.References)
+		}
+		switch r.Kind {
+		case "one_to_many":
+			if r.Pivot != "" {
+				return fmt.Errorf("relations[%d]: pivot %q not allowed for one_to_many", i, r.Pivot)
+			}
+		case "many_to_many":
+			if !pivotRe.MatchString(r.Pivot) {
+				return fmt.Errorf("relations[%d]: many_to_many requires a valid pivot, got %q", i, r.Pivot)
 			}
 		}
 	}

@@ -271,8 +271,72 @@ type ModelDefinition struct {
 	OrgScoped  bool        `json:"org_scoped,omitempty"`
 	SoftDelete bool        `json:"soft_delete,omitempty"`
 	Columns    []ColumnDef `json:"columns"`
-	Table      interface{} `json:"table,omitempty"` // UI table spec (opaque)
-	Modal      interface{} `json:"modal,omitempty"` // UI modal spec (opaque)
+	// Relations declares model-to-model edges the kernel uses to derive
+	// joins, eager loading, REST sub-resources and SDK metadata. The slice
+	// is optional — addons that only expose flat tables can omit it and
+	// keep the legacy behaviour. See RelationDef for the supported shapes.
+	Relations []RelationDef `json:"relations,omitempty"`
+	Table     interface{}   `json:"table,omitempty"` // UI table spec (opaque)
+	Modal     interface{}   `json:"modal,omitempty"` // UI modal spec (opaque)
+}
+
+// RelationDef declares an inter-model relationship rooted at the owning
+// ModelDefinition. The kernel uses it to derive joins, eager-loading
+// hints, REST sub-resources and the metadata exposed to the TS SDK. Only
+// the two shapes below are supported in this revision; richer cardinalities
+// (one_to_one, polymorphic) can be added later without breaking existing
+// manifests because RelationDef.Kind is a discriminator.
+//
+//	Kind = "one_to_many"  — the owning model has many rows on Through.
+//	                        ForeignKey is the column on Through that points
+//	                        back at the owner. References is the owner
+//	                        column the FK targets (defaults to "id").
+//	                        Pivot MUST be empty.
+//
+//	Kind = "many_to_many" — Pivot is a join table between owner and Through.
+//	                        ForeignKey is the column on Pivot pointing at
+//	                        the owner. References is the column on the
+//	                        owner the pivot row holds (defaults to "id").
+//	                        Through and Pivot are both required.
+//
+// Field shapes are the same identifier rules as ColumnDef.Name and
+// ModelDefinition.TableName so the same regexes can validate them.
+//
+// Consumers (dynamic schema, modelbase metadata, the TS SDK) are NOT
+// updated in this revision — the types only land in the manifest contract
+// so addon authors can declare relations ahead of the kernel learning to
+// honour them. Follow-up PRs wire each consumer up incrementally.
+type RelationDef struct {
+	// Name is a stable identifier for the relation, scoped to the owning
+	// ModelDefinition. Lowercase snake_case, e.g. "tickets" or "tags".
+	// It is what the SDK and REST sub-resources address the relation by,
+	// so two relations on the same model cannot share a Name. Required.
+	Name string `json:"name"`
+
+	// Kind discriminates the relation shape: "one_to_many" | "many_to_many".
+	Kind string `json:"kind"`
+
+	// Through is the target model/table the relation points at. For
+	// one_to_many it is where the foreign key column lives; for
+	// many_to_many it is the model joined via Pivot. Required.
+	Through string `json:"through"`
+
+	// ForeignKey is the column carrying the relationship.
+	//   one_to_many : column on Through pointing back at the owner.
+	//   many_to_many: column on Pivot pointing at the owner.
+	// Required in both shapes.
+	ForeignKey string `json:"foreign_key"`
+
+	// References is the owner column the ForeignKey targets. Empty means
+	// "id" — the conventional primary key — so the common case stays
+	// terse. Validated as a column identifier when set.
+	References string `json:"references,omitempty"`
+
+	// Pivot is the join table for many_to_many relations. It MUST be
+	// empty for one_to_many (otherwise the relation shape is ambiguous)
+	// and required for many_to_many. The pivot table is expected to
+	// live in the addon schema; the kernel only needs the name here.
+	Pivot string `json:"pivot,omitempty"`
 }
 
 // ColumnDef is a column on an addon-installed table.
