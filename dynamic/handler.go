@@ -274,7 +274,20 @@ func (h *Handler) options(c fiber.Ctx) error {
 	if err != nil {
 		return h.handleError(c, err)
 	}
-	return c.JSON(fiber.Map{"success": true, "data": res.Options, "type": res.Type})
+	// v0.9.0: normalize the options envelope to {success, data, meta} so the
+	// endpoint matches every other dynamic handler. The previous shape
+	// {success, data, type} surfaced `type` as a sibling of `data` which
+	// forced consumers to special-case this route. The discriminator is now
+	// nested under `meta.type` alongside the count, mirroring how list
+	// endpoints carry pagination meta. BREAKING — bumped in CHANGELOG.
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    res.Options,
+		"meta": fiber.Map{
+			"type":  res.Type,
+			"count": len(res.Options),
+		},
+	})
 }
 
 func (h *Handler) search(c fiber.Ctx) error {
