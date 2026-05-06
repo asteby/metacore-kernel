@@ -7,7 +7,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Breaking
+
+- **`GET /api/options/:model?field=…` now returns the canonical
+  `{success, data, meta}` envelope (v0.9.0).** The previous shape was
+  `{success, data, type}` — the static/dynamic discriminator rode at the
+  envelope root which forced consumers to special-case this single route.
+  As of v0.9.0 the discriminator is nested under `meta.type` (alongside
+  `meta.count`) so the response matches every other dynamic handler. Any
+  client reading `response.type` must now read `response.meta.type`.
+  See SDK ≥ next-minor (`@asteby/metacore-runtime-react useOptionsResolver`)
+  for the upgraded consumer; bridge clients must adjust the unmarshal
+  target.
+
 ### Added
+
+- **`ColumnDef.Ref` auto-derivation from `belongs_to` relations.** Models
+  that implement `modelbase.HasRelations` (compiled core models) and addon
+  manifests that declare `RelationDef{Kind: "belongs_to", …}` now get
+  `Ref` stamped on every FK column whose name matches the relation's
+  `ForeignKey`. Author-provided `Ref` values always win — the inference is
+  purely additive. Compiled models go through `metadata.Service` (runs
+  inline in `computeTable`, no extra `modelbase.Get` round-trip per
+  request); addon manifests can call `manifest.AutoDeriveColumnRefs(def)`
+  during install if the host wants the same behaviour pre-projection. New
+  relation kind `"belongs_to"` is whitelisted by `manifest.Validate` —
+  `Pivot` is rejected for it (same shape as `one_to_many`).
+- **Locale-aware validators via `$org.<key>` references.** `ColumnDef.Validation.Custom`
+  and `FieldDef.Validation` now accept a `$org.<key>` token in addition to
+  the legacy dotted identifier. The metadata service resolves the
+  reference at request time through an app-supplied `OrgConfigResolver`
+  registered with `metadata.Service.WithOrgConfigResolver`. Unresolved
+  references pass through untouched so the SDK can decide between
+  fallback validators and surfacing the missing config to operators.
+  This is the contract that keeps fiscal/regional rules (RFC México, NIT
+  Colombia, RUC Perú, etc.) out of core: the kernel only knows how to
+  swap a token for the validator identifier the org actually wants
+  applied. Cache is bypassed when an org resolver is registered because
+  resolution varies per-request.
+- **`modelbase.RelationDef` and `modelbase.HasRelations`.** Mirrors of the
+  manifest types so compiled core models and declarative addons share one
+  vocabulary. The metadata service consumes `HasRelations` to power the
+  Ref auto-derivation described above.
+- **`modelbase.ColumnDef.Ref`, `modelbase.ColumnDef.Validation`,
+  `modelbase.FieldDef.Ref`.** New optional fields exposed through the
+  `/api/metadata/table/:model` payload so the SDK's `<DynamicForm>` and
+  `<DynamicRelation>` can build reference-aware selects without per-page
+  wiring.
+
+### Added (pre-existing)
 
 - **Per-file SHA-256 verification on bundle install
   (`installer.verifySignature` / `security.VerifyBundle`).** When the
