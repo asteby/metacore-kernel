@@ -14,8 +14,17 @@ var (
 	columnRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 	// customValidatorRe matches "<namespace>.<symbol>" identifiers used by
 	// ValidationRule.Custom — keeps it injection-safe for log lines and
-	// future router lookups.
+	// future router lookups. As of v0.9.0 the same field also accepts
+	// `$org.<key>` references that the metadata service swaps for the
+	// org-configured validator at request time, so the regex below is
+	// matched against the *unprefixed* tail when the value starts with
+	// "$org.". This keeps fiscal/regional rules out of core: kernel and
+	// SDK only know how to apply a validator the org config picks.
 	customValidatorRe = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+	// orgRefRe matches the `$org.<key>` form that defers validator
+	// resolution to org config. The key alphabet matches columnRe (snake
+	// identifiers) so it stays grep-friendly across audits.
+	orgRefRe = regexp.MustCompile(`^\$org\.[a-z][a-z0-9_]*$`)
 	// validVisibility is the closed set of ColumnDef.Visibility values.
 	// Empty string is also accepted at the call site as the legacy default.
 	validVisibility = map[string]struct{}{
@@ -27,9 +36,17 @@ var (
 	// validRelationKinds lists the shapes RelationDef supports today.
 	// New cardinalities (one_to_one, polymorphic) extend this map without
 	// touching the surrounding loop — the discriminator stays stable.
+	//
+	// belongs_to lands in v0.9.0 to power ColumnDef.Ref auto-derivation:
+	// a belongs_to declaration says "this model carries the FK column
+	// `ForeignKey` pointing at `Through.References`", so the column with
+	// that name reports Ref=Through automatically without per-column
+	// wiring. Validation enforces Pivot-empty for belongs_to (same shape
+	// as one_to_many in that regard).
 	validRelationKinds = map[string]struct{}{
 		"one_to_many":  {},
 		"many_to_many": {},
+		"belongs_to":   {},
 	}
 	// validTriggerTypes lists the dispatch shapes ActionTrigger supports.
 	// The set is closed: addon authors that need a custom dispatcher pick
@@ -354,6 +371,10 @@ func validateRelations(rels []RelationDef) error {
 			if r.Pivot != "" {
 				return fmt.Errorf("relations[%d]: pivot %q not allowed for one_to_many", i, r.Pivot)
 			}
+		case "belongs_to":
+			if r.Pivot != "" {
+				return fmt.Errorf("relations[%d]: pivot %q not allowed for belongs_to", i, r.Pivot)
+			}
 		case "many_to_many":
 			if !pivotRe.MatchString(r.Pivot) {
 				return fmt.Errorf("relations[%d]: many_to_many requires a valid pivot, got %q", i, r.Pivot)
@@ -378,8 +399,8 @@ func (v *ValidationRule) validate() error {
 	if v.Min != nil && v.Max != nil && *v.Min > *v.Max {
 		return fmt.Errorf("min %g greater than max %g", *v.Min, *v.Max)
 	}
-	if v.Custom != "" && !customValidatorRe.MatchString(v.Custom) {
-		return fmt.Errorf("custom %q must be a dotted identifier (e.g. \"rfc.tax_id\")", v.Custom)
+	if v.Custom != "" && !customValidatorRe.MatchString(v.Custom) && !orgRefRe.MatchString(v.Custom) {
+		return fmt.Errorf("custom %q must be a dotted identifier (e.g. \"email.basic\") or an org reference (e.g. \"$org.tax_id_validator\")", v.Custom)
 	}
 	return nil
 }

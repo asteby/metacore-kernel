@@ -42,6 +42,37 @@ type ColumnDef struct {
 	RelationPath   string                 `json:"relationPath,omitempty"`
 	SearchEndpoint string                 `json:"searchEndpoint,omitempty"`
 	Hidden         bool                   `json:"hidden,omitempty"`
+	// Ref is the foreign-key target model the column points at (e.g.
+	// "customers", "addon_tickets.comments"). When populated, the SDK
+	// resolves the column's options against `/api/options/:Ref?field=id`
+	// instead of falling back to a hand-wired SearchEndpoint or hardcoded
+	// Options. Authors set Ref directly on compiled models; for addons it
+	// is auto-derived by the metadata service from
+	// `manifest.ModelDefinition.Relations` so a column named `customer_id`
+	// targeting a belongs-to relation reports Ref="customers" without any
+	// per-column declaration.
+	Ref string `json:"ref,omitempty"`
+	// Validation declares server-side input constraints that the SDK can
+	// also pre-flight in the form layer. Strings prefixed with `$org.`
+	// (e.g. `$org.tax_id_validator`) are resolved at runtime against the
+	// current organization's config — keeping fiscal/regional rules out of
+	// the kernel and out of the SDK.
+	Validation *ValidationRule `json:"validation,omitempty"`
+}
+
+// ValidationRule mirrors `manifest.ValidationRule` but lives on the metadata
+// payload exposed to the frontend. Apps can populate it directly on compiled
+// models (HasMetadata) and the metadata service projects it from manifest
+// authors automatically. The Custom field accepts either a literal validator
+// identifier (e.g. "rfc.tax_id") OR a `$org.<key>` reference that the SDK
+// resolves against the current org config — this is the contract that lets
+// region-specific rules ride the same plumbing without leaking fiscal
+// vocabulary into core.
+type ValidationRule struct {
+	Regex  string   `json:"regex,omitempty"`
+	Min    *float64 `json:"min,omitempty"`
+	Max    *float64 `json:"max,omitempty"`
+	Custom string   `json:"custom,omitempty"`
 }
 
 // ModalMetadata describes a create/edit modal rendered by the frontend.
@@ -56,6 +87,12 @@ type ModalMetadata struct {
 }
 
 // FieldDef describes a single form field inside a ModalMetadata.
+//
+// Validation accepts either a legacy literal pattern (e.g. "email") or a
+// `$org.<key>` reference resolved at runtime against the org config — same
+// contract as ColumnDef.Validation.Custom. Ref points at a foreign-key target
+// model so the SDK can resolve the field's option list against the canonical
+// `/api/options/:ref?field=id` endpoint.
 type FieldDef struct {
 	Key            string      `json:"key"`
 	Label          string      `json:"label"`
@@ -67,6 +104,7 @@ type FieldDef struct {
 	HideInView     bool        `json:"hideInView,omitempty"`
 	SearchEndpoint string      `json:"searchEndpoint,omitempty"`
 	Placeholder    string      `json:"placeholder,omitempty"`
+	Ref            string      `json:"ref,omitempty"`
 }
 
 // ActionDef is the UI metadata for a frontend action button. The backend

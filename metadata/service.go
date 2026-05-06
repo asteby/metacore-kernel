@@ -53,6 +53,19 @@ type Service struct {
 	tableTransformers []TableTransformer
 	modalTransformers []ModalTransformer
 
+	// orgResolver is the per-request lookup invoked by the
+	// $org.<key> resolver transformer. Apps install it via
+	// WithOrgConfigResolver. nil disables org-aware validator resolution
+	// and references like `$org.tax_id_validator` pass through verbatim
+	// (the SDK then surfaces the unresolved literal so the operator
+	// notices the missing config).
+	orgResolver OrgConfigResolver
+	// orgValidatorsWired records whether the org-validator transformers
+	// have already been appended to the chains. WithOrgConfigResolver
+	// swaps the resolver pointer freely but only wires the transformers
+	// once so resetting the resolver to nil does not strip them out.
+	orgValidatorsWired bool
+
 	// cacheVersion monotonically increments on every global invalidation so
 	// that AllMetadata.Version gives the frontend a stable cache-buster.
 	cacheVersion uint64
@@ -71,6 +84,12 @@ type AllMetadata struct {
 // New constructs a Service with the given configuration. The Config is
 // applied eagerly: after New returns, mutations to the passed-in Config have
 // no effect.
+//
+// As of v0.9.0 the service auto-derives ColumnDef.Ref from any model that
+// implements modelbase.HasRelations. This happens inline inside computeTable
+// (before user-registered transformers run) so an existing factory
+// invocation produces both the def *and* its derived Ref values — no extra
+// modelbase.Get round-trip per request.
 func New(cfg Config) *Service {
 	ttl := cfg.CacheTTL
 	if ttl == 0 {
@@ -114,9 +133,17 @@ func (s *Service) WithModalTransformer(fn ModalTransformer) *Service {
 // Apps that need transformer output to vary per-request (e.g. per-org
 // overlays) should set CacheTTL negative or call InvalidateCache when the
 // overlay context changes.
+//
+// When an org-config resolver is registered (WithOrgConfigResolver) the
+// cache is bypassed entirely because validator references vary per-org and
+// the kernel does not own a notion of "current org" stable enough to use
+// as a cache key.
 func (s *Service) GetTable(ctx context.Context, modelKey string) (*modelbase.TableMetadata, error) {
 	if modelKey == "" {
 		return nil, ErrModelNotFound
+	}
+	if s.orgResolverSnapshot() != nil {
+		return s.computeTable(ctx, modelKey)
 	}
 	key := tableCacheKey(modelKey) + s.langSuffix(ctx)
 	if cached, ok := s.cache.Get(key); ok {
@@ -124,12 +151,31 @@ func (s *Service) GetTable(ctx context.Context, modelKey string) (*modelbase.Tab
 			return meta, nil
 		}
 	}
+	meta, err := s.computeTable(ctx, modelKey)
+	if err != nil {
+		return nil, err
+	}
+	s.cache.Set(key, meta)
+	return meta, nil
+}
 
+// computeTable runs the underlying lookup + transformer chain without
+// touching the cache. Both GetTable (cache-miss path) and the
+// org-resolver bypass call into this helper.
+func (s *Service) computeTable(ctx context.Context, modelKey string) (*modelbase.TableMetadata, error) {
 	def, ok := modelbase.Get(modelKey)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrModelNotFound, modelKey)
 	}
 	table := def.DefineTable()
+
+	// Auto-derive ColumnDef.Ref from belongs_to relations declared on the
+	// model. Runs inline (before user transformers) so the same factory
+	// invocation that produced the def also produces the derived Refs —
+	// avoids an extra modelbase.Get and keeps the transformer chain free
+	// of kernel-owned hooks. Models that do not implement HasRelations
+	// short-circuit to a no-op.
+	deriveRefsFromDef(def, &table)
 
 	s.mu.RLock()
 	transformers := append([]TableTransformer(nil), s.tableTransformers...)
@@ -139,17 +185,17 @@ func (s *Service) GetTable(ctx context.Context, modelKey string) (*modelbase.Tab
 			return nil, fmt.Errorf("metadata: table transformer for %s: %w", modelKey, err)
 		}
 	}
-
-	meta := &table
-	s.cache.Set(key, meta)
-	return meta, nil
+	return &table, nil
 }
 
 // GetModal returns the ModalMetadata for modelKey. See GetTable for caching
-// semantics — they are identical.
+// semantics — they are identical, including the org-resolver bypass.
 func (s *Service) GetModal(ctx context.Context, modelKey string) (*modelbase.ModalMetadata, error) {
 	if modelKey == "" {
 		return nil, ErrModelNotFound
+	}
+	if s.orgResolverSnapshot() != nil {
+		return s.computeModal(ctx, modelKey)
 	}
 	key := modalCacheKey(modelKey) + s.langSuffix(ctx)
 	if cached, ok := s.cache.Get(key); ok {
@@ -157,7 +203,15 @@ func (s *Service) GetModal(ctx context.Context, modelKey string) (*modelbase.Mod
 			return meta, nil
 		}
 	}
+	meta, err := s.computeModal(ctx, modelKey)
+	if err != nil {
+		return nil, err
+	}
+	s.cache.Set(key, meta)
+	return meta, nil
+}
 
+func (s *Service) computeModal(ctx context.Context, modelKey string) (*modelbase.ModalMetadata, error) {
 	def, ok := modelbase.Get(modelKey)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrModelNotFound, modelKey)
@@ -172,10 +226,7 @@ func (s *Service) GetModal(ctx context.Context, modelKey string) (*modelbase.Mod
 			return nil, fmt.Errorf("metadata: modal transformer for %s: %w", modelKey, err)
 		}
 	}
-
-	meta := &modal
-	s.cache.Set(key, meta)
-	return meta, nil
+	return &modal, nil
 }
 
 // GetAll returns every registered model's TableMetadata and ModalMetadata in
