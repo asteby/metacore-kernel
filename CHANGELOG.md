@@ -22,6 +22,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`installer.ManifestChangeBroadcaster` — push hot-swap signals over the
+  WebSocket hub without polling.** The installer now snapshots a manifest's
+  SHA-256 fingerprint on every install and, when it differs from the
+  previously persisted hash (or when no row existed yet, signalled by an
+  empty `OldHash`), invokes the configured broadcaster with a
+  `ManifestChangeEvent`. The kernel ships a `NoopBroadcaster` default so
+  hosts that do not surface a real-time channel keep working unchanged;
+  `Installer.WithBroadcaster` swaps the implementation following the Law 2
+  pluggable-default pattern. A new `Installation.ManifestHash` column is
+  populated on every install (legacy rows pre-dating the column are
+  auto-populated on the first reinstall). Broadcast errors are logged and
+  never roll back the install — the WebSocket fan-out is best-effort. The
+  installer never imports `kernel/ws` directly: the seam lives in
+  `bridge/installer_broadcaster.go`, which wraps a `*ws.Hub` into the
+  interface and emits `ws.MessageType("ADDON_MANIFEST_CHANGED")` per-user
+  for every operator of the affected org. Frontends consuming
+  `@asteby/metacore-runtime-react` can drop the payload straight into
+  their metadata-cache invalidation reducer. Minor bump — additive,
+  backwards compatible.
 - **`FrontendSpec.Layout` — opt-in immersive (full-page) addon UI.** Manifests
   can now declare how the host should frame the federated module on screen.
   Two values are recognised: `"shell"` (the default chrome — sidebar + topbar

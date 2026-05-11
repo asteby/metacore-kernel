@@ -25,12 +25,15 @@
 package installer
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -39,6 +42,7 @@ import (
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/lifecycle"
 	"github.com/asteby/metacore-kernel/manifest"
+	"github.com/asteby/metacore-kernel/obs"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -59,6 +63,13 @@ type Installation struct {
 	// this and supply their own SecretResolver.
 	SecretEnc      string         `gorm:"size:512;column:secret_enc" json:"-"`
 	Settings       map[string]any `gorm:"serializer:json;type:jsonb" json:"settings"`
+	// ManifestHash is the SHA-256 of the manifest as it landed on disk. The
+	// installer recomputes it on every Install and compares against the
+	// previous value to drive ManifestChangeBroadcaster hot-swap signals so
+	// the frontend can invalidate its metadata-cache without polling. Empty
+	// on legacy rows that pre-date this column — they are auto-populated on
+	// the first reinstall.
+	ManifestHash   string         `gorm:"size:80;column:manifest_hash" json:"manifest_hash,omitempty"`
 	InstalledAt    time.Time      `gorm:"autoCreateTime" json:"installed_at"`
 	EnabledAt      *time.Time     `json:"enabled_at,omitempty"`
 	DisabledAt     *time.Time     `json:"disabled_at,omitempty"`
@@ -99,6 +110,17 @@ type Installer struct {
 	// AllowUnsigned opts out of signature verification entirely. Tied to the
 	// ALLOW_UNSIGNED_BUNDLES env var by New(). DO NOT enable in production.
 	AllowUnsigned bool
+
+	// Broadcaster is invoked after a successful Install whenever the
+	// computed manifest hash differs from what was previously persisted (or
+	// when there is no previous record — the first install also fires an
+	// event with OldHash=""). Defaults to NoopBroadcaster so hosts that do
+	// not surface a real-time channel keep working unchanged.
+	//
+	// Wired via WithBroadcaster (Law 2 — opinionated default, pluggable
+	// escape hatch). The installer never imports kernel/ws directly; the
+	// host glue in bridge/installer_broadcaster.go is what closes the loop.
+	Broadcaster ManifestChangeBroadcaster
 }
 
 // ErrSignatureRequired is returned by Install when the host has not configured
@@ -129,7 +151,25 @@ func New(db *gorm.DB, kernelVersion string) *Installer {
 		Interceptors:  lifecycle.NewInterceptorRegistry(),
 		PublicKeys:    pubs,
 		AllowUnsigned: envFlag("ALLOW_UNSIGNED_BUNDLES"),
+		Broadcaster:   NoopBroadcaster{},
 	}
+}
+
+// WithBroadcaster swaps the installer's manifest-change broadcaster and
+// returns the receiver so callers can chain it on construction:
+//
+//	inst := installer.New(db, "2.0.0").
+//	    WithBroadcaster(bridge.NewWSManifestBroadcaster(hub))
+//
+// Passing nil reverts to NoopBroadcaster so a host can opt out at runtime
+// without panicking the install flow.
+func (i *Installer) WithBroadcaster(b ManifestChangeBroadcaster) *Installer {
+	if b == nil {
+		i.Broadcaster = NoopBroadcaster{}
+		return i
+	}
+	i.Broadcaster = b
+	return i
 }
 
 // loadTrustedKeysFromEnv reads MARKETPLACE_PUBKEYS first (the rotation-
@@ -169,6 +209,10 @@ func envFlag(name string) bool {
 //  3. creates tables from model_definitions (idempotent)
 //  4. registers a declarative lifecycle (if no compiled one was pre-registered)
 //  5. writes the metacore_installations row with a new per-install secret
+//  6. broadcasts a ManifestChangeEvent when the manifest hash changes
+//     (first install too — OldHash is empty in that case) so frontends can
+//     drop their metadata-cache without polling. Broadcaster errors are
+//     logged and do NOT roll back the install.
 //
 // Returns the per-installation secret (caller shares only with the addon).
 func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, []byte, error) {
@@ -181,6 +225,11 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	if err := i.DB.AutoMigrate(&Installation{}); err != nil {
 		return nil, nil, err
 	}
+	// Snapshot the previous manifest hash BEFORE we run the rest of Install
+	// so a post-persist comparison can distinguish "fresh install"
+	// (OldHash="") from "hash unchanged" from "hot-swap".
+	prevHash, _ := loadPrevManifestHash(i.DB, orgID, b.Manifest.Key)
+	newHash := manifestHashFromBundle(b)
 	iso := dynamic.ParseIsolation(b.Manifest.TenantIsolation)
 	if err := dynamic.EnsureSchema(i.DB, b.Manifest.Key, orgID, iso); err != nil {
 		return nil, nil, err
@@ -219,6 +268,7 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 		Source:         sourceOf(b.Manifest),
 		SecretHash:     hashSecret(secret),
 		Settings:       defaultSettings(b.Manifest),
+		ManifestHash:   newHash,
 		EnabledAt:      &now,
 	}
 	if len(i.MasterKey) == 32 {
@@ -239,7 +289,104 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 			return nil, nil, fmt.Errorf("WriteFrontend: %w", err)
 		}
 	}
+	// Broadcast the manifest-hash change (or first-install signal). Errors
+	// are logged but never fail the install — the WebSocket fan-out is a
+	// nice-to-have, not part of the install contract.
+	maybeBroadcastManifestChange(context.Background(), i.Broadcaster, ManifestChangeEvent{
+		OrgID:     orgID,
+		AddonKey:  b.Manifest.Key,
+		OldHash:   prevHash,
+		NewHash:   newHash,
+		Version:   b.Manifest.Version,
+		Timestamp: now,
+	})
 	return inst, secret, nil
+}
+
+// loadPrevManifestHash reads the previous manifest hash for (orgID, addonKey)
+// directly from metacore_installations. Returns ("", nil) when there's no
+// prior row — the caller distinguishes "first install" from "hash unchanged"
+// off the empty string and the new hash respectively. Errors are propagated
+// to the caller but Install treats them as "no prior hash known" so a flaky
+// read can't block an install.
+func loadPrevManifestHash(db *gorm.DB, orgID uuid.UUID, addonKey string) (string, error) {
+	if db == nil {
+		return "", nil
+	}
+	var row struct {
+		ManifestHash string `gorm:"column:manifest_hash"`
+	}
+	err := db.Table((Installation{}).TableName()).
+		Select("manifest_hash").
+		Where("organization_id = ? AND addon_key = ?", orgID, addonKey).
+		Take(&row).Error
+	if err == gorm.ErrRecordNotFound {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return row.ManifestHash, nil
+}
+
+// manifestHashFromBundle returns the canonical SHA-256 fingerprint of an
+// addon's manifest. It prefers the digest the bundle reader already computed
+// over manifest.json (zero-cost on the install hot path) and falls back to a
+// fresh marshal+hash when the bundle was constructed in-memory (e.g. tests
+// or compiled-in addons). The Signature field is stripped before hashing so
+// re-signing the same manifest does not appear as a hot-swap.
+func manifestHashFromBundle(b *bundle.Bundle) string {
+	if b == nil {
+		return ""
+	}
+	if dig, ok := b.EntryDigests["manifest.json"]; ok && dig != "" {
+		return "sha256:" + dig
+	}
+	return manifestHash(b.Manifest)
+}
+
+// manifestHash returns "sha256:<hex>" over a stable JSON encoding of m. The
+// Signature field is zeroed first because the kernel hashes the *contents*
+// the frontend cares about — re-signing the same manifest with a new
+// timestamp must NOT flip the hash and cause spurious cache invalidations.
+func manifestHash(m manifest.Manifest) string {
+	m.Signature = nil
+	raw, err := json.Marshal(m)
+	if err != nil {
+		// json.Marshal on the manifest type cannot fail in practice — all
+		// fields are JSON-clean. The empty hash falls through as "" so the
+		// broadcaster treats it as "no hash known" rather than panicking.
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// maybeBroadcastManifestChange forwards the event to the configured
+// broadcaster whenever the new hash differs from the previous one. Pure
+// helper extracted so unit tests can exercise the diff logic without a DB
+// or a bundle pipeline. The function is intentionally non-fatal: a nil
+// broadcaster or a broadcast error is logged and swallowed.
+func maybeBroadcastManifestChange(ctx context.Context, bcast ManifestChangeBroadcaster, evt ManifestChangeEvent) {
+	if bcast == nil {
+		return
+	}
+	if evt.NewHash == "" {
+		// No hash known (in-memory bundle without EntryDigests AND a
+		// manifest that failed to marshal — should be impossible). Skip
+		// the broadcast rather than spam consumers with empty events.
+		return
+	}
+	if evt.OldHash == evt.NewHash {
+		return
+	}
+	if err := bcast.Broadcast(ctx, evt); err != nil {
+		obs.Warn(ctx, "installer.manifest_broadcast_failed",
+			slog.String("addon_key", evt.AddonKey),
+			slog.String("org_id", evt.OrgID.String()),
+			slog.String("err", err.Error()),
+		)
+	}
 }
 
 // RotateSecret generates a fresh per-installation HMAC secret, re-hashes it,
