@@ -57,6 +57,15 @@ var (
 		"webhook": {},
 		"noop":    {},
 	}
+	// validFrontendLayouts is the closed set of FrontendSpec.Layout values.
+	// Empty string is accepted at the call site and treated as "shell" for
+	// backwards compatibility with manifests authored before the field
+	// landed. "immersive" opts the addon into a full-viewport takeover
+	// (POS terminals, kitchen-display screens, customer-facing kiosks).
+	validFrontendLayouts = map[string]struct{}{
+		"shell":     {},
+		"immersive": {},
+	}
 	// triggerExportRe matches a wasm export symbol. Same alphabet as a Go
 	// identifier (lower/upper letters, digits, underscore) so the validator
 	// can be used identically against TinyGo, Rust and AssemblyScript
@@ -186,6 +195,11 @@ func (m *Manifest) Validate(kernelVersion string) error {
 			// ok
 		default:
 			return fmt.Errorf("manifest.frontend.format: unknown %q", m.Frontend.Format)
+		}
+		if m.Frontend.Layout != "" {
+			if _, ok := validFrontendLayouts[m.Frontend.Layout]; !ok {
+				return fmt.Errorf("manifest.frontend.layout: unknown %q (want shell|immersive)", m.Frontend.Layout)
+			}
 		}
 	}
 	return nil

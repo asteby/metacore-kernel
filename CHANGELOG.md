@@ -22,6 +22,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`FrontendSpec.Layout` — opt-in immersive (full-page) addon UI.** Manifests
+  can now declare how the host should frame the federated module on screen.
+  Two values are recognised: `"shell"` (the default chrome — sidebar + topbar
+  + content slot, identical to today's behaviour) and `"immersive"` (the
+  addon owns the entire viewport, no sidebar or topbar). Empty / unset is
+  interpreted as `"shell"` so every manifest published before this release
+  validates and renders unchanged. `manifest.Validate` rejects any other
+  value so typos surface at install time rather than at first paint. The
+  field unlocks kiosk-style surfaces (POS terminals, kitchen-display
+  screens, customer-facing waiting-room displays) on top of the same kernel
+  contract that powers chrome-wrapped admin pages. This is a minor bump —
+  the field is additive, optional and backwards compatible.
 - **`ColumnDef.Ref` auto-derivation from `belongs_to` relations.** Models
   that implement `modelbase.HasRelations` (compiled core models) and addon
   manifests that declare `RelationDef{Kind: "belongs_to", …}` now get

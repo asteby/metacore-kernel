@@ -121,6 +121,24 @@ type FrontendSpec struct {
 	// `@originjs/vite-plugin-federation` MUST match this value for the host
 	// to locate the container after injecting the script tag.
 	Container string `json:"container,omitempty"`
+
+	// Layout selects how the host frames the addon UI on screen.
+	//
+	//	""          — legacy / unset: treated as "shell" for retro-compat
+	//	              with every manifest published before this field landed.
+	//	"shell"     — default chrome: sidebar + topbar + content slot. The
+	//	              host renders navigation around the addon and the
+	//	              federated module only owns the content viewport.
+	//	"immersive" — full-page takeover. The addon owns the entire viewport
+	//	              (no sidebar, no topbar) and is responsible for any
+	//	              navigation back to the shell. Use for point-of-sale
+	//	              terminals, kitchen-display screens, customer-facing
+	//	              waiting-room displays and other kiosk-style UIs where
+	//	              the surrounding ERP chrome is noise.
+	//
+	// Validate rejects any value outside this closed set so addon authors
+	// catch typos at install time rather than at first paint.
+	Layout string `json:"layout,omitempty"`
 }
 
 // BackendSpec declares how the addon's backend code is executed.

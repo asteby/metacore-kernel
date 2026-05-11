@@ -708,6 +708,75 @@ func TestValidate_ActionTrigger_ErrorPathIncludesIndex(t *testing.T) {
 	}
 }
 
+// withFrontendLayout returns a minimal valid manifest carrying a FrontendSpec
+// with the supplied Layout value. Keeps the layout tests focused on the
+// field under check instead of the surrounding boilerplate.
+func withFrontendLayout(layout string) manifest.Manifest {
+	return manifest.Manifest{
+		Key:     "ui",
+		Name:    "UI",
+		Version: "1.0.0",
+		Frontend: &manifest.FrontendSpec{
+			Entry:  "https://cdn.example.com/remoteEntry.js",
+			Format: "federation",
+			Expose: "./plugin",
+			Layout: layout,
+		},
+	}
+}
+
+func TestValidate_FrontendLayout_EmptyDefaultsToShell(t *testing.T) {
+	// An empty layout must validate — it is the legacy shape and the host
+	// interprets it as "shell" for retro-compat with manifests published
+	// before the field landed.
+	m := withFrontendLayout("")
+	if err := m.Validate("2.0.0"); err != nil {
+		t.Fatalf("empty layout should validate, got %v", err)
+	}
+}
+
+func TestValidate_FrontendLayout_ShellOK(t *testing.T) {
+	m := withFrontendLayout("shell")
+	if err := m.Validate("2.0.0"); err != nil {
+		t.Fatalf("layout=shell should validate, got %v", err)
+	}
+}
+
+func TestValidate_FrontendLayout_ImmersiveOK(t *testing.T) {
+	m := withFrontendLayout("immersive")
+	if err := m.Validate("2.0.0"); err != nil {
+		t.Fatalf("layout=immersive should validate, got %v", err)
+	}
+}
+
+func TestValidate_FrontendLayout_RejectsFullscreen(t *testing.T) {
+	// "fullscreen" is a near-miss but not in the closed set — the validator
+	// must reject it so addon authors learn the canonical token at install
+	// time rather than discover a silent no-op at first paint.
+	m := withFrontendLayout("fullscreen")
+	err := m.Validate("2.0.0")
+	if err == nil || !strings.Contains(err.Error(), "frontend.layout") {
+		t.Fatalf("expected frontend.layout error for fullscreen, got %v", err)
+	}
+}
+
+func TestValidate_FrontendLayout_RejectsArbitraryValue(t *testing.T) {
+	m := withFrontendLayout("kiosk-mode")
+	err := m.Validate("2.0.0")
+	if err == nil || !strings.Contains(err.Error(), "frontend.layout") {
+		t.Fatalf("expected frontend.layout error for arbitrary value, got %v", err)
+	}
+}
+
+func TestValidate_FrontendLayout_NilFrontendIsOK(t *testing.T) {
+	// Manifests without a Frontend section at all (e.g. backend-only addons)
+	// must keep validating regardless of the new field.
+	m := manifest.Manifest{Key: "be", Name: "Be", Version: "1.0.0"}
+	if err := m.Validate("2.0.0"); err != nil {
+		t.Fatalf("nil frontend should validate, got %v", err)
+	}
+}
+
 func TestValidate_Relations_ErrorPathIncludesModelIndex(t *testing.T) {
 	// The model loop stitches "manifest.model_definitions[i]." onto the
 	// relation error so operators can grep the full path. Verify the
