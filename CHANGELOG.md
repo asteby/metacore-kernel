@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-11
+
 ### Breaking
 
 - **`GET /api/options/:model?field=…` now returns the canonical
