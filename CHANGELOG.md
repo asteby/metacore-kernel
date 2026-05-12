@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-05-11
+
 ### Added
 
 - **`host.App` now wires the in-process `events.Bus` into `dynamic.Service`
