@@ -7,6 +7,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`host.App` now wires the in-process `events.Bus` into `dynamic.Service`
+  so canonical CRUD events fan out to subscribers post-commit.** Previously
+  `host.NewApp` constructed `dynamic.New(...)` without a `Bus`, which turned
+  every `publishCanonical` call inside the dynamic engine into a silent
+  no-op — the bus support landed in `dynamic.Service` in v0.10.0 but was
+  never reached by hosts going through `host.NewApp`. The audit at
+  [`docs/audits/2026-05-04-dynamic-events.md`](docs/audits/2026-05-04-dynamic-events.md)
+  flagged the missing wire-in; this change closes it. `host.App` now owns
+  a single `*events.Bus` (exposed as `app.Bus`) constructed inside
+  `NewApp` and shared with `dynamic.Service` via the existing
+  `dynamic.Config.Bus` field. Two new optional fields on `AppConfig` let
+  hosts tune the wiring without touching the kernel:
+  `EventsEnforcer *security.Enforcer` (capability gate; nil disables
+  enforcement, kernel-originated publishes bypass it regardless) and
+  `AddonKeyForModel func(ctx, model) string` (namespaces the canonical
+  event under `<addonKey>.<model>.<action>`; nil falls back to
+  `"kernel"`). Both default to nil so existing apps upgrade transparently
+  and immediately gain the canonical event stream under the `kernel.*`
+  namespace. Tests in `host/app_test.go` cover the regression
+  (`TestApp_BusWiredIntoDynamic`) and the resolver path
+  (`TestApp_AddonKeyForModelResolverFlowsThrough`). Minor bump — additive
+  and backwards compatible.
+
 ## [0.10.0] - 2026-05-11
 
 ### Breaking

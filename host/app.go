@@ -12,6 +12,7 @@ import (
 
 	"github.com/asteby/metacore-kernel/auth"
 	"github.com/asteby/metacore-kernel/dynamic"
+	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/i18n"
 	"github.com/asteby/metacore-kernel/idempotency"
 	"github.com/asteby/metacore-kernel/marketplace"
@@ -22,6 +23,7 @@ import (
 	"github.com/asteby/metacore-kernel/modelbase"
 	"github.com/asteby/metacore-kernel/permission"
 	"github.com/asteby/metacore-kernel/push"
+	"github.com/asteby/metacore-kernel/security"
 	"github.com/asteby/metacore-kernel/vector"
 	metacorews "github.com/asteby/metacore-kernel/ws"
 	"github.com/asteby/metacore-kernel/webhooks"
@@ -127,6 +129,23 @@ type AppConfig struct {
 	// IdempotencyTTL is the replay window. Defaults to 24h (Stripe-aligned).
 	IdempotencyTTL time.Duration
 
+	// EventsEnforcer is the optional security.Enforcer the in-process
+	// events.Bus consults for `event:emit` / `event:subscribe` capability
+	// checks. nil disables enforcement — appropriate for tests and bring-up
+	// before an addon registry is wired. Kernel-originated publishes
+	// (addonKey == "kernel") bypass the enforcer regardless. See
+	// `events/events.go` for the contract.
+	EventsEnforcer *security.Enforcer
+
+	// AddonKeyForModel resolves the addon owner of a model name. The result
+	// becomes the leading segment of every canonical CRUD event emitted by
+	// `dynamic.Service` (`<addonKey>.<model>.<created|updated|deleted>`).
+	// nil — or a resolver returning "" — falls back to "kernel", which is
+	// the correct default for hosts that have not yet wired an addon
+	// registry. Apps with one (e.g. host.Host.Installer) plug their lookup
+	// here.
+	AddonKeyForModel func(ctx context.Context, model string) string
+
 	// Overrides
 	MetadataCacheTTL time.Duration // default 5m
 	JWTExpiry        time.Duration // default 24h
@@ -144,6 +163,14 @@ type App struct {
 	Push       *push.Service
 	Webhooks   *webhooks.Service
 	WSHub      *metacorews.Hub
+
+	// Bus is the in-process events.Bus shared by the host. It is constructed
+	// during NewApp and wired into dynamic.Service so canonical
+	// `<addonKey>.<model>.<created|updated|deleted>` events fan out to
+	// subscribers post-commit. Addons reach it through their Boot context
+	// (services["eventbus"]) or directly via app.Bus when they live in the
+	// same binary as the host.
+	Bus *events.Bus
 
 	// Metrics registry — non-nil when AppConfig.EnableMetrics is true.
 	Metrics *metrics.Registry
@@ -237,10 +264,17 @@ func NewApp(cfg AppConfig) *App {
 		permSvc = permission.New(permission.Config{Store: cfg.PermissionStore})
 	}
 
+	// Shared in-process events.Bus. Built before dynamic.New so the dynamic
+	// service can publish canonical CRUD events; exposed on app.Bus so
+	// addons and host code share a single fan-out point.
+	bus := events.NewBus(cfg.EventsEnforcer)
+
 	dynSvc := dynamic.New(dynamic.Config{
-		DB:          cfg.DB,
-		Metadata:    metaSvc,
-		Permissions: permSvc,
+		DB:               cfg.DB,
+		Metadata:         metaSvc,
+		Permissions:      permSvc,
+		Bus:              bus,
+		AddonKeyForModel: cfg.AddonKeyForModel,
 	})
 
 	a := &App{
@@ -249,6 +283,7 @@ func NewApp(cfg AppConfig) *App {
 		Metadata:   metaSvc,
 		Permission: permSvc,
 		Dynamic:    dynSvc,
+		Bus:        bus,
 	}
 
 	if cfg.EnableMetrics {
