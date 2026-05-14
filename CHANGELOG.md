@@ -7,6 +7,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+
+- **fix(security): extend AST gating to `RangeTblFunc` (XMLTABLE /
+  JSON_TABLE).** PR #61 / PR #63 closed cross-schema reads through
+  `RangeVar` and `RangeFunction`, but libpg_query exposes the
+  `XMLTABLE` and `JSON_TABLE` SQL constructs as their own
+  `RangeTableFunc` and `JsonTable` nodes — distinct from both. A
+  guest writing
+  `SELECT * FROM XMLTABLE('//row' PASSING (SELECT data FROM other.audit_log) COLUMNS …)`
+  (or the `JSON_TABLE` counterpart) could therefore read another
+  schema through the PASSING subquery without the walker ever
+  surfacing the reference. The `runtime/wasm` AST walker now descends
+  through `RangeTableFunc` (`Docexpr` / `Rowexpr` / namespaces /
+  `RangeTableFuncCol` `Colexpr` + `Coldefexpr`), `JsonTable`
+  (`ContextItem` / `Passing` / `Columns`), `JsonTableColumn` (nested
+  `NESTED PATH` children plus `OnEmpty` / `OnError` DEFAULT
+  expressions), `JsonValueExpr`, `JsonArgument`, `JsonBehavior` and
+  `RangeTableSample` so any nested `RangeVar` / `RangeFunction` /
+  `RangeTableFunc` / `JsonTable` reachable from those constructs
+  trips the surrounding capability gate. The XML/JSON constructs
+  themselves are SQL syntax (not user-defined functions) so there's
+  no function name to gate at the construct level — only the
+  expression children carry attackable references. Inside a DML
+  scope (`INSERT … SELECT … XMLTABLE(…)`) the read entries are gated
+  under `db:read` exactly like an `UPDATE … FROM` source; unlike
+  `RangeFunction` the XML/JSON constructs do not also trigger the
+  defensive both-axes gate because they're built-in SQL, not
+  arbitrary `setof`-returning code. New coverage in
+  `runtime/wasm/dbquery_rangetblfunc_test.go` (14 cases — extractor
+  unit tests plus full-stack `executeDBQuery` / `executeDBExec`
+  integration tests with sqlmock). Doc: `docs/wasm-abi.md` § 9.3 and
+  § 10.3 list `RangeTableFunc` / `JsonTable` in the enforcement
+  contract. Patch bump — purely additive defence-in-depth, no ABI
+  change.
+
 ### Added
 
 - **feat(guest): complete TinyGo helpers for `db_query`, `db_exec`,

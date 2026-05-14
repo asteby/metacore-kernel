@@ -324,6 +324,118 @@ func walkNodeForRelations(n *pg_query.Node, ctxCap capKind, inMutation bool, add
 			walkNodeForRelations(fnNode, ctxCap, inMutation, add)
 		}
 
+	case *pg_query.Node_RangeTableFunc:
+		// `XMLTABLE(rowexpr PASSING docexpr COLUMNS …)` — an XML/JSON-based
+		// table function that produces a relation from an expression. Unlike
+		// `RangeFunction` the function itself (XMLTABLE) is a SQL construct,
+		// not a user-defined function, so there's nothing to gate at the
+		// "function name" level. What CAN cross the schema boundary is the
+		// expression tree: the `Docexpr` (PASSING clause) and per-column
+		// `Colexpr` / `Coldefexpr` can each hold a `SubLink` whose subquery
+		// reads from another schema, or a correlated reference reaching out
+		// through `FuncCall` arguments. We descend into every child carrying
+		// an expression so any nested `RangeVar` / `RangeFunction` /
+		// `RangeTableFunc` / `JsonTable` reachable from there trips the gate.
+		// Read-only: the XMLTABLE relation itself is computed from the
+		// expression, so all children are walked under the surrounding
+		// ctxCap rather than re-anchoring to capWrite. Defence-in-depth
+		// against the PR #61 follow-up vector — see § 9.3 / § 10.3 of
+		// docs/wasm-abi.md.
+		rtf := v.RangeTableFunc
+		walkNodeForRelations(rtf.GetDocexpr(), ctxCap, inMutation, add)
+		walkNodeForRelations(rtf.GetRowexpr(), ctxCap, inMutation, add)
+		for _, ns := range rtf.GetNamespaces() {
+			walkNodeForRelations(ns, ctxCap, inMutation, add)
+		}
+		for _, col := range rtf.GetColumns() {
+			walkNodeForRelations(col, ctxCap, inMutation, add)
+		}
+
+	case *pg_query.Node_RangeTableFuncCol:
+		// XMLTABLE column spec — the `PATH` expression and `DEFAULT` value
+		// can themselves embed a subquery (rare, but the parser accepts
+		// arbitrary expressions). Walk both so a sneaky
+		// `XMLTABLE(… COLUMNS x INT PATH (SELECT … FROM other.t))` doesn't
+		// slip past.
+		walkNodeForRelations(v.RangeTableFuncCol.GetColexpr(), ctxCap, inMutation, add)
+		walkNodeForRelations(v.RangeTableFuncCol.GetColdefexpr(), ctxCap, inMutation, add)
+
+	case *pg_query.Node_JsonTable:
+		// `JSON_TABLE(context_item, pathspec PASSING … COLUMNS …)` — JSON
+		// counterpart to XMLTABLE. Same idea: the SQL construct itself is
+		// not user-defined so there's no function name to gate, but the
+		// context item, the PASSING arguments and each column's expression
+		// tree can reach into other schemas via SubLink / FuncCall.
+		// `ContextItem` is a JsonValueExpr wrapping the source expression,
+		// `Passing` is a list of JsonArgument (each a JsonValueExpr), and
+		// `Columns` is a list of JsonTableColumn — possibly nested via the
+		// `NESTED PATH` form, which the JsonTableColumn case below handles
+		// recursively.
+		jt := v.JsonTable
+		if ci := jt.GetContextItem(); ci != nil {
+			walkNodeForRelations(ci.GetRawExpr(), ctxCap, inMutation, add)
+			walkNodeForRelations(ci.GetFormattedExpr(), ctxCap, inMutation, add)
+		}
+		for _, p := range jt.GetPassing() {
+			walkNodeForRelations(p, ctxCap, inMutation, add)
+		}
+		for _, col := range jt.GetColumns() {
+			walkNodeForRelations(col, ctxCap, inMutation, add)
+		}
+
+	case *pg_query.Node_JsonTableColumn:
+		// A JSON_TABLE column spec. `NESTED PATH '…' COLUMNS (…)` produces
+		// a JsonTableColumn whose `Columns` field carries the nested
+		// children — recurse so any expression hidden inside a nested
+		// branch is still walked. The ON EMPTY / ON ERROR clauses can
+		// carry a DEFAULT expression too.
+		jtc := v.JsonTableColumn
+		for _, c := range jtc.GetColumns() {
+			walkNodeForRelations(c, ctxCap, inMutation, add)
+		}
+		if oe := jtc.GetOnEmpty(); oe != nil {
+			walkNodeForRelations(oe.GetExpr(), ctxCap, inMutation, add)
+		}
+		if oe := jtc.GetOnError(); oe != nil {
+			walkNodeForRelations(oe.GetExpr(), ctxCap, inMutation, add)
+		}
+
+	case *pg_query.Node_JsonValueExpr:
+		// Wrapper produced by JSON_TABLE / JSON_QUERY / JSON_VALUE around a
+		// source expression. Both the raw and the formatted form may carry
+		// nested RangeVars via SubLink.
+		walkNodeForRelations(v.JsonValueExpr.GetRawExpr(), ctxCap, inMutation, add)
+		walkNodeForRelations(v.JsonValueExpr.GetFormattedExpr(), ctxCap, inMutation, add)
+
+	case *pg_query.Node_JsonArgument:
+		// Named PASSING argument inside a JSON_TABLE (`PASSING x AS foo`).
+		// The `Val` field holds the source expression — same recursion as
+		// the JsonValueExpr case above.
+		if val := v.JsonArgument.GetVal(); val != nil {
+			walkNodeForRelations(val.GetRawExpr(), ctxCap, inMutation, add)
+			walkNodeForRelations(val.GetFormattedExpr(), ctxCap, inMutation, add)
+		}
+
+	case *pg_query.Node_JsonBehavior:
+		// ON EMPTY / ON ERROR clause whose DEFAULT expression can itself
+		// reference another relation through a subquery. The JsonTable /
+		// JsonTableColumn cases above feed us through here for completeness.
+		walkNodeForRelations(v.JsonBehavior.GetExpr(), ctxCap, inMutation, add)
+
+	case *pg_query.Node_RangeTableSample:
+		// `<rel> TABLESAMPLE method(args) REPEATABLE(seed)` — the relation
+		// is a child node (typically a RangeVar) wrapped by the sample
+		// clause. The top-level SelectStmt FROM walk would reach the inner
+		// RangeVar directly if it appeared bare, but a TABLESAMPLE
+		// wrapping nests it one level deeper. Descend so the gate still
+		// fires. Args / Repeatable can also embed subqueries.
+		rts := v.RangeTableSample
+		walkNodeForRelations(rts.GetRelation(), ctxCap, inMutation, add)
+		for _, a := range rts.GetArgs() {
+			walkNodeForRelations(a, ctxCap, inMutation, add)
+		}
+		walkNodeForRelations(rts.GetRepeatable(), ctxCap, inMutation, add)
+
 	case *pg_query.Node_CommonTableExpr:
 		// A CTE body inherits the caller's ctxCap — a `WITH x AS (UPDATE …)`
 		// inside a DML statement keeps capWrite for the UPDATE target. The
