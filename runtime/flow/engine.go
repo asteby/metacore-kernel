@@ -165,6 +165,12 @@ func (e *Engine) ExecuteFlow(flow *Flow, triggerType TriggerType, triggerData ma
 	e.activeExecs[execCtx.ExecutionID] = cancel
 	e.mu.Unlock()
 
+	// Snapshot the submission-time state for the synchronous return value so
+	// callers can never observe the background goroutine's writes through the
+	// returned pointer (which would be a data race under -race). The goroutine
+	// owns `execution` from this point on.
+	snapshot := *execution
+
 	go func() {
 		defer cancel()
 		defer func() {
@@ -175,7 +181,7 @@ func (e *Engine) ExecuteFlow(flow *Flow, triggerType TriggerType, triggerData ma
 		e.run(ctx, execCtx, execution)
 	}()
 
-	return execution, nil
+	return &snapshot, nil
 }
 
 // TestResult is the synchronous response from TestFlowInline. It mirrors a
