@@ -10,6 +10,7 @@
 //	GET  /api/metacore/navigation                   → Navigation
 //	GET  /api/metacore/catalog                      → Catalog
 //	POST /api/metacore/installations/:key           → Install
+//	PUT  /api/metacore/installations/:key/version   → Upgrade
 //	GET  /api/metacore/addons/:key/frontend/*path   → ServeAddonFrontend
 //	GET  /api/metacore/tools[?addon_key=X]          → ListTools
 //	POST /api/metacore/tools/execute                → ExecuteTool
@@ -283,6 +284,123 @@ func (h *Handler) Install(c fiber.Ctx) error {
 		"installation":   inst,
 		"install_secret": string(secret),
 		"manifest":       lc.Manifest(),
+	})
+}
+
+// Upgrade applies a newer bundle on top of an already-installed addon for
+// the caller's organization. Required because Install treats every call as
+// a fresh first-install and never fires the `upgrade` lifecycle event;
+// hosts that need to bump a tenant from 1.0 → 1.1 use this route so addon
+// authors can react to the version change via their declared
+// `lifecycle_hooks.upgrade` handlers.
+//
+// Request body: multipart/form-data with a `bundle` file containing the new
+// .tar.gz. The :key URL param MUST match the bundle's manifest key — safety
+// check against wrong-URL uploads.
+//
+// Possible status codes:
+//
+//	200   upgrade applied; body contains the updated installation row
+//	400   bundle missing, malformed, or key mismatch
+//	404   addon is not installed for the caller's org (installer.ErrNotInstalled)
+//	409   cannot downgrade / same-version upgrade
+//	422   signature rejected or schema apply failed
+//
+// PUT /api/metacore/installations/:key/version
+func (h *Handler) Upgrade(c fiber.Ctx) error {
+	orgID, ok := orgIDFromCtx(c)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"success": false,
+			"message": "organization context required",
+		})
+	}
+	key := c.Params("key")
+	if key == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"message": "addon key required",
+		})
+	}
+
+	file, err := c.FormFile("bundle")
+	if err != nil || file == nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"message": "multipart form-data with 'bundle' file is required",
+		})
+	}
+	src, err := file.Open()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"success": false,
+			"message": "failed to read uploaded bundle",
+		})
+	}
+	defer src.Close()
+
+	b, err := bundle.Read(src, 64<<20)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"message": fmt.Sprintf("invalid bundle: %v", err),
+		})
+	}
+	if b.Manifest.Key != key {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"message": fmt.Sprintf("bundle key %q does not match URL key %q", b.Manifest.Key, key),
+		})
+	}
+
+	inst, err := h.deps.Bridge.Host().Installer.Upgrade(c.Context(), orgID, b)
+	if err != nil {
+		// Map sentinel errors to specific HTTP codes so frontends can render
+		// a precise message ("not installed → install first", "same version
+		// → already up to date", etc.).
+		switch {
+		case errors.Is(err, installer.ErrNotInstalled):
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"success": false,
+				"code":    "not_installed",
+				"message": err.Error(),
+			})
+		case errors.Is(err, installer.ErrCannotDowngrade):
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+				"success": false,
+				"code":    "cannot_downgrade",
+				"message": err.Error(),
+			})
+		case errors.Is(err, installer.ErrSameVersionUpgrade):
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+				"success": false,
+				"code":    "same_version_upgrade",
+				"message": err.Error(),
+			})
+		}
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+			"success": false,
+			"message": err.Error(),
+		})
+	}
+
+	// Re-project host-specific side effects exactly like Install does so
+	// the host sees a consistent post-state regardless of whether the
+	// version arrived via Install or Upgrade.
+	if h.deps.ToolStore != nil {
+		_ = bridge.SyncAddonTools(h.deps.ToolStore, orgID, b.Manifest)
+	}
+	if inst != nil {
+		_, _ = kerneltool.SyncFromManifest(b.Manifest, *inst, h.deps.Bridge.WebhookDispatcher(), h.deps.ToolRegistry)
+	}
+	if h.deps.ActionsBridge != nil {
+		_ = h.deps.ActionsBridge.SyncAddonActions(b.Manifest)
+	}
+
+	return c.JSON(fiber.Map{
+		"success":      true,
+		"installation": inst,
+		"manifest":     b.Manifest,
 	})
 }
 

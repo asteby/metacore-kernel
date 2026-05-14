@@ -38,6 +38,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   sample usage; the "roadmap" section is removed. Purely additive —
   addons that hand-rolled the raw ABI keep working.
 
+- **`installer.Upgrade` — fire-site for the `upgrade` lifecycle event.**
+  Before this release the `upgrade` event existed as a constant
+  (`lifecycle.HookEventUpgrade`) and validated as a manifest key, but no
+  caller ever fired it: addon authors who declared
+  `lifecycle_hooks.upgrade` never saw a dispatch because the installer's
+  only path forward was `Install` (which treats every call as a fresh
+  install). The new `Installer.Upgrade(ctx, orgID, newBundle)` method
+  drives a full upgrade transition:
+  1. Verifies the new bundle's signature and re-runs manifest
+     `ValidateAdvisory`.
+  2. Loads the existing `metacore_installations` row; returns
+     `ErrNotInstalled`, `ErrSameVersionUpgrade`, or `ErrCannotDowngrade`
+     before any DB mutation when the preconditions fail.
+  3. Dispatches `lifecycle_hooks.upgrade` with `phase: "before"` and a
+     payload that carries `from_version` / `to_version`. A non-nil error
+     aborts: the row is untouched and no schema work runs.
+  4. Calls `dynamic.EnsureSchema` → `dynamic.Apply` → CreateTable /
+     SyncSchema on the new manifest (additive; old columns survive).
+     `dynamic.Apply` is idempotent — already-recorded migrations are
+     skipped and only new files execute.
+  5. Re-projects manifest CRUD hooks into `dynamic.HookRegistry`
+     (same `UnregisterAddon` + `RegisterManifestHooks` round-trip that
+     `Install` uses, so the new before_*/after_* shape replaces the old
+     one without doubling up).
+  6. Persists the version bump with a settings merge — user-tuned values
+     win; new defaults declared by the new manifest are added.
+  7. Dispatches `lifecycle_hooks.upgrade` with `phase: "after"`, a
+     `migrations_applied` counter, and the same `from_version` /
+     `to_version` payload. AFTER errors are logged and swallowed (the
+     upgrade has committed; DDL rollback is unsafe).
+  8. Broadcasts a `ManifestChangeEvent` so SDK frontends drop their
+     metadata cache without polling.
+  Companion HTTP endpoint: `PUT /api/metacore/installations/:key/version`
+  on `httpx/metacore/handler.go`, mirroring the existing `Install` route
+  shape (multipart bundle upload, key match check, sentinel-to-HTTP-code
+  mapping for the three guard errors). Companion doc:
+  [`docs/lifecycle-hooks.md` § 3](docs/lifecycle-hooks.md) now documents
+  the enriched payload and the guard rails. Minor bump — purely additive.
+
 ## [0.11.0] - 2026-05-14
 
 ### Added
