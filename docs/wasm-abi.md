@@ -282,22 +282,30 @@ For each parsed relation reference the host computes a fully-qualified
 | `public.<table>` or other schema  | Requires `db:read <schema>.<table>` or `db:read <schema>.*`.             |
 | `pg_*` / `information_schema.*`   | Always denied (`forbidden`, `reason: "introspection_disabled"`).         |
 
-> **Enforcement contract (since v0.10.2):** the rules above are **enforced
-> at the AST layer**, not soft-guaranteed by `SET LOCAL search_path`. Every
-> `db_query` payload is parsed with libpg_query (`github.com/pganalyze/pg_query_go`)
-> and the walker pulls every `RangeVar` reachable from the statement: top-level
-> FROM tables, JOIN arms, CTE bodies, RangeSubselect derived tables,
-> `IN(SELECT …)` SubLinks, UNION/INTERSECT/EXCEPT arms and `VALUES` rows.
-> Each reference is then matched against the addon's compiled `db:read`
-> capability list individually — a partial grant (e.g. `db:read public.*`
-> while a join also references `billing.invoices`) denies the call before
-> the driver is touched. A parse failure rejects the statement with
-> `invalid_sql` rather than degrading to "permit". Prior to v0.10.2 this
-> was a soft-guarantee: `SET LOCAL search_path` masked bare names but a
-> guest writing `SELECT * FROM public.users` or another addon's schema
-> explicitly slipped past the gate — see commit
+> **Enforcement contract (since v0.10.2, extended in v0.10.3):** the rules
+> above are **enforced at the AST layer**, not soft-guaranteed by
+> `SET LOCAL search_path`. Every `db_query` payload is parsed with
+> libpg_query (`github.com/pganalyze/pg_query_go`) and the walker pulls
+> every relation reference reachable from the statement: `RangeVar` nodes
+> in top-level FROM tables, JOIN arms, CTE bodies, RangeSubselect derived
+> tables, `IN(SELECT …)` SubLinks, UNION/INTERSECT/EXCEPT arms and
+> `VALUES` rows; and `RangeFunction` nodes (function-as-table —
+> `SELECT * FROM other.fn(args)`) whose schema-qualified function name is
+> gated like any other relation. Each reference is then matched against
+> the addon's compiled `db:read` capability list individually — a partial
+> grant (e.g. `db:read public.*` while a join also references
+> `billing.invoices`) denies the call before the driver is touched. A
+> parse failure rejects the statement with `invalid_sql` rather than
+> degrading to "permit". Prior to v0.10.2 this was a soft-guarantee:
+> `SET LOCAL search_path` masked bare names but a guest writing
+> `SELECT * FROM public.users` or another addon's schema explicitly
+> slipped past the gate. v0.10.3 closes the function-as-table vector that
+> the v0.10.2 walker missed because libpg_query exposes `FuncCall` nodes
+> separately from `RangeVar` — see commits
 > [`fix(security): enforce cross-schema gating in db_query via AST walk`](https://github.com/asteby/metacore-kernel/commit/HEAD)
-> for the fix.
+> and
+> [`fix(security): apply AST gating to db_exec + RangeFunction cross-schema`](https://github.com/asteby/metacore-kernel/commit/HEAD)
+> for the fixes.
 
 Cross-tenant scoping (org filters) is **orthogonal** and applied by the
 host transparently for any model that carries an `org_id` column — see
@@ -468,6 +476,31 @@ the host computes a fully-qualified `<schema>.<table>` and decides:
 `WHERE` / `RETURNING` go through the **read** capability check
 (`db:read`), since the guest is only inspecting them — same rules as
 `db_query` (§ 9.3).
+
+> **Enforcement contract (since v0.10.3):** the rules above are **enforced
+> at the AST layer**, paralleling the `db_query` walk in § 9.3. The
+> pre-v0.10.3 path only checked the implicit `db:write addon_<key>.*`
+> capability and trusted `SET LOCAL search_path` to scope bare names — a
+> guest writing `UPDATE public.users SET role = 'admin'` (or any other
+> cross-schema mutation) bypassed the gate entirely. Every `db_exec`
+> payload is now parsed with libpg_query and the walker tags each
+> reference by the capability axis it needs: the DML target (the
+> `Relation` field of an `InsertStmt` / `UpdateStmt` / `DeleteStmt` /
+> `MergeStmt` at any nesting depth, including inside a `WITH … <DML>` CTE
+> body) gets gated under `db:write`; read-only sources (`UPDATE.FROM`,
+> `DELETE.USING`, `MERGE` source, `INSERT.SELECT`, `RETURNING` /
+> `WHERE` subqueries, CTE bodies that are themselves SELECTs) get
+> `db:read`. A function-as-table reached from within a DML scope
+> (`INSERT INTO t SELECT * FROM other.fn()`) is gated under **both**
+> axes — a `setof`-returning function can read and write state and the
+> AST gives us no way to tell which, so the declared capabilities must
+> cover both `db:read <schema>.<fn>` and `db:write <schema>.<fn>` to let
+> the call through. The `db_exec` host import signature is unchanged.
+> Parse failure rejects with `invalid_sql`; the AST top-level check also
+> rejects a `WITH … SELECT` payload so `db_exec` can't be used as a
+> SELECT bypass. See commit
+> [`fix(security): apply AST gating to db_exec + RangeFunction cross-schema`](https://github.com/asteby/metacore-kernel/commit/HEAD)
+> for the fix.
 
 Cross-tenant scoping (`org_id` row-level filters) is **orthogonal** and
 applied transparently by the host for any model that carries an `org_id`

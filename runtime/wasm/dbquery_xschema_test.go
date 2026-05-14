@@ -35,7 +35,7 @@ func TestExtractRelations_BareName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
-	want := []relationRef{{Schema: "", Table: "tickets"}}
+	want := []relationRef{{Schema: "", Table: "tickets", Cap: capRead}}
 	if !reflect.DeepEqual(rels, want) {
 		t.Fatalf("got %#v want %#v", rels, want)
 	}
@@ -46,7 +46,7 @@ func TestExtractRelations_SchemaQualified(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
-	want := []relationRef{{Schema: "public", Table: "users"}}
+	want := []relationRef{{Schema: "public", Table: "users", Cap: capRead}}
 	if !reflect.DeepEqual(rels, want) {
 		t.Fatalf("got %#v want %#v", rels, want)
 	}
@@ -62,9 +62,9 @@ func TestExtractRelations_CrossSchemaJoin(t *testing.T) {
 		t.Fatalf("unexpected: %v", err)
 	}
 	want := []relationRef{
-		{Schema: "addon_tickets", Table: "a"},
-		{Schema: "billing", Table: "invoices"},
-		{Schema: "public", Table: "users"},
+		{Schema: "addon_tickets", Table: "a", Cap: capRead},
+		{Schema: "billing", Table: "invoices", Cap: capRead},
+		{Schema: "public", Table: "users", Cap: capRead},
 	}
 	if !reflect.DeepEqual(rels, want) {
 		t.Fatalf("got %#v want %#v", rels, want)
@@ -81,8 +81,8 @@ func TestExtractRelations_CTEInternalReferences(t *testing.T) {
 		t.Fatalf("unexpected: %v", err)
 	}
 	want := []relationRef{
-		{Schema: "", Table: "recent"},
-		{Schema: "public", Table: "users"},
+		{Schema: "", Table: "recent", Cap: capRead},
+		{Schema: "public", Table: "users", Cap: capRead},
 	}
 	if !reflect.DeepEqual(rels, want) {
 		t.Fatalf("got %#v want %#v", rels, want)
@@ -96,8 +96,8 @@ func TestExtractRelations_SubqueryInWhere(t *testing.T) {
 		t.Fatalf("unexpected: %v", err)
 	}
 	want := []relationRef{
-		{Schema: "", Table: "tickets"},
-		{Schema: "public", Table: "users"},
+		{Schema: "", Table: "tickets", Cap: capRead},
+		{Schema: "public", Table: "users", Cap: capRead},
 	}
 	if !reflect.DeepEqual(rels, want) {
 		t.Fatalf("got %#v want %#v", rels, want)
@@ -110,7 +110,7 @@ func TestExtractRelations_DerivedTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
-	want := []relationRef{{Schema: "public", Table: "users"}}
+	want := []relationRef{{Schema: "public", Table: "users", Cap: capRead}}
 	if !reflect.DeepEqual(rels, want) {
 		t.Fatalf("got %#v want %#v", rels, want)
 	}
@@ -123,8 +123,8 @@ func TestExtractRelations_UnionArms(t *testing.T) {
 		t.Fatalf("unexpected: %v", err)
 	}
 	want := []relationRef{
-		{Schema: "addon_tickets", Table: "a"},
-		{Schema: "public", Table: "audit"},
+		{Schema: "addon_tickets", Table: "a", Cap: capRead},
+		{Schema: "public", Table: "audit", Cap: capRead},
 	}
 	if !reflect.DeepEqual(rels, want) {
 		t.Fatalf("got %#v want %#v", rels, want)

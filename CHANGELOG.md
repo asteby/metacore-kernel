@@ -7,6 +7,76 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-05-14
+
+### Fixed
+
+- **`runtime/wasm.db_exec` now enforces the documented cross-schema
+  capability gate via the same AST walk introduced for `db_query` in
+  v0.10.2.** The pre-v0.10.3 path only ran
+  `Enforcer.CheckCapability(addonKey, "db:write", "addon_<key>.*")`
+  against the addon's own implicit schema. `SET LOCAL search_path TO
+  addon_<key>, public` did scope bare names back into the addon schema,
+  but a guest writing `UPDATE public.users SET role = 'admin'` (or any
+  other cross-schema `INSERT` / `DELETE` / `MERGE`, or a CTE-hidden
+  mutation like `WITH x AS (UPDATE other.t SET …) …`) bypassed the gate
+  entirely — declarations like `db:write public.users` were optional in
+  practice. Documented as the soft-guarantee twin of § 9.3 in
+  [`docs/wasm-abi.md`](docs/wasm-abi.md) § 10.3; flagged as a hallazgo
+  follow-up to PR #61 before opening the kernel to third-party addons.
+  Resolution: the `extractRelations` walker from v0.10.2 is generalised
+  into `extractMutationRelations`, which still parses with libpg_query
+  but now tags each relation reference by the capability axis it must
+  satisfy. DML targets (the `Relation` field of an `InsertStmt` /
+  `UpdateStmt` / `DeleteStmt` / `MergeStmt` at any nesting depth,
+  including inside a `WITH … <DML>` CTE body) emit a `db:write` ref;
+  read-only sources (`UPDATE.FROM`, `DELETE.USING`, `MERGE` source,
+  `INSERT.SELECT`, `RETURNING` / `WHERE` subqueries, CTE bodies that
+  are themselves SELECTs) emit `db:read` refs. Each is gated
+  individually against the addon's compiled capability list. The
+  `validateMutationOnly` string-level check is loosened to accept a
+  leading `WITH` (Postgres allows `WITH cte AS (…) INSERT / UPDATE /
+  DELETE / MERGE`); the AST-layer top-level check inside
+  `extractMutationRelations` enforces that the top-level statement
+  after the WITH is a DML so `db_exec` can't be used as a SELECT bypass.
+  Parse failure rejects with `invalid_sql` instead of degrading to
+  "permit".
+- **`db_query` and `db_exec` walkers now gate `RangeFunction` references
+  (function-as-table — `SELECT * FROM other.fn(args)`).** The v0.10.2
+  walker only reached `RangeVar` nodes, so libpg_query's split between
+  table references (`RangeVar`) and function references (`FuncCall`
+  wrapped in `RangeFunction.Functions[]`) left an open vector: a guest
+  could read or call `other_addon.my_func()` without declaring any
+  capability for `other_addon.*`. The walker now recurses into
+  `RangeFunction.Functions[]`, pulls the schema-qualified function name
+  out of `FuncCall.Funcname` (Postgres lists this as `[schema, fn]` or
+  `[catalog, schema, fn]` — we collapse to `schema.fn`), and gates the
+  reference exactly like a relation: bare names ride the implicit
+  own-schema grant through `SET LOCAL search_path`; cross-schema names
+  require an explicit `<cap> <schema>.<fn>` (or `<cap> <schema>.*`)
+  declaration. Inside a mutation scope a `setof`-returning function may
+  read AND write state, and the AST gives us no way to tell which, so
+  the function name is gated **defensively under both axes** —
+  declared caps must cover `db:read <schema>.<fn>` and
+  `db:write <schema>.<fn>` to let the call through.
+- **Tests.** New file `runtime/wasm/dbexec_xschema_test.go` covers the
+  v0.10.3 regressions end-to-end: bare-table allowed, own-schema
+  qualified allowed, `UPDATE public.users` without cap denied,
+  `UPDATE public.users` with `db:write public.*` allowed, with
+  `db:write public.users` allowed, `INSERT` / `DELETE` / `MERGE` into
+  another schema without cap denied, `UPDATE … FROM cross.schema`
+  source side gated under `db:read`, CTE-hidden DML cross-schema
+  denied, `WITH … SELECT` rejected at the AST layer, parse-error
+  regression (`invalid_sql` not "permit"), `db_query`
+  `SELECT * FROM other.my_func()` without cap denied / with cap
+  allowed, and `db_exec`'s defensive function-as-table dual-axis gate.
+  `extractMutationRelations` also gets a focused unit-test layer for
+  every DML node shape so the cap tagging stays explicit. No
+  public-API changes — `executeDBExec` / `executeDBQuery` signatures
+  and the host-import wire shape are byte-for-byte identical, and the
+  `db_exec` envelope is unchanged. Patch bump: security hardening,
+  no consumer-facing changes.
+
 ## [0.10.2] - 2026-05-14
 
 ### Fixed
