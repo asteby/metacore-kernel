@@ -84,6 +84,20 @@ type Installer struct {
 	Lifecycles    *lifecycle.Registry
 	Interceptors  *lifecycle.InterceptorRegistry
 
+	// HookRunner reads manifest.LifecycleHooks at install/enable/disable/
+	// uninstall and dispatches each declared HookDef through its registered
+	// HookDispatchers. Optional: a nil runner skips lifecycle-event hook
+	// dispatch entirely (the pre-implementation behaviour). When set, hosts
+	// register dispatchers for "wasm" and "webhook" before calling Install.
+	HookRunner *lifecycle.HookRunner
+
+	// DynamicHooks is the dynamic.HookRegistry the installer projects
+	// manifest CRUD hooks into. Optional: when nil the installer skips the
+	// CRUD plane wiring. Hosts wiring both fields get full lifecycle +
+	// CRUD coverage; hosts that only want lifecycle (install/enable/...)
+	// can leave DynamicHooks nil.
+	DynamicHooks *dynamic.HookRegistry
+
 	// FrontendBasePath, when non-empty, is the on-disk root under which
 	// federation artifacts shipped inside a bundle are materialized by
 	// Install() — see WriteFrontend. Hosts that do not serve addon frontends
@@ -259,8 +273,21 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	if err := lc.OnInstall(i.DB, orgID); err != nil {
 		return nil, nil, fmt.Errorf("OnInstall: %w", err)
 	}
+	if err := i.runLifecycleHooks(context.Background(), b.Manifest, orgID, lifecycle.HookEventInstall); err != nil {
+		return nil, nil, fmt.Errorf("lifecycle hook install: %w", err)
+	}
 	if err := lc.OnEnable(i.DB, orgID); err != nil {
 		return nil, nil, fmt.Errorf("OnEnable: %w", err)
+	}
+	if err := i.runLifecycleHooks(context.Background(), b.Manifest, orgID, lifecycle.HookEventEnable); err != nil {
+		return nil, nil, fmt.Errorf("lifecycle hook enable: %w", err)
+	}
+	// Wire the manifest's CRUD hooks (before_*/after_*) into the dynamic
+	// engine's HookRegistry. Idempotent — the registry first removes any
+	// previous registration for this addon before re-adding the new shape,
+	// so reinstalls don't double-fire.
+	if i.DynamicHooks != nil && i.HookRunner != nil {
+		i.DynamicHooks.RegisterManifestHooks(b.Manifest.Key, b.Manifest, i.HookRunner)
 	}
 	secret, err := newSecret()
 	if err != nil {
@@ -435,6 +462,9 @@ func (i *Installer) Enable(orgID uuid.UUID, addonKey string) error {
 	if err := lc.OnEnable(i.DB, orgID); err != nil {
 		return err
 	}
+	if err := i.runLifecycleHooks(context.Background(), lc.Manifest(), orgID, lifecycle.HookEventEnable); err != nil {
+		return fmt.Errorf("lifecycle hook enable: %w", err)
+	}
 	now := time.Now()
 	return i.DB.Model(&Installation{}).
 		Where("organization_id = ? AND addon_key = ?", orgID, addonKey).
@@ -449,6 +479,9 @@ func (i *Installer) Disable(orgID uuid.UUID, addonKey string) error {
 	}
 	if err := lc.OnDisable(i.DB, orgID); err != nil {
 		return err
+	}
+	if err := i.runLifecycleHooks(context.Background(), lc.Manifest(), orgID, lifecycle.HookEventDisable); err != nil {
+		return fmt.Errorf("lifecycle hook disable: %w", err)
 	}
 	now := time.Now()
 	return i.DB.Model(&Installation{}).
@@ -471,8 +504,14 @@ func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool)
 		if err := lc.OnDisable(i.DB, orgID); err != nil {
 			return err
 		}
+		if err := i.runLifecycleHooks(context.Background(), lc.Manifest(), orgID, lifecycle.HookEventDisable); err != nil {
+			return fmt.Errorf("lifecycle hook disable: %w", err)
+		}
 		if err := lc.OnUninstall(i.DB, orgID); err != nil {
 			return err
+		}
+		if err := i.runLifecycleHooks(context.Background(), lc.Manifest(), orgID, lifecycle.HookEventUninstall); err != nil {
+			return fmt.Errorf("lifecycle hook uninstall: %w", err)
 		}
 	}
 	if err := i.DB.Where("organization_id = ? AND addon_key = ?", orgID, addonKey).
@@ -480,6 +519,12 @@ func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool)
 		return err
 	}
 	i.Interceptors.UnregisterAddon(addonKey)
+	// Drop any manifest-driven CRUD hooks the installer projected at
+	// Install time. Safe to call even when the addon never registered any
+	// (UnregisterAddon is a no-op for unknown keys).
+	if i.DynamicHooks != nil {
+		i.DynamicHooks.UnregisterAddon(addonKey)
+	}
 	if !dropSchema {
 		return nil
 	}
@@ -504,6 +549,34 @@ func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool)
 // SignerFor rebuilds the HMAC signer for a known secret. Hosts persist the
 // cleartext secret in a secrets manager and only store the hash here.
 func SignerFor(secret []byte) *security.Signer { return security.NewSigner(secret) }
+
+// runLifecycleHooks dispatches the `event`-family hooks (install, enable,
+// disable, uninstall, upgrade) declared in the manifest. A nil HookRunner
+// or absent declaration is a silent no-op so legacy hosts and legacy
+// manifests both keep working unchanged.
+//
+// The payload is the JSON envelope `{event, addon_key, org_id, version}` —
+// addons receive enough context to disambiguate which install just landed
+// without having to read kernel internals. The shape mirrors the CRUD hook
+// adapter so guest authors can reuse a single decoder.
+func (i *Installer) runLifecycleHooks(ctx context.Context, m manifest.Manifest, orgID uuid.UUID, event string) error {
+	if i.HookRunner == nil {
+		return nil
+	}
+	payload, err := json.Marshal(map[string]any{
+		"event":     event,
+		"addon_key": m.Key,
+		"org_id":    orgID.String(),
+		"version":   m.Version,
+	})
+	if err != nil {
+		// Marshal of a fixed shape with primitive types cannot fail in
+		// practice; fall back to a nil payload rather than aborting the
+		// install on an impossible error.
+		payload = nil
+	}
+	return i.HookRunner.Run(ctx, m.Key, orgID, event, m, payload)
+}
 
 // verifySignature enforces the supply-chain trust model on a bundle before
 // any other Install step touches the database or filesystem. The decision

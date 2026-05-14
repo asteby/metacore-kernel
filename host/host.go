@@ -4,6 +4,7 @@
 package host
 
 import (
+	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/installer"
 	"github.com/asteby/metacore-kernel/lifecycle"
 	"github.com/asteby/metacore-kernel/manifest"
@@ -34,11 +35,28 @@ type Config struct {
 	KernelVersion string
 	// Services are injected into addon Boot() calls (e.g. "eventbus", "fiscal").
 	Services map[string]any
+
+	// HookRunner, when set, is wired into installer.Installer so
+	// manifest.LifecycleHooks fire on Install/Enable/Disable/Uninstall.
+	// Hosts typically construct it via lifecycle.NewHookRunner, register
+	// the wasm + webhook dispatchers, and pass it through here. Leaving
+	// it nil keeps the pre-implementation behaviour (declared hooks are
+	// validated but never dispatched).
+	HookRunner *lifecycle.HookRunner
+
+	// DynamicHooks is the dynamic.HookRegistry the installer projects
+	// manifest before_*/after_* CRUD hooks into. Must be the same
+	// instance that was passed to dynamic.New through dynamic.Config.Hooks
+	// (typically host.App.DynamicHooks when both host.App and host.Host
+	// are wired into the same app).
+	DynamicHooks *dynamic.HookRegistry
 }
 
 // New builds a Host and runs AutoMigrate for kernel-owned tables.
 func New(cfg Config) (*Host, error) {
 	inst := installer.New(cfg.DB, cfg.KernelVersion)
+	inst.HookRunner = cfg.HookRunner
+	inst.DynamicHooks = cfg.DynamicHooks
 	if err := cfg.DB.AutoMigrate(&installer.Installation{}); err != nil {
 		return nil, err
 	}

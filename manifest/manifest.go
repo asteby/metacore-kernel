@@ -60,8 +60,15 @@ type Manifest struct {
 	// when an Events entry has no matching `event:emit` capability so the
 	// drift surfaces at install time. New manifests should declare event
 	// names via Capabilities exclusively.
-	Events           []string               `json:"events,omitempty"`
-	LifecycleHooks   map[string][]HookDef   `json:"lifecycle_hooks,omitempty"`
+	Events []string `json:"events,omitempty"`
+	// LifecycleHooks maps a hook event ("install" | "uninstall" | "enable"
+	// | "disable" | "upgrade" | "before_create" | "after_create" |
+	// "before_update" | "after_update" | "before_delete" | "after_delete")
+	// to one or more HookDef entries the kernel dispatches when the event
+	// fires. Lifecycle transitions run from the installer; CRUD events
+	// fire from dynamic.Service. See [docs/lifecycle-hooks.md] for the
+	// full contract (timeouts, error semantics, payload shape).
+	LifecycleHooks map[string][]HookDef `json:"lifecycle_hooks,omitempty"`
 	I18n             map[string]map[string]string `json:"i18n,omitempty"`
 
 	// Frontend describes the federated UI bundle.
@@ -311,7 +318,20 @@ type FieldDef struct {
 	Size      int         `json:"size,omitempty"`
 }
 
-// HookDef is a CRUD lifecycle hook dispatch target.
+// HookDef is one declared lifecycle hook entry. The kernel dispatches
+// every entry under a given LifecycleHooks key in Priority-ascending order
+// when the matching event fires.
+//
+//   - Event mirrors the map key for self-documenting manifests. When set
+//     it MUST match the key (Validate rejects mismatches); when empty the
+//     map key is authoritative.
+//   - Target is the dispatch destination (wasm export, webhook URL, or
+//     reserved prompt). Required.
+//   - Priority orders multiple hooks bound to the same event — lower
+//     numbers fire first. Default 0.
+//   - Async detaches the dispatch onto a goroutine. Allowed only on
+//     after_*-family events because before-events and lifecycle
+//     transitions must block on the result to honour a veto.
 type HookDef struct {
 	Event    string     `json:"event"`
 	Target   HookTarget `json:"target"`
@@ -320,6 +340,15 @@ type HookDef struct {
 }
 
 // HookTarget describes where a lifecycle hook dispatches to.
+//
+//   Type = "wasm"    — invoke the exported function `Function` on the
+//                      addon's compiled wasm module. The function MUST
+//                      appear in Backend.Exports.
+//   Type = "webhook" — POST the event payload to URL (HMAC-signed via
+//                      the host's webhook dispatcher).
+//   Type = "prompt"  — reserved for a future LLM dispatcher; validates
+//                      but currently runs as a no-op unless the host
+//                      registers a custom prompt dispatcher.
 type HookTarget struct {
 	Type     string `json:"type"`
 	URL      string `json:"url,omitempty"`

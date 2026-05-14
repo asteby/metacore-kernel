@@ -910,3 +910,139 @@ func TestValidate_Relations_ErrorPathIncludesModelIndex(t *testing.T) {
 		t.Fatalf("expected fully-qualified path in error, got %v", err)
 	}
 }
+
+// ----------------------------------------------------------------------------
+// LifecycleHooks validation — guards the contract documented in
+// docs/lifecycle-hooks.md and exercised at runtime by lifecycle.HookRunner.
+// ----------------------------------------------------------------------------
+
+func TestValidate_LifecycleHooks_OK(t *testing.T) {
+	m := manifest.Manifest{
+		Key:     "demo",
+		Name:    "Demo",
+		Version: "1.0.0",
+		Backend: &manifest.BackendSpec{
+			Runtime: "wasm",
+			Entry:   "backend/backend.wasm",
+			Exports: []string{"on_install", "after_create"},
+		},
+		LifecycleHooks: map[string][]manifest.HookDef{
+			"install": {{Target: manifest.HookTarget{Type: "wasm", Function: "on_install"}}},
+			"after_create": {{
+				Target: manifest.HookTarget{Type: "webhook", URL: "https://x.example/hook"},
+				Async:  true,
+			}},
+		},
+	}
+	if err := m.Validate("2.0.0"); err != nil {
+		t.Fatalf("expected ok, got %v", err)
+	}
+}
+
+func TestValidate_LifecycleHooks_UnknownEvent(t *testing.T) {
+	m := manifest.Manifest{
+		Key: "demo", Name: "Demo", Version: "1.0.0",
+		LifecycleHooks: map[string][]manifest.HookDef{
+			"on_something": {{Target: manifest.HookTarget{Type: "webhook", URL: "x"}}},
+		},
+	}
+	err := m.Validate("2.0.0")
+	if err == nil || !strings.Contains(err.Error(), "unknown event") {
+		t.Fatalf("expected unknown event error, got %v", err)
+	}
+}
+
+func TestValidate_LifecycleHooks_UnknownTargetType(t *testing.T) {
+	m := manifest.Manifest{
+		Key: "demo", Name: "Demo", Version: "1.0.0",
+		LifecycleHooks: map[string][]manifest.HookDef{
+			"install": {{Target: manifest.HookTarget{Type: "binary"}}},
+		},
+	}
+	err := m.Validate("2.0.0")
+	if err == nil || !strings.Contains(err.Error(), "target.type") {
+		t.Fatalf("expected target.type error, got %v", err)
+	}
+}
+
+func TestValidate_LifecycleHooks_WasmRequiresFunction(t *testing.T) {
+	m := manifest.Manifest{
+		Key: "demo", Name: "Demo", Version: "1.0.0",
+		Backend: &manifest.BackendSpec{Runtime: "wasm", Entry: "x.wasm", Exports: []string{"f"}},
+		LifecycleHooks: map[string][]manifest.HookDef{
+			"install": {{Target: manifest.HookTarget{Type: "wasm"}}},
+		},
+	}
+	err := m.Validate("2.0.0")
+	if err == nil || !strings.Contains(err.Error(), "target.function") {
+		t.Fatalf("expected target.function required, got %v", err)
+	}
+}
+
+func TestValidate_LifecycleHooks_WasmFunctionMustBeInExports(t *testing.T) {
+	m := manifest.Manifest{
+		Key: "demo", Name: "Demo", Version: "1.0.0",
+		Backend: &manifest.BackendSpec{Runtime: "wasm", Entry: "x.wasm", Exports: []string{"f"}},
+		LifecycleHooks: map[string][]manifest.HookDef{
+			"install": {{Target: manifest.HookTarget{Type: "wasm", Function: "missing"}}},
+		},
+	}
+	err := m.Validate("2.0.0")
+	if err == nil || !strings.Contains(err.Error(), "backend.exports") {
+		t.Fatalf("expected backend.exports cross-check, got %v", err)
+	}
+}
+
+func TestValidate_LifecycleHooks_WebhookRequiresURL(t *testing.T) {
+	m := manifest.Manifest{
+		Key: "demo", Name: "Demo", Version: "1.0.0",
+		LifecycleHooks: map[string][]manifest.HookDef{
+			"install": {{Target: manifest.HookTarget{Type: "webhook"}}},
+		},
+	}
+	err := m.Validate("2.0.0")
+	if err == nil || !strings.Contains(err.Error(), "target.url") {
+		t.Fatalf("expected target.url required, got %v", err)
+	}
+}
+
+func TestValidate_LifecycleHooks_AsyncForbiddenOnBeforeEvents(t *testing.T) {
+	m := manifest.Manifest{
+		Key: "demo", Name: "Demo", Version: "1.0.0",
+		LifecycleHooks: map[string][]manifest.HookDef{
+			"before_create": {{
+				Target: manifest.HookTarget{Type: "webhook", URL: "x"},
+				Async:  true,
+			}},
+		},
+	}
+	err := m.Validate("2.0.0")
+	if err == nil || !strings.Contains(err.Error(), "async") {
+		t.Fatalf("expected async-forbidden error, got %v", err)
+	}
+}
+
+func TestValidate_LifecycleHooks_EventFieldMustMatchKey(t *testing.T) {
+	m := manifest.Manifest{
+		Key: "demo", Name: "Demo", Version: "1.0.0",
+		LifecycleHooks: map[string][]manifest.HookDef{
+			"install": {{
+				Event:  "enable",
+				Target: manifest.HookTarget{Type: "webhook", URL: "x"},
+			}},
+		},
+	}
+	err := m.Validate("2.0.0")
+	if err == nil || !strings.Contains(err.Error(), "does not match map key") {
+		t.Fatalf("expected event/key mismatch error, got %v", err)
+	}
+}
+
+func TestValidate_LifecycleHooks_EmptyMapIsNoop(t *testing.T) {
+	// Manifest without the field must keep validating exactly like before
+	// the field landed — additive contract.
+	m := manifest.Manifest{Key: "demo", Name: "Demo", Version: "1.0.0"}
+	if err := m.Validate("2.0.0"); err != nil {
+		t.Fatalf("expected ok, got %v", err)
+	}
+}

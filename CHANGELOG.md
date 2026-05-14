@@ -65,6 +65,61 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   v0.11.0 surfaces a wrapped sentinel error so call sites can branch with
   `errors.Is(err, host.ErrRuntimeNotImplemented)` and `ValidateAdvisory`
   flags the same case at authoring time.
+- **`manifest.lifecycle_hooks` is now functional.** The field was declared
+  in `manifest/manifest.go` and validated structurally, but no consumer
+  read it — addons could declare hooks that never fired (flagged by the
+  ABI v1 freeze audit as inconsistency #1 / "reserved"). v0.11.0
+  implements the read + dispatch path end-to-end so the contract matches
+  the addon authoring docs:
+  - New `lifecycle.HookRunner` (`lifecycle/hooks.go`) reads
+    `manifest.LifecycleHooks`, sorts each event's `HookDef` slice by
+    `Priority` ascending, and dispatches through registered
+    `HookDispatcher`s keyed by `HookTarget.Type` (`wasm` | `webhook` |
+    `prompt`). Mirrors the `dynamic.ActionDispatcher` pattern that
+    already ships for `manifest.actions`.
+  - `installer.Installer.HookRunner` and `installer.Installer.DynamicHooks`
+    are new optional fields. `Install` fires the `install` and `enable`
+    hooks; `Enable` fires `enable`; `Disable` fires `disable`;
+    `Uninstall` fires `disable` + `uninstall`. The reserved `upgrade`
+    event is recognised by validation today and will be fired by future
+    upgrade flows.
+  - `dynamic.HookRegistry.RegisterManifestHooks(addonKey, manifest, invoker)`
+    projects every `before_*` / `after_*` declaration into the existing
+    per-model hook chains so `dynamic.Service.Create/Update/Delete`
+    fires them automatically. `UnregisterAddon` rips the registration
+    out wholesale on uninstall so reinstalls stay idempotent.
+  - `manifest.Validate` now enforces the closed set of events (`install`
+    | `uninstall` | `enable` | `disable` | `upgrade` | `before_create`
+    | `after_create` | `before_update` | `after_update` | `before_delete`
+    | `after_delete`), the closed set of target types, the wasm-export
+    cross-check, the webhook-URL requirement, and the
+    `async`-forbidden-on-before-events rule.
+  - `host.AppConfig.EnableLifecycleHooks` opts a host in. When true,
+    `NewApp` constructs the runner and registry, exposes them on
+    `app.HookRunner` / `app.DynamicHooks`, and wires the registry into
+    `dynamic.Service`. `host.Config.HookRunner` / `host.Config.DynamicHooks`
+    forward the same instances into the installer so `Install` /
+    `Enable` / `Disable` / `Uninstall` dispatch the lifecycle hooks
+    automatically. Hosts still register their wasm + webhook
+    dispatchers explicitly because those depend on the host's wazero
+    instance and signed webhook dispatcher.
+
+  Error semantics are documented at
+  [`docs/lifecycle-hooks.md`](docs/lifecycle-hooks.md): lifecycle events
+  and `before_*` hooks abort the operation on error; `after_*` hooks log
+  and continue so a flaky notification never strands a committed row.
+  `async: true` is allowed only on after-events because before-events
+  must block on the result to honour a veto.
+
+  Existing apps are unaffected — `LifecycleHooks` is opt-in by manifest
+  authors and the host runner is opt-in by app config. Apps that do not
+  declare hooks or do not enable the runner keep their pre-v0.11.0
+  behaviour byte-for-byte.
+
+  Tests: `lifecycle/hooks_test.go`, `manifest/validate_test.go`
+  (TestValidate_LifecycleHooks_*), `dynamic/hooks_test.go`,
+  `installer/lifecycle_hooks_test.go`. Minor bump — additive feature, no
+  breaking changes.
 
 ### Deprecated
 
@@ -219,6 +274,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `google.golang.org/protobuf` which we already pull through
   `prometheus/client_golang`. Patch bump — security hardening, no
   consumer-facing changes.
+
 
 ## [0.10.1] - 2026-05-11
 
