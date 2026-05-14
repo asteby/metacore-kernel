@@ -12,9 +12,9 @@ every addon had to repeat the same boilerplate: marshal payload, unpack the
 i64, locate the buffer in guest memory, JSON-decode the envelope and
 branch on `success`. The helpers do that once.
 
-> **Scope (today).** `EmitEvent` only. `db_query`, `db_exec`, `http_fetch`
-> and `log` are deliberately out of scope for the first cut — see
-> [§ 5](#5-roadmap--what-comes-next) for the order we plan to land them.
+> **Scope (today).** `EmitEvent`, `Log`, `EnvGet`, `HttpFetch`,
+> `DbQuery` and `DbExec` — full coverage of the six host imports
+> documented in [`docs/wasm-abi.md` § 3](wasm-abi.md#3-host-imports-module-metacore_host).
 
 ---
 
@@ -166,45 +166,241 @@ target. The wasm-specific files (`alloc_wasm.go`, `eventemit_wasm.go`)
 are guarded by `//go:build wasm || wasip1` so `go build` on a Linux
 host stays a pure type-check.
 
-## 5. Roadmap — what comes next
+## 5. Log
 
-The kernel ships five host imports today
-(`log`, `env_get`, `http_fetch`, `db_query`, `db_exec`, `event_emit`).
-`EmitEvent` is the first helper to land because:
+```go
+guest.Log(guest.LevelInfo, "ticket resolved")
+guest.Log(guest.LevelWarn, "retry exhausted, falling back")
+```
 
-1. `event_emit` is the import whose v1.3 envelope (`{success, data,
-   meta}`) is materially harder to consume by hand — the older imports
-   either return a plain string (`env_get`) or are trivial (`log`).
-2. The kernel-side envelope change (PR #62) explicitly called out
-   "guest-side helpers, not in the kernel" as the follow-up.
+`Log` wraps `metacore_host.log` (see
+[`docs/wasm-abi.md` § 3](wasm-abi.md#3-host-imports-module-metacore_host)).
+The host import accepts a single string; the helper prepends
+`[<level>] ` so structured log pipelines can branch on severity
+without an ABI change. The call is fire-and-forget — there is no
+envelope to decode and `Log` never returns an error.
 
-Order we plan to land the rest (no PRs open yet):
+### 5.1 Levels
 
-- `Log(msg string)` — wraps `metacore_host.log`. Trivial wrapper around
-  `stringRef`. Mainly value-add: a structured logger that prepends the
-  call-site, similar to `slog`. Low priority.
-- `Env(key string) (string, bool)` — wraps `env_get`. Returns
-  `("", false)` when the key is missing.
-- `Fetch(req FetchRequest) (FetchResponse, error)` — wraps
-  `http_fetch`. Mirrors the response shape `{status, body}` documented
-  in `runtime/wasm/capabilities.go`.
-- `Query(sql string, args ...any) (QueryResult, error)` — wraps
-  `db_query`. The response envelope already follows
-  `{success, data, meta}`, so this reuses the same decoder skeleton as
-  `EmitEvent`.
-- `Exec(sql string, args ...any) (ExecResult, error)` — wraps
-  `db_exec`. Same envelope shape; surfaces `rowsAffected` /
-  `lastInsertId` / `returning`.
+```go
+type LogLevel int
+const (
+    LevelDebug LogLevel = iota
+    LevelInfo
+    LevelWarn
+    LevelError
+)
+```
 
-Each will land as a separate PR with its own test matrix. See the
-package doc comment in `guest/doc.go` for the canonical list.
+Unknown enum values render as `info` on the wire so a future enum
+bump cannot corrupt the host's structured log fields.
 
-## 6. ABI version compatibility
+## 6. EnvGet
+
+```go
+apiKey, found, err := guest.EnvGet("STRIPE_API_KEY")
+if err != nil {
+    // reserved — today always nil; future host may add a typed
+    // capability error.
+}
+if !found {
+    // settings map didn't carry the key, or the value was empty.
+}
+```
+
+`EnvGet` reads an installation setting (or secret) by key. The host
+returns the raw value bytes directly — there is no JSON envelope.
+
+The helper folds "key missing" and "key present but empty" into a
+single `found == false` because the host today (see
+[`runtime/wasm/capabilities.go:134-137`](../runtime/wasm/capabilities.go))
+treats them identically. The third return slot is reserved for a
+future host that surfaces a typed envelope (e.g.
+`{success:false, error:{code:"forbidden"}}`); callers should keep
+the `err` check to avoid a breaking signature change.
+
+## 7. HttpFetch
+
+```go
+resp, err := guest.HttpFetch(guest.HttpRequest{
+    Method: "POST",
+    URL:    "https://api.stripe.com/v1/refunds",
+    Body:   []byte(`{"charge":"ch_..."}`),
+})
+if err != nil {
+    var denied *guest.HttpCapabilityDeniedError
+    if errors.As(err, &denied) {
+        // addon manifest is missing `http:fetch api.stripe.com`
+    }
+    var fe *guest.HttpFetchError
+    if errors.As(err, &fe) {
+        switch fe.Code {
+        case "transport":   /* retry */
+        case "bad_request": /* surface as bug */
+        }
+    }
+    return 0
+}
+fmt.Printf("upstream returned %d, %d bytes body\n", resp.Status, len(resp.Body))
+```
+
+`HttpFetch` wraps `metacore_host.http_fetch`. The host enforces the
+addon's `http:fetch <host-whitelist>` capability + egress SSRF guard
+before any syscall happens — see
+[`docs/permissions.md`](permissions.md).
+
+### 7.1 Shapes
+
+```go
+type HttpRequest struct {
+    Method  string              // "GET" by default
+    URL     string              // absolute URL
+    Headers map[string][]string // reserved; host ignores today
+    Body    []byte              // nil for GET / empty body
+}
+
+type HttpResponse struct {
+    Status  int                  // HTTP status code
+    Headers map[string][]string  // reserved; nil today
+    Body    []byte               // capped at 8 MiB by host
+}
+```
+
+`Headers` on both shapes is reserved — the host today only forwards
+the method, URL and body and hard-codes `Content-Type:
+application/json` when the body is non-empty
+([`runtime/wasm/capabilities.go:165-167`](../runtime/wasm/capabilities.go)).
+Populating the field is silently ignored — preserved so consumers
+don't refactor when the host gains header support.
+
+### 7.2 Error surface
+
+| Code             | Meaning                                                              |
+|------------------|----------------------------------------------------------------------|
+| `forbidden`      | `Capabilities.CanFetch` denied — surfaced as `*HttpCapabilityDeniedError` |
+| `bad_request`    | host couldn't build the request (invalid URL, bad method)            |
+| `transport`      | DNS / dial / TLS / read-body failure — retry-safe                    |
+| `decode`         | host wrote something the helper couldn't parse (host bug)            |
+
+## 8. DbQuery
+
+```go
+res, err := guest.DbQuery(
+    `SELECT id, status FROM tickets WHERE org_id = $1 AND status = $2`,
+    orgID, "open",
+)
+if err != nil {
+    var qErr *guest.DbQueryError
+    if errors.As(err, &qErr) {
+        switch qErr.Code {
+        case "forbidden":         /* missing db:read capability */
+        case "row_limit_exceeded":/* paginate */
+        case "query_timeout":     /* simplify */
+        }
+    }
+    return 0
+}
+for _, row := range res.Rows {
+    fmt.Printf("ticket %v status=%v\n", row["id"], row["status"])
+}
+fmt.Printf("scanned %d rows in %dms\n", res.RowCount, res.Meta.DurationMs)
+```
+
+`DbQuery` wraps `metacore_host.db_query` (see
+[`docs/wasm-abi.md` § 9](wasm-abi.md#9-db_query--scoped-read-only-sql-v11)).
+The host enforces SELECT-only contract, AST-level cross-schema
+capability gating (`db:read`), row limit (10 000) and per-call
+deadline (5 s) — see § 9.2 - 9.5.
+
+Args use Postgres-style positional placeholders (`$1`, `$2`, …);
+allowed types follow § 9.6 (nil, bool, integers, floats, strings, plus
+the `{$bytes, $uuid, $ts}` JSON wrappers).
+
+### 8.1 Shapes
+
+```go
+type QueryResult struct {
+    Rows     []map[string]any // decoded result set
+    Columns  []ColumnMeta     // {Name, Type}
+    RowCount int              // == len(Rows) — host caps over-cap reads as row_limit_exceeded
+    Meta     QueryMeta        // {Schema, DurationMs, Truncated}
+}
+
+type DbQueryError struct {
+    Code    string  // see § 9.4
+    Message string
+    Meta    QueryMeta
+}
+```
+
+## 9. DbExec
+
+```go
+res, err := guest.DbExec(
+    `UPDATE refunds SET status = $1 WHERE id = $2 AND org_id = $3 RETURNING amount_cents`,
+    "refunded", refundID, orgID,
+)
+if err != nil {
+    var eErr *guest.DbExecError
+    if errors.As(err, &eErr) {
+        switch eErr.Code {
+        case "constraint_violation":   /* eErr.SQLState carries 23xxx */
+        case "serialization_failure":  /* retry the whole action */
+        case "missing_org_filter":     /* WHERE didn't constrain org_id */
+        case "no_active_tx":           /* host wired Invoke instead of InvokeInTx */
+        }
+    }
+    return 0
+}
+for _, row := range res.Rows {
+    fmt.Printf("refunded amount=%v\n", row["amount_cents"])
+}
+```
+
+`DbExec` wraps `metacore_host.db_exec` (see
+[`docs/wasm-abi.md` § 10](wasm-abi.md#10-db_exec--addon-scoped-writes-v12)).
+Accepts `INSERT`/`UPDATE`/`DELETE`/`MERGE` (and leading-CTE variants).
+The call piggybacks on the action handler's open transaction when the
+host entered through `Host.InvokeInTx`; a guest invoked via plain
+`Host.Invoke` receives `no_active_tx`.
+
+`RETURNING` clauses populate `Rows` + `Columns` (kernel v0.11.0+);
+plain mutations carry only `RowsAffected`.
+
+### 9.1 Shapes
+
+```go
+type ExecResult struct {
+    RowsAffected int64
+    Rows         []map[string]any // populated only on RETURNING
+    Columns      []ColumnMeta     // populated only on RETURNING
+    Meta         ExecMeta         // {Schema, DurationMs}
+}
+
+type DbExecError struct {
+    Code     string  // see § 10.4
+    Message  string
+    SQLState string  // SQLSTATE preserved for constraint/serialization
+    Meta     ExecMeta
+}
+```
+
+`SQLState` is populated for driver-level violations
+(`constraint_violation`, `serialization_failure`, `db_error`) — the
+host preserves Postgres SQLSTATE so guests can branch on the
+underlying violation without parsing the message.
+
+## 10. ABI version compatibility
 
 | Helper API     | Kernel envelope | Wire-compat note                                       |
 |----------------|-----------------|--------------------------------------------------------|
-| `EmitEvent` v1 | v1              | Helper handles the post-PR#62 envelope. Pre-PR#62 hosts that returned literal `0` on success are still supported — `decodeEmitEnvelope(nil)` produces a zero-value `EmitEventResult` with `err == nil`. |
+| `EmitEvent` v1 | v1              | Pre-PR#62 hosts that returned literal `0` on success are still supported — `decodeEmitEnvelope(nil)` produces a zero-value `EmitEventResult` with `err == nil`. |
+| `Log` v1       | n/a             | Fire-and-forget; no envelope.                                                                                  |
+| `EnvGet` v1    | raw bytes       | Host returns the value bytes verbatim; helper folds missing + empty into `found == false`.                     |
+| `HttpFetch` v1 | `{status, body}` | Host envelope is flat (no `{success, data, meta}`); helper probes for the `{error, message}` failure shape first. |
+| `DbQuery` v1   | v1              | Decoder follows `{success, data, meta}` from § 9.4 verbatim.                                                   |
+| `DbExec` v1    | v1 (v0.11+)     | RETURNING projection lives under `data.rows` + `data.columns`; pre-v0.11 envelopes (no `rows`) decode cleanly with `Rows == nil`. |
 
-The helper is **additive** — addons compiled against the older raw
-`hostEventEmit` import keep working untouched; new addons opt in by
-calling `guest.EmitEvent`.
+The helpers are **additive** — addons compiled against the raw host
+imports keep working untouched; new addons opt in by calling the
+typed wrappers.

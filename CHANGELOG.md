@@ -5,6 +5,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **feat(guest): complete TinyGo helpers for `db_query`, `db_exec`,
+  `http_fetch`, `env_get`, `log`.** Closes out the helper matrix the
+  initial `EmitEvent` PR (#66) called out as roadmap in
+  `docs/guest-go.md` § 5. Each helper ships in the same two-file
+  pattern as `EmitEvent`: a host-runnable `<name>.go` with the typed
+  result struct, typed error and envelope decoder + a
+  `//go:build wasm || wasip1` `<name>_wasm.go` carrying the
+  `//go:wasmimport metacore_host <name>` stub and the (ptr, len)
+  marshalling. `Log(level, msg)` adds a guest-side `[<level>]` prefix
+  so the host's existing single-string log import surfaces severity
+  without an ABI change. `EnvGet(key)` returns `(value, found, err)`
+  and folds "missing key" + "empty value" into a single
+  `found == false` (mirrors `runtime/wasm/capabilities.go` line
+  134-137); the third slot is reserved for a future typed envelope.
+  `HttpFetch(req)` decodes the flat `{status, body}` success shape
+  and the `{error, message}` failure shape the host emits via
+  `jsonError`, and surfaces `forbidden` as a dedicated
+  `*HttpCapabilityDeniedError` for `errors.As` branching. `DbQuery`
+  and `DbExec` share the `{success, data, meta}` decoder skeleton —
+  `DbExec` adds a `SQLState` field on its typed error so driver-
+  level violations (`constraint_violation` /
+  `serialization_failure`) carry the Postgres SQLSTATE through to
+  the guest. Each helper has an envelope-decoder test matrix (happy
+  path, typed error paths, empty / null buffer, malformed JSON) —
+  all run host-side with `go test ./guest/...` (no WASM required).
+  `docs/guest-go.md` is updated to document all six helpers with
+  sample usage; the "roadmap" section is removed. Purely additive —
+  addons that hand-rolled the raw ABI keep working.
+
 ## [0.11.0] - 2026-05-14
 
 ### Added
