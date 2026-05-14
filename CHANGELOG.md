@@ -121,6 +121,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `installer/lifecycle_hooks_test.go`. Minor bump — additive feature, no
   breaking changes.
 
+- **New `runtime/flow` package — generic workflow engine extracted from
+  link.** The kernel now ships a DAG executor with a pluggable node
+  registry, template interpolation, optional persistence (`Store` interface),
+  optional progress notifications (`ProgressSink`), and a `TriggerService`
+  coordinator that routes incoming events to matching flows. Built-in
+  domain-free node executors cover HTTP, Webhook, Condition, Switch, Delay,
+  Loop, Filter, SetVariable, TransformData, Split, Merge, ErrorHandler,
+  Note, and Trigger. Apps register their own domain nodes
+  (`message`, `ai_chat`, `create_ticket`, …) via `Engine.RegisterNode`.
+  An optional Fiber `Handler` exposes the runtime endpoints
+  (`POST /:id/run`, `POST /:id/test`, `POST /:id/cancel`); flow CRUD stays
+  with the host because flows live in host-specific tables. The kernel
+  does NOT persist flows, expose CRUD, or know about contacts / tickets /
+  messaging / AI — those remain app-side concerns. See
+  [`docs/flow.md`](docs/flow.md) for the DSL spec. This is the additive
+  half of the flow extraction; link will migrate to consume
+  `runtime/flow` in a follow-up PR and delete its `internal/flow`
+  vendor copy then. Additive, no breaking changes.
+
 ### Deprecated
 
 - **`manifest.events`** — kept for back-compat; will be derived from
@@ -274,7 +293,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `google.golang.org/protobuf` which we already pull through
   `prometheus/client_golang`. Patch bump — security hardening, no
   consumer-facing changes.
-
 
 ## [0.10.1] - 2026-05-11
 
