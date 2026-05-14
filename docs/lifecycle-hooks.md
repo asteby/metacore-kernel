@@ -18,7 +18,7 @@ runner via `host.AppConfig.EnableLifecycleHooks = true` (or by wiring
 | `uninstall`        | `installer.Uninstall`   | yes (aborts uninstall) |
 | `enable`           | `installer.Enable`      | yes |
 | `disable`          | `installer.Disable`     | yes |
-| `upgrade`          | reserved for future use | yes |
+| `upgrade`          | `installer.Upgrade`     | yes (before only — after errors are logged) |
 | `before_create`    | `dynamic.Service.Create` | yes (aborts the mutation) |
 | `after_create`     | `dynamic.Service.Create` | no (error is logged) |
 | `before_update`    | `dynamic.Service.Update` | yes |
@@ -108,6 +108,47 @@ Lifecycle transitions receive:
 }
 ```
 
+The `upgrade` event carries an enriched payload because the addon often
+needs both the source and target version to know which migration path
+applies. Two dispatches happen per upgrade — `phase: "before"` runs before
+any schema or bundle work; `phase: "after"` runs once the new version has
+committed and includes the count of newly-applied migrations:
+
+```json
+// before — fired before any schema/bundle mutation; non-nil error aborts.
+{
+  "event": "upgrade",
+  "addon_key": "tickets",
+  "org_id": "ab2f...",
+  "from_version": "1.0.0",
+  "to_version": "1.1.0",
+  "phase": "before"
+}
+
+// after — fired post-commit. Errors are logged and swallowed (the upgrade
+// has already persisted and DDL rollback is unsafe). `migrations_applied`
+// counts files in the new bundle that were NOT already recorded in
+// `metacore_addon_migrations`; legacy / shared files are skipped by
+// dynamic.Apply and do not contribute to the count.
+{
+  "event": "upgrade",
+  "addon_key": "tickets",
+  "org_id": "ab2f...",
+  "from_version": "1.0.0",
+  "to_version": "1.1.0",
+  "phase": "after",
+  "migrations_applied": 2
+}
+```
+
+Guard rails enforced by `installer.Upgrade` BEFORE the first hook fires:
+
+| Sentinel error                | Cause                                                                   | HTTP code |
+|-------------------------------|-------------------------------------------------------------------------|-----------|
+| `installer.ErrNotInstalled`   | `(org, addon_key)` has no row in `metacore_installations`               | 404       |
+| `installer.ErrCannotDowngrade`| `to_version` sorts strictly lower than the installed version (semver)   | 409       |
+| `installer.ErrSameVersionUpgrade` | `to_version` equals the installed version                           | 409       |
+
 CRUD events receive:
 
 ```json
@@ -178,10 +219,6 @@ structured logs (the calling goroutine has long since returned).
 
 ## 8. Reserved / future work
 
-- `upgrade` event: the constant exists and is fired by future Installer
-  upgrade flows; addons can declare hooks today and they will be
-  validated, but the kernel only fires `install`/`enable`/`disable`/
-  `uninstall` until the upgrade path lands.
 - `target.type = "prompt"`: declared and validated; runtime delegation
   awaits a kernel-bundled LLM dispatcher. Hosts can register a custom
   prompt dispatcher today and the runner picks it up via the standard

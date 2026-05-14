@@ -38,6 +38,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/asteby/metacore-kernel/bundle"
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/lifecycle"
@@ -125,6 +126,15 @@ type Installer struct {
 	// ALLOW_UNSIGNED_BUNDLES env var by New(). DO NOT enable in production.
 	AllowUnsigned bool
 
+	// schemaApplier runs the dynamic schema / migration steps an Upgrade
+	// performs (EnsureSchema → Apply → CreateTable/SyncSchema). Production
+	// hosts leave this nil and the real Postgres-backed helpers fire. Tests
+	// (sqlite-only) inject a stub to assert the Upgrade fire-site without a
+	// real Postgres instance. Unexported on purpose — the field is an
+	// implementation detail of the test harness, not a public extension
+	// point.
+	schemaApplier schemaApplier
+
 	// Broadcaster is invoked after a successful Install whenever the
 	// computed manifest hash differs from what was previously persisted (or
 	// when there is no previous record — the first install also fires an
@@ -141,6 +151,25 @@ type Installer struct {
 // any trusted public keys and ALLOW_UNSIGNED_BUNDLES is not set. Misconfigured
 // production deploys hit this on every install attempt.
 var ErrSignatureRequired = errors.New("installer: signature verification is required (set MARKETPLACE_PUBKEY or, for dev, ALLOW_UNSIGNED_BUNDLES=true)")
+
+// ErrNotInstalled is returned by Upgrade when the (orgID, addonKey) pair has
+// no row in metacore_installations. Hosts surface it as "install first" guidance.
+var ErrNotInstalled = errors.New("installer: addon is not installed for this organization")
+
+// ErrCannotDowngrade is returned by Upgrade when newBundle.Manifest.Version
+// sorts strictly lower than the currently-installed version. Downgrades are
+// refused by default because rolled-back migrations are an addon-author
+// concern, not a kernel responsibility — the kernel cannot safely "undo" a
+// schema migration that the new (older) manifest no longer ships. Hosts that
+// need downgrade semantics (e.g. rollback after a bad release) Uninstall +
+// Install at their own risk.
+var ErrCannotDowngrade = errors.New("installer: cannot downgrade addon (new version is older than installed version)")
+
+// ErrSameVersionUpgrade is returned by Upgrade when newBundle.Manifest.Version
+// equals the currently-installed version. Re-installing the same version is
+// a no-op upgrade and the caller almost certainly meant Install (which is
+// idempotent for unchanged manifests) or a forced reinstall.
+var ErrSameVersionUpgrade = errors.New("installer: upgrade target version matches installed version (use Install for reinstall)")
 
 // New returns a ready-to-use installer with initialized registries.
 //
@@ -546,6 +575,290 @@ func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool)
 	return nil
 }
 
+// Upgrade applies a newer bundle on top of an existing installation.
+//
+// Pre-flight checks (fail-closed before any state mutation):
+//
+//  1. Signature verification on the new bundle — same gate as Install.
+//  2. Manifest validation against KernelVersion (advisory warnings logged,
+//     hard errors abort).
+//  3. The (orgID, addonKey) row must exist — otherwise ErrNotInstalled.
+//  4. newBundle.Manifest.Version MUST be strict-greater than the installed
+//     version (semver). Equal version returns ErrSameVersionUpgrade; lower
+//     version returns ErrCannotDowngrade. The kernel does not "undo"
+//     migrations — downgrades are a host concern.
+//
+// Flow once preflight passes:
+//
+//	a. Dispatch lifecycle_hooks["upgrade"] (BEFORE) with payload
+//	   {event, addon_key, org_id, from_version, to_version}. A non-nil
+//	   error aborts: the installed row remains untouched, no migrations
+//	   are applied, no bundle artifacts are replaced.
+//	b. Apply migrations declared in the new bundle. dynamic.Apply is
+//	   idempotent — migrations the previous version already ran are
+//	   skipped by (addon_key, version) lookup; only new files execute.
+//	   Migration count is captured in the post-hook payload as
+//	   migrations_applied.
+//	c. CreateTable / SyncSchema each model definition in the new manifest
+//	   (additive — old tables/columns are not dropped to preserve data).
+//	d. Replace the lifecycle.Addon registration with the new manifest
+//	   (so subsequent Enable/Disable/CRUD see the new declarations).
+//	e. Re-project manifest CRUD hooks (UnregisterAddon + RegisterManifestHooks
+//	   on the dynamic.HookRegistry) so before_*/after_* dispatchers point
+//	   at the new declarations.
+//	f. Materialise new frontend artifacts to disk (federation only). The
+//	   old assets are overwritten in place — atomic per-file write.
+//	g. Update metacore_installations row (version, manifest_hash,
+//	   settings merge: new defaults add, existing user values keep).
+//	h. Dispatch lifecycle_hooks["upgrade"] AFTER with the same payload
+//	   shape plus migrations_applied.
+//	i. Broadcast a ManifestChangeEvent (hash will diverge by construction).
+//
+// On any error AFTER the BEFORE hook has fired but BEFORE the version row
+// has been committed, Upgrade attempts a best-effort rollback: the row is
+// not yet updated so the installation continues to read as the old version.
+// Applied migrations are NOT rolled back (Postgres does not undo DDL on a
+// per-version basis); however a future Upgrade attempt with the same target
+// version will skip them as already-applied. The error is returned wrapped
+// with the failed stage for operator triage.
+//
+// Upgrade does NOT change the per-installation secret. Rotation is an
+// orthogonal concern — call RotateSecret if the new bundle introduces new
+// signed-webhook endpoints that need a fresh key.
+func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bundle.Bundle) (*Installation, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if newBundle == nil {
+		return nil, fmt.Errorf("installer.Upgrade: bundle is required")
+	}
+	if err := i.verifySignature(newBundle); err != nil {
+		return nil, err
+	}
+	warnings, err := newBundle.Manifest.ValidateAdvisory(i.KernelVersion)
+	if err != nil {
+		return nil, err
+	}
+	for _, w := range warnings {
+		slog.Warn("manifest.advisory",
+			"addon", newBundle.Manifest.Key,
+			"version", newBundle.Manifest.Version,
+			"warning", w)
+	}
+
+	// Pre-flight: the installation row must exist; capture its current
+	// version so we can guard against same-version / downgrade attempts
+	// before doing any DB work.
+	var existing Installation
+	err = i.DB.Where("organization_id = ? AND addon_key = ?", orgID, newBundle.Manifest.Key).
+		Take(&existing).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, ErrNotInstalled
+	}
+	if err != nil {
+		return nil, fmt.Errorf("installer.Upgrade: lookup installation: %w", err)
+	}
+	fromVersion := existing.Version
+	toVersion := newBundle.Manifest.Version
+	if err := guardUpgradeVersion(fromVersion, toVersion); err != nil {
+		return nil, err
+	}
+
+	// Build the lifecycle payload once — the BEFORE hook reads it as-is;
+	// the AFTER hook re-marshals with migrations_applied attached.
+	beforePayload := map[string]any{
+		"event":        lifecycle.HookEventUpgrade,
+		"addon_key":    newBundle.Manifest.Key,
+		"org_id":       orgID.String(),
+		"from_version": fromVersion,
+		"to_version":   toVersion,
+		"phase":        "before",
+	}
+	if err := i.runLifecycleHooksWithPayload(ctx, newBundle.Manifest, orgID, lifecycle.HookEventUpgrade, beforePayload); err != nil {
+		return nil, fmt.Errorf("lifecycle hook upgrade (before): %w", err)
+	}
+
+	// Apply migrations and schema changes. dynamic.Apply is keyed on
+	// (addon_key, version) so previously-applied files are skipped — only
+	// new files declared in the upgrade bundle execute.
+	iso := dynamic.ParseIsolation(newBundle.Manifest.TenantIsolation)
+	applier := i.schemaApplier
+	if applier == nil {
+		applier = defaultSchemaApplier{}
+	}
+	migrationsApplied, err := countAppliedMigrations(i.DB, newBundle.Manifest.Key, newBundle.Migrations)
+	if err != nil {
+		return nil, fmt.Errorf("installer.Upgrade: count migrations: %w", err)
+	}
+	if err := applier.ApplyForUpgrade(i.DB, orgID, iso, newBundle); err != nil {
+		return nil, fmt.Errorf("installer.Upgrade: apply schema: %w", err)
+	}
+
+	// Replace the lifecycle.Addon binding with the new manifest. Compiled
+	// addons that registered themselves before Install retain their custom
+	// implementation — we only swap when the previous entry was a
+	// ManifestOnly (declarative) shim. This mirrors Install's "first
+	// registration wins" rule.
+	if lc, ok := i.Lifecycles.Get(newBundle.Manifest.Key); ok {
+		if _, isManifestOnly := lc.(*lifecycle.ManifestOnly); isManifestOnly {
+			i.Lifecycles.Register(newBundle.Manifest.Key, &lifecycle.ManifestOnly{Data: newBundle.Manifest})
+		}
+	} else {
+		i.Lifecycles.Register(newBundle.Manifest.Key, &lifecycle.ManifestOnly{Data: newBundle.Manifest})
+	}
+
+	// Re-project manifest CRUD hooks. Idempotent: RegisterManifestHooks
+	// first removes the previous registration for this addon, so the new
+	// before_*/after_* shape replaces the old one cleanly.
+	if i.DynamicHooks != nil && i.HookRunner != nil {
+		i.DynamicHooks.RegisterManifestHooks(newBundle.Manifest.Key, newBundle.Manifest, i.HookRunner)
+	}
+
+	// Materialise federation artifacts. Federation paths are deterministic
+	// per addon key so the new files overwrite the previous version's files
+	// in-place. Non-federation bundles skip this.
+	if newBundle.Manifest.Frontend != nil && newBundle.Manifest.Frontend.Format == "federation" {
+		if err := WriteFrontend(i.FrontendBasePath, newBundle.Manifest.Key, newBundle.Frontend); err != nil {
+			return nil, fmt.Errorf("installer.Upgrade: WriteFrontend: %w", err)
+		}
+	}
+
+	// Persist the version bump. Settings merge keeps user-tuned values from
+	// the old installation and ADDS defaults for any new settings declared
+	// by the new manifest — addon authors don't have to teach every host to
+	// run a migration just to surface a new toggle.
+	prevHash := existing.ManifestHash
+	newHash := manifestHashFromBundle(newBundle)
+	mergedSettings := mergeSettings(existing.Settings, defaultSettings(newBundle.Manifest))
+	now := time.Now()
+	// Persist via .Save on the loaded struct so gorm honours the JSON
+	// serializer on Settings instead of stringifying the map literal. A
+	// raw `.Updates(map[…])` bypasses the field-level serializer and
+	// writes "map[k:v]" — which then fails to round-trip on read.
+	existing.Version = toVersion
+	existing.ManifestHash = newHash
+	existing.Settings = mergedSettings
+	if err := i.DB.Save(&existing).Error; err != nil {
+		return nil, fmt.Errorf("installer.Upgrade: persist row: %w", err)
+	}
+
+	// AFTER hook fires once the row has committed — its payload includes
+	// migrations_applied so audit pipelines can correlate schema drift with
+	// the version bump.
+	afterPayload := map[string]any{
+		"event":               lifecycle.HookEventUpgrade,
+		"addon_key":           newBundle.Manifest.Key,
+		"org_id":              orgID.String(),
+		"from_version":        fromVersion,
+		"to_version":          toVersion,
+		"phase":               "after",
+		"migrations_applied":  migrationsApplied,
+	}
+	if err := i.runLifecycleHooksWithPayload(ctx, newBundle.Manifest, orgID, lifecycle.HookEventUpgrade, afterPayload); err != nil {
+		// AFTER errors are logged but do NOT roll back — the upgrade
+		// has committed and rolling back DDL is unsafe. Matches the
+		// install/enable contract where post-state hooks are best-effort.
+		slog.Warn("installer.upgrade.after_hook_failed",
+			"addon_key", newBundle.Manifest.Key,
+			"org_id", orgID.String(),
+			"from_version", fromVersion,
+			"to_version", toVersion,
+			"err", err.Error())
+	}
+
+	maybeBroadcastManifestChange(ctx, i.Broadcaster, ManifestChangeEvent{
+		OrgID:     orgID,
+		AddonKey:  newBundle.Manifest.Key,
+		OldHash:   prevHash,
+		NewHash:   newHash,
+		Version:   toVersion,
+		Timestamp: now,
+	})
+
+	return &existing, nil
+}
+
+// guardUpgradeVersion enforces strict-greater semver ordering on the upgrade
+// target. Non-semver versions on either side fall back to lexicographic
+// string compare so legacy installations with calendar-versioned addons
+// ("2025.10.01") still benefit from same-version / downgrade guards.
+func guardUpgradeVersion(from, to string) error {
+	fv, fErr := semver.NewVersion(from)
+	tv, tErr := semver.NewVersion(to)
+	if fErr == nil && tErr == nil {
+		cmp := tv.Compare(fv)
+		switch {
+		case cmp == 0:
+			return ErrSameVersionUpgrade
+		case cmp < 0:
+			return ErrCannotDowngrade
+		}
+		return nil
+	}
+	// Lexicographic fallback — never as accurate as semver but the only
+	// thing the kernel can do for arbitrary version strings.
+	switch {
+	case from == to:
+		return ErrSameVersionUpgrade
+	case to < from:
+		return ErrCannotDowngrade
+	}
+	return nil
+}
+
+// countAppliedMigrations reports how many of the supplied migration files
+// will actually execute on the next dynamic.Apply call — i.e. those that
+// are not yet recorded in metacore_addon_migrations. The count goes into
+// the upgrade AFTER-hook payload so audit consumers can see exactly how
+// much schema work a version bump performed.
+//
+// Failure modes are non-fatal: a DB error returns (0, err) and Upgrade
+// surfaces it to the caller; a missing table (first-ever migration) is
+// auto-created by dynamic.Apply later in the flow and reads as zero applied
+// rows here, so we treat ErrRecordNotFound / "no such table" as zero.
+func countAppliedMigrations(db *gorm.DB, addonKey string, files []dynamic.File) (int, error) {
+	if len(files) == 0 {
+		return 0, nil
+	}
+	versions := make([]string, 0, len(files))
+	for _, f := range files {
+		versions = append(versions, f.Version)
+	}
+	var alreadyApplied int64
+	err := db.Model(&dynamic.Migration{}).
+		Where("addon_key = ? AND version IN ?", addonKey, versions).
+		Count(&alreadyApplied).Error
+	if err != nil {
+		// Migration table not yet auto-migrated (first-ever migration for
+		// any addon) — treat as zero already-applied. Both sqlite and
+		// postgres surface this with substring "no such table" / "does not
+		// exist"; matching on substrings is more robust than driver-
+		// specific error codes for a non-fatal hint.
+		es := err.Error()
+		if strings.Contains(es, "no such table") || strings.Contains(es, "does not exist") {
+			return len(files), nil
+		}
+		return 0, err
+	}
+	return len(files) - int(alreadyApplied), nil
+}
+
+// mergeSettings combines the previously-persisted settings with the new
+// manifest's defaults. User-set values (anything already present in `old`)
+// win — the upgrade must NOT clobber a tenant's customisation. Defaults
+// that did not exist before are added so addon authors can ship new
+// toggles without per-tenant migrations.
+func mergeSettings(old, newDefaults map[string]any) map[string]any {
+	out := make(map[string]any, len(old)+len(newDefaults))
+	for k, v := range newDefaults {
+		out[k] = v
+	}
+	for k, v := range old {
+		out[k] = v
+	}
+	return out
+}
+
 // SignerFor rebuilds the HMAC signer for a known secret. Hosts persist the
 // cleartext secret in a secrets manager and only store the hash here.
 func SignerFor(secret []byte) *security.Signer { return security.NewSigner(secret) }
@@ -576,6 +889,25 @@ func (i *Installer) runLifecycleHooks(ctx context.Context, m manifest.Manifest, 
 		payload = nil
 	}
 	return i.HookRunner.Run(ctx, m.Key, orgID, event, m, payload)
+}
+
+// runLifecycleHooksWithPayload is the sibling helper Upgrade uses to ship
+// extra context (from_version, to_version, phase, migrations_applied) into
+// the hook payload — runLifecycleHooks's fixed shape is intentionally minimal
+// for the symmetric install/enable/disable/uninstall events. The caller owns
+// every key in `payload`; this helper just marshals and dispatches.
+func (i *Installer) runLifecycleHooksWithPayload(ctx context.Context, m manifest.Manifest, orgID uuid.UUID, event string, payload map[string]any) error {
+	if i.HookRunner == nil {
+		return nil
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		// Same rationale as runLifecycleHooks: encoding a map of
+		// JSON-clean primitives cannot fail in practice; fall back to a
+		// nil payload rather than aborting the upgrade.
+		raw = nil
+	}
+	return i.HookRunner.Run(ctx, m.Key, orgID, event, m, raw)
 }
 
 // verifySignature enforces the supply-chain trust model on a bundle before
@@ -633,4 +965,37 @@ func sourceOf(m manifest.Manifest) string {
 		return "federated"
 	}
 	return "bundle"
+}
+
+// schemaApplier abstracts the dynamic-schema mutations Upgrade performs so
+// tests can exercise the lifecycle fire-site without spinning up a Postgres
+// instance (kernel/dynamic only supports Postgres syntax). Production keeps
+// the default applier which delegates to the dynamic package verbatim.
+type schemaApplier interface {
+	ApplyForUpgrade(db *gorm.DB, orgID uuid.UUID, iso dynamic.Isolation, b *bundle.Bundle) error
+}
+
+// defaultSchemaApplier is the production implementation — runs EnsureSchema,
+// dynamic.Apply over the bundle's migrations, then CreateTable / SyncSchema
+// for every model definition. Order matches the original Install flow so
+// hosts upgrading from a manifest that adds a new model see the table
+// created without manual SQL.
+type defaultSchemaApplier struct{}
+
+func (defaultSchemaApplier) ApplyForUpgrade(db *gorm.DB, orgID uuid.UUID, iso dynamic.Isolation, b *bundle.Bundle) error {
+	if err := dynamic.EnsureSchema(db, b.Manifest.Key, orgID, iso); err != nil {
+		return fmt.Errorf("EnsureSchema: %w", err)
+	}
+	if err := dynamic.Apply(db, b.Manifest.Key, orgID, iso, b.Migrations); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+	for _, def := range b.Manifest.ModelDefinitions {
+		if err := dynamic.CreateTable(db, b.Manifest.Key, orgID, iso, def); err != nil {
+			return fmt.Errorf("CreateTable %s: %w", def.ModelKey, err)
+		}
+		if err := dynamic.SyncSchema(db, b.Manifest.Key, orgID, iso, def); err != nil {
+			return fmt.Errorf("SyncSchema %s: %w", def.ModelKey, err)
+		}
+	}
+	return nil
 }
