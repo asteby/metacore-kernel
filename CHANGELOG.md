@@ -7,6 +7,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-14
+
+### Added
+
+- **`metacore_host.event_emit` now returns the canonical
+  `{success, data, meta}` envelope documented in
+  [`docs/wasm-abi.md` § 12.4](docs/wasm-abi.md).** Prior to this release
+  the host import returned literal `0` on success and a bare
+  `{"error","message"}` JSON on failure (`runtime/wasm/capabilities.go:202`),
+  diverging from the doc — the divergence was the inconsistency #4 of the
+  ABI v1.0 freeze audit. The new envelope adds `data.event`,
+  `data.subscribers`, `meta.addon`, `meta.orgId`, `meta.emittedAt`,
+  `meta.durationMs`, and a versioned `meta.envelopeVersion` (`1` today,
+  exposed in Go as `wasm.EventEmitEnvelopeVersion`). The change is
+  **wire-compatible** with legacy guests that ignored the `i64` return
+  value: the publish side-effect runs before the host writes the envelope,
+  so dropping the return packs into a `drop; i64.const 0` body keeps
+  working (regression test `TestHost_InvokeEventEmitLegacyGuestIgnoresReturn`).
+- **`events.Bus.PublishWithCount(ctx, addonKey, event, orgID, payload)
+  (int, error)`** — count-returning sibling of `Publish`. The wasm host
+  import uses it to populate `data.subscribers`; `Publish` is kept as a
+  thin one-line wrapper for source compatibility.
+
+### Notes
+
+- No breaking changes to the `event_emit` import signature. ABI v1
+  remains intact — only the return-value semantics changed (from "0 on
+  success" to "ptr|len of envelope always"), and the publish side-effect
+  ordering is unchanged.
+- The audit cross-reference at
+  [`docs/audits/2026-05-04-host-functions-gap.md`](docs/audits/2026-05-04-host-functions-gap.md)
+  has been amended with the resolution note.
+
 ## [0.10.3] - 2026-05-14
 
 ### Fixed

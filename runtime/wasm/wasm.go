@@ -146,25 +146,21 @@ func (h *Host) Load(ctx context.Context, addonKey string, wasmBytes []byte, spec
 // bounds wall-clock time per BackendSpec.TimeoutMs, serialises access to the
 // module's memory, and returns the guest's result bytes.
 //
-// Tenant scope (orgID) is read from ctx via WithOrgID; callers from
-// tenant-scoped paths (HTTP handlers, action bridge, dynamic CRUD hooks)
-// MUST wrap the context with WithOrgID before reaching this entry — or use
-// the InvokeFor sibling for an explicit parameter. Without an orgID,
-// imports that require tenant scoping (event_emit today) surface
-// `no_active_org`; imports that do not (log, env_get, http_fetch, db_query,
-// db_exec) keep working as before.
+// Tenant scope: orgID stays unset on this entry point — callers that need
+// `event_emit` (or any future tenant-scoped host import) must use
+// InvokeFor / InvokeForInTx instead, otherwise the guest will see a
+// `no_active_org` envelope (docs/wasm-abi.md § 12.6).
 func (h *Host) Invoke(ctx context.Context, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) ([]byte, error) {
-	return h.invokeImpl(ctx, nil, installation, addonKey, funcName, payload, settings)
+	return h.invokeImpl(ctx, nil, uuid.Nil, installation, addonKey, funcName, payload, settings)
 }
 
-// InvokeFor is the ergonomic sibling of Invoke for tenant-scoped callers.
-// It threads orgID onto ctx via WithOrgID so the per-invocation context bag
-// populates `invocation.orgID`. Pass uuid.Nil only for callers that
-// legitimately have no active tenant (kernel boot probes, addon-installer
-// dry runs, fixture tests); event_emit then surfaces `no_active_org` if
-// the guest tries to publish.
-func (h *Host) InvokeFor(ctx context.Context, orgID uuid.UUID, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) ([]byte, error) {
-	return h.invokeImpl(WithOrgID(ctx, orgID), nil, installation, addonKey, funcName, payload, settings)
+// InvokeFor is the tenant-aware sibling of Invoke. The orgID is propagated
+// to every host import that needs tenant scope (today: `event_emit` —
+// see docs/wasm-abi.md § 12.6). Callers running inside an HTTP handler
+// should pass the org id they already resolved via `httpx.ExtractOrgID`;
+// background workers / cron paths must thread the org id explicitly.
+func (h *Host) InvokeFor(ctx context.Context, orgID, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) ([]byte, error) {
+	return h.invokeImpl(ctx, nil, orgID, installation, addonKey, funcName, payload, settings)
 }
 
 // InvokeInTx is the action-handler-aware sibling of Invoke. The tx is the
@@ -173,22 +169,18 @@ func (h *Host) InvokeFor(ctx context.Context, orgID uuid.UUID, installation uuid
 // rollback atomically with the action's own row mutations. Passing a nil tx
 // is equivalent to plain Invoke — `db_exec` then opens its own short-lived
 // transaction via h.db, used in non-action callers and tests.
-//
-// The same orgID rules as Invoke apply: wrap ctx with WithOrgID first, or
-// use InvokeInTxFor.
 func (h *Host) InvokeInTx(ctx context.Context, tx *gorm.DB, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) ([]byte, error) {
-	return h.invokeImpl(ctx, tx, installation, addonKey, funcName, payload, settings)
+	return h.invokeImpl(ctx, tx, uuid.Nil, installation, addonKey, funcName, payload, settings)
 }
 
-// InvokeInTxFor combines InvokeInTx (action-bound transaction) with explicit
-// tenant scope. Action bridges that already know the orgID from their
-// ActionContext should prefer this entry — it makes the tenant binding
-// visible at the call site instead of relying on an upstream WithOrgID.
-func (h *Host) InvokeInTxFor(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) ([]byte, error) {
-	return h.invokeImpl(WithOrgID(ctx, orgID), tx, installation, addonKey, funcName, payload, settings)
+// InvokeForInTx combines tenant scope (orgID) and transaction binding (tx).
+// Used by the action bridge when the surrounding handler already resolved
+// both the org and the open *gorm.DB transaction.
+func (h *Host) InvokeForInTx(ctx context.Context, tx *gorm.DB, orgID, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) ([]byte, error) {
+	return h.invokeImpl(ctx, tx, orgID, installation, addonKey, funcName, payload, settings)
 }
 
-func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) ([]byte, error) {
+func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) ([]byte, error) {
 	ce, ok := h.compiled.Load(addonKey)
 	if !ok {
 		return nil, fmt.Errorf("wasm: addon %q not loaded", addonKey)
@@ -213,18 +205,14 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, installation uuid.UU
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	// Stash settings + caller id on the ctx so the host module imports
-	// (env_get, http_fetch, log, event_emit) can read them without global
-	// state. orgID is resolved from the ctx tag set by WithOrgID — see
-	// docs/wasm-abi.md § 12.6. uuid.Nil here is valid; only event_emit
-	// rejects it (with `no_active_org`), the other imports do not depend
-	// on tenant scope.
+	// (env_get, http_fetch, log) can read them without global state.
 	callCtx = withInvocation(callCtx, &invocation{
 		addonKey:     addonKey,
 		installation: installation,
 		settings:     settings,
 		caps:         h.caps,
 		bus:          h.bus,
-		orgID:        orgIDFrom(callCtx),
+		orgID:        orgID,
 		db:           h.db,
 		tx:           tx,
 		enforcer:     h.enforcer,

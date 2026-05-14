@@ -7,6 +7,14 @@
 - **Visión de referencia:** add-ons WASM verificados por hash que (a) consultan/mutan modelos a través del kernel (sin DSN propio), (b) publican en el event bus interno y (c) resuelven options de relaciones para llenar los selects que el frontend deriva del manifest.
 - **Alcance:** sólo el inventario de host imports en el módulo `metacore_host`. No se modifica código en esta tarea — el output es la firma propuesta para cada nueva host function y su política de capabilities.
 
+> **Update (kernel v0.11.0)** — la inconsistencia #4 del audit ABI v1.0
+> (`event_emit` devolvía literal `0` en éxito mientras
+> `docs/wasm-abi.md` § 12.4 documentaba el envelope unificado) está
+> **resuelta**. El host ahora aloca un `{success, data, meta}` aditivo en
+> memoria del guest y los guests legacy que ignoran el `i64` retorno
+> siguen funcionando (la publicación al bus ocurre antes del write).
+> Ver `runtime/wasm/eventemit.go` y `EventEmitEnvelopeVersion = 1`.
+
 ## Estado actual — host imports presentes
 
 `registerHostModule` (`runtime/wasm/capabilities.go:46`) expone hoy **tres** funciones bajo el módulo `metacore_host`:

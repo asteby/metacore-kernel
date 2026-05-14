@@ -910,9 +910,13 @@ event_emit(eventPtr i32, eventLen i32, payloadPtr i32, payloadLen i32) -> i64
 | `payloadLen` | i32  | Payload length in bytes. `0` for empty. Hard cap: 256 KiB (§ 12.5).  |
 | **return**   | i64  | Packed `(ptr<<32)\|len` of the response envelope (§ 12.4).           |
 
-A return of `0` is reserved and currently never produced — `event_emit`
-always allocates an envelope, even when the publish fanned out to zero
-subscribers.
+A return of `0` is reserved and never produced under the v1 envelope —
+`event_emit` always allocates an envelope, even when the publish fanned
+out to zero subscribers. Legacy guests written against kernels ≤ v0.10
+that ignored the return value remain wire-compatible: the publish
+side-effect runs before the host writes the envelope into guest memory,
+so dropping the i64 result is harmless (see audit ABI v1.0 § 12
+inconsistency #4, resolved in kernel v0.11.0).
 
 ### 12.2 Event-name contract
 
@@ -949,23 +953,30 @@ bridges) can decode without prior arrangement:
 - **Size cap.** Payloads larger than the limit in § 12.5 are rejected with
   `payload_too_large` before any capability check runs.
 
-The host materialises the call to `events.Bus.Publish` as:
+The host materialises the call to `events.Bus.PublishWithCount` as:
 
 ```go
 var payload any
 if len(buf) > 0 {
     payload = json.RawMessage(buf) // forwarded verbatim; subscribers decode
 }
-err := bus.Publish(ctx, addonKey, eventName, orgID, payload)
+subscribers, err := bus.PublishWithCount(ctx, addonKey, eventName, orgID, payload)
 ```
 
 `json.RawMessage` keeps the bytes immutable for the synchronous fan-out and
 lets subscribers either treat the payload as opaque or `json.Unmarshal` it
-into a typed struct.
+into a typed struct. `PublishWithCount` is the count-returning sibling of
+`events.Bus.Publish` (kept as a thin wrapper for source-compat callers)
+and is the reason `data.subscribers` can ride in the success envelope —
+prior to kernel v0.11.0 the bus exposed only the `error`-returning
+`Publish` (see audit ABI v1.0 § 12 inconsistency #4, resolved in v0.11.0).
 
 ### 12.4 Response envelope
 
-Success follows the kernel `{success, data, meta}` convention:
+Success follows the kernel `{success, data, meta}` convention. The wire
+shape is versioned via `meta.envelopeVersion` (currently `1`); subscribers
+that need to gate on future shape evolutions should branch on that field
+rather than sniffing keys:
 
 ```json
 {
@@ -975,21 +986,30 @@ Success follows the kernel `{success, data, meta}` convention:
     "subscribers": 3
   },
   "meta": {
-    "addon":      "tickets",
-    "orgId":      "11111111-1111-1111-1111-111111111111",
-    "durationMs": 1
+    "addon":           "tickets",
+    "orgId":           "11111111-1111-1111-1111-111111111111",
+    "emittedAt":       "2026-05-14T08:12:33.124Z",
+    "durationMs":      1,
+    "envelopeVersion": 1
   }
 }
 ```
 
-- `data.subscribers` is the number of handlers `events.Bus.Publish` invoked.
-  Returns `0` when no pattern matched the event name — that is a successful
-  publish, not an error.
+- `data.subscribers` is the number of handlers
+  `events.Bus.PublishWithCount` invoked. Returns `0` when no pattern
+  matched the event name — that is a successful publish, not an error.
 - `meta.orgId` is the tenant id the host bound to the invocation (§ 12.6).
   It is informational; it is **not** part of the addon's per-call surface
-  and cannot be overridden from the guest.
+  and cannot be overridden from the guest. Omitted on error envelopes
+  where `orgID == uuid.Nil` (e.g. `no_active_org`) so telemetry doesn't
+  ingest the all-zero UUID as a tenant.
+- `meta.emittedAt` is the RFC 3339 UTC instant the host started building
+  the envelope (i.e. the moment `event_emit` entered the host import).
 - `meta.durationMs` covers the synchronous fan-out (every subscriber
-  handler runs serially inside `Publish`).
+  handler runs serially inside `PublishWithCount`).
+- `meta.envelopeVersion` is `1` for kernels ≥ v0.11.0. Mirrors the Go
+  constant `wasm.EventEmitEnvelopeVersion` so guest SDK helpers can
+  branch on it without hard-coding magic numbers.
 
 Errors share the same outer shape and never propagate subscriber failures —
 those are logged by the bus itself:
@@ -1127,10 +1147,12 @@ already serialises calls per module via `Module.mu` (`wasm.go:151`), so:
    "fire-and-forget"; if you need the rollback guarantee, use the outbox
    pattern.
 
-### 12.9 Wiring proposal
+### 12.9 Wiring (landed in v0.11.0)
 
 The implementation lives in `runtime/wasm/capabilities.go` next to
-`http_fetch`. It carries the same shape as the existing imports:
+`http_fetch`, with the envelope helpers split out into
+`runtime/wasm/eventemit.go`. It carries the same shape as the existing
+imports:
 
 - `Host` (in `runtime/wasm/wasm.go`) gains a `bus *events.Bus` dependency
   injected at construction time. `NewHost` grows an `events.Bus` parameter
@@ -1169,11 +1191,12 @@ purely an in-process, in-memory fan-out; it never opens a DB transaction.
 - **Cross-process bus.** v1.3 still targets the in-process `events.Bus`.
   When the bus grows a NATS / Kafka transport, the host import surface
   stays the same — only the receiving end changes.
-- **`Bus.PublishWithCount` helper.** `events.Bus.Publish` currently returns
-  only `error` — landing the v1.3 envelope's `data.subscribers` cleanly
-  needs a sibling method (or a `(int, error)` return). That extension is
-  trivial but lives in the kernel-side implementation PR, not in this ABI
-  proposal.
+- ~~**`Bus.PublishWithCount` helper.** `events.Bus.Publish` currently
+  returns only `error` — landing the v1.3 envelope's `data.subscribers`
+  cleanly needs a sibling method (or a `(int, error)` return).~~ Landed
+  in kernel v0.11.0 as `events.Bus.PublishWithCount(ctx, addonKey, event,
+  orgID, payload) (int, error)`. `Publish` is kept as a thin wrapper for
+  source compatibility.
 
 ### 12.11 Tests (proposed coverage — `event_emit`)
 

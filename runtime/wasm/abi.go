@@ -23,7 +23,12 @@ import (
 //	  - env_get(keyPtr, keyLen) -> i64 (ptr|len, 0 if missing)
 //	  - http_fetch(urlPtr, urlLen, methodPtr, methodLen, bodyPtr, bodyLen) -> i64
 //	  - event_emit(eventPtr, eventLen, payloadPtr, payloadLen) -> i64
-//	      0 on success; ptr|len of a JSON {"error","message"} envelope on failure.
+//	      Packed (ptr<<32)|len of the v1 `{success, data, meta}` envelope
+//	      documented in docs/wasm-abi.md § 12.4. Legacy guests that ignore
+//	      the return value still see the publish side-effect — the envelope
+//	      is allocated in the guest's own bump arena but the host writes it
+//	      *after* `events.Bus.PublishWithCount` returns, so dropping the
+//	      return value is harmless. See wasm/eventemit.go (EventEmitEnvelopeVersion).
 
 // writeMem allocates `len(data)` bytes in the guest via its exported alloc
 // and copies data in. It returns the guest-side pointer.

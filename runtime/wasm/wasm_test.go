@@ -2,6 +2,7 @@ package wasm
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -65,20 +66,17 @@ func TestHost_InvokeUnknownExport(t *testing.T) {
 // TestHost_InvokeEventEmit drives the metacore_host.event_emit import end to
 // end: build a host with an attached events.Bus, register a subscriber, and
 // invoke a guest export that publishes "ev.fired" through the host import.
-// The test asserts the subscriber observed the publish, that the host
-// import returned 0 (success contract: 0 ok, ptr|len on error), AND that
-// the orgID threaded through Host.InvokeFor reached the subscriber — the
-// regression guard for the v0.10.2 fix that propagates `invocation.orgID`
-// end to end.
+// The test asserts the subscriber observed the publish *and* that the host
+// import returned the v1 `{success, data, meta}` envelope documented in
+// docs/wasm-abi.md § 12.4 (resolution of audit ABI v1.0 § 12 inconsistency
+// #4 — the import used to return literal 0 on success).
 func TestHost_InvokeEventEmit(t *testing.T) {
 	ctx := context.Background()
 
 	bus := events.NewBus(nil) // nil enforcer → capability check skipped
 	var fired int32
-	var seenOrgID uuid.UUID
-	if err := bus.Subscribe("testaddon", "ev.fired", func(_ context.Context, orgID uuid.UUID, _ any) error {
+	if err := bus.Subscribe("testaddon", "ev.fired", func(_ context.Context, _ uuid.UUID, _ any) error {
 		atomic.AddInt32(&fired, 1)
-		seenOrgID = orgID
 		return nil
 	}); err != nil {
 		t.Fatalf("subscribe: %v", err)
@@ -104,47 +102,53 @@ func TestHost_InvokeEventEmit(t *testing.T) {
 	// Guest's emit_test ignores its (ptr,len) input and calls
 	// event_emit(eventPtr=16, eventLen=8 → "ev.fired", payloadPtr=0,
 	// payloadLen=0). It returns the host's i64 directly via its export
-	// signature, but Host.Invoke interprets that as a packed result buffer.
-	// Success → 0 means an empty []byte back.
+	// signature, so Host.InvokeFor decodes the packed ptr|len back into
+	// the envelope bytes — assert the v1 shape.
 	orgID := uuid.New()
 	out, err := h.InvokeFor(ctx, orgID, uuid.New(), "testaddon", "emit_test", nil, nil)
 	if err != nil {
-		t.Fatalf("InvokeFor: %v", err)
-	}
-	if len(out) != 0 {
-		t.Fatalf("expected empty result on successful publish, got %q", out)
+		t.Fatalf("Invoke: %v", err)
 	}
 	if got := atomic.LoadInt32(&fired); got != 1 {
 		t.Fatalf("subscriber not invoked: got=%d want=1", got)
 	}
-	if seenOrgID != orgID {
-		t.Fatalf("subscriber saw orgID=%s, want %s — orgID not propagated end-to-end", seenOrgID, orgID)
+	env := decodeEnvelope(t, out)
+	if got, _ := env["success"].(bool); !got {
+		t.Fatalf("expected success=true, got envelope: %s", out)
+	}
+	data, _ := env["data"].(map[string]any)
+	if data == nil {
+		t.Fatalf("expected data object, got envelope: %s", out)
+	}
+	if got, _ := data["event"].(string); got != "ev.fired" {
+		t.Fatalf("data.event = %q, want %q", got, "ev.fired")
+	}
+	if got, _ := data["subscribers"].(float64); got != 1 {
+		t.Fatalf("data.subscribers = %v, want 1", got)
+	}
+	meta, _ := env["meta"].(map[string]any)
+	if meta == nil {
+		t.Fatalf("expected meta object, got envelope: %s", out)
+	}
+	if got, _ := meta["addon"].(string); got != "testaddon" {
+		t.Fatalf("meta.addon = %q, want testaddon", got)
+	}
+	if got, _ := meta["orgId"].(string); got != orgID.String() {
+		t.Fatalf("meta.orgId = %q, want %q", got, orgID)
+	}
+	if got, _ := meta["envelopeVersion"].(float64); int(got) != EventEmitEnvelopeVersion {
+		t.Fatalf("meta.envelopeVersion = %v, want %d", got, EventEmitEnvelopeVersion)
 	}
 }
 
-// TestHost_InvokeEventEmitNoActiveOrg locks the v0.10.2 contract: when a
-// guest reaches `event_emit` without an orgID bound on the per-invocation
-// context bag (i.e. caller forgot to wrap with WithOrgID / used plain
-// Host.Invoke from a non-tenant path), the import returns a
-// `no_active_org` envelope instead of silently publishing with uuid.Nil.
-// Subscribers do NOT fire — the publish must be blocked, not just tagged.
-func TestHost_InvokeEventEmitNoActiveOrg(t *testing.T) {
+// TestHost_InvokeEventEmitBusUnavailable asserts the host import surfaces a
+// bus_unavailable error envelope when no events.Bus is attached.
+func TestHost_InvokeEventEmitBusUnavailable(t *testing.T) {
 	ctx := context.Background()
-
-	bus := events.NewBus(nil)
-	var fired int32
-	if err := bus.Subscribe("testaddon", "ev.fired", func(_ context.Context, _ uuid.UUID, _ any) error {
-		atomic.AddInt32(&fired, 1)
-		return nil
-	}); err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
-
 	h, err := NewHost(ctx, security.Compile("testaddon", nil), nil)
 	if err != nil {
 		t.Fatalf("NewHost: %v", err)
 	}
-	h.WithBus(bus)
 	defer h.Close(ctx)
 
 	spec := &manifest.BackendSpec{
@@ -156,19 +160,68 @@ func TestHost_InvokeEventEmitNoActiveOrg(t *testing.T) {
 	if err := h.Load(ctx, "testaddon", eventEmitWasm(), spec); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	// Plain Invoke — no WithOrgID, no InvokeFor — must trigger the guard.
-	out, err := h.Invoke(ctx, uuid.New(), "testaddon", "emit_test", nil, nil)
+	out, err := h.InvokeFor(ctx, uuid.New(), uuid.New(), "testaddon", "emit_test", nil, nil)
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
 	if len(out) == 0 {
-		t.Fatal("expected no_active_org JSON, got empty success")
+		t.Fatal("expected bus_unavailable envelope, got empty success")
 	}
-	if want := `"no_active_org"`; !strings.Contains(string(out), want) {
-		t.Fatalf("expected error JSON to contain %s, got %q", want, out)
+	if want := `"bus_unavailable"`; !strings.Contains(string(out), want) {
+		t.Fatalf("expected error envelope to contain %s, got %q", want, out)
 	}
-	if got := atomic.LoadInt32(&fired); got != 0 {
-		t.Fatalf("subscriber must NOT fire when orgID missing: got=%d", got)
+	env := decodeEnvelope(t, out)
+	if got, _ := env["success"].(bool); got {
+		t.Fatalf("expected success=false, got envelope: %s", out)
+	}
+	errObj, _ := env["error"].(map[string]any)
+	if errObj == nil {
+		t.Fatalf("expected error object, got envelope: %s", out)
+	}
+	if got, _ := errObj["code"].(string); got != "bus_unavailable" {
+		t.Fatalf("error.code = %q, want bus_unavailable", got)
+	}
+}
+
+// TestHost_InvokeEventEmitNoActiveOrg covers the wiring-bug case the doc
+// surfaces as `no_active_org` (docs/wasm-abi.md § 12.6). The bus is wired
+// but the caller used Invoke (not InvokeFor) → orgID stays uuid.Nil →
+// envelope reports the misconfiguration without panicking.
+func TestHost_InvokeEventEmitNoActiveOrg(t *testing.T) {
+	ctx := context.Background()
+	bus := events.NewBus(nil)
+	h, err := NewHost(ctx, security.Compile("testaddon", nil), nil)
+	if err != nil {
+		t.Fatalf("NewHost: %v", err)
+	}
+	h.WithBus(bus)
+	defer h.Close(ctx)
+	spec := &manifest.BackendSpec{
+		Runtime: "wasm", Entry: "b.wasm",
+		Exports: []string{"emit_test"}, TimeoutMs: 2000,
+	}
+	if err := h.Load(ctx, "testaddon", eventEmitWasm(), spec); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Plain Invoke leaves orgID at uuid.Nil — the import should refuse to
+	// publish under a nil tenant.
+	out, err := h.Invoke(ctx, uuid.New(), "testaddon", "emit_test", nil, nil)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	env := decodeEnvelope(t, out)
+	if got, _ := env["success"].(bool); got {
+		t.Fatalf("expected success=false, got envelope: %s", out)
+	}
+	errObj, _ := env["error"].(map[string]any)
+	if got, _ := errObj["code"].(string); got != "no_active_org" {
+		t.Fatalf("error.code = %q, want no_active_org", got)
+	}
+	// meta.orgId must be omitted when orgID is uuid.Nil so telemetry
+	// doesn't ingest the all-zero UUID as a tenant.
+	meta, _ := env["meta"].(map[string]any)
+	if _, present := meta["orgId"]; present {
+		t.Fatalf("meta.orgId must be omitted on no_active_org, got envelope: %s", out)
 	}
 }
 
@@ -232,36 +285,64 @@ func TestHost_InvokeEventEmitOrgIsolation(t *testing.T) {
 	}
 }
 
-// TestHost_InvokeEventEmitBusUnavailable asserts the host import surfaces a
-// bus_unavailable JSON error (non-zero packed return) when no events.Bus is
-// attached.
-func TestHost_InvokeEventEmitBusUnavailable(t *testing.T) {
+// TestHost_InvokeEventEmitLegacyGuestIgnoresReturn asserts the additive
+// nature of the envelope: a guest that ignores the i64 return value still
+// publishes successfully — the side effect (subscriber fan-out) happens
+// before the host writes the envelope into guest memory, so dropping the
+// return value on the floor is harmless. This is the wire-compat guarantee
+// the audit ABI v1.0 § 12 inconsistency #4 resolution leans on.
+func TestHost_InvokeEventEmitLegacyGuestIgnoresReturn(t *testing.T) {
 	ctx := context.Background()
+
+	bus := events.NewBus(nil)
+	var fired int32
+	if err := bus.Subscribe("testaddon", "ev.fired", func(_ context.Context, _ uuid.UUID, _ any) error {
+		atomic.AddInt32(&fired, 1)
+		return nil
+	}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
 	h, err := NewHost(ctx, security.Compile("testaddon", nil), nil)
 	if err != nil {
 		t.Fatalf("NewHost: %v", err)
 	}
+	h.WithBus(bus)
 	defer h.Close(ctx)
 
 	spec := &manifest.BackendSpec{
 		Runtime:   "wasm",
 		Entry:     "backend.wasm",
-		Exports:   []string{"emit_test"},
+		Exports:   []string{"emit_drop"},
 		TimeoutMs: 2000,
 	}
-	if err := h.Load(ctx, "testaddon", eventEmitWasm(), spec); err != nil {
+	// emitDropWasm is the legacy-guest analogue: it calls event_emit,
+	// `drop`s the i64 return, and ends with i64.const 0 — matching the
+	// pre-envelope contract guests were written against.
+	if err := h.Load(ctx, "testaddon", emitDropWasm(), spec); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	out, err := h.Invoke(ctx, uuid.New(), "testaddon", "emit_test", nil, nil)
+	out, err := h.InvokeFor(ctx, uuid.New(), uuid.New(), "testaddon", "emit_drop", nil, nil)
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
-	if len(out) == 0 {
-		t.Fatal("expected bus_unavailable JSON, got empty success")
+	if len(out) != 0 {
+		t.Fatalf("legacy guest should still return empty result, got %q", out)
 	}
-	if want := `"bus_unavailable"`; !strings.Contains(string(out), want) {
-		t.Fatalf("expected error JSON to contain %s, got %q", want, out)
+	if got := atomic.LoadInt32(&fired); got != 1 {
+		t.Fatalf("subscriber not invoked under legacy guest: got=%d want=1", got)
 	}
+}
+
+// decodeEnvelope unmarshals an event_emit envelope, failing the test on
+// malformed JSON. Centralised so the assertions stay readable.
+func decodeEnvelope(t *testing.T, raw []byte) map[string]any {
+	t.Helper()
+	var env map[string]any
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("envelope is not valid JSON: %v (%q)", err, raw)
+	}
+	return env
 }
 
 func TestHost_LoadRequiresWasmRuntime(t *testing.T) {
@@ -538,6 +619,110 @@ func eventEmitWasm() []byte {
 	var data []byte
 	data = append(data, 0x01) // count
 	data = append(data, 0x00) // active, memidx 0
+	data = append(data, 0x41)
+	data = append(data, encodeSLEB128(16)...)
+	data = append(data, 0x0B)
+	data = append(data, encodeULEB128(8)...)
+	data = append(data, []byte("ev.fired")...)
+	buf = append(buf, section(0x0B, data)...)
+
+	return buf
+}
+
+// emitDropWasm is the "legacy guest" variant of eventEmitWasm. The export
+// `emit_drop(ptr,len) -> i64` calls event_emit but `drop`s the i64 return
+// value and ends with `i64.const 0`, matching the pre-envelope contract
+// guests were written against. Used by
+// TestHost_InvokeEventEmitLegacyGuestIgnoresReturn to assert the envelope
+// rollout is additive — old guests keep working.
+func emitDropWasm() []byte {
+	var buf []byte
+	buf = append(buf, 0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00)
+
+	// Type section: same three signatures as eventEmitWasm.
+	types := []byte{
+		0x03,
+		0x60, 0x01, 0x7F, 0x01, 0x7F, // (i32) -> i32
+		0x60, 0x02, 0x7F, 0x7F, 0x01, 0x7E, // (i32,i32) -> i64
+		0x60, 0x04, 0x7F, 0x7F, 0x7F, 0x7F, 0x01, 0x7E, // (i32,i32,i32,i32) -> i64
+	}
+	buf = append(buf, section(0x01, types)...)
+
+	// Import section: metacore_host.event_emit at func index 0.
+	var imports []byte
+	imports = append(imports, 0x01)
+	imports = append(imports, encodeName("metacore_host")...)
+	imports = append(imports, encodeName("event_emit")...)
+	imports = append(imports, 0x00, 0x02)
+	buf = append(buf, section(0x02, imports)...)
+
+	// Function section: alloc (type 0) + emit_drop (type 1).
+	funcs := []byte{0x02, 0x00, 0x01}
+	buf = append(buf, section(0x03, funcs)...)
+
+	// Memory: 1 page.
+	mem := []byte{0x01, 0x00, 0x01}
+	buf = append(buf, section(0x05, mem)...)
+
+	// Bump pointer global at 1024.
+	globals := []byte{0x01, 0x7F, 0x01}
+	globals = append(globals, 0x41)
+	globals = append(globals, encodeSLEB128(1024)...)
+	globals = append(globals, 0x0B)
+	buf = append(buf, section(0x06, globals)...)
+
+	// Exports: memory, alloc, emit_drop.
+	var exports []byte
+	exports = append(exports, 0x03)
+	exports = append(exports, encodeName("memory")...)
+	exports = append(exports, 0x02, 0x00)
+	exports = append(exports, encodeName("alloc")...)
+	exports = append(exports, 0x00, 0x01)
+	exports = append(exports, encodeName("emit_drop")...)
+	exports = append(exports, 0x00, 0x02)
+	buf = append(buf, section(0x07, exports)...)
+
+	// Code: alloc (identical to eventEmitWasm) + emit_drop.
+	allocBody := []byte{
+		0x01, 0x01, 0x7F,
+		0x23, 0x00,
+		0x22, 0x01,
+		0x20, 0x00,
+		0x6A,
+		0x24, 0x00,
+		0x20, 0x01,
+		0x0B,
+	}
+	allocBody = withSize(allocBody)
+
+	// emit_drop(ptr, len): event_emit(16, 8, ptr, len), drop, i64.const 0.
+	//   The `drop` (0x1A) pops the i64 envelope ptr|len returned by
+	//   event_emit — the legacy guest deliberately ignores it. The export
+	//   signature still requires an i64 result, so we return `i64.const 0`
+	//   which Host.Invoke decodes as an empty []byte (success/empty).
+	emitBody := []byte{
+		0x00,
+		0x41, 0x10, // i32.const 16
+		0x41, 0x08, // i32.const 8
+		0x20, 0x00, // local.get 0
+		0x20, 0x01, // local.get 1
+		0x10, 0x00, // call 0 (event_emit)
+		0x1A,       // drop
+		0x42, 0x00, // i64.const 0
+		0x0B,
+	}
+	emitBody = withSize(emitBody)
+
+	var code []byte
+	code = append(code, 0x02)
+	code = append(code, allocBody...)
+	code = append(code, emitBody...)
+	buf = append(buf, section(0x0A, code)...)
+
+	// Data: "ev.fired" at offset 16.
+	var data []byte
+	data = append(data, 0x01)
+	data = append(data, 0x00)
 	data = append(data, 0x41)
 	data = append(data, encodeSLEB128(16)...)
 	data = append(data, 0x0B)
