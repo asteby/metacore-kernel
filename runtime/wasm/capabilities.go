@@ -182,67 +182,85 @@ func registerHostModule(ctx context.Context, h *Host) error {
 		Export("http_fetch")
 
 	// event_emit(eventPtr, eventLen, payloadPtr, payloadLen) -> i64
-	// Publishes to the in-process events.Bus on behalf of the guest. Returns 0
-	// on a successful publish (subscribers, if any, ran synchronously inside
-	// Bus.Publish). On failure returns a packed (ptr<<32)|len of a JSON
-	// {"error","message"} envelope written into guest memory — the guest
-	// inspects len != 0 to detect failure.
+	// Publishes to the in-process events.Bus on behalf of the guest. The
+	// return value is always a packed (ptr<<32)|len of a JSON envelope
+	// (`{success, data, meta}` on success — `{success:false, error, meta}`
+	// on failure) written into guest memory via the guest's `alloc` export.
+	// Guests written against the v0.10 ABI that ignored the return value keep
+	// working — the envelope is allocated in the guest's own bump arena and
+	// the publish side-effect already ran by the time the function returns.
+	// See docs/wasm-abi.md § 12.4 for the wire shape and the resolution of
+	// the audit ABI v1.0 § 12 inconsistency #4.
 	b.NewFunctionBuilder().
 		WithFunc(func(ctx context.Context, mod api.Module,
 			eventPtr, eventLen, payloadPtr, payloadLen uint32) uint64 {
+			start := time.Now()
 			inv := invocationFrom(ctx)
 			if inv == nil {
-				return 0
+				// No invocation bag — fall back to a minimal error envelope.
+				// This path is unreachable in production (every entry through
+				// Host.Invoke* sets the bag) but defends against future
+				// re-wiring that might forget it.
+				return writeToGuest(ctx, mod, eventEmitErr("",
+					"bus_unavailable", "invocation context missing",
+					uuid.Nil, start))
 			}
 			if inv.bus == nil {
-				return writeToGuest(ctx, mod, jsonError("bus_unavailable",
-					"host has no events.Bus configured"))
-			}
-			// Tenant scope is mandatory for publish — see § 12.6 of
-			// docs/wasm-abi.md. Callers thread the orgID through
-			// runtime/wasm.WithOrgID (or Host.InvokeFor /
-			// Host.InvokeInTxFor) and the invocation reads it back here.
-			// Without it the bus would fan out with uuid.Nil and any
-			// subscriber filtering by tenant would see cross-org bleed.
-			if inv.orgID == uuid.Nil {
-				return writeToGuest(ctx, mod, jsonError("no_active_org",
-					"invocation has no bound orgID"))
+				return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
+					"bus_unavailable", "host has no events.Bus configured",
+					inv.orgID, start))
 			}
 			if eventLen == 0 {
-				return writeToGuest(ctx, mod, jsonError("invalid_event",
-					"event name is empty"))
+				return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
+					"invalid_event", "event name is empty",
+					inv.orgID, start))
 			}
 			if eventLen > eventNameMaxBytes {
-				return writeToGuest(ctx, mod, jsonError("invalid_event",
-					fmt.Sprintf("event name exceeds %d bytes", eventNameMaxBytes)))
+				return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
+					"invalid_event",
+					fmt.Sprintf("event name exceeds %d bytes", eventNameMaxBytes),
+					inv.orgID, start))
 			}
 			nameBytes, ok := mod.Memory().Read(eventPtr, eventLen)
 			if !ok {
-				return writeToGuest(ctx, mod, jsonError("invalid_event",
-					"event name out of guest memory"))
+				return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
+					"invalid_event", "event name out of guest memory",
+					inv.orgID, start))
 			}
 			if !utf8.Valid(nameBytes) {
-				return writeToGuest(ctx, mod, jsonError("invalid_event",
-					"event name is not valid UTF-8"))
+				return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
+					"invalid_event", "event name is not valid UTF-8",
+					inv.orgID, start))
 			}
 			eventName := string(nameBytes)
 			if payloadLen > eventPayloadMaxBytes {
-				return writeToGuest(ctx, mod, jsonError("payload_too_large",
-					fmt.Sprintf("payload exceeds %d bytes", eventPayloadMaxBytes)))
+				return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
+					"payload_too_large",
+					fmt.Sprintf("payload exceeds %d bytes", eventPayloadMaxBytes),
+					inv.orgID, start))
 			}
 			var payload any
 			if payloadLen > 0 {
 				body := readBytes(mod, payloadPtr, payloadLen)
 				if body == nil {
-					return writeToGuest(ctx, mod, jsonError("invalid_payload",
-						"payload out of guest memory"))
+					return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
+						"invalid_payload", "payload out of guest memory",
+						inv.orgID, start))
 				}
 				payload = json.RawMessage(body)
 			}
-			if err := inv.bus.Publish(ctx, inv.addonKey, eventName, inv.orgID, payload); err != nil {
-				return writeToGuest(ctx, mod, jsonError("forbidden", err.Error()))
+			if inv.orgID == uuid.Nil {
+				return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
+					"no_active_org", "invocation has no bound orgID",
+					uuid.Nil, start))
 			}
-			return 0
+			subscribers, err := inv.bus.PublishWithCount(ctx, inv.addonKey, eventName, inv.orgID, payload)
+			if err != nil {
+				return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
+					"forbidden", err.Error(), inv.orgID, start))
+			}
+			return writeToGuest(ctx, mod, eventEmitOK(
+				inv.addonKey, eventName, subscribers, inv.orgID, start))
 		}).
 		Export("event_emit")
 

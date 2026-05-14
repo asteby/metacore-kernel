@@ -103,12 +103,32 @@ func (b *Bus) Subscribe(addonKey, eventPattern string, h Handler) error {
 // The addonKey identifies the producer ("kernel" for host-originated events);
 // it drives the event:emit capability check. Handler errors are logged and
 // otherwise swallowed so one faulty subscriber cannot block siblings.
+//
+// Publish is a thin wrapper over PublishWithCount kept for source compat —
+// callers that need the matched-subscriber count (e.g. the wasm `event_emit`
+// envelope, see docs/wasm-abi.md § 12.4) should call PublishWithCount
+// directly.
 func (b *Bus) Publish(ctx context.Context, addonKey, event string, orgID uuid.UUID, payload any) error {
+	_, err := b.PublishWithCount(ctx, addonKey, event, orgID, payload)
+	return err
+}
+
+// PublishWithCount is the count-returning sibling of Publish. It mirrors the
+// Publish semantics 1:1 (capability check → match scan → synchronous fan-out)
+// and additionally returns the number of subscriber handlers that were
+// invoked. The count is the fan-out size, not the success count — handler
+// errors are still logged-and-swallowed, so a return of `(3, nil)` means
+// three handlers ran (one or more may have errored internally).
+//
+// On capability denial (enforce mode) or input error the count is `0` and
+// the error is non-nil. Capability denial in `ModeShadow` returns
+// `(matched, nil)` mirroring the bus's pre-existing behaviour.
+func (b *Bus) PublishWithCount(ctx context.Context, addonKey, event string, orgID uuid.UUID, payload any) (int, error) {
 	if event == "" {
-		return fmt.Errorf("events: empty event name")
+		return 0, fmt.Errorf("events: empty event name")
 	}
 	if err := b.check(addonKey, "event:emit", event); err != nil {
-		return err
+		return 0, err
 	}
 
 	b.mu.RLock()
@@ -129,7 +149,7 @@ func (b *Bus) Publish(ctx context.Context, addonKey, event string, orgID uuid.UU
 				s.AddonKey, s.Pattern, event, err)
 		}
 	}
-	return nil
+	return len(matched), nil
 }
 
 // Unsubscribe removes every subscription registered under addonKey. It is the
