@@ -63,6 +63,39 @@ func invocationFrom(ctx context.Context) *invocation {
 	return nil
 }
 
+// orgIDKey is the context tag callers stash a tenant id under via WithOrgID.
+// Kept private so consumers cannot collide on the type identity; reads go
+// through orgIDFrom.
+type orgIDKey struct{}
+
+// WithOrgID returns ctx tagged with the caller's organization id so the WASM
+// host imports that need tenant scoping (today: event_emit, see § 12.6 of
+// docs/wasm-abi.md) can resolve it without a new function parameter.
+//
+// Callers SHOULD wrap their context before reaching Host.Invoke /
+// Host.InvokeInTx when the invocation originates from a tenant-scoped
+// request (HTTP handler, action bridge, dynamic CRUD hook). The Host.InvokeFor
+// and Host.InvokeInTxFor sibling helpers do this automatically.
+//
+// Passing uuid.Nil is a no-op — it does not overwrite an existing tag — so
+// nested withers cannot accidentally erase an upstream tenant binding.
+func WithOrgID(ctx context.Context, orgID uuid.UUID) context.Context {
+	if orgID == uuid.Nil {
+		return ctx
+	}
+	return context.WithValue(ctx, orgIDKey{}, orgID)
+}
+
+// orgIDFrom reads the tenant id stashed by WithOrgID, or uuid.Nil if absent.
+// uuid.Nil is the documented "no active org" sentinel — see § 12.6 of
+// docs/wasm-abi.md for which imports treat that as an error vs. a no-op.
+func orgIDFrom(ctx context.Context) uuid.UUID {
+	if v, ok := ctx.Value(orgIDKey{}).(uuid.UUID); ok {
+		return v
+	}
+	return uuid.Nil
+}
+
 // registerHostModule exposes the "metacore_host" imports every guest relies
 // on. We keep the surface deliberately narrow: one function per privileged
 // capability, each enforced by security.Capabilities.
@@ -164,6 +197,16 @@ func registerHostModule(ctx context.Context, h *Host) error {
 			if inv.bus == nil {
 				return writeToGuest(ctx, mod, jsonError("bus_unavailable",
 					"host has no events.Bus configured"))
+			}
+			// Tenant scope is mandatory for publish — see § 12.6 of
+			// docs/wasm-abi.md. Callers thread the orgID through
+			// runtime/wasm.WithOrgID (or Host.InvokeFor /
+			// Host.InvokeInTxFor) and the invocation reads it back here.
+			// Without it the bus would fan out with uuid.Nil and any
+			// subscriber filtering by tenant would see cross-org bleed.
+			if inv.orgID == uuid.Nil {
+				return writeToGuest(ctx, mod, jsonError("no_active_org",
+					"invocation has no bound orgID"))
 			}
 			if eventLen == 0 {
 				return writeToGuest(ctx, mod, jsonError("invalid_event",

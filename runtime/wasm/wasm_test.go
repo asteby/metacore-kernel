@@ -65,15 +65,20 @@ func TestHost_InvokeUnknownExport(t *testing.T) {
 // TestHost_InvokeEventEmit drives the metacore_host.event_emit import end to
 // end: build a host with an attached events.Bus, register a subscriber, and
 // invoke a guest export that publishes "ev.fired" through the host import.
-// The test asserts the subscriber observed the publish *and* that the host
-// import returned 0 (success contract per task: 0 ok, ptr|len on error).
+// The test asserts the subscriber observed the publish, that the host
+// import returned 0 (success contract: 0 ok, ptr|len on error), AND that
+// the orgID threaded through Host.InvokeFor reached the subscriber — the
+// regression guard for the v0.10.2 fix that propagates `invocation.orgID`
+// end to end.
 func TestHost_InvokeEventEmit(t *testing.T) {
 	ctx := context.Background()
 
 	bus := events.NewBus(nil) // nil enforcer → capability check skipped
 	var fired int32
-	if err := bus.Subscribe("testaddon", "ev.fired", func(_ context.Context, _ uuid.UUID, _ any) error {
+	var seenOrgID uuid.UUID
+	if err := bus.Subscribe("testaddon", "ev.fired", func(_ context.Context, orgID uuid.UUID, _ any) error {
 		atomic.AddInt32(&fired, 1)
+		seenOrgID = orgID
 		return nil
 	}); err != nil {
 		t.Fatalf("subscribe: %v", err)
@@ -101,15 +106,129 @@ func TestHost_InvokeEventEmit(t *testing.T) {
 	// payloadLen=0). It returns the host's i64 directly via its export
 	// signature, but Host.Invoke interprets that as a packed result buffer.
 	// Success → 0 means an empty []byte back.
-	out, err := h.Invoke(ctx, uuid.New(), "testaddon", "emit_test", nil, nil)
+	orgID := uuid.New()
+	out, err := h.InvokeFor(ctx, orgID, uuid.New(), "testaddon", "emit_test", nil, nil)
 	if err != nil {
-		t.Fatalf("Invoke: %v", err)
+		t.Fatalf("InvokeFor: %v", err)
 	}
 	if len(out) != 0 {
 		t.Fatalf("expected empty result on successful publish, got %q", out)
 	}
 	if got := atomic.LoadInt32(&fired); got != 1 {
 		t.Fatalf("subscriber not invoked: got=%d want=1", got)
+	}
+	if seenOrgID != orgID {
+		t.Fatalf("subscriber saw orgID=%s, want %s — orgID not propagated end-to-end", seenOrgID, orgID)
+	}
+}
+
+// TestHost_InvokeEventEmitNoActiveOrg locks the v0.10.2 contract: when a
+// guest reaches `event_emit` without an orgID bound on the per-invocation
+// context bag (i.e. caller forgot to wrap with WithOrgID / used plain
+// Host.Invoke from a non-tenant path), the import returns a
+// `no_active_org` envelope instead of silently publishing with uuid.Nil.
+// Subscribers do NOT fire — the publish must be blocked, not just tagged.
+func TestHost_InvokeEventEmitNoActiveOrg(t *testing.T) {
+	ctx := context.Background()
+
+	bus := events.NewBus(nil)
+	var fired int32
+	if err := bus.Subscribe("testaddon", "ev.fired", func(_ context.Context, _ uuid.UUID, _ any) error {
+		atomic.AddInt32(&fired, 1)
+		return nil
+	}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	h, err := NewHost(ctx, security.Compile("testaddon", nil), nil)
+	if err != nil {
+		t.Fatalf("NewHost: %v", err)
+	}
+	h.WithBus(bus)
+	defer h.Close(ctx)
+
+	spec := &manifest.BackendSpec{
+		Runtime:   "wasm",
+		Entry:     "backend.wasm",
+		Exports:   []string{"emit_test"},
+		TimeoutMs: 2000,
+	}
+	if err := h.Load(ctx, "testaddon", eventEmitWasm(), spec); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Plain Invoke — no WithOrgID, no InvokeFor — must trigger the guard.
+	out, err := h.Invoke(ctx, uuid.New(), "testaddon", "emit_test", nil, nil)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("expected no_active_org JSON, got empty success")
+	}
+	if want := `"no_active_org"`; !strings.Contains(string(out), want) {
+		t.Fatalf("expected error JSON to contain %s, got %q", want, out)
+	}
+	if got := atomic.LoadInt32(&fired); got != 0 {
+		t.Fatalf("subscriber must NOT fire when orgID missing: got=%d", got)
+	}
+}
+
+// TestHost_InvokeEventEmitOrgIsolation asserts a subscriber that filters by
+// orgID receives only events from its own tenant. This is the multi-tenant
+// scenario the v0.10.2 fix unblocks: before the fix every publish sailed
+// out with uuid.Nil, so an org-aware subscriber saw zero matches.
+func TestHost_InvokeEventEmitOrgIsolation(t *testing.T) {
+	ctx := context.Background()
+
+	bus := events.NewBus(nil)
+	orgA := uuid.New()
+	orgB := uuid.New()
+
+	var receivedForA int32
+	var receivedForB int32
+	if err := bus.Subscribe("testaddon", "ev.fired", func(_ context.Context, orgID uuid.UUID, _ any) error {
+		switch orgID {
+		case orgA:
+			atomic.AddInt32(&receivedForA, 1)
+		case orgB:
+			atomic.AddInt32(&receivedForB, 1)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	h, err := NewHost(ctx, security.Compile("testaddon", nil), nil)
+	if err != nil {
+		t.Fatalf("NewHost: %v", err)
+	}
+	h.WithBus(bus)
+	defer h.Close(ctx)
+
+	spec := &manifest.BackendSpec{
+		Runtime:   "wasm",
+		Entry:     "backend.wasm",
+		Exports:   []string{"emit_test"},
+		TimeoutMs: 2000,
+	}
+	if err := h.Load(ctx, "testaddon", eventEmitWasm(), spec); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if _, err := h.InvokeFor(ctx, orgA, uuid.New(), "testaddon", "emit_test", nil, nil); err != nil {
+		t.Fatalf("InvokeFor(orgA): %v", err)
+	}
+	if _, err := h.InvokeFor(ctx, orgB, uuid.New(), "testaddon", "emit_test", nil, nil); err != nil {
+		t.Fatalf("InvokeFor(orgB): %v", err)
+	}
+	if _, err := h.InvokeFor(ctx, orgA, uuid.New(), "testaddon", "emit_test", nil, nil); err != nil {
+		t.Fatalf("InvokeFor(orgA) 2nd: %v", err)
+	}
+
+	if got, want := atomic.LoadInt32(&receivedForA), int32(2); got != want {
+		t.Fatalf("orgA: got=%d want=%d", got, want)
+	}
+	if got, want := atomic.LoadInt32(&receivedForB), int32(1); got != want {
+		t.Fatalf("orgB: got=%d want=%d", got, want)
 	}
 }
 

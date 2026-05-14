@@ -983,6 +983,17 @@ need to bound their own work do so themselves.
 
 ### 12.6 Tenant scope (`orgID` from the context bag)
 
+> **Resolved in v0.10.2 — orgID propagates end-to-end.** Audit item #5 of the
+> ABI v1 freeze flagged that the `invocation.orgID` field existed on
+> `runtime/wasm/capabilities.go` but was never populated by `invokeImpl`,
+> so every guest publish reached the bus with `uuid.Nil` and subscribers
+> filtering by tenant saw cross-org bleed. The fix landed in v0.10.2:
+> callers thread the tenant id through `runtime/wasm.WithOrgID(ctx, orgID)`
+> (or the ergonomic `Host.InvokeFor` / `Host.InvokeInTxFor` siblings, with
+> `host.Host.InvokeWASMFor` at the kernel-facade layer); `invokeImpl` reads
+> it back when building the per-invocation context bag, and `event_emit`
+> rejects the publish with `no_active_org` if it is still `uuid.Nil`.
+
 `event_emit` always carries an `orgID uuid.UUID` to `events.Bus.Publish`.
 The guest cannot supply it: the host stashes it on the per-invocation
 context bag (`runtime/wasm/capabilities.go:invocation`) at `Host.Invoke`
@@ -999,9 +1010,18 @@ if inv == nil || inv.orgID == uuid.Nil {
 The lookup mirrors what HTTP handlers do via `httpx.ExtractOrgID` — the
 caller of `Host.Invoke` (action bridge, webhook adapter, dynamic CRUD hook)
 is responsible for resolving `LocalOrganizationID` from its own context and
-forwarding it. Calling `Host.Invoke` without an `orgID` is a wiring bug; we
-surface it as `no_active_org` instead of letting the bus publish under a
-nil tenant.
+forwarding it via `WithOrgID` (or `Host.InvokeFor`). Calling `Host.Invoke`
+without an `orgID` is a wiring bug; we surface it as `no_active_org`
+instead of letting the bus publish under a nil tenant.
+
+**When `uuid.Nil` is legitimate.** A small set of callers have no active
+tenant by design: kernel boot probes, installer dry runs, fixture tests
+exercising imports other than `event_emit`. They may use plain
+`Host.Invoke` without `WithOrgID` and every non-tenant import (log,
+env_get, http_fetch, db_query, db_exec) continues to work — only
+`event_emit` returns `no_active_org`, which is the correct behaviour for
+that path (publishing into a tenant-aware bus from a tenantless context is
+exactly the bug the v0.10.2 fix prevents).
 
 The bus itself does not filter handlers by `orgID` — it only matches on
 event-name patterns. Subscribers receive `(ctx, orgID, payload)` and are

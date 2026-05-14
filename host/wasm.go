@@ -56,11 +56,27 @@ func (h *Host) LoadWASMFromBundle(ctx context.Context, b *bundle.Bundle) error {
 // InvokeWASM is a thin helper over Host.WASM.Invoke that binds the
 // installation's stored settings automatically. Returns the raw byte slice
 // the guest export wrote into its linear memory — caller unmarshals.
+//
+// Tenant-scoped callers SHOULD prefer InvokeWASMFor (or wrap ctx with
+// runtime/wasm.WithOrgID before reaching here) so the guest's event_emit
+// import resolves the right orgID; see docs/wasm-abi.md § 12.6.
 func (h *Host) InvokeWASM(ctx context.Context, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) ([]byte, error) {
 	if h.WASM == nil {
 		return nil, fmt.Errorf("host: WASM runtime not enabled")
 	}
 	return h.WASM.Invoke(ctx, installation, addonKey, funcName, payload, settings)
+}
+
+// InvokeWASMFor is the tenant-aware sibling of InvokeWASM. It threads orgID
+// through the runtime/wasm context bag so the guest's event_emit import
+// publishes against the caller's tenant. Pass uuid.Nil only when the
+// invocation legitimately has no active org (kernel boot probes, fixtures);
+// event_emit then surfaces `no_active_org` if the guest publishes.
+func (h *Host) InvokeWASMFor(ctx context.Context, orgID uuid.UUID, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) ([]byte, error) {
+	if h.WASM == nil {
+		return nil, fmt.Errorf("host: WASM runtime not enabled")
+	}
+	return h.WASM.InvokeFor(ctx, orgID, installation, addonKey, funcName, payload, settings)
 }
 
 // manifestBackend is re-exported for call sites that only import kernel/host.
