@@ -37,16 +37,16 @@ func AddonSchema(addonKey string) string {
 // Defense in depth:
 //  1. validateSelectOnly rejects obvious mutations and multi-statement
 //     payloads at the string layer.
-//  2. The Enforcer (when wired) gates the call against
-//     `db:read addon_<key>.*` per security.Capabilities.
+//  2. extractRelations parses the SQL with libpg_query and pulls every
+//     referenced (schema, table) out of the AST. Each cross-schema
+//     reference is gated against
+//     `Enforcer.CheckCapability("db:read", "<schema>.<rel>")` individually;
+//     bare names ride on the implicit own-schema capability because
+//     `SET LOCAL search_path` will resolve them there. A parse failure
+//     rejects the statement — never degrades to "permit". See
+//     docs/wasm-abi.md § 9.3.
 //  3. SET LOCAL search_path scopes bare-name lookups to the addon schema for
 //     the duration of the surrounding transaction.
-//
-// Cross-schema references (`public.foo`, `billing.invoices`) are NOT walked
-// in v1 — that requires a real Postgres AST parser and is tracked in
-// docs/wasm-abi.md § 9.7. Until v1.2, an addon that wants public reads must
-// declare an explicit `db:read public.<table>` capability AND the implicit
-// own-schema search_path will mask it on bare names.
 func executeDBQuery(
 	ctx context.Context,
 	db *gorm.DB,
@@ -80,9 +80,27 @@ func executeDBQuery(
 			fmt.Sprintf("argument count exceeds %d", dbQueryMaxArgs), durMs())
 	}
 
+	// AST-level cross-schema gate. Soft-guaranteed in v1.1 (§ 9.3) and
+	// enforced via libpg_query walk since v0.10.2. We always go through the
+	// parser so a malformed payload is rejected here rather than at the
+	// driver — that keeps the error code (`invalid_sql`) stable and avoids
+	// leaking driver detail back to the guest.
+	relations, parseErr := extractRelations(sqlText)
+	if parseErr != nil {
+		return dbQueryErr(schema, "invalid_sql", parseErr.Error(), durMs())
+	}
 	if enforcer != nil {
+		// Implicit own-schema gate stays — preserves the v0.10.1 behaviour
+		// of denying entirely-unregistered addons (no capabilities resolver
+		// hit) even when the parsed SQL only references the addon's own
+		// schema.
 		if err := enforcer.CheckCapability(addonKey, "db:read", schema+".*"); err != nil {
 			return dbQueryErr(schema, "forbidden", err.Error(), durMs())
+		}
+		for _, rel := range relations {
+			if err := gateRelation(enforcer, addonKey, schema, rel); err != nil {
+				return dbQueryErr(schema, "forbidden", err.Error(), durMs())
+			}
 		}
 	}
 
@@ -184,6 +202,39 @@ func executeDBQuery(
 			"response exceeds size cap", durMs())
 	}
 	return env
+}
+
+// gateRelation enforces the cross-schema rule from docs/wasm-abi.md § 9.3 for
+// a single parsed relation reference:
+//
+//   - Bare name (schema == "")  → allowed (search_path resolves into the
+//     addon's own schema; addons get implicit db:read on their own schema).
+//   - Own schema (addon_<key>) → allowed.
+//   - pg_catalog / information_schema / pg_* schemas → denied.
+//   - Anything else → must have an explicit `db:read <schema>.<rel>` or
+//     `db:read <schema>.*` capability.
+func gateRelation(enforcer *security.Enforcer, addonKey, addonSchema string, rel relationRef) error {
+	if rel.Schema == "" || rel.Schema == addonSchema {
+		return nil
+	}
+	if isIntrospectionSchema(rel.Schema) {
+		return fmt.Errorf("addon %q referenced introspection schema %q.%s",
+			addonKey, rel.Schema, rel.Table)
+	}
+	target := rel.Schema + "." + rel.Table
+	return enforcer.CheckCapability(addonKey, "db:read", target)
+}
+
+// isIntrospectionSchema returns true for the Postgres meta-schemas we never
+// expose through db_query. validateSelectOnly already filters these at the
+// string layer; this is the parser-level twin so a CTE / subquery that hides
+// the literal `pg_catalog` token still gets caught.
+func isIntrospectionSchema(schema string) bool {
+	s := strings.ToLower(schema)
+	if s == "pg_catalog" || s == "information_schema" || s == "pg_toast" || s == "pg_temp" {
+		return true
+	}
+	return strings.HasPrefix(s, "pg_")
 }
 
 func dbQueryErr(schema, code, message string, durationMs int64) []byte {

@@ -282,6 +282,23 @@ For each parsed relation reference the host computes a fully-qualified
 | `public.<table>` or other schema  | Requires `db:read <schema>.<table>` or `db:read <schema>.*`.             |
 | `pg_*` / `information_schema.*`   | Always denied (`forbidden`, `reason: "introspection_disabled"`).         |
 
+> **Enforcement contract (since v0.10.2):** the rules above are **enforced
+> at the AST layer**, not soft-guaranteed by `SET LOCAL search_path`. Every
+> `db_query` payload is parsed with libpg_query (`github.com/pganalyze/pg_query_go`)
+> and the walker pulls every `RangeVar` reachable from the statement: top-level
+> FROM tables, JOIN arms, CTE bodies, RangeSubselect derived tables,
+> `IN(SELECT …)` SubLinks, UNION/INTERSECT/EXCEPT arms and `VALUES` rows.
+> Each reference is then matched against the addon's compiled `db:read`
+> capability list individually — a partial grant (e.g. `db:read public.*`
+> while a join also references `billing.invoices`) denies the call before
+> the driver is touched. A parse failure rejects the statement with
+> `invalid_sql` rather than degrading to "permit". Prior to v0.10.2 this
+> was a soft-guarantee: `SET LOCAL search_path` masked bare names but a
+> guest writing `SELECT * FROM public.users` or another addon's schema
+> explicitly slipped past the gate — see commit
+> [`fix(security): enforce cross-schema gating in db_query via AST walk`](https://github.com/asteby/metacore-kernel/commit/HEAD)
+> for the fix.
+
 Cross-tenant scoping (org filters) is **orthogonal** and applied by the
 host transparently for any model that carries an `org_id` column — see
 [`permissions.md`](./permissions.md) for the row-level rules.
