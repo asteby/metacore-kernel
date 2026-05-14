@@ -15,6 +15,7 @@ import (
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/i18n"
 	"github.com/asteby/metacore-kernel/idempotency"
+	"github.com/asteby/metacore-kernel/lifecycle"
 	"github.com/asteby/metacore-kernel/marketplace"
 	kernellog "github.com/asteby/metacore-kernel/log"
 	"github.com/asteby/metacore-kernel/metadata"
@@ -146,6 +147,19 @@ type AppConfig struct {
 	// here.
 	AddonKeyForModel func(ctx context.Context, model string) string
 
+	// EnableLifecycleHooks turns on the manifest-driven lifecycle/CRUD
+	// hook runner. When true, NewApp constructs a `lifecycle.HookRunner`
+	// (exposed as `app.HookRunner`) and a `dynamic.HookRegistry` (exposed
+	// as `app.DynamicHooks`); both are wired into the dynamic engine so
+	// addons that declare `manifest.lifecycle_hooks` get them honoured.
+	// Hosts still register the dispatcher implementations for
+	// "wasm"/"webhook" themselves (see `lifecycle.HookRunner.Register`)
+	// because those depend on the host's wasm runtime instance and signed
+	// webhook dispatcher. Off by default: existing apps keep the
+	// pre-implementation behaviour where `lifecycle_hooks` is purely
+	// declarative.
+	EnableLifecycleHooks bool
+
 	// Overrides
 	MetadataCacheTTL time.Duration // default 5m
 	JWTExpiry        time.Duration // default 24h
@@ -171,6 +185,18 @@ type App struct {
 	// (services["eventbus"]) or directly via app.Bus when they live in the
 	// same binary as the host.
 	Bus *events.Bus
+
+	// HookRunner reads manifest.LifecycleHooks and dispatches each
+	// declared HookDef. Non-nil iff AppConfig.EnableLifecycleHooks was
+	// true. Hosts register dispatchers (wasm, webhook) before Boot.
+	HookRunner *lifecycle.HookRunner
+
+	// DynamicHooks is the dynamic.HookRegistry the addon installer projects
+	// manifest before_*/after_* CRUD hooks into. Non-nil iff
+	// AppConfig.EnableLifecycleHooks was true. Apps can keep registering
+	// their own compiled hooks against it through the
+	// RegisterBeforeCreate / … entry points.
+	DynamicHooks *dynamic.HookRegistry
 
 	// Metrics registry — non-nil when AppConfig.EnableMetrics is true.
 	Metrics *metrics.Registry
@@ -269,21 +295,36 @@ func NewApp(cfg AppConfig) *App {
 	// addons and host code share a single fan-out point.
 	bus := events.NewBus(cfg.EventsEnforcer)
 
+	// Lifecycle hook plumbing — opt-in via AppConfig.EnableLifecycleHooks
+	// so existing apps that don't declare hooks don't pay for an extra
+	// registry. When enabled the dynamic engine consults the registry on
+	// every CRUD mutation; hosts still register the wasm/webhook
+	// dispatchers separately before Boot.
+	var hookRunner *lifecycle.HookRunner
+	var dynHooks *dynamic.HookRegistry
+	if cfg.EnableLifecycleHooks {
+		hookRunner = lifecycle.NewHookRunner(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+		dynHooks = dynamic.NewHookRegistry()
+	}
+
 	dynSvc := dynamic.New(dynamic.Config{
 		DB:               cfg.DB,
 		Metadata:         metaSvc,
 		Permissions:      permSvc,
+		Hooks:            dynHooks,
 		Bus:              bus,
 		AddonKeyForModel: cfg.AddonKeyForModel,
 	})
 
 	a := &App{
-		Config:     cfg,
-		Auth:       authSvc,
-		Metadata:   metaSvc,
-		Permission: permSvc,
-		Dynamic:    dynSvc,
-		Bus:        bus,
+		Config:       cfg,
+		Auth:         authSvc,
+		Metadata:     metaSvc,
+		Permission:   permSvc,
+		Dynamic:      dynSvc,
+		Bus:          bus,
+		HookRunner:   hookRunner,
+		DynamicHooks: dynHooks,
 	}
 
 	if cfg.EnableMetrics {

@@ -57,6 +57,50 @@ var (
 		"webhook": {},
 		"noop":    {},
 	}
+	// validLifecycleHookEvents enumerates the manifest.LifecycleHooks map
+	// keys the kernel knows how to fire. "install"/"uninstall"/"enable"/
+	// "disable"/"upgrade" come from the installer; the "before_*"/"after_*"
+	// family runs from dynamic.Service around model mutations.
+	//
+	// Authors who declare an event outside this set hit a validation error
+	// at install time — manifests stay self-documenting and a typo never
+	// silently turns into a hook that never fires.
+	validLifecycleHookEvents = map[string]struct{}{
+		"install":       {},
+		"uninstall":     {},
+		"enable":        {},
+		"disable":       {},
+		"upgrade":       {},
+		"before_create": {},
+		"after_create":  {},
+		"before_update": {},
+		"after_update":  {},
+		"before_delete": {},
+		"after_delete":  {},
+	}
+	// validLifecycleHookTargets enumerates the HookTarget.Type values an
+	// addon can declare. The runner ships dispatchers for "wasm" and
+	// "webhook"; "prompt" is reserved for a future LLM dispatcher and
+	// validates but runs as a no-op until a host wires one in.
+	validLifecycleHookTargets = map[string]struct{}{
+		"wasm":    {},
+		"webhook": {},
+		"prompt":  {},
+	}
+	// lifecycleBeforeEvents lists the events that semantically veto the
+	// operation on error. Used to reject `async: true` combined with a
+	// before-hook — the runner needs to block on the result to honour the
+	// veto, so async would silently degrade the contract.
+	lifecycleBeforeEvents = map[string]struct{}{
+		"install":       {},
+		"uninstall":     {},
+		"enable":        {},
+		"disable":       {},
+		"upgrade":       {},
+		"before_create": {},
+		"before_update": {},
+		"before_delete": {},
+	}
 	// validFrontendLayouts is the closed set of FrontendSpec.Layout values.
 	// Empty string is accepted at the call site and treated as "shell" for
 	// backwards compatibility with manifests authored before the field
@@ -264,6 +308,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 		return err
 	}
 	if err := m.validateActionTriggers(); err != nil {
+		return err
+	}
+	if err := m.validateLifecycleHooks(); err != nil {
 		return err
 	}
 	if m.Frontend != nil {
@@ -492,6 +539,64 @@ func (v *ValidationRule) validate() error {
 	}
 	if v.Custom != "" && !customValidatorRe.MatchString(v.Custom) && !orgRefRe.MatchString(v.Custom) {
 		return fmt.Errorf("custom %q must be a dotted identifier (e.g. \"email.basic\") or an org reference (e.g. \"$org.tax_id_validator\")", v.Custom)
+	}
+	return nil
+}
+
+// validateLifecycleHooks walks `m.LifecycleHooks` and enforces the closed
+// event/target sets plus the per-shape contract (wasm exports listed,
+// webhook URL present, async forbidden on before-events). A nil map is a
+// no-op so manifests that don't declare hooks validate exactly as before.
+func (m *Manifest) validateLifecycleHooks() error {
+	if len(m.LifecycleHooks) == 0 {
+		return nil
+	}
+	exports := m.backendExportSet()
+	for event, defs := range m.LifecycleHooks {
+		if _, ok := validLifecycleHookEvents[event]; !ok {
+			return fmt.Errorf("manifest.lifecycle_hooks[%q]: unknown event (want install|uninstall|enable|disable|upgrade|before_create|after_create|before_update|after_update|before_delete|after_delete)", event)
+		}
+		_, isBefore := lifecycleBeforeEvents[event]
+		for i, h := range defs {
+			if h.Event != "" && h.Event != event {
+				// Event is keyed by the map already; the optional field
+				// must match when set so the manifest stays self-consistent.
+				return fmt.Errorf("manifest.lifecycle_hooks[%q][%d]: event %q does not match map key", event, i, h.Event)
+			}
+			if _, ok := validLifecycleHookTargets[h.Target.Type]; !ok {
+				return fmt.Errorf("manifest.lifecycle_hooks[%q][%d].target.type: unknown %q (want wasm|webhook|prompt)", event, i, h.Target.Type)
+			}
+			switch h.Target.Type {
+			case "wasm":
+				if strings.TrimSpace(h.Target.Function) == "" {
+					return fmt.Errorf("manifest.lifecycle_hooks[%q][%d].target.function: required when type=wasm", event, i)
+				}
+				if !triggerExportRe.MatchString(h.Target.Function) {
+					return fmt.Errorf("manifest.lifecycle_hooks[%q][%d].target.function: invalid symbol %q", event, i, h.Target.Function)
+				}
+				// Cross-check against Backend.Exports so a typo is caught
+				// at install time rather than at first dispatch.
+				if len(exports) > 0 {
+					if _, ok := exports[h.Target.Function]; !ok {
+						return fmt.Errorf("manifest.lifecycle_hooks[%q][%d].target.function: %q not declared in backend.exports", event, i, h.Target.Function)
+					}
+				}
+			case "webhook":
+				if strings.TrimSpace(h.Target.URL) == "" {
+					return fmt.Errorf("manifest.lifecycle_hooks[%q][%d].target.url: required when type=webhook", event, i)
+				}
+			case "prompt":
+				if strings.TrimSpace(h.Target.Prompt) == "" {
+					return fmt.Errorf("manifest.lifecycle_hooks[%q][%d].target.prompt: required when type=prompt", event, i)
+				}
+			}
+			if h.Async && isBefore {
+				// Before-hooks veto the operation on error; async would
+				// silently drop the veto. Forbid the combination at
+				// authoring time rather than at dispatch.
+				return fmt.Errorf("manifest.lifecycle_hooks[%q][%d].async: not allowed on before/lifecycle events (the runner must block on the result to honour a veto)", event, i)
+			}
+		}
 	}
 	return nil
 }
