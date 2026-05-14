@@ -5,37 +5,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
-
-### Added
-
-- **`guest/` package — TinyGo-compatible helpers for addon authors.** New
-  package `github.com/asteby/metacore-kernel/guest` consumable from any
-  wasm backend (TinyGo target `wasi` / `wasm-unknown`). The first helper,
-  `guest.EmitEvent(event, payload)`, wraps the `metacore_host.event_emit`
-  import: marshals the payload via `encoding/json`, calls the host,
-  unpacks the `(ptr<<32)|len` return value, reads the response buffer
-  out of guest memory, and decodes the `{success, data, meta}` envelope
-  documented in [`docs/wasm-abi.md` § 12.4](docs/wasm-abi.md#124-response-envelope)
-  into a typed `EmitEventResult` plus typed `*EmitEventError`. Forward-
-  compatible decoder: unknown `meta.envelopeVersion` values are tolerated
-  (known fields populated, unknown fields ignored) so guests authored
-  against v1 keep working when the host bumps to v2. Empty-buffer return
-  (`packed == 0`) is preserved as a zero-value success so the helper is
-  also compatible with hosts on the pre-PR-#62 contract that returned
-  literal `0` on success. The package additionally ships an opt-in
-  default `alloc` export (build tag `metacore_guest_alloc`) for addons
-  that don't already define their own bump allocator. Only stdlib used
-  (`encoding/json`, `errors`, `unsafe`); no kernel-runtime dependencies
-  pulled in, so TinyGo can compile the helpers cleanly. See
-  [`docs/guest-go.md`](docs/guest-go.md) for usage. Follow-up to PR #62
-  (`event_emit` rich envelope) which called out "guest SDK helpers, not
-  the kernel" as the next step. Minor bump — purely additive.
-
 ## [0.11.0] - 2026-05-14
 
 ### Added
 
+- **ABI WASM v1.0 contract frozen + documented (PR #56).** The full host
+  import / export contract, manifest schema, capability axes, and host
+  envelope shapes are now codified in
+  [`docs/wasm-abi.md`](docs/wasm-abi.md) as the v1.0 stable surface that
+  third-party addon authors can target. The audit pass that produced the
+  freeze flagged seven follow-up inconsistencies (resolved across PRs
+  #58 / #61 / #62 / #63 / #64 / #65 in this release) so the doc and the
+  runtime line up byte-for-byte for v1.0. Future ABI versions will bump
+  `meta.envelopeVersion` (host envelopes) and `wasm.ABIVersion` (kernel
+  Go constant) in lockstep; v1 stays the supported floor for the
+  foreseeable future.
+- **`hub/` package — kernel-side Hub HTTP client for ecosystem consumers
+  (PR #57).** New `github.com/asteby/metacore-kernel/hub` package that
+  speaks the Hub catalog/bundle contract end-to-end so every kernel
+  consumer (ops, link, custom apps embedding the kernel) gets browse →
+  fetch → install with one import path. API: `hub.NewClient(baseURL,
+  token, opts...)`, `hub.FromEnv(opts...)` (reads `HUB_BASE_URL` /
+  `HUB_LICENSE_TOKEN`), `c.FetchCatalog(ctx, params) → CatalogResult`,
+  `c.FetchAddon(ctx, key) → *AddonDetail` (`errors.Is(err,
+  ErrNotFound)`), `c.DownloadBundle(ctx, key, version) → io.ReadCloser`
+  (streamed, never buffers — wires directly into `kernel/bundle.Read`),
+  and `c.FetchSpec(ctx) → *Spec` (`ErrSpecUnavailable` when `/v1/spec`
+  404s). Bearer auth is optional: public catalogs browse anonymously,
+  license token is sent as Bearer when configured. Zero kernel-internal
+  dependencies so non-kernel Go services (Hub admin tooling, CI bots)
+  can import the package standalone. Tests in `hub/client_test.go` are
+  fully self-contained — httptest server speaks the Hub contract,
+  covers happy paths, 404 → `ErrNotFound`, `/v1/spec` →
+  `ErrSpecUnavailable`, header / query forwarding, and a 1 MiB stream
+  regression for `DownloadBundle`. Minor bump — purely additive, no
+  kernel-internal changes.
 - **`metacore_host.event_emit` now returns the canonical
   `{success, data, meta}` envelope documented in
   [`docs/wasm-abi.md` § 12.4](docs/wasm-abi.md).** Prior to this release
@@ -165,101 +169,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `runtime/flow` in a follow-up PR and delete its `internal/flow`
   vendor copy then. Additive, no breaking changes.
 
-### Deprecated
-
-- **`manifest.events`** — kept for back-compat; will be derived from
-  `Capabilities[event:emit]` in v2. `ValidateAdvisory` emits a warning
-  for every entry that has no matching `event:emit` capability so
-  addon authors can migrate before v2 removes the field. The runtime
-  authoritative gate has been the capability set since v0.8 — the array
-  itself was never consulted.
-
-### Notes
-
-- No breaking changes to the `event_emit` import signature. ABI v1
-  remains intact — only the return-value semantics changed (from "0 on
-  success" to "ptr|len of envelope always"), and the publish side-effect
-  ordering is unchanged.
-- The audit cross-reference at
-  [`docs/audits/2026-05-04-host-functions-gap.md`](docs/audits/2026-05-04-host-functions-gap.md)
-  has been amended with the resolution note.
-
-## [0.10.3] - 2026-05-14
-
-### Fixed
-
-- **`runtime/wasm.db_exec` now enforces the documented cross-schema
-  capability gate via the same AST walk introduced for `db_query` in
-  v0.10.2.** The pre-v0.10.3 path only ran
-  `Enforcer.CheckCapability(addonKey, "db:write", "addon_<key>.*")`
-  against the addon's own implicit schema. `SET LOCAL search_path TO
-  addon_<key>, public` did scope bare names back into the addon schema,
-  but a guest writing `UPDATE public.users SET role = 'admin'` (or any
-  other cross-schema `INSERT` / `DELETE` / `MERGE`, or a CTE-hidden
-  mutation like `WITH x AS (UPDATE other.t SET …) …`) bypassed the gate
-  entirely — declarations like `db:write public.users` were optional in
-  practice. Documented as the soft-guarantee twin of § 9.3 in
-  [`docs/wasm-abi.md`](docs/wasm-abi.md) § 10.3; flagged as a hallazgo
-  follow-up to PR #61 before opening the kernel to third-party addons.
-  Resolution: the `extractRelations` walker from v0.10.2 is generalised
-  into `extractMutationRelations`, which still parses with libpg_query
-  but now tags each relation reference by the capability axis it must
-  satisfy. DML targets (the `Relation` field of an `InsertStmt` /
-  `UpdateStmt` / `DeleteStmt` / `MergeStmt` at any nesting depth,
-  including inside a `WITH … <DML>` CTE body) emit a `db:write` ref;
-  read-only sources (`UPDATE.FROM`, `DELETE.USING`, `MERGE` source,
-  `INSERT.SELECT`, `RETURNING` / `WHERE` subqueries, CTE bodies that
-  are themselves SELECTs) emit `db:read` refs. Each is gated
-  individually against the addon's compiled capability list. The
-  `validateMutationOnly` string-level check is loosened to accept a
-  leading `WITH` (Postgres allows `WITH cte AS (…) INSERT / UPDATE /
-  DELETE / MERGE`); the AST-layer top-level check inside
-  `extractMutationRelations` enforces that the top-level statement
-  after the WITH is a DML so `db_exec` can't be used as a SELECT bypass.
-  Parse failure rejects with `invalid_sql` instead of degrading to
-  "permit".
-- **`db_query` and `db_exec` walkers now gate `RangeFunction` references
-  (function-as-table — `SELECT * FROM other.fn(args)`).** The v0.10.2
-  walker only reached `RangeVar` nodes, so libpg_query's split between
-  table references (`RangeVar`) and function references (`FuncCall`
-  wrapped in `RangeFunction.Functions[]`) left an open vector: a guest
-  could read or call `other_addon.my_func()` without declaring any
-  capability for `other_addon.*`. The walker now recurses into
-  `RangeFunction.Functions[]`, pulls the schema-qualified function name
-  out of `FuncCall.Funcname` (Postgres lists this as `[schema, fn]` or
-  `[catalog, schema, fn]` — we collapse to `schema.fn`), and gates the
-  reference exactly like a relation: bare names ride the implicit
-  own-schema grant through `SET LOCAL search_path`; cross-schema names
-  require an explicit `<cap> <schema>.<fn>` (or `<cap> <schema>.*`)
-  declaration. Inside a mutation scope a `setof`-returning function may
-  read AND write state, and the AST gives us no way to tell which, so
-  the function name is gated **defensively under both axes** —
-  declared caps must cover `db:read <schema>.<fn>` and
-  `db:write <schema>.<fn>` to let the call through.
-- **Tests.** New file `runtime/wasm/dbexec_xschema_test.go` covers the
-  v0.10.3 regressions end-to-end: bare-table allowed, own-schema
-  qualified allowed, `UPDATE public.users` without cap denied,
-  `UPDATE public.users` with `db:write public.*` allowed, with
-  `db:write public.users` allowed, `INSERT` / `DELETE` / `MERGE` into
-  another schema without cap denied, `UPDATE … FROM cross.schema`
-  source side gated under `db:read`, CTE-hidden DML cross-schema
-  denied, `WITH … SELECT` rejected at the AST layer, parse-error
-  regression (`invalid_sql` not "permit"), `db_query`
-  `SELECT * FROM other.my_func()` without cap denied / with cap
-  allowed, and `db_exec`'s defensive function-as-table dual-axis gate.
-  `extractMutationRelations` also gets a focused unit-test layer for
-  every DML node shape so the cap tagging stays explicit. No
-  public-API changes — `executeDBExec` / `executeDBQuery` signatures
-  and the host-import wire shape are byte-for-byte identical, and the
-  `db_exec` envelope is unchanged. Patch bump: security hardening,
-  no consumer-facing changes.
-
-## [0.10.2] - 2026-05-14
+- **`guest/` package — TinyGo-compatible helpers for addon authors
+  (PR #66).** New package `github.com/asteby/metacore-kernel/guest`
+  consumable from any wasm backend (TinyGo target `wasi` /
+  `wasm-unknown`). The first helper, `guest.EmitEvent(event, payload)`,
+  wraps the `metacore_host.event_emit` import: marshals the payload via
+  `encoding/json`, calls the host, unpacks the `(ptr<<32)|len` return
+  value, reads the response buffer out of guest memory, and decodes the
+  `{success, data, meta}` envelope documented in
+  [`docs/wasm-abi.md` § 12.4](docs/wasm-abi.md#124-response-envelope)
+  into a typed `EmitEventResult` plus typed `*EmitEventError`.
+  Forward-compatible decoder: unknown `meta.envelopeVersion` values are
+  tolerated (known fields populated, unknown fields ignored) so guests
+  authored against v1 keep working when the host bumps to v2. Empty-
+  buffer return (`packed == 0`) is preserved as a zero-value success so
+  the helper is also compatible with hosts on the pre-PR-#62 contract
+  that returned literal `0` on success. The package additionally ships
+  an opt-in default `alloc` export (build tag `metacore_guest_alloc`)
+  for addons that don't already define their own bump allocator. Only
+  stdlib used (`encoding/json`, `errors`, `unsafe`); no kernel-runtime
+  dependencies pulled in, so TinyGo can compile the helpers cleanly.
+  See [`docs/guest-go.md`](docs/guest-go.md) for usage. Follow-up to
+  PR #62 (`event_emit` rich envelope) which called out "guest SDK
+  helpers, not the kernel" as the next step. Purely additive.
 
 ### Fixed
 
 - **`runtime/wasm` now propagates `orgID` end-to-end into `event_emit`
-  publishes.** The `invocation.orgID` field declared on
+  publishes (PR #58).** The `invocation.orgID` field declared on
   `runtime/wasm/capabilities.go` was never populated by `invokeImpl`, so
   every guest call to `event_emit` reached `events.Bus.Publish` with
   `uuid.Nil`. Subscribers filtering by tenant (the documented contract,
@@ -277,13 +214,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   layer. `event_emit` now also enforces the documented `no_active_org`
   guard — a publish without a bound orgID returns the JSON error
   envelope instead of silently fanning out under `uuid.Nil`. The full
-  contract lives at `docs/wasm-abi.md` § 12.6. Patch bump — additive
-  and backwards compatible: legacy callers that go through
-  `Host.Invoke` keep working for every non-tenant import (log, env_get,
-  http_fetch, db_query, db_exec); only `event_emit` from a tenantless
-  context surfaces `no_active_org`, which is the correct behaviour.
+  contract lives at `docs/wasm-abi.md` § 12.6. Additive and backwards
+  compatible: legacy callers that go through `Host.Invoke` keep working
+  for every non-tenant import (log, env_get, http_fetch, db_query,
+  db_exec); only `event_emit` from a tenantless context surfaces
+  `no_active_org`, which is the correct behaviour.
 - **`runtime/wasm.db_query` now enforces the documented cross-schema
-  capability gate via an AST walk.** The pre-v0.10.2 path only ran
+  capability gate via an AST walk (PR #61).** The pre-fix path only ran
   `Enforcer.CheckCapability(addonKey, "db:read", "addon_<key>.*")` against
   the addon's own implicit schema. `SET LOCAL search_path TO addon_<key>,
   public` did scope bare names back into the addon schema, but a guest
@@ -306,9 +243,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `invalid_sql` instead of silently bypassing the gate. The `db_query`
   host import signature is unchanged — this is purely an internal
   hardening, ABI v1 stays stable. New test file
-  `runtime/wasm/dbquery_xschema_test.go` covers bare-name still
-  allowed, own-schema qualified still allowed, cross-schema without cap
-  denied, cross-schema with `<schema>.*` cap allowed, cross-schema with
+  `runtime/wasm/dbquery_xschema_test.go` covers bare-name still allowed,
+  own-schema qualified still allowed, cross-schema without cap denied,
+  cross-schema with `<schema>.*` cap allowed, cross-schema with
   per-relation cap allowed, mixed cross-schema joins (partial cap =
   deny, full cap = allow), CTE / SubLink / RangeSubselect-hidden
   references denied, and a parse-error regression that asserts we
@@ -316,8 +253,91 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `github.com/pganalyze/pg_query_go/v6` (CGO, already required for
   `mattn/go-sqlite3`); the sole new transitive is
   `google.golang.org/protobuf` which we already pull through
-  `prometheus/client_golang`. Patch bump — security hardening, no
-  consumer-facing changes.
+  `prometheus/client_golang`. Security hardening, no consumer-facing
+  changes.
+- **`runtime/wasm.db_exec` now enforces the documented cross-schema
+  capability gate via the same AST walk introduced for `db_query`
+  (PR #63).** The pre-fix `db_exec` path only ran
+  `Enforcer.CheckCapability(addonKey, "db:write", "addon_<key>.*")`
+  against the addon's own implicit schema. `SET LOCAL search_path TO
+  addon_<key>, public` did scope bare names back into the addon schema,
+  but a guest writing `UPDATE public.users SET role = 'admin'` (or any
+  other cross-schema `INSERT` / `DELETE` / `MERGE`, or a CTE-hidden
+  mutation like `WITH x AS (UPDATE other.t SET …) …`) bypassed the gate
+  entirely — declarations like `db:write public.users` were optional in
+  practice. Documented as the soft-guarantee twin of § 9.3 in
+  [`docs/wasm-abi.md`](docs/wasm-abi.md) § 10.3; flagged as a hallazgo
+  follow-up to PR #61 before opening the kernel to third-party addons.
+  Resolution: the `extractRelations` walker from PR #61 is generalised
+  into `extractMutationRelations`, which still parses with libpg_query
+  but now tags each relation reference by the capability axis it must
+  satisfy. DML targets (the `Relation` field of an `InsertStmt` /
+  `UpdateStmt` / `DeleteStmt` / `MergeStmt` at any nesting depth,
+  including inside a `WITH … <DML>` CTE body) emit a `db:write` ref;
+  read-only sources (`UPDATE.FROM`, `DELETE.USING`, `MERGE` source,
+  `INSERT.SELECT`, `RETURNING` / `WHERE` subqueries, CTE bodies that
+  are themselves SELECTs) emit `db:read` refs. Each is gated
+  individually against the addon's compiled capability list. The
+  `validateMutationOnly` string-level check is loosened to accept a
+  leading `WITH` (Postgres allows `WITH cte AS (…) INSERT / UPDATE /
+  DELETE / MERGE`); the AST-layer top-level check inside
+  `extractMutationRelations` enforces that the top-level statement
+  after the WITH is a DML so `db_exec` can't be used as a SELECT bypass.
+  Parse failure rejects with `invalid_sql` instead of degrading to
+  "permit".
+- **`db_query` and `db_exec` walkers now gate `RangeFunction` references
+  (function-as-table — `SELECT * FROM other.fn(args)`) (PR #63).** The
+  PR #61 walker only reached `RangeVar` nodes, so libpg_query's split
+  between table references (`RangeVar`) and function references
+  (`FuncCall` wrapped in `RangeFunction.Functions[]`) left an open
+  vector: a guest could read or call `other_addon.my_func()` without
+  declaring any capability for `other_addon.*`. The walker now recurses
+  into `RangeFunction.Functions[]`, pulls the schema-qualified function
+  name out of `FuncCall.Funcname` (Postgres lists this as `[schema, fn]`
+  or `[catalog, schema, fn]` — we collapse to `schema.fn`), and gates
+  the reference exactly like a relation: bare names ride the implicit
+  own-schema grant through `SET LOCAL search_path`; cross-schema names
+  require an explicit `<cap> <schema>.<fn>` (or `<cap> <schema>.*`)
+  declaration. Inside a mutation scope a `setof`-returning function may
+  read AND write state, and the AST gives us no way to tell which, so
+  the function name is gated **defensively under both axes** —
+  declared caps must cover `db:read <schema>.<fn>` and
+  `db:write <schema>.<fn>` to let the call through.
+- **Tests.** New file `runtime/wasm/dbexec_xschema_test.go` covers the
+  PR #63 regressions end-to-end: bare-table allowed, own-schema
+  qualified allowed, `UPDATE public.users` without cap denied,
+  `UPDATE public.users` with `db:write public.*` allowed, with
+  `db:write public.users` allowed, `INSERT` / `DELETE` / `MERGE` into
+  another schema without cap denied, `UPDATE … FROM cross.schema`
+  source side gated under `db:read`, CTE-hidden DML cross-schema
+  denied, `WITH … SELECT` rejected at the AST layer, parse-error
+  regression (`invalid_sql` not "permit"), `db_query`
+  `SELECT * FROM other.my_func()` without cap denied / with cap
+  allowed, and `db_exec`'s defensive function-as-table dual-axis gate.
+  `extractMutationRelations` also gets a focused unit-test layer for
+  every DML node shape so the cap tagging stays explicit. No
+  public-API changes — `executeDBExec` / `executeDBQuery` signatures
+  and the host-import wire shape are byte-for-byte identical, and the
+  `db_exec` envelope is unchanged.
+
+### Deprecated
+
+- **`manifest.events`** — kept for back-compat; will be derived from
+  `Capabilities[event:emit]` in v2. `ValidateAdvisory` emits a warning
+  for every entry that has no matching `event:emit` capability so
+  addon authors can migrate before v2 removes the field. The runtime
+  authoritative gate has been the capability set since v0.8 — the array
+  itself was never consulted.
+
+### Notes
+
+- No breaking changes to the `event_emit` import signature. ABI v1
+  remains intact — only the return-value semantics changed (from "0 on
+  success" to "ptr|len of envelope always"), and the publish side-effect
+  ordering is unchanged.
+- The audit cross-reference at
+  [`docs/audits/2026-05-04-host-functions-gap.md`](docs/audits/2026-05-04-host-functions-gap.md)
+  has been amended with the resolution note.
 
 ## [0.10.1] - 2026-05-11
 
