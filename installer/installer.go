@@ -219,8 +219,15 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	if err := i.verifySignature(b); err != nil {
 		return nil, nil, err
 	}
-	if err := b.Manifest.Validate(i.KernelVersion); err != nil {
+	warnings, err := b.Manifest.ValidateAdvisory(i.KernelVersion)
+	if err != nil {
 		return nil, nil, err
+	}
+	for _, w := range warnings {
+		slog.Warn("manifest.advisory",
+			"addon", b.Manifest.Key,
+			"version", b.Manifest.Version,
+			"warning", w)
 	}
 	if err := i.DB.AutoMigrate(&Installation{}); err != nil {
 		return nil, nil, err

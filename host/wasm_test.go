@@ -3,6 +3,7 @@ package host
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/asteby/metacore-kernel/bundle"
@@ -10,6 +11,57 @@ import (
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
 )
+
+// TestHost_LoadWASMFromBundle_BinaryRuntimeRejected exercises the ABI v1.0
+// "binary" runtime path: the manifest validates (so addon authors can
+// declare the reserved value ahead of time) but the host refuses to install
+// it because there is no executor yet. The error must wrap
+// ErrRuntimeNotImplemented so call sites can branch with errors.Is.
+func TestHost_LoadWASMFromBundle_BinaryRuntimeRejected(t *testing.T) {
+	ctx := context.Background()
+	h := &Host{}
+	caps := security.Compile("native_addon", nil)
+	if err := h.EnableWASM(ctx, caps); err != nil {
+		t.Fatalf("EnableWASM: %v", err)
+	}
+	defer h.WASM.Close(ctx)
+
+	b := &bundle.Bundle{
+		Manifest: manifest.Manifest{
+			Key:     "native_addon",
+			Backend: &manifest.BackendSpec{Runtime: "binary"},
+		},
+	}
+	err := h.LoadWASMFromBundle(ctx, b)
+	if err == nil {
+		t.Fatal("expected error for binary runtime")
+	}
+	if !errors.Is(err, ErrRuntimeNotImplemented) {
+		t.Fatalf("expected ErrRuntimeNotImplemented, got %v", err)
+	}
+}
+
+// TestHost_LoadWASMFromBundle_WebhookIsNoop confirms the webhook short-circuit
+// is untouched by the binary-runtime guard added in v0.11.0.
+func TestHost_LoadWASMFromBundle_WebhookIsNoop(t *testing.T) {
+	ctx := context.Background()
+	h := &Host{}
+	caps := security.Compile("hook_addon", nil)
+	if err := h.EnableWASM(ctx, caps); err != nil {
+		t.Fatalf("EnableWASM: %v", err)
+	}
+	defer h.WASM.Close(ctx)
+
+	b := &bundle.Bundle{
+		Manifest: manifest.Manifest{
+			Key:     "hook_addon",
+			Backend: &manifest.BackendSpec{Runtime: "webhook"},
+		},
+	}
+	if err := h.LoadWASMFromBundle(ctx, b); err != nil {
+		t.Fatalf("webhook runtime must be a no-op, got %v", err)
+	}
+}
 
 // TestHost_WASM_EndToEnd wires the minimal path a real host uses:
 // EnableWASM → LoadWASMFromBundle(bundle with backend/backend.wasm) →
