@@ -21,7 +21,9 @@ type dbeEnvelope struct {
 }
 
 type dbeData struct {
-	RowsAffected int64 `json:"rowsAffected"`
+	RowsAffected int64            `json:"rowsAffected"`
+	Rows         []map[string]any `json:"rows,omitempty"`
+	Columns      []map[string]any `json:"columns,omitempty"`
 }
 
 func unmarshalExec(t *testing.T, raw []byte) dbeEnvelope {
@@ -282,6 +284,176 @@ func TestExecuteDBExec_BadArgs(t *testing.T) {
 	env := unmarshalExec(t, out)
 	if env.Success || env.Error == nil || env.Error.Code != "arg_decode" {
 		t.Fatalf("expected arg_decode, got %s", out)
+	}
+}
+
+func TestExecuteDBExec_InsertReturningIncludesRows(t *testing.T) {
+	// Audit § 12.7: prior to v0.11.0 `INSERT … RETURNING` discarded the rows
+	// because the host routed every statement through Exec. The kernel now
+	// detects RETURNING and routes through the Rows path so the projected
+	// rows surface inside data.rows alongside rowsAffected.
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+
+	mock.ExpectExec(`SET LOCAL search_path TO "addon_tickets", public`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`INSERT INTO tickets .* RETURNING id, title`).
+		WithArgs("hello", "open").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "title"}).
+			AddRow(int64(42), "hello"))
+
+	out := executeDBExec(context.Background(), gdb, nil, "tickets",
+		permissiveEnforcer(),
+		"INSERT INTO tickets (title, status) VALUES ($1, $2) RETURNING id, title",
+		[]byte(`["hello", "open"]`))
+
+	env := unmarshalExec(t, out)
+	if !env.Success {
+		t.Fatalf("expected success, got %s", out)
+	}
+	if env.Data == nil || env.Data.RowsAffected != 1 {
+		t.Fatalf("expected rowsAffected=1, got %#v", env.Data)
+	}
+	if len(env.Data.Rows) != 1 {
+		t.Fatalf("expected 1 returned row, got %#v", env.Data.Rows)
+	}
+	if env.Data.Rows[0]["title"] != "hello" {
+		t.Fatalf("expected title=hello, got %#v", env.Data.Rows[0])
+	}
+	if len(env.Data.Columns) != 2 {
+		t.Fatalf("expected 2 columns, got %#v", env.Data.Columns)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations not met: %v", err)
+	}
+}
+
+func TestExecuteDBExec_UpdateReturningStarIncludesRows(t *testing.T) {
+	// `UPDATE … RETURNING *` is the typical "stamp and emit" pattern an
+	// addon uses when it wants the freshly-mutated row to feed an event or
+	// secondary side-effect. The kernel must surface every column.
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`SET LOCAL search_path TO "addon_tickets", public`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`UPDATE tickets SET status = \$1 WHERE id = \$2 RETURNING \*`).
+		WithArgs("closed", int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "status", "title"}).
+			AddRow(int64(7), "closed", "first")).
+		RowsWillBeClosed()
+	mock.ExpectCommit()
+
+	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+		permissiveEnforcer(),
+		"UPDATE tickets SET status = $1 WHERE id = $2 RETURNING *",
+		[]byte(`["closed", 7]`))
+
+	env := unmarshalExec(t, out)
+	if !env.Success {
+		t.Fatalf("expected success, got %s", out)
+	}
+	if env.Data == nil || len(env.Data.Rows) != 1 {
+		t.Fatalf("expected 1 returned row, got %#v", env.Data)
+	}
+	if env.Data.Rows[0]["status"] != "closed" {
+		t.Fatalf("expected status=closed, got %#v", env.Data.Rows[0])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestExecuteDBExec_InsertWithoutReturningOmitsRows(t *testing.T) {
+	// Backwards-compat contract: a mutation that does not include a
+	// RETURNING clause must surface the legacy envelope (rowsAffected
+	// only, no rows / columns). Downstream apps wrote against that shape
+	// before v0.11.0 and the field is additive — old behaviour is preserved
+	// verbatim.
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+
+	mock.ExpectExec(`SET LOCAL search_path TO "addon_tickets", public`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`INSERT INTO tickets`).
+		WithArgs("hello", "open").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	out := executeDBExec(context.Background(), gdb, nil, "tickets",
+		permissiveEnforcer(),
+		"INSERT INTO tickets (title, status) VALUES ($1, $2)",
+		[]byte(`["hello", "open"]`))
+
+	env := unmarshalExec(t, out)
+	if !env.Success {
+		t.Fatalf("expected success, got %s", out)
+	}
+	if env.Data == nil || env.Data.RowsAffected != 1 {
+		t.Fatalf("expected rowsAffected=1, got %#v", env.Data)
+	}
+	if env.Data.Rows != nil {
+		t.Fatalf("expected no rows field for non-RETURNING insert, got %#v", env.Data.Rows)
+	}
+	if env.Data.Columns != nil {
+		t.Fatalf("expected no columns field for non-RETURNING insert, got %#v", env.Data.Columns)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestExecuteDBExec_ReturningLiteralDoesNotTrigger(t *testing.T) {
+	// A literal containing the word RETURNING (e.g. a label stored verbatim
+	// in a column) must NOT trip the routing — stripSQLLiterals guards
+	// against false-triggering and the statement keeps using the Exec path.
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+
+	mock.ExpectExec(`SET LOCAL search_path TO "addon_tickets", public`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`INSERT INTO tickets`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	out := executeDBExec(context.Background(), gdb, nil, "tickets",
+		permissiveEnforcer(),
+		"INSERT INTO tickets (note) VALUES ('returning home')", nil)
+
+	env := unmarshalExec(t, out)
+	if !env.Success {
+		t.Fatalf("expected success, got %s", out)
+	}
+	if env.Data.Rows != nil {
+		t.Fatalf("literal RETURNING should not switch to rows path, got %#v", env.Data)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestContainsReturning(t *testing.T) {
+	yes := []string{
+		"INSERT INTO tickets DEFAULT VALUES RETURNING id",
+		"insert into tickets (title) values ('x') returning *",
+		"UPDATE tickets SET status = 'closed' RETURNING status",
+		"DELETE FROM tickets WHERE id = 1 RETURNING *",
+		"INSERT INTO tickets DEFAULT VALUES RETURNING id;",
+	}
+	for _, s := range yes {
+		if !containsReturning(s) {
+			t.Errorf("containsReturning(%q) = false, want true", s)
+		}
+	}
+	no := []string{
+		"INSERT INTO tickets DEFAULT VALUES",
+		"UPDATE tickets SET status = 'returning to base' WHERE id = 1",
+		"INSERT INTO tickets (note) VALUES ('RETURNING')",
+		"DELETE FROM tickets WHERE id = 1",
+	}
+	for _, s := range no {
+		if containsReturning(s) {
+			t.Errorf("containsReturning(%q) = true, want false", s)
+		}
 	}
 }
 

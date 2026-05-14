@@ -117,9 +117,86 @@ var (
 			`)$`)
 )
 
+// ValidateAdvisory performs the same structural + semantic check as Validate
+// and additionally returns a list of advisory warnings. Warnings are
+// non-fatal — they communicate deprecated fields, reserved-but-not-yet
+// implemented runtime values, and field-cross-check mismatches that an
+// addon author should fix but do not break installation.
+//
+// Returned warnings are stable strings of the form
+// `manifest.<path>: <message>` so consumers can grep them. The function
+// keeps the same fail-fast semantics as Validate for errors: the first
+// error short-circuits the rest of the walk. Warnings emitted before the
+// error are still returned alongside it.
+//
+// Hosts that want to surface the warnings into operator logs should call
+// ValidateAdvisory; everything else can keep calling Validate.
+func (m *Manifest) ValidateAdvisory(kernelVersion string) ([]string, error) {
+	if m == nil {
+		return nil, fmt.Errorf("manifest: nil")
+	}
+	var warnings []string
+	// Events at the manifest root were the v0.x mechanism to declare the
+	// event names an addon could emit. As of v0.11.0 the gate is the set
+	// of `event:emit` capabilities the addon requests — manifest.events
+	// is read-only documentation and will be derived from capabilities in
+	// v2. Emit a warning when both are present and the rooted Events slice
+	// declares names the capabilities do not cover, so authors notice the
+	// drift before the schema-level deprecation lands. See
+	// docs/wasm-abi.md "Reserved / advisory fields".
+	if len(m.Events) > 0 {
+		emit := make(map[string]struct{}, len(m.Capabilities))
+		for _, c := range m.Capabilities {
+			if c.Kind == "event:emit" {
+				emit[c.Target] = struct{}{}
+			}
+		}
+		for _, ev := range m.Events {
+			if _, ok := emit[ev]; ok {
+				continue
+			}
+			warnings = append(warnings, fmt.Sprintf(
+				"manifest.events: %q has no matching capability[event:emit] — "+
+					"manifest.events is deprecated (derived from capabilities in v2); "+
+					"declare a capability {kind:\"event:emit\", target:%q} instead",
+				ev, ev))
+		}
+	}
+	// Backend.Runtime=="binary" was reserved in the ABI v1.0 freeze for a
+	// future native side-car runtime. The manifest validates but the kernel
+	// has no installer or invoker for it — emit a warning so addon authors
+	// know the field is accepted at authoring time but the addon will fail
+	// at install/invoke time. host.LoadWASMFromBundle surfaces the install
+	// error with code "runtime_not_implemented".
+	if m.Backend != nil && m.Backend.Runtime == "binary" {
+		warnings = append(warnings, "manifest.backend.runtime: \"binary\" "+
+			"is reserved for a future native side-car runtime; the manifest "+
+			"is accepted but installation will fail with "+
+			"runtime_not_implemented")
+	}
+	if err := m.validateStrict(kernelVersion); err != nil {
+		return warnings, err
+	}
+	return warnings, nil
+}
+
 // Validate performs a full structural + semantic check of the manifest.
 // It is cheap and side-effect free; callers should run it before install.
+//
+// Validate is the legacy entry-point and intentionally returns only the
+// first hard error. Use ValidateAdvisory to surface non-fatal warnings
+// alongside the error (deprecated fields, reserved runtimes, etc.).
 func (m *Manifest) Validate(kernelVersion string) error {
+	if m == nil {
+		return fmt.Errorf("manifest: nil")
+	}
+	return m.validateStrict(kernelVersion)
+}
+
+// validateStrict is the structural / semantic check shared by Validate and
+// ValidateAdvisory. Splitting it out keeps the advisory warnings from
+// affecting either call's error contract.
+func (m *Manifest) validateStrict(kernelVersion string) error {
 	if m == nil {
 		return fmt.Errorf("manifest: nil")
 	}

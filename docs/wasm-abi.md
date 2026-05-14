@@ -451,10 +451,15 @@ allocates an envelope, even for zero-row mutations.
   every call and rejects guest-side overrides at parse time.
 - **No `pg_*` / `information_schema` writes** — always denied
   (`forbidden`, `reason: "introspection_disabled"`).
-- **`RETURNING` is allowed.** The returned rows are projected into
-  `data.returning` (same shape as `db_query.data.rows`). The row cap from
-  § 9.5 applies; exceeding it triggers `row_limit_exceeded` and rolls back
-  the action (see § 10.7).
+- **`RETURNING` is allowed.** As of kernel v0.11.0 the returned rows are
+  projected into `data.rows` (same shape as `db_query.data.rows`) and
+  `data.columns` carries the column metadata. Earlier kernels accepted the
+  clause at parse time but discarded the rows — only `rowsAffected` reached
+  the guest. The row cap from § 9.5 applies; exceeding it triggers
+  `row_limit_exceeded` and rolls back the action (see § 10.7). When the
+  statement does not include a `RETURNING` clause the response envelope
+  omits `rows` and `columns` entirely (back-compat with the pre-v0.11
+  shape).
 
 ### 10.3 Schema scope & capability check
 
@@ -517,8 +522,7 @@ Success follows the kernel `{success, data, meta}` convention:
   "success": true,
   "data": {
     "rowsAffected": 3,
-    "lastInsertId": "8b1f…",
-    "returning": [
+    "rows": [
       { "id": "8b1f…", "status": "refunded", "amount_cents": 4200 }
     ],
     "columns": [
@@ -529,23 +533,18 @@ Success follows the kernel `{success, data, meta}` convention:
   },
   "meta": {
     "schema":     "addon_refunds",
-    "durationMs": 11,
-    "txId":       "tx_01HXY…",
-    "truncated":  false
+    "durationMs": 11
   }
 }
 ```
 
-- `lastInsertId` is populated when the statement is a single-row `INSERT`
-  whose target has a primary key the host can recover (either via
-  `RETURNING` requested by the host, or via the driver's `LastInsertId()`
-  for integer PKs). Multi-row inserts leave it `null`; rely on `returning`
-  instead.
-- `returning` / `columns` are omitted when the statement does not include a
-  `RETURNING` clause.
-- `meta.txId` is the kernel-assigned id of the action transaction, present
-  so audit trails can correlate guest writes with the host's commit/rollback
-  decision.
+- `rows` / `columns` are present **only** when the statement includes a
+  `RETURNING` clause (v0.11.0+). The shape mirrors `db_query` so guests can
+  use the same decoder for read and write results. Statements without
+  `RETURNING` keep the legacy envelope (`rowsAffected` only) verbatim —
+  back-compat with consumers written before v0.11.0.
+- When `rows` is present, `rowsAffected` equals `len(rows)` so a guest can
+  read either without checking which shape it received.
 
 Errors share the same outer shape and **always** roll back the action (see
 § 10.7):
@@ -718,10 +717,13 @@ These are deliberately **not** in v1.2 and will land as separate proposals:
 ### 10.11 Tests (proposed coverage)
 
 - `INSERT INTO addon_<key>.tickets …` resolved bare → runs and commits.
-- `INSERT INTO addon_<key>.tickets … RETURNING id` → `returning` populated,
-  `lastInsertId` matches.
-- Single-row `INSERT` without `RETURNING` → `lastInsertId` populated for
-  integer PKs, `null` for uuid PKs without `RETURNING`.
+- `INSERT INTO addon_<key>.tickets … RETURNING id` → `data.rows` populated
+  with the returned columns, `rowsAffected` equals `len(rows)`. Covered by
+  `TestExecuteDBExec_InsertReturningIncludesRows` and
+  `TestExecuteDBExec_UpdateReturningStarIncludesRows` (v0.11.0).
+- Single-row `INSERT` without `RETURNING` → envelope carries `rowsAffected`
+  only; `rows` / `columns` are absent (back-compat shape). Covered by
+  `TestExecuteDBExec_InsertWithoutReturningOmitsRows`.
 - `UPDATE billing.invoices` without explicit `db:write billing.invoices`
   → `forbidden`.
 - `UPDATE addon_<key>.tickets SET …` without `WHERE org_id = $N` → first
@@ -1250,3 +1252,73 @@ entry point unless otherwise noted.
 - **Kernel trusted-path unaffected.** Independent test asserts that direct
   `bus.Publish(ctx, "kernel", evt, orgID, payload)` continues to bypass
   the capability check (regression guard for § 12.7).
+
+## 13. Reserved / advisory fields (ABI v1.0 audit follow-up)
+
+The ABI v1.0 freeze audit (PR #56 § 12) flagged a small set of manifest
+fields that validate but either duplicate a now-canonical surface or are
+reserved for a future runtime. None of them are breaking changes; v0.11.0
+clarifies their status without altering the wire format.
+
+`manifest.ValidateAdvisory(kernelVersion) ([]string, error)` is the
+non-fatal counterpart of `Validate` — it returns warnings for every case
+documented below alongside the same strict error. The installer logs each
+warning (`slog.Warn("manifest.advisory", …)`) so operators see them in
+the boot trail without aborting the install.
+
+### 13.1 `manifest.events` — deprecated documentation field
+
+The top-level `events: ["ticket.created", …]` array predates the
+capability-based gate. The runtime authoritative check is the addon's
+`Capabilities[event:emit <name>]` set; `events` itself is never consulted
+when a guest calls `event_emit` and was effectively dead documentation by
+v0.8.
+
+- **v0.11.0** — `ValidateAdvisory` cross-checks `events` against
+  `event:emit` capabilities and emits a warning for any name that has no
+  matching capability. The field stays accepted by the strict `Validate`
+  for back-compat with manifests already published.
+- **v2 (planned)** — the field is removed from the type and the JSON
+  schema. The `event:emit` capability set is the only declaration surface.
+
+Recommendation for addon authors: declare `event:emit` capabilities and
+delete the redundant `events` array.
+
+### 13.2 `manifest.backend.runtime = "binary"` — reserved value
+
+The strict validator accepts the literal `"binary"` so addon authors can
+opt in to the reserved value ahead of time, but the kernel ships no
+executor for it. Until the native side-car runtime lands:
+
+- **`manifest.Validate`** — accepts the value, same as today (no breaking
+  change).
+- **`manifest.ValidateAdvisory`** — emits a warning naming the value as
+  reserved and pointing at `runtime_not_implemented`.
+- **`host.LoadWASMFromBundle`** — refuses to install a `binary` bundle and
+  returns `host.ErrRuntimeNotImplemented` (wrapped with the addon key in
+  the error message). Call sites can branch with
+  `errors.Is(err, host.ErrRuntimeNotImplemented)`.
+
+When the native runtime lands the validator gains an executor lookup and
+the install-time gate flips automatically.
+
+### 13.3 `db_exec` `RETURNING` rows
+
+The pre-v0.11.0 behaviour was: any mutation routed through `gorm.Exec`,
+which discards rows produced by a `RETURNING` clause. The guest only saw
+`rowsAffected` even though the doc (§ 10.4) advertised `data.rows`.
+
+v0.11.0 closes the gap inside `runtime/wasm/dbexec.go`:
+
+1. The host detects `RETURNING` on the parsed statement
+   (`containsReturning` — regex over stripped literals, identical
+   stripping rules to `validateMutationOnly`).
+2. When present, the statement is routed through `gorm.Raw().Rows()` so
+   every returned row is scanned into the success envelope.
+3. The envelope shape mirrors `db_query`: `data.rows`, `data.columns`,
+   `data.rowsAffected = len(rows)`. Statements without `RETURNING` keep
+   the legacy envelope (`rowsAffected` only) verbatim — the change is
+   purely additive.
+
+The kernel row cap (`dbQueryMaxRows`) applies to `RETURNING` results too;
+exceeding it triggers `row_limit_exceeded` and rolls back the action.

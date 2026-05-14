@@ -29,6 +29,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (int, error)`** — count-returning sibling of `Publish`. The wasm host
   import uses it to populate `data.subscribers`; `Publish` is kept as a
   thin one-line wrapper for source compatibility.
+- **`manifest.ValidateAdvisory(kernelVersion) ([]string, error)` — non-fatal
+  warnings alongside the strict error.** The ABI v1.0 freeze audit
+  (PR #56 § 12) flagged three manifest fields that validate but either
+  duplicate a now-canonical surface or are reserved for a future runtime.
+  The advisory entry-point surfaces those cases without breaking existing
+  manifests: `Validate` keeps its current signature and error contract,
+  `ValidateAdvisory` returns the same first error and an extra slice of
+  warnings. The installer now calls the advisory path and logs each
+  warning via `slog.Warn("manifest.advisory", …)` so operators see the
+  drift in the boot trail. See `docs/wasm-abi.md` § 13 for the full
+  catalogue of advisory cases.
+- **`db_exec` now surfaces `RETURNING` rows on the success envelope.**
+  Prior to v0.11.0 every mutation routed through `gorm.Exec`, which
+  discards the rows a `RETURNING` clause produces — the guest only saw
+  `rowsAffected` even though `docs/wasm-abi.md` § 10.4 advertised
+  `data.rows`. The kernel now detects `RETURNING` (regex over stripped
+  literals, same rules as `validateMutationOnly`) and routes the
+  statement through `gorm.Raw().Rows()` so every returned row reaches the
+  guest. Envelope shape mirrors `db_query`: `data.rows`, `data.columns`,
+  `data.rowsAffected = len(rows)`. Statements without `RETURNING` keep
+  the legacy envelope (`rowsAffected` only) verbatim — the change is
+  purely additive and ABI-compatible. The kernel row cap
+  (`dbQueryMaxRows = 10_000`) applies to `RETURNING` results too;
+  exceeding it returns `row_limit_exceeded`. Covered by
+  `TestExecuteDBExec_InsertReturningIncludesRows`,
+  `TestExecuteDBExec_UpdateReturningStarIncludesRows`,
+  `TestExecuteDBExec_InsertWithoutReturningOmitsRows`,
+  `TestExecuteDBExec_ReturningLiteralDoesNotTrigger` and
+  `TestContainsReturning`.
+- **`host.ErrRuntimeNotImplemented` — clear failure for
+  `backend.runtime = "binary"`.** The reserved runtime value validated
+  silently but `host.LoadWASMFromBundle` returned `nil` for any non-wasm
+  runtime, which let a binary-runtime addon install as a dead bundle.
+  v0.11.0 surfaces a wrapped sentinel error so call sites can branch with
+  `errors.Is(err, host.ErrRuntimeNotImplemented)` and `ValidateAdvisory`
+  flags the same case at authoring time.
+
+### Deprecated
+
+- **`manifest.events`** — kept for back-compat; will be derived from
+  `Capabilities[event:emit]` in v2. `ValidateAdvisory` emits a warning
+  for every entry that has no matching `event:emit` capability so
+  addon authors can migrate before v2 removes the field. The runtime
+  authoritative gate has been the capability set since v0.8 — the array
+  itself was never consulted.
 
 ### Notes
 

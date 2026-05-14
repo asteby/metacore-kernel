@@ -50,6 +50,16 @@ type Manifest struct {
 	// are semantic and carry extraction hints for parameter inference.
 	Tools            []ToolDef              `json:"tools,omitempty"`
 	ModelDefinitions []ModelDefinition      `json:"model_definitions,omitempty"`
+	// Events lists the event names the addon may emit. It predates the
+	// capability-based gate (`{kind:"event:emit", target:"<name>"}`) and is
+	// kept on the type for backwards compatibility with v0.x manifests.
+	//
+	// @deprecated — Will be derived from Capabilities[event:emit] in v2 and
+	// removed. The runtime gate is already the capability set; declaring
+	// names here is documentation only. ValidateAdvisory emits a warning
+	// when an Events entry has no matching `event:emit` capability so the
+	// drift surfaces at install time. New manifests should declare event
+	// names via Capabilities exclusively.
 	Events           []string               `json:"events,omitempty"`
 	LifecycleHooks   map[string][]HookDef   `json:"lifecycle_hooks,omitempty"`
 	I18n             map[string]map[string]string `json:"i18n,omitempty"`
@@ -147,7 +157,14 @@ type FrontendSpec struct {
 //	Runtime = "wasm"    — sandboxed in-process module at Entry. Exports
 //	                      enumerates the function symbols each hook can
 //	                      dispatch to; kernel/runtime/wasm enforces it.
-//	Runtime = "binary"  — reserved for future use (native side-car).
+//	Runtime = "binary"  — RESERVED for a future native side-car runtime.
+//	                      The manifest validates (so addon authors can
+//	                      declare it ahead of time) but the kernel has no
+//	                      installer / invoker for it yet. ValidateAdvisory
+//	                      emits a warning and host.LoadWASMFromBundle
+//	                      surfaces a runtime_not_implemented error at
+//	                      install time. See docs/wasm-abi.md
+//	                      "Reserved / advisory fields".
 type BackendSpec struct {
 	Runtime       string   `json:"runtime"`                   // "webhook" | "wasm" | "binary"
 	Entry         string   `json:"entry,omitempty"`           // e.g. "backend/backend.wasm"

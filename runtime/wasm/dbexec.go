@@ -133,6 +133,112 @@ func executeDBExec(
 			"set search_path: "+err.Error(), durMs())
 	}
 
+	// Detect a RETURNING clause and route the statement through the Rows
+	// path when present. Postgres only surfaces the rows produced by an
+	// INSERT/UPDATE/DELETE … RETURNING via a result-set cursor; calling
+	// db.Exec discards them and only reports RowsAffected. The ABI doc
+	// (§ 10.4) has always documented `data.rows`/`data.columns` on the
+	// success envelope when RETURNING is present, but the kernel silently
+	// dropped the rows until v0.11.0 closed the gap.
+	//
+	// Detection is regex-over-stripped-literals so a column literally named
+	// `'RETURNING'` or a comment containing the word does not false-trigger
+	// the routing. A real Postgres AST parser is the long-term plan
+	// (docs/wasm-abi.md § 9.7).
+	hasReturning := containsReturning(sqlText)
+
+	if hasReturning {
+		rows, err := work.Raw(sqlText, args...).Rows()
+		if err != nil {
+			if standalone {
+				_ = work.Rollback()
+			}
+			return dbExecErr(schema, "db_error", err.Error(), durMs())
+		}
+		cols, err := rows.Columns()
+		if err != nil {
+			_ = rows.Close()
+			if standalone {
+				_ = work.Rollback()
+			}
+			return dbExecErr(schema, "db_error", err.Error(), durMs())
+		}
+		colTypes, _ := rows.ColumnTypes()
+		rowsOut := make([]map[string]any, 0)
+		truncated := false
+		for rows.Next() {
+			if len(rowsOut) >= dbQueryMaxRows {
+				truncated = true
+				break
+			}
+			vals := make([]any, len(cols))
+			ptrs := make([]any, len(cols))
+			for i := range vals {
+				ptrs[i] = &vals[i]
+			}
+			if err := rows.Scan(ptrs...); err != nil {
+				_ = rows.Close()
+				if standalone {
+					_ = work.Rollback()
+				}
+				return dbExecErr(schema, "db_error", err.Error(), durMs())
+			}
+			row := make(map[string]any, len(cols))
+			for i, c := range cols {
+				row[c] = jsonifyDBVal(vals[i])
+			}
+			rowsOut = append(rowsOut, row)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			if standalone {
+				_ = work.Rollback()
+			}
+			return dbExecErr(schema, "db_error", err.Error(), durMs())
+		}
+		_ = rows.Close()
+		if truncated {
+			if standalone {
+				_ = work.Rollback()
+			}
+			return dbExecErr(schema, "row_limit_exceeded",
+				fmt.Sprintf("RETURNING produced more than %d rows", dbQueryMaxRows),
+				durMs())
+		}
+		if standalone {
+			if err := work.Commit().Error; err != nil {
+				return dbExecErr(schema, "db_error", err.Error(), durMs())
+			}
+		}
+		colMeta := make([]map[string]any, len(cols))
+		for i, c := range cols {
+			cm := map[string]any{"name": c}
+			if i < len(colTypes) && colTypes[i] != nil {
+				if t := colTypes[i].DatabaseTypeName(); t != "" {
+					cm["type"] = strings.ToLower(t)
+				}
+			}
+			colMeta[i] = cm
+		}
+		env, _ := json.Marshal(map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"rowsAffected": int64(len(rowsOut)),
+				"rows":         rowsOut,
+				"columns":      colMeta,
+			},
+			"meta": map[string]any{
+				"schema":     schema,
+				"durationMs": durMs(),
+			},
+		})
+		if len(env) > dbExecMaxRespBytes {
+			return dbExecErr(schema, "db_error",
+				"response exceeds size cap", durMs())
+		}
+		return env
+	}
+
 	res := work.Exec(sqlText, args...)
 	if res.Error != nil {
 		if standalone {
@@ -163,6 +269,22 @@ func executeDBExec(
 			"response exceeds size cap", durMs())
 	}
 	return env
+}
+
+// containsReturning reports whether a mutation statement carries a
+// top-level RETURNING clause. It strips single-quoted literals (so a
+// payload that contains the word `RETURNING` inside a string does not
+// false-trigger) and then matches the keyword as a whole word.
+//
+// libpg_query is not a kernel dependency (the doc § 9.7 tracks the
+// long-term plan to adopt one); regex over stripped literals is the
+// same approach validateMutationOnly uses for its banned-keyword scan,
+// so the two stay consistent until the AST parser lands.
+func containsReturning(sqlText string) bool {
+	trimmed := strings.TrimSpace(sqlText)
+	trimmed = strings.TrimRight(trimmed, ";")
+	naked := stripSQLLiterals(trimmed)
+	return matchWholeWord(naked, "RETURNING")
 }
 
 func dbExecErr(schema, code, message string, durationMs int64) []byte {

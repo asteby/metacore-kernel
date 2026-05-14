@@ -31,14 +31,35 @@ func (h *Host) EnableWASM(ctx context.Context, caps *security.Capabilities) erro
 	return nil
 }
 
+// ErrRuntimeNotImplemented is returned by LoadWASMFromBundle when the bundle
+// declares `manifest.backend.runtime = "binary"`. The value is reserved in
+// the ABI v1.0 freeze for a future native side-car runtime; manifest.Validate
+// accepts it (so addon authors can declare it ahead of time) but the kernel
+// has no installer or invoker for it yet. The error wraps a sentinel so call
+// sites can branch on `errors.Is(err, ErrRuntimeNotImplemented)` without
+// string-matching.
+//
+// See manifest.ValidateAdvisory for an authoring-time warning that flags the
+// same case before the bundle even reaches the install pipeline.
+var ErrRuntimeNotImplemented = fmt.Errorf("runtime_not_implemented")
+
 // LoadWASMFromBundle extracts backend/backend.wasm from a bundle and registers
 // it under the addon's key. Call right after the rest of the install pipeline
 // so migrations + frontend + capabilities are already in place.
+//
+// The function returns ErrRuntimeNotImplemented when the manifest declares
+// `backend.runtime = "binary"` — the value is reserved in the ABI v1.0 freeze
+// but there is no executor for it yet, so the installer must refuse a
+// binary-runtime addon up front rather than silently install a dead bundle.
 func (h *Host) LoadWASMFromBundle(ctx context.Context, b *bundle.Bundle) error {
 	if h.WASM == nil {
 		return fmt.Errorf("host: WASM runtime not enabled (call EnableWASM first)")
 	}
 	m := &b.Manifest
+	if m.Backend != nil && m.Backend.Runtime == "binary" {
+		return fmt.Errorf("host: addon %q declares backend.runtime=%q: %w",
+			m.Key, m.Backend.Runtime, ErrRuntimeNotImplemented)
+	}
 	if m.Backend == nil || m.Backend.Runtime != "wasm" {
 		return nil // nothing to do — webhook or native addon
 	}

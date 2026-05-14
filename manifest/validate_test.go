@@ -777,6 +777,107 @@ func TestValidate_FrontendLayout_NilFrontendIsOK(t *testing.T) {
 	}
 }
 
+func TestValidateAdvisory_NoWarningsOnCleanManifest(t *testing.T) {
+	m := manifest.Manifest{
+		Key: "tickets", Name: "Tickets", Version: "1.0.0",
+		Capabilities: []manifest.Capability{
+			{Kind: "event:emit", Target: "ticket.created"},
+		},
+		Events: []string{"ticket.created"},
+	}
+	warnings, err := m.ValidateAdvisory("2.0.0")
+	if err != nil {
+		t.Fatalf("expected ok, got %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("expected zero warnings, got %v", warnings)
+	}
+}
+
+func TestValidateAdvisory_EventsWithoutCapabilityWarns(t *testing.T) {
+	// manifest.events is deprecated: it was the v0.x gate but the runtime
+	// has used capability[event:emit] since v0.8. The advisory output
+	// surfaces the drift so authors migrate before v2 removes the field.
+	m := manifest.Manifest{
+		Key: "tickets", Name: "Tickets", Version: "1.0.0",
+		Events: []string{"ticket.created"},
+	}
+	warnings, err := m.ValidateAdvisory("2.0.0")
+	if err != nil {
+		t.Fatalf("expected ok, got %v", err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "manifest.events") {
+		t.Fatalf("expected manifest.events warning, got %v", warnings)
+	}
+	if !strings.Contains(warnings[0], "ticket.created") {
+		t.Fatalf("expected warning to mention the orphan event name, got %v", warnings)
+	}
+	// Validate (legacy entry-point) must still pass without warnings —
+	// the advisory is non-fatal by design.
+	if err := m.Validate("2.0.0"); err != nil {
+		t.Fatalf("Validate() must remain compatible, got %v", err)
+	}
+}
+
+func TestValidateAdvisory_BinaryRuntimeWarns(t *testing.T) {
+	// Backend.Runtime="binary" is reserved in the ABI v1.0 freeze for a
+	// future native side-car runtime. The manifest validates so authors
+	// can declare it ahead of time, but the advisory must surface that
+	// installation will fail with runtime_not_implemented.
+	m := manifest.Manifest{
+		Key: "native", Name: "Native", Version: "1.0.0",
+		Backend: &manifest.BackendSpec{Runtime: "binary"},
+	}
+	warnings, err := m.ValidateAdvisory("2.0.0")
+	if err != nil {
+		t.Fatalf("expected ok (binary still validates), got %v", err)
+	}
+	if len(warnings) == 0 {
+		t.Fatal("expected at least one warning for binary runtime")
+	}
+	var found bool
+	for _, w := range warnings {
+		if strings.Contains(w, "backend.runtime") && strings.Contains(w, "binary") &&
+			strings.Contains(w, "runtime_not_implemented") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected binary-runtime warning, got %v", warnings)
+	}
+}
+
+func TestValidateAdvisory_EventsMatchingCapabilityIsSilent(t *testing.T) {
+	m := manifest.Manifest{
+		Key: "tickets", Name: "Tickets", Version: "1.0.0",
+		Events: []string{"ticket.created", "ticket.closed"},
+		Capabilities: []manifest.Capability{
+			{Kind: "event:emit", Target: "ticket.created"},
+			{Kind: "event:emit", Target: "ticket.closed"},
+		},
+	}
+	warnings, err := m.ValidateAdvisory("2.0.0")
+	if err != nil {
+		t.Fatalf("expected ok, got %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("expected zero warnings when every event has a matching capability, got %v", warnings)
+	}
+}
+
+func TestValidate_BinaryRuntimeStillValidates(t *testing.T) {
+	// Strict Validate must keep accepting the reserved value — addon
+	// authors that opt in to the reserved runtime should still be able to
+	// publish their manifest. The advisory path is what flags the case.
+	m := manifest.Manifest{
+		Key: "native", Name: "Native", Version: "1.0.0",
+		Backend: &manifest.BackendSpec{Runtime: "binary"},
+	}
+	if err := m.Validate("2.0.0"); err != nil {
+		t.Fatalf("binary runtime must still validate strictly, got %v", err)
+	}
+}
+
 func TestValidate_Relations_ErrorPathIncludesModelIndex(t *testing.T) {
 	// The model loop stitches "manifest.model_definitions[i]." onto the
 	// relation error so operators can grep the full path. Verify the
