@@ -3,8 +3,23 @@
 // imports without hand-rolling the `(ptr, len) -> i64` ABI on every call.
 //
 // The helpers mirror the host imports documented in
-// docs/wasm-abi.md and translate the on-wire `{success, data, meta}`
-// envelope into typed Go values plus a typed error.
+// docs/wasm-abi.md and translate the on-wire envelopes into typed Go
+// values plus a typed error per import. Coverage today:
+//
+//   - EmitEvent — wraps metacore_host.event_emit, decodes
+//     {success, data, meta} envelope (§ 12.4).
+//   - Log       — wraps metacore_host.log, fire-and-forget with a
+//     LogLevel prefix.
+//   - EnvGet    — wraps metacore_host.env_get, returns
+//     (value, found, err) and folds missing + empty values together.
+//   - HttpFetch — wraps metacore_host.http_fetch, decodes
+//     {status, body} success shape and {error, message} failure
+//     shape, surfaces forbidden as *HttpCapabilityDeniedError.
+//   - DbQuery   — wraps metacore_host.db_query, decodes
+//     {success, data: {rows, rowCount, columns}, meta} (§ 9.4).
+//   - DbExec    — wraps metacore_host.db_exec, decodes
+//     {success, data: {rowsAffected, rows?, columns?}, meta} (§ 10.4)
+//     and preserves SQLSTATE on driver violations.
 //
 // # Usage
 //
