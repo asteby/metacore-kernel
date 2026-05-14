@@ -7,6 +7,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-05-14
+
+### Fixed
+
+- **`runtime/wasm` now propagates `orgID` end-to-end into `event_emit`
+  publishes.** The `invocation.orgID` field declared on
+  `runtime/wasm/capabilities.go` was never populated by `invokeImpl`, so
+  every guest call to `event_emit` reached `events.Bus.Publish` with
+  `uuid.Nil`. Subscribers filtering by tenant (the documented contract,
+  see `events/events.go:Handler`) silently saw cross-org bleed because
+  the bus does not differentiate publishers — it forwards whatever
+  `orgID` the caller passed. Audit item #5 of the ABI v1 freeze flagged
+  this. Resolution: a new `runtime/wasm.WithOrgID(ctx, orgID)` context
+  helper carries the tenant id without changing any public Invoke
+  signature, and two ergonomic siblings
+  (`Host.InvokeFor(ctx, orgID, ...)`, `Host.InvokeInTxFor(ctx, tx,
+  orgID, ...)`) make the binding explicit at call sites. `invokeImpl`
+  reads the orgID off ctx when building the per-invocation bag, so any
+  caller that wraps with `WithOrgID` lights up automatically.
+  `host.Host.InvokeWASMFor` mirrors the new entry at the kernel-facade
+  layer. `event_emit` now also enforces the documented `no_active_org`
+  guard — a publish without a bound orgID returns the JSON error
+  envelope instead of silently fanning out under `uuid.Nil`. The full
+  contract lives at `docs/wasm-abi.md` § 12.6. Patch bump — additive
+  and backwards compatible: legacy callers that go through
+  `Host.Invoke` keep working for every non-tenant import (log, env_get,
+  http_fetch, db_query, db_exec); only `event_emit` from a tenantless
+  context surfaces `no_active_org`, which is the correct behaviour.
+
 ## [0.10.1] - 2026-05-11
 
 ### Added
