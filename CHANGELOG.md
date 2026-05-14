@@ -35,6 +35,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `Host.Invoke` keep working for every non-tenant import (log, env_get,
   http_fetch, db_query, db_exec); only `event_emit` from a tenantless
   context surfaces `no_active_org`, which is the correct behaviour.
+- **`runtime/wasm.db_query` now enforces the documented cross-schema
+  capability gate via an AST walk.** The pre-v0.10.2 path only ran
+  `Enforcer.CheckCapability(addonKey, "db:read", "addon_<key>.*")` against
+  the addon's own implicit schema. `SET LOCAL search_path TO addon_<key>,
+  public` did scope bare names back into the addon schema, but a guest
+  writing `SELECT * FROM public.users` or `SELECT * FROM other_addon.foo`
+  bypassed the gate entirely — capability declarations like
+  `db:read public.invoices` were optional in practice. Documented as a
+  soft-guarantee in [`docs/wasm-abi.md`](docs/wasm-abi.md) § 9.3; flagged
+  as hallazgo #6 of the ABI v1 audit and closed before opening the kernel
+  to third-party addons. Resolution: every `db_query` payload is now
+  parsed with libpg_query (via `github.com/pganalyze/pg_query_go/v6`) and
+  the walker pulls every `RangeVar` reachable from the AST — top-level
+  FROM tables, JOIN arms, CTE bodies, `RangeSubselect` derived tables,
+  `IN(SELECT …)` SubLinks, UNION / INTERSECT / EXCEPT arms and `VALUES`
+  rows. Each reference is then gated individually against the addon's
+  compiled capability list (`db:read <schema>.<rel>` or
+  `db:read <schema>.*`); the `pg_catalog` / `information_schema` /
+  `pg_*` meta-schemas are denied at the AST layer regardless of grants,
+  giving us a defence-in-depth twin to the string-level filter in
+  `validateSelectOnly`. A parse failure rejects the statement with
+  `invalid_sql` instead of silently bypassing the gate. The `db_query`
+  host import signature is unchanged — this is purely an internal
+  hardening, ABI v1 stays stable. New test file
+  `runtime/wasm/dbquery_xschema_test.go` covers bare-name still
+  allowed, own-schema qualified still allowed, cross-schema without cap
+  denied, cross-schema with `<schema>.*` cap allowed, cross-schema with
+  per-relation cap allowed, mixed cross-schema joins (partial cap =
+  deny, full cap = allow), CTE / SubLink / RangeSubselect-hidden
+  references denied, and a parse-error regression that asserts we
+  reject instead of degrade. Only new dep is
+  `github.com/pganalyze/pg_query_go/v6` (CGO, already required for
+  `mattn/go-sqlite3`); the sole new transitive is
+  `google.golang.org/protobuf` which we already pull through
+  `prometheus/client_golang`. Patch bump — security hardening, no
+  consumer-facing changes.
 
 ## [0.10.1] - 2026-05-11
 
