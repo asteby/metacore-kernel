@@ -28,6 +28,7 @@
 - [Subsystems](#subsystems)
 - [WebSocket protocol](#websocket-protocol)
 - [Addon contract](#addon-contract)
+- [Stability](#stability)
 - [Documentation](#documentation)
 - [Development](#development)
 - [Release process](#release-process)
@@ -350,11 +351,37 @@ The wire-level WASM ABI is defined in `runtime/wasm/abi.go` and is documented
 on the SDK side at `docs/wasm-abi.md` (single source of truth — the kernel is
 the implementer, the SDK is the reference).
 
+## Stability
+
+**ABI v1 is stable.** The contract that addons depend on — the manifest
+schema, the bundle format, the WASM guest ABI and the `metacore_host` import
+surface — is frozen as of kernel `v0.10.1`. See
+[`docs/abi/v1.md`](./docs/abi/v1.md) for the full normative document and
+[`docs/abi/CHANGELOG.md`](./docs/abi/CHANGELOG.md) for the revision log.
+
+The compatibility promise:
+
+- **Patch releases** (`v0.10.x`): bug fixes only.
+- **Minor releases** inside the v1 series: **additive only** — new host
+  imports, new manifest fields with meaningful zero defaults, new capability
+  kinds, new column types or widgets. Existing v1 addons keep working
+  unchanged.
+- **Breaking changes require v2.** A v2 cut ships with at least one minor
+  release of overlap during which the kernel honours both v1 and v2, giving
+  addon authors a deprecation window to migrate.
+
+Anything **not** documented in `docs/abi/v1.md` is implementation detail and
+may change between minor releases without notice. The HTTP routes, the
+WebSocket protocol, Prometheus metric names and internal table layouts live
+outside the ABI freeze and follow the kernel's normal embedding semver.
+
 ## Documentation
 
 | Document                                                         | Audience                                              |
 | ---------------------------------------------------------------- | ----------------------------------------------------- |
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md)                           | Maintainers — the four laws of the kernel             |
+| [`docs/abi/v1.md`](./docs/abi/v1.md)                             | Addon authors + runtime implementers — frozen ABI v1.0 |
+| [`docs/abi/CHANGELOG.md`](./docs/abi/CHANGELOG.md)               | Revision log for the ABI v1 contract                  |
 | [`docs/dynamic-system.md`](./docs/dynamic-system.md)             | App teams using the dynamic CRUD framework            |
 | [`docs/dynamic-api.md`](./docs/dynamic-api.md)                   | Anyone calling the dynamic / metadata HTTP endpoints  |
 | [`docs/permissions.md`](./docs/permissions.md)                   | Auth / capability model — user gates and addon gates  |
