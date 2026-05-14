@@ -7,6 +7,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`guest/` package — TinyGo-compatible helpers for addon authors.** New
+  package `github.com/asteby/metacore-kernel/guest` consumable from any
+  wasm backend (TinyGo target `wasi` / `wasm-unknown`). The first helper,
+  `guest.EmitEvent(event, payload)`, wraps the `metacore_host.event_emit`
+  import: marshals the payload via `encoding/json`, calls the host,
+  unpacks the `(ptr<<32)|len` return value, reads the response buffer
+  out of guest memory, and decodes the `{success, data, meta}` envelope
+  documented in [`docs/wasm-abi.md` § 12.4](docs/wasm-abi.md#124-response-envelope)
+  into a typed `EmitEventResult` plus typed `*EmitEventError`. Forward-
+  compatible decoder: unknown `meta.envelopeVersion` values are tolerated
+  (known fields populated, unknown fields ignored) so guests authored
+  against v1 keep working when the host bumps to v2. Empty-buffer return
+  (`packed == 0`) is preserved as a zero-value success so the helper is
+  also compatible with hosts on the pre-PR-#62 contract that returned
+  literal `0` on success. The package additionally ships an opt-in
+  default `alloc` export (build tag `metacore_guest_alloc`) for addons
+  that don't already define their own bump allocator. Only stdlib used
+  (`encoding/json`, `errors`, `unsafe`); no kernel-runtime dependencies
+  pulled in, so TinyGo can compile the helpers cleanly. See
+  [`docs/guest-go.md`](docs/guest-go.md) for usage. Follow-up to PR #62
+  (`event_emit` rich envelope) which called out "guest SDK helpers, not
+  the kernel" as the next step. Minor bump — purely additive.
+
 ## [0.11.0] - 2026-05-14
 
 ### Added

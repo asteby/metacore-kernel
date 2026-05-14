@@ -6,6 +6,11 @@ between the guest (the addon) and the host (this kernel). The addon-author
 view lives in [`metacore-sdk/docs/wasm-abi.md`](https://github.com/asteby/metacore-sdk/blob/main/docs/wasm-abi.md);
 keep them in sync.
 
+> Looking for Go / TinyGo helpers that consume these imports without
+> hand-rolling the ABI? See [`docs/guest-go.md`](./guest-go.md) — the
+> `github.com/asteby/metacore-kernel/guest` package wraps `event_emit`
+> (and, over time, the rest of the host surface) behind typed Go APIs.
+
 > ABI version: **1.3** (proposal — `event_emit` host import added on top of
 > v1.2; guests built against 1.0 / 1.1 / 1.2 keep working — purely additive).
 > Bundled via `manifest.backend.runtime = "wasm"`.
