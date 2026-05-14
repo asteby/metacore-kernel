@@ -28,6 +28,19 @@ const (
 // a driver error rolls back cleanly. All failures surface inside the JSON
 // envelope; the function never returns an error — the wire shape matches
 // the rest of the kernel ({success, data, meta}).
+//
+// Defense in depth (mirrors db_query — see docs/wasm-abi.md § 10.3):
+//  1. validateMutationOnly rejects DDL, multi-statement payloads, banned
+//     keywords, and the introspection schemas at the string layer.
+//  2. extractMutationRelations parses the SQL with libpg_query and pulls
+//     every referenced (schema, table) out of the AST, tagging the DML
+//     target as `db:write` and read-only sources (UPDATE.FROM, DELETE.USING,
+//     MERGE source, INSERT.SELECT, RETURNING / WHERE subqueries, CTE
+//     bodies) as `db:read`. Each cross-schema reference is gated against the
+//     addon's compiled capability list individually; a parse failure
+//     rejects the statement instead of degrading to "permit".
+//  3. SET LOCAL search_path scopes bare-name lookups to the addon schema for
+//     the duration of the surrounding transaction.
 func executeDBExec(
 	ctx context.Context,
 	tx *gorm.DB,
@@ -72,9 +85,30 @@ func executeDBExec(
 			fmt.Sprintf("argument count exceeds %d", dbExecMaxArgs), durMs())
 	}
 
+	// AST-level cross-schema gate. The pre-v0.10.3 path only checked
+	// `db:write addon_<key>.*` and trusted `SET LOCAL search_path` to scope
+	// bare names — a guest writing `UPDATE public.users SET role = 'admin'`
+	// (or any cross-schema mutation) bypassed the gate entirely. We now parse
+	// the payload with libpg_query and gate each referenced relation
+	// individually: the DML target under `db:write`, read-only sources
+	// (UPDATE.FROM, DELETE.USING, MERGE source, INSERT.SELECT, RETURNING /
+	// WHERE subqueries, CTE bodies) under `db:read`. Parse failure rejects
+	// with `invalid_sql` — never degrades to permit.
+	relations, parseErr := extractMutationRelations(sqlText)
+	if parseErr != nil {
+		return dbExecErr(schema, "invalid_sql", parseErr.Error(), durMs())
+	}
 	if enforcer != nil {
+		// Implicit own-schema gate stays — denies entirely-unregistered
+		// addons (no capabilities resolver hit) even when the parsed SQL
+		// only references the addon's own schema.
 		if err := enforcer.CheckCapability(addonKey, "db:write", schema+".*"); err != nil {
 			return dbExecErr(schema, "forbidden", err.Error(), durMs())
+		}
+		for _, rel := range relations {
+			if err := gateRelation(enforcer, addonKey, schema, rel); err != nil {
+				return dbExecErr(schema, "forbidden", err.Error(), durMs())
+			}
 		}
 	}
 
@@ -163,7 +197,15 @@ func validateMutationOnly(sqlText string) error {
 	leading := firstWordUpper(naked)
 	switch leading {
 	case "INSERT", "UPDATE", "DELETE", "MERGE":
-		// allowed
+		// allowed at the string layer
+	case "WITH":
+		// Postgres allows `WITH cte AS (…) INSERT|UPDATE|DELETE|MERGE …`
+		// where the top-level statement after the WITH clause is a DML.
+		// The AST top-level type still resolves to InsertStmt / UpdateStmt
+		// / DeleteStmt / MergeStmt, which is enforced inside
+		// extractMutationRelations once we've parsed. We allow the leading
+		// WITH here and let the AST layer reject pure-SELECT wraps so
+		// db_exec can't be used as a SELECT bypass.
 	default:
 		return fmt.Errorf("only INSERT/UPDATE/DELETE/MERGE allowed (got %q)", leading)
 	}

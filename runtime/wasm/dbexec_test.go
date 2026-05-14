@@ -294,6 +294,10 @@ func TestValidateMutationOnly(t *testing.T) {
 		"MERGE INTO tickets USING staging ON tickets.id = staging.id WHEN MATCHED THEN UPDATE SET status = 'x'",
 		"INSERT INTO tickets (note) VALUES ('DROP me');",
 		"INSERT INTO tickets (note) SELECT note FROM staging",
+		// `WITH … <DML>` is allowed at the string layer; the AST check
+		// inside extractMutationRelations enforces that the top-level
+		// statement after the WITH is a mutation.
+		"WITH x AS (SELECT 1) INSERT INTO tickets (note) SELECT note FROM staging",
 	}
 	for _, s := range good {
 		if err := validateMutationOnly(s); err != nil {
@@ -304,7 +308,6 @@ func TestValidateMutationOnly(t *testing.T) {
 		"",
 		";",
 		"SELECT 1",
-		"WITH t AS (SELECT 1) SELECT * FROM t",
 		"DROP TABLE tickets",
 		"TRUNCATE tickets",
 		"INSERT INTO tickets DEFAULT VALUES; DELETE FROM tickets",
@@ -315,6 +318,11 @@ func TestValidateMutationOnly(t *testing.T) {
 		"DELETE FROM information_schema.tables",
 		"DELETE FROM pg_catalog.pg_class",
 	}
+	// `WITH t AS (SELECT 1) SELECT * FROM t` now passes validateMutationOnly
+	// (the leading WITH is allowed because Postgres supports
+	// `WITH … INSERT/UPDATE/DELETE/MERGE`) and is rejected at the AST layer
+	// inside extractMutationRelations — see TestExecuteDBExec_RejectsWithSelect
+	// for the end-to-end coverage.
 	for _, s := range bad {
 		if err := validateMutationOnly(s); err == nil {
 			t.Errorf("validateMutationOnly(%q) should have failed", s)

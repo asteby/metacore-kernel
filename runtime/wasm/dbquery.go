@@ -204,15 +204,18 @@ func executeDBQuery(
 	return env
 }
 
-// gateRelation enforces the cross-schema rule from docs/wasm-abi.md § 9.3 for
-// a single parsed relation reference:
+// gateRelation enforces the cross-schema rule from docs/wasm-abi.md § 9.3 /
+// § 10.3 for a single parsed relation reference. The capability axis comes
+// from `rel.Cap` (db:read for SELECTs and DML sources, db:write for DML
+// targets):
 //
 //   - Bare name (schema == "")  → allowed (search_path resolves into the
-//     addon's own schema; addons get implicit db:read on their own schema).
+//     addon's own schema; addons get the implicit own-schema grant for
+//     both axes via the upstream `<addon_<key>>.*` check).
 //   - Own schema (addon_<key>) → allowed.
 //   - pg_catalog / information_schema / pg_* schemas → denied.
-//   - Anything else → must have an explicit `db:read <schema>.<rel>` or
-//     `db:read <schema>.*` capability.
+//   - Anything else → must have an explicit `<cap> <schema>.<rel>` or
+//     `<cap> <schema>.*` capability.
 func gateRelation(enforcer *security.Enforcer, addonKey, addonSchema string, rel relationRef) error {
 	if rel.Schema == "" || rel.Schema == addonSchema {
 		return nil
@@ -221,8 +224,12 @@ func gateRelation(enforcer *security.Enforcer, addonKey, addonSchema string, rel
 		return fmt.Errorf("addon %q referenced introspection schema %q.%s",
 			addonKey, rel.Schema, rel.Table)
 	}
+	cap := string(rel.Cap)
+	if cap == "" {
+		cap = string(capRead)
+	}
 	target := rel.Schema + "." + rel.Table
-	return enforcer.CheckCapability(addonKey, "db:read", target)
+	return enforcer.CheckCapability(addonKey, cap, target)
 }
 
 // isIntrospectionSchema returns true for the Postgres meta-schemas we never
