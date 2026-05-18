@@ -7,7 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-## [0.11.1] - 2026-05-18
+## [0.12.0] - 2026-05-18
 
 ### Security
 
