@@ -221,13 +221,21 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	sliceType := reflect.SliceOf(reflect.TypeOf(instance))
 	results := reflect.New(sliceType).Interface()
 
-	db := s.db.WithContext(ctx).Table(instance.(modelbase.ModelDefiner).TableName())
+	tableName := instance.(modelbase.ModelDefiner).TableName()
+	db := s.db.WithContext(ctx).Table(tableName)
 	db = s.scope.ScopeQuery(db, user)
 
-	builder := query.New(tableMeta)
+	// Wire relations into the builder so ?with= preloads and
+	// f_<relation>.<field> filters work without callers having to plumb
+	// HasRelations themselves. Models that do not implement HasRelations
+	// get an empty relation set — the new query features are no-ops.
+	builder := query.New(tableMeta).WithTableName(tableName)
+	if rels, ok := instance.(modelbase.HasRelations); ok {
+		builder = builder.WithRelations(rels.DefineRelations())
+	}
 	db = builder.Apply(db, params)
 
-	total, err := builder.Count(s.db.WithContext(ctx).Table(instance.(modelbase.ModelDefiner).TableName()).Scopes(func(d *gorm.DB) *gorm.DB {
+	total, err := builder.Count(s.db.WithContext(ctx).Table(tableName).Scopes(func(d *gorm.DB) *gorm.DB {
 		return s.scope.ScopeQuery(builder.Apply(d, params), user)
 	}), params)
 	if err != nil {

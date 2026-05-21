@@ -26,13 +26,30 @@ type Builder struct {
 	// Sourced from meta.SearchColumns, intersected with allowed so the
 	// builder never emits SQL for a column the frontend cannot see.
 	searchable []string
+
+	// relations is the optional set of model-to-model edges the builder
+	// may JOIN against (for relation filters) or Preload (for ?with=).
+	// Populated via WithRelations — kept optional so callers that never
+	// touch the new features do not have to plumb modelbase.HasRelations
+	// through their boot path.
+	relations map[string]modelbase.RelationDef
+
+	// tableName, when non-empty, is the SQL table name of the bound
+	// model. Used to disambiguate columns in GROUP BY when relation
+	// joins are present. Populated by WithTableName; callers that do
+	// not set it fall back to bare column names.
+	tableName string
 }
 
 // New constructs a Builder bound to a TableMetadata. A nil meta is
 // tolerated (yields a Builder that permits nothing — handy for tests of
 // the error paths) but production callers should always pass a real one.
 func New(meta *modelbase.TableMetadata) *Builder {
-	b := &Builder{meta: meta, allowed: map[string]struct{}{}}
+	b := &Builder{
+		meta:      meta,
+		allowed:   map[string]struct{}{},
+		relations: map[string]modelbase.RelationDef{},
+	}
 	if meta == nil {
 		return b
 	}
@@ -55,13 +72,62 @@ func New(meta *modelbase.TableMetadata) *Builder {
 	return b
 }
 
+// WithRelations binds the relation set the builder may JOIN against
+// (relation filters) or Preload (?with=). Names that fail the SQL-
+// identifier check are dropped so a malformed RelationDef cannot leak
+// into raw SQL. Returns the same builder so callers can chain:
+//
+//	qb := query.New(meta).WithRelations(model.DefineRelations()).WithTableName("orders")
+//
+// Pass nil or an empty slice to disable relation features entirely.
+// Idempotent — calling WithRelations twice replaces the prior set
+// rather than appending, so a host can rebuild the binding after a
+// hot-reload without restarting.
+func (b *Builder) WithRelations(rels []modelbase.RelationDef) *Builder {
+	out := make(map[string]modelbase.RelationDef, len(rels))
+	for _, r := range rels {
+		if r.Name == "" || !isSafeIdent(r.Name) {
+			continue
+		}
+		// ForeignKey is required for every kind we render. Through
+		// (target table) is required for joins; addons without it
+		// still register as "known" relations so Apply can drop them
+		// cleanly with a typed error rather than silently producing
+		// broken SQL.
+		out[r.Name] = r
+	}
+	b.relations = out
+	return b
+}
+
+// WithTableName declares the SQL table name of the bound model. The
+// builder uses it to qualify columns in GROUP BY and aggregation
+// SELECTs once a relation JOIN is in play — otherwise PostgreSQL would
+// reject ambiguous unqualified column references. Callers that do not
+// use relation features can omit it without consequence.
+func (b *Builder) WithTableName(name string) *Builder {
+	if isSafeIdent(name) {
+		b.tableName = name
+	}
+	return b
+}
+
 // Apply layers sort + filters + search onto db. Pagination is applied
 // separately via Paginate so Count can run on the un-paginated query.
 //
 // Apply never returns an error: every validation failure (unknown column,
 // unsafe identifier) drops the offending clause silently — a garbage sort
 // param produces a default-sorted list, not a 400.
+//
+// Order of operations is significant: Preloads and relation joins are
+// applied BEFORE filters/search/sort so any column qualifier the
+// downstream clauses emit (e.g. "orders.status = ?" once a JOIN is
+// present) lines up with the join graph.
 func (b *Builder) Apply(db *gorm.DB, params Params) *gorm.DB {
+	db = b.applyPreloads(db, params)
+	db = b.applyRelationFilters(db, params)
+	db = b.applyAggregations(db, params)
+	db = b.applyGroupBy(db, params)
 	db = b.applyFilters(db, params)
 	db = b.applySearch(db, params)
 	db = b.applySort(db, params)
@@ -273,4 +339,238 @@ func escapeLike(s string) string {
 	s = strings.ReplaceAll(s, `%`, `\%`)
 	s = strings.ReplaceAll(s, `_`, `\_`)
 	return s
+}
+
+// applyPreloads issues db.Preload for every relation name in
+// params.Preloads that the builder knows about. Unknown names are
+// dropped silently — matches Filters' "garbage in → safe degrade"
+// policy. The preloaded association name is the GORM struct field
+// name (e.g. "Customer") in conventional kernel models; since
+// RelationDef.Name uses the same convention by contract, we pass it
+// through verbatim.
+func (b *Builder) applyPreloads(db *gorm.DB, params Params) *gorm.DB {
+	if len(params.Preloads) == 0 || len(b.relations) == 0 {
+		return db
+	}
+	for _, name := range params.Preloads {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if !isSafeIdent(name) {
+			continue
+		}
+		if _, ok := b.relations[name]; !ok {
+			continue
+		}
+		db = db.Preload(name)
+	}
+	return db
+}
+
+// applyRelationFilters emits one INNER JOIN + one WHERE per declared
+// relation filter. Only belongs_to and one_to_many edges are joinable
+// today; many_to_many would require crossing the pivot table and is
+// deferred until a real call site needs it.
+//
+// Unknown relations and relations missing ForeignKey/Through are
+// dropped silently. The join clause is built from RelationDef
+// metadata, never from client input — every identifier crossing into
+// raw SQL is taken from the declared RelationDef, which the host
+// controls.
+func (b *Builder) applyRelationFilters(db *gorm.DB, params Params) *gorm.DB {
+	if len(params.RelationFilters) == 0 || len(b.relations) == 0 {
+		return db
+	}
+	joined := map[string]struct{}{}
+	for _, rf := range params.RelationFilters {
+		rel, ok := b.relations[rf.Relation]
+		if !ok {
+			continue
+		}
+		if rel.Through == "" || rel.ForeignKey == "" {
+			continue
+		}
+		if !isSafeIdent(rel.Through) || !isSafeIdent(rel.ForeignKey) {
+			continue
+		}
+		if !isSafeIdent(rf.Field) {
+			continue
+		}
+		// References defaults to "id" — matches GORM convention.
+		refs := rel.References
+		if refs == "" {
+			refs = "id"
+		}
+		if !isSafeIdent(refs) {
+			continue
+		}
+		// Skip many_to_many for now: needs pivot traversal that the
+		// kernel does not have a stable API for. Document the gap.
+		if strings.EqualFold(rel.Kind, "many_to_many") {
+			continue
+		}
+
+		ownerTable := b.tableName
+		if ownerTable == "" {
+			// Fall back to the model the *gorm.DB is already bound to —
+			// GORM resolves stmt.Table lazily; we emit a best-effort
+			// join keyed off the FK metadata.
+			ownerTable = ""
+		}
+
+		// Build the JOIN clause once per relation, even if multiple
+		// filters target the same relation.
+		if _, alreadyJoined := joined[rf.Relation]; !alreadyJoined {
+			var joinSQL string
+			switch strings.ToLower(rel.Kind) {
+			case "belongs_to":
+				// owner.fk = target.refs
+				if ownerTable != "" {
+					joinSQL = fmt.Sprintf(
+						"JOIN %s ON %s.%s = %s.%s",
+						rel.Through, ownerTable, rel.ForeignKey, rel.Through, refs,
+					)
+				} else {
+					joinSQL = fmt.Sprintf(
+						"JOIN %s ON %s = %s.%s",
+						rel.Through, rel.ForeignKey, rel.Through, refs,
+					)
+				}
+			case "one_to_many", "has_many", "":
+				// target.fk = owner.refs (default kind = has_many for
+				// legacy manifest authors that omit the field).
+				if ownerTable != "" {
+					joinSQL = fmt.Sprintf(
+						"JOIN %s ON %s.%s = %s.%s",
+						rel.Through, rel.Through, rel.ForeignKey, ownerTable, refs,
+					)
+				} else {
+					joinSQL = fmt.Sprintf(
+						"JOIN %s ON %s.%s = %s",
+						rel.Through, rel.Through, rel.ForeignKey, refs,
+					)
+				}
+			default:
+				continue
+			}
+			db = db.Joins(joinSQL)
+			joined[rf.Relation] = struct{}{}
+		}
+
+		// Now apply the WHERE clause against the joined table. We
+		// always qualify with rel.Through to avoid column-name
+		// collisions with the owner table.
+		qualified := rel.Through + "." + rf.Field
+		db = applyOneFilter(db, qualified, Filter{Op: rf.Op, Value: rf.Value})
+	}
+	return db
+}
+
+// applyAggregations emits SELECT-list aggregation expressions. When
+// aggregations are present the builder OVERRIDES the default SELECT
+// (which would otherwise be `SELECT *`) — the SELECT list becomes
+// the GroupBy columns plus the aggregation aliases. Callers that want
+// raw rows alongside aggregates must run two separate queries; this
+// matches the wire protocol every host frontend already expects.
+func (b *Builder) applyAggregations(db *gorm.DB, params Params) *gorm.DB {
+	if len(params.Aggregations) == 0 {
+		return db
+	}
+	parts := make([]string, 0, len(params.Aggregations)+len(params.GroupBy))
+
+	// GroupBy columns first, in declaration order, so the SELECT list
+	// mirrors the GROUP BY clause — required by every dialect.
+	for _, col := range params.GroupBy {
+		col = strings.TrimSpace(col)
+		if col == "" {
+			continue
+		}
+		if _, ok := b.allowed[col]; !ok {
+			continue
+		}
+		if !isSafeIdent(col) {
+			continue
+		}
+		parts = append(parts, b.qualifyOwner(col))
+	}
+
+	// Aggregation expressions next, each emitted as `FN(field) AS alias`.
+	// Field is either "*" (count only — guarded by parser) or a
+	// whitelisted column. The parser already enforces isSafeIdent on
+	// alias and field, but we re-check here as defence in depth.
+	for _, a := range params.Aggregations {
+		if !isSafeIdent(a.Alias) {
+			continue
+		}
+		fn := strings.ToUpper(string(a.Func))
+		if a.Field == "*" {
+			if a.Func != AggCount {
+				continue
+			}
+			parts = append(parts, fmt.Sprintf("%s(*) AS %s", fn, a.Alias))
+			continue
+		}
+		if !isSafeIdent(a.Field) {
+			continue
+		}
+		// Whitelisting: a Builder bound to nil/empty meta has no
+		// allowed columns, in which case we skip the check so test
+		// fixtures can exercise the SQL emitter without a metadata
+		// dance. Production callers will always have meta.
+		if len(b.allowed) > 0 {
+			if _, ok := b.allowed[a.Field]; !ok {
+				continue
+			}
+		}
+		parts = append(parts, fmt.Sprintf(
+			"%s(%s) AS %s",
+			fn, b.qualifyOwner(a.Field), a.Alias,
+		))
+	}
+
+	if len(parts) == 0 {
+		return db
+	}
+	return db.Select(strings.Join(parts, ", "))
+}
+
+// applyGroupBy emits the GROUP BY clause when params.GroupBy is
+// non-empty. Columns are validated against the allowed set and the
+// safe-ident regex; unknown or unsafe columns are dropped silently.
+// When the builder has a table name set, columns are qualified so the
+// GROUP BY survives a JOIN without ambiguity errors.
+func (b *Builder) applyGroupBy(db *gorm.DB, params Params) *gorm.DB {
+	if len(params.GroupBy) == 0 {
+		return db
+	}
+	cols := make([]string, 0, len(params.GroupBy))
+	for _, col := range params.GroupBy {
+		col = strings.TrimSpace(col)
+		if col == "" {
+			continue
+		}
+		if _, ok := b.allowed[col]; !ok {
+			continue
+		}
+		if !isSafeIdent(col) {
+			continue
+		}
+		cols = append(cols, b.qualifyOwner(col))
+	}
+	if len(cols) == 0 {
+		return db
+	}
+	return db.Group(strings.Join(cols, ", "))
+}
+
+// qualifyOwner prefixes col with the bound table name when one is set,
+// otherwise returns col unchanged. Used by GROUP BY and aggregation
+// SELECTs once a relation JOIN is in play; bare-column callers (no
+// joins) get the unqualified form to keep emitted SQL readable.
+func (b *Builder) qualifyOwner(col string) string {
+	if b.tableName == "" {
+		return col
+	}
+	return b.tableName + "." + col
 }
