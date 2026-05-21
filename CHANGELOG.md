@@ -7,6 +7,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **fix(dynamic): `resolveModel` respects `Config.ModelResolver`.** The
+  service's internal `resolveModel` helper (used by `List`, `Get`,
+  `Create`, `Update`, `Delete`) called `modelbase.Get` directly,
+  bypassing the configurable `ModelResolver` field. Hosts that keep
+  their own model index (e.g. Ops via `meta-core/models`) could not
+  drive dynamic CRUD without also registering each model in the
+  package-init `modelbase` registry. `resolveModel` now routes
+  through `Service.lookupModel`, which honours
+  `Config.ModelResolver` when wired and falls back to `modelbase.Get`
+  otherwise — so existing hosts keep working unchanged. New
+  regression coverage in `dynamic/service_test.go` asserts (a) the
+  custom resolver is invoked on every CRUD path, (b) the
+  `modelbase.Get` fallback still works when no resolver is wired,
+  and (c) a resolver returning `(nil, false)` surfaces
+  `ErrModelNotFound` without silently falling through.
+
 ## [0.12.0] - 2026-05-18
 
 ### Security
