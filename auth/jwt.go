@@ -18,6 +18,25 @@ type Claims struct {
 	Role           string    `json:"role,omitempty"`
 }
 
+// GetUserID lets *Claims satisfy adapters.ClaimsAccessor without forcing apps
+// to write a wrapper. The accessor methods are read-only and do not change
+// the JSON shape — JSON tags continue to drive
+// serialisation/deserialisation.
+func (c *Claims) GetUserID() uuid.UUID { return c.UserID }
+
+// GetOrganizationID lets *Claims satisfy adapters.ClaimsAccessor.
+func (c *Claims) GetOrganizationID() uuid.UUID { return c.OrganizationID }
+
+// GetRoleKeys lets *Claims satisfy adapters.ClaimsAccessor. The default
+// claims carry a single role string; the slice has one element so apps can
+// range over it uniformly.
+func (c *Claims) GetRoleKeys() []string {
+	if c.Role == "" {
+		return nil
+	}
+	return []string{c.Role}
+}
+
 // GenerateToken signs a HS256 JWT using the provided secret. It fills in
 // IssuedAt and ExpiresAt using `expiry` (falling back to 24h when zero).
 // Returns the signed string and the computed expiry timestamp.

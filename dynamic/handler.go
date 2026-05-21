@@ -7,6 +7,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 
+	"github.com/asteby/metacore-kernel/auth/adapters"
 	"github.com/asteby/metacore-kernel/modelbase"
 	"github.com/asteby/metacore-kernel/query"
 )
@@ -128,10 +129,29 @@ func (h *Handler) MountOptions(r fiber.Router, middleware ...fiber.Handler) {
 }
 
 func (h *Handler) user(c fiber.Ctx) modelbase.AuthUser {
-	if h.resolver == nil {
+	// Legacy path: app supplied a UserResolver that returns the full
+	// modelbase.AuthUser. Honoured first so existing wiring keeps working
+	// unchanged.
+	if h.resolver != nil {
+		if u := h.resolver(c); u != nil {
+			return u
+		}
+	}
+
+	// Fallback path: Service.AuthExtractor is configured. Apps with a custom
+	// principal shape (raw UUIDs in Fiber locals, JWT-claims-only auth, …)
+	// wire an extractor instead of a resolver and the handler bridges back to
+	// modelbase.AuthUser via adapters.WrapAsModelbase.
+	extractor := h.service.AuthExtractor()
+	if extractor == nil {
 		return nil
 	}
-	return h.resolver(c)
+	ctx := adapters.WithFiberCtx(c, c)
+	provider, err := extractor(ctx)
+	if err != nil || provider == nil {
+		return nil
+	}
+	return adapters.WrapAsModelbase(provider)
 }
 
 func (h *Handler) list(c fiber.Ctx) error {

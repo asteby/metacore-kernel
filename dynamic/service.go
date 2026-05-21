@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/asteby/metacore-kernel/auth/adapters"
 	"github.com/asteby/metacore-kernel/metadata"
 	"github.com/asteby/metacore-kernel/modelbase"
 	"github.com/asteby/metacore-kernel/permission"
@@ -82,6 +83,20 @@ type Config struct {
 	// kernel deliberately does not import runtime/wasm or net/http here to
 	// keep the dynamic package minimal).
 	ActionDispatchers map[string]ActionDispatcher
+
+	// AuthUserExtractor optionally lets the Handler pull the authenticated
+	// principal from the request context using the narrow AuthUserProvider
+	// contract instead of the legacy UserResolver (which forces apps to
+	// materialise a full modelbase.AuthUser).
+	//
+	// When configured, Handler.user falls back to the extractor whenever the
+	// legacy UserResolver is nil or returns nil — apps mid-migration can wire
+	// both and the handler picks the first that yields a principal. When nil
+	// (the default), behaviour is unchanged.
+	//
+	// See the adapters package for built-in extractors
+	// (ModelbaseExtractor / FiberLocalsExtractor / JWTClaimsExtractor).
+	AuthUserExtractor adapters.AuthUserExtractor
 }
 
 // Publisher is the minimal subset of events.Bus that dynamic.Service depends
@@ -122,6 +137,7 @@ type Service struct {
 	addonKeyForModel  func(ctx context.Context, model string) string
 	actionResolver    ActionResolver
 	actionDispatchers map[string]ActionDispatcher
+	authExtractor     adapters.AuthUserExtractor
 }
 
 // New constructs a dynamic Service.
@@ -161,8 +177,14 @@ func New(cfg Config) *Service {
 		addonKeyForModel:  cfg.AddonKeyForModel,
 		actionResolver:    cfg.ActionResolver,
 		actionDispatchers: dispatchers,
+		authExtractor:     cfg.AuthUserExtractor,
 	}
 }
+
+// AuthExtractor returns the configured AuthUserExtractor (or nil).
+// dynamic.Handler uses it as the second-chance source for the authenticated
+// principal when the legacy UserResolver is unwired or returns nil.
+func (s *Service) AuthExtractor() adapters.AuthUserExtractor { return s.authExtractor }
 
 // lookupModel resolves a model name to an instance. Apps that wire a
 // ModelResolver get app-specific behaviour (e.g. addon-registered models);
