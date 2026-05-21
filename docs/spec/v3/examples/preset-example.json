@@ -1,0 +1,55 @@
+{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Preset",
+  "metadata": {
+    "key": "retail_starter",
+    "name": "Retail Starter",
+    "description": "Opinionated bundle for small retail businesses: catalog, inventory, POS and reporting wired together with sane defaults.",
+    "version": "1.0.0",
+    "category": "vertical",
+    "icon": { "type": "lucide", "slug": "Store", "color": "#22C55E" },
+    "author": "Asteby",
+    "license": "Apache-2.0",
+    "features": [
+      "Catalog + inventory + POS pre-wired",
+      "Spanish (MX) defaults",
+      "Daily low-stock sweep enabled"
+    ]
+  },
+  "compatibility": {
+    "requires": [
+      { "key": "kernel", "version": ">=3.0.0 <4.0.0" }
+    ]
+  },
+  "tenancy": {
+    "isolation": "shared",
+    "rls_column": "organization_id"
+  },
+  "i18n": {
+    "default_locale": "es-MX",
+    "bundles": [
+      { "locale": "es-MX", "path": "i18n/es-MX.json" },
+      { "locale": "en", "path": "i18n/en.json" }
+    ]
+  },
+  "preset": {
+    "addons": [
+      { "key": "core_catalog", "version": "^1.2.0" },
+      { "key": "inventory", "version": "^1.0.0" },
+      { "key": "pos_terminal", "version": "^1.0.0" },
+      { "key": "reporting_basic", "version": "^1.0.0", "optional": true }
+    ],
+    "defaults": {
+      "inventory.low_stock_threshold": 5,
+      "inventory.notification_channel": "whatsapp",
+      "pos_terminal.print_receipts": true,
+      "pos_terminal.default_currency": "MXN"
+    }
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "marketplace:asteby:2026Q1",
+    "value": "MEQCIH4kQjVTXkqxz9V6X1lLqK0FQpVmK1XwY3bV7zXk1c1IAiBjB1l5n9bV7zXk1c1Iz0M5g7H3yA2bG0xL6kQpVmK1Xw==",
+    "signed_at": "2026-05-21T15:08:00Z"
+  }
+}
