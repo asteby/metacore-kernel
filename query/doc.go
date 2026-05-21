@@ -38,13 +38,17 @@
 //
 // # Parameters accepted
 //
-//	page              int     1-indexed, default 1
-//	per_page          int     default 15, clamped to [1, 200]
-//	sortBy            string  must match a whitelisted ColumnDef.Key
-//	order             string  asc | desc, default desc
-//	search            string  matched against meta.SearchColumns via ILIKE
-//	f_<col>=<op>:<v>  filter: op ∈ {eq, ilike, in, gte, lte, range}
-//	f_<col>=<v>       shorthand for eq
+//	page                       int     1-indexed, default 1
+//	per_page                   int     default 15, clamped to [1, 200]
+//	sortBy                     string  must match a whitelisted ColumnDef.Key
+//	order                      string  asc | desc, default desc
+//	search                     string  matched against meta.SearchColumns via ILIKE
+//	f_<col>=<op>:<v>           filter: op ∈ {eq, ilike, in, gte, lte, range}
+//	f_<col>=<v>                shorthand for eq
+//	f_<rel>.<field>=<op>:<v>   relation filter: JOINs rel, filters by rel.field
+//	group_by=col1,col2         emits GROUP BY col1, col2
+//	aggregate=fn(field)[:as]   emits fn(field) AS <alias> in SELECT
+//	with=rel1,rel2             db.Preload each relation by GORM name
 //
 // # Filter operators
 //
@@ -54,6 +58,39 @@
 //	gte     f_amount=gte:100            WHERE amount >= 100
 //	lte     f_amount=lte:100            WHERE amount <= 100
 //	range   f_created_at=range:a|b      WHERE created_at BETWEEN 'a' AND 'b'
+//
+// # Relation filters
+//
+// A dot in the filter key promotes the directive from a flat column
+// filter into a relation filter. The relation name must match a
+// modelbase.RelationDef.Name on the bound model (see Builder.WithRelations).
+//
+//	f_customer.name=eq:Juan     JOIN customers ON orders.customer_id = customers.id
+//	                            WHERE customers.name = 'Juan'
+//
+// belongs_to and one_to_many edges are joinable. many_to_many is
+// recognised but skipped — its pivot traversal will arrive in a
+// follow-up.
+//
+// # Aggregations + group_by
+//
+// When `aggregate=` is present the SELECT list is REWRITTEN to the
+// group_by columns followed by the aggregate expressions. Callers that
+// want raw rows alongside aggregates must run two queries.
+//
+//	?group_by=status&aggregate=sum(amount):total,count(*)
+//	SELECT orders.status, SUM(amount) AS total, COUNT(*) AS count
+//	FROM orders GROUP BY orders.status
+//
+// Supported aggregate functions: sum, count, avg, min, max. Unknown
+// functions return ErrUnknownAggregate; malformed expressions return
+// ErrInvalidAggregate.
+//
+// # Preloads
+//
+// `with=Customer,Items` calls db.Preload("Customer").Preload("Items"),
+// validating each name against the relations declared via
+// Builder.WithRelations. Unknown names are dropped silently.
 //
 // # Security
 //
