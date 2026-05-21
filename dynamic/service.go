@@ -373,7 +373,11 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 // --- internal -----------------------------------------------------------
 
 func (s *Service) resolveModel(ctx context.Context, model string) (any, *modelbase.TableMetadata, error) {
-	definer, ok := modelbase.Get(model)
+	// Route through lookupModel so an app-supplied Config.ModelResolver wins
+	// over the package-init modelbase registry. Hosts that keep their own
+	// model index (e.g. meta-core/models) plug it via Config.ModelResolver;
+	// when nil, lookupModel falls back to modelbase.Get for backward compat.
+	definer, ok := s.lookupModel(ctx, model)
 	if !ok {
 		return nil, nil, ErrModelNotFound
 	}

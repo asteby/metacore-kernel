@@ -23,6 +23,7 @@
 - [Schema isolation and RLS](#schema-isolation-and-rls)
 - [Permission gates](#permission-gates)
 - [Real-time updates](#real-time-updates)
+- [Plugging a custom model registry (`Config.ModelResolver`)](#plugging-a-custom-model-registry-configmodelresolver)
 - [What is NOT auto](#what-is-not-auto)
 - [See also](#see-also)
 
@@ -519,6 +520,33 @@ durable storage.
 For cross-process fan-out (multi-replica deployment), use the addon
 event bus ([`events/`](../events/)) and have each replica subscribe to its
 own forwarder — the in-process hub is per-process by design.
+
+## Plugging a custom model registry (`Config.ModelResolver`)
+
+By default `dynamic.Service` looks up model factories in `modelbase.Get` — the
+package-init registry populated by `modelbase.Register("<key>", factory)`.
+Hosts that maintain their own index (Ops keeps its models in
+`meta-core/models`, addons populate a runtime registry from
+`manifest.json`) can plug a resolver directly into the service:
+
+```go
+svc := dynamic.New(dynamic.Config{
+    DB:       db,
+    Metadata: meta,
+    // Route every CRUD lookup through the host's own registry. Return
+    // (nil, false) for unknown keys; the service surfaces ErrModelNotFound.
+    ModelResolver: func(ctx context.Context, name string) (any, bool) {
+        return mycore.Models().Get(ctx, name)
+    },
+})
+```
+
+The resolver is consulted by `List`, `Get`, `Create`, `Update`, `Delete`,
+`Options` and `Search`. When `ModelResolver` is `nil` the service falls back
+to `modelbase.Get`, so hosts that already register models the legacy way
+keep working unchanged. `metadata.Service.GetTable` is a separate component
+with its own lookup path — apps that drop `modelbase.Register` entirely
+should wire a parallel resolver there too.
 
 ## What is NOT auto
 

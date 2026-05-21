@@ -439,6 +439,115 @@ func TestEvents_NoBusIsNoop(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// ModelResolver wiring — guards against regressions where resolveModel
+// bypasses Config.ModelResolver and reads modelbase.Get directly. Hosts that
+// keep their own model registry (e.g. meta-core/models) depend on this.
+// ---------------------------------------------------------------------------
+
+// TestModelResolver_CustomResolverInvoked wires a Config.ModelResolver and
+// confirms every CRUD path drives lookups through it. Pre-fix, resolveModel
+// called modelbase.Get directly — the resolver would never fire and `hits`
+// would be 0.
+//
+// We still register the model in modelbase so metadata.Service.GetTable (a
+// separate component the test does not exercise the fix on) can resolve the
+// schema. The assertion that proves the fix is `hits > 0`, not the absence
+// of a modelbase entry.
+func TestModelResolver_CustomResolverInvoked(t *testing.T) {
+	db := setupTestDB(t)
+	modelbase.Register("test_products", func() modelbase.ModelDefiner { return &TestProduct{} })
+	meta := metadata.New(metadata.Config{CacheTTL: -1})
+
+	var hits int
+	resolver := func(_ context.Context, name string) (any, bool) {
+		hits++
+		// Delegate to modelbase for the underlying instance so storage works,
+		// but the call itself proves the dynamic service is honouring the
+		// configured resolver instead of bypassing it.
+		inst, ok := modelbase.Get(name)
+		if !ok {
+			return nil, false
+		}
+		return inst, true
+	}
+
+	svc := New(Config{DB: db, Metadata: meta, ModelResolver: resolver})
+	user := newUser(uuid.New())
+
+	out, err := svc.Create(context.Background(), "test_products", user, map[string]any{
+		"name":  "FromResolver",
+		"price": 1.23,
+	})
+	if err != nil {
+		t.Fatalf("create via resolver: %v", err)
+	}
+	if hits == 0 {
+		t.Fatal("expected ModelResolver to be invoked on Create, got 0 hits — resolveModel is bypassing Config.ModelResolver")
+	}
+	id, err := uuid.Parse(out["id"].(string))
+	if err != nil {
+		t.Fatalf("parse id: %v", err)
+	}
+
+	// Reset and walk every CRUD path so each resolveModel call is observed.
+	hits = 0
+	if _, err := svc.Get(context.Background(), "test_products", user, id); err != nil {
+		t.Fatalf("get via resolver: %v", err)
+	}
+	if _, _, err := svc.List(context.Background(), "test_products", user, query.Params{Page: 1, PerPage: 10}); err != nil {
+		t.Fatalf("list via resolver: %v", err)
+	}
+	if _, err := svc.Update(context.Background(), "test_products", user, id, map[string]any{"name": "Renamed"}); err != nil {
+		t.Fatalf("update via resolver: %v", err)
+	}
+	if err := svc.Delete(context.Background(), "test_products", user, id); err != nil {
+		t.Fatalf("delete via resolver: %v", err)
+	}
+	if hits < 4 {
+		t.Fatalf("expected resolver to be called once per Get/List/Update/Delete (>=4), got %d", hits)
+	}
+}
+
+// TestModelResolver_BackwardCompatModelbase confirms that when no
+// Config.ModelResolver is wired, resolveModel still falls back to
+// modelbase.Get — a host that has not opted in to the resolver keeps
+// working exactly as before.
+func TestModelResolver_BackwardCompatModelbase(t *testing.T) {
+	db := setupTestDB(t)
+	svc := setupService(t, db) // no ModelResolver in Config
+	user := newUser(uuid.New())
+
+	// test_products is registered in modelbase by setupService; this would
+	// fail with ErrModelNotFound if the fallback to modelbase.Get were
+	// dropped.
+	created := createProduct(t, svc, user, "FromModelbase", 4.2)
+	if created["name"] != "FromModelbase" {
+		t.Fatalf("name = %v, want FromModelbase", created["name"])
+	}
+}
+
+// TestModelResolver_ReturnsFalseYieldsNotFound asserts that when the wired
+// resolver signals "unknown model" (ok == false), the service surfaces
+// ErrModelNotFound and does NOT silently fall back to modelbase.Get.
+func TestModelResolver_ReturnsFalseYieldsNotFound(t *testing.T) {
+	db := setupTestDB(t)
+	// Register test_products in modelbase to prove the resolver overrides it:
+	// if the service ever fell through to modelbase.Get the call would
+	// succeed instead of returning ErrModelNotFound.
+	modelbase.Register("test_products", func() modelbase.ModelDefiner { return &TestProduct{} })
+	meta := metadata.New(metadata.Config{CacheTTL: -1})
+
+	resolver := func(_ context.Context, _ string) (any, bool) { return nil, false }
+	svc := New(Config{DB: db, Metadata: meta, ModelResolver: resolver})
+	user := newUser(uuid.New())
+
+	_, _, err := svc.List(context.Background(), "test_products", user, query.Params{Page: 1, PerPage: 10})
+	if err != ErrModelNotFound {
+		t.Fatalf("expected ErrModelNotFound when resolver returns false, got %v", err)
+	}
+}
+
 // TestEvents_DefaultAddonKeyKernel verifies that when no AddonKeyForModel
 // resolver is wired, events are namespaced under "kernel.<model>.<action>".
 func TestEvents_DefaultAddonKeyKernel(t *testing.T) {
