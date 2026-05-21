@@ -1,0 +1,266 @@
+{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": {
+    "key": "inventory",
+    "name": "Inventory",
+    "description": "Stock, warehouses and movement tracking for the Asteby ecosystem.",
+    "version": "1.0.0",
+    "category": "logistics",
+    "icon": { "type": "lucide", "slug": "Boxes", "color": "#0EA5E9" },
+    "author": "Asteby",
+    "website": "https://asteby.com/addons/inventory",
+    "license": "Apache-2.0",
+    "readme": "README.md",
+    "screenshots": ["screenshots/products.png", "screenshots/movements.png"],
+    "features": [
+      "Multi-warehouse stock",
+      "Movement audit trail",
+      "Low-stock alerts via events"
+    ]
+  },
+  "compatibility": {
+    "requires": [
+      { "key": "kernel", "version": ">=3.0.0 <4.0.0" },
+      { "key": "core_catalog", "version": ">=1.2.0", "optional": true, "reason": "Richer product cards when the catalog addon is installed." }
+    ]
+  },
+  "tenancy": {
+    "isolation": "shared",
+    "rls_column": "organization_id"
+  },
+  "capabilities": [
+    { "kind": "db:write", "target": "addon_inventory.*", "reason": "Persist products, warehouses and movements." },
+    { "kind": "db:read", "target": "addon_inventory.*" },
+    { "kind": "db:read", "target": "addon_core_catalog.products", "reason": "Read product cards when the catalog addon is installed." },
+    { "kind": "event:emit", "target": "inventory.stock_changed" },
+    { "kind": "event:emit", "target": "inventory.low_stock_detected" },
+    { "kind": "event:subscribe", "target": "sales.order_paid" },
+    { "kind": "cron:register", "target": "0 6 * * *", "reason": "Daily low-stock sweep." },
+    { "kind": "secrets:read", "target": "inventory.*" },
+    { "kind": "queue:produce", "target": "inventory.alerts" },
+    { "kind": "file-storage:write", "target": "inventory/exports/*" }
+  ],
+  "models": [
+    {
+      "key": "Warehouse",
+      "table": "warehouses",
+      "label": "inventory.model.warehouse",
+      "columns": [
+        { "name": "id", "type": "uuid", "primary_key": true, "default": "gen_random_uuid()" },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
+        { "name": "code", "type": "text", "not_null": true },
+        { "name": "name", "type": "text", "not_null": true },
+        { "name": "created_at", "type": "timestamptz", "not_null": true, "default": "now()" }
+      ],
+      "indices": [
+        { "name": "warehouses_org_code_uq", "columns": ["organization_id", "code"], "unique": true }
+      ]
+    },
+    {
+      "key": "Product",
+      "table": "products",
+      "label": "inventory.model.product",
+      "columns": [
+        { "name": "id", "type": "uuid", "primary_key": true, "default": "gen_random_uuid()" },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
+        { "name": "sku", "type": "text", "not_null": true },
+        { "name": "name", "type": "text", "not_null": true },
+        { "name": "unit_price", "type": "numeric" },
+        { "name": "metadata", "type": "jsonb" },
+        { "name": "created_at", "type": "timestamptz", "not_null": true, "default": "now()" }
+      ],
+      "indices": [
+        { "name": "products_org_sku_uq", "columns": ["organization_id", "sku"], "unique": true }
+      ]
+    },
+    {
+      "key": "StockMovement",
+      "table": "stock_movements",
+      "label": "inventory.model.stock_movement",
+      "columns": [
+        { "name": "id", "type": "uuid", "primary_key": true, "default": "gen_random_uuid()" },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
+        { "name": "product_id", "type": "uuid", "not_null": true },
+        { "name": "warehouse_id", "type": "uuid", "not_null": true },
+        { "name": "delta", "type": "numeric", "not_null": true },
+        { "name": "reason", "type": "text" },
+        { "name": "occurred_at", "type": "timestamptz", "not_null": true, "default": "now()" }
+      ],
+      "foreign_keys": [
+        {
+          "columns": ["product_id"],
+          "references": { "model": "inventory.Product", "columns": ["id"] },
+          "policy": "physical",
+          "on_delete": "restrict"
+        },
+        {
+          "columns": ["warehouse_id"],
+          "references": { "model": "inventory.Warehouse", "columns": ["id"] },
+          "policy": "physical",
+          "on_delete": "restrict"
+        }
+      ],
+      "indices": [
+        { "name": "stock_movements_org_product_idx", "columns": ["organization_id", "product_id"] }
+      ]
+    }
+  ],
+  "contributions": {
+    "navigation": [
+      {
+        "title": "inventory.nav.group",
+        "icon": "Boxes",
+        "target": "sidebar.logistics",
+        "items": [
+          { "title": "inventory.nav.products", "model": "Product", "permission": "inventory.product.read" },
+          { "title": "inventory.nav.warehouses", "model": "Warehouse", "permission": "inventory.warehouse.read" },
+          { "title": "inventory.nav.movements", "model": "StockMovement", "permission": "inventory.movement.read" }
+        ]
+      }
+    ],
+    "slots": [
+      {
+        "slot_kind": "core_catalog.product_detail_panel",
+        "entry": "frontend/StockPanel",
+        "order": 100,
+        "permission": "inventory.product.read"
+      }
+    ],
+    "actions": [
+      {
+        "key": "adjust_stock",
+        "label": "inventory.action.adjust_stock",
+        "handler": { "type": "wasm", "function": "AdjustStock" },
+        "target_model": "Product"
+      }
+    ],
+    "tools": [
+      {
+        "key": "report_low_stock",
+        "description": "Lists products under the configured low-stock threshold.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "warehouse_code": { "type": "string" }
+          }
+        },
+        "handler": { "type": "wasm", "function": "ReportLowStock" }
+      }
+    ],
+    "subscriptions": [
+      {
+        "event": "sales.order_paid",
+        "handler": { "type": "wasm", "function": "OnOrderPaid" },
+        "filter": "payload.line_items.size() > 0"
+      }
+    ]
+  },
+  "extension_points": {
+    "events": [
+      {
+        "name": "inventory.stock_changed",
+        "payload_schema": "schemas/events/stock_changed.json",
+        "description": "Emitted on any positive or negative stock movement."
+      },
+      {
+        "name": "inventory.low_stock_detected",
+        "payload_schema": "schemas/events/low_stock_detected.json"
+      }
+    ],
+    "slot_kinds": [
+      {
+        "name": "inventory.product_detail_panel",
+        "props_schema": "schemas/slots/product_detail_panel.json",
+        "description": "Right-hand panel on the product detail screen."
+      }
+    ],
+    "model_extensions_accepted": ["Product"]
+  },
+  "lifecycle": {
+    "install": "Install",
+    "uninstall": "Uninstall",
+    "enable": "Enable",
+    "disable": "Disable",
+    "upgrade": [
+      { "from": ">=0.9.0 <1.0.0", "type": "wasm", "function": "MigrateTo_1_0" },
+      { "from": ">=1.0.0 <1.3.0", "type": "sql", "function": "migrations/1_3_to_1_4.sql" }
+    ]
+  },
+  "i18n": {
+    "default_locale": "es-MX",
+    "bundles": [
+      { "locale": "es-MX", "path": "i18n/es-MX.json" },
+      { "locale": "en", "path": "i18n/en.json" }
+    ]
+  },
+  "rbac": {
+    "roles": [
+      {
+        "key": "inventory_manager",
+        "label": "inventory.role.manager",
+        "description": "Full access to inventory data.",
+        "permissions": [
+          "inventory.product.read",
+          "inventory.product.write",
+          "inventory.warehouse.read",
+          "inventory.warehouse.write",
+          "inventory.movement.read",
+          "inventory.movement.write"
+        ]
+      },
+      {
+        "key": "inventory_viewer",
+        "label": "inventory.role.viewer",
+        "permissions": [
+          "inventory.product.read",
+          "inventory.warehouse.read",
+          "inventory.movement.read"
+        ]
+      }
+    ],
+    "permissions": [
+      { "key": "inventory.product.read", "label": "Read products" },
+      { "key": "inventory.product.write", "label": "Create/update/delete products" },
+      { "key": "inventory.warehouse.read", "label": "Read warehouses" },
+      { "key": "inventory.warehouse.write", "label": "Create/update/delete warehouses" },
+      { "key": "inventory.movement.read", "label": "Read stock movements" },
+      { "key": "inventory.movement.write", "label": "Record stock movements" }
+    ]
+  },
+  "settings": [
+    {
+      "key": "low_stock_threshold",
+      "type": "integer",
+      "label": "inventory.settings.low_stock_threshold",
+      "default": 5,
+      "required": true
+    },
+    {
+      "key": "notification_channel",
+      "type": "select",
+      "label": "inventory.settings.notification_channel",
+      "default": "email",
+      "options": [
+        { "value": "email", "label": "Email" },
+        { "value": "whatsapp", "label": "WhatsApp" },
+        { "value": "none", "label": "Disabled" }
+      ]
+    }
+  ],
+  "billing": {
+    "metered_events": [
+      {
+        "event": "inventory.stock_changed",
+        "unit": "movement",
+        "revenue_share": 0.85
+      }
+    ]
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "marketplace:asteby:2026Q1",
+    "value": "MEUCIQDqj0J3y8u8KQHv9XQqkF6gLQ+TvOq5xK0F2WkqxqK4kQIgB1l5n9bV7zXk1c1Iz0M5g7H3yA2bG0xL6kQpVmK1XwY=",
+    "signed_at": "2026-05-21T15:04:05Z"
+  }
+}

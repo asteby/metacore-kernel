@@ -1,0 +1,874 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://asteby.com/schemas/module-contract/v3/manifest.json",
+  "title": "Metacore Module Contract v3 Manifest",
+  "description": "Authoritative declarative grammar for a metacore addon, preset, theme or connector pack. The kernel only honours behaviour declared here; code-side discovery is never used as a side channel.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "compatibility"],
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "const": "asteby.com/v3",
+      "description": "Module Contract version. Always 'asteby.com/v3' in this revision. The kernel rejects unknown values.",
+      "examples": ["asteby.com/v3"]
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["Addon", "Preset", "Theme", "ConnectorPack"],
+      "description": "Top-level shape selector. Each kind imposes additional constraints (see top-level allOf).",
+      "examples": ["Addon", "Preset"]
+    },
+    "metadata": { "$ref": "#/$defs/Metadata" },
+    "compatibility": { "$ref": "#/$defs/Compatibility" },
+    "tenancy": { "$ref": "#/$defs/Tenancy" },
+    "capabilities": {
+      "type": "array",
+      "description": "Scoped permissions the addon requests. The host prompts the org admin for approval and the runtime enforces them by injecting a constrained AddonContext.",
+      "items": { "$ref": "#/$defs/Capability" }
+    },
+    "models": {
+      "type": "array",
+      "description": "Data models the addon owns. The installer materialises each as a table in the addon schema (shared) or per-tenant schema, with the declared columns, indices and RLS policies.",
+      "items": { "$ref": "#/$defs/Model" }
+    },
+    "contributions": { "$ref": "#/$defs/Contributions" },
+    "extension_points": { "$ref": "#/$defs/ExtensionPoints" },
+    "lifecycle": { "$ref": "#/$defs/Lifecycle" },
+    "i18n": { "$ref": "#/$defs/I18n" },
+    "rbac": { "$ref": "#/$defs/Rbac" },
+    "settings": {
+      "type": "array",
+      "description": "User-facing tenant-scoped settings the addon reads at runtime via secrets:read or the kernel settings API.",
+      "items": { "$ref": "#/$defs/Setting" }
+    },
+    "billing": { "$ref": "#/$defs/Billing" },
+    "preset": { "$ref": "#/$defs/Preset" },
+    "theme": { "$ref": "#/$defs/Theme" },
+    "connector_pack": { "$ref": "#/$defs/ConnectorPack" },
+    "signature": { "$ref": "#/$defs/Signature" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "Addon" } } },
+      "then": {
+        "not": { "required": ["preset"] },
+        "description": "Addons must not declare a preset block."
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "Preset" } } },
+      "then": {
+        "required": ["preset"],
+        "not": { "anyOf": [
+          { "required": ["models"] },
+          { "required": ["lifecycle"] }
+        ] },
+        "description": "Presets must declare 'preset' and must not own models or lifecycle hooks."
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "Theme" } } },
+      "then": {
+        "required": ["theme"],
+        "not": { "anyOf": [
+          { "required": ["models"] },
+          { "required": ["capabilities"] }
+        ] }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "ConnectorPack" } } },
+      "then": { "required": ["connector_pack"] }
+    }
+  ],
+  "$defs": {
+    "Metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "name", "version"],
+      "description": "Identity, presentation and authorship metadata for the module.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{1,62}$",
+          "description": "Stable lowercase identifier. Used as the addon schema name and event namespace. Immutable after first publish.",
+          "examples": ["inventory", "pos_terminal"]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable display name shown in the marketplace and install UI.",
+          "examples": ["Inventory"]
+        },
+        "description": {
+          "type": "string",
+          "description": "Short marketing-friendly description."
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$",
+          "description": "Semver 2.0 version of this manifest payload. Drives the lifecycle.upgrade dispatcher.",
+          "examples": ["1.0.0", "2.3.1-rc.1"]
+        },
+        "category": {
+          "type": "string",
+          "description": "Marketplace category, free-form lowercase slug.",
+          "examples": ["sales", "logistics"]
+        },
+        "icon": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Triple (type, slug, color) used by the host to render the addon avatar.",
+          "properties": {
+            "type": { "type": "string", "enum": ["brand", "lucide", "url"] },
+            "slug": { "type": "string" },
+            "color": { "type": "string" }
+          },
+          "required": ["type", "slug"]
+        },
+        "author": { "type": "string" },
+        "website": { "type": "string", "format": "uri" },
+        "license": { "type": "string" },
+        "readme": { "type": "string", "description": "Path inside the bundle to the long-form README markdown." },
+        "screenshots": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "features": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "examples": [
+        {
+          "key": "inventory",
+          "name": "Inventory",
+          "version": "1.0.0",
+          "category": "logistics",
+          "author": "Asteby"
+        }
+      ]
+    },
+    "Compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requires"],
+      "description": "Versioned dependency declarations. 'requires' replaces the v2 trio (kernel, requires, implicit host match) with a uniform list.",
+      "properties": {
+        "requires": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/Requirement" }
+        }
+      },
+      "examples": [
+        {
+          "requires": [
+            { "key": "kernel", "version": ">=3.0.0 <4.0.0" },
+            { "key": "core_catalog", "version": ">=1.2.0", "optional": true, "reason": "richer product cards when present" }
+          ]
+        }
+      ]
+    },
+    "Requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "version"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Dependency identifier. 'kernel' is reserved for the host. Anything else references another addon by metadata.key.",
+          "examples": ["kernel", "inventory"]
+        },
+        "version": {
+          "type": "string",
+          "description": "Semver range parsed by Masterminds/semver. Empty string is not allowed.",
+          "minLength": 1,
+          "examples": [">=3.0.0 <4.0.0", "^1.2.0"]
+        },
+        "optional": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, the install proceeds even if the peer is missing; the addon must gracefully detect absence at runtime."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Human-readable justification surfaced in the install UI."
+        }
+      }
+    },
+    "Tenancy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-tenant data isolation strategy. Defaults to shared+RLS.",
+      "properties": {
+        "isolation": {
+          "type": "string",
+          "enum": ["shared", "schema", "database"],
+          "default": "shared",
+          "description": "shared: single addon schema, RLS by rls_column; schema: addon_<key>_<orgshort>; database: reserved."
+        },
+        "rls_column": {
+          "type": "string",
+          "default": "organization_id",
+          "description": "Column the kernel filters by when isolation=shared. Must exist on every model table the addon owns."
+        }
+      },
+      "examples": [
+        { "isolation": "shared", "rls_column": "organization_id" },
+        { "isolation": "schema" }
+      ]
+    },
+    "Capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "target"],
+      "description": "A single scoped permission grant. Wildcards in target follow shell glob semantics.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "db:read",
+            "db:write",
+            "http:fetch",
+            "event:emit",
+            "event:subscribe",
+            "fs:read",
+            "secrets:read",
+            "cron:register",
+            "queue:produce",
+            "queue:consume",
+            "file-storage:write",
+            "time:wallclock"
+          ],
+          "description": "Closed set of capability kinds the runtime enforces."
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Capability target. db:* expects 'schema.table' or 'schema.*'. http:fetch expects a URL prefix. event:* expects an event name. cron:register expects a cron expression. queue:* expects a queue name. secrets:read expects a secret key glob.",
+          "examples": ["addon_inventory.*", "https://api.stripe.com/*", "sale.created", "0 * * * *"]
+        },
+        "reason": {
+          "type": "string",
+          "description": "User-facing justification for the install consent screen."
+        }
+      },
+      "examples": [
+        { "kind": "db:write", "target": "addon_inventory.*", "reason": "Persist stock movements." },
+        { "kind": "http:fetch", "target": "https://api.stripe.com/*" },
+        { "kind": "event:emit", "target": "inventory.stock_changed" }
+      ]
+    },
+    "Model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "table", "columns"],
+      "description": "A data model the addon owns. Materialised by the installer.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Za-z0-9]+$",
+          "description": "PascalCase logical identifier the SDK exposes (e.g. 'Product').",
+          "examples": ["Product", "StockMovement"]
+        },
+        "table": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]+$",
+          "description": "Physical SQL table name inside the addon schema.",
+          "examples": ["products", "stock_movements"]
+        },
+        "label": {
+          "type": "string",
+          "description": "i18n key resolving to the human label."
+        },
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/Column" }
+        },
+        "indices": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Index" }
+        },
+        "foreign_keys": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ForeignKey" }
+        },
+        "extensions": {
+          "type": "array",
+          "description": "Columns this addon attaches to another addon's model. The target model must opt in via extension_points.model_extensions_accepted[].",
+          "items": { "$ref": "#/$defs/ModelExtension" }
+        }
+      },
+      "examples": [
+        {
+          "key": "Product",
+          "table": "products",
+          "columns": [
+            { "name": "id", "type": "uuid", "primary_key": true },
+            { "name": "sku", "type": "text", "not_null": true },
+            { "name": "name", "type": "text", "not_null": true }
+          ],
+          "indices": [
+            { "name": "products_sku_uq", "columns": ["sku"], "unique": true }
+          ]
+        }
+      ]
+    },
+    "Column": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$" },
+        "type": {
+          "type": "string",
+          "description": "Logical type the kernel maps to a Postgres type. Closed set kept narrow to keep cross-driver portability.",
+          "enum": [
+            "uuid",
+            "text",
+            "integer",
+            "bigint",
+            "numeric",
+            "boolean",
+            "timestamp",
+            "timestamptz",
+            "date",
+            "json",
+            "jsonb",
+            "vector"
+          ]
+        },
+        "primary_key": { "type": "boolean", "default": false },
+        "not_null": { "type": "boolean", "default": false },
+        "default": {
+          "description": "Default value as JSON literal or recognised SQL expression token (e.g. 'now()', 'gen_random_uuid()')."
+        },
+        "label": { "type": "string" }
+      }
+    },
+    "Index": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "columns"],
+      "properties": {
+        "name": { "type": "string" },
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "unique": { "type": "boolean", "default": false },
+        "method": { "type": "string", "enum": ["btree", "gin", "gist", "hash", "ivfflat", "hnsw"] }
+      }
+    },
+    "ForeignKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["columns", "references", "policy"],
+      "description": "Cross-model reference. 'policy' selects whether the installer materialises a physical FK constraint or only validates the link in application code.",
+      "properties": {
+        "columns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "references": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["model", "columns"],
+          "properties": {
+            "model": {
+              "type": "string",
+              "description": "Either '<this_addon>.Model' or '<other_addon>.Model'."
+            },
+            "columns": {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1
+            }
+          }
+        },
+        "policy": {
+          "type": "string",
+          "enum": ["logical", "physical"],
+          "description": "logical: kernel enforces in application code only (safe across schemas/tenants). physical: kernel emits an SQL FK constraint."
+        },
+        "on_delete": {
+          "type": "string",
+          "enum": ["restrict", "cascade", "set_null", "no_action"]
+        }
+      }
+    },
+    "ModelExtension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_model", "columns"],
+      "description": "Columns this addon attaches to another addon's model.",
+      "properties": {
+        "target_model": {
+          "type": "string",
+          "description": "Fully qualified '<addon_key>.<ModelKey>' of the model being extended.",
+          "examples": ["catalog.Product"]
+        },
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/Column" }
+        }
+      }
+    },
+    "Contributions": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What this addon contributes to the host shell and to extension points published by other addons.",
+      "properties": {
+        "navigation": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/NavGroup" }
+        },
+        "slots": {
+          "type": "array",
+          "description": "Renders into a slot_kind published by another addon (or the host).",
+          "items": { "$ref": "#/$defs/SlotContribution" }
+        },
+        "actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Action" }
+        },
+        "tools": {
+          "type": "array",
+          "description": "LLM-facing actions registered into the host agent-tool registry on install.",
+          "items": { "$ref": "#/$defs/Tool" }
+        },
+        "subscriptions": {
+          "type": "array",
+          "description": "Event handlers. Each subscription must be backed by an 'event:subscribe' capability.",
+          "items": { "$ref": "#/$defs/Subscription" }
+        }
+      }
+    },
+    "NavGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "items"],
+      "properties": {
+        "title": { "type": "string" },
+        "icon": { "type": "string" },
+        "target": { "type": "string", "description": "Merges into an existing host group (e.g. 'sidebar.sales')." },
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/NavItem" }
+        }
+      }
+    },
+    "NavItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title"],
+      "properties": {
+        "title": { "type": "string" },
+        "url": { "type": "string" },
+        "icon": { "type": "string" },
+        "model": { "type": "string", "description": "Binds the item to a dynamic CRUD screen for that model." },
+        "permission": { "type": "string" },
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/NavItem" }
+        }
+      }
+    },
+    "SlotContribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slot_kind", "entry"],
+      "properties": {
+        "slot_kind": {
+          "type": "string",
+          "description": "Fully qualified '<addon_key>.<slot_name>' published in extension_points.slot_kinds[]."
+        },
+        "entry": {
+          "type": "string",
+          "description": "Bundle-relative path or federation expose pointing at the React component."
+        },
+        "order": { "type": "integer", "default": 0 },
+        "permission": { "type": "string" }
+      }
+    },
+    "Action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "handler"],
+      "properties": {
+        "key": { "type": "string" },
+        "label": { "type": "string" },
+        "handler": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {
+            "type": { "type": "string", "enum": ["wasm", "webhook"] },
+            "function": { "type": "string" },
+            "url": { "type": "string" }
+          }
+        },
+        "target_model": { "type": "string" }
+      }
+    },
+    "Tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "description"],
+      "properties": {
+        "key": { "type": "string" },
+        "description": { "type": "string" },
+        "input_schema": { "type": "object" },
+        "handler": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {
+            "type": { "type": "string", "enum": ["wasm", "webhook"] },
+            "function": { "type": "string" },
+            "url": { "type": "string" }
+          }
+        }
+      }
+    },
+    "Subscription": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "handler"],
+      "properties": {
+        "event": {
+          "type": "string",
+          "description": "Event name as published by another addon in extension_points.events[]. Must match a 'event:subscribe' capability target."
+        },
+        "handler": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {
+            "type": { "type": "string", "enum": ["wasm", "webhook"] },
+            "function": { "type": "string" },
+            "url": { "type": "string" }
+          }
+        },
+        "filter": { "type": "string", "description": "CEL expression over the event payload; only matching events dispatch." }
+      }
+    },
+    "ExtensionPoints": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What this addon publishes for others to extend.",
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PublishedEvent" }
+        },
+        "slot_kinds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PublishedSlot" }
+        },
+        "model_extensions_accepted": {
+          "type": "array",
+          "description": "Names of own models that opt into accepting model extensions from other addons.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "PublishedEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
+          "description": "Dotted '<addon_key>.<event>' identifier.",
+          "examples": ["inventory.stock_changed"]
+        },
+        "payload_schema": {
+          "type": "string",
+          "description": "Bundle-relative path or HTTPS URL to the JSON Schema describing the payload."
+        },
+        "description": { "type": "string" }
+      }
+    },
+    "PublishedSlot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
+          "examples": ["inventory.product_detail_panel"]
+        },
+        "props_schema": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "Lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Hook map plus the upgrade ladder. The installer dispatches each entry through the addon backend runtime.",
+      "properties": {
+        "install": { "type": "string", "description": "Exported function or webhook path to run on first install." },
+        "uninstall": { "type": "string" },
+        "enable": { "type": "string" },
+        "disable": { "type": "string" },
+        "upgrade": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/UpgradeStep" }
+        }
+      }
+    },
+    "UpgradeStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "type", "function"],
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "Semver range matching the previously installed version. The first matching step runs.",
+          "examples": [">=1.0.0 <1.3.0"]
+        },
+        "type": {
+          "type": "string",
+          "enum": ["wasm", "sql", "webhook"],
+          "description": "wasm: exported function in the addon backend. sql: goose-compatible file inside the bundle. webhook: remote HTTP."
+        },
+        "function": {
+          "type": "string",
+          "description": "Function symbol, file path or URL depending on type.",
+          "examples": ["MigrateTo_1_3", "migrations/1_3_to_2_0.sql"]
+        }
+      }
+    },
+    "I18n": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default_locale", "bundles"],
+      "properties": {
+        "default_locale": {
+          "type": "string",
+          "pattern": "^[a-z]{2}(?:-[A-Z]{2})?$",
+          "examples": ["es-MX", "en"]
+        },
+        "bundles": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["locale", "path"],
+            "properties": {
+              "locale": { "type": "string", "pattern": "^[a-z]{2}(?:-[A-Z]{2})?$" },
+              "path": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "Rbac": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "First-class roles + permissions. Replaces the v2 legacy 'permissions' shape.",
+      "properties": {
+        "roles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Role" }
+        },
+        "permissions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PermissionDef" }
+        }
+      }
+    },
+    "Role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "label"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$" },
+        "label": { "type": "string" },
+        "description": { "type": "string" },
+        "permissions": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "PermissionDef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_:]*)+$",
+          "description": "Dotted permission identifier. Conventionally '<addon_key>.<resource>.<action>' (e.g. 'inventory.product.read').",
+          "examples": ["inventory.product.read", "inventory.product.write"]
+        },
+        "label": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "Setting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "type"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$" },
+        "type": { "type": "string", "enum": ["string", "integer", "boolean", "secret", "json", "select"] },
+        "label": { "type": "string" },
+        "default": {},
+        "required": { "type": "boolean", "default": false },
+        "options": {
+          "type": "array",
+          "description": "When type=select.",
+          "items": {
+            "type": "object",
+            "required": ["value", "label"],
+            "properties": {
+              "value": { "type": "string" },
+              "label": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "Billing": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Marketplace billing surface. metered_events feeds the host billing pipeline.",
+      "properties": {
+        "metered_events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/MeteredEvent" }
+        }
+      }
+    },
+    "MeteredEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "unit"],
+      "properties": {
+        "event": {
+          "type": "string",
+          "description": "Event name (must also be declared in extension_points.events[] when emitted by this addon).",
+          "examples": ["inventory.stock_changed"]
+        },
+        "unit": {
+          "type": "string",
+          "description": "What one event counts as (e.g. 'movement', 'invoice', 'mb_transferred').",
+          "examples": ["movement", "invoice"]
+        },
+        "revenue_share": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Author cut as a 0..1 fraction. The marketplace keeps 1 - revenue_share."
+        }
+      }
+    },
+    "Preset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["addons"],
+      "description": "Preset-specific block: which addons to install in which order with which defaults.",
+      "properties": {
+        "addons": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key", "version"],
+            "properties": {
+              "key": { "type": "string" },
+              "version": { "type": "string" },
+              "optional": { "type": "boolean", "default": false }
+            }
+          }
+        },
+        "defaults": {
+          "type": "object",
+          "description": "Map of '<addon_key>.<setting_key>' to default value applied at install time.",
+          "additionalProperties": true
+        }
+      }
+    },
+    "Theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Theme-specific block. Themes are pure visual contributions.",
+      "properties": {
+        "tokens": { "type": "string", "description": "Bundle-relative path to a JSON file with design tokens." },
+        "fonts": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "icon_overrides": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "ConnectorPack": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "ConnectorPack-specific block. Declares third-party API credentials and capability templates.",
+      "properties": {
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key", "credentials"],
+            "properties": {
+              "key": { "type": "string" },
+              "label": { "type": "string" },
+              "credentials": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/Setting" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_id", "value", "signed_at"],
+      "description": "Detached signature over the canonical JSON of the manifest minus this block.",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "const": "ed25519",
+          "description": "Only ed25519 is supported in v3."
+        },
+        "key_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifier of the public key registered with the marketplace key registry.",
+          "examples": ["marketplace:asteby:2026Q1"]
+        },
+        "value": {
+          "type": "string",
+          "description": "Base64-encoded ed25519 signature bytes.",
+          "minLength": 1
+        },
+        "signed_at": {
+          "type": "string",
+          "format": "date-time",
+          "examples": ["2026-05-21T15:04:05Z"]
+        }
+      }
+    }
+  }
+}
