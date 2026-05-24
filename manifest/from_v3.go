@@ -1,6 +1,8 @@
 package manifest
 
 import (
+	"strings"
+
 	v3 "github.com/asteby/metacore-kernel/manifest/v3"
 )
 
@@ -144,7 +146,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				Name:     c.Name,
 				Type:     c.Type,
 				Required: c.NotNull,
-				Default:  c.Default,
+				Default:  renderColumnDefault(c.Default),
 			}
 			if _, ok := uniqueCols[c.Name]; ok {
 				col.Unique = true
@@ -157,6 +159,34 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		out = append(out, def)
 	}
 	return out
+}
+
+// renderColumnDefault translates a v3 column default into a DDL-safe legacy
+// ColumnDef.Default. In v3 a column `default` is a JSON value, so a bare string
+// like "draft", "MXN" or "{}" is a literal VALUE — not a SQL expression — and
+// must be emitted as a quoted SQL literal ('draft') to satisfy the DDL default
+// whitelist. Values that already read as valid SQL (numeric, an existing
+// quoted literal, or a recognised function/keyword like now() /
+// gen_random_uuid() / true / false / null) pass through untouched. Numbers,
+// bools and nil are handled by DefaultLiteral downstream and pass through here.
+func renderColumnDefault(v any) any {
+	s, ok := v.(string)
+	if !ok {
+		return v
+	}
+	if s == "" {
+		return nil
+	}
+	if _, valid := DefaultLiteral(s); valid {
+		return s
+	}
+	// Quote the bare literal, unless it carries characters the whitelist's
+	// quoted-string form forbids (' " ; \) — leave those for validation to flag
+	// rather than emit an unsafe DEFAULT expression.
+	if !strings.ContainsAny(s, "'\";\\") {
+		return "'" + s + "'"
+	}
+	return s
 }
 
 // mapNavigation copies contributions.navigation field-by-field. NavGroup and
