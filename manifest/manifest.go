@@ -2,7 +2,13 @@ package manifest
 
 // APIVersion is the kernel contract version this package implements.
 // Addons declare `kernel: ">=X.Y <Z"` to opt into a compatibility window.
-const APIVersion = "2.0.0"
+//
+// Bumped to 3.0.0 once the bundle ingestion path learned to dual-read the
+// Module Contract v3 manifest (see bundle.parseManifest + manifest.FromV3):
+// the kernel now satisfies v3 addons' `kernel: ">=3.0.0 <4.0.0"` requirement.
+// Legacy v2 addons declare no range (checkKernelRange skips them) so they are
+// unaffected.
+const APIVersion = "3.0.0"
 
 // Manifest describes everything an addon provides: metadata, extension points,
 // data model, navigation, permissions and distribution info.
