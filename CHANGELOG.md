@@ -7,6 +7,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **feat(database): `RegisterCurrencyDefaultCallback` BeforeCreate hook.**
+  Apps now wire a single callback on their root `*gorm.DB` that
+  populates any model's `CurrencyCode` (or `Moneda`) string field at
+  INSERT time from `config.OrgCurrencyGetter` resolved via the request
+  context's `config.CurrencyGetterFromContext`. The hook reads
+  `OrganizationID` (matching `modelbase.BaseUUIDModel`), resolves the
+  per-org currency, and falls back to `database.CurrencyHookFallback`
+  ("USD" — geography-agnostic) when no getter is wired or the org has
+  no currency configured. Detection is by reflection of two recognised
+  field names (`CurrencyCode`, `Moneda` — the latter for the SAT
+  carta-porte CFDI model) and a struct-type cache keeps the hot path
+  to a single `sync.Map` lookup per row. Explicit caller-supplied
+  values are always preserved; batch inserts are handled per element.
+  Motivation: the addon monorepo carried 18 `gorm:"default:'MXN'"`
+  tags across customers / purchases / accounting-lite / waybill, kept
+  as a DB-level fallback after Wave 2.5d's getter migration left no
+  INSERT-time resolver. The hook lets addons drop the tag entirely,
+  eliminating the MXN bias from a platform that ships in COP, USD,
+  EUR, MXN, etc. New coverage in `database/currency_hook_test.go`
+  exercises (a) getter resolves, (b) fallback when no getter, (c)
+  fallback when getter reports miss, (d) explicit caller value wins,
+  (e) `Moneda` field name, (f) no-op on models without a currency
+  field, (g) batch insert with per-row org lookup, (h)
+  `RegisterCurrencyDefaultCallback("")` defaults to USD, (i)
+  idempotent registration.
+
 ### Fixed
 
 - **fix(dynamic): `resolveModel` respects `Config.ModelResolver`.** The
