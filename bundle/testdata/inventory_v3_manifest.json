@@ -1,0 +1,396 @@
+{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": {
+    "key": "inventory",
+    "name": "Inventory",
+    "description": "Foundation addon for inventory management: products, warehouses, stock levels, transfers, adjustments, movements and fulfillment. Universal across retail, restaurant, manufacturing, tire shops and pharmacy verticals.",
+    "version": "0.1.0",
+    "category": "foundation.commerce",
+    "icon": { "type": "lucide", "slug": "Boxes", "color": "#0EA5E9" },
+    "author": "Asteby",
+    "website": "https://asteby.com/addons/inventory",
+    "license": "Apache-2.0",
+    "readme": "README.md",
+    "screenshots": [],
+    "features": [
+      "Multi-warehouse stock levels",
+      "Product catalog with SKU uniqueness per org",
+      "Stock movements with audit trail",
+      "Warehouse transfers (multi-step)",
+      "Manual inventory adjustments",
+      "Fulfillment orders",
+      "Low-stock event emission for downstream subscribers"
+    ]
+  },
+  "compatibility": {
+    "requires": [
+      { "key": "kernel", "version": ">=3.0.0 <4.0.0" }
+    ]
+  },
+  "tenancy": {
+    "isolation": "shared",
+    "rls_column": "organization_id"
+  },
+  "capabilities": [
+    { "kind": "db:write", "target": "addon_inventory.*", "reason": "Persist products, warehouses, stock, transfers, adjustments, movements and fulfillment records." },
+    { "kind": "db:read", "target": "addon_inventory.*", "reason": "Read inventory data for screens, reports and events." },
+    { "kind": "event:emit", "target": "inventory.product_created" },
+    { "kind": "event:emit", "target": "inventory.product_updated" },
+    { "kind": "event:emit", "target": "inventory.product_deleted" },
+    { "kind": "event:emit", "target": "inventory.stock_changed" },
+    { "kind": "event:emit", "target": "inventory.low_stock_detected" },
+    { "kind": "event:emit", "target": "inventory.transfer_completed" },
+    { "kind": "event:emit", "target": "inventory.fulfillment_shipped" },
+    { "kind": "event:subscribe", "target": "sales.order_paid", "reason": "Decrement stock and create fulfillment orders when sales close." }
+  ],
+  "models": [
+    {
+      "key": "Product",
+      "table": "products",
+      "label": "inventory.model.product",
+      "columns": [
+        { "name": "id", "type": "uuid", "primary_key": true, "default": "gen_random_uuid()" },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
+        { "name": "sku", "type": "text", "not_null": true },
+        { "name": "name", "type": "text", "not_null": true },
+        { "name": "description", "type": "text" },
+        { "name": "unit_price", "type": "numeric" },
+        { "name": "metadata", "type": "jsonb" },
+        { "name": "deleted_at", "type": "timestamptz" },
+        { "name": "created_at", "type": "timestamptz", "not_null": true, "default": "now()" },
+        { "name": "updated_at", "type": "timestamptz", "not_null": true, "default": "now()" }
+      ],
+      "indices": [
+        { "name": "products_org_sku_uq", "columns": ["organization_id", "sku"], "unique": true },
+        { "name": "products_org_idx", "columns": ["organization_id"] }
+      ]
+    },
+    {
+      "key": "Warehouse",
+      "table": "warehouses",
+      "label": "inventory.model.warehouse",
+      "columns": [
+        { "name": "id", "type": "uuid", "primary_key": true, "default": "gen_random_uuid()" },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
+        { "name": "code", "type": "text", "not_null": true },
+        { "name": "name", "type": "text", "not_null": true },
+        { "name": "address", "type": "jsonb" },
+        { "name": "deleted_at", "type": "timestamptz" },
+        { "name": "created_at", "type": "timestamptz", "not_null": true, "default": "now()" },
+        { "name": "updated_at", "type": "timestamptz", "not_null": true, "default": "now()" }
+      ],
+      "indices": [
+        { "name": "warehouses_org_code_uq", "columns": ["organization_id", "code"], "unique": true }
+      ]
+    },
+    {
+      "key": "Stock",
+      "table": "stock",
+      "label": "inventory.model.stock",
+      "columns": [
+        { "name": "id", "type": "uuid", "primary_key": true, "default": "gen_random_uuid()" },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
+        { "name": "product_id", "type": "uuid", "not_null": true },
+        { "name": "warehouse_id", "type": "uuid", "not_null": true },
+        { "name": "quantity", "type": "numeric", "not_null": true, "default": 0 },
+        { "name": "reserved", "type": "numeric", "not_null": true, "default": 0 },
+        { "name": "created_at", "type": "timestamptz", "not_null": true, "default": "now()" },
+        { "name": "updated_at", "type": "timestamptz", "not_null": true, "default": "now()" }
+      ],
+      "foreign_keys": [
+        {
+          "columns": ["product_id"],
+          "references": { "model": "inventory.Product", "columns": ["id"] },
+          "policy": "physical",
+          "on_delete": "restrict"
+        },
+        {
+          "columns": ["warehouse_id"],
+          "references": { "model": "inventory.Warehouse", "columns": ["id"] },
+          "policy": "physical",
+          "on_delete": "restrict"
+        }
+      ],
+      "indices": [
+        { "name": "stock_org_product_warehouse_uq", "columns": ["organization_id", "product_id", "warehouse_id"], "unique": true }
+      ]
+    },
+    {
+      "key": "ProductsWarehouses",
+      "table": "products_warehouses",
+      "label": "inventory.model.products_warehouses",
+      "columns": [
+        { "name": "id", "type": "uuid", "primary_key": true, "default": "gen_random_uuid()" },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
+        { "name": "product_id", "type": "uuid", "not_null": true },
+        { "name": "warehouse_id", "type": "uuid", "not_null": true },
+        { "name": "min_threshold", "type": "numeric" },
+        { "name": "max_threshold", "type": "numeric" },
+        { "name": "created_at", "type": "timestamptz", "not_null": true, "default": "now()" },
+        { "name": "updated_at", "type": "timestamptz", "not_null": true, "default": "now()" }
+      ],
+      "foreign_keys": [
+        {
+          "columns": ["product_id"],
+          "references": { "model": "inventory.Product", "columns": ["id"] },
+          "policy": "physical",
+          "on_delete": "cascade"
+        },
+        {
+          "columns": ["warehouse_id"],
+          "references": { "model": "inventory.Warehouse", "columns": ["id"] },
+          "policy": "physical",
+          "on_delete": "cascade"
+        }
+      ],
+      "indices": [
+        { "name": "products_warehouses_org_pair_uq", "columns": ["organization_id", "product_id", "warehouse_id"], "unique": true }
+      ]
+    },
+    {
+      "key": "Transfer",
+      "table": "transfers",
+      "label": "inventory.model.transfer",
+      "columns": [
+        { "name": "id", "type": "uuid", "primary_key": true, "default": "gen_random_uuid()" },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
+        { "name": "source_warehouse_id", "type": "uuid", "not_null": true },
+        { "name": "destination_warehouse_id", "type": "uuid", "not_null": true },
+        { "name": "status", "type": "text", "not_null": true, "default": "draft" },
+        { "name": "notes", "type": "text" },
+        { "name": "items", "type": "jsonb" },
+        { "name": "completed_at", "type": "timestamptz" },
+        { "name": "deleted_at", "type": "timestamptz" },
+        { "name": "created_at", "type": "timestamptz", "not_null": true, "default": "now()" },
+        { "name": "updated_at", "type": "timestamptz", "not_null": true, "default": "now()" }
+      ],
+      "foreign_keys": [
+        {
+          "columns": ["source_warehouse_id"],
+          "references": { "model": "inventory.Warehouse", "columns": ["id"] },
+          "policy": "physical",
+          "on_delete": "restrict"
+        },
+        {
+          "columns": ["destination_warehouse_id"],
+          "references": { "model": "inventory.Warehouse", "columns": ["id"] },
+          "policy": "physical",
+          "on_delete": "restrict"
+        }
+      ],
+      "indices": [
+        { "name": "transfers_org_status_idx", "columns": ["organization_id", "status"] }
+      ]
+    },
+    {
+      "key": "InventoryChange",
+      "table": "inventory_changes",
+      "label": "inventory.model.inventory_change",
+      "columns": [
+        { "name": "id", "type": "uuid", "primary_key": true, "default": "gen_random_uuid()" },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
+        { "name": "warehouse_id", "type": "uuid", "not_null": true },
+        { "name": "reason", "type": "text", "not_null": true },
+        { "name": "notes", "type": "text" },
+        { "name": "lines", "type": "jsonb" },
+        { "name": "created_by", "type": "uuid" },
+        { "name": "created_at", "type": "timestamptz", "not_null": true, "default": "now()" }
+      ],
+      "foreign_keys": [
+        {
+          "columns": ["warehouse_id"],
+          "references": { "model": "inventory.Warehouse", "columns": ["id"] },
+          "policy": "physical",
+          "on_delete": "restrict"
+        }
+      ],
+      "indices": [
+        { "name": "inventory_changes_org_warehouse_idx", "columns": ["organization_id", "warehouse_id"] }
+      ]
+    },
+    {
+      "key": "InventoryMovement",
+      "table": "inventory_movements",
+      "label": "inventory.model.inventory_movement",
+      "columns": [
+        { "name": "id", "type": "uuid", "primary_key": true, "default": "gen_random_uuid()" },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
+        { "name": "product_id", "type": "uuid", "not_null": true },
+        { "name": "warehouse_id", "type": "uuid", "not_null": true },
+        { "name": "delta", "type": "numeric", "not_null": true },
+        { "name": "source_kind", "type": "text", "not_null": true },
+        { "name": "source_id", "type": "uuid" },
+        { "name": "occurred_at", "type": "timestamptz", "not_null": true, "default": "now()" }
+      ],
+      "foreign_keys": [
+        {
+          "columns": ["product_id"],
+          "references": { "model": "inventory.Product", "columns": ["id"] },
+          "policy": "physical",
+          "on_delete": "restrict"
+        },
+        {
+          "columns": ["warehouse_id"],
+          "references": { "model": "inventory.Warehouse", "columns": ["id"] },
+          "policy": "physical",
+          "on_delete": "restrict"
+        }
+      ],
+      "indices": [
+        { "name": "inventory_movements_org_product_idx", "columns": ["organization_id", "product_id"] },
+        { "name": "inventory_movements_org_occurred_idx", "columns": ["organization_id", "occurred_at"] }
+      ]
+    },
+    {
+      "key": "Fulfillment",
+      "table": "fulfillments",
+      "label": "inventory.model.fulfillment",
+      "columns": [
+        { "name": "id", "type": "uuid", "primary_key": true, "default": "gen_random_uuid()" },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
+        { "name": "warehouse_id", "type": "uuid", "not_null": true },
+        { "name": "external_reference", "type": "text" },
+        { "name": "status", "type": "text", "not_null": true, "default": "pending" },
+        { "name": "items", "type": "jsonb" },
+        { "name": "shipped_at", "type": "timestamptz" },
+        { "name": "deleted_at", "type": "timestamptz" },
+        { "name": "created_at", "type": "timestamptz", "not_null": true, "default": "now()" },
+        { "name": "updated_at", "type": "timestamptz", "not_null": true, "default": "now()" }
+      ],
+      "foreign_keys": [
+        {
+          "columns": ["warehouse_id"],
+          "references": { "model": "inventory.Warehouse", "columns": ["id"] },
+          "policy": "physical",
+          "on_delete": "restrict"
+        }
+      ],
+      "indices": [
+        { "name": "fulfillments_org_status_idx", "columns": ["organization_id", "status"] }
+      ]
+    }
+  ],
+  "contributions": {
+    "navigation": [
+      {
+        "title": "inventory.nav.group",
+        "icon": "Boxes",
+        "target": "sidebar.operations",
+        "items": [
+          { "title": "inventory.nav.products", "model": "Product", "permission": "inventory.product.read" },
+          { "title": "inventory.nav.warehouses", "model": "Warehouse", "permission": "inventory.warehouse.read" },
+          { "title": "inventory.nav.stock", "model": "Stock", "permission": "inventory.stock.read" },
+          { "title": "inventory.nav.transfers", "model": "Transfer", "permission": "inventory.transfer.read" },
+          { "title": "inventory.nav.adjustments", "model": "InventoryChange", "permission": "inventory.change.read" },
+          { "title": "inventory.nav.movements", "model": "InventoryMovement", "permission": "inventory.movement.read" },
+          { "title": "inventory.nav.fulfillments", "model": "Fulfillment", "permission": "inventory.fulfillment.read" }
+        ]
+      }
+    ],
+    "subscriptions": [
+      {
+        "event": "sales.order_paid",
+        "handler": { "type": "wasm", "function": "OnOrderPaid" }
+      }
+    ]
+  },
+  "extension_points": {
+    "events": [
+      { "name": "inventory.product_created", "description": "Emitted when a new product is created." },
+      { "name": "inventory.product_updated", "description": "Emitted when a product's fields change." },
+      { "name": "inventory.product_deleted", "description": "Emitted when a product is soft-deleted." },
+      { "name": "inventory.stock_changed", "description": "Emitted on any positive or negative stock movement." },
+      { "name": "inventory.low_stock_detected", "description": "Emitted when a stock row drops below its min_threshold." },
+      { "name": "inventory.transfer_completed", "description": "Emitted when a transfer reaches the completed status." },
+      { "name": "inventory.fulfillment_shipped", "description": "Emitted when a fulfillment reaches the shipped status." }
+    ],
+    "slot_kinds": [],
+    "model_extensions_accepted": ["Product", "Warehouse"]
+  },
+  "lifecycle": {
+    "install": "Install",
+    "uninstall": "Uninstall",
+    "enable": "Enable",
+    "disable": "Disable",
+    "upgrade": []
+  },
+  "i18n": {
+    "default_locale": "es-MX",
+    "bundles": [
+      { "locale": "es-MX", "path": "locales/es-MX.json" },
+      { "locale": "en-US", "path": "locales/en-US.json" }
+    ]
+  },
+  "rbac": {
+    "roles": [
+      {
+        "key": "inventory_manager",
+        "label": "inventory.role.manager",
+        "description": "Full read/write access to inventory data.",
+        "permissions": [
+          "inventory.product.read",
+          "inventory.product.write",
+          "inventory.warehouse.read",
+          "inventory.warehouse.write",
+          "inventory.stock.read",
+          "inventory.stock.write",
+          "inventory.transfer.read",
+          "inventory.transfer.write",
+          "inventory.change.read",
+          "inventory.change.write",
+          "inventory.movement.read",
+          "inventory.fulfillment.read",
+          "inventory.fulfillment.write"
+        ]
+      },
+      {
+        "key": "inventory_viewer",
+        "label": "inventory.role.viewer",
+        "description": "Read-only access to inventory data.",
+        "permissions": [
+          "inventory.product.read",
+          "inventory.warehouse.read",
+          "inventory.stock.read",
+          "inventory.transfer.read",
+          "inventory.change.read",
+          "inventory.movement.read",
+          "inventory.fulfillment.read"
+        ]
+      }
+    ],
+    "permissions": [
+      { "key": "inventory.product.read", "label": "Read products" },
+      { "key": "inventory.product.write", "label": "Create, update or delete products" },
+      { "key": "inventory.warehouse.read", "label": "Read warehouses" },
+      { "key": "inventory.warehouse.write", "label": "Create, update or delete warehouses" },
+      { "key": "inventory.stock.read", "label": "Read stock levels" },
+      { "key": "inventory.stock.write", "label": "Adjust stock levels" },
+      { "key": "inventory.transfer.read", "label": "Read transfers" },
+      { "key": "inventory.transfer.write", "label": "Create or update transfers" },
+      { "key": "inventory.change.read", "label": "Read inventory adjustments" },
+      { "key": "inventory.change.write", "label": "Record inventory adjustments" },
+      { "key": "inventory.movement.read", "label": "Read stock movements" },
+      { "key": "inventory.fulfillment.read", "label": "Read fulfillments" },
+      { "key": "inventory.fulfillment.write", "label": "Create or update fulfillments" }
+    ]
+  },
+  "settings": [
+    {
+      "key": "low_stock_threshold",
+      "type": "integer",
+      "label": "inventory.settings.low_stock_threshold",
+      "default": 5,
+      "required": false
+    },
+    {
+      "key": "default_warehouse_code",
+      "type": "string",
+      "label": "inventory.settings.default_warehouse_code",
+      "required": false
+    }
+  ],
+  "billing": {
+    "metered_events": []
+  }
+}
