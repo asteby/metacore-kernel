@@ -130,6 +130,7 @@ type Column struct {
 	NotNull    bool        `json:"not_null,omitempty"`
 	Default    interface{} `json:"default,omitempty"`
 	Label      string      `json:"label,omitempty"`
+	Comment    string      `json:"comment,omitempty"`
 }
 
 // Index is a single index declaration.
@@ -269,6 +270,7 @@ type Subscription struct {
 	Event   string  `json:"event"`
 	Handler Handler `json:"handler"`
 	Filter  string  `json:"filter,omitempty"`
+	Comment string  `json:"comment,omitempty"` // author note; ignored by the runtime
 }
 
 // Handler is the polymorphic invocation target for actions/tools/subscriptions.
@@ -350,12 +352,13 @@ type PermissionDef struct {
 
 // Setting is a user-facing tenant-scoped setting.
 type Setting struct {
-	Key      string          `json:"key"`
-	Type     string          `json:"type"`
-	Label    string          `json:"label,omitempty"`
-	Default  interface{}     `json:"default,omitempty"`
-	Required bool            `json:"required,omitempty"`
-	Options  []SettingOption `json:"options,omitempty"`
+	Key         string          `json:"key"`
+	Type        string          `json:"type"`
+	Label       string          `json:"label,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Default     interface{}     `json:"default,omitempty"`
+	Required    bool            `json:"required,omitempty"`
+	Options     []SettingOption `json:"options,omitempty"`
 }
 
 // SettingOption is a value/label pair for select-typed settings.

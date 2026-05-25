@@ -155,6 +155,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 			if _, managed := managedColumns[c.Name]; managed {
 				continue
 			}
+			// v3 Column.Comment has no legacy ColumnDef slot, so it
+			// intentionally does NOT round-trip — consumers read it off the
+			// v3-served metadata. We do not grow legacy ColumnDef for it.
 			col := ColumnDef{
 				Name:     c.Name,
 				Type:     c.Type,
@@ -241,6 +244,11 @@ func mapNavItems(in []v3.NavItem) []NavItem {
 // mapSettings maps v3 settings into legacy SettingDef. v3 {key,type,label,
 // default,options} → legacy {Key,Type,Label,DefaultValue,Options}. v3 has no
 // Secret flag, so legacy Secret stays false.
+//
+// v3 Setting.Description has no legacy SettingDef slot, so it intentionally does
+// NOT round-trip here — consumers read it off the v3-served metadata. We do not
+// grow legacy SettingDef for it. (v3 Setting.Type "number" likewise carries
+// across as the raw type string; no special-casing is needed.)
 func mapSettings(in []v3.Setting) []SettingDef {
 	if len(in) == 0 {
 		return nil
