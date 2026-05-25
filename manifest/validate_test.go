@@ -551,16 +551,20 @@ func TestValidate_ActionTrigger_WasmExportInvalidSymbol(t *testing.T) {
 }
 
 func TestValidate_ActionTrigger_WasmWithoutBackendExports(t *testing.T) {
-	// No Backend declared at all — wasm trigger has nothing to point at.
+	// No Backend declared at all. This is the v3 shape: the addon carries no
+	// separate backend block, so its wasm handler functions ARE the export
+	// surface. With nothing authoritative to cross-check against, the trigger
+	// validates on symbol shape alone — mirroring validateLifecycleHooks,
+	// which already skips the membership check when no exports are declared.
+	// (Real case: packages/pos open_session → OnSessionOpen.)
 	m := withActions(manifest.ActionDef{
 		Key:     "escalate",
 		Name:    "Escalate",
 		Label:   "Escalate",
 		Trigger: &manifest.ActionTrigger{Type: "wasm", Export: "escalateTicket"},
 	})
-	err := m.Validate("2.0.0")
-	if err == nil || !strings.Contains(err.Error(), "backend.exports") {
-		t.Fatalf("expected export-mismatch error when Backend is nil, got %v", err)
+	if err := m.Validate("2.0.0"); err != nil {
+		t.Fatalf("v3-style wasm trigger without a Backend block must validate, got %v", err)
 	}
 }
 

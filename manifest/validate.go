@@ -369,10 +369,12 @@ func (m *Manifest) validateBackend() error {
 
 // validateActionTriggers walks every ActionDef carried by the manifest
 // (the Actions map keyed by model and the Actions slice on each
-// ModelExtension) and enforces ActionTrigger.validate against the union of
-// exports declared by Backend.Exports. The Backend exports set is hoisted
-// once so the per-trigger checks stay O(triggers) instead of O(triggers *
-// exports). Manifests without any Trigger field set are a no-op so the
+// ModelExtension) and enforces ActionTrigger.validate against the exports
+// declared by Backend.Exports. The Backend exports set is hoisted once so the
+// per-trigger checks stay O(triggers) instead of O(triggers * exports). When
+// no Backend.Exports list is declared (v3 manifests, whose wasm handlers are
+// the export surface) the membership cross-check is skipped — symbol shape is
+// still validated. Manifests without any Trigger field set are a no-op so the
 // legacy authoring style keeps validating.
 func (m *Manifest) validateActionTriggers() error {
 	exports := m.backendExportSet()
@@ -426,8 +428,17 @@ func validateActionTrigger(t *ActionTrigger, exports map[string]struct{}) error 
 		if !triggerExportRe.MatchString(t.Export) {
 			return fmt.Errorf("trigger.export: invalid symbol %q", t.Export)
 		}
-		if _, ok := exports[t.Export]; !ok {
-			return fmt.Errorf("trigger.export: %q not declared in backend.exports", t.Export)
+		// Cross-check against Backend.Exports only when an export list was
+		// actually declared — the same lenient rule validateLifecycleHooks
+		// already applies. A v3 manifest carries no separate backend block:
+		// the wasm handler functions ARE the export surface, so an empty set
+		// means "nothing authoritative to cross-check" rather than "the
+		// backend exports nothing". Legacy manifests that ship an explicit
+		// Backend.Exports keep strict typo enforcement.
+		if len(exports) > 0 {
+			if _, ok := exports[t.Export]; !ok {
+				return fmt.Errorf("trigger.export: %q not declared in backend.exports", t.Export)
+			}
 		}
 	case "webhook":
 		// Webhook triggers cannot honour RunInTx — the network hop escapes
