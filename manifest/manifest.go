@@ -101,6 +101,19 @@ type Manifest struct {
 	Screenshots []string `json:"screenshots,omitempty"`
 	Features    []string `json:"features,omitempty"`
 	Price       string   `json:"price,omitempty"`
+	// MetadataI18n carries marketplace catalog localizations keyed by locale
+	// ("es", "en"). Populated by FromV3 from v3 metadata.i18n. The hub stores
+	// and serves these so the catalog renders in the browsed locale; the flat
+	// Name/Description/Features above stay the default/fallback copy.
+	MetadataI18n map[string]MetadataLocale `json:"i18n,omitempty"`
+}
+
+// MetadataLocale is one locale's catalog copy (name/description/features).
+// Any field may be empty — consumers fall back to the default Manifest copy.
+type MetadataLocale struct {
+	Name        string   `json:"name,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Features    []string `json:"features,omitempty"`
 }
 
 // Module is a named reference with a translatable label.

@@ -239,3 +239,35 @@ func TestSchemaJSON_ReturnsEmbeddedBytes(t *testing.T) {
 		t.Fatal("embedded schema does not look like the v3 schema")
 	}
 }
+
+// TestParse_MetadataI18n confirms the strict v3 schema accepts metadata.i18n
+// (marketplace catalog localizations) and Parse returns them typed. Without the
+// schema/type entry, additionalProperties:false would reject the field.
+func TestParse_MetadataI18n(t *testing.T) {
+	m := baseValid()
+	md := m["metadata"].(map[string]interface{})
+	md["description"] = "Foundation addon for inventory management."
+	md["i18n"] = map[string]interface{}{
+		"es": map[string]interface{}{
+			"name":        "Inventario",
+			"description": "Addon base para gestión de inventario.",
+			"features":    []interface{}{"Productos", "Almacenes"},
+		},
+		"en": map[string]interface{}{
+			"name":        "Inventory",
+			"description": "Foundation addon for inventory management.",
+		},
+	}
+
+	got, err := Parse(mustJSON(t, m))
+	if err != nil {
+		t.Fatalf("Parse rejected metadata.i18n: %v", err)
+	}
+	es, ok := got.Metadata.I18n["es"]
+	if !ok {
+		t.Fatalf("expected es locale, got %+v", got.Metadata.I18n)
+	}
+	if es.Name != "Inventario" || es.Description == "" || len(es.Features) != 2 {
+		t.Fatalf("es locale not mapped: %+v", es)
+	}
+}

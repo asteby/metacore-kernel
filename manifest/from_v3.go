@@ -49,6 +49,7 @@ func FromV3(m *v3.Manifest) Manifest {
 		Readme:      m.Metadata.Readme,
 		Screenshots: m.Metadata.Screenshots,
 		Features:    m.Metadata.Features,
+		MetadataI18n: mapMetadataI18n(m.Metadata.I18n),
 	}
 
 	// Icon triplet. v3 carries the structured {type, slug, color}; the legacy
@@ -444,6 +445,31 @@ func mapI18n(i *v3.I18n) map[string]map[string]string {
 			continue
 		}
 		out[b.Locale] = map[string]string{}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// mapMetadataI18n copies the v3 metadata.i18n catalog localizations into the
+// internal map. Unlike mapI18n (app-UI bundle pointers), these carry the actual
+// localized name/description/features inline, so the hub can store + serve them
+// without reading any bundle file.
+func mapMetadataI18n(in map[string]v3.MetadataLocale) map[string]MetadataLocale {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]MetadataLocale, len(in))
+	for locale, l := range in {
+		if locale == "" {
+			continue
+		}
+		out[locale] = MetadataLocale{
+			Name:        l.Name,
+			Description: l.Description,
+			Features:    l.Features,
+		}
 	}
 	if len(out) == 0 {
 		return nil
