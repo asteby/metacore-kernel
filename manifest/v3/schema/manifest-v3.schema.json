@@ -347,7 +347,8 @@
         "default": {
           "description": "Default value as JSON literal or recognised SQL expression token (e.g. 'now()', 'gen_random_uuid()')."
         },
-        "label": { "type": "string" }
+        "label": { "type": "string" },
+        "comment": { "type": "string", "description": "Column-level documentation string." }
       }
     },
     "Index": {
@@ -793,8 +794,9 @@
       "required": ["key", "type"],
       "properties": {
         "key": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$" },
-        "type": { "type": "string", "enum": ["string", "integer", "boolean", "secret", "json", "select"] },
+        "type": { "type": "string", "enum": ["string", "integer", "number", "boolean", "secret", "json", "select"] },
         "label": { "type": "string" },
+        "description": { "type": "string", "description": "Human description of the setting." },
         "default": {},
         "required": { "type": "boolean", "default": false },
         "options": {
