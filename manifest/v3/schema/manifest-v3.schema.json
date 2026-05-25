@@ -32,6 +32,7 @@
       "description": "Data models the addon owns. The installer materialises each as a table in the addon schema (shared) or per-tenant schema, with the declared columns, indices and RLS policies.",
       "items": { "$ref": "#/$defs/Model" }
     },
+    "frontend": { "$ref": "#/$defs/Frontend" },
     "contributions": { "$ref": "#/$defs/Contributions" },
     "extension_points": { "$ref": "#/$defs/ExtensionPoints" },
     "lifecycle": { "$ref": "#/$defs/Lifecycle" },
@@ -497,13 +498,29 @@
         "permission": { "type": "string" }
       }
     },
+    "Frontend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entry", "format"],
+      "description": "The federated UI bundle the host loads at runtime for this addon.",
+      "properties": {
+        "entry": { "type": "string", "description": "URL or relative path of the remoteEntry.js / bundle." },
+        "format": { "type": "string", "enum": ["federation", "script"], "description": "Module loading strategy." },
+        "expose": { "type": "string", "description": "Federation module name to import (e.g. './plugin')." },
+        "integrity": { "type": "string", "description": "SRI hash for the bundle." },
+        "container": { "type": "string", "description": "Global name the remoteEntry.js assigns itself on window." },
+        "layout": { "type": "string", "enum": ["shell", "immersive"], "description": "How the host frames the addon UI." }
+      }
+    },
     "Action": {
       "type": "object",
       "additionalProperties": false,
       "required": ["key", "handler"],
+      "description": "A UI-triggered operation. May declare a rich declarative action modal (fields[]) and/or delegate to a custom federated modal component (modal).",
       "properties": {
         "key": { "type": "string" },
         "label": { "type": "string" },
+        "icon": { "type": "string" },
         "handler": {
           "type": "object",
           "additionalProperties": false,
@@ -514,7 +531,60 @@
             "url": { "type": "string" }
           }
         },
-        "target_model": { "type": "string" }
+        "target_model": { "type": "string" },
+        "fields": {
+          "type": "array",
+          "description": "Declarative form rendered in the action modal before dispatch.",
+          "items": { "$ref": "#/$defs/ActionField" }
+        },
+        "modal": {
+          "type": "string",
+          "description": "slot_kind of a custom federated modal component the host mounts instead of (or alongside) the declarative form."
+        },
+        "confirm": { "type": "boolean", "description": "Show a confirmation step before dispatch." },
+        "confirm_message": { "type": "string", "description": "Body shown in the confirmation step." }
+      }
+    },
+    "ActionField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "type"],
+      "description": "One input in an action modal's declarative form. Mirrors the SDK ActionFieldDef.",
+      "properties": {
+        "key": { "type": "string" },
+        "label": { "type": "string" },
+        "type": { "type": "string" },
+        "required": { "type": "boolean" },
+        "options": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/FieldOption" }
+        },
+        "default": {},
+        "placeholder": { "type": "string" },
+        "widget": { "type": "string" },
+        "ref": { "type": "string", "description": "Target model key for reference/relation fields." },
+        "search_endpoint": { "type": "string", "description": "Endpoint backing an async-search widget." },
+        "validation": { "$ref": "#/$defs/FieldValidation" }
+      }
+    },
+    "FieldOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "label"],
+      "properties": {
+        "value": { "type": "string" },
+        "label": { "type": "string" }
+      }
+    },
+    "FieldValidation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Client-side validation hints the SDK reads off the manifest-served action metadata.",
+      "properties": {
+        "regex": { "type": "string" },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "custom": { "type": "string" }
       }
     },
     "Tool": {

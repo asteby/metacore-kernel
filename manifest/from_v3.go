@@ -73,6 +73,19 @@ func FromV3(m *v3.Manifest) Manifest {
 		out.TenantIsolation = m.Tenancy.Isolation
 	}
 
+	// Frontend federation block. v3.Frontend mirrors FrontendSpec 1:1, so the
+	// mapping is a straight field copy.
+	if m.Frontend != nil {
+		out.Frontend = &FrontendSpec{
+			Entry:     m.Frontend.Entry,
+			Format:    m.Frontend.Format,
+			Expose:    m.Frontend.Expose,
+			Integrity: m.Frontend.Integrity,
+			Container: m.Frontend.Container,
+			Layout:    m.Frontend.Layout,
+		}
+	}
+
 	out.Capabilities = mapCapabilities(m.Capabilities)
 	out.ModelDefinitions = mapModels(m.Models)
 	out.Navigation = mapNavigation(m)
@@ -251,6 +264,19 @@ func mapSettings(in []v3.Setting) []SettingDef {
 // mapActions projects contributions.actions into the legacy Actions map keyed
 // by target model (the same "<model>::<action>" addressing the bridge expects).
 // Actions with no target model are bucketed under "" so they still register.
+//
+// Besides the Handler→Trigger / TargetModel dispatch core, the richer v3 Action
+// surface (declarative action modals + custom federated modals) is carried over:
+// Icon, Confirm, ConfirmMessage and Modal copy straight across, and each v3
+// ActionField is folded into a legacy FieldDef.
+//
+// Note: the legacy FieldDef is {Name, Label, Type, Required, Default, Options,
+// Size} — it has no widget / validation / ref / placeholder / search_endpoint
+// slot. Those v3 ActionField properties intentionally do NOT round-trip through
+// FieldDef: the SDK reads them directly off the manifest-served action metadata
+// (the raw v3 Action), so the legacy FieldDef only needs to carry the fields a
+// legacy consumer actually reads. We deliberately do not grow the legacy
+// FieldDef for them.
 func mapActions(m *v3.Manifest) map[string][]ActionDef {
 	if m.Contributions == nil || len(m.Contributions.Actions) == 0 {
 		return nil
@@ -258,9 +284,14 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 	out := map[string][]ActionDef{}
 	for _, a := range m.Contributions.Actions {
 		def := ActionDef{
-			Key:   a.Key,
-			Name:  a.Key,
-			Label: a.Label,
+			Key:            a.Key,
+			Name:           a.Key,
+			Label:          a.Label,
+			Icon:           a.Icon,
+			Confirm:        a.Confirm,
+			ConfirmMessage: a.ConfirmMessage,
+			Modal:          a.Modal,
+			Fields:         mapActionFields(a.Fields),
 		}
 		switch a.Handler.Type {
 		case "wasm":
@@ -269,6 +300,32 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 			def.Trigger = &ActionTrigger{Type: "webhook"}
 		}
 		out[a.TargetModel] = append(out[a.TargetModel], def)
+	}
+	return out
+}
+
+// mapActionFields folds v3 ActionFields into legacy FieldDefs. v3 field.Key maps
+// to legacy FieldDef.Name; Label/Type/Required/Default copy across and
+// FieldOptions map to legacy Options. widget/validation/ref/placeholder/
+// search_endpoint have no FieldDef slot and are intentionally not mapped (see
+// mapActions doc).
+func mapActionFields(in []v3.ActionField) []FieldDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]FieldDef, 0, len(in))
+	for _, f := range in {
+		fd := FieldDef{
+			Name:     f.Key,
+			Label:    f.Label,
+			Type:     f.Type,
+			Required: f.Required,
+			Default:  f.Default,
+		}
+		for _, o := range f.Options {
+			fd.Options = append(fd.Options, Option{Value: o.Value, Label: o.Label})
+		}
+		out = append(out, fd)
 	}
 	return out
 }

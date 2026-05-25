@@ -29,6 +29,7 @@ type Manifest struct {
 	Tenancy         *Tenancy         `json:"tenancy,omitempty"`
 	Capabilities    []Capability     `json:"capabilities,omitempty"`
 	Models          []Model          `json:"models,omitempty"`
+	Frontend        *Frontend        `json:"frontend,omitempty"`
 	Contributions   *Contributions   `json:"contributions,omitempty"`
 	ExtensionPoints *ExtensionPoints `json:"extension_points,omitempty"`
 	Lifecycle       *Lifecycle       `json:"lifecycle,omitempty"`
@@ -40,6 +41,25 @@ type Manifest struct {
 	Theme           *Theme           `json:"theme,omitempty"`
 	ConnectorPack   *ConnectorPack   `json:"connector_pack,omitempty"`
 	Signature       *Signature       `json:"signature,omitempty"`
+}
+
+// Frontend describes the federated UI bundle the host loads at runtime for
+// this addon. It mirrors the legacy manifest.FrontendSpec so FromV3 maps it
+// 1:1. Entry + Format identify the bundle; Container/Expose/Integrity/Layout
+// tune how the host locates, verifies and frames it.
+type Frontend struct {
+	// Entry is the URL (or relative path) of the remoteEntry.js / bundle.
+	Entry string `json:"entry"`
+	// Format: "federation" | "script" (legacy window.__addon registration).
+	Format string `json:"format"`
+	// Expose is the federation module name to import (e.g. "./plugin").
+	Expose string `json:"expose,omitempty"`
+	// Integrity SRI hash, optional but recommended.
+	Integrity string `json:"integrity,omitempty"`
+	// Container is the global name the remoteEntry.js assigns itself on window.
+	Container string `json:"container,omitempty"`
+	// Layout selects how the host frames the addon UI ("shell" | "immersive").
+	Layout string `json:"layout,omitempty"`
 }
 
 // Metadata is identity + presentation + authorship.
@@ -175,12 +195,65 @@ type SlotContribution struct {
 	Permission string `json:"permission,omitempty"`
 }
 
-// Action is a UI-triggered operation.
+// Action is a UI-triggered operation. Beyond the thin {key,label,handler,
+// target_model} dispatch core it can declare a rich, declarative action modal
+// (a form built from Fields) and/or delegate to a custom federated modal
+// component (Modal — the slot_kind the host loads from the addon's frontend
+// bundle). Both surfaces are consumed by the SDK's ActionModalDispatcher.
 type Action struct {
 	Key         string  `json:"key"`
 	Label       string  `json:"label,omitempty"`
+	Icon        string  `json:"icon,omitempty"`
 	Handler     Handler `json:"handler"`
 	TargetModel string  `json:"target_model,omitempty"`
+
+	// Fields declares a declarative form the host renders in the action modal
+	// before dispatching the handler. Optional — an action with no fields and
+	// no modal is a plain one-click action.
+	Fields []ActionField `json:"fields,omitempty"`
+
+	// Modal is the slot_kind of a custom federated modal component the host
+	// mounts instead of (or alongside) the declarative form — for actions whose
+	// UI is too rich for a flat field list (e.g. a checkout panel). It is the
+	// same federation slot_kind addressing used elsewhere in the contract.
+	Modal string `json:"modal,omitempty"`
+
+	// Confirm asks the host to show a confirmation step before dispatching.
+	Confirm bool `json:"confirm,omitempty"`
+	// ConfirmMessage is the body shown in that confirmation step.
+	ConfirmMessage string `json:"confirm_message,omitempty"`
+}
+
+// ActionField is one input in an action modal's declarative form. It mirrors
+// the SDK's ActionFieldDef (runtime-react/src/types.ts) 1:1 so the v3 field
+// maps cleanly onto what dynamic-form / ActionModalDispatcher render.
+type ActionField struct {
+	Key            string           `json:"key"`
+	Label          string           `json:"label,omitempty"`
+	Type           string           `json:"type"`
+	Required       bool             `json:"required,omitempty"`
+	Options        []FieldOption    `json:"options,omitempty"`
+	Default        any              `json:"default,omitempty"`
+	Placeholder    string           `json:"placeholder,omitempty"`
+	Widget         string           `json:"widget,omitempty"`
+	Ref            string           `json:"ref,omitempty"`
+	SearchEndpoint string           `json:"search_endpoint,omitempty"`
+	Validation     *FieldValidation `json:"validation,omitempty"`
+}
+
+// FieldOption is a value/label choice for select-typed action fields.
+type FieldOption struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+// FieldValidation carries client-side validation hints for an action field.
+// The SDK reads these directly from the manifest-served action metadata.
+type FieldValidation struct {
+	Regex  string   `json:"regex,omitempty"`
+	Min    *float64 `json:"min,omitempty"`
+	Max    *float64 `json:"max,omitempty"`
+	Custom string   `json:"custom,omitempty"`
 }
 
 // Tool is an LLM-facing action wired into the host agent-tool registry.
