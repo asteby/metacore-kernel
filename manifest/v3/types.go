@@ -240,6 +240,15 @@ type ActionField struct {
 	Ref            string           `json:"ref,omitempty"`
 	SearchEndpoint string           `json:"search_endpoint,omitempty"`
 	Validation     *FieldValidation `json:"validation,omitempty"`
+
+	// ItemFields declares the columns of a repeatable line-items group. It is
+	// set on a field with type "array" (the multi-row container — e.g. the
+	// item rows of a "Recibir mercancía" modal, or the debit/credit lines of a
+	// journal entry). Each ItemFields entry is itself an ActionField (the cell
+	// widget for one column), so the structure is self-referential. The field's
+	// value is an array of objects keyed by the ItemFields keys. The SDK
+	// (dynamic-line-items) renders a row grid with add/remove controls.
+	ItemFields []ActionField `json:"item_fields,omitempty"`
 }
 
 // FieldOption is a value/label choice for select-typed action fields.

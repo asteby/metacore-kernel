@@ -317,6 +317,14 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 // FieldOptions map to legacy Options. widget/validation/ref/placeholder/
 // search_endpoint have no FieldDef slot and are intentionally not mapped (see
 // mapActions doc).
+//
+// item_fields (the columns of a repeatable line-items group on a type:"array"
+// field) likewise has NO legacy FieldDef slot — the flat FieldDef cannot carry
+// nested fields. So the line-items structure intentionally does NOT round-trip
+// through FromV3: the SDK (dynamic-line-items) reads item_fields directly off
+// the v3-served action metadata, the same pattern as widget/validation. The
+// container field still maps as an ordinary flat FieldDef (Type "array") so a
+// legacy consumer at least sees the field exists.
 func mapActionFields(in []v3.ActionField) []FieldDef {
 	if len(in) == 0 {
 		return nil
