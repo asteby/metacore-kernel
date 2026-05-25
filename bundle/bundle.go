@@ -62,6 +62,14 @@ func parseManifest(data []byte, dst *manifest.Manifest) error {
 // Bundle is the in-memory representation after reading a .tar.gz.
 type Bundle struct {
 	Manifest   manifest.Manifest
+	// RawManifest holds the verbatim manifest.json bytes as they appeared in
+	// the archive, BEFORE the dual-read v2/v3 normalisation that produces the
+	// legacy Manifest above. It is the only place the original v3 document
+	// survives — manifest.FromV3 intentionally drops kind:Preset / kind:Theme
+	// blocks (the legacy Manifest has no field for them). Consumers that need
+	// the v3-only surface (e.g. preset.Resolve to read preset.addons[]) parse
+	// these bytes with v3.Parse. Empty for in-memory bundles built via Write.
+	RawManifest []byte
 	Migrations []dynamic.File
 	// Frontend holds static files keyed by bundle-relative path
 	// (e.g. "frontend/remoteEntry.js"). Callers persist them where needed.
@@ -161,6 +169,10 @@ func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
 			if err := parseManifest(data, &b.Manifest); err != nil {
 				return nil, fmt.Errorf("bundle: manifest.json: %w", err)
 			}
+			// Preserve the verbatim bytes so v3-only consumers (preset/theme
+			// resolution) can re-parse the original document the legacy
+			// Manifest drops. Copy because `data` aliases a reused buffer.
+			b.RawManifest = append([]byte(nil), data...)
 		case strings.HasPrefix(h.Name, "migrations/") && strings.HasSuffix(h.Name, ".sql"):
 			name := strings.TrimSuffix(path.Base(h.Name), ".sql")
 			b.Migrations = append(b.Migrations, dynamic.File{Version: name, SQL: string(data)})
