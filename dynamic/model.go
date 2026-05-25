@@ -114,13 +114,21 @@ func columnGoType(c manifest.ColumnDef) (reflect.Type, string, error) {
 		return reflect.TypeOf(float64(0)), "numeric(18,4)", nil
 	case "bool", "boolean":
 		return reflect.TypeOf(false), "boolean", nil
-	case "timestamp", "datetime":
+	case "timestamp", "timestamptz", "datetime", "timestamp with time zone":
 		return reflect.TypeOf(time.Time{}), "timestamptz", nil
 	case "date":
 		return reflect.TypeOf(time.Time{}), "date", nil
 	case "jsonb", "json":
 		return reflect.TypeOf(map[string]any{}), "jsonb", nil
 	default:
+		// Parameterized Postgres-native forms (e.g. numeric(6,2), varchar(120))
+		// that v3 manifests declare verbatim — pass the validated form through.
+		if sqlType, ok := parameterizedColumnType(c.Type); ok {
+			if strings.HasPrefix(sqlType, "varchar") {
+				return reflect.TypeOf(""), sqlType, nil
+			}
+			return reflect.TypeOf(float64(0)), sqlType, nil
+		}
 		return nil, "", fmt.Errorf("unknown column type %q", c.Type)
 	}
 }

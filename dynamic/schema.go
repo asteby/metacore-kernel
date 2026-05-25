@@ -3,6 +3,7 @@ package dynamic
 import (
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/asteby/metacore-kernel/manifest"
@@ -195,14 +196,43 @@ func pgColumnType(c manifest.ColumnDef) (string, error) {
 		return "numeric(18,4)", nil
 	case "bool", "boolean":
 		return "boolean", nil
-	case "timestamp", "datetime":
+	case "timestamp", "timestamptz", "datetime", "timestamp with time zone":
 		return "timestamptz", nil
 	case "date":
 		return "date", nil
 	case "jsonb", "json":
 		return "jsonb", nil
 	default:
+		if sqlType, ok := parameterizedColumnType(c.Type); ok {
+			return sqlType, nil
+		}
 		return "", fmt.Errorf("unknown column type %q", c.Type)
+	}
+}
+
+// paramColumnTypeRe matches Postgres-native parameterized type forms that v3
+// manifests may declare verbatim, e.g. "numeric(6,2)", "decimal(10,2)" or
+// "varchar(120)". The inner parameters are constrained to digits and a single
+// comma so the value is safe to splice into DDL.
+var paramColumnTypeRe = regexp.MustCompile(`^([a-zA-Z][a-zA-Z ]*)\((\d{1,4}(,\d{1,4})?)\)$`)
+
+// parameterizedColumnType normalizes a parameterized column type into the SQL
+// type the kernel emits. It returns ok=false for anything it does not
+// explicitly recognize, so the caller still rejects genuinely unknown types.
+func parameterizedColumnType(raw string) (string, bool) {
+	m := paramColumnTypeRe.FindStringSubmatch(strings.TrimSpace(raw))
+	if m == nil {
+		return "", false
+	}
+	base := strings.ToLower(strings.TrimSpace(m[1]))
+	params := m[2]
+	switch base {
+	case "numeric", "decimal":
+		return "numeric(" + params + ")", true
+	case "varchar", "char", "character", "character varying":
+		return "varchar(" + params + ")", true
+	default:
+		return "", false
 	}
 }
 
