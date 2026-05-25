@@ -167,6 +167,69 @@ func TestParse_ReturnsTypedManifestOnSuccess(t *testing.T) {
 	}
 }
 
+func TestParse_ActionWithLineItemsField(t *testing.T) {
+	m := baseValid()
+	m["contributions"] = map[string]interface{}{
+		"actions": []interface{}{
+			map[string]interface{}{
+				"key":          "receive_goods",
+				"label":        "Recibir mercancía",
+				"target_model": "purchase_order",
+				"handler": map[string]interface{}{
+					"type":     "wasm",
+					"function": "ReceiveGoods",
+				},
+				"fields": []interface{}{
+					map[string]interface{}{
+						"key":   "lines",
+						"label": "Renglones",
+						"type":  "array",
+						"item_fields": []interface{}{
+							map[string]interface{}{
+								"key":   "product_id",
+								"label": "Producto",
+								"type":  "select",
+								"ref":   "product",
+							},
+							map[string]interface{}{
+								"key":      "quantity",
+								"label":    "Cantidad",
+								"type":     "number",
+								"required": true,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	got, err := Parse(mustJSON(t, m))
+	if err != nil {
+		t.Fatalf("Parse returned unexpected error: %v", err)
+	}
+	if got.Contributions == nil || len(got.Contributions.Actions) != 1 {
+		t.Fatalf("expected 1 action, got %+v", got.Contributions)
+	}
+	fields := got.Contributions.Actions[0].Fields
+	if len(fields) != 1 {
+		t.Fatalf("expected 1 field, got %d", len(fields))
+	}
+	lines := fields[0]
+	if lines.Type != "array" {
+		t.Fatalf("line-items field Type = %q, want %q", lines.Type, "array")
+	}
+	if len(lines.ItemFields) != 2 {
+		t.Fatalf("expected 2 item_fields, got %d", len(lines.ItemFields))
+	}
+	if lines.ItemFields[0].Key != "product_id" || lines.ItemFields[0].Ref != "product" {
+		t.Fatalf("item_fields[0] = %+v, want product_id/product", lines.ItemFields[0])
+	}
+	if lines.ItemFields[1].Key != "quantity" || !lines.ItemFields[1].Required {
+		t.Fatalf("item_fields[1] = %+v, want required quantity", lines.ItemFields[1])
+	}
+}
+
 func TestSchemaJSON_ReturnsEmbeddedBytes(t *testing.T) {
 	b := SchemaJSON()
 	if len(b) == 0 {

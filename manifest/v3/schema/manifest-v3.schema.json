@@ -565,7 +565,12 @@
         "widget": { "type": "string" },
         "ref": { "type": "string", "description": "Target model key for reference/relation fields." },
         "search_endpoint": { "type": "string", "description": "Endpoint backing an async-search widget." },
-        "validation": { "$ref": "#/$defs/FieldValidation" }
+        "validation": { "$ref": "#/$defs/FieldValidation" },
+        "item_fields": {
+          "type": "array",
+          "description": "Columns of a repeatable line-items group. Set on a field with type \"array\"; each entry is the cell widget for one column. The field value is an array of objects keyed by these item field keys.",
+          "items": { "$ref": "#/$defs/ActionField" }
+        }
       }
     },
     "FieldOption": {
