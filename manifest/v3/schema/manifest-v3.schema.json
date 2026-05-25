@@ -527,7 +527,7 @@
           "additionalProperties": false,
           "required": ["type"],
           "properties": {
-            "type": { "type": "string", "enum": ["wasm", "webhook"] },
+            "type": { "type": "string", "enum": ["wasm", "webhook", "compiled"] },
             "function": { "type": "string" },
             "url": { "type": "string" }
           }
@@ -601,7 +601,7 @@
           "additionalProperties": false,
           "required": ["type"],
           "properties": {
-            "type": { "type": "string", "enum": ["wasm", "webhook"] },
+            "type": { "type": "string", "enum": ["wasm", "webhook", "compiled"] },
             "function": { "type": "string" },
             "url": { "type": "string" }
           }
@@ -622,12 +622,13 @@
           "additionalProperties": false,
           "required": ["type"],
           "properties": {
-            "type": { "type": "string", "enum": ["wasm", "webhook"] },
+            "type": { "type": "string", "enum": ["wasm", "webhook", "compiled"] },
             "function": { "type": "string" },
             "url": { "type": "string" }
           }
         },
-        "filter": { "type": "string", "description": "CEL expression over the event payload; only matching events dispatch." }
+        "filter": { "type": "string", "description": "CEL expression over the event payload; only matching events dispatch." },
+        "comment": { "type": "string", "description": "Author note; ignored by the runtime." }
       }
     },
     "ExtensionPoints": {

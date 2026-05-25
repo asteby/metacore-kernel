@@ -270,6 +270,7 @@ type Subscription struct {
 	Event   string  `json:"event"`
 	Handler Handler `json:"handler"`
 	Filter  string  `json:"filter,omitempty"`
+	Comment string  `json:"comment,omitempty"` // author note; ignored by the runtime
 }
 
 // Handler is the polymorphic invocation target for actions/tools/subscriptions.
