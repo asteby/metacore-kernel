@@ -1,0 +1,45 @@
+{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Preset",
+  "metadata": {
+    "key": "pitsline",
+    "name": "Pitsline — Llanteras",
+    "version": "0.1.0",
+    "description": "Sistema integral para llanteras: inventario de llantas (DOT, medidas, vida útil), órdenes de servicio (alineación, balanceo, vulcanizado), CFDI Carta Porte, fleets.",
+    "author": "Asteby",
+    "website": "https://pitsline.asteby.com",
+    "features": ["vertical", "automotive", "tires", "MX"]
+  },
+  "compatibility": {
+    "requires": [
+      { "key": "kernel", "version": ">=3.0.0 <4.0.0" }
+    ]
+  },
+  "preset": {
+    "addons": [
+      { "key": "inventory", "version": "^0.1.0" },
+      { "key": "customers", "version": "^0.1.0" },
+      { "key": "billing_sat", "version": "^0.1.0" },
+      { "key": "pos", "version": "^0.1.0" },
+      { "key": "accounting_lite", "version": "^0.1.0" },
+      { "key": "purchases", "version": "^0.1.0" },
+
+      { "key": "hr_lite", "version": "^0.1.0" },
+      { "key": "vehicles", "version": "^0.1.0" },
+      { "key": "tires_inventory", "version": "^0.1.0" },
+      { "key": "workshop", "version": "^0.1.0" },
+      { "key": "alignment", "version": "^0.1.0" },
+      { "key": "balancing", "version": "^0.1.0" },
+      { "key": "vulcanizado", "version": "^0.1.0" },
+      { "key": "waybill_cartaporte", "version": "^0.1.0" },
+      { "key": "fleet_customers", "version": "^0.1.0", "optional": true },
+      { "key": "tire_warranty", "version": "^0.1.0", "optional": true }
+    ],
+    "defaults": {
+      "roles_file": "./defaults/roles.json",
+      "categories_file": "./defaults/categories.json",
+      "dashboards_file": "./defaults/dashboards.json",
+      "branding_file": "./defaults/branding.json"
+    }
+  }
+}
