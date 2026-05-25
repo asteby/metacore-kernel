@@ -76,6 +76,21 @@ type Metadata struct {
 	Readme      string   `json:"readme,omitempty"`
 	Screenshots []string `json:"screenshots,omitempty"`
 	Features    []string `json:"features,omitempty"`
+	// I18n carries marketplace catalog localizations keyed by locale
+	// ("es", "en", …). Distinct from the top-level Manifest.I18n, which
+	// points at app-UI string bundles. The top-level Name/Description/Features
+	// stay the default/fallback copy; the hub serves the localized variant
+	// when the catalog is browsed in that locale, falling back to the default.
+	I18n map[string]MetadataLocale `json:"i18n,omitempty"`
+}
+
+// MetadataLocale is one locale's catalog copy. Every field is optional so an
+// author can localize just the description, and the renderer falls back to the
+// default Metadata field for anything omitted.
+type MetadataLocale struct {
+	Name        string   `json:"name,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Features    []string `json:"features,omitempty"`
 }
 
 // Icon is the triple {type, slug, color} the host renders for the avatar.
