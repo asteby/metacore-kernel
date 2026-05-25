@@ -24,7 +24,7 @@ func TestWriteReadRoundTrip(t *testing.T) {
 			Version:     "1.2.3",
 			Category:    "utility",
 			Icon:        "Package",
-			Kernel:      ">=2.0.0 <3.0.0",
+			Kernel:      ">=3.0.0 <4.0.0",
 			ModelDefinitions: []manifest.ModelDefinition{
 				{
 					TableName: "demo_items",
@@ -104,7 +104,7 @@ func TestWriteDeterministic(t *testing.T) {
 	b := &bundle.Bundle{
 		Manifest: manifest.Manifest{
 			Key: "demo", Name: "Demo", Version: "1.0.0", Category: "utility",
-			Kernel: ">=2.0.0 <3.0.0",
+			Kernel: ">=3.0.0 <4.0.0",
 			ModelDefinitions: []manifest.ModelDefinition{{
 				TableName: "t", ModelKey: "t", Label: "T",
 				Columns: []manifest.ColumnDef{{Name: "x", Type: "string"}},

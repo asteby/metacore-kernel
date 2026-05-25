@@ -29,7 +29,35 @@ import (
 
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/manifest"
+	v3 "github.com/asteby/metacore-kernel/manifest/v3"
 )
+
+// parseManifest ingests a raw manifest.json into the legacy manifest.Manifest
+// shape, dual-reading both the legacy (v2) and the Module Contract v3 formats.
+//
+// It peeks the raw JSON for an `apiVersion` field — the legacy struct has no
+// such field, while every v3 manifest sets "apiVersion": "asteby.com/v3". When
+// present the bytes are validated against the v3 contract via v3.Parse and then
+// mapped into the legacy shape via manifest.FromV3, so all existing consumers
+// (which are deeply coupled to manifest.Manifest) keep working unchanged.
+// Otherwise the legacy unmarshal path is preserved verbatim.
+func parseManifest(data []byte, dst *manifest.Manifest) error {
+	var probe struct {
+		APIVersion string `json:"apiVersion"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return err
+	}
+	if probe.APIVersion != "" {
+		m, err := v3.Parse(data)
+		if err != nil {
+			return err
+		}
+		*dst = manifest.FromV3(m)
+		return nil
+	}
+	return json.Unmarshal(data, dst)
+}
 
 // Bundle is the in-memory representation after reading a .tar.gz.
 type Bundle struct {
@@ -130,7 +158,7 @@ func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
 		b.EntryDigests[h.Name] = hex.EncodeToString(sum[:])
 		switch {
 		case h.Name == "manifest.json":
-			if err := json.Unmarshal(data, &b.Manifest); err != nil {
+			if err := parseManifest(data, &b.Manifest); err != nil {
 				return nil, fmt.Errorf("bundle: manifest.json: %w", err)
 			}
 		case strings.HasPrefix(h.Name, "migrations/") && strings.HasSuffix(h.Name, ".sql"):

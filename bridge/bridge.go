@@ -25,8 +25,10 @@ import (
 
 // KernelVersion is the semver this bridge advertises to addons via the
 // manifest.Kernel compatibility check, and echoes back to the frontend
-// for diagnostics.
-const KernelVersion = "2.0.0"
+// for diagnostics. It tracks manifest.APIVersion — the single source of
+// truth for the contract version the kernel implements — so the bridge and
+// the hub-side publish validation never drift apart.
+const KernelVersion = manifest.APIVersion
 
 // Config bundles the dependencies a host supplies when constructing the
 // bridge. All fields except DB and Services are optional: hosts that don't
