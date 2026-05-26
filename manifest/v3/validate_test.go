@@ -271,3 +271,18 @@ func TestParse_MetadataI18n(t *testing.T) {
 		t.Fatalf("es locale not mapped: %+v", es)
 	}
 }
+
+// TestParse_MetadataCountries confirms metadata.countries (market scoping)
+// is accepted by the strict v3 schema and parsed onto the typed manifest.
+func TestParse_MetadataCountries(t *testing.T) {
+	m := baseValid()
+	md := m["metadata"].(map[string]interface{})
+	md["countries"] = []interface{}{"MX"}
+	got, err := Parse(mustJSON(t, m))
+	if err != nil {
+		t.Fatalf("Parse rejected metadata.countries: %v", err)
+	}
+	if len(got.Metadata.Countries) != 1 || got.Metadata.Countries[0] != "MX" {
+		t.Fatalf("countries not parsed: %+v", got.Metadata.Countries)
+	}
+}

@@ -76,6 +76,12 @@ type Metadata struct {
 	Readme      string   `json:"readme,omitempty"`
 	Screenshots []string `json:"screenshots,omitempty"`
 	Features    []string `json:"features,omitempty"`
+	// Countries scopes the addon to specific markets as ISO 3166-1 alpha-2
+	// codes (e.g. ["MX"]). Region-specific addons (fiscal complements like
+	// Carta Porte / SAT) declare their countries so the catalog can hide them
+	// from users elsewhere. Empty/omitted means GLOBAL — available in every
+	// country (the default for general addons).
+	Countries []string `json:"countries,omitempty"`
 	// I18n carries marketplace catalog localizations keyed by locale
 	// ("es", "en", …). Distinct from the top-level Manifest.I18n, which
 	// points at app-UI string bundles. The top-level Name/Description/Features

@@ -101,6 +101,11 @@ type Manifest struct {
 	Screenshots []string `json:"screenshots,omitempty"`
 	Features    []string `json:"features,omitempty"`
 	Price       string   `json:"price,omitempty"`
+	// Countries scopes the addon to ISO 3166-1 alpha-2 markets (e.g. ["MX"]).
+	// Empty/omitted = global. The hub uses it to filter the catalog by the
+	// browsing user's country so region-specific (fiscal) addons don't surface
+	// where they don't apply.
+	Countries []string `json:"countries,omitempty"`
 	// MetadataI18n carries marketplace catalog localizations keyed by locale
 	// ("es", "en"). Populated by FromV3 from v3 metadata.i18n. The hub stores
 	// and serves these so the catalog renders in the browsed locale; the flat

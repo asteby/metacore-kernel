@@ -49,6 +49,7 @@ func FromV3(m *v3.Manifest) Manifest {
 		Readme:      m.Metadata.Readme,
 		Screenshots: m.Metadata.Screenshots,
 		Features:    m.Metadata.Features,
+		Countries:    m.Metadata.Countries,
 		MetadataI18n: mapMetadataI18n(m.Metadata.I18n),
 	}
 
