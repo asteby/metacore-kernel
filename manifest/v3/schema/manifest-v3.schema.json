@@ -288,6 +288,13 @@
             "type": "string"
           }
         },
+        "countries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "ISO 3166-1 alpha-2 country codes the addon targets; empty = global."
+        },
         "i18n": {
           "type": "object",
           "description": "Marketplace catalog localizations keyed by locale (es, en, ...).",
