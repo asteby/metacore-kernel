@@ -1,14 +1,21 @@
-# Dynamic Actions API (proposal — kernel-side)
+# Dynamic Actions API (kernel-side)
 
 HTTP reference for the per-row action endpoint that the dynamic CRUD
-framework will mount alongside list/get/create/update/delete:
+framework mounts alongside list/get/create/update/delete:
 
 ```
 POST /dynamic/:model/:id/action/:key
 ```
 
+> **Status: shipped in v0.10.0.** The endpoint, `Service.ExecAction`, the
+> `ActionResolver` / `ActionDispatchers` config seams and the built-in
+> `NoopDispatcher` are implemented (`dynamic/action.go`, `dynamic/handler.go`).
+> Sections below tagged "out of scope for v1" (bulk, async/queued, sagas,
+> streaming, `dry_run`) remain future work; everything else describes the
+> live contract.
+
 This document is the wire contract and dispatch contract for that endpoint.
-It is the v1 spec — **proposal, no implementation yet** — and depends on:
+It depends on:
 
 - [`docs/audits/2026-05-04-action-trigger-gap.md`](audits/2026-05-04-action-trigger-gap.md)
   for the `manifest.ActionDef.Trigger` shape this endpoint dispatches on.

@@ -198,19 +198,29 @@ metacore-kernel/
 ├── notifications/   # delivery queue: workers + dedup + retry + ChannelHandler
 ├── eventlog/        # org-scoped persistent pub/sub with cursor pagination
 ├── host/            # boot orchestration (glue)
-├── lifecycle/       # addon lifecycle registry
-├── installer/       # addon install + migration runner
+├── lifecycle/       # addon lifecycle registry + declarative hook runner
+├── installer/       # addon install / upgrade + migration runner
+├── marketplace/     # install/uninstall/upgrade/rollback/discovery HTTP endpoints
+├── preset/          # resolve + install kind:Preset verticals as an ordered unit
 ├── navigation/      # sidebar merger
 ├── events/          # in-process addon pub/sub bus (NOT eventlog — different concern)
 ├── tool/            # addon tool runtime + dispatcher + registry
-├── manifest/        # addon manifest schema
+├── manifest/        # addon manifest schema; manifest/v3 = Module Contract v3 + FromV3 mapper
 ├── bundle/          # addon bundle I/O contracts
+├── guest/           # TinyGo-compatible guest-side ABI helpers for addon authors
 ├── security/        # HMAC signing + capability enforcement
 ├── bridge/          # host-side glue: ports for ActionInterceptor / Tool / Agent / SecretResolver (stable v2.0+)
+├── hub/             # kernel-side Hub HTTP client (catalog/bundle contract)
+├── config/          # org-scoped config getters (OrgCurrencyGetter) + Fiber-context helpers
+├── database/        # GORM hooks (RegisterCurrencyDefaultCallback BeforeCreate)
+├── idempotency/     # idempotency-key middleware + store
+├── i18n/            # string-bundle loading + locale resolution
+├── vector/          # pgvector helpers for embedding columns
 ├── log/             # builder-style logger (legacy; new code uses obs)
 ├── metrics/         # Prometheus metrics helpers
 ├── migrations/      # GORM migration helpers
-└── runtime/wasm/    # WASM addon runtime (wazero)
+├── runtime/wasm/    # WASM addon runtime (wazero)
+└── runtime/flow/    # generic workflow DAG engine (pluggable nodes, optional persistence)
 ```
 
 Each module owns its tests, its doc.go with a usage example, and its errors.

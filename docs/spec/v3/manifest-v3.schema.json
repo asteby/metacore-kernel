@@ -139,6 +139,16 @@
         "features": {
           "type": "array",
           "items": { "type": "string" }
+        },
+        "countries": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "ISO 3166-1 alpha-2 country codes the addon targets; empty = global."
+        },
+        "i18n": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/MetadataLocale" },
+          "description": "Marketplace catalog localizations keyed by locale (es, en, ...)."
         }
       },
       "examples": [
@@ -150,6 +160,19 @@
           "author": "Asteby"
         }
       ]
+    },
+    "MetadataLocale": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One locale's marketplace catalog copy. Every field is optional; missing fields fall back to the flat metadata.name/description/features.",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "features": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
     },
     "Compatibility": {
       "type": "object",

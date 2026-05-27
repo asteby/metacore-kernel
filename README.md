@@ -262,7 +262,7 @@ marketplace integrations.
 ```go
 h, err := host.New(host.Config{
     DB:            db,
-    KernelVersion: "0.7.2",
+    KernelVersion: "0.20.0",
     Services: map[string]any{
         "eventbus": bus,
     },
@@ -298,15 +298,25 @@ For a step-by-step walk-through see
 | `notifications/`  | Delivery queue, dedup, retry, pluggable `ChannelHandler`                      |
 | `eventlog/`       | Org-scoped persisted event log with cursor pagination                         |
 | `events/`         | In-process pub/sub bus for addons (capability-checked, wildcard patterns)     |
-| `lifecycle/`      | Addon contract (`Manifest`, `OnInstall`, …) + registry + interceptors         |
-| `installer/`      | Install / enable / disable / uninstall flow + frontend bundle materialization |
+| `lifecycle/`      | Addon contract (`Manifest`, `OnInstall`, …) + registry + interceptors + hook runner |
+| `installer/`      | Install / enable / disable / uninstall / upgrade flow + frontend bundle materialization |
+| `marketplace/`    | Install / uninstall / upgrade / rollback / discovery HTTP endpoints           |
+| `preset/`         | Resolve + install `kind: "Preset"` verticals as an ordered addon unit          |
 | `navigation/`     | Merge core sidebar groups with addon contributions                            |
-| `manifest/`       | Declarative addon manifest schema (mirrored by SDK)                           |
+| `manifest/`       | Declarative addon manifest schema (mirrored by SDK); `v3/` = Module Contract v3 + `FromV3` mapper |
 | `bundle/`         | Addon bundle I/O contracts (`bundle.tgz` reader/writer)                       |
 | `tool/`           | Addon tool runtime + dispatcher + registry                                    |
+| `guest/`          | TinyGo-compatible guest-side helpers for addon authors (`EmitEvent`, `DbQuery`, …) |
 | `bridge/`         | Adapters that map kernel actions/tools/webhooks to host integrations          |
 | `runtime/wasm/`   | wazero-based WASM runtime, ABI, capability-gated host imports                 |
+| `runtime/flow/`   | Generic workflow DAG engine (pluggable node registry, optional persistence)   |
 | `security/`       | `Enforcer`, `Capabilities`, HMAC, secretbox, nonce store, webhook dispatch    |
+| `hub/`            | Kernel-side Hub HTTP client (browse → fetch → install catalog/bundle contract) |
+| `config/`         | Org-scoped config getters (`OrgCurrencyGetter`) + Fiber-context helpers       |
+| `database/`       | GORM helpers incl. the `RegisterCurrencyDefaultCallback` BeforeCreate hook    |
+| `idempotency/`    | Idempotency-key middleware + store for replay-safe mutations                  |
+| `i18n/`           | String-bundle loading + locale resolution                                     |
+| `vector/`         | pgvector helpers for embedding columns                                        |
 | `metrics/`        | Prometheus registry, Fiber middleware, `/metrics` handler                    |
 | `migrations/`     | Versioned SQL migration runner (Goose) for kernel-owned tables                |
 | `httpx/`          | HTTP helpers reused across handlers                                           |
