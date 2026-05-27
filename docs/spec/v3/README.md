@@ -196,6 +196,37 @@ The full field-by-field mapping lives in
 - [`examples/preset-example.json`](./examples/preset-example.json) — a
   vertical `Preset` bundling foundation addons with default settings.
 
+## Additive revisions inside v3
+
+v3 was frozen in kernel v0.13.0 and has since grown additively (all backwards
+compatible — existing v3 manifests validate unchanged). The
+[`manifest-v3.schema.json`](./manifest-v3.schema.json) in this folder tracks
+the authoritative embedded schema; the table below summarises what each kernel
+release added:
+
+| Kernel | Field(s) added                                                                                          |
+| ------ | ------------------------------------------------------------------------------------------------------- |
+| v0.14.0 | `contributions.actions[]` modals: `Action.icon`, `Action.fields[]`, `Action.modal`, `Action.confirm`, `Action.confirm_message`; new `ActionField` / `FieldOption` / `FieldValidation`; top-level `frontend` block (federated UI). |
+| v0.15.0 | `settings[].description`, `settings[].type: "number"`, `models[].columns[].comment`, handler `type: "compiled"`. |
+| v0.16.0 | `ActionField.item_fields[]` — declarative repeatable line-items group (a `type: "array"` field whose cell columns are themselves `ActionField`s). |
+| v0.17.0 | `kind: "Preset"` resolution + install (see [Kinds](#kinds)); `preset.addons[]` + `preset.defaults`. |
+| v0.18.0 | wasm action triggers validate without a `backend` block (their handlers are the export surface). |
+| v0.19.0 | `metadata.i18n` — marketplace catalog localizations keyed by locale (`{ "es": { name, description, features }, … }`). Distinct from the top-level `i18n` block (app string-bundle pointers); the flat `metadata.name`/`description`/`features` are the per-field fallback. |
+| v0.20.0 | `metadata.countries[]` — ISO 3166-1 alpha-2 codes the addon targets (empty = global). The hub filters the catalog by the user's country. |
+
+`metadata.i18n` and `metadata.countries` slot into the `metadata` block:
+
+```jsonc
+"metadata": {
+  "key": "waybill", "version": "1.2.0", "name": "Carta Porte",
+  "countries": ["MX"],
+  "i18n": {
+    "es": { "name": "Carta Porte", "description": "Complemento SAT" },
+    "en": { "name": "Waybill",     "description": "SAT complement"  }
+  }
+}
+```
+
 ## Validating a manifest
 
 ```go

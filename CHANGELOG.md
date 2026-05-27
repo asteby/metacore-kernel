@@ -7,9 +7,156 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+_No unreleased changes. The currency hook and `resolveModel` fix below shipped
+in v0.13.0 (#84 / #75)._
+
+## [0.20.0] - 2026-05-26
+
 ### Added
 
-- **feat(database): `RegisterCurrencyDefaultCallback` BeforeCreate hook.**
+- **feat(manifest): `metadata.countries` regional catalog scoping (#92).**
+  v3 manifests may declare `metadata.countries` (ISO 3166-1 alpha-2, e.g.
+  `["MX"]`; empty = global). Schema + `v3.Metadata.Countries` +
+  internal `Manifest.Countries` + `FromV3` mapping. The hub filters the
+  catalog by the user's country so regional addons (fiscal: Carta Porte,
+  SAT) do not surface where they don't apply. Round-trip test included.
+  Additive.
+
+## [0.19.0] - 2026-05-25
+
+### Added
+
+- **feat(manifest): `metadata.i18n` catalog localization (#91).** v3 manifests
+  may declare `metadata.i18n` (a map `locale → {name, description, features}`).
+  Distinct from the top-level `manifest.i18n` block (pointers to the app's
+  string bundles) — `metadata.i18n` carries the marketplace copy inline so the
+  hub can store and serve catalog metadata per locale. Schema +
+  `v3.MetadataLocale` + internal `Manifest.MetadataI18n` + `mapMetadataI18n`
+  in `FromV3`. Flat `name`/`description`/`features` remain the per-field
+  fallback. Json tag is `metadata_i18n` internally to avoid collision with
+  `Manifest.I18n`. Round-trip test included. Additive.
+
+## [0.18.0] - 2026-05-25
+
+### Fixed
+
+- **fix(manifest): wasm action triggers validate without a `backend` block
+  (v3) (#90).** `validateActionTrigger` required a wasm trigger's export to be
+  present in `backend.exports` *always*, even when no backend block was
+  declared. v3 manifests carry no backend block — their wasm handlers ARE the
+  export surface — so an empty export set means "nothing authoritative to
+  cross-check", not "the backend exports nothing". The membership check now
+  runs only when a list is declared (`len(exports) > 0`), matching the
+  pre-existing lenient behaviour of `validateLifecycleHooks`. Legacy manifests
+  with explicit `Backend.Exports` keep the strict typo-check. Unblocks
+  publishing first-party addons with native actions (pos:
+  `open_session → OnSessionOpen`, etc.).
+
+## [0.17.0] - 2026-05-25
+
+### Added
+
+- **feat(preset): resolve + install `kind: "Preset"` verticals as a unit
+  (#89).** New `preset/` package that turns a `kind: "Preset"` v3 manifest
+  (e.g. Pitsline) into an ordered addon list and drives an idempotent,
+  per-addon install via a host-supplied `InstallAddonFunc` — the kernel never
+  reinvents the single-addon installer, it only resolves the list and collects
+  per-addon results. `ResolveFromManifest` / `Resolve` extract addons
+  (required-first, optional flagged) + defaults from a parsed/raw v3 preset
+  manifest. `InstallPreset` drives install per addon: idempotent (install func
+  returns `false` ⇒ skipped "already installed"), optional addons gated by a
+  caller selection set, optional failures reported but non-fatal, required
+  failures abort by default (`ContinueOnRequiredError` opts out). Returns a
+  `Summary` with `installed[]` / `skipped[]` / `failed[]`. Tests parse the real
+  Pitsline manifest. Also: `bundle.Bundle.RawManifest` preserves verbatim
+  `manifest.json` bytes. Additive.
+
+## [0.16.0] - 2026-05-25
+
+### Added
+
+- **feat(v3): declarative line-items (repeatable group) action field (#88).**
+  `ActionField` grows `ItemFields []ActionField` so a field with `type: "array"`
+  can declare the columns of a repeatable line-items group (e.g. the item rows
+  of a "Recibir mercancía" modal, or the debit/credit lines of a journal entry)
+  directly in the manifest instead of needing a custom federated modal. Both
+  schema copies (embedded + `docs/spec`) allow `item_fields` as an array of
+  `ActionField` refs in the `ActionField` `$def`. `item_fields` has no legacy
+  flat `FieldDef` slot, so it does NOT round-trip through `FromV3` — the SDK
+  reads it off the v3-served action metadata (same pattern as
+  widget/validation). Additive; flat-field rendering and the strict schema are
+  unaffected.
+
+## [0.15.0] - 2026-05-25
+
+### Added
+
+- **feat(manifest/v3): accept `Setting.description`, `Setting.type "number"`,
+  `Column.comment`, handler `"compiled"` (#87).** The strict v3 contract
+  (`additionalProperties:false` + `DisallowUnknownFields`) rejected legitimate
+  optional metadata fields used by real addon manifests, making them
+  un-installable. Added as additive/optional: `Setting.description` (human
+  description of a tenant setting), `Setting.type` enum gains `"number"` (for
+  decimal settings, e.g. a tax rate), `Column.comment` (column-level doc string
+  on `models[].columns[]`), handler `type: "compiled"` (first-party native
+  handlers) and a subscription `comment`. Both schema copies (embedded + docs)
+  updated in sync. The new strings intentionally do NOT round-trip through
+  `FromV3` (legacy structs have no slot — consumers read them off the v3-served
+  metadata). Additive.
+
+## [0.14.0] - 2026-05-25
+
+### Added
+
+- **feat(v3): action modals (fields/modal/confirm) + frontend federation
+  (#86).** The v3 `Action` was a thin `{key, label, handler, target_model}` and
+  the v3 `Manifest` had no frontend block, even though the legacy types, SDK
+  and installer already supported rich declarative action modals, custom
+  federated modals and federated frontends. This additively exposes them in the
+  v3 contract:
+  - v3 `Action` grows `Icon`, `Fields []ActionField`, `Modal`, `Confirm`,
+    `ConfirmMessage`.
+  - New `ActionField` (mirrors the SDK `ActionFieldDef` 1:1), `FieldOption`,
+    `FieldValidation`.
+  - v3 `Manifest` grows `Frontend *Frontend` (mirrors legacy `FrontendSpec`).
+  - `FromV3.mapActions` copies `Icon`/`Confirm`/`ConfirmMessage`/`Modal` and
+    folds each `ActionField` into a legacy `FieldDef`;
+    `widget`/`validation`/`ref`/`placeholder`/`search_endpoint` have no
+    `FieldDef` slot and intentionally do not round-trip (the SDK reads them off
+    the raw manifest-served action metadata).
+  - Embedded + docs JSON schema extended (`additionalProperties:false` +
+    `DisallowUnknownFields` require declaring the new fields). Strictly
+    additive — no existing field changed.
+
+## [0.13.0] - 2026-05-25
+
+### Added
+
+- **feat(bundle): dual-read v2 and v3 manifests on ingestion (#85).**
+  `bundle.Read` unmarshalled `manifest.json` directly into the legacy
+  `manifest.Manifest`, so any v3-authored addon (all of `asteby-hq/addons`)
+  failed to load. The reader now peeks the raw JSON for `apiVersion`: v3
+  manifests are validated via `v3.Parse` and mapped into the legacy shape by a
+  new `manifest.FromV3`, keeping `bundle.Bundle.Manifest` as `manifest.Manifest`
+  so the ~14 existing consumers stay untouched. The legacy v2 path is
+  unchanged. Adds a focused test loading the real inventory v3 manifest fixture.
+- **feat(manifest): advertise kernel contract 3.0.0 now that v3 is ingested
+  (#85).** The bundle path dual-reads Module Contract v3, so the kernel
+  satisfies v3 addons' `kernel: ">=3.0.0 <4.0.0"` requirement. Bumped
+  `manifest.APIVersion` 2.0.0 → 3.0.0. Legacy v2 addons declaring no kernel
+  range are unaffected (`checkKernelRange` skips empty ranges).
+- **feat(spec): freeze Module Contract v3 (#73).** The v3 manifest schema,
+  migration guide and examples landed under `docs/spec/v3/`.
+- **feat(auth): `AuthUserProvider` contract + adapters (modelbase, uuid-locals,
+  jwt) (#76).** A pluggable provider so hosts that keep their own user index
+  can drive the kernel's auth surface without registering each model in the
+  package-init registry.
+- **feat(query): relation filters, group_by, aggregations, preloads (#77).**
+- **feat(marketplace): uninstall, upgrade, rollback, discovery endpoints (#74).**
+- **feat(config,database): `OrgCurrencyGetter` + `WithFiberContext` helpers
+  (#82).**
+- **feat(database): `RegisterCurrencyDefaultCallback` BeforeCreate hook
+  (#84).**
   Apps now wire a single callback on their root `*gorm.DB` that
   populates any model's `CurrencyCode` (or `Moneda`) string field at
   INSERT time from `config.OrgCurrencyGetter` resolved via the request
