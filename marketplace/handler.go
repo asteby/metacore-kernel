@@ -23,11 +23,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/asteby/metacore-kernel/auth"
 	"github.com/asteby/metacore-kernel/bundle"
 	"github.com/asteby/metacore-kernel/installer"
+	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -333,6 +335,17 @@ func (h *Handler) install(c fiber.Ctx) error {
 // fetchBundle downloads the .tar.gz from the Hub and parses it through
 // kernel/bundle.Read. The addon key is checked against the bundle manifest
 // to catch URL/key mismatches early.
+//
+// Central trust anchor wiring: the hub counter-signs every served bundle
+// with its central Ed25519 key (Let's Encrypt-style) and ships the hex
+// signature in the X-Asteby-Marketplace-Signature header (see
+// installer.HeaderMarketplaceSignature). The publisher's own embedded
+// manifest.Signature (if any) is kept; otherwise the header signature is
+// injected here so installer/security.VerifyBundle can verify it against
+// the trusted MARKETPLACE_PUBKEY set the installer auto-fetches at boot.
+// Without this injection the bundle reaches the security gate as unsigned
+// and the install fails with "security: bundle has no signature" even
+// though the marketplace signed it correctly.
 func (h *Handler) fetchBundle(url, expectedKey string) (*bundle.Bundle, error) {
 	resp, err := h.httpc.Get(url)
 	if err != nil {
@@ -350,7 +363,32 @@ func (h *Handler) fetchBundle(url, expectedKey string) (*bundle.Bundle, error) {
 	if b.Manifest.Key != expectedKey {
 		return nil, fmt.Errorf("bundle key %q does not match request %q", b.Manifest.Key, expectedKey)
 	}
+	injectCentralSignature(b, resp.Header)
 	return b, nil
+}
+
+// injectCentralSignature copies the marketplace counter-signature from the
+// HTTP response headers into the in-memory manifest.Signature so the
+// security gate sees a signature to verify. Publisher-embedded signatures
+// take precedence — multi-key trust means either may verify. Split out so
+// the upgrade flow (which also calls fetchBundle's HTTP path) can share it.
+func injectCentralSignature(b *bundle.Bundle, headers http.Header) {
+	if b == nil {
+		return
+	}
+	if b.Manifest.Signature != nil && strings.TrimSpace(b.Manifest.Signature.Value) != "" {
+		return
+	}
+	sig := strings.TrimSpace(headers.Get(installer.HeaderMarketplaceSignature))
+	if sig == "" {
+		return
+	}
+	b.Manifest.Signature = &manifest.Signature{
+		Algorithm: "ed25519",
+		Value:     sig,
+		Digest:    strings.TrimSpace(headers.Get(installer.HeaderBundleChecksum)),
+		Verified:  true,
+	}
 }
 
 func (h *Handler) markStatus(row *Installation, status, errMsg string) {

@@ -57,6 +57,22 @@ import (
 // tests can swap it without juggling env vars.
 var DefaultMarketplaceURL = "https://hub.asteby.com"
 
+// HeaderMarketplaceSignature is the response header the hub stamps on every
+// served bundle, carrying the hex-encoded Ed25519 signature over the bundle
+// SHA-256 produced with the central marketplace key. Hosts that download
+// bundles (kernel/marketplace.fetchBundle, ops claim/preset flows) must read
+// this header and inject it into the in-memory manifest.Signature so the
+// installer's security gate can verify it against the trusted pubkey set.
+// Mirrors hub/backend/internal/api/bundle.go::HeaderMarketplaceSignature.
+const HeaderMarketplaceSignature = "X-Asteby-Marketplace-Signature"
+
+// HeaderBundleChecksum is the response header the hub stamps with the
+// hex-encoded SHA-256 of the bundle bytes. Optional — security.VerifyBundle
+// recomputes the digest from the raw tarball, but mirroring it into
+// manifest.Signature.Digest catches "right signature, wrong tarball" drift
+// with a clearer error before the more expensive ed25519 verify.
+const HeaderBundleChecksum = "X-Bundle-Checksum"
+
 // marketplacePubKeyResponse mirrors the JSON shape served by
 // hub/backend/internal/api/marketplace_pubkey.go. Defensive: extra fields
 // are ignored, the "pubkey" key is the one we need.
