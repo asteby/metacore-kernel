@@ -209,9 +209,23 @@ func renderColumnDefault(v any) any {
 
 // mapNavigation copies contributions.navigation field-by-field. NavGroup and
 // NavItem have the same shape in both contracts.
+//
+// It also RESOLVES each model-bound nav item's URL to the host dynamic-CRUD
+// route (/m/<table_name>) up front, using the manifest's own models. Addon nav
+// items typically declare only `model: "Customer"` (no url); without resolution
+// the consumer must rebuild a model→table index from model_definitions (which
+// the frontend often lacks → every item falls back to "#" and clicking does
+// nothing). Resolving here makes the served nav self-contained.
 func mapNavigation(m *v3.Manifest) []NavGroup {
 	if m.Contributions == nil || len(m.Contributions.Navigation) == 0 {
 		return nil
+	}
+	// model key → table name, the route the kernel also creates tables at.
+	modelTable := make(map[string]string, len(m.Models))
+	for _, mod := range m.Models {
+		if mod.Key != "" && mod.Table != "" {
+			modelTable[mod.Key] = mod.Table
+		}
 	}
 	out := make([]NavGroup, 0, len(m.Contributions.Navigation))
 	for _, g := range m.Contributions.Navigation {
@@ -219,25 +233,31 @@ func mapNavigation(m *v3.Manifest) []NavGroup {
 			Title:  g.Title,
 			Icon:   g.Icon,
 			Target: g.Target,
-			Items:  mapNavItems(g.Items),
+			Items:  mapNavItems(g.Items, modelTable),
 		})
 	}
 	return out
 }
 
-func mapNavItems(in []v3.NavItem) []NavItem {
+func mapNavItems(in []v3.NavItem, modelTable map[string]string) []NavItem {
 	if len(in) == 0 {
 		return nil
 	}
 	out := make([]NavItem, 0, len(in))
 	for _, it := range in {
+		url := it.URL
+		if url == "" && it.Model != "" {
+			if table, ok := modelTable[it.Model]; ok {
+				url = "/m/" + table
+			}
+		}
 		out = append(out, NavItem{
 			Title:      it.Title,
-			URL:        it.URL,
+			URL:        url,
 			Icon:       it.Icon,
 			Model:      it.Model,
 			Permission: it.Permission,
-			Items:      mapNavItems(it.Items),
+			Items:      mapNavItems(it.Items, modelTable),
 		})
 	}
 	return out
