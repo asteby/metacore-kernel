@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -223,7 +224,23 @@ type installRequest struct {
 func (h *Handler) install(c fiber.Ctx) error {
 	orgID := auth.GetOrganizationID(c)
 	userID := auth.GetUserID(c)
+	// Verbose diagnostic — temporary while we hunt the 401 in production.
+	// Logs the raw locals types + claim dump so we can tell apart "no
+	// auth middleware ran" from "auth ran but JWT lacked OrgID" from
+	// "Locals key collision".
+	claims := auth.GetClaims(c)
+	claimsDump := "<nil>"
+	if claims != nil {
+		claimsDump = fmt.Sprintf("user=%s org=%s role=%s email=%s",
+			claims.UserID, claims.OrganizationID, claims.Role, claims.Email)
+	}
+	rawOrg := c.Locals(auth.LocalOrganizationID)
+	rawUser := c.Locals(auth.LocalUserID)
+	log.Printf("[kernel-install] enter orgID=%s userID=%s rawOrgType=%T rawUserType=%T claims={%s} authHeader=%v",
+		orgID, userID, rawOrg, rawUser, claimsDump, c.Get(fiber.HeaderAuthorization) != "")
 	if orgID == uuid.Nil || userID == uuid.Nil {
+		log.Printf("[kernel-install] AUTH FAIL → 401: orgID=%s userID=%s claims={%s}",
+			orgID, userID, claimsDump)
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"success": false,
 			"message": "authenticated organization required",
