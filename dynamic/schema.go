@@ -60,6 +60,20 @@ func CreateTable(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, d
 	if err := db.Exec(stmt).Error; err != nil {
 		return fmt.Errorf("create table %s.%s: %w", schema, def.TableName, err)
 	}
+	// Self-heal: a table created by an earlier code path — or before this model
+	// became org-scoped — may pre-exist WITHOUT organization_id. CREATE TABLE IF
+	// NOT EXISTS won't add the missing column, and createIndexes / enableRLS
+	// below would then fail with "column organization_id does not exist"
+	// (SQLSTATE 42703). Add it idempotently. Nullable here because NOT NULL
+	// can't be applied to a populated table; freshly-created tables above
+	// already declare it NOT NULL.
+	if needsOrgColumn {
+		alter := fmt.Sprintf(`ALTER TABLE %q.%q ADD COLUMN IF NOT EXISTS "organization_id" uuid`,
+			schema, def.TableName)
+		if err := db.Exec(alter).Error; err != nil {
+			return fmt.Errorf("ensure organization_id on %s.%s: %w", schema, def.TableName, err)
+		}
+	}
 	if err := createIndexes(db, schema, def, needsOrgColumn); err != nil {
 		return err
 	}
