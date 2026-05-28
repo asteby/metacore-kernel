@@ -11,6 +11,30 @@ _No unreleased changes._
 
 ## [0.24.0] - 2026-05-28
 
+### Fixed
+
+- **fix(bundle): hydrate `Manifest.I18n` from `locales/*.json` in v3 bundles.**
+  v3 manifests carry only file PATHS in `i18n.bundles[*]`; `FromV3.mapI18n`
+  emitted empty inner maps so `Manifest.I18n[locale]` was always `{}`. The
+  hub's `/v1/addons/{key}/i18n/{lang}.json` returned that empty payload, and
+  every consumer (sidebars, dashboards, action labels) rendered the raw i18n
+  keys — `accounting.nav.group` instead of `Contabilidad`.
+
+  `bundle.Read` now post-processes the archive: for each declared
+  `i18n.bundles[*]` entry it looks up the matching `locales/<file>.json`
+  among the tar entries, parses it (nested objects supported), and flattens
+  every string leaf into `Manifest.I18n[<locale>]` as dotted keys. A
+  base-language alias is also written (e.g. `es-MX` → `es`) so hosts
+  normalizing browser tags to the bare language code still resolve. The new
+  `Bundle.Locales` map exposes the raw file bytes for callers that want them.
+
+  Adds `bundle.Write` symmetry: locales round-trip through Read → Write so
+  in-memory bundle builders (CLI / tests) preserve i18n payloads.
+
+  Hub republish is required for the addons whose bundles already shipped —
+  the locales files are in the tarball, this change just teaches the parser
+  to inline them on Read.
+
 ### Added
 
 - **feat(marketplace): dep-block + cascade on uninstall.** The uninstall
