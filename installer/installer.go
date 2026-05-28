@@ -41,6 +41,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/asteby/metacore-kernel/bundle"
 	"github.com/asteby/metacore-kernel/dynamic"
+	"github.com/asteby/metacore-kernel/i18n"
 	"github.com/asteby/metacore-kernel/lifecycle"
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/obs"
@@ -344,6 +345,18 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	if err := i.DB.Create(inst).Error; err != nil {
 		return nil, nil, err
 	}
+	// Persist any i18n catalog the manifest declares so consumers (frontend
+	// translator, hub catalog renderer, conversational hosts) can look the
+	// strings up via i18n.GetAddonI18n. Idempotent — re-running Install on
+	// the same manifest is a deterministic upsert. We log-and-continue on
+	// error because i18n is a nice-to-have (the addon stays installed even
+	// if string registration hiccups); a hard failure here would mask a
+	// successful schema/lifecycle install.
+	if err := i18n.RegisterAddonI18n(context.Background(), i.DB, b.Manifest.Key, b.Manifest); err != nil {
+		slog.Warn("installer.i18n_register_failed",
+			"addon_key", b.Manifest.Key,
+			"err", err.Error())
+	}
 	// Materialize federation artifacts to disk so the host's static route can
 	// serve them. Non-federation bundles (no frontend, or "script" format) are
 	// a no-op. An empty FrontendBasePath opts the host out entirely.
@@ -554,6 +567,14 @@ func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool)
 	if i.DynamicHooks != nil {
 		i.DynamicHooks.UnregisterAddon(addonKey)
 	}
+	// Drop the persisted i18n catalog so removed addons stop surfacing
+	// stale translations. Best-effort: a transient DB error here doesn't
+	// invalidate the rest of the uninstall.
+	if err := i18n.UnregisterAddonI18n(context.Background(), i.DB, addonKey); err != nil {
+		slog.Warn("installer.i18n_unregister_failed",
+			"addon_key", addonKey,
+			"err", err.Error())
+	}
 	if !dropSchema {
 		return nil
 	}
@@ -740,6 +761,17 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	existing.Settings = mergedSettings
 	if err := i.DB.Save(&existing).Error; err != nil {
 		return nil, fmt.Errorf("installer.Upgrade: persist row: %w", err)
+	}
+
+	// Refresh the persisted i18n catalog so an upgrade picks up renamed /
+	// added / removed translation keys. The store purges-then-upserts the
+	// addon's rows, so removed keys disappear in lockstep with the new
+	// version. Log-and-continue: a stale catalog is preferable to rolling
+	// back a successful schema upgrade.
+	if err := i18n.RegisterAddonI18n(ctx, i.DB, newBundle.Manifest.Key, newBundle.Manifest); err != nil {
+		slog.Warn("installer.upgrade.i18n_register_failed",
+			"addon_key", newBundle.Manifest.Key,
+			"err", err.Error())
 	}
 
 	// AFTER hook fires once the row has committed — its payload includes
