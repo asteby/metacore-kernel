@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -412,13 +413,24 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	// Broadcast the manifest-hash change (or first-install signal). Errors
 	// are logged but never fail the install — the WebSocket fan-out is a
 	// nice-to-have, not part of the install contract.
+	action := ChangeActionInstall
+	if prevHash != "" {
+		// Same-org reinstall: from the consumer's perspective this is an
+		// upgrade-shaped event (the version may not have moved but the
+		// manifest/bundle did). Uninstall has its own branch in Uninstall.
+		action = ChangeActionUpgrade
+	}
+	assetPaths, contentHash := frontendAssetDigest(b)
 	maybeBroadcastManifestChange(context.Background(), i.Broadcaster, ManifestChangeEvent{
-		OrgID:     orgID,
-		AddonKey:  b.Manifest.Key,
-		OldHash:   prevHash,
-		NewHash:   newHash,
-		Version:   b.Manifest.Version,
-		Timestamp: now,
+		OrgID:       orgID,
+		AddonKey:    b.Manifest.Key,
+		OldHash:     prevHash,
+		NewHash:     newHash,
+		Version:     b.Manifest.Version,
+		Timestamp:   now,
+		Action:      action,
+		AssetPaths:  assetPaths,
+		ContentHash: contentHash,
 	})
 	return inst, secret, nil
 }
@@ -619,6 +631,20 @@ func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool)
 			"addon_key", addonKey,
 			"err", err.Error())
 	}
+	// Broadcast uninstall so frontends drop their cached federated module
+	// and stop probing for assets that no longer exist. We do not have a
+	// bundle in hand here (uninstall takes only an addon key), so we fire
+	// the event with empty AssetPaths/ContentHash — the Action="uninstall"
+	// is sufficient signal for the consumer to evict.
+	maybeBroadcastManifestChange(context.Background(), i.Broadcaster, ManifestChangeEvent{
+		OrgID:     orgID,
+		AddonKey:  addonKey,
+		OldHash:   "",
+		NewHash:   "uninstalled",
+		Version:   "",
+		Timestamp: time.Now(),
+		Action:    ChangeActionUninstall,
+	})
 	if !dropSchema {
 		return nil
 	}
@@ -856,13 +882,17 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 			"err", err.Error())
 	}
 
+	upgradeAssets, upgradeHash := frontendAssetDigest(newBundle)
 	maybeBroadcastManifestChange(ctx, i.Broadcaster, ManifestChangeEvent{
-		OrgID:     orgID,
-		AddonKey:  newBundle.Manifest.Key,
-		OldHash:   prevHash,
-		NewHash:   newHash,
-		Version:   toVersion,
-		Timestamp: now,
+		OrgID:       orgID,
+		AddonKey:    newBundle.Manifest.Key,
+		OldHash:     prevHash,
+		NewHash:     newHash,
+		Version:     toVersion,
+		Timestamp:   now,
+		Action:      ChangeActionUpgrade,
+		AssetPaths:  upgradeAssets,
+		ContentHash: upgradeHash,
 	})
 
 	return &existing, nil
@@ -1048,6 +1078,39 @@ func defaultSettings(m manifest.Manifest) map[string]any {
 		}
 	}
 	return out
+}
+
+// frontendAssetDigest returns the sorted bundle-relative paths of every
+// frontend asset and a SHA-256 hex digest covering their concatenated
+// bytes in path order. It is the seam ManifestChangeEvent uses so a
+// frontend consumer can:
+//
+//   - invalidate exact asset URLs without guessing paths (paths flow
+//     verbatim into the event);
+//   - skip a full module reload when only the backend bundle rotated
+//     (ContentHash unchanged signals "user-facing surface is the same").
+//
+// Empty for non-federation bundles, missing frontends, and uninstall
+// events. Returned slice is freshly allocated so callers can append to it
+// without aliasing bundle internals.
+func frontendAssetDigest(b *bundle.Bundle) ([]string, string) {
+	if b == nil || b.Manifest.Frontend == nil || b.Manifest.Frontend.Format != "federation" || len(b.Frontend) == 0 {
+		return nil, ""
+	}
+	paths := make([]string, 0, len(b.Frontend))
+	for k := range b.Frontend {
+		paths = append(paths, k)
+	}
+	sort.Strings(paths)
+	h := sha256.New()
+	for _, p := range paths {
+		// Include the path itself in the hash so a rename without bytes
+		// change still flips ContentHash — frontends watch the right thing.
+		h.Write([]byte(p))
+		h.Write([]byte{0})
+		h.Write(b.Frontend[p])
+	}
+	return paths, hex.EncodeToString(h.Sum(nil))
 }
 
 // needsBackendRuntime reports whether the manifest's Backend block selects

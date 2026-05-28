@@ -179,12 +179,76 @@ func TestManifestChangedPayload_ShapeIsStable(t *testing.T) {
 		Timestamp: time.Unix(1715472000, 0).UTC(),
 	}
 	got := manifestChangedPayload(evt)
-	for _, want := range []string{"orgId", "addonKey", "oldHash", "newHash", "version", "timestamp"} {
+	for _, want := range []string{
+		"orgId", "addonKey", "oldHash", "newHash", "version", "timestamp",
+		"action", "assetPaths", "contentHash",
+	} {
 		if _, ok := got[want]; !ok {
 			t.Errorf("payload missing key %q (got %+v)", want, got)
 		}
 	}
 	if got["orgId"] != orgID {
 		t.Errorf("orgId: got %v, want %v", got["orgId"], orgID)
+	}
+}
+
+// TestManifestChangedPayload_CarriesAssetSignal locks in the new
+// hot-reload-friendly fields (gap 4): action / assetPaths / contentHash
+// flow verbatim from the kernel event into the bridge payload so the SDK
+// can drive a structured reload without guessing paths or hashes.
+func TestManifestChangedPayload_CarriesAssetSignal(t *testing.T) {
+	evt := installer.ManifestChangeEvent{
+		OrgID:       uuid.New(),
+		AddonKey:    "demo",
+		NewHash:     "sha256:new",
+		Action:      installer.ChangeActionUpgrade,
+		AssetPaths:  []string{"frontend/remoteEntry.js", "frontend/assets/index.css"},
+		ContentHash: "deadbeef",
+	}
+	got := manifestChangedPayload(evt)
+	if got["action"] != "upgrade" {
+		t.Errorf("action: got %v, want upgrade", got["action"])
+	}
+	if got["contentHash"] != "deadbeef" {
+		t.Errorf("contentHash: got %v", got["contentHash"])
+	}
+	paths, ok := got["assetPaths"].([]string)
+	if !ok || len(paths) != 2 || paths[0] != "frontend/remoteEntry.js" {
+		t.Fatalf("assetPaths: %T %v", got["assetPaths"], got["assetPaths"])
+	}
+}
+
+// TestManifestChangedPayload_NilAssetPathsBecomeEmptySlice protects
+// against the JSON renderer emitting "null" instead of "[]" — frontends
+// that iterate over assetPaths shouldn't have to defensively null-check.
+func TestManifestChangedPayload_NilAssetPathsBecomeEmptySlice(t *testing.T) {
+	evt := installer.ManifestChangeEvent{
+		OrgID:    uuid.New(),
+		AddonKey: "demo",
+		NewHash:  "sha256:n",
+		Action:   installer.ChangeActionUninstall,
+	}
+	got := manifestChangedPayload(evt)
+	paths, ok := got["assetPaths"].([]string)
+	if !ok {
+		t.Fatalf("assetPaths: %T", got["assetPaths"])
+	}
+	if len(paths) != 0 {
+		t.Fatalf("expected empty assetPaths, got %v", paths)
+	}
+}
+
+// TestManifestChangedPayload_LegacyActionDefault ensures consumers that
+// never set Action see a stable "upgrade" default rather than an empty
+// string — keeps the SDK reducer simple.
+func TestManifestChangedPayload_LegacyActionDefault(t *testing.T) {
+	evt := installer.ManifestChangeEvent{
+		OrgID:    uuid.New(),
+		AddonKey: "demo",
+		NewHash:  "sha256:n",
+	}
+	got := manifestChangedPayload(evt)
+	if got["action"] != "upgrade" {
+		t.Fatalf("legacy events must default action=upgrade, got %v", got["action"])
 	}
 }

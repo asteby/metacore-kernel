@@ -25,28 +25,65 @@ import (
 	"github.com/google/uuid"
 )
 
+// ChangeAction is the lifecycle transition a ManifestChangeEvent represents.
+// The kernel emits an event for each transition so consumers (frontend SDK,
+// hub catalog renderer, observability) can branch on the right shape — a
+// brand-new install needs different cache invalidation semantics than an
+// in-place upgrade or an uninstall.
+type ChangeAction string
+
+const (
+	// ChangeActionInstall is the first install of an addon for the org.
+	// OldHash is empty; AssetPaths reflects the freshly materialised files.
+	ChangeActionInstall ChangeAction = "install"
+	// ChangeActionUpgrade is a same-key new-version landing. OldHash and
+	// NewHash both populated and different.
+	ChangeActionUpgrade ChangeAction = "upgrade"
+	// ChangeActionUninstall is the removal of an addon. NewHash empty;
+	// AssetPaths empty (consumers drop their cached bundle entirely).
+	ChangeActionUninstall ChangeAction = "uninstall"
+)
+
 // ManifestChangeEvent is the payload the installer hands the broadcaster
 // whenever it observes a manifest-hash change at persist time. Field semantics:
 //
-//	OrgID     — organization the change is scoped to; hosts use it as the
-//	            WebSocket routing key (only operators of this org receive it).
-//	AddonKey  — manifest.Key of the addon whose hash flipped.
-//	OldHash   — previous manifest hash. Empty on first install ("" signals
-//	            "no prior record" so the frontend can decide whether to treat
-//	            it as a fresh load vs. a hot-swap).
-//	NewHash   — manifest hash now persisted. Always populated.
-//	Version   — manifest.Version that landed; not required for cache busting
-//	            but useful in observability dashboards.
-//	Timestamp — host-clock instant the change was observed; sent verbatim so
-//	            late-arriving WS messages can be reordered client-side if
-//	            ever needed.
+//	OrgID       — organization the change is scoped to; hosts use it as the
+//	              WebSocket routing key (only operators of this org receive it).
+//	AddonKey    — manifest.Key of the addon whose hash flipped.
+//	OldHash     — previous manifest hash. Empty on first install ("" signals
+//	              "no prior record" so the frontend can decide whether to treat
+//	              it as a fresh load vs. a hot-swap).
+//	NewHash     — manifest hash now persisted. Always populated for install/
+//	              upgrade; empty on uninstall.
+//	Version     — manifest.Version that landed; not required for cache busting
+//	              but useful in observability dashboards.
+//	Timestamp   — host-clock instant the change was observed; sent verbatim so
+//	              late-arriving WS messages can be reordered client-side if
+//	              ever needed.
+//	Action      — the lifecycle transition (install / upgrade / uninstall).
+//	              Frontends consume this to decide between "wire up fresh"
+//	              vs "swap module" vs "drop bundle entirely".
+//	AssetPaths  — bundle-relative paths of every frontend asset materialised
+//	              for this addon (e.g. ["frontend/remoteEntry.js",
+//	              "frontend/assets/index.css"]). Empty when the addon has
+//	              no federated UI or when Action is uninstall. The SDK uses
+//	              this list to call import.meta.hot.invalidate on each
+//	              individual asset URL without guessing paths.
+//	ContentHash — SHA-256 (hex, sans "sha256:" prefix) covering the
+//	              concatenated frontend asset bytes in sorted-path order. Lets
+//	              the consumer detect "manifest changed but the user-facing
+//	              bundle didn't" (e.g. only backend.wasm rotated) and skip the
+//	              full module reload. Empty when AssetPaths is empty.
 type ManifestChangeEvent struct {
-	OrgID     uuid.UUID
-	AddonKey  string
-	OldHash   string
-	NewHash   string
-	Version   string
-	Timestamp time.Time
+	OrgID       uuid.UUID
+	AddonKey    string
+	OldHash     string
+	NewHash     string
+	Version     string
+	Timestamp   time.Time
+	Action      ChangeAction
+	AssetPaths  []string
+	ContentHash string
 }
 
 // ManifestChangeBroadcaster is the abstract publisher the installer calls when
