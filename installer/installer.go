@@ -12,11 +12,24 @@
 //	    ↓
 //	addon executes inside the runtime sandbox (capabilities, schema scoping)
 //
-// PublicKeys is loaded by New() from MARKETPLACE_PUBKEY (single key) or
-// MARKETPLACE_PUBKEYS (comma-separated, for rotation). When PublicKeys is
-// empty AND ALLOW_UNSIGNED_BUNDLES is not "true", Install() refuses to
-// proceed — production deploys MUST configure a key. The unsigned escape
-// hatch exists for local development and self-hosted sideloading only.
+// PublicKeys is loaded by New() in priority order:
+//
+//  1. MARKETPLACE_PUBKEY (single key) or MARKETPLACE_PUBKEYS (comma-
+//     separated, for rotation) — explicit operator pin. Customer-on-VPS
+//     and air-gapped deployments that want a deterministic trust anchor
+//     set this.
+//  2. {MARKETPLACE_URL}/v1/marketplace/pubkey — fetched at construction
+//     time when no env key is pinned. This is the central marketplace
+//     trust anchor (Let's Encrypt-style: ONE hub-owned key counter-signs
+//     every bundle, so consumers trust ONE key instead of the union of
+//     every developer pubkey). MARKETPLACE_URL defaults to
+//     https://hub.asteby.com so the SaaS path needs zero env config. See
+//     central_trust.go for the fetch semantics.
+//
+// When PublicKeys ends up empty AND ALLOW_UNSIGNED_BUNDLES is not "true",
+// Install() refuses to proceed — production deploys MUST resolve at least
+// one trust anchor. The unsigned escape hatch exists for local development
+// and self-hosted sideloading only.
 //
 // ops's services/addonbundle/signature.go performs an equivalent check
 // before reaching the kernel; that path remains as defense-in-depth but is
@@ -116,12 +129,19 @@ type Installer struct {
 	// PublicKeys are the Ed25519 keys trusted to have signed published
 	// bundles. Multiple keys support marketplace key rotation: a bundle is
 	// accepted if it verifies under ANY of them. New() populates this from
-	// MARKETPLACE_PUBKEY (single hex key) or MARKETPLACE_PUBKEYS (comma-
-	// separated hex keys).
+	// (in priority order):
+	//
+	//   1. MARKETPLACE_PUBKEY / MARKETPLACE_PUBKEYS env (explicit pins).
+	//   2. The central marketplace pubkey fetched from
+	//      {MARKETPLACE_URL}/v1/marketplace/pubkey when no env key is set.
+	//      MARKETPLACE_URL defaults to https://hub.asteby.com.
 	//
 	// When empty AND AllowUnsigned is false, Install() refuses every bundle
 	// — fail-closed is the kernel default. Set AllowUnsigned (env
 	// ALLOW_UNSIGNED_BUNDLES=true) only in local dev / self-hosted sideloads.
+	//
+	// Hosts that need to add a key at runtime (rotation without restart)
+	// call AppendTrustedPubKey on the live Installer.
 	PublicKeys []ed25519.PublicKey
 
 	// AllowUnsigned opts out of signature verification entirely. Tied to the
@@ -160,7 +180,7 @@ type Installer struct {
 // ErrSignatureRequired is returned by Install when the host has not configured
 // any trusted public keys and ALLOW_UNSIGNED_BUNDLES is not set. Misconfigured
 // production deploys hit this on every install attempt.
-var ErrSignatureRequired = errors.New("installer: signature verification is required (set MARKETPLACE_PUBKEY or, for dev, ALLOW_UNSIGNED_BUNDLES=true)")
+var ErrSignatureRequired = errors.New("installer: signature verification is required (set MARKETPLACE_URL to a reachable hub, or MARKETPLACE_PUBKEY explicitly, or — for dev — ALLOW_UNSIGNED_BUNDLES=true)")
 
 // ErrNotInstalled is returned by Upgrade when the (orgID, addonKey) pair has
 // no row in metacore_installations. Hosts surface it as "install first" guidance.
@@ -197,6 +217,10 @@ var ErrSameVersionUpgrade = errors.New("installer: upgrade target version matche
 // trail; panicking at boot can mask the cause.
 func New(db *gorm.DB, kernelVersion string) *Installer {
 	pubs, _ := loadTrustedKeysFromEnv()
+	// Central trust anchor: when no key is pinned via env we try to fetch
+	// the hub's marketplace pubkey at boot. Best-effort + logged — see
+	// central_trust.go for the contract.
+	pubs = loadCentralPubKeyIfNeeded(pubs)
 	return &Installer{
 		DB:            db,
 		KernelVersion: kernelVersion,
