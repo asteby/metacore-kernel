@@ -9,6 +9,68 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 _No unreleased changes._
 
+## [0.24.0] - 2026-05-28
+
+### Fixed
+
+- **fix(bundle): hydrate `Manifest.I18n` from `locales/*.json` in v3 bundles.**
+  v3 manifests carry only file PATHS in `i18n.bundles[*]`; `FromV3.mapI18n`
+  emitted empty inner maps so `Manifest.I18n[locale]` was always `{}`. The
+  hub's `/v1/addons/{key}/i18n/{lang}.json` returned that empty payload, and
+  every consumer (sidebars, dashboards, action labels) rendered the raw i18n
+  keys — `accounting.nav.group` instead of `Contabilidad`.
+
+  `bundle.Read` now post-processes the archive: for each declared
+  `i18n.bundles[*]` entry it looks up the matching `locales/<file>.json`
+  among the tar entries, parses it (nested objects supported), and flattens
+  every string leaf into `Manifest.I18n[<locale>]` as dotted keys. A
+  base-language alias is also written (e.g. `es-MX` → `es`) so hosts
+  normalizing browser tags to the bare language code still resolve. The new
+  `Bundle.Locales` map exposes the raw file bytes for callers that want them.
+
+  Adds `bundle.Write` symmetry: locales round-trip through Read → Write so
+  in-memory bundle builders (CLI / tests) preserve i18n payloads.
+
+  Hub republish is required for the addons whose bundles already shipped —
+  the locales files are in the tarball, this change just teaches the parser
+  to inline them on Read.
+
+### Added
+
+- **feat(marketplace): dep-block + cascade on uninstall.** The uninstall
+  handler now refuses to remove an addon some OTHER active installation in
+  the same org declares under `compatibility.requires[]`; without the gate
+  the dependent silently broke. The 409 response carries a
+  `data.dependents[]` list so the UI can render "primero desinstalá X".
+
+  Two escape hatches let the operator push through:
+
+    - `force: true`   — skip the dep-block. Admin override; the dependent
+      will be left in a broken state.
+    - `cascade: true` — walk the reverse dep graph and uninstall every
+      dependent leaf-first before the requested addon. Returns the full
+      uninstall list under `data.uninstalled` plus `data.primary` pointing
+      at the requested addon.
+
+  Implementation notes:
+
+    - New `Installation.Requires` column (`AddonKeyList`, JSON-serialised)
+      captures the addon-level dep keys at install time from the bundle's
+      preserved v3 `RawManifest`. Existing rows that pre-date the column
+      stay empty (legacy installs are never the source of a 409 — only the
+      target). The reserved `"kernel"` requirement is filtered: it is a
+      runtime range, not an addon dep.
+    - Dep lookup is a single query (`organization_id`, `status='installed'`)
+      followed by an in-Go scan to dodge JSON `LIKE` substring collisions
+      (e.g. `customers` vs `customers_pro`).
+    - Cascade is BFS over the reverse-dep tree, then reversed for
+      leaf-first execution. Cycles are tolerated (visited set); planned
+      victims that vanished mid-flight are skipped silently.
+    - Five new tests cover: dep-block fires + lists dependents, no-deps
+      case still passes, force-override bypasses, cascade uninstalls
+      leaf-first with the primary last, and cascade on a leaf still
+      uninstalls just the requested addon.
+
 ## [0.23.0] - 2026-05-28
 
 ### Fixed

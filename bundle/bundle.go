@@ -78,6 +78,13 @@ type Bundle struct {
 	// (e.g. "backend/backend.wasm"). Populated when manifest.backend.runtime
 	// selects an in-process runtime like "wasm".
 	Backend map[string][]byte
+	// Locales holds the raw, unflattened locale JSON files keyed by bundle-
+	// relative path (e.g. "locales/es-MX.json"). The v3 manifest's `i18n.bundles`
+	// declares which paths to look for; Read inlines their bytes here AND
+	// flattens their (possibly nested) JSON into `Manifest.I18n[<locale>]` so
+	// `/v1/addons/{key}/i18n/{lang}.json` can serve them to host frontends
+	// without re-reading the archive on every request.
+	Locales map[string][]byte
 	// Readme is the raw README.md content, if any.
 	Readme string
 	// RawSize is the total decompressed byte count (useful for quotas).
@@ -120,6 +127,7 @@ func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
 	b := &Bundle{
 		Frontend:     map[string][]byte{},
 		Backend:      map[string][]byte{},
+		Locales:      map[string][]byte{},
 		EntryDigests: map[string]string{},
 	}
 	var total int64
@@ -180,6 +188,13 @@ func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
 			b.Frontend[h.Name] = data
 		case strings.HasPrefix(h.Name, "backend/"):
 			b.Backend[h.Name] = data
+		case strings.HasPrefix(h.Name, "locales/") && strings.HasSuffix(h.Name, ".json"):
+			// Captured for v3 i18n bundle resolution below. Keep the verbatim
+			// bytes so a later step can flatten the (possibly nested) JSON into
+			// the legacy `Manifest.I18n[locale]` map without re-streaming the
+			// archive. Non-JSON files under locales/ are ignored on purpose
+			// (e.g. README, .gitkeep) so an extra doc never crashes Read.
+			b.Locales[h.Name] = data
 		case h.Name == "README.md":
 			b.Readme = string(data)
 		}
@@ -200,7 +215,94 @@ func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
 	sort.Slice(b.Migrations, func(i, j int) bool {
 		return b.Migrations[i].Version < b.Migrations[j].Version
 	})
+	// v3 i18n bundle inlining. FromV3.mapI18n only emits empty inner maps
+	// because the manifest carries paths, not content — load the actual files
+	// from the archive here so consumers reading `Manifest.I18n[locale]` get
+	// the translations without a second pass over the bundle. Best effort: a
+	// missing or malformed locale file degrades to an empty map for that locale
+	// instead of failing the whole bundle read.
+	if len(b.Locales) > 0 && len(b.RawManifest) > 0 {
+		hydrateManifestI18n(&b.Manifest, b.RawManifest, b.Locales)
+	}
 	return b, nil
+}
+
+// hydrateManifestI18n loads the locale JSON files referenced by a v3 manifest's
+// `i18n.bundles` block into `m.I18n[locale]` as a flat dotted-key map. Nested
+// JSON objects (e.g. {"accounting": {"nav": {"group": "Contabilidad"}}}) are
+// flattened into {"accounting.nav.group": "Contabilidad"} so the hub's
+// `/v1/addons/{key}/i18n/{lang}.json` endpoint can serve the bundle directly,
+// and host i18next instances can register it without a custom transform.
+//
+// Behaviour:
+//   - The exact bundle locale (e.g. "es-MX") is loaded as-is.
+//   - The base language (e.g. "es") is mirrored when not already present, so a
+//     host requesting "es" still resolves an "es-MX"-only bundle.
+//   - Non-string leaves (numbers, booleans, arrays) are dropped — i18next only
+//     consumes string values for `t()`.
+//   - Errors on individual files keep the map populated for everything else.
+//
+// The legacy manifest is mutated in place. RawManifest is parsed inline because
+// `manifest.Manifest` (the v2 shape) drops the `i18n.bundles` block during
+// FromV3 — only the file PATHS know which locale maps to which file.
+func hydrateManifestI18n(m *manifest.Manifest, rawManifest []byte, locales map[string][]byte) {
+	parsed, err := v3.Parse(rawManifest)
+	if err != nil || parsed == nil || parsed.I18n == nil || len(parsed.I18n.Bundles) == 0 {
+		return
+	}
+	if m.I18n == nil {
+		m.I18n = map[string]map[string]string{}
+	}
+	for _, bndl := range parsed.I18n.Bundles {
+		if bndl.Locale == "" || bndl.Path == "" {
+			continue
+		}
+		raw, ok := locales[bndl.Path]
+		if !ok {
+			continue
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			continue
+		}
+		flat := map[string]string{}
+		flattenLocale("", doc, flat)
+		if len(flat) == 0 {
+			continue
+		}
+		m.I18n[bndl.Locale] = flat
+		// Mirror to the base language tag (e.g. "es" from "es-MX") so callers
+		// asking for the bare language still resolve. Only when not already
+		// populated by an explicit bundle entry for the base tag.
+		if dash := strings.IndexByte(bndl.Locale, '-'); dash > 0 {
+			base := bndl.Locale[:dash]
+			if _, exists := m.I18n[base]; !exists {
+				m.I18n[base] = flat
+			}
+		}
+	}
+}
+
+// flattenLocale walks a nested locale object and emits flat dotted keys for
+// every string leaf into `out`. Non-string leaves are skipped — i18next only
+// uses string values for translations; arrays/numbers/booleans in a locale
+// bundle are addon-specific extensions that don't belong in the host's t()
+// lookup table.
+func flattenLocale(prefix string, in any, out map[string]string) {
+	switch v := in.(type) {
+	case map[string]any:
+		for k, child := range v {
+			key := k
+			if prefix != "" {
+				key = prefix + "." + k
+			}
+			flattenLocale(key, child, out)
+		}
+	case string:
+		if prefix != "" {
+			out[prefix] = v
+		}
+	}
 }
 
 // epoch is the fixed modification time stamped into every bundle entry so
@@ -292,7 +394,25 @@ func Write(w io.Writer, b *Bundle) error {
 		}
 	}
 
-	// 5. README.md
+	// 5. locales — sorted by path so Write is byte-deterministic. Callers can
+	// build a bundle in-memory with locale files and round-trip it through
+	// Read without losing the i18n payload.
+	lkeys := make([]string, 0, len(b.Locales))
+	for k := range b.Locales {
+		lkeys = append(lkeys, k)
+	}
+	sort.Strings(lkeys)
+	for _, k := range lkeys {
+		name := k
+		if !strings.HasPrefix(name, "locales/") {
+			name = path.Join("locales", k)
+		}
+		if err := write(name, b.Locales[k]); err != nil {
+			return err
+		}
+	}
+
+	// 6. README.md
 	if b.Readme != "" {
 		if err := write("README.md", []byte(b.Readme)); err != nil {
 			return err

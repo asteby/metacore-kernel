@@ -50,7 +50,8 @@ func setupDB(t *testing.T) *gorm.DB {
 		upgraded_at DATETIME,
 		uninstalled_at DATETIME,
 		purge_at DATETIME,
-		data_policy TEXT
+		data_policy TEXT,
+		requires TEXT
 	)`).Error; err != nil {
 		t.Fatalf("create schema: %v", err)
 	}
@@ -599,6 +600,177 @@ func TestUninstall_Unauthenticated(t *testing.T) {
 	}
 	if resp.StatusCode != 401 {
 		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+// seedInstalledWithRequires inserts an installed row whose Requires column
+// declares the given dep keys. Drives the dep-block / cascade tests below.
+func seedInstalledWithRequires(t *testing.T, db *gorm.DB, addonKey, name string, requires []string) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	now := time.Now().UTC().Format("2006-01-02 15:04:05")
+	reqJSON, _ := json.Marshal(requires)
+	if err := db.Exec(`INSERT INTO marketplace_installations
+		(id, organization_id, addon_key, name, version, bundle_url, status,
+		 requested_by_id, requested_at, requires)
+		VALUES (?, ?, ?, ?, '1.0.0', '', 'installed', ?, ?, ?)`,
+		id.String(), testOrgID.String(), addonKey, name,
+		testUserID.String(), now, string(reqJSON)).Error; err != nil {
+		t.Fatalf("seed installed with requires: %v", err)
+	}
+	return id
+}
+
+func TestUninstall_DepBlock_ReturnsConflictWithDependents(t *testing.T) {
+	db := setupDB(t)
+	// "customers" is the leaf; "pos" depends on it.
+	seedInstalled(t, db, "customers", "1.0.0")
+	seedInstalledWithRequires(t, db, "pos", "Point of Sale", []string{"customers"})
+	app := newTestApp(t, db)
+
+	req := makeJSONReq(t, "POST", "/marketplace/uninstall", map[string]any{
+		"addonKey": "customers",
+	})
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("test request: %v", err)
+	}
+	if resp.StatusCode != 409 {
+		t.Fatalf("expected 409 conflict, got %d (body=%s)", resp.StatusCode, dumpBody(resp))
+	}
+	body := readBody(t, resp)
+	if body["success"] != false {
+		t.Fatalf("expected success=false, got %v", body["success"])
+	}
+	data, ok := body["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object, got %v", body["data"])
+	}
+	deps, ok := data["dependents"].([]any)
+	if !ok || len(deps) != 1 {
+		t.Fatalf("expected one dependent, got %v", data["dependents"])
+	}
+	first := deps[0].(map[string]any)
+	if first["key"] != "pos" {
+		t.Fatalf("expected dependent key=pos, got %v", first["key"])
+	}
+	if first["name"] != "Point of Sale" {
+		t.Fatalf("expected dependent name=Point of Sale, got %v", first["name"])
+	}
+}
+
+func TestUninstall_NoDependents_Passes(t *testing.T) {
+	db := setupDB(t)
+	// Only one addon installed → no reverse deps possible.
+	seedInstalled(t, db, "customers", "1.0.0")
+	app := newTestApp(t, db)
+
+	req := makeJSONReq(t, "POST", "/marketplace/uninstall", map[string]any{
+		"addonKey": "customers",
+	})
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("test request: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d (body=%s)", resp.StatusCode, dumpBody(resp))
+	}
+	data := readBody(t, resp)["data"].(map[string]any)
+	if data["status"] != "uninstalled" {
+		t.Fatalf("expected status=uninstalled, got %v", data["status"])
+	}
+}
+
+func TestUninstall_ForceOverride_BypassesDepBlock(t *testing.T) {
+	db := setupDB(t)
+	seedInstalled(t, db, "customers", "1.0.0")
+	seedInstalledWithRequires(t, db, "pos", "POS", []string{"customers"})
+	app := newTestApp(t, db)
+
+	req := makeJSONReq(t, "POST", "/marketplace/uninstall", map[string]any{
+		"addonKey": "customers",
+		"force":    true,
+	})
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("test request: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200 with force=true, got %d (body=%s)", resp.StatusCode, dumpBody(resp))
+	}
+	data := readBody(t, resp)["data"].(map[string]any)
+	if data["status"] != "uninstalled" {
+		t.Fatalf("expected status=uninstalled, got %v", data["status"])
+	}
+}
+
+func TestUninstall_Cascade_UninstallsDependentsLeafFirst(t *testing.T) {
+	db := setupDB(t)
+	// Dep chain: invoicing → pos → customers
+	// Cascade on "customers" should uninstall invoicing first, then pos, then
+	// customers (leaf-first).
+	seedInstalled(t, db, "customers", "1.0.0")
+	seedInstalledWithRequires(t, db, "pos", "POS", []string{"customers"})
+	seedInstalledWithRequires(t, db, "invoicing", "Invoicing", []string{"pos"})
+	app := newTestApp(t, db)
+
+	req := makeJSONReq(t, "POST", "/marketplace/uninstall", map[string]any{
+		"addonKey": "customers",
+		"cascade":  true,
+	})
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("test request: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200 with cascade=true, got %d (body=%s)", resp.StatusCode, dumpBody(resp))
+	}
+	body := readBody(t, resp)
+	data := body["data"].(map[string]any)
+	list, ok := data["uninstalled"].([]any)
+	if !ok || len(list) != 3 {
+		t.Fatalf("expected 3 uninstalled rows, got %v", data["uninstalled"])
+	}
+	// First entry must be the deepest leaf (no one depends on it: invoicing),
+	// last entry must be the requested addon (customers).
+	first := list[0].(map[string]any)
+	if first["addon_key"] != "invoicing" {
+		t.Fatalf("expected leaf-first uninstall (invoicing), got %v", first["addon_key"])
+	}
+	last := list[len(list)-1].(map[string]any)
+	if last["addon_key"] != "customers" {
+		t.Fatalf("expected requested addon last (customers), got %v", last["addon_key"])
+	}
+	primary, ok := data["primary"].(map[string]any)
+	if !ok || primary["addon_key"] != "customers" {
+		t.Fatalf("expected primary=customers, got %v", data["primary"])
+	}
+}
+
+func TestUninstall_Cascade_NoDependents_StillUninstallsPrimary(t *testing.T) {
+	db := setupDB(t)
+	seedInstalled(t, db, "customers", "1.0.0")
+	app := newTestApp(t, db)
+
+	req := makeJSONReq(t, "POST", "/marketplace/uninstall", map[string]any{
+		"addonKey": "customers",
+		"cascade":  true,
+	})
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("test request: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	data := readBody(t, resp)["data"].(map[string]any)
+	list := data["uninstalled"].([]any)
+	if len(list) != 1 {
+		t.Fatalf("expected exactly 1 uninstall, got %d", len(list))
+	}
+	only := list[0].(map[string]any)
+	if only["addon_key"] != "customers" {
+		t.Fatalf("expected customers, got %v", only["addon_key"])
 	}
 }
 
