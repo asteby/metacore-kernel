@@ -34,15 +34,35 @@ import (
 // bundle is not a vertical preset".
 var ErrNotPreset = errors.New("preset: manifest is not a kind:Preset (or has no preset block)")
 
+// ErrCyclicDependency is returned by SortByDeps when the addon graph the
+// preset declares cannot be topo-sorted — i.e. two addons mutually require
+// each other (directly or transitively). Hosts surface it as "the preset
+// declares a circular addon dependency"; the manifest author has to break
+// the cycle.
+var ErrCyclicDependency = errors.New("preset: cyclic addon dependency in preset.addons[].requires")
+
+// ErrUnknownDependency is returned by SortByDeps when an addon's `requires`
+// list references a key that is NOT part of the preset. Cross-preset
+// dependencies are the host's marketplace concern, not the kernel's; a
+// dangling reference is almost always a manifest typo or an extraction
+// mistake — fail loudly.
+var ErrUnknownDependency = errors.New("preset: preset.addons[].requires references an addon not in this preset")
+
 // Addon is one entry in a resolved preset — the addon key, the version range
-// the preset pins, and whether it is optional (installed only when the caller
-// explicitly opts in). It mirrors v3.PresetAddon but is re-exported from this
-// package so hosts can depend on `preset.Addon` without reaching into the v3
-// manifest types directly.
+// the preset pins, whether it is optional (installed only when the caller
+// explicitly opts in), and the in-preset addons it depends on. It mirrors
+// v3.PresetAddon but is re-exported from this package so hosts can depend
+// on `preset.Addon` without reaching into the v3 manifest types directly.
+//
+// Requires names other addon keys in the SAME preset that must land before
+// this one. The kernel does NOT model cross-preset dependencies — those
+// are the host's marketplace concern. Empty/nil means "no constraint
+// beyond preset order".
 type Addon struct {
 	Key      string
 	Version  string
 	Optional bool
+	Requires []string
 }
 
 // Resolved is the outcome of resolving a preset manifest: the preset's own key
@@ -102,18 +122,33 @@ func ResolveFromManifest(m *v3.Manifest) (Resolved, error) {
 	required := make([]Addon, 0, len(m.Preset.Addons))
 	optional := make([]Addon, 0)
 	for _, a := range m.Preset.Addons {
-		entry := Addon{Key: a.Key, Version: a.Version, Optional: a.Optional}
+		entry := Addon{
+			Key:      a.Key,
+			Version:  a.Version,
+			Optional: a.Optional,
+			Requires: append([]string(nil), a.Requires...),
+		}
 		if a.Optional {
 			optional = append(optional, entry)
 		} else {
 			required = append(required, entry)
 		}
 	}
+	merged := append(required, optional...)
+	// Topologically sort the merged list so an addon that declares
+	// `requires: [other]` lands after its prerequisite — independent of
+	// the manifest's declaration order. SortByDeps preserves preset order
+	// among addons with no constraints, so addons without `requires`
+	// behave exactly as before.
+	sorted, err := SortByDeps(merged)
+	if err != nil {
+		return Resolved{}, err
+	}
 	return Resolved{
 		Key:      m.Metadata.Key,
 		Version:  m.Metadata.Version,
 		Name:     m.Metadata.Name,
-		Addons:   append(required, optional...),
+		Addons:   sorted,
 		Defaults: m.Preset.Defaults,
 	}, nil
 }
@@ -215,6 +250,86 @@ func IncludeOptionalSet(keys []string) map[string]struct{} {
 		set[k] = struct{}{}
 	}
 	return set
+}
+
+// SortByDeps returns a topological ordering of addons that honours every
+// addon's `Requires` constraint while preserving the input order as the
+// tie-breaker so addons with no constraints land in their declared
+// position. Uses Kahn's algorithm with a stable in-degree zero queue.
+//
+// Errors:
+//
+//   - ErrUnknownDependency when an addon's `requires` references a key
+//     not in the input — fail-fast typos and extraction bugs.
+//   - ErrCyclicDependency when the graph has a cycle (Kahn's terminates
+//     with fewer-than-input nodes scheduled).
+func SortByDeps(addons []Addon) ([]Addon, error) {
+	if len(addons) == 0 {
+		return addons, nil
+	}
+	// Build lookup so we can detect unknown deps in one pass.
+	index := make(map[string]int, len(addons))
+	for i, a := range addons {
+		index[a.Key] = i
+	}
+	// inDegree counts how many of an addon's requires haven't been
+	// scheduled yet; reverse maps each prereq to the addons that depend
+	// on it so we can drain it on schedule.
+	inDegree := make([]int, len(addons))
+	reverse := make(map[int][]int, len(addons))
+	for i, a := range addons {
+		for _, req := range a.Requires {
+			if req == a.Key {
+				// Self-referential requires == cycle of length 1.
+				return nil, fmt.Errorf("%w: %q requires itself", ErrCyclicDependency, a.Key)
+			}
+			j, ok := index[req]
+			if !ok {
+				return nil, fmt.Errorf("%w: addon %q requires %q which is not in the preset",
+					ErrUnknownDependency, a.Key, req)
+			}
+			inDegree[i]++
+			reverse[j] = append(reverse[j], i)
+		}
+	}
+	// Queue addons with in-degree zero in their original order. Kahn's
+	// algorithm — drain the queue, push downstream addons whose remaining
+	// in-degree drops to zero, preserving order via a slice (not a
+	// priority queue, so we don't reshuffle).
+	queue := make([]int, 0, len(addons))
+	for i, deg := range inDegree {
+		if deg == 0 {
+			queue = append(queue, i)
+		}
+	}
+	scheduled := make([]bool, len(addons))
+	out := make([]Addon, 0, len(addons))
+	for len(queue) > 0 {
+		i := queue[0]
+		queue = queue[1:]
+		if scheduled[i] {
+			continue
+		}
+		scheduled[i] = true
+		out = append(out, addons[i])
+		for _, j := range reverse[i] {
+			inDegree[j]--
+			if inDegree[j] == 0 {
+				queue = append(queue, j)
+			}
+		}
+	}
+	if len(out) != len(addons) {
+		// Cycle: at least one addon never reached in-degree zero.
+		unresolved := make([]string, 0, len(addons)-len(out))
+		for i, a := range addons {
+			if !scheduled[i] {
+				unresolved = append(unresolved, a.Key)
+			}
+		}
+		return nil, fmt.Errorf("%w: unresolved addons %v", ErrCyclicDependency, unresolved)
+	}
+	return out, nil
 }
 
 // InstallPreset drives an idempotent install of a resolved preset's addons by

@@ -292,3 +292,105 @@ func TestInstallPreset_NilFunc(t *testing.T) {
 		t.Fatal("InstallPreset(nil func) want error")
 	}
 }
+
+// TestSortByDeps_TopoSortsRequires verifies that addons declaring
+// `requires` land after their prereqs even when the manifest lists them
+// in the wrong order. Three addons: c requires b, b requires a. Input
+// order intentionally reverses the dep direction.
+func TestSortByDeps_TopoSortsRequires(t *testing.T) {
+	in := []Addon{
+		{Key: "c", Requires: []string{"b"}},
+		{Key: "b", Requires: []string{"a"}},
+		{Key: "a"},
+	}
+	out, err := SortByDeps(in)
+	if err != nil {
+		t.Fatalf("SortByDeps: %v", err)
+	}
+	if len(out) != 3 {
+		t.Fatalf("len=%d want 3", len(out))
+	}
+	if out[0].Key != "a" || out[1].Key != "b" || out[2].Key != "c" {
+		t.Fatalf("order = [%s %s %s], want [a b c]", out[0].Key, out[1].Key, out[2].Key)
+	}
+}
+
+// TestSortByDeps_PreservesOrderWithoutRequires confirms that without
+// `requires` the input order is preserved exactly — no spurious reshuffle
+// for legacy presets.
+func TestSortByDeps_PreservesOrderWithoutRequires(t *testing.T) {
+	in := []Addon{{Key: "z"}, {Key: "a"}, {Key: "m"}}
+	out, err := SortByDeps(in)
+	if err != nil {
+		t.Fatalf("SortByDeps: %v", err)
+	}
+	for i := range in {
+		if out[i].Key != in[i].Key {
+			t.Fatalf("index %d: got %s want %s — order must be preserved", i, out[i].Key, in[i].Key)
+		}
+	}
+}
+
+// TestSortByDeps_RejectsCycles_TwoNode covers a→b→a cycle.
+func TestSortByDeps_RejectsCycles_TwoNode(t *testing.T) {
+	in := []Addon{
+		{Key: "a", Requires: []string{"b"}},
+		{Key: "b", Requires: []string{"a"}},
+	}
+	if _, err := SortByDeps(in); !errors.Is(err, ErrCyclicDependency) {
+		t.Fatalf("err = %v, want ErrCyclicDependency", err)
+	}
+}
+
+// TestSortByDeps_RejectsCycles_SelfReference covers an addon requiring
+// itself (the degenerate 1-node cycle).
+func TestSortByDeps_RejectsCycles_SelfReference(t *testing.T) {
+	in := []Addon{{Key: "a", Requires: []string{"a"}}}
+	if _, err := SortByDeps(in); !errors.Is(err, ErrCyclicDependency) {
+		t.Fatalf("err = %v, want ErrCyclicDependency", err)
+	}
+}
+
+// TestSortByDeps_RejectsUnknownDependency verifies a typo / missing addon
+// reference surfaces as ErrUnknownDependency.
+func TestSortByDeps_RejectsUnknownDependency(t *testing.T) {
+	in := []Addon{{Key: "a", Requires: []string{"missing"}}}
+	if _, err := SortByDeps(in); !errors.Is(err, ErrUnknownDependency) {
+		t.Fatalf("err = %v, want ErrUnknownDependency", err)
+	}
+}
+
+// TestInstallPreset_RespectsDependencyOrder wires three addons where the
+// preset author lists them in the wrong order but declares `requires` so
+// the resolver topo-sorts them. The recording install func captures the
+// actual call order — must match the dep order, not the manifest order.
+func TestInstallPreset_RespectsDependencyOrder(t *testing.T) {
+	r := Resolved{
+		Key: "demo",
+		Addons: []Addon{
+			{Key: "c", Version: "1.0.0", Requires: []string{"b"}},
+			{Key: "b", Version: "1.0.0", Requires: []string{"a"}},
+			{Key: "a", Version: "1.0.0"},
+		},
+	}
+	// SortByDeps in ResolveFromManifest is the realistic path; here we
+	// hit InstallPreset with a pre-sorted Resolved as ResolveFromManifest
+	// would emit (depth-first install order).
+	sorted, err := SortByDeps(r.Addons)
+	if err != nil {
+		t.Fatalf("SortByDeps: %v", err)
+	}
+	r.Addons = sorted
+
+	var order []string
+	_, err = InstallPreset(r, func(a Addon) (bool, error) {
+		order = append(order, a.Key)
+		return true, nil
+	}, Options{})
+	if err != nil {
+		t.Fatalf("InstallPreset: %v", err)
+	}
+	if len(order) != 3 || order[0] != "a" || order[1] != "b" || order[2] != "c" {
+		t.Fatalf("install order = %v, want [a b c]", order)
+	}
+}
