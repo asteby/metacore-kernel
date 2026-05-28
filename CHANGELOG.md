@@ -9,6 +9,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 _No unreleased changes._
 
+## [0.23.0] - 2026-05-28
+
+### Fixed
+
+- **fix(marketplace): inject central counter-signature from response header.**
+  v0.22.0 landed the trust anchor end (hub counter-signs, kernel auto-fetches
+  the pubkey) but the marketplace install/upgrade HTTP path threw away the
+  signature: `fetchBundle` parsed the tarball through `bundle.Read` and
+  ignored the `X-Asteby-Marketplace-Signature` response header. The bundle
+  reached `installer.Install` with `Manifest.Signature == nil`, the security
+  gate fired `ErrUnsignedBundle`, and every install via the iframe embed
+  failed with **"installer: bundle signature rejected: security: bundle has
+  no signature"** even though the hub had signed correctly.
+
+  Now `fetchBundle` calls `injectCentralSignature` to hoist
+  `X-Asteby-Marketplace-Signature` (+ optional `X-Bundle-Checksum`) into the
+  in-memory `manifest.Signature` before returning. Publisher-embedded
+  signatures still take precedence — the multi-key trust model in
+  `security.VerifyBundle` accepts either.
+
+  Two new public constants under `installer.HeaderMarketplaceSignature` /
+  `HeaderBundleChecksum` lock the header names against hub drift; a unit
+  test (`TestInjectCentralSignature_HeaderConstantsMatchHub`) trips before
+  a real install fails in prod.
+
 ## [0.22.0] - 2026-05-28
 
 ### Added
