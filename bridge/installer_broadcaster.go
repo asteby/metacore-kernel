@@ -113,14 +113,35 @@ func (w *WSManifestBroadcaster) Broadcast(ctx context.Context, evt installer.Man
 // frontends consume. Keys mirror the camelCase the SDK already uses for
 // metadata-cache entries so a consumer can drop the payload straight into
 // its cache-invalidation reducer.
+//
+// The action/assetPaths/contentHash trio (added in v0.21.0) lets the SDK
+// drive a structured hot-reload: action picks the reducer (install vs
+// upgrade vs uninstall), assetPaths flows into per-asset invalidation
+// without path guessing, and contentHash lets the consumer skip a full
+// federation reload when only the backend (or some other non-UI surface)
+// rotated. Backwards-compatible: legacy consumers that only read hash +
+// addonKey continue to work unchanged because the new keys are additive.
 func manifestChangedPayload(evt installer.ManifestChangeEvent) map[string]any {
+	action := string(evt.Action)
+	if action == "" {
+		// Older callers that never set Action — surface a stable default so
+		// clients can rely on the field being present.
+		action = string(installer.ChangeActionUpgrade)
+	}
+	assets := evt.AssetPaths
+	if assets == nil {
+		assets = []string{}
+	}
 	return map[string]any{
-		"orgId":     evt.OrgID,
-		"addonKey":  evt.AddonKey,
-		"oldHash":   evt.OldHash,
-		"newHash":   evt.NewHash,
-		"version":   evt.Version,
-		"timestamp": evt.Timestamp,
+		"orgId":       evt.OrgID,
+		"addonKey":    evt.AddonKey,
+		"oldHash":     evt.OldHash,
+		"newHash":     evt.NewHash,
+		"version":     evt.Version,
+		"timestamp":   evt.Timestamp,
+		"action":      action,
+		"assetPaths":  assets,
+		"contentHash": evt.ContentHash,
 	}
 }
 

@@ -35,12 +35,14 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/asteby/metacore-kernel/bundle"
 	"github.com/asteby/metacore-kernel/dynamic"
+	"github.com/asteby/metacore-kernel/i18n"
 	"github.com/asteby/metacore-kernel/lifecycle"
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/obs"
@@ -145,6 +147,14 @@ type Installer struct {
 	// escape hatch). The installer never imports kernel/ws directly; the
 	// host glue in bridge/installer_broadcaster.go is what closes the loop.
 	Broadcaster ManifestChangeBroadcaster
+
+	// BackendRuntime materialises an addon's in-process backend (today: WASM)
+	// after the database state has been persisted. Defaults to a no-op so
+	// hosts that don't run in-process backends (CLI tools, schema-only smoke
+	// tests) keep working unchanged. Hosts that do run WASM wire an adapter
+	// over host.LoadWASMFromBundle via WithBackendRuntime. See
+	// backend_runtime.go for the contract.
+	BackendRuntime BackendRuntimeLoader
 }
 
 // ErrSignatureRequired is returned by Install when the host has not configured
@@ -192,10 +202,30 @@ func New(db *gorm.DB, kernelVersion string) *Installer {
 		KernelVersion: kernelVersion,
 		Lifecycles:    lifecycle.NewRegistry(),
 		Interceptors:  lifecycle.NewInterceptorRegistry(),
-		PublicKeys:    pubs,
-		AllowUnsigned: envFlag("ALLOW_UNSIGNED_BUNDLES"),
-		Broadcaster:   NoopBroadcaster{},
+		PublicKeys:     pubs,
+		AllowUnsigned:  envFlag("ALLOW_UNSIGNED_BUNDLES"),
+		Broadcaster:    NoopBroadcaster{},
+		BackendRuntime: NoopBackendRuntimeLoader{},
 	}
+}
+
+// WithBackendRuntime swaps the installer's backend runtime loader and
+// returns the receiver so callers can chain it on construction:
+//
+//	inst := installer.New(db, "2.0.0").
+//	    WithBackendRuntime(bridge.NewWASMBackendLoader(hostApp))
+//
+// Passing nil reverts to NoopBackendRuntimeLoader so a host can opt out
+// at runtime without panicking the install flow. The default zero-value
+// installer also keeps working — Install / Upgrade only invoke the
+// loader when manifest.Backend.Runtime selects an in-process runtime.
+func (i *Installer) WithBackendRuntime(l BackendRuntimeLoader) *Installer {
+	if l == nil {
+		i.BackendRuntime = NoopBackendRuntimeLoader{}
+		return i
+	}
+	i.BackendRuntime = l
+	return i
 }
 
 // WithBroadcaster swaps the installer's manifest-change broadcaster and
@@ -344,6 +374,18 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	if err := i.DB.Create(inst).Error; err != nil {
 		return nil, nil, err
 	}
+	// Persist any i18n catalog the manifest declares so consumers (frontend
+	// translator, hub catalog renderer, conversational hosts) can look the
+	// strings up via i18n.GetAddonI18n. Idempotent — re-running Install on
+	// the same manifest is a deterministic upsert. We log-and-continue on
+	// error because i18n is a nice-to-have (the addon stays installed even
+	// if string registration hiccups); a hard failure here would mask a
+	// successful schema/lifecycle install.
+	if err := i18n.RegisterAddonI18n(context.Background(), i.DB, b.Manifest.Key, b.Manifest); err != nil {
+		slog.Warn("installer.i18n_register_failed",
+			"addon_key", b.Manifest.Key,
+			"err", err.Error())
+	}
 	// Materialize federation artifacts to disk so the host's static route can
 	// serve them. Non-federation bundles (no frontend, or "script" format) are
 	// a no-op. An empty FrontendBasePath opts the host out entirely.
@@ -352,16 +394,43 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 			return nil, nil, fmt.Errorf("WriteFrontend: %w", err)
 		}
 	}
+	// Materialise the addon's in-process backend runtime when the manifest
+	// declares one (WASM today; "binary" reserved). The loader reads the
+	// declared entry path (defaulting to backend/backend.wasm) out of
+	// bundle.Backend, registers it on the host's runtime, and cross-checks
+	// the declared exports — the same fields the v0.18.0 action-trigger
+	// validator gates on. Skipped silently when the manifest has no
+	// backend block or selects the legacy "webhook" runtime.
+	if needsBackendRuntime(b.Manifest.Backend) {
+		loader := i.BackendRuntime
+		if loader == nil {
+			loader = NoopBackendRuntimeLoader{}
+		}
+		if err := loader.LoadFromBundle(context.Background(), b); err != nil {
+			return nil, nil, fmt.Errorf("LoadBackendRuntime: %w", err)
+		}
+	}
 	// Broadcast the manifest-hash change (or first-install signal). Errors
 	// are logged but never fail the install — the WebSocket fan-out is a
 	// nice-to-have, not part of the install contract.
+	action := ChangeActionInstall
+	if prevHash != "" {
+		// Same-org reinstall: from the consumer's perspective this is an
+		// upgrade-shaped event (the version may not have moved but the
+		// manifest/bundle did). Uninstall has its own branch in Uninstall.
+		action = ChangeActionUpgrade
+	}
+	assetPaths, contentHash := frontendAssetDigest(b)
 	maybeBroadcastManifestChange(context.Background(), i.Broadcaster, ManifestChangeEvent{
-		OrgID:     orgID,
-		AddonKey:  b.Manifest.Key,
-		OldHash:   prevHash,
-		NewHash:   newHash,
-		Version:   b.Manifest.Version,
-		Timestamp: now,
+		OrgID:       orgID,
+		AddonKey:    b.Manifest.Key,
+		OldHash:     prevHash,
+		NewHash:     newHash,
+		Version:     b.Manifest.Version,
+		Timestamp:   now,
+		Action:      action,
+		AssetPaths:  assetPaths,
+		ContentHash: contentHash,
 	})
 	return inst, secret, nil
 }
@@ -554,6 +623,28 @@ func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool)
 	if i.DynamicHooks != nil {
 		i.DynamicHooks.UnregisterAddon(addonKey)
 	}
+	// Drop the persisted i18n catalog so removed addons stop surfacing
+	// stale translations. Best-effort: a transient DB error here doesn't
+	// invalidate the rest of the uninstall.
+	if err := i18n.UnregisterAddonI18n(context.Background(), i.DB, addonKey); err != nil {
+		slog.Warn("installer.i18n_unregister_failed",
+			"addon_key", addonKey,
+			"err", err.Error())
+	}
+	// Broadcast uninstall so frontends drop their cached federated module
+	// and stop probing for assets that no longer exist. We do not have a
+	// bundle in hand here (uninstall takes only an addon key), so we fire
+	// the event with empty AssetPaths/ContentHash — the Action="uninstall"
+	// is sufficient signal for the consumer to evict.
+	maybeBroadcastManifestChange(context.Background(), i.Broadcaster, ManifestChangeEvent{
+		OrgID:     orgID,
+		AddonKey:  addonKey,
+		OldHash:   "",
+		NewHash:   "uninstalled",
+		Version:   "",
+		Timestamp: time.Now(),
+		Action:    ChangeActionUninstall,
+	})
 	if !dropSchema {
 		return nil
 	}
@@ -722,6 +813,20 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 			return nil, fmt.Errorf("installer.Upgrade: WriteFrontend: %w", err)
 		}
 	}
+	// Reload the addon's in-process backend so the new module replaces the
+	// previous compile. wasm.Host.Load already swaps the cached entry and
+	// disposes stale per-installation instances; we just need to call it
+	// with the new bundle's bytes. Skipped silently when the new manifest
+	// has no backend or runtime="webhook".
+	if needsBackendRuntime(newBundle.Manifest.Backend) {
+		loader := i.BackendRuntime
+		if loader == nil {
+			loader = NoopBackendRuntimeLoader{}
+		}
+		if err := loader.LoadFromBundle(ctx, newBundle); err != nil {
+			return nil, fmt.Errorf("installer.Upgrade: LoadBackendRuntime: %w", err)
+		}
+	}
 
 	// Persist the version bump. Settings merge keeps user-tuned values from
 	// the old installation and ADDS defaults for any new settings declared
@@ -740,6 +845,17 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	existing.Settings = mergedSettings
 	if err := i.DB.Save(&existing).Error; err != nil {
 		return nil, fmt.Errorf("installer.Upgrade: persist row: %w", err)
+	}
+
+	// Refresh the persisted i18n catalog so an upgrade picks up renamed /
+	// added / removed translation keys. The store purges-then-upserts the
+	// addon's rows, so removed keys disappear in lockstep with the new
+	// version. Log-and-continue: a stale catalog is preferable to rolling
+	// back a successful schema upgrade.
+	if err := i18n.RegisterAddonI18n(ctx, i.DB, newBundle.Manifest.Key, newBundle.Manifest); err != nil {
+		slog.Warn("installer.upgrade.i18n_register_failed",
+			"addon_key", newBundle.Manifest.Key,
+			"err", err.Error())
 	}
 
 	// AFTER hook fires once the row has committed — its payload includes
@@ -766,13 +882,17 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 			"err", err.Error())
 	}
 
+	upgradeAssets, upgradeHash := frontendAssetDigest(newBundle)
 	maybeBroadcastManifestChange(ctx, i.Broadcaster, ManifestChangeEvent{
-		OrgID:     orgID,
-		AddonKey:  newBundle.Manifest.Key,
-		OldHash:   prevHash,
-		NewHash:   newHash,
-		Version:   toVersion,
-		Timestamp: now,
+		OrgID:       orgID,
+		AddonKey:    newBundle.Manifest.Key,
+		OldHash:     prevHash,
+		NewHash:     newHash,
+		Version:     toVersion,
+		Timestamp:   now,
+		Action:      ChangeActionUpgrade,
+		AssetPaths:  upgradeAssets,
+		ContentHash: upgradeHash,
 	})
 
 	return &existing, nil
@@ -958,6 +1078,57 @@ func defaultSettings(m manifest.Manifest) map[string]any {
 		}
 	}
 	return out
+}
+
+// frontendAssetDigest returns the sorted bundle-relative paths of every
+// frontend asset and a SHA-256 hex digest covering their concatenated
+// bytes in path order. It is the seam ManifestChangeEvent uses so a
+// frontend consumer can:
+//
+//   - invalidate exact asset URLs without guessing paths (paths flow
+//     verbatim into the event);
+//   - skip a full module reload when only the backend bundle rotated
+//     (ContentHash unchanged signals "user-facing surface is the same").
+//
+// Empty for non-federation bundles, missing frontends, and uninstall
+// events. Returned slice is freshly allocated so callers can append to it
+// without aliasing bundle internals.
+func frontendAssetDigest(b *bundle.Bundle) ([]string, string) {
+	if b == nil || b.Manifest.Frontend == nil || b.Manifest.Frontend.Format != "federation" || len(b.Frontend) == 0 {
+		return nil, ""
+	}
+	paths := make([]string, 0, len(b.Frontend))
+	for k := range b.Frontend {
+		paths = append(paths, k)
+	}
+	sort.Strings(paths)
+	h := sha256.New()
+	for _, p := range paths {
+		// Include the path itself in the hash so a rename without bytes
+		// change still flips ContentHash — frontends watch the right thing.
+		h.Write([]byte(p))
+		h.Write([]byte{0})
+		h.Write(b.Frontend[p])
+	}
+	return paths, hex.EncodeToString(h.Sum(nil))
+}
+
+// needsBackendRuntime reports whether the manifest's Backend block selects
+// an in-process runtime that warrants calling BackendRuntimeLoader. The
+// legacy "webhook" runtime (or a nil block) is dispatched over HTTP and
+// needs no runtime materialisation; "wasm" and the reserved "binary"
+// runtimes do. Centralised here so Install / Upgrade stay symmetric and
+// future runtime kinds only add to this predicate.
+func needsBackendRuntime(spec *manifest.BackendSpec) bool {
+	if spec == nil {
+		return false
+	}
+	switch spec.Runtime {
+	case "", "webhook":
+		return false
+	default:
+		return true
+	}
 }
 
 func sourceOf(m manifest.Manifest) string {

@@ -416,10 +416,20 @@ type Preset struct {
 }
 
 // PresetAddon is one entry in a preset's bundle list.
+//
+// Requires names other addon keys in the SAME preset that must be
+// installed before this one. The preset resolver topologically sorts the
+// addons on this field so the install loop respects ordering even when
+// the preset author lists them out of order. Empty/nil = no constraint
+// beyond the preset's declared manifest order. References to keys that
+// are not part of the preset are reported as errors at resolve time —
+// cross-preset dependencies are not modelled here (those are the host's
+// concern, e.g. ops's marketplace catalog).
 type PresetAddon struct {
-	Key      string `json:"key"`
-	Version  string `json:"version"`
-	Optional bool   `json:"optional,omitempty"`
+	Key      string   `json:"key"`
+	Version  string   `json:"version"`
+	Optional bool     `json:"optional,omitempty"`
+	Requires []string `json:"requires,omitempty"`
 }
 
 // Theme block for kind: "Theme" manifests.

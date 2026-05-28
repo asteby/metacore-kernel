@@ -7,8 +7,87 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-_No unreleased changes. The currency hook and `resolveModel` fix below shipped
-in v0.13.0 (#84 / #75)._
+_No unreleased changes._
+
+## [0.21.0] - 2026-05-28
+
+### Added
+
+- **feat(installer): cover the fullstack install pipeline (#93).** The
+  installer now drives the four artifact families a v3 bundle ships, not
+  just SQL + lifecycle hooks. Closes the gaps that historically forced
+  each host (ops, link) to reimplement post-install glue.
+
+  - **i18n catalog persisted kernel-side.** New `metacore_addon_i18n`
+    table (migration 0007) + `i18n.RegisterAddonI18n` / `GetAddonI18n` /
+    `UnregisterAddonI18n` collapse what ops had as a workaround in
+    `services/addonbundle/loader.go` (lines ~189-212) into the kernel.
+    Both source shapes (`manifest.I18n[lang][key]` and v0.19.0's
+    `metadata.i18n[lang]`) project into the persisted table — `metadata.i18n`
+    unfolds to `catalog.name`/`catalog.description`/`catalog.features.<i>`
+    dotted keys so the existing flat-key translator picks them up
+    transparently. Install / Upgrade upsert (purge-then-upsert so renamed
+    keys disappear in lockstep with the new version); Uninstall drops the
+    rows. Every host (ops, link, future apps) inherits the registration
+    path for free.
+
+  - **WASM backend runtime auto-materialised.** The bundle reader has
+    populated `Bundle.Backend` since the early iterations and v0.18.0
+    validates wasm action triggers without a backend block, but nothing
+    connected those to the installer — `host.LoadWASMFromBundle` had to
+    be called by hand. New `installer.BackendRuntimeLoader` interface
+    (kernel layer) with `NoopBackendRuntimeLoader` default; Install /
+    Upgrade fire `LoadFromBundle` whenever `manifest.Backend.Runtime`
+    selects an in-process runtime (predicate excludes nil + "webhook").
+    `host.EnableWASM` now wires the existing `host.LoadWASMFromBundle`
+    helper into `Installer.BackendRuntime` automatically — apps that opt
+    into WASM get the integration with zero extra boot wiring. The
+    declared-exports cross-check from v0.18.0 is honoured by the existing
+    `wasm.Host.Load` path; the installer just hands the bundle across.
+
+  - **Preset orchestration: topo-sort on `requires`.** `InstallPreset`
+    already drove an idempotent per-addon install through a host-supplied
+    `InstallAddonFunc`, but it walked the manifest in declared order.
+    v3 `PresetAddon` now grows an optional `requires []string`; the
+    resolver topologically sorts the merged required+optional list
+    (Kahn's algorithm; preserves manifest order as the tie-breaker so
+    legacy presets keep working unchanged) before handing it to
+    `InstallPreset`. Cycles surface as `ErrCyclicDependency`; references
+    to addons not in the preset surface as `ErrUnknownDependency` (the
+    kernel does not model cross-preset deps — those are a host
+    marketplace concern). Schema (both `manifest/v3/schema` and
+    `docs/spec/v3`) accepts `requires` as an array of unique strings.
+    The `POST /marketplace/install/preset` HTTP surface stays host-side
+    — bundle download is a host concern (ops talks to hub, link has its
+    own registry); the kernel only owns the orchestration primitive.
+
+  - **Frontend hot-reload signal: structured asset payload.**
+    `ManifestChangeEvent` grows three fields the SDK can drive a
+    structured reload off: `Action` (`install`/`upgrade`/`uninstall`),
+    `AssetPaths` (bundle-relative paths of every frontend asset
+    materialised; SDK invalidates exact URLs without guessing) and
+    `ContentHash` (SHA-256 over concatenated frontend bytes in
+    sorted-path order, so "manifest hash flipped but the user-facing
+    bundle didn't" — e.g. only `backend.wasm` rotated — skips a full
+    federation reload). The `bridge` payload now carries the same trio
+    over the existing `ADDON_MANIFEST_CHANGED` WebSocket topic, so the
+    SDK consumer reads `evt.assetPaths.forEach(p => invalidate(p))`
+    instead of guessing what to bust. Uninstall now also broadcasts so
+    frontends drop their cached federated module.
+
+### Migration notes
+
+- Hosts embedding the kernel pick up i18n persistence automatically on
+  next install — no code change required. The migration
+  `0007_addon_i18n.up.sql` runs through whichever migration runner the
+  host already uses; AutoMigrate keeps sqlite-backed tests working.
+- Hosts that want WASM addons to be auto-loaded by the installer call
+  `host.EnableWASM(ctx, caps)` exactly once at boot (no longer need to
+  thread `host.LoadWASMFromBundle` through their install handler).
+- Hosts wiring a custom `ManifestChangeBroadcaster` (anything other than
+  the bridge's `WSManifestBroadcaster`) inherit the new event fields
+  additively — legacy reducers that only read `oldHash`/`newHash`/`addonKey`
+  continue to work.
 
 ## [0.20.0] - 2026-05-26
 

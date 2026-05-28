@@ -1507,6 +1507,14 @@
               "optional": {
                 "type": "boolean",
                 "default": false
+              },
+              "requires": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Keys of other addons in this preset that must install before this one. The preset resolver topologically sorts on this field.",
+                "uniqueItems": true
               }
             }
           }
