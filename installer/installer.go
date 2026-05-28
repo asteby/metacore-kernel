@@ -146,6 +146,14 @@ type Installer struct {
 	// escape hatch). The installer never imports kernel/ws directly; the
 	// host glue in bridge/installer_broadcaster.go is what closes the loop.
 	Broadcaster ManifestChangeBroadcaster
+
+	// BackendRuntime materialises an addon's in-process backend (today: WASM)
+	// after the database state has been persisted. Defaults to a no-op so
+	// hosts that don't run in-process backends (CLI tools, schema-only smoke
+	// tests) keep working unchanged. Hosts that do run WASM wire an adapter
+	// over host.LoadWASMFromBundle via WithBackendRuntime. See
+	// backend_runtime.go for the contract.
+	BackendRuntime BackendRuntimeLoader
 }
 
 // ErrSignatureRequired is returned by Install when the host has not configured
@@ -193,10 +201,30 @@ func New(db *gorm.DB, kernelVersion string) *Installer {
 		KernelVersion: kernelVersion,
 		Lifecycles:    lifecycle.NewRegistry(),
 		Interceptors:  lifecycle.NewInterceptorRegistry(),
-		PublicKeys:    pubs,
-		AllowUnsigned: envFlag("ALLOW_UNSIGNED_BUNDLES"),
-		Broadcaster:   NoopBroadcaster{},
+		PublicKeys:     pubs,
+		AllowUnsigned:  envFlag("ALLOW_UNSIGNED_BUNDLES"),
+		Broadcaster:    NoopBroadcaster{},
+		BackendRuntime: NoopBackendRuntimeLoader{},
 	}
+}
+
+// WithBackendRuntime swaps the installer's backend runtime loader and
+// returns the receiver so callers can chain it on construction:
+//
+//	inst := installer.New(db, "2.0.0").
+//	    WithBackendRuntime(bridge.NewWASMBackendLoader(hostApp))
+//
+// Passing nil reverts to NoopBackendRuntimeLoader so a host can opt out
+// at runtime without panicking the install flow. The default zero-value
+// installer also keeps working — Install / Upgrade only invoke the
+// loader when manifest.Backend.Runtime selects an in-process runtime.
+func (i *Installer) WithBackendRuntime(l BackendRuntimeLoader) *Installer {
+	if l == nil {
+		i.BackendRuntime = NoopBackendRuntimeLoader{}
+		return i
+	}
+	i.BackendRuntime = l
+	return i
 }
 
 // WithBroadcaster swaps the installer's manifest-change broadcaster and
@@ -363,6 +391,22 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	if b.Manifest.Frontend != nil && b.Manifest.Frontend.Format == "federation" {
 		if err := WriteFrontend(i.FrontendBasePath, b.Manifest.Key, b.Frontend); err != nil {
 			return nil, nil, fmt.Errorf("WriteFrontend: %w", err)
+		}
+	}
+	// Materialise the addon's in-process backend runtime when the manifest
+	// declares one (WASM today; "binary" reserved). The loader reads the
+	// declared entry path (defaulting to backend/backend.wasm) out of
+	// bundle.Backend, registers it on the host's runtime, and cross-checks
+	// the declared exports — the same fields the v0.18.0 action-trigger
+	// validator gates on. Skipped silently when the manifest has no
+	// backend block or selects the legacy "webhook" runtime.
+	if needsBackendRuntime(b.Manifest.Backend) {
+		loader := i.BackendRuntime
+		if loader == nil {
+			loader = NoopBackendRuntimeLoader{}
+		}
+		if err := loader.LoadFromBundle(context.Background(), b); err != nil {
+			return nil, nil, fmt.Errorf("LoadBackendRuntime: %w", err)
 		}
 	}
 	// Broadcast the manifest-hash change (or first-install signal). Errors
@@ -743,6 +787,20 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 			return nil, fmt.Errorf("installer.Upgrade: WriteFrontend: %w", err)
 		}
 	}
+	// Reload the addon's in-process backend so the new module replaces the
+	// previous compile. wasm.Host.Load already swaps the cached entry and
+	// disposes stale per-installation instances; we just need to call it
+	// with the new bundle's bytes. Skipped silently when the new manifest
+	// has no backend or runtime="webhook".
+	if needsBackendRuntime(newBundle.Manifest.Backend) {
+		loader := i.BackendRuntime
+		if loader == nil {
+			loader = NoopBackendRuntimeLoader{}
+		}
+		if err := loader.LoadFromBundle(ctx, newBundle); err != nil {
+			return nil, fmt.Errorf("installer.Upgrade: LoadBackendRuntime: %w", err)
+		}
+	}
 
 	// Persist the version bump. Settings merge keeps user-tuned values from
 	// the old installation and ADDS defaults for any new settings declared
@@ -990,6 +1048,24 @@ func defaultSettings(m manifest.Manifest) map[string]any {
 		}
 	}
 	return out
+}
+
+// needsBackendRuntime reports whether the manifest's Backend block selects
+// an in-process runtime that warrants calling BackendRuntimeLoader. The
+// legacy "webhook" runtime (or a nil block) is dispatched over HTTP and
+// needs no runtime materialisation; "wasm" and the reserved "binary"
+// runtimes do. Centralised here so Install / Upgrade stay symmetric and
+// future runtime kinds only add to this predicate.
+func needsBackendRuntime(spec *manifest.BackendSpec) bool {
+	if spec == nil {
+		return false
+	}
+	switch spec.Runtime {
+	case "", "webhook":
+		return false
+	default:
+		return true
+	}
 }
 
 func sourceOf(m manifest.Manifest) string {

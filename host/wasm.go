@@ -28,7 +28,36 @@ func (h *Host) EnableWASM(ctx context.Context, caps *security.Capabilities) erro
 		return fmt.Errorf("host: enable wasm: %w", err)
 	}
 	h.WASM = wh
+	// Hand the installer the loader so manifest-declared in-process
+	// backends (runtime=wasm) get compiled + registered automatically at
+	// install / upgrade time — no host-side boilerplate. Hosts that boot
+	// the installer without EnableWASM keep the default no-op loader.
+	if h.Installer != nil {
+		h.Installer.WithBackendRuntime(&wasmBackendLoader{host: h})
+	}
 	return nil
+}
+
+// wasmBackendLoader is the host-side adapter that closes the
+// installer.BackendRuntimeLoader interface over the existing
+// host.LoadWASMFromBundle helper. Defined here (not in the installer)
+// because runtime/wasm pulls in heavier deps the kernel layer
+// deliberately avoids.
+type wasmBackendLoader struct {
+	host *Host
+}
+
+// LoadFromBundle delegates to host.LoadWASMFromBundle so the existing
+// path (extract backend.wasm → Host.WASM.Load with cross-checked
+// exports) keeps working unchanged. The installer treats binary-runtime
+// addons as "needs runtime"; the helper returns
+// ErrRuntimeNotImplemented for that case so the installer surfaces the
+// right error.
+func (l *wasmBackendLoader) LoadFromBundle(ctx context.Context, b *bundle.Bundle) error {
+	if l == nil || l.host == nil {
+		return fmt.Errorf("wasmBackendLoader: host is nil")
+	}
+	return l.host.LoadWASMFromBundle(ctx, b)
 }
 
 // ErrRuntimeNotImplemented is returned by LoadWASMFromBundle when the bundle
