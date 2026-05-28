@@ -30,6 +30,7 @@ import (
 	"github.com/asteby/metacore-kernel/bundle"
 	"github.com/asteby/metacore-kernel/installer"
 	"github.com/asteby/metacore-kernel/manifest"
+	v3 "github.com/asteby/metacore-kernel/manifest/v3"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -94,7 +95,19 @@ type Installation struct {
 	// can see whether storage was reclaimed. One of "drop_now",
 	// "retain_30d", "retain_forever" (or empty for never-uninstalled rows).
 	DataPolicy string `gorm:"size:20;column:data_policy" json:"data_policy,omitempty"`
+
+	// Requires is the list of OTHER addon keys this installation declares
+	// under `compatibility.requires[]` (excluding the reserved "kernel" key).
+	// It is captured at install time from the bundle manifest so the uninstall
+	// path can answer "who depends on X?" with a single indexed query instead
+	// of walking every other installation's manifest blob. Empty for lite-mode
+	// installs (no bundle parsed) and for legacy rows that predate the field.
+	Requires AddonKeyList `gorm:"serializer:json;type:jsonb;column:requires" json:"requires,omitempty"`
 }
+
+// AddonKeyList is the typed alias used for the JSON-serialised Requires column
+// so the gorm serializer tag resolves cleanly under sqlite and postgres alike.
+type AddonKeyList []string
 
 // PreviousVersionList is a typed alias used so the JSON-serializer gorm tag
 // resolves cleanly. The slice always stores versions oldest-first, capped at
@@ -323,6 +336,13 @@ func (h *Handler) install(c fiber.Ctx) error {
 	row.Status = "installed"
 	row.CompletedAt = &now
 	row.ErrorMessage = ""
+	// Capture the addon's declared addon-level dependencies (excluding the
+	// reserved "kernel" key) so the uninstall handler can compute the reverse
+	// dep graph without re-reading bundles. extractRequires reads the bundle's
+	// preserved RawManifest (the only place the v3 compatibility.requires list
+	// survives — manifest.FromV3 only forwards the kernel range). Empty for
+	// legacy v2 bundles or v3 bundles that declare no addon-level deps.
+	row.Requires = extractRequires(b)
 	_ = h.db.Save(&row).Error
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
@@ -330,6 +350,38 @@ func (h *Handler) install(c fiber.Ctx) error {
 		"data":         row,
 		"installation": inst,
 	})
+}
+
+// extractRequires reads the bundle's preserved v3 RawManifest and returns the
+// addon-level deps declared under compatibility.requires[] (the reserved
+// "kernel" key is filtered — it is a runtime range, not a dep). Returns nil
+// for legacy v2 bundles or v3 manifests that declare no requires. The bundle
+// is read defensively: any parse error degrades to nil so a malformed manifest
+// that nonetheless installed (the security gate is upstream) cannot crash the
+// dep-graph capture.
+func extractRequires(b *bundle.Bundle) AddonKeyList {
+	if b == nil || len(b.RawManifest) == 0 {
+		return nil
+	}
+	m, err := v3.Parse(b.RawManifest)
+	if err != nil || m == nil {
+		return nil
+	}
+	if len(m.Compatibility.Requires) == 0 {
+		return nil
+	}
+	out := make(AddonKeyList, 0, len(m.Compatibility.Requires))
+	for _, r := range m.Compatibility.Requires {
+		key := strings.TrimSpace(r.Key)
+		if key == "" || key == "kernel" {
+			continue
+		}
+		out = append(out, key)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // fetchBundle downloads the .tar.gz from the Hub and parses it through
@@ -416,10 +468,36 @@ func truncateError(s string, max int) string {
 // calls; web sessions ignore it and use the authenticated org. DataPolicy
 // defaults to retain_30d so a user clicking "Uninstall" without specifying a
 // policy still gets a 30-day grace window before storage is reclaimed.
+//
+// Force/Cascade are mutually compatible escape hatches around the dep-block
+// gate the handler runs by default (refuses to uninstall an addon some other
+// installed row declares under compatibility.requires[]):
+//
+//	force=true   — skip the dep-block check entirely. The dependent will be
+//	               left broken; only an operator who knows what they are
+//	               doing should reach for this. Surfaced as the "admin
+//	               override" path in the UI.
+//	cascade=true — walk the reverse dep graph and uninstall every dependent
+//	               leaf-first before the requested addon. Surfaced from the
+//	               409 dialog as "Desinstalar X y sus N dependientes".
+//
+// When both are set cascade wins (a cascade implicitly satisfies the dep-block
+// without skipping it).
 type uninstallRequest struct {
 	AddonKey   string `json:"addonKey"`
 	OrgID      string `json:"orgID,omitempty"`
 	DataPolicy string `json:"dataPolicy,omitempty"`
+	Force      bool   `json:"force,omitempty"`
+	Cascade    bool   `json:"cascade,omitempty"`
+}
+
+// dependent is the projection returned in the 409 body so the UI can list the
+// addons blocking the uninstall by display name. Kept tiny on purpose — the
+// dialog only renders {key, name}, anything richer (version, category) would
+// invite scope creep on the API contract.
+type dependent struct {
+	Key  string `json:"key"`
+	Name string `json:"name,omitempty"`
 }
 
 func (h *Handler) uninstall(c fiber.Ctx) error {
@@ -450,24 +528,122 @@ func (h *Handler) uninstall(c fiber.Ctx) error {
 			"message": err.Error(),
 		})
 	}
-	// Locate the marketplace row first — the kernel installer drives the
-	// destructive work but we need the row to track state transitions and
-	// to compute the purge_at deadline.
-	var row Installation
-	if err := h.db.WithContext(c).
-		Where("organization_id = ? AND addon_key = ?", orgID, req.AddonKey).
-		Order("requested_at DESC").
-		Take(&row).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+
+	// Dep-block gate. Refuse to uninstall an addon some OTHER active
+	// installation declares under compatibility.requires[]; the dependent
+	// would silently break otherwise. Two escape hatches:
+	//
+	//   force=true   → skip the check (admin override).
+	//   cascade=true → uninstall every dependent leaf-first before the
+	//                  requested addon (the "yes, really gone" hatch).
+	//
+	// When the gate fires without either flag we return 409 + the dependents
+	// list so the UI can render the "primero desinstalá X" dialog with the
+	// fallback cascade button.
+	if !req.Force && !req.Cascade {
+		deps, err := h.findDependents(c, orgID, req.AddonKey)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"success": false,
+				"message": "dependents lookup: " + err.Error(),
+			})
+		}
+		if len(deps) > 0 {
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+				"success": false,
+				"message": fmt.Sprintf("cannot uninstall %s: %d installed addon(s) depend on it", req.AddonKey, len(deps)),
+				"data": fiber.Map{
+					"dependents": deps,
+				},
+			})
+		}
+	}
+
+	// Cascade: walk the reverse dep graph and uninstall every dependent
+	// leaf-first before the requested addon. Failures inside the cascade
+	// abort the whole operation — the requested addon stays installed so
+	// the UI doesn't end up with a half-torn-down dep tree it can't reason
+	// about. Hosts that want partial-progress semantics can drive the
+	// individual uninstalls themselves.
+	if req.Cascade {
+		victims, err := h.reverseDepOrder(c, orgID, req.AddonKey)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"success": false,
+				"message": "cascade plan: " + err.Error(),
+			})
+		}
+		uninstalled := make([]Installation, 0, len(victims))
+		for _, v := range victims {
+			done, err := h.runUninstall(c, orgID, v, policy)
+			if err != nil {
+				return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+					"success": false,
+					"message": fmt.Sprintf("cascade uninstall of %s: %s", v, err.Error()),
+					"data": fiber.Map{
+						"uninstalled": uninstalled,
+					},
+				})
+			}
+			uninstalled = append(uninstalled, done)
+		}
+		return c.JSON(fiber.Map{
+			"success": true,
+			"data": fiber.Map{
+				"uninstalled": uninstalled,
+				// The requested addon is the last entry — surface it
+				// explicitly so the UI can flip the "Desinstalado" toast
+				// without recomputing the order client-side.
+				"primary": uninstalled[len(uninstalled)-1],
+			},
+		})
+	}
+
+	row, err := h.runUninstall(c, orgID, req.AddonKey, policy)
+	if err != nil {
+		// runUninstall returns ErrUninstallNotFound for missing rows so the
+		// handler can map it to a 404 without leaking internals. Everything
+		// else is a 422 with the persisted-failed row attached.
+		if err == errUninstallNotFound {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 				"success": false,
 				"message": "no installation for addon " + req.AddonKey,
 			})
 		}
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
 			"success": false,
 			"message": err.Error(),
+			"data":    row,
 		})
+	}
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    row,
+	})
+}
+
+// errUninstallNotFound is the sentinel runUninstall returns when the addon row
+// for the org does not exist. The handler maps it to 404; callers driving the
+// helper directly (cascade) can ignore it (a planned victim that vanished
+// between plan and execute is treated as "already gone" and dropped silently).
+var errUninstallNotFound = fmt.Errorf("marketplace: no installation for addon")
+
+// runUninstall is the shared per-addon uninstall step used by both the direct
+// path and the cascade walker. It re-runs the row lookup, marks the row
+// uninstalling, drives the installer lifecycle hooks (when wired), and
+// persists the final state with the correct PurgeAt window for the policy.
+// Returns the persisted row (success or failure) so the handler can attach it
+// to the response body.
+func (h *Handler) runUninstall(c fiber.Ctx, orgID uuid.UUID, addonKey, policy string) (Installation, error) {
+	var row Installation
+	if err := h.db.WithContext(c).
+		Where("organization_id = ? AND addon_key = ?", orgID, addonKey).
+		Order("requested_at DESC").
+		Take(&row).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return Installation{}, errUninstallNotFound
+		}
+		return Installation{}, err
 	}
 
 	// Mark uninstalling BEFORE we touch the installer so a concurrent
@@ -481,13 +657,10 @@ func (h *Handler) uninstall(c fiber.Ctx) error {
 	// row transition so a worker / cron can finish the job out-of-band.
 	if h.installer != nil {
 		dropNow := policy == DataPolicyDropNow
-		if err := h.installer.Uninstall(orgID, req.AddonKey, dropNow); err != nil {
-			h.markFailed(&row, fmt.Errorf("uninstall: %w", err))
-			return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
-				"success": false,
-				"message": err.Error(),
-				"data":    row,
-			})
+		if err := h.installer.Uninstall(orgID, addonKey, dropNow); err != nil {
+			wrapped := fmt.Errorf("uninstall: %w", err)
+			h.markFailed(&row, wrapped)
+			return row, wrapped
 		}
 	}
 
@@ -507,15 +680,79 @@ func (h *Handler) uninstall(c fiber.Ctx) error {
 		row.PurgeAt = nil
 	}
 	if err := h.db.Save(&row).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"success": false,
-			"message": "persist uninstall: " + err.Error(),
-		})
+		return row, fmt.Errorf("persist uninstall: %w", err)
 	}
-	return c.JSON(fiber.Map{
-		"success": true,
-		"data":    row,
-	})
+	return row, nil
+}
+
+// findDependents returns the OTHER active installations in the same org whose
+// Requires list contains addonKey. The query uses the json serializer column
+// rendered to string (sqlite + postgres both round-trip a JSON array as
+// `["a","b"]`); we lift the rows in Go and match exactly so a substring
+// collision ("customers" vs "customers_pro") cannot fire a false positive.
+//
+// Returns dependents oldest-first so the UI lists them in install order — the
+// dep that landed first is usually the one the user remembers installing.
+func (h *Handler) findDependents(c fiber.Ctx, orgID uuid.UUID, addonKey string) ([]dependent, error) {
+	var rows []Installation
+	if err := h.db.WithContext(c).
+		Where("organization_id = ? AND status = ? AND addon_key <> ?", orgID, "installed", addonKey).
+		Order("requested_at ASC").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]dependent, 0)
+	for _, r := range rows {
+		for _, dep := range r.Requires {
+			if dep == addonKey {
+				name := r.Name
+				if name == "" {
+					name = r.AddonKey
+				}
+				out = append(out, dependent{Key: r.AddonKey, Name: name})
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+// reverseDepOrder builds the leaf-first uninstall plan for a cascade. Starting
+// from the requested addon it walks the reverse-dep tree (who depends on me?)
+// breadth-first, then reverses the visit order so leaves (no further
+// dependents) come out first. The requested addon is always the last entry.
+//
+// Cycles are tolerated (visited set), and missing rows are skipped silently —
+// a planned victim that was uninstalled out-of-band between plan and execute
+// is treated as already gone. Returns a slice of addon keys.
+func (h *Handler) reverseDepOrder(c fiber.Ctx, orgID uuid.UUID, root string) ([]string, error) {
+	visited := map[string]bool{root: true}
+	order := []string{root}
+	queue := []string{root}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		deps, err := h.findDependents(c, orgID, current)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range deps {
+			if visited[d.Key] {
+				continue
+			}
+			visited[d.Key] = true
+			order = append(order, d.Key)
+			queue = append(queue, d.Key)
+		}
+	}
+	// Reverse: BFS visits root → direct dependents → transitive dependents,
+	// so the slice above is root-first. The uninstall plan needs leaf-first
+	// (uninstall things that depend on X before X), so flip it.
+	out := make([]string, len(order))
+	for i, k := range order {
+		out[len(order)-1-i] = k
+	}
+	return out, nil
 }
 
 // normaliseDataPolicy validates the policy enum and applies the default
