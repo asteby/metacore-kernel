@@ -9,6 +9,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 _No unreleased changes._
 
+## [0.22.0] - 2026-05-28
+
+### Added
+
+- **feat(installer): central marketplace trust anchor (Let's Encrypt style).**
+  The installer's `New()` constructor now resolves trusted Ed25519 keys in
+  this priority order:
+
+    1. `MARKETPLACE_PUBKEY` / `MARKETPLACE_PUBKEYS` env (operator-pinned).
+    2. `GET {MARKETPLACE_URL}/v1/marketplace/pubkey` (best-effort fetch
+       at boot — fail-closed if both are empty and `ALLOW_UNSIGNED_BUNDLES`
+       isn't set).
+
+  `MARKETPLACE_URL` defaults to `https://hub.asteby.com` so SaaS hosts
+  (ops, link, future apps) get the central anchor with zero env config.
+  Customer-on-VPS deployments inherit the same behaviour when they have
+  network reachability to a hub; air-gapped or pinned deployments set
+  `MARKETPLACE_PUBKEY` explicitly to bypass the fetch.
+
+  The previous model required listing every developer pubkey in env
+  (impractical: the hub has many publishing developers, and the set
+  changes on every new registration). Trusting ONE central
+  hub-counter-signed key replaces that.
+
+  Hosts that rotate keys at runtime call `Installer.AppendTrustedPubKey(hex)`
+  on the live installer — the kernel's "verify under ANY trusted key"
+  semantics keep in-flight bundles signed by the previous key valid until
+  the host drops it on the next deploy. New exported helper
+  `installer.FetchCentralPubKey(ctx, baseURL)` drives the same fetch from
+  application code (refresh on a rotation event without a restart).
+
+  The hub-side counter-sign and `/v1/marketplace/pubkey` endpoint ship in
+  hub's matching PR.
+
 ## [0.21.0] - 2026-05-28
 
 ### Added
