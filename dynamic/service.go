@@ -52,6 +52,18 @@ type Config struct {
 	// used — which only covers models explicitly registered at package init.
 	ModelResolver ModelResolver
 
+	// TableNameResolver returns the database table for a model name. It exists
+	// for hosts whose dynamic (addon) models are reflect-built structs that
+	// CANNOT carry a Go TableName() method — so neither the modelbase.ModelDefiner
+	// assertion nor GORM's pluralized schema parse can recover the real table.
+	// The host (which already knows the table from its addon metadata registry)
+	// plugs it here. Resolution order in the CRUD paths is:
+	//   1. TableNameResolver(model) if set and ok,
+	//   2. instance.(modelbase.ModelDefiner).TableName() if implemented,
+	//   3. GORM schema parse (pluralized struct name) as last resort.
+	// nil leaves the previous behaviour (compiled models) unchanged.
+	TableNameResolver TableNameResolver
+
 	// Bus is the in-process event bus where the service publishes canonical
 	// "<addonKey>.<model>.<created|updated|deleted>" events post-commit.
 	// nil disables emission — existing apps that do not wire a Bus keep the
@@ -106,9 +118,15 @@ type Publisher interface {
 }
 
 // ModelResolver lets apps supply their own model-name → instance lookup. The
-// returned instance must implement modelbase.ModelDefiner (for TableName +
-// DefineTable) so the CRUD paths keep working unchanged.
+// returned instance should implement modelbase.ModelDefiner; reflect-built
+// addon models that cannot (no Go methods) must additionally wire a
+// TableNameResolver so the CRUD paths can pin the table explicitly.
 type ModelResolver func(ctx context.Context, model string) (any, bool)
+
+// TableNameResolver lets apps map a model name to its database table when the
+// instance cannot carry a TableName() method (reflect-built addon models).
+// Returning ("", false) defers to the ModelDefiner / GORM-parse fallbacks.
+type TableNameResolver func(ctx context.Context, model string) (string, bool)
 
 // SearchMatchClause is the app-supplied builder used by Service.Search to
 // turn a (column, query) pair into a SQL predicate + bind value. Returning
@@ -133,6 +151,7 @@ type Service struct {
 	searchResolver    SearchConfigResolver
 	matchClause       SearchMatchClause
 	modelResolver     ModelResolver
+	tableNameResolver TableNameResolver
 	bus               Publisher
 	addonKeyForModel  func(ctx context.Context, model string) string
 	actionResolver    ActionResolver
@@ -173,6 +192,7 @@ func New(cfg Config) *Service {
 		searchResolver:    cfg.SearchConfigResolver,
 		matchClause:       cfg.SearchMatchClause,
 		modelResolver:     cfg.ModelResolver,
+		tableNameResolver: cfg.TableNameResolver,
 		bus:               cfg.Bus,
 		addonKeyForModel:  cfg.AddonKeyForModel,
 		actionResolver:    cfg.ActionResolver,
@@ -221,7 +241,10 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	sliceType := reflect.SliceOf(reflect.TypeOf(instance))
 	results := reflect.New(sliceType).Interface()
 
-	tableName := instance.(modelbase.ModelDefiner).TableName()
+	tableName, err := s.tableNameFor(ctx, model, instance)
+	if err != nil {
+		return nil, query.PageMeta{}, err
+	}
 	db := s.db.WithContext(ctx).Table(tableName)
 	db = s.scope.ScopeQuery(db, user)
 
@@ -268,7 +291,11 @@ func (s *Service) Get(ctx context.Context, model string, user modelbase.AuthUser
 		return nil, err
 	}
 
-	db := s.db.WithContext(ctx).Table(instance.(modelbase.ModelDefiner).TableName())
+	tableName, err := s.tableNameFor(ctx, model, instance)
+	if err != nil {
+		return nil, err
+	}
+	db := s.db.WithContext(ctx).Table(tableName)
 	db = s.scope.ScopeQuery(db, user)
 
 	if err := db.First(instance, "id = ?", id).Error; err != nil {
@@ -290,6 +317,11 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 		return nil, err
 	}
 
+	tableName, err := s.tableNameFor(ctx, model, instance)
+	if err != nil {
+		return nil, err
+	}
+
 	s.scope.InjectOnCreate(input, user)
 	input["created_by_id"] = user.GetID()
 
@@ -302,7 +334,9 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 		return nil, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
 
-	if err := s.db.WithContext(ctx).Create(instance).Error; err != nil {
+	// .Table pins the INTO so reflect-built addon models (no TableName()
+	// method) insert into the right table instead of GORM's pluralized guess.
+	if err := s.db.WithContext(ctx).Table(tableName).Create(instance).Error; err != nil {
 		return nil, fmt.Errorf("dynamic: create: %w", err)
 	}
 
@@ -324,7 +358,11 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		return nil, err
 	}
 
-	db := s.db.WithContext(ctx).Table(instance.(modelbase.ModelDefiner).TableName())
+	tableName, err := s.tableNameFor(ctx, model, instance)
+	if err != nil {
+		return nil, err
+	}
+	db := s.db.WithContext(ctx).Table(tableName)
 	db = s.scope.ScopeQuery(db, user)
 
 	if err := db.First(instance, "id = ?", id).Error; err != nil {
@@ -348,7 +386,7 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		return nil, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
 
-	if err := s.db.WithContext(ctx).Save(instance).Error; err != nil {
+	if err := s.db.WithContext(ctx).Table(tableName).Save(instance).Error; err != nil {
 		return nil, fmt.Errorf("dynamic: update: %w", err)
 	}
 
@@ -369,12 +407,17 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 		return err
 	}
 
+	tableName, err := s.tableNameFor(ctx, model, instance)
+	if err != nil {
+		return err
+	}
+
 	hc := HookContext{Model: model, User: user, DB: s.db}
 	if err := s.hooks.runBeforeDelete(ctx, hc, id.String()); err != nil {
 		return err
 	}
 
-	db := s.db.WithContext(ctx).Table(instance.(modelbase.ModelDefiner).TableName())
+	db := s.db.WithContext(ctx).Table(tableName)
 	db = s.scope.ScopeQuery(db, user)
 
 	// Snapshot the row before the delete so the canonical event can carry
@@ -383,7 +426,7 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 	// already gone (or out of tenant scope) at publish time.
 	var before map[string]any
 	if s.bus != nil {
-		loadDB := s.db.WithContext(ctx).Table(instance.(modelbase.ModelDefiner).TableName())
+		loadDB := s.db.WithContext(ctx).Table(tableName)
 		loadDB = s.scope.ScopeQuery(loadDB, user)
 		if err := loadDB.First(instance, "id = ?", id).Error; err == nil {
 			before = toMap(instance)

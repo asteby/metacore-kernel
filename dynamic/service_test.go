@@ -2,6 +2,7 @@ package dynamic
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -568,5 +569,148 @@ func TestEvents_DefaultAddonKeyKernel(t *testing.T) {
 	createProduct(t, svc, user, "X", 1)
 	if hits != 1 {
 		t.Fatalf("hits = %d, want 1", hits)
+	}
+}
+
+// dynItemsMeta is a compiled twin used ONLY so metadata.GetTable can resolve
+// the "dyn_items" model. The instance the CRUD paths actually operate on is a
+// reflect-built struct with no Go methods (see TestTableNameResolver_*), which
+// is exactly the case real addon models hit.
+type dynItemsMeta struct {
+	modelbase.BaseUUIDModel
+	Label string `json:"label"`
+}
+
+func (dynItemsMeta) TableName() string { return "dyn_items" }
+func (dynItemsMeta) DefineTable() modelbase.TableMetadata {
+	return modelbase.TableMetadata{
+		Title:   "Dyn Items",
+		Columns: []modelbase.ColumnDef{{Key: "label", Label: "Label"}},
+	}
+}
+func (dynItemsMeta) DefineModal() modelbase.ModalMetadata {
+	return modelbase.ModalMetadata{Title: "Dyn Item"}
+}
+
+// reflectDynType builds a runtime struct mirroring an addon model: it has the
+// right json/gorm tags but — like every reflect.StructOf type — carries NO Go
+// methods, so it cannot implement modelbase.ModelDefiner. Its table can only be
+// recovered through Config.TableNameResolver.
+func reflectDynType() reflect.Type {
+	return reflect.StructOf([]reflect.StructField{
+		{Name: "ID", Type: reflect.TypeOf(""), Tag: `json:"id" gorm:"column:id;primaryKey"`},
+		{Name: "OrganizationID", Type: reflect.TypeOf(""), Tag: `json:"organization_id" gorm:"column:organization_id"`},
+		{Name: "CreatedByID", Type: reflect.TypeOf(""), Tag: `json:"created_by_id" gorm:"column:created_by_id"`},
+		{Name: "Label", Type: reflect.TypeOf(""), Tag: `json:"label" gorm:"column:label"`},
+	})
+}
+
+// TestTableNameResolver_MethodlessModel is the core of the kernel→host
+// migration: an addon model whose instance has no TableName() method must still
+// route every CRUD path to the right table via Config.TableNameResolver. Before
+// this, the service asserted instance.(modelbase.ModelDefiner) and panicked.
+func TestTableNameResolver_MethodlessModel(t *testing.T) {
+	db := setupTestDB(t)
+	db.Exec(`CREATE TABLE IF NOT EXISTS dyn_items (
+		id TEXT PRIMARY KEY,
+		organization_id TEXT,
+		created_by_id TEXT,
+		label TEXT
+	)`)
+	// Compiled twin for metadata resolution only.
+	modelbase.Register("dyn_items", func() modelbase.ModelDefiner { return &dynItemsMeta{} })
+	meta := metadata.New(metadata.Config{CacheTTL: -1})
+
+	dynType := reflectDynType()
+	resolver := func(_ context.Context, name string) (any, bool) {
+		if name != "dyn_items" {
+			return nil, false
+		}
+		// Fresh method-less instance per call — proves the assertion is gone.
+		return reflect.New(dynType).Interface(), true
+	}
+	var tableHits int
+	tableResolver := func(_ context.Context, name string) (string, bool) {
+		if name == "dyn_items" {
+			tableHits++
+			return "dyn_items", true
+		}
+		return "", false
+	}
+
+	svc := New(Config{
+		DB:                db,
+		Metadata:          meta,
+		ModelResolver:     resolver,
+		TableNameResolver: tableResolver,
+	})
+	user := newUser(uuid.New())
+	ctx := context.Background()
+
+	// Create — reflect structs get no BeforeCreate hook, so supply the id.
+	id := uuid.New()
+	created, err := svc.Create(ctx, "dyn_items", user, map[string]any{
+		"id":    id.String(),
+		"label": "alpha",
+	})
+	if err != nil {
+		t.Fatalf("create method-less model: %v", err)
+	}
+	if created["label"] != "alpha" {
+		t.Fatalf("label = %v, want alpha", created["label"])
+	}
+
+	// Get
+	got, err := svc.Get(ctx, "dyn_items", user, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got["label"] != "alpha" {
+		t.Fatalf("get label = %v, want alpha", got["label"])
+	}
+
+	// List — this is the exact path that 500'd in the host ("model type not
+	// found in query"): it must return the row, not blow up.
+	items, pm, err := svc.List(ctx, "dyn_items", user, query.Params{Page: 1, PerPage: 10})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(items) != 1 || pm.Total != 1 {
+		t.Fatalf("list len/total = %d/%d, want 1/1", len(items), pm.Total)
+	}
+
+	// Update
+	if _, err := svc.Update(ctx, "dyn_items", user, id, map[string]any{"label": "beta"}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	reGot, _ := svc.Get(ctx, "dyn_items", user, id)
+	if reGot["label"] != "beta" {
+		t.Fatalf("after update label = %v, want beta", reGot["label"])
+	}
+
+	// Delete
+	if err := svc.Delete(ctx, "dyn_items", user, id); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := svc.Get(ctx, "dyn_items", user, id); err != ErrRecordNotFound {
+		t.Fatalf("after delete, get = %v, want ErrRecordNotFound", err)
+	}
+
+	if tableHits == 0 {
+		t.Fatal("TableNameResolver was never consulted — the CRUD paths are not using it")
+	}
+}
+
+// TestTableNameResolver_FallsBackToModelDefiner confirms the new resolver is
+// strictly additive: when no TableNameResolver is wired, a model that DOES
+// implement ModelDefiner still resolves its table the old way.
+func TestTableNameResolver_FallsBackToModelDefiner(t *testing.T) {
+	db := setupTestDB(t)
+	svc := setupService(t, db) // no TableNameResolver
+	user := newUser(uuid.New())
+
+	created := createProduct(t, svc, user, "Compiled", 7)
+	if created["name"] != "Compiled" {
+		t.Fatalf("name = %v, want Compiled", created["name"])
 	}
 }

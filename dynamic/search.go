@@ -48,12 +48,14 @@ func (s *Service) Search(ctx context.Context, user modelbase.AuthUser, q SearchQ
 		return nil, ErrNoSearchConfig
 	}
 
-	tableName, err := s.tableNameFor(instance)
+	tableName, err := s.tableNameFor(ctx, q.Model, instance)
 	if err != nil {
 		return nil, err
 	}
 
-	db := s.db.WithContext(ctx).Model(instance)
+	// .Model(instance) drives column mapping; .Table pins the FROM so
+	// reflect-built addon models (no TableName() method) resolve correctly.
+	db := s.db.WithContext(ctx).Model(instance).Table(tableName)
 
 	// Scope only if the root model carries an OrganizationID column and a user
 	// is available (read-without-auth is allowed, but obviously without scope).
@@ -192,12 +194,18 @@ func projectSearch(results reflect.Value, cfg SearchConfig) []Option {
 	return out
 }
 
-// tableNameFor resolves the database table for a model instance. Models that
-// implement modelbase.ModelDefiner (TableName) take priority; otherwise we
-// fall back to gorm's own schema parsing so models that rely on the default
-// pluralized naming (and most do) keep working without implementing the
-// interface explicitly.
-func (s *Service) tableNameFor(instance any) (string, error) {
+// tableNameFor resolves the database table for a model. Resolution order:
+//  1. a host-supplied TableNameResolver (required for reflect-built addon models
+//     that cannot carry a Go TableName() method),
+//  2. modelbase.ModelDefiner.TableName() when the instance implements it,
+//  3. gorm's own schema parsing so models that rely on default pluralized
+//     naming keep working without implementing the interface explicitly.
+func (s *Service) tableNameFor(ctx context.Context, model string, instance any) (string, error) {
+	if s.tableNameResolver != nil {
+		if name, ok := s.tableNameResolver(ctx, model); ok && name != "" {
+			return name, nil
+		}
+	}
 	if def, ok := instance.(modelbase.ModelDefiner); ok {
 		return def.TableName(), nil
 	}
