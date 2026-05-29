@@ -99,4 +99,35 @@
 // raw-SQL interpolation. Unknown sort columns and unknown filter keys are
 // dropped silently so that a malicious client cannot probe for column
 // existence via error responses.
+//
+// # Ops dialect (additive, opt-in)
+//
+// A host that needs the richer ops wire-syntax opts in WITHOUT forking:
+//
+//	qb := query.New(meta, query.WithOpsDialect()).WithTableName("orders")
+//	params, _ := qb.ParseValues(req.URL.Query())  // ops parser
+//	q := qb.Apply(db, params)
+//	total, _ := qb.Count(q, params)
+//	var rows []Order
+//	qb.Paginate(q, params).Find(&rows)
+//	meta := qb.OpsMeta(total, len(rows), params)   // full envelope
+//
+// The ops dialect adds these per-value operators (case-insensitive token
+// before the first ':') on top of the default set:
+//
+//	IN:a,b,c        NOT_IN:a,b,c
+//	LIKE:txt        (case-sensitive, %txt%, ESCAPE '\')
+//	ILIKE:txt       (unaccent + case-insensitive)
+//	GT/LT/GTE/LTE:n (numeric; non-numeric arg → clause dropped)
+//	RANGE:min,max   (numeric, either side optional)
+//	NULL  NOT_NULL  (IS [NOT] NULL)
+//	YYYY-MM-DD_YYYY-MM-DD  (date range, end snapped to 23:59:59)
+//	f_fiscal_data.<key>=v (JSONB ->> equality)
+//	repeated f_<col> params → IN
+//
+// Default callers (New(meta) with no options) are byte-for-byte unchanged:
+// ParseValues delegates to ParseFromMap, PageMeta omits the new envelope
+// keys, and Apply never consults the dialect. WithFilterDialect lets a host
+// supply an arbitrary per-value decoder; OpsMeta derives the ops-compatible
+// {current_page, from, to, ...} envelope on demand.
 package query

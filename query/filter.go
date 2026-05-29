@@ -22,6 +22,57 @@ const (
 	OpRange FilterOp = "range"
 )
 
+// Extended operator constants used by the ops filter dialect (see
+// dialect.go / ParseOpsFilters). These are ADDITIVE: the default parser
+// (ParseFromMap) never emits them, so existing consumers see no change.
+// applyOneFilter dispatches on them; an op a given switch does not handle
+// degrades to a dropped clause (the kernel's "garbage in → safe degrade"
+// policy), never a panic.
+const (
+	// OpNotIn is `<col> NOT IN ?`. Value: []string.
+	OpNotIn FilterOp = "not_in"
+	// OpLike is a CASE-SENSITIVE `<col> LIKE ? ESCAPE '\'` wrapped in
+	// %...%. Value: string. Distinct from OpIlike which is case- and
+	// accent-insensitive via unaccent().
+	OpLike FilterOp = "like"
+	// OpGt is `<col> > ?` with a numeric (float64) value.
+	OpGt FilterOp = "gt"
+	// OpLt is `<col> < ?` with a numeric (float64) value.
+	OpLt FilterOp = "lt"
+	// OpNumGte is `<col> >= ?` with a numeric (float64) value. Distinct
+	// from OpGte (string), which ops does not use for the GTE operator.
+	OpNumGte FilterOp = "num_gte"
+	// OpNumLte is `<col> <= ?` with a numeric (float64) value.
+	OpNumLte FilterOp = "num_lte"
+	// OpNumRange is `<col> >= ? [AND <col> <= ?]` over a numeric range.
+	// Value: [2]*float64 (nil side omitted).
+	OpNumRange FilterOp = "num_range"
+	// OpUnaccentIlike is the ops ILIKE: accent- and case-insensitive via
+	// `unaccent(<col>) ILIKE unaccent(?) ESCAPE '\'`. Value: string.
+	OpUnaccentIlike FilterOp = "unaccent_ilike"
+	// OpNull is `<col> IS NULL`. Value is ignored.
+	OpNull FilterOp = "null"
+	// OpNotNull is `<col> IS NOT NULL`. Value is ignored.
+	OpNotNull FilterOp = "not_null"
+	// OpDateRange is `<col> >= ? AND <col> <= ?` over two time.Time
+	// bounds (end snapped to 23:59:59). Value: [2]time.Time.
+	OpDateRange FilterOp = "date_range"
+	// OpJSONBEq is `<jsonbcol>->>? = ?` exact match on a JSONB key.
+	// Value: JSONBFilter{Key, Val}. The bound column carries the JSONB
+	// column name; the key/value are bound as parameters.
+	OpJSONBEq FilterOp = "jsonb_eq"
+)
+
+// JSONBFilter is the Value type for OpJSONBEq. Key is the JSON object key
+// extracted with the `->>` operator; Val is the literal compared for
+// equality. Both are passed as bound parameters (no interpolation), so a
+// JSONB filter is injection-safe even though the path bypasses the
+// column whitelist.
+type JSONBFilter struct {
+	Key string
+	Val string
+}
+
 // Filter is a parsed f_<col>=<op>:<value> directive. Value is typed per Op:
 //
 //	OpEq, OpIlike, OpGte, OpLte: string
