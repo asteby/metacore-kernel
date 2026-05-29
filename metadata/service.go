@@ -23,6 +23,17 @@ type Config struct {
 	// falls back to DefaultCacheTTL — pass a small negative (e.g. -1) to
 	// explicitly opt out.
 	CacheTTL time.Duration
+
+	// ModelResolver is an optional hook letting a host resolve models that
+	// are NOT present in the global modelbase registry — e.g. addon-owned
+	// models that ops registers in its own private registry rather than via
+	// modelbase.Register.
+	//
+	// When set, it is consulted FIRST for every model lookup (both table and
+	// modal). If it returns ok==true, its ModelDefiner is used. If it returns
+	// ok==false (or is nil), the lookup falls back to modelbase.Get, so the
+	// zero value preserves the historical behaviour exactly.
+	ModelResolver func(modelKey string) (modelbase.ModelDefiner, bool)
 }
 
 // TableTransformer mutates a TableMetadata after it has been produced by the
@@ -70,6 +81,11 @@ type Service struct {
 	// that AllMetadata.Version gives the frontend a stable cache-buster.
 	cacheVersion uint64
 	startedAt    time.Time
+
+	// modelResolver is the optional host-supplied lookup copied from
+	// Config.ModelResolver in New. Consulted before modelbase.Get; nil
+	// preserves the historical modelbase-only behaviour.
+	modelResolver func(modelKey string) (modelbase.ModelDefiner, bool)
 }
 
 // AllMetadata is the wire payload of GetAll. It is a snapshot of every
@@ -99,9 +115,10 @@ func New(cfg Config) *Service {
 		ttl = 0 // disable
 	}
 	return &Service{
-		cfg:       Config{CacheTTL: ttl},
-		cache:     newCache(ttl),
-		startedAt: time.Now(),
+		cfg:           Config{CacheTTL: ttl, ModelResolver: cfg.ModelResolver},
+		cache:         newCache(ttl),
+		startedAt:     time.Now(),
+		modelResolver: cfg.ModelResolver,
 	}
 }
 
@@ -163,7 +180,7 @@ func (s *Service) GetTable(ctx context.Context, modelKey string) (*modelbase.Tab
 // touching the cache. Both GetTable (cache-miss path) and the
 // org-resolver bypass call into this helper.
 func (s *Service) computeTable(ctx context.Context, modelKey string) (*modelbase.TableMetadata, error) {
-	def, ok := modelbase.Get(modelKey)
+	def, ok := s.resolveModel(modelKey)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrModelNotFound, modelKey)
 	}
@@ -186,6 +203,20 @@ func (s *Service) computeTable(ctx context.Context, modelKey string) (*modelbase
 		}
 	}
 	return &table, nil
+}
+
+// resolveModel looks up a ModelDefiner for modelKey. The host-supplied
+// Config.ModelResolver is consulted FIRST (when set); if it returns ok==true
+// its definer wins. Otherwise — including when no resolver is configured — the
+// lookup falls back to the global modelbase registry, so a Service constructed
+// without a ModelResolver behaves identically to before this hook existed.
+func (s *Service) resolveModel(modelKey string) (modelbase.ModelDefiner, bool) {
+	if s.modelResolver != nil {
+		if def, ok := s.modelResolver(modelKey); ok {
+			return def, true
+		}
+	}
+	return modelbase.Get(modelKey)
 }
 
 // GetModal returns the ModalMetadata for modelKey. See GetTable for caching
@@ -212,7 +243,7 @@ func (s *Service) GetModal(ctx context.Context, modelKey string) (*modelbase.Mod
 }
 
 func (s *Service) computeModal(ctx context.Context, modelKey string) (*modelbase.ModalMetadata, error) {
-	def, ok := modelbase.Get(modelKey)
+	def, ok := s.resolveModel(modelKey)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrModelNotFound, modelKey)
 	}
