@@ -325,6 +325,10 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	s.scope.InjectOnCreate(input, user)
 	input["created_by_id"] = user.GetID()
 
+	// Normalize string-encoded typed fields (uuid/number/bool) so a form that
+	// sends everything as strings doesn't fail the unmarshal. See coerce.go.
+	coerceInputToStruct(input, instance)
+
 	hc := HookContext{Model: model, User: user, DB: s.db}
 	if err := s.hooks.runBeforeCreate(ctx, hc, input); err != nil {
 		return nil, err
@@ -376,6 +380,9 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	// can mutate `instance` — the canonical event needs the pre-mutation row
 	// as `before`.
 	before := toMap(instance)
+
+	// Normalize string-encoded typed fields before merging into the record.
+	coerceInputToStruct(input, instance)
 
 	hc := HookContext{Model: model, User: user, DB: s.db}
 	if err := s.hooks.runBeforeUpdate(ctx, hc, id.String(), input); err != nil {
