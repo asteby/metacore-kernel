@@ -55,6 +55,17 @@ func TestParseOpsFilterValue_NumericNonParseableIsNoop(t *testing.T) {
 	}
 }
 
+// Ops parity: a RANGE without a comma must be DROPPED (noop), not applied as a
+// single-sided `>=`. Matches ops query_sorting.go which requires len(parts)==2.
+func TestParseOpsFilterValue_RangeWithoutCommaIsNoop(t *testing.T) {
+	for _, raw := range []string{"RANGE:5", "RANGE:", "RANGE:abc"} {
+		got := ParseOpsFilterValue(raw)
+		if got.Op != FilterOp("noop") {
+			t.Errorf("ParseOpsFilterValue(%q).Op = %q, want noop (comma required)", raw, got.Op)
+		}
+	}
+}
+
 func TestParseOpsFilterValue_DateRange(t *testing.T) {
 	got := ParseOpsFilterValue("2024-01-01_2024-03-31")
 	if got.Op != OpDateRange {
@@ -78,8 +89,9 @@ func TestParseOpsFilterValue_DateRange(t *testing.T) {
 }
 
 func TestParseOpsFilterValue_NotADateRange(t *testing.T) {
-	// Too short / wrong separator should not be a date range.
-	for _, raw := range []string{"2024-01-01", "2024-01-01:2024-03-31"} {
+	// Too short / wrong separator / extra underscores should not be a date
+	// range (ops splits on "_" and requires EXACTLY two parts).
+	for _, raw := range []string{"2024-01-01", "2024-01-01:2024-03-31", "2024-01-01_2024-03-31_x", "2024-01-01_2024-03-31_2024-04-01"} {
 		got := ParseOpsFilterValue(raw)
 		if got.Op == OpDateRange {
 			t.Errorf("ParseOpsFilterValue(%q) wrongly parsed as date_range", raw)

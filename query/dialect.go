@@ -136,24 +136,19 @@ func noopFilter() Filter {
 // ok=false when the value does not look like a date range so the caller
 // can fall through to operator parsing.
 func parseDateRange(raw string) (Filter, bool) {
-	if len(raw) < 21 {
+	// Match ops semantics exactly: split on "_" and require EXACTLY two parts,
+	// each a full YYYY-MM-DD date. A value with extra underscores (e.g.
+	// "2024-01-01_2024-03-31_x") is NOT a date range — the caller falls through
+	// to operator / literal-eq parsing, identical to ops query_sorting.go.
+	parts := strings.Split(raw, "_")
+	if len(parts) != 2 {
 		return Filter{}, false
 	}
-	us := strings.Index(raw, "_")
-	if us != 10 {
-		return Filter{}, false
-	}
-	startStr := raw[:10]
-	endStr := raw[11:]
-	if len(endStr) < 10 {
-		return Filter{}, false
-	}
-	endStr = endStr[:10]
-	start, err := time.Parse(dateRangeLayout, startStr)
+	start, err := time.Parse(dateRangeLayout, parts[0])
 	if err != nil {
 		return Filter{}, false
 	}
-	end, err := time.Parse(dateRangeLayout, endStr)
+	end, err := time.Parse(dateRangeLayout, parts[1])
 	if err != nil {
 		return Filter{}, false
 	}
@@ -163,21 +158,22 @@ func parseDateRange(raw string) (Filter, bool) {
 	return Filter{Op: OpDateRange, Value: [2]time.Time{start, end}}, true
 }
 
-// parseNumRange decodes `RANGE:min,max` where either side may be empty.
-// Non-numeric sides are dropped. If neither side parses, the filter is a
+// parseNumRange decodes `RANGE:min,max`. Match ops semantics exactly: a comma
+// is REQUIRED (ops needs len(parts)==2) — `RANGE:5` without a comma is dropped,
+// NOT treated as `>= 5`. Either side may be empty (`RANGE:5,` → >=5;
+// `RANGE:,10` → <=10). Non-numeric sides are dropped; if neither parses it's a
 // no-op.
 func parseNumRange(arg string) Filter {
 	parts := strings.SplitN(arg, ",", 2)
-	var rng [2]*float64
-	if len(parts) >= 1 {
-		if n, ok := parseFloat(strings.TrimSpace(parts[0])); ok {
-			rng[0] = &n
-		}
+	if len(parts) != 2 {
+		return noopFilter()
 	}
-	if len(parts) == 2 {
-		if n, ok := parseFloat(strings.TrimSpace(parts[1])); ok {
-			rng[1] = &n
-		}
+	var rng [2]*float64
+	if n, ok := parseFloat(strings.TrimSpace(parts[0])); ok {
+		rng[0] = &n
+	}
+	if n, ok := parseFloat(strings.TrimSpace(parts[1])); ok {
+		rng[1] = &n
 	}
 	if rng[0] == nil && rng[1] == nil {
 		return noopFilter()
