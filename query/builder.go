@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/asteby/metacore-kernel/modelbase"
 	"gorm.io/gorm"
@@ -39,21 +40,77 @@ type Builder struct {
 	// joins are present. Populated by WithTableName; callers that do
 	// not set it fall back to bare column names.
 	tableName string
+
+	// dialect, when non-nil, is the per-value filter decoder a host has
+	// opted into via WithFilterDialect. It is used ONLY by ParseValues
+	// (the builder-driven parser); Apply never touches it. nil means the
+	// default dialect (parseFilterValue) — i.e. exactly today's
+	// behaviour. This is the extensibility lever: a host wires the ops
+	// dialect (or its own) without forking the kernel.
+	dialect ParseFilterValue
+
+	// opsParse, when true, routes ParseValues through ParseOpsFromValues
+	// so the ops JSONB / native-array / relation promotions apply, not
+	// just the per-value dialect. Set by WithOpsDialect.
+	opsParse bool
+}
+
+// Option configures a Builder at construction. Options are applied in
+// order after the meta-derived state is built. The variadic form keeps
+// New(meta) backward-compatible: callers that pass no options compile and
+// behave exactly as before.
+type Option func(*Builder)
+
+// WithFilterDialect selects the per-value filter dialect the builder's
+// ParseValues method uses. Passing ParseOpsFilterValue opts a host into
+// the full ops wire-syntax (operators + RANGE + date-range). Passing nil,
+// or omitting the option entirely, leaves the default dialect in place —
+// preserving today's behaviour for every existing consumer.
+//
+//	qb := query.New(meta, query.WithFilterDialect(query.ParseOpsFilterValue))
+func WithFilterDialect(d ParseFilterValue) Option {
+	return func(b *Builder) { b.dialect = d }
+}
+
+// WithOpsDialect is the ergonomic shorthand that opts a host fully into the
+// ops wire-syntax: it sets the per-value dialect to ParseOpsFilterValue AND
+// routes Builder.ParseValues through ParseOpsFromValues (so JSONB-path,
+// relation, and native-array promotions apply). Omitting it leaves the
+// builder on the default parser — today's behaviour, byte-for-byte.
+//
+//	qb := query.New(meta, query.WithOpsDialect())
+//	params, _ := qb.ParseValues(req.URL.Query())
+func WithOpsDialect() Option {
+	return func(b *Builder) {
+		b.dialect = ParseOpsFilterValue
+		b.opsParse = true
+	}
 }
 
 // New constructs a Builder bound to a TableMetadata. A nil meta is
 // tolerated (yields a Builder that permits nothing — handy for tests of
 // the error paths) but production callers should always pass a real one.
-func New(meta *modelbase.TableMetadata) *Builder {
+func New(meta *modelbase.TableMetadata, opts ...Option) *Builder {
 	b := &Builder{
 		meta:      meta,
 		allowed:   map[string]struct{}{},
 		relations: map[string]modelbase.RelationDef{},
 	}
-	if meta == nil {
-		return b
+	if meta != nil {
+		buildAllowed(b, meta)
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(b)
+		}
+	}
+	return b
+}
 
+// buildAllowed populates the whitelist + searchable set from meta. Split
+// out of New so the variadic options can be applied afterwards without
+// duplicating the derivation.
+func buildAllowed(b *Builder, meta *modelbase.TableMetadata) {
 	for _, col := range meta.Columns {
 		if col.Key == "" || !isSafeIdent(col.Key) {
 			continue
@@ -69,7 +126,6 @@ func New(meta *modelbase.TableMetadata) *Builder {
 		}
 		b.searchable = append(b.searchable, s)
 	}
-	return b
 }
 
 // WithRelations binds the relation set the builder may JOIN against
@@ -180,12 +236,82 @@ func (b *Builder) PageMeta(total int64, params Params) PageMeta {
 }
 
 // PageMeta is the JSON envelope the frontend consumes for pagination.
-// The tags are load-bearing — changing them is a MAJOR bump.
+// The tags are load-bearing — changing or removing them is a MAJOR bump.
+// ADDING fields (with their own json tag) is backward-compatible: existing
+// JSON consumers ignore unknown keys.
+//
+// CurrentPage, From and To were added for the ops envelope; they are
+// `omitempty` so the default PageMeta (built by PageMeta()) serialises
+// EXACTLY as before — the new keys never appear unless OpsMeta populates
+// them. This keeps every existing consumer byte-for-byte identical.
 type PageMeta struct {
 	Total    int64 `json:"total"`
 	Page     int   `json:"page"`
 	PerPage  int   `json:"per_page"`
 	LastPage int   `json:"last_page"`
+
+	// CurrentPage mirrors Page under the snake_case key the ops frontend
+	// reads. Omitted unless set by OpsMeta.
+	CurrentPage int `json:"current_page,omitempty"`
+	// From is the 1-indexed position of the first row on this page
+	// (offset+1), or 0 when the page is empty. Omitted unless set by
+	// OpsMeta.
+	From int `json:"from,omitempty"`
+	// To is the 1-indexed position of the last row on this page
+	// (offset+len(rows)). Omitted unless set by OpsMeta.
+	To int `json:"to,omitempty"`
+}
+
+// OpsMeta builds the full ops-compatible pagination envelope. It is a
+// superset of PageMeta: the four base fields plus current_page, from and
+// to. rowCount is the number of rows actually returned for the current
+// page (len(results)) and is required to compute `to` precisely on a short
+// final page. Pass 0 when the row count is unknown — `from`/`to` then
+// reflect the requested window.
+//
+// This method is ADDITIVE; PageMeta() is unchanged and remains the default
+// envelope for every existing consumer.
+func (b *Builder) OpsMeta(total int64, rowCount int, params Params) PageMeta {
+	m := b.PageMeta(total, params)
+	page, perPage := b.normalizePage(params)
+	offset := (page - 1) * perPage
+	m.CurrentPage = page
+	if total == 0 || rowCount == 0 && offset >= int(total) {
+		// Empty page: from/to stay 0.
+		return m
+	}
+	m.From = offset + 1
+	if rowCount > 0 {
+		m.To = offset + rowCount
+	} else {
+		// Unknown row count → assume a full page, clamped to total.
+		to := offset + perPage
+		if int64(to) > total {
+			to = int(total)
+		}
+		m.To = to
+	}
+	return m
+}
+
+// ParseValues parses request parameters honouring the builder's
+// configured filter dialect. When no dialect was set (WithFilterDialect
+// omitted) it delegates to ParseFromMap — the exact default behaviour.
+// When the ops dialect is configured it delegates to ParseOpsFromValues so
+// the full ops wire-syntax (operators, RANGE, date-range, JSONB) is
+// honoured. Hosts call this instead of the free parser functions when they
+// want a single builder-driven entry point.
+func (b *Builder) ParseValues(values map[string][]string) (Params, error) {
+	if b.opsParse {
+		return ParseOpsFromValues(values)
+	}
+	if b.dialect != nil {
+		// A custom per-value dialect without the full ops promotions:
+		// parse with ParseFromMap's structure but decode flat filter
+		// values through the supplied dialect.
+		return parseWithDialect(values, b.dialect)
+	}
+	return ParseFromMap(values)
 }
 
 // normalizePage returns the effective page and per-page for params,
@@ -294,6 +420,83 @@ func applyOneFilter(db *gorm.DB, col string, f Filter) *gorm.DB {
 		case rng[1] != "":
 			return db.Where(fmt.Sprintf("%s <= ?", col), rng[1])
 		}
+	// --- Extended ops dialect operators (additive). ---
+	case OpNotIn:
+		vals, ok := f.Value.([]string)
+		if !ok || len(vals) == 0 {
+			return db
+		}
+		return db.Where(fmt.Sprintf("%s NOT IN ?", col), vals)
+	case OpLike:
+		v, ok := f.Value.(string)
+		if !ok || v == "" {
+			return db
+		}
+		// Case-sensitive LIKE with explicit escape, matching ops.
+		return db.Where(fmt.Sprintf("%s LIKE ? ESCAPE '\\'", col), "%"+escapeLike(v)+"%")
+	case OpUnaccentIlike:
+		v, ok := f.Value.(string)
+		if !ok || v == "" {
+			return db
+		}
+		// Accent- and case-insensitive, requires the unaccent extension.
+		return db.Where(
+			fmt.Sprintf("unaccent(%s) ILIKE unaccent(?) ESCAPE '\\'", col),
+			"%"+escapeLike(v)+"%",
+		)
+	case OpGt:
+		n, ok := f.Value.(float64)
+		if !ok {
+			return db
+		}
+		return db.Where(fmt.Sprintf("%s > ?", col), n)
+	case OpLt:
+		n, ok := f.Value.(float64)
+		if !ok {
+			return db
+		}
+		return db.Where(fmt.Sprintf("%s < ?", col), n)
+	case OpNumGte:
+		n, ok := f.Value.(float64)
+		if !ok {
+			return db
+		}
+		return db.Where(fmt.Sprintf("%s >= ?", col), n)
+	case OpNumLte:
+		n, ok := f.Value.(float64)
+		if !ok {
+			return db
+		}
+		return db.Where(fmt.Sprintf("%s <= ?", col), n)
+	case OpNumRange:
+		rng, ok := f.Value.([2]*float64)
+		if !ok {
+			return db
+		}
+		if rng[0] != nil {
+			db = db.Where(fmt.Sprintf("%s >= ?", col), *rng[0])
+		}
+		if rng[1] != nil {
+			db = db.Where(fmt.Sprintf("%s <= ?", col), *rng[1])
+		}
+		return db
+	case OpDateRange:
+		bounds, ok := f.Value.([2]time.Time)
+		if !ok {
+			return db
+		}
+		return db.Where(fmt.Sprintf("%s >= ? AND %s <= ?", col, col), bounds[0], bounds[1])
+	case OpNull:
+		return db.Where(fmt.Sprintf("%s IS NULL", col))
+	case OpNotNull:
+		return db.Where(fmt.Sprintf("%s IS NOT NULL", col))
+	case OpJSONBEq:
+		jf, ok := f.Value.(JSONBFilter)
+		if !ok || jf.Key == "" {
+			return db
+		}
+		// col is the JSONB column name (whitelisted); key + value bound.
+		return db.Where(fmt.Sprintf("%s->>? = ?", col), jf.Key, jf.Val)
 	}
 	return db
 }
