@@ -150,6 +150,7 @@ type Service struct {
 	optsResolver      OptionsConfigResolver
 	searchResolver    SearchConfigResolver
 	matchClause       SearchMatchClause
+	listSearchClause  SearchMatchClause // explicit-only; threaded into List's builder search
 	modelResolver     ModelResolver
 	tableNameResolver TableNameResolver
 	bus               Publisher
@@ -170,6 +171,11 @@ func New(cfg Config) *Service {
 	if cfg.Scoper == nil {
 		cfg.Scoper = OrganizationScoper{}
 	}
+	// Capture whether the host explicitly provided a search clause BEFORE
+	// defaulting — only an explicit clause is threaded into List's builder, so
+	// List's default search behaviour (builder ILIKE) is unchanged unless the
+	// host opts in (e.g. ops wires unaccent ILIKE for accent-insensitive search).
+	explicitSearchClause := cfg.SearchMatchClause
 	if cfg.SearchMatchClause == nil {
 		cfg.SearchMatchClause = defaultSearchMatchClause
 	}
@@ -191,6 +197,7 @@ func New(cfg Config) *Service {
 		optsResolver:      cfg.OptionsConfigResolver,
 		searchResolver:    cfg.SearchConfigResolver,
 		matchClause:       cfg.SearchMatchClause,
+		listSearchClause:  explicitSearchClause,
 		modelResolver:     cfg.ModelResolver,
 		tableNameResolver: cfg.TableNameResolver,
 		bus:               cfg.Bus,
@@ -228,6 +235,18 @@ func defaultSearchMatchClause(col, q string) (string, any) {
 
 func (c Config) Perms() *permission.Service { return c.Permissions }
 
+// listBuilderOpts returns the query.Builder options for List. Currently it only
+// threads a host-supplied search clause (e.g. unaccent ILIKE) when one was
+// explicitly configured; otherwise List keeps the builder's default ILIKE. Kept
+// as a helper so future List-only builder options have one wiring point.
+func (s *Service) listBuilderOpts() []query.Option {
+	var opts []query.Option
+	if s.listSearchClause != nil {
+		opts = append(opts, query.WithSearchClause(query.SearchClause(s.listSearchClause)))
+	}
+	return opts
+}
+
 // List returns paginated, filtered, sorted records for a model.
 func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUser, params query.Params) ([]map[string]any, query.PageMeta, error) {
 	instance, tableMeta, err := s.resolveModel(ctx, model)
@@ -252,7 +271,7 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	// f_<relation>.<field> filters work without callers having to plumb
 	// HasRelations themselves. Models that do not implement HasRelations
 	// get an empty relation set — the new query features are no-ops.
-	builder := query.New(tableMeta).WithTableName(tableName)
+	builder := query.New(tableMeta, s.listBuilderOpts()...).WithTableName(tableName)
 	if rels, ok := instance.(modelbase.HasRelations); ok {
 		builder = builder.WithRelations(rels.DefineRelations())
 	}

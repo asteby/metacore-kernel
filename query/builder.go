@@ -53,7 +53,20 @@ type Builder struct {
 	// so the ops JSONB / native-array / relation promotions apply, not
 	// just the per-value dialect. Set by WithOpsDialect.
 	opsParse bool
+
+	// searchClause, when non-nil, builds the per-column SQL fragment + bind
+	// value for the free-text search OR-clause. Set via WithSearchClause. nil
+	// means the default `<col> ILIKE ?` with `%term%` — i.e. exactly today's
+	// behaviour. Hosts wire a dialect-specific clause (e.g. Postgres
+	// `unaccent(<col>) ILIKE unaccent(?)`) without forking the kernel.
+	searchClause SearchClause
 }
+
+// SearchClause builds the SQL fragment and bind value for ONE column of the
+// free-text search OR-clause. Mirrors the dynamic.SearchMatchClause shape so a
+// host can pass the same function to both Options/Search and List. Returning
+// ("", nil) skips the column.
+type SearchClause func(col, term string) (fragment string, value any)
 
 // Option configures a Builder at construction. Options are applied in
 // order after the meta-derived state is built. The variadic form keeps
@@ -85,6 +98,17 @@ func WithOpsDialect() Option {
 		b.dialect = ParseOpsFilterValue
 		b.opsParse = true
 	}
+}
+
+// WithSearchClause sets the per-column match clause for the free-text `search`
+// param. Omitting it (or passing nil) keeps the default `<col> ILIKE ?` —
+// today's behaviour. A Postgres host with the unaccent extension typically wires:
+//
+//	query.New(meta, query.WithSearchClause(func(col, q string) (string, any) {
+//	    return fmt.Sprintf("unaccent(%s) ILIKE unaccent(?)", col), "%" + q + "%"
+//	}))
+func WithSearchClause(c SearchClause) Option {
+	return func(b *Builder) { b.searchClause = c }
 }
 
 // New constructs a Builder bound to a TableMetadata. A nil meta is
@@ -522,6 +546,16 @@ func (b *Builder) applySearch(db *gorm.DB, params Params) *gorm.DB {
 		// Defence-in-depth: col already checked at New time, re-check
 		// in case meta was mutated between New and Apply (tests do this).
 		if !isSafeIdent(col) {
+			continue
+		}
+		// Host-supplied clause (e.g. unaccent ILIKE) wins; default is ILIKE.
+		if b.searchClause != nil {
+			frag, val := b.searchClause(col, term)
+			if frag == "" {
+				continue
+			}
+			conds = append(conds, frag)
+			args = append(args, val)
 			continue
 		}
 		conds = append(conds, fmt.Sprintf("%s ILIKE ?", col))

@@ -379,6 +379,34 @@ func TestApply_SearchNoSearchColumns_NoOp(t *testing.T) {
 	}
 }
 
+// WithSearchClause lets a host swap the default ILIKE for a dialect-specific
+// match (e.g. Postgres unaccent ILIKE) — closes the ops "search" List gate.
+func TestApply_SearchCustomClause(t *testing.T) {
+	b := New(testMeta(), WithSearchClause(func(col, q string) (string, any) {
+		return "unaccent(" + col + ") ILIKE unaccent(?)", "%" + q + "%"
+	}))
+	db := openDryDB(t)
+	q := b.Apply(db.Model(&testRow{}), Params{Search: "piñata"})
+	sql := renderSQL(t, q)
+	if !strings.Contains(sql, "unaccent(name)") || !strings.Contains(sql, "unaccent(status)") {
+		t.Errorf("want unaccent over both search columns, got %q", sql)
+	}
+	if !strings.Contains(strings.ToUpper(sql), " OR ") {
+		t.Errorf("want OR between columns, got %q", sql)
+	}
+}
+
+// Default (no WithSearchClause) must stay byte-for-byte ILIKE — additivity.
+func TestApply_SearchDefaultUnchangedByOption(t *testing.T) {
+	b := New(testMeta()) // no option
+	db := openDryDB(t)
+	q := b.Apply(db.Model(&testRow{}), Params{Search: "widget"})
+	sql := renderSQL(t, q)
+	if !strings.Contains(sql, "name ILIKE") || strings.Contains(sql, "unaccent") {
+		t.Errorf("default must be plain ILIKE, got %q", sql)
+	}
+}
+
 // -----------------------------------------------------------------
 // Pagination / PageMeta
 // -----------------------------------------------------------------
