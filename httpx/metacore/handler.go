@@ -442,29 +442,34 @@ func (h *Handler) ServeAddonFrontend(c fiber.Ctx) error {
 	if h.deps.FrontendBasePath == "" {
 		return c.Status(fiber.StatusNotFound).SendString("frontend serving disabled")
 	}
-	orgID, ok := orgIDFromCtx(c)
-	if !ok {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"success": false,
-			"message": "organization context required",
-		})
-	}
 	addonKey := c.Params("key")
 	subpath := strings.TrimPrefix(c.Params("*"), "/")
 	if addonKey == "" || subpath == "" {
 		return c.Status(fiber.StatusBadRequest).SendString("key and path required")
 	}
 
-	// Installation scope check: only serve for addons enabled in this org.
-	var count int64
-	if err := h.deps.Bridge.Host().Installer.DB.
-		Model(&installer.Installation{}).
-		Where("organization_id = ? AND addon_key = ? AND status = ?", orgID, addonKey, "enabled").
-		Count(&count).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
-	}
-	if count == 0 {
-		return c.Status(fiber.StatusNotFound).SendString("addon not installed for organization")
+	// Federation bundles are PUBLIC static frontend assets. The browser's
+	// module loader fetches remoteEntry.js — and every lazy chunk it imports —
+	// via plain <script>/import() with no way to attach the host's bearer
+	// token, so gating this route on auth makes federated addon UIs impossible
+	// to load (the request 401s and the browser refuses the JSON error as a
+	// module). The bundle is non-sensitive client code; the data layer stays
+	// behind the authenticated API. So: when org context IS present we still
+	// scope the serve to addons enabled for that org (defence in depth for
+	// authenticated callers); when it is absent — the normal script-load case —
+	// we serve the static asset anyway. Hosts mount this route without their
+	// auth middleware to make it publicly reachable.
+	if orgID, ok := orgIDFromCtx(c); ok {
+		var count int64
+		if err := h.deps.Bridge.Host().Installer.DB.
+			Model(&installer.Installation{}).
+			Where("organization_id = ? AND addon_key = ? AND status = ?", orgID, addonKey, "enabled").
+			Count(&count).Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		}
+		if count == 0 {
+			return c.Status(fiber.StatusNotFound).SendString("addon not installed for organization")
+		}
 	}
 
 	dir := installer.FrontendDir(h.deps.FrontendBasePath, addonKey)
