@@ -940,6 +940,11 @@
         "target_model": {
           "type": "string"
         },
+        "placement": {
+          "type": "string",
+          "enum": ["row", "table", "create"],
+          "description": "Where the host surfaces the trigger: 'row' (per-row table action, default), 'table' (page toolbar button), or 'create' (toolbar button that replaces the generic create button for a custom create experience)."
+        },
         "fields": {
           "type": "array",
           "description": "Declarative form rendered in the action modal before dispatch.",

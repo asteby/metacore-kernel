@@ -58,7 +58,8 @@ const richManifestJSON = `{
         "label": "Open Checkout",
         "target_model": "order",
         "handler": { "type": "webhook", "url": "https://example.com/hook" },
-        "modal": "checkout_panel"
+        "modal": "checkout_panel",
+        "placement": "create"
       }
     ]
   }
@@ -125,6 +126,13 @@ func TestFromV3_ActionFieldsAndModal(t *testing.T) {
 	}
 	if checkout.Modal != "checkout_panel" {
 		t.Errorf("checkout.Modal = %q, want checkout_panel", checkout.Modal)
+	}
+	if checkout.Placement != "create" {
+		t.Errorf("checkout.Placement = %q, want create", checkout.Placement)
+	}
+	// 'refund' declared no placement → empty (host defaults to row).
+	if refund.Placement != "" {
+		t.Errorf("refund.Placement = %q, want empty (row default)", refund.Placement)
 	}
 	if checkout.Trigger == nil || checkout.Trigger.Type != "webhook" {
 		t.Errorf("checkout.Trigger = %+v, want webhook", checkout.Trigger)
