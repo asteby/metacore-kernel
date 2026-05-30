@@ -117,8 +117,9 @@ type ActionDef struct {
 	Icon           string      `json:"icon,omitempty"`
 	Class          string      `json:"class,omitempty"`
 	Color          string      `json:"color,omitempty"`
-	Type           string      `json:"type,omitempty"`    // custom, link
-	LinkURL        string      `json:"linkUrl,omitempty"` // URL pattern for type=link
+	Type           string      `json:"type,omitempty"`      // custom, link
+	LinkURL        string      `json:"linkUrl,omitempty"`   // URL pattern for type=link
+	Placement      string      `json:"placement,omitempty"` // "row" (default), "table", or "create" — see manifest/v3.Action.Placement
 	Condition      interface{} `json:"condition,omitempty"`
 	Confirm        bool        `json:"confirm,omitempty"`
 	ConfirmMessage string      `json:"confirmMessage,omitempty"`

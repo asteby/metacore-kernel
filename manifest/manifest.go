@@ -290,7 +290,8 @@ type ActionDef struct {
 	RequiresState  []string   `json:"requiresState,omitempty"`
 	Confirm        bool       `json:"confirm,omitempty"`
 	ConfirmMessage string     `json:"confirmMessage,omitempty"`
-	Modal          string     `json:"modal,omitempty"` // slot name for a custom modal
+	Modal          string     `json:"modal,omitempty"`     // slot name for a custom modal
+	Placement      string     `json:"placement,omitempty"` // "row" (default), "table", or "create" — see v3.Action.Placement
 
 	// Trigger declares how the action dispatches when invoked. Optional —
 	// when nil the legacy behaviour applies (the host resolves the action via

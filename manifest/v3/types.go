@@ -229,6 +229,17 @@ type Action struct {
 	Handler     Handler `json:"handler"`
 	TargetModel string  `json:"target_model,omitempty"`
 
+	// Placement declares where the host surfaces the action's trigger.
+	//   ""/"row" — a per-row action in the model's table (default; executes
+	//              against the hovered record).
+	//   "table"  — a toolbar button at the page level (no record context).
+	//   "create" — a toolbar button that REPLACES the generic "create" button,
+	//              for addons that ship a custom create experience (e.g. a
+	//              journal entry with debit/credit lines). Opens with an empty
+	//              record; the host suppresses its default create button.
+	// Hosts that don't understand a value fall back to "row".
+	Placement string `json:"placement,omitempty"`
+
 	// Fields declares a declarative form the host renders in the action modal
 	// before dispatching the handler. Optional — an action with no fields and
 	// no modal is a plain one-click action.

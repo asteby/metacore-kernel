@@ -321,6 +321,7 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 			Confirm:        a.Confirm,
 			ConfirmMessage: a.ConfirmMessage,
 			Modal:          a.Modal,
+			Placement:      a.Placement,
 			Fields:         mapActionFields(a.Fields),
 		}
 		switch a.Handler.Type {
