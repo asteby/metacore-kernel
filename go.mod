@@ -15,7 +15,7 @@ require (
 	github.com/pressly/goose/v3 v3.27.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
-	github.com/tetratelabs/wazero v1.11.0
+	github.com/tetratelabs/wazero v1.12.0
 	github.com/valyala/fasthttp v1.71.0
 	golang.org/x/crypto v0.52.0
 	golang.org/x/sync v0.20.0
