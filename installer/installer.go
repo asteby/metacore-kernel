@@ -62,33 +62,34 @@ import (
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Installation is the kernel's persisted record. Host apps may extend it.
 type Installation struct {
-	ID             uuid.UUID      `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	OrganizationID uuid.UUID      `gorm:"type:uuid;not null;uniqueIndex:idx_org_addon" json:"organization_id"`
-	AddonKey       string         `gorm:"size:100;not null;uniqueIndex:idx_org_addon" json:"addon_key"`
-	Version        string         `gorm:"size:40;not null" json:"version"`
-	Status         string         `gorm:"size:20;not null;default:'enabled'" json:"status"`
-	Source         string         `gorm:"size:20;not null" json:"source"` // compiled | bundle | federated
-	SecretHash     string         `gorm:"size:128" json:"-"`              // hash of install-time secret
+	ID             uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	OrganizationID uuid.UUID `gorm:"type:uuid;not null;uniqueIndex:idx_org_addon" json:"organization_id"`
+	AddonKey       string    `gorm:"size:100;not null;uniqueIndex:idx_org_addon" json:"addon_key"`
+	Version        string    `gorm:"size:40;not null" json:"version"`
+	Status         string    `gorm:"size:20;not null;default:'enabled'" json:"status"`
+	Source         string    `gorm:"size:20;not null" json:"source"` // compiled | bundle | federated
+	SecretHash     string    `gorm:"size:128" json:"-"`              // hash of install-time secret
 	// SecretEnc stores the per-installation HMAC secret encrypted with the
 	// host's master key (AES-256-GCM, base64). Only populated when the
 	// Installer is constructed with a MasterKey. Hosts with a KMS can ignore
 	// this and supply their own SecretResolver.
-	SecretEnc      string         `gorm:"size:512;column:secret_enc" json:"-"`
-	Settings       map[string]any `gorm:"serializer:json;type:jsonb" json:"settings"`
+	SecretEnc string         `gorm:"size:512;column:secret_enc" json:"-"`
+	Settings  map[string]any `gorm:"serializer:json;type:jsonb" json:"settings"`
 	// ManifestHash is the SHA-256 of the manifest as it landed on disk. The
 	// installer recomputes it on every Install and compares against the
 	// previous value to drive ManifestChangeBroadcaster hot-swap signals so
 	// the frontend can invalidate its metadata-cache without polling. Empty
 	// on legacy rows that pre-date this column — they are auto-populated on
 	// the first reinstall.
-	ManifestHash   string         `gorm:"size:80;column:manifest_hash" json:"manifest_hash,omitempty"`
-	InstalledAt    time.Time      `gorm:"autoCreateTime" json:"installed_at"`
-	EnabledAt      *time.Time     `json:"enabled_at,omitempty"`
-	DisabledAt     *time.Time     `json:"disabled_at,omitempty"`
+	ManifestHash string     `gorm:"size:80;column:manifest_hash" json:"manifest_hash,omitempty"`
+	InstalledAt  time.Time  `gorm:"autoCreateTime" json:"installed_at"`
+	EnabledAt    *time.Time `json:"enabled_at,omitempty"`
+	DisabledAt   *time.Time `json:"disabled_at,omitempty"`
 }
 
 func (Installation) TableName() string { return "metacore_installations" }
@@ -222,10 +223,10 @@ func New(db *gorm.DB, kernelVersion string) *Installer {
 	// central_trust.go for the contract.
 	pubs = loadCentralPubKeyIfNeeded(pubs)
 	return &Installer{
-		DB:            db,
-		KernelVersion: kernelVersion,
-		Lifecycles:    lifecycle.NewRegistry(),
-		Interceptors:  lifecycle.NewInterceptorRegistry(),
+		DB:             db,
+		KernelVersion:  kernelVersion,
+		Lifecycles:     lifecycle.NewRegistry(),
+		Interceptors:   lifecycle.NewInterceptorRegistry(),
 		PublicKeys:     pubs,
 		AllowUnsigned:  envFlag("ALLOW_UNSIGNED_BUNDLES"),
 		Broadcaster:    NoopBroadcaster{},
@@ -349,9 +350,15 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 			return nil, nil, err
 		}
 	}
-	if _, ok := i.Lifecycles.Get(b.Manifest.Key); !ok {
-		i.Lifecycles.Register(b.Manifest.Key, &lifecycle.ManifestOnly{Data: b.Manifest})
-	}
+	// Install doubles as the marketplace "Actualizar" (upgrade) path — the
+	// embed re-runs Install with the NEW bundle rather than calling Upgrade.
+	// Refresh the in-memory lifecycle so its Manifest().Version reflects the
+	// new bundle: this registry is the SINGLE source the host's
+	// /metacore/manifests endpoint reports installed versions from, and a stale
+	// entry here is exactly what left the marketplace "Actualización disponible"
+	// badge stuck on the old version after an upgrade (addon_manifests + the
+	// host registries updated, but this lifecycle didn't).
+	refreshDeclarativeLifecycle(i.Lifecycles, b.Manifest)
 	lc, _ := i.Lifecycles.Get(b.Manifest.Key)
 	if err := lc.OnInstall(i.DB, orgID); err != nil {
 		return nil, nil, fmt.Errorf("OnInstall: %w", err)
@@ -395,7 +402,18 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 		}
 		inst.SecretEnc = enc
 	}
-	if err := i.DB.Create(inst).Error; err != nil {
+	// Idempotent persist. Because Install is also the upgrade path (see the
+	// lifecycle refresh above), an installation row may already exist for this
+	// (org, addon) — a blind Create would violate the idx_org_addon unique
+	// index and the re-install would fail. Upsert instead: refresh the
+	// versioned columns (so metacore_installations.Version tracks the new
+	// bundle, keeping telemetry/rollback consistent with the lifecycle) while
+	// PRESERVING the install-time secret, per-org settings, id and created_at
+	// (those columns are intentionally absent from DoUpdates).
+	if err := i.DB.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "organization_id"}, {Name: "addon_key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"version", "manifest_hash", "status", "source", "enabled_at"}),
+	}).Create(inst).Error; err != nil {
 		return nil, nil, err
 	}
 	// Persist any i18n catalog the manifest declares so consumers (frontend
@@ -812,15 +830,8 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	// Replace the lifecycle.Addon binding with the new manifest. Compiled
 	// addons that registered themselves before Install retain their custom
 	// implementation — we only swap when the previous entry was a
-	// ManifestOnly (declarative) shim. This mirrors Install's "first
-	// registration wins" rule.
-	if lc, ok := i.Lifecycles.Get(newBundle.Manifest.Key); ok {
-		if _, isManifestOnly := lc.(*lifecycle.ManifestOnly); isManifestOnly {
-			i.Lifecycles.Register(newBundle.Manifest.Key, &lifecycle.ManifestOnly{Data: newBundle.Manifest})
-		}
-	} else {
-		i.Lifecycles.Register(newBundle.Manifest.Key, &lifecycle.ManifestOnly{Data: newBundle.Manifest})
-	}
+	// ManifestOnly (declarative) shim.
+	refreshDeclarativeLifecycle(i.Lifecycles, newBundle.Manifest)
 
 	// Re-project manifest CRUD hooks. Idempotent: RegisterManifestHooks
 	// first removes the previous registration for this addon, so the new
@@ -886,13 +897,13 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	// migrations_applied so audit pipelines can correlate schema drift with
 	// the version bump.
 	afterPayload := map[string]any{
-		"event":               lifecycle.HookEventUpgrade,
-		"addon_key":           newBundle.Manifest.Key,
-		"org_id":              orgID.String(),
-		"from_version":        fromVersion,
-		"to_version":          toVersion,
-		"phase":               "after",
-		"migrations_applied":  migrationsApplied,
+		"event":              lifecycle.HookEventUpgrade,
+		"addon_key":          newBundle.Manifest.Key,
+		"org_id":             orgID.String(),
+		"from_version":       fromVersion,
+		"to_version":         toVersion,
+		"phase":              "after",
+		"migrations_applied": migrationsApplied,
 	}
 	if err := i.runLifecycleHooksWithPayload(ctx, newBundle.Manifest, orgID, lifecycle.HookEventUpgrade, afterPayload); err != nil {
 		// AFTER errors are logged but do NOT roll back — the upgrade
@@ -1052,6 +1063,22 @@ func (i *Installer) runLifecycleHooksWithPayload(ctx context.Context, m manifest
 		raw = nil
 	}
 	return i.HookRunner.Run(ctx, m.Key, orgID, event, m, raw)
+}
+
+// refreshDeclarativeLifecycle re-registers the addon's lifecycle binding with
+// the new manifest IFF the current entry is a declarative ManifestOnly shim
+// (or absent). Compiled addons that registered a custom lifecycle.Addon keep
+// it untouched. Both Install (the de-facto upgrade path the marketplace embed
+// uses) and Upgrade call this so the in-memory Lifecycles registry — the single
+// source the host's /metacore/manifests endpoint reports installed versions
+// from — never reports a stale version after a re-install/upgrade.
+func refreshDeclarativeLifecycle(reg *lifecycle.Registry, m manifest.Manifest) {
+	if lc, ok := reg.Get(m.Key); ok {
+		if _, isManifestOnly := lc.(*lifecycle.ManifestOnly); !isManifestOnly {
+			return // compiled custom lifecycle — preserve it
+		}
+	}
+	reg.Register(m.Key, &lifecycle.ManifestOnly{Data: m})
 }
 
 // verifySignature enforces the supply-chain trust model on a bundle before
