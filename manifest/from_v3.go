@@ -258,6 +258,7 @@ func mapNavItems(in []v3.NavItem, modelTable map[string]string) []NavItem {
 			Model:      it.Model,
 			Permission: it.Permission,
 			Items:      mapNavItems(it.Items, modelTable),
+			Filter:     it.Filter,
 		})
 	}
 	return out
@@ -322,6 +323,7 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 			ConfirmMessage: a.ConfirmMessage,
 			Modal:          a.Modal,
 			Placement:      a.Placement,
+			RequiresState:  a.RequiresState,
 			Fields:         mapActionFields(a.Fields),
 		}
 		switch a.Handler.Type {
