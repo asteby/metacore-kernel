@@ -38,17 +38,17 @@ func FromV3(m *v3.Manifest) Manifest {
 	}
 
 	out := Manifest{
-		Key:         m.Metadata.Key,
-		Name:        m.Metadata.Name,
-		Description: m.Metadata.Description,
-		Version:     m.Metadata.Version,
-		Category:    m.Metadata.Category,
-		Author:      m.Metadata.Author,
-		Website:     m.Metadata.Website,
-		License:     m.Metadata.License,
-		Readme:      m.Metadata.Readme,
-		Screenshots: m.Metadata.Screenshots,
-		Features:    m.Metadata.Features,
+		Key:          m.Metadata.Key,
+		Name:         m.Metadata.Name,
+		Description:  m.Metadata.Description,
+		Version:      m.Metadata.Version,
+		Category:     m.Metadata.Category,
+		Author:       m.Metadata.Author,
+		Website:      m.Metadata.Website,
+		License:      m.Metadata.License,
+		Readme:       m.Metadata.Readme,
+		Screenshots:  m.Metadata.Screenshots,
+		Features:     m.Metadata.Features,
 		Countries:    m.Metadata.Countries,
 		MetadataI18n: mapMetadataI18n(m.Metadata.I18n),
 	}
@@ -335,19 +335,19 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 	return out
 }
 
-// mapActionFields folds v3 ActionFields into legacy FieldDefs. v3 field.Key maps
-// to legacy FieldDef.Name; Label/Type/Required/Default copy across and
-// FieldOptions map to legacy Options. widget/validation/ref/placeholder/
-// search_endpoint have no FieldDef slot and are intentionally not mapped (see
-// mapActions doc).
+// mapActionFields folds v3 ActionFields into FieldDefs the host serves to the
+// SDK. v3 field.Key maps to BOTH FieldDef.Key (the tag the host/SDK read) and
+// FieldDef.Name (kept for legacy consumers); Label/Type/Required/Default and
+// FieldOptions copy across.
 //
-// item_fields (the columns of a repeatable line-items group on a type:"array"
-// field) likewise has NO legacy FieldDef slot — the flat FieldDef cannot carry
-// nested fields. So the line-items structure intentionally does NOT round-trip
-// through FromV3: the SDK (dynamic-line-items) reads item_fields directly off
-// the v3-served action metadata, the same pattern as widget/validation. The
-// container field still maps as an ordinary flat FieldDef (Type "array") so a
-// legacy consumer at least sees the field exists.
+// The rich properties — widget, ref, placeholder, search_endpoint, total,
+// balance, and the nested item_fields of a line-items (type:"array") group —
+// are now forwarded too. FieldDef carries matching JSON tags, so they survive
+// the v3 → host conversion and the SDK (runtime-react) renders the full
+// declarative modal (searchable pickers, multi-column line-items with
+// totals/balance). Previously these were dropped, collapsing every rich field
+// to a plain input. item_fields recurses (each item column is itself an
+// ActionField).
 func mapActionFields(in []v3.ActionField) []FieldDef {
 	if len(in) == 0 {
 		return nil
@@ -356,13 +356,32 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 	for _, f := range in {
 		fd := FieldDef{
 			Name:     f.Key,
+			Key:      f.Key, // host/SDK key off "key"; Name kept for legacy
 			Label:    f.Label,
 			Type:     f.Type,
 			Required: f.Required,
 			Default:  f.Default,
+			// Rich properties — forwarded so the declarative modal renders
+			// searchable pickers and line-items grids instead of plain inputs.
+			Widget:         f.Widget,
+			Ref:            f.Ref,
+			Placeholder:    f.Placeholder,
+			SearchEndpoint: f.SearchEndpoint,
+			Total:          f.Total,
+			// ItemFields are themselves ActionFields — recurse so a line-items
+			// group's columns (debit/credit/account picker) survive intact.
+			ItemFields: mapActionFields(f.ItemFields),
 		}
 		for _, o := range f.Options {
 			fd.Options = append(fd.Options, Option{Value: o.Value, Label: o.Label})
+		}
+		if f.Balance != nil {
+			fd.Balance = &FieldBalanceRule{
+				DebitColumn:    f.Balance.DebitColumn,
+				CreditColumn:   f.Balance.CreditColumn,
+				Message:        f.Balance.Message,
+				RequireNonzero: f.Balance.RequireNonzero,
+			}
 		}
 		out = append(out, fd)
 	}

@@ -96,7 +96,7 @@ type ModalMetadata struct {
 type FieldDef struct {
 	Key            string      `json:"key"`
 	Label          string      `json:"label"`
-	Type           string      `json:"type"` // text, textarea, select, search, number, date, email, url, boolean, image
+	Type           string      `json:"type"` // text, textarea, select, search, number, date, email, url, boolean, image, dynamic_select, array
 	Required       bool        `json:"required,omitempty"`
 	Validation     string      `json:"validation,omitempty"`
 	Options        []OptionDef `json:"options,omitempty"`
@@ -105,6 +105,39 @@ type FieldDef struct {
 	SearchEndpoint string      `json:"searchEndpoint,omitempty"`
 	Placeholder    string      `json:"placeholder,omitempty"`
 	Ref            string      `json:"ref,omitempty"`
+
+	// Widget overrides the renderer inferred from Type (e.g. "textarea",
+	// "dynamic_select"). Optional — empty lets the SDK infer from Type.
+	Widget string `json:"widget,omitempty"`
+
+	// ItemFields declares the columns of a repeatable line-items group, set on a
+	// field with Type "array" (e.g. the debit/credit lines of a journal entry).
+	// Each entry is itself a FieldDef describing one cell widget; the field's
+	// value is an array of objects keyed by these item-field keys. The SDK
+	// (runtime-react dynamic-line-items) renders a row grid. Mirrors
+	// manifest/v3 ActionField.item_fields so the rich modal survives the
+	// v3 → host conversion (previously dropped, collapsing the grid to a single
+	// text input).
+	ItemFields []FieldDef `json:"item_fields,omitempty"`
+
+	// Total flags an ItemFields column for summation in the line-items footer.
+	Total bool `json:"total,omitempty"`
+
+	// Balance declares a generic reconciliation constraint on a line-items
+	// (Type "array") field: the summed Total of one column must equal another
+	// (Σdebit == Σcredit). Drives the balanced/out-of-balance indicator and the
+	// submit gate. Domain-agnostic.
+	Balance *FieldBalanceRule `json:"balance,omitempty"`
+}
+
+// FieldBalanceRule is the host-facing mirror of manifest/v3 FieldBalanceRule.
+// It reconciles two summed line-items columns. JSON tags match the v3 contract
+// so it round-trips byte-for-byte through the host's action metadata.
+type FieldBalanceRule struct {
+	DebitColumn    string `json:"debit_column"`
+	CreditColumn   string `json:"credit_column"`
+	Message        string `json:"message,omitempty"`
+	RequireNonzero *bool  `json:"require_nonzero,omitempty"`
 }
 
 // ActionDef is the UI metadata for a frontend action button. The backend
