@@ -529,6 +529,13 @@
           "items": {
             "$ref": "#/$defs/ModelExtension"
           }
+        },
+        "relations": {
+          "type": "array",
+          "description": "Inverse 1:N / N:M view edges the host projects into served TableMetadata so a detail page can list the model's child records (e.g. a Customer's vehicles, addresses, attachments). Unlike foreign_keys (physical constraints on the owning column) these are owner-rooted view hints.",
+          "items": {
+            "$ref": "#/$defs/ModelRelation"
+          }
         }
       },
       "examples": [
@@ -563,6 +570,50 @@
           ]
         }
       ]
+    },
+    "ModelRelation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind",
+        "through",
+        "foreign_key"
+      ],
+      "description": "An inverse 1:N / N:M edge rooted at the owning model. The host projects it into TableMetadata.relations so a detail page can list the owner's child records.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Stable identifier for the relation, scoped to the owning model (e.g. 'vehicles')."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "one_to_many",
+            "many_to_many"
+          ],
+          "description": "one_to_many: foreign_key is the column on 'through' pointing back at the owner. many_to_many: 'through' is the target model joined via foreign_key."
+        },
+        "through": {
+          "type": "string",
+          "description": "Child / target model key, e.g. 'Vehicle'."
+        },
+        "foreign_key": {
+          "type": "string",
+          "description": "Child column pointing back at the owner, e.g. 'customer_id'."
+        },
+        "scope": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Static equality filter applied to the child query. Makes polymorphic children addressable: a shared attachments table carries an 'owner_model' discriminator, so a Customer's attachments relation declares {\"owner_model\":\"Customer\"} alongside foreign_key 'owner_id'."
+        },
+        "label": {
+          "type": "string",
+          "description": "Optional i18n key / human label for the related-records panel."
+        }
+      }
     },
     "Column": {
       "type": "object",
@@ -1038,6 +1089,19 @@
         },
         "balance": {
           "$ref": "#/$defs/FieldBalanceRule"
+        },
+        "accept": {
+          "type": "string",
+          "description": "On a type:\"upload\" field, a comma-separated MIME / extension allow-list passed to the file picker's accept attribute, e.g. \"image/*,.pdf\". Ignored on non-upload fields."
+        },
+        "max_size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "On a type:\"upload\" field, the maximum accepted file size in BYTES (0 = host default). Ignored on non-upload fields."
+        },
+        "storage_path": {
+          "type": "string",
+          "description": "On a type:\"upload\" field, the logical storage bucket / path prefix the host stores the file under, e.g. \"attachments/customers\". Empty = host default. Ignored on non-upload fields."
         }
       }
     },

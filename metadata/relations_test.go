@@ -71,6 +71,63 @@ func TestService_AutoDerivesRefFromBelongsTo(t *testing.T) {
 	}
 }
 
+func TestService_ProjectsInverseRelationsOntoTableMetadata(t *testing.T) {
+	svc := New(Config{CacheTTL: time.Minute})
+	key := registerRelated(t, "Customers", []modelbase.RelationDef{
+		// 1:N child.
+		{Name: "vehicles", Kind: "one_to_many", Through: "Vehicle", ForeignKey: "customer_id", Label: "Vehículos"},
+		// Polymorphic child via Scope.
+		{
+			Name:       "attachments",
+			Kind:       "one_to_many",
+			Through:    "Attachment",
+			ForeignKey: "owner_id",
+			Scope:      map[string]string{"owner_model": "Customer"},
+		},
+		// N:M.
+		{Name: "tags", Kind: "many_to_many", Through: "Tag", ForeignKey: "customer_id"},
+		// belongs_to feeds column Ref, NOT meta.Relations.
+		{Name: "agent", Kind: "belongs_to", Through: "agents", ForeignKey: "agent_id"},
+	})
+	meta, err := svc.GetTable(context.Background(), key)
+	if err != nil {
+		t.Fatalf("GetTable: %v", err)
+	}
+	if len(meta.Relations) != 3 {
+		t.Fatalf("expected 3 inverse relations (belongs_to excluded), got %d: %+v", len(meta.Relations), meta.Relations)
+	}
+	byName := map[string]modelbase.RelationMeta{}
+	for _, r := range meta.Relations {
+		byName[r.Name] = r
+	}
+	veh, ok := byName["vehicles"]
+	if !ok || veh.Kind != "one_to_many" || veh.Through != "Vehicle" || veh.ForeignKey != "customer_id" || veh.Label != "Vehículos" {
+		t.Errorf("vehicles relation lost/mismatched: %+v", veh)
+	}
+	att, ok := byName["attachments"]
+	if !ok || att.Scope["owner_model"] != "Customer" {
+		t.Errorf("polymorphic attachments scope lost: %+v", att)
+	}
+	if tg, ok := byName["tags"]; !ok || tg.Kind != "many_to_many" {
+		t.Errorf("tags many_to_many relation lost: %+v", tg)
+	}
+	if _, ok := byName["agent"]; ok {
+		t.Errorf("belongs_to should NOT be projected as an inverse relation")
+	}
+}
+
+func TestService_FlatModelHasNoRelationsInMetadata(t *testing.T) {
+	svc := New(Config{CacheTTL: time.Minute})
+	key := registerRelated(t, "Flat", nil)
+	meta, err := svc.GetTable(context.Background(), key)
+	if err != nil {
+		t.Fatalf("GetTable: %v", err)
+	}
+	if len(meta.Relations) != 0 {
+		t.Fatalf("flat model should expose no relations, got %+v", meta.Relations)
+	}
+}
+
 func TestService_AutoDerivedRef_AuthorOverrideRespected(t *testing.T) {
 	svc := New(Config{CacheTTL: time.Minute})
 	// Register a model whose DefineTable already sets Ref.
@@ -200,7 +257,7 @@ func (m *orgRefModel) DefineModal() modelbase.ModalMetadata { return modelbase.M
 
 type orgRefModalModel struct{ key string }
 
-func (m *orgRefModalModel) TableName() string                  { return m.key }
+func (m *orgRefModalModel) TableName() string                    { return m.key }
 func (m *orgRefModalModel) DefineTable() modelbase.TableMetadata { return modelbase.TableMetadata{} }
 func (m *orgRefModalModel) DefineModal() modelbase.ModalMetadata {
 	return modelbase.ModalMetadata{

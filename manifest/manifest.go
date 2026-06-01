@@ -368,6 +368,15 @@ type FieldDef struct {
 	ItemFields     []FieldDef        `json:"item_fields,omitempty"`
 	Total          bool              `json:"total,omitempty"`
 	Balance        *FieldBalanceRule `json:"balance,omitempty"`
+
+	// Upload-field properties forwarded verbatim from manifest/v3 ActionField
+	// for a field with type "upload". Accept is the file-picker allow-list,
+	// MaxSize the byte cap and StoragePath the logical storage prefix. The SDK
+	// reads them off the host-served action metadata; matching JSON tags keep
+	// them intact through the v3 → host conversion. Ignored on non-upload fields.
+	Accept      string `json:"accept,omitempty"`
+	MaxSize     int64  `json:"max_size,omitempty"`
+	StoragePath string `json:"storage_path,omitempty"`
 }
 
 // FieldBalanceRule mirrors manifest/v3 FieldBalanceRule with identical JSON
@@ -499,6 +508,18 @@ type RelationDef struct {
 	// and required for many_to_many. The pivot table is expected to
 	// live in the addon schema; the kernel only needs the name here.
 	Pivot string `json:"pivot,omitempty"`
+
+	// Scope is a static equality filter applied to the child query, the
+	// mechanism that makes POLYMORPHIC children addressable: a shared
+	// Attachment/Address/Note table carries an `owner_model` discriminator,
+	// so a Customer's attachments relation declares Scope
+	// {"owner_model":"Customer"} alongside ForeignKey "owner_id". Empty =
+	// no extra filter (the common, non-polymorphic case).
+	Scope map[string]string `json:"scope,omitempty"`
+
+	// Label is an optional i18n key / human label for the related-records
+	// panel the SDK renders on a detail page. Empty falls back to Name.
+	Label string `json:"label,omitempty"`
 }
 
 // ColumnDef is a column on an addon-installed table.

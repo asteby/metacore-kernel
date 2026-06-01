@@ -141,6 +141,39 @@ type Model struct {
 	Indices     []Index          `json:"indices,omitempty"`
 	ForeignKeys []ForeignKey     `json:"foreign_keys,omitempty"`
 	Extensions  []ModelExtension `json:"extensions,omitempty"`
+
+	// Relations declares the INVERSE edges of this model — the child records a
+	// detail page should be able to list under it (e.g. a Customer's vehicles,
+	// addresses and attachments). Unlike ForeignKeys (which declare the physical
+	// FK constraints carried by the OWNING column) Relations are owner-rooted
+	// view hints the host projects into served TableMetadata so the SDK can
+	// render a "related records" panel with zero per-app wiring. Optional —
+	// flat models omit it and keep the legacy behaviour. See ModelRelation for
+	// the supported shapes (including polymorphic children via Scope).
+	Relations []ModelRelation `json:"relations,omitempty"`
+}
+
+// ModelRelation is one inverse 1:N / N:M edge rooted at the owning Model. The
+// host projects it into modelbase.TableMetadata.Relations so a detail page can
+// list the owner's child records.
+//
+//	Kind = "one_to_many"  — the owner has many rows on Through; ForeignKey is
+//	                        the column on Through pointing back at the owner.
+//	Kind = "many_to_many" — Through is the target model joined to the owner;
+//	                        ForeignKey is the join column pointing at the owner.
+//
+// Scope adds a static equality filter applied to the child query, which is what
+// makes POLYMORPHIC children addressable: an Attachment table shared by many
+// owners carries an `owner_model` discriminator, so a Customer's attachments
+// relation declares Scope {"owner_model":"Customer"} alongside
+// ForeignKey "owner_id". Empty Scope = no extra filter (the common case).
+type ModelRelation struct {
+	Name       string            `json:"name"`            // stable identifier, e.g. "vehicles"
+	Kind       string            `json:"kind"`            // "one_to_many" | "many_to_many"
+	Through    string            `json:"through"`         // child model key, e.g. "Vehicle"
+	ForeignKey string            `json:"foreign_key"`     // child column pointing back, e.g. "customer_id"
+	Scope      map[string]string `json:"scope,omitempty"` // static child filter for polymorphic children
+	Label      string            `json:"label,omitempty"` // i18n key / human label for the panel
 }
 
 // Column is a single physical column declaration.
@@ -296,6 +329,20 @@ type ActionField struct {
 	// value is an array of objects keyed by the ItemFields keys. The SDK
 	// (dynamic-line-items) renders a row grid with add/remove controls.
 	ItemFields []ActionField `json:"item_fields,omitempty"`
+
+	// Accept, MaxSize and StoragePath configure a field with type "upload" (a
+	// file attachment input). They are declarative hints the SDK reads off the
+	// served action metadata — the actual upload HANDLER lives in the host
+	// (ops/SDK); this contract only lets authors DECLARE an upload field.
+	//   Accept      — a comma-separated MIME / extension allow-list passed to the
+	//                 file picker's `accept` attribute, e.g. "image/*,.pdf".
+	//   MaxSize     — max accepted file size in BYTES (0 = host default).
+	//   StoragePath — optional logical bucket / path prefix the host stores the
+	//                 file under, e.g. "attachments/customers". Empty = host default.
+	// All three are ignored on non-upload fields.
+	Accept      string `json:"accept,omitempty"`
+	MaxSize     int64  `json:"max_size,omitempty"`
+	StoragePath string `json:"storage_path,omitempty"`
 
 	// Total, on an ItemFields column, flags it for summation in the line-items
 	// footer. The SDK renders a totals row summing every numeric column marked
