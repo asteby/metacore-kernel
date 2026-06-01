@@ -2,6 +2,7 @@ package dynamic
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -9,6 +10,25 @@ import (
 
 	"github.com/asteby/metacore-kernel/modelbase"
 )
+
+// orgScopedReflectLike simulates a reflect-built addon model: the org column
+// maps to a Go field whose name is NOT "OrganizationID" (the reflect builder
+// derives "OrganizationId" from the snake_case column), so the legacy
+// FieldByName("OrganizationID") tenant-scope gate would miss it and leak other
+// orgs' rows. hasOrgColumn (column-based) detects it correctly.
+type orgScopedReflectLike struct {
+	ID    uuid.UUID `json:"id" gorm:"type:uuid;primaryKey"`
+	OrgID uuid.UUID `json:"organization_id" gorm:"type:uuid"`
+	Name  string    `json:"name"`
+}
+
+func (orgScopedReflectLike) TableName() string { return "test_org_scoped" }
+func (orgScopedReflectLike) DefineTable() modelbase.TableMetadata {
+	return modelbase.TableMetadata{Title: "Org Scoped"}
+}
+func (orgScopedReflectLike) DefineModal() modelbase.ModalMetadata {
+	return modelbase.ModalMetadata{Title: "Org Scoped"}
+}
 
 // TestCategory is a second model used to exercise dynamic-source options
 // (products.category_id → categories.id).
@@ -305,6 +325,63 @@ func TestDeriveLabelColumn(t *testing.T) {
 	}
 	if got := deriveLabelColumn(&withCode{}); got != "code" {
 		t.Fatalf("withCode label = %q, want code", got)
+	}
+}
+
+// TestSelfOptionsTenantScoped: the self-referential picker must NOT leak rows
+// across organizations. Regression for reflect-built models whose org field is
+// "OrganizationId" (not "OrganizationID"), which the legacy field-name gate
+// missed — returning every tenant's rows.
+func TestSelfOptionsTenantScoped(t *testing.T) {
+	db := setupTestDB(t)
+	db.Exec(`CREATE TABLE IF NOT EXISTS test_org_scoped (
+		id TEXT PRIMARY KEY, organization_id TEXT, name TEXT)`)
+	modelbase.Register("test_org_scoped", func() modelbase.ModelDefiner { return &orgScopedReflectLike{} })
+
+	orgA := uuid.New()
+	orgB := uuid.New()
+	db.Exec(`INSERT INTO test_org_scoped (id, organization_id, name) VALUES (?,?,?),(?,?,?),(?,?,?)`,
+		uuid.NewString(), orgA.String(), "A-Journal",
+		uuid.NewString(), orgB.String(), "B-Journal",
+		uuid.NewString(), orgA.String(), "A-Journal-2")
+
+	svc := newOptionsService(t, db, noOptionsConfig(), nil)
+	svc.selfOptions = true
+
+	user := &fakeUser{id: uuid.New(), orgID: orgA}
+	res, err := svc.Options(context.Background(), user, OptionsQuery{Model: "test_org_scoped", Field: "id"})
+	if err != nil {
+		t.Fatalf("scoped self options: %v", err)
+	}
+	if len(res.Options) != 2 {
+		t.Fatalf("tenant scope leaked: got %d options, want 2 (org A only)", len(res.Options))
+	}
+	for _, o := range res.Options {
+		if label, _ := o.Label.(string); label == "B-Journal" {
+			t.Errorf("cross-tenant leak: org B row returned in org A's picker")
+		}
+	}
+}
+
+// TestHasOrgColumn locks the column-based detection that the scoping relies on.
+func TestHasOrgColumn(t *testing.T) {
+	if !hasOrgColumn(&TestProduct{}) {
+		t.Error("compiled model (BaseUUIDModel) should be detected as org-scoped")
+	}
+	if !hasOrgColumn(&orgScopedReflectLike{}) {
+		t.Error("reflect-like model should be detected as org-scoped via its column")
+	}
+	// Premise: the field is genuinely NOT named OrganizationID, so the legacy
+	// field-name gate would have missed it.
+	if _, ok := reflect.TypeOf(orgScopedReflectLike{}).FieldByName("OrganizationID"); ok {
+		t.Error("test premise broken: field is literally named OrganizationID")
+	}
+	type noOrg struct {
+		ID   uuid.UUID `json:"id"`
+		Name string    `json:"name"`
+	}
+	if hasOrgColumn(&noOrg{}) {
+		t.Error("a model without organization_id must not be treated as org-scoped")
 	}
 }
 

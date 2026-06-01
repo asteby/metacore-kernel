@@ -144,12 +144,15 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 	}
 	db := s.db.WithContext(ctx).Model(sourceInstance).Table(tableName)
 
-	// Tenant scoping: only when the source model actually has organization_id.
-	sourceType := reflect.TypeOf(sourceInstance)
-	if sourceType.Kind() == reflect.Ptr {
-		sourceType = sourceType.Elem()
-	}
-	if _, hasOrg := sourceType.FieldByName("OrganizationID"); hasOrg && user != nil {
+	// Tenant scoping: only when the source model actually carries an
+	// organization_id column. Detection is COLUMN-based (json tag), not Go
+	// field-name based: reflect-built addon models derive the field name from
+	// the column ("organization_id" → "OrganizationId"), which a
+	// FieldByName("OrganizationID") lookup misses — silently dropping tenant
+	// scoping and leaking other orgs' rows into the picker. hasOrgColumn
+	// matches both compiled (OrganizationID, json:"organization_id") and
+	// reflect-built models.
+	if user != nil && hasOrgColumn(sourceInstance) {
 		db = s.scope.ScopeQuery(db, user)
 	}
 
@@ -301,6 +304,15 @@ func structColumnSet(instance any) map[string]struct{} {
 	}
 	walk(t)
 	return out
+}
+
+// hasOrgColumn reports whether a model carries an organization_id column —
+// the signal that it is tenant-scoped and its queries must be filtered by the
+// caller's organization. Column-based (json tag) so it is correct for both
+// compiled models and reflect-built addon models.
+func hasOrgColumn(instance any) bool {
+	_, ok := structColumnSet(instance)["organization_id"]
+	return ok
 }
 
 func columnNameFromField(f reflect.StructField) string {

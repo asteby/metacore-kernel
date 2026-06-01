@@ -57,13 +57,12 @@ func (s *Service) Search(ctx context.Context, user modelbase.AuthUser, q SearchQ
 	// reflect-built addon models (no TableName() method) resolve correctly.
 	db := s.db.WithContext(ctx).Model(instance).Table(tableName)
 
-	// Scope only if the root model carries an OrganizationID column and a user
+	// Scope only if the root model carries an organization_id column and a user
 	// is available (read-without-auth is allowed, but obviously without scope).
-	instType := reflect.TypeOf(instance)
-	if instType.Kind() == reflect.Ptr {
-		instType = instType.Elem()
-	}
-	if _, hasOrg := instType.FieldByName("OrganizationID"); hasOrg && user != nil {
+	// Column-based detection (see hasOrgColumn) so reflect-built addon models —
+	// whose org field is "OrganizationId", not "OrganizationID" — are scoped
+	// instead of silently leaking other tenants' rows.
+	if user != nil && hasOrgColumn(instance) {
 		db = s.scope.ScopeQuery(db, user)
 	}
 
