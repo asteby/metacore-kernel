@@ -94,6 +94,32 @@ type Installation struct {
 
 func (Installation) TableName() string { return "metacore_installations" }
 
+// ensureInstallationUniqueIndex idempotently creates the composite unique index
+// over (organization_id, addon_key) that Install's ON CONFLICT upsert targets.
+// It does NOT rely on GORM's AutoMigrate index reconciliation, which has been
+// observed to leave a pre-existing table (created by an older kernel) without
+// this index — making the upsert fail with Postgres 42P10. The index columns
+// (not its name) are what ON CONFLICT matches, so any unique index over exactly
+// these two columns satisfies the clause. Table name and columns are trusted
+// literals — no injection surface.
+func ensureInstallationUniqueIndex(db *gorm.DB) error {
+	tbl := (Installation{}).TableName()
+	switch db.Dialector.Name() {
+	case "postgres", "sqlite", "sqlite3":
+		return db.Exec(fmt.Sprintf(
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_org_addon ON %s (organization_id, addon_key)", tbl)).Error
+	default:
+		// Dialects without a portable CREATE INDEX IF NOT EXISTS (e.g. MySQL):
+		// fall back to GORM's migrator, which builds the index from the struct
+		// tag when absent.
+		m := db.Migrator()
+		if m.HasIndex(&Installation{}, "idx_org_addon") {
+			return nil
+		}
+		return m.CreateIndex(&Installation{}, "idx_org_addon")
+	}
+}
+
 // Installer wires the collaborators the kernel needs.
 type Installer struct {
 	DB            *gorm.DB
@@ -329,6 +355,18 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	}
 	if err := i.DB.AutoMigrate(&Installation{}); err != nil {
 		return nil, nil, err
+	}
+	// Self-heal the composite unique index the upsert below depends on. GORM's
+	// AutoMigrate does NOT reliably add a multi-column `uniqueIndex` to a table
+	// that already exists (observed on prod: metacore_installations carried only
+	// its primary key). The idempotent persist further down uses ON CONFLICT
+	// (organization_id, addon_key), and Postgres rejects that with 42P10 ("no
+	// unique or exclusion constraint matching the ON CONFLICT specification")
+	// unless a unique index over exactly those columns exists. Ensure it
+	// explicitly so the installer is correct regardless of how — or by which
+	// kernel version — the table was first created.
+	if err := ensureInstallationUniqueIndex(i.DB); err != nil {
+		return nil, nil, fmt.Errorf("ensure installation unique index: %w", err)
 	}
 	// Snapshot the previous manifest hash BEFORE we run the rest of Install
 	// so a post-persist comparison can distinguish "fresh install"
