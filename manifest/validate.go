@@ -12,6 +12,15 @@ var (
 	keyRe    = regexp.MustCompile(`^[a-z][a-z0-9_]{1,63}$`)
 	modelRe  = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 	columnRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
+	// modelKeyRe matches a model REFERENCE — a relation's `through`/`pivot` or
+	// any cross-addon model handle. Unlike modelRe (snake_case table names) it
+	// accepts PascalCase model keys ("Vehicle", "PurchaseOrder") because that is
+	// how authors reference models everywhere else (dynamic_select `ref`,
+	// foreign_keys.references.model), and a relation's target is RESOLVED AT
+	// RUNTIME against the global model registry — it is NOT required to be a
+	// local table. Case-insensitive first char so both "vehicles" and "Vehicle"
+	// validate.
+	modelKeyRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.]{0,63}$`)
 	// customValidatorRe matches "<namespace>.<symbol>" identifiers used by
 	// ValidationRule.Custom — keeps it injection-safe for log lines and
 	// future router lookups. As of v0.9.0 the same field also accepts
@@ -121,7 +130,7 @@ var (
 	// validator reads cleanly and a future tweak to the relation alphabet
 	// does not silently widen unrelated identifiers.
 	relationNameRe = columnRe
-	pivotRe        = modelRe
+	pivotRe        = modelKeyRe
 	// validWidgets enumerates the widget slugs the UI knows how to render.
 	// Kept as a map so adding entries is cheap; addons that need a custom
 	// widget can ship it via a federated module and pick a slug we extend
@@ -506,7 +515,7 @@ func validateRelations(rels []RelationDef) error {
 		if _, ok := validRelationKinds[r.Kind]; !ok {
 			return fmt.Errorf("relations[%d]: unknown kind %q (want one_to_many|many_to_many)", i, r.Kind)
 		}
-		if !modelRe.MatchString(r.Through) {
+		if !modelKeyRe.MatchString(r.Through) {
 			return fmt.Errorf("relations[%d]: invalid through %q", i, r.Through)
 		}
 		if !columnRe.MatchString(r.ForeignKey) {
