@@ -23,4 +23,11 @@ var (
 	// ErrUnsupportedTriggerType is returned when an action declares a
 	// Trigger.Type the kernel has no dispatcher for.
 	ErrUnsupportedTriggerType = errors.New("unsupported trigger type")
+
+	// ErrInvalidState is returned when an action declares RequiresState and the
+	// target record's `status` column is not one of the allowed values. The
+	// action is gated on the record's lifecycle state, so dispatching it from a
+	// disallowed state is rejected before the trigger runs. The handler maps it
+	// to HTTP 409 Conflict.
+	ErrInvalidState = errors.New("action not allowed in record's current state")
 )

@@ -139,6 +139,17 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 		return ActionResult{}, err
 	}
 
+	// State gate: when the action declares requires_state, the target record's
+	// `status` column must be one of the allowed values. Enforced before the
+	// trigger runs so a disallowed transition never reaches the dispatcher.
+	// Additive — when RequiresState is empty the action is always valid, so
+	// existing actions are unaffected.
+	if len(def.RequiresState) > 0 {
+		if err := checkRequiresState(row, def.RequiresState); err != nil {
+			return ActionResult{}, err
+		}
+	}
+
 	dispatcher, ok := s.actionDispatchers[trig.Type]
 	if !ok {
 		return ActionResult{}, fmt.Errorf("%w: %q", ErrUnsupportedTriggerType, trig.Type)
@@ -217,6 +228,40 @@ func buildResult(resp ActionResponse, kernelMeta map[string]any) ActionResult {
 		Error:      resp.Error,
 		Meta:       meta,
 		HTTPStatus: 422,
+	}
+}
+
+// checkRequiresState enforces an action's RequiresState gate against the loaded
+// record. It reads the record's `status` column and returns ErrInvalidState
+// (wrapped with the offending/allowed values) when the status is not one of the
+// allowed states. allowed is guaranteed non-empty by the caller.
+func checkRequiresState(row map[string]any, allowed []string) error {
+	status := stringifyStatus(row["status"])
+	for _, s := range allowed {
+		if s == status {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: status %q not in %v", ErrInvalidState, status, allowed)
+}
+
+// stringifyStatus normalises a record's status column value to a string for
+// comparison. The dynamic CRUD layer returns column values as their JSON/Go
+// scalar shapes; status is a text column so it is almost always a string, but
+// we coerce defensively (e.g. []byte from some drivers) and treat a missing or
+// null status as the empty string.
+func stringifyStatus(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case []byte:
+		return string(t)
+	case fmt.Stringer:
+		return t.String()
+	default:
+		return fmt.Sprintf("%v", t)
 	}
 }
 

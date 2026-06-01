@@ -146,6 +146,10 @@ type NavItem struct {
 	Model      string    `json:"model,omitempty"`
 	Permission string    `json:"permission,omitempty"`
 	Items      []NavItem `json:"items,omitempty"`
+	// Filter is a static column→value filter the host applies when rendering
+	// this entry's list view (e.g. {"status":"reception"}), so an addon can
+	// publish one nav entry per status. Empty/omitted means no filter.
+	Filter map[string]string `json:"filter,omitempty"`
 }
 
 // FrontendSpec describes the federated module the host loads at runtime.

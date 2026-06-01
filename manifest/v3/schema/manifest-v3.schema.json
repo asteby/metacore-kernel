@@ -825,6 +825,13 @@
           "items": {
             "$ref": "#/$defs/NavItem"
           }
+        },
+        "filter": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Static column→value filter the host applies when rendering this entry's list view (e.g. {\"status\":\"reception\"}), so an addon can publish one nav entry per status."
         }
       }
     },
@@ -963,6 +970,13 @@
         "confirm_message": {
           "type": "string",
           "description": "Body shown in the confirmation step."
+        },
+        "requires_state": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Gates the action on the target record's `status` column: the action is only valid when the record's status is one of these values. Enforced by the kernel at dispatch. Empty/omitted means no state gate."
         }
       }
     },
