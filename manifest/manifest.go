@@ -45,17 +45,17 @@ type Manifest struct {
 	// Empty value is treated as "shared" for backwards compatibility.
 	TenantIsolation string `json:"tenant_isolation,omitempty"`
 
-	Navigation       []NavGroup             `json:"navigation,omitempty"`
-	Extensions       []ModelExtension       `json:"extensions,omitempty"`
-	Settings         []SettingDef           `json:"settings,omitempty"`
-	Hooks            map[string]string      `json:"hooks,omitempty"`
-	Actions          map[string][]ActionDef `json:"actions,omitempty"`
+	Navigation []NavGroup             `json:"navigation,omitempty"`
+	Extensions []ModelExtension       `json:"extensions,omitempty"`
+	Settings   []SettingDef           `json:"settings,omitempty"`
+	Hooks      map[string]string      `json:"hooks,omitempty"`
+	Actions    map[string][]ActionDef `json:"actions,omitempty"`
 	// Tools are LLM-facing actions. Conversational hosts sync these into
 	// their agent-tool registry on install so an AI can trigger them from a
 	// user message. Unlike Actions (UI-triggered record operations) Tools
 	// are semantic and carry extraction hints for parameter inference.
-	Tools            []ToolDef              `json:"tools,omitempty"`
-	ModelDefinitions []ModelDefinition      `json:"model_definitions,omitempty"`
+	Tools            []ToolDef         `json:"tools,omitempty"`
+	ModelDefinitions []ModelDefinition `json:"model_definitions,omitempty"`
 	// Events lists the event names the addon may emit. It predates the
 	// capability-based gate (`{kind:"event:emit", target:"<name>"}`) and is
 	// kept on the type for backwards compatibility with v0.x manifests.
@@ -74,8 +74,8 @@ type Manifest struct {
 	// fires. Lifecycle transitions run from the installer; CRUD events
 	// fire from dynamic.Service. See [docs/lifecycle-hooks.md] for the
 	// full contract (timeouts, error semantics, payload shape).
-	LifecycleHooks map[string][]HookDef `json:"lifecycle_hooks,omitempty"`
-	I18n             map[string]map[string]string `json:"i18n,omitempty"`
+	LifecycleHooks map[string][]HookDef         `json:"lifecycle_hooks,omitempty"`
+	I18n           map[string]map[string]string `json:"i18n,omitempty"`
 
 	// Frontend describes the federated UI bundle.
 	Frontend *FrontendSpec `json:"frontend,omitempty"`
@@ -211,11 +211,12 @@ type BackendSpec struct {
 // injecting an AddonContext with only the declared access.
 //
 // Examples:
-//   { "kind": "db:read",   "target": "orders"                  }
-//   { "kind": "db:write",  "target": "addon_tickets.*"         }
-//   { "kind": "http:fetch","target": "https://api.stripe.com/*"}
-//   { "kind": "event:emit","target": "sale.created"            }
-//   { "kind": "event:subscribe", "target": "invoice.stamped"   }
+//
+//	{ "kind": "db:read",   "target": "orders"                  }
+//	{ "kind": "db:write",  "target": "addon_tickets.*"         }
+//	{ "kind": "http:fetch","target": "https://api.stripe.com/*"}
+//	{ "kind": "event:emit","target": "sale.created"            }
+//	{ "kind": "event:subscribe", "target": "invoice.stamped"   }
 type Capability struct {
 	Kind   string `json:"kind"`
 	Target string `json:"target"`
@@ -250,20 +251,20 @@ type Option struct {
 // user message can trigger them. The endpoint receives an HMAC-signed
 // webhook produced by kernel/security.WebhookDispatcher.
 type ToolDef struct {
-	ID              string           `json:"id"`                         // unique within the addon
-	Name            string           `json:"name"`
-	Description     string           `json:"description"`                // shown to the LLM — be specific
-	Category        string           `json:"category,omitempty"`         // communication | query | action | integration
-	InputSchema     []ToolInputParam `json:"input_schema,omitempty"`
-	TriggerKeywords []string         `json:"trigger_keywords,omitempty"`
-	TriggerIntents  []string         `json:"trigger_intents,omitempty"`
-	Endpoint        string           `json:"endpoint"`                   // relative or absolute URL
-	Method          string           `json:"method,omitempty"`           // defaults to POST
-	AutoCreateRecord string          `json:"auto_create_record,omitempty"` // host-specific record type
-	Settings        map[string]any   `json:"settings,omitempty"`
-	Timeout         int              `json:"timeout,omitempty"`          // seconds
-	CacheTTL        int              `json:"cache_ttl,omitempty"`
-	Priority        int              `json:"priority,omitempty"`
+	ID               string           `json:"id"` // unique within the addon
+	Name             string           `json:"name"`
+	Description      string           `json:"description"`        // shown to the LLM — be specific
+	Category         string           `json:"category,omitempty"` // communication | query | action | integration
+	InputSchema      []ToolInputParam `json:"input_schema,omitempty"`
+	TriggerKeywords  []string         `json:"trigger_keywords,omitempty"`
+	TriggerIntents   []string         `json:"trigger_intents,omitempty"`
+	Endpoint         string           `json:"endpoint"`                     // relative or absolute URL
+	Method           string           `json:"method,omitempty"`             // defaults to POST
+	AutoCreateRecord string           `json:"auto_create_record,omitempty"` // host-specific record type
+	Settings         map[string]any   `json:"settings,omitempty"`
+	Timeout          int              `json:"timeout,omitempty"` // seconds
+	CacheTTL         int              `json:"cache_ttl,omitempty"`
+	Priority         int              `json:"priority,omitempty"`
 }
 
 // ToolInputParam describes a single LLM-extractable argument for a tool.
@@ -329,20 +330,49 @@ type ActionDef struct {
 // prompted the action. This is what unlocks "stamp this invoice and write
 // the linked log entry atomically" without leaking partially-applied state.
 type ActionTrigger struct {
-	Type    string `json:"type"`              // "wasm" | "webhook" | "noop"
-	Export  string `json:"export,omitempty"`  // wasm export name; required when Type=wasm
+	Type    string `json:"type"`             // "wasm" | "webhook" | "noop"
+	Export  string `json:"export,omitempty"` // wasm export name; required when Type=wasm
 	RunInTx bool   `json:"run_in_tx,omitempty"`
 }
 
 // FieldDef is an input field used by action forms and model definitions.
 type FieldDef struct {
-	Name      string      `json:"name"`
-	Label     string      `json:"label"`
-	Type      string      `json:"type"`
-	Required  bool        `json:"required,omitempty"`
-	Default   interface{} `json:"default,omitempty"`
-	Options   []Option    `json:"options,omitempty"`
-	Size      int         `json:"size,omitempty"`
+	Name     string      `json:"name"`
+	Label    string      `json:"label"`
+	Type     string      `json:"type"`
+	Required bool        `json:"required,omitempty"`
+	Default  interface{} `json:"default,omitempty"`
+	Options  []Option    `json:"options,omitempty"`
+	Size     int         `json:"size,omitempty"`
+
+	// Key carries the field identifier with the SAME json tag the host
+	// (modelbase.FieldDef) and the SDK read. Name (json:"name") is kept for
+	// legacy consumers, but the host JSON round-trip keys off "key" — without
+	// this the field key arrived empty at the renderer.
+	Key string `json:"key,omitempty"`
+
+	// Rich action-field properties forwarded verbatim from manifest/v3
+	// ActionField so the declarative modal renders fully (searchable pickers,
+	// multi-column line-items with totals/balance) instead of collapsing every
+	// field to a plain input. The legacy flat FieldDef intentionally had no slot
+	// for these; the SDK reads them off the host-served action metadata, so they
+	// must survive the v3 → host conversion. JSON tags match modelbase.FieldDef.
+	Widget         string            `json:"widget,omitempty"`
+	Ref            string            `json:"ref,omitempty"`
+	Placeholder    string            `json:"placeholder,omitempty"`
+	SearchEndpoint string            `json:"searchEndpoint,omitempty"`
+	ItemFields     []FieldDef        `json:"item_fields,omitempty"`
+	Total          bool              `json:"total,omitempty"`
+	Balance        *FieldBalanceRule `json:"balance,omitempty"`
+}
+
+// FieldBalanceRule mirrors manifest/v3 FieldBalanceRule with identical JSON
+// tags so it round-trips through the host's action metadata untouched.
+type FieldBalanceRule struct {
+	DebitColumn    string `json:"debit_column"`
+	CreditColumn   string `json:"credit_column"`
+	Message        string `json:"message,omitempty"`
+	RequireNonzero *bool  `json:"require_nonzero,omitempty"`
 }
 
 // HookDef is one declared lifecycle hook entry. The kernel dispatches
@@ -368,14 +398,14 @@ type HookDef struct {
 
 // HookTarget describes where a lifecycle hook dispatches to.
 //
-//   Type = "wasm"    — invoke the exported function `Function` on the
-//                      addon's compiled wasm module. The function MUST
-//                      appear in Backend.Exports.
-//   Type = "webhook" — POST the event payload to URL (HMAC-signed via
-//                      the host's webhook dispatcher).
-//   Type = "prompt"  — reserved for a future LLM dispatcher; validates
-//                      but currently runs as a no-op unless the host
-//                      registers a custom prompt dispatcher.
+//	Type = "wasm"    — invoke the exported function `Function` on the
+//	                   addon's compiled wasm module. The function MUST
+//	                   appear in Backend.Exports.
+//	Type = "webhook" — POST the event payload to URL (HMAC-signed via
+//	                   the host's webhook dispatcher).
+//	Type = "prompt"  — reserved for a future LLM dispatcher; validates
+//	                   but currently runs as a no-op unless the host
+//	                   registers a custom prompt dispatcher.
 type HookTarget struct {
 	Type     string `json:"type"`
 	URL      string `json:"url,omitempty"`
