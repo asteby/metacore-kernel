@@ -286,3 +286,96 @@ func TestParse_MetadataCountries(t *testing.T) {
 		t.Fatalf("countries not parsed: %+v", got.Metadata.Countries)
 	}
 }
+
+// actionWithBalance builds a baseValid manifest carrying one action whose
+// declarative form has a line-items field with the given balance block.
+func actionWithBalance(balance map[string]interface{}) map[string]interface{} {
+	m := baseValid()
+	field := map[string]interface{}{
+		"key":  "lines",
+		"type": "array",
+		"item_fields": []interface{}{
+			map[string]interface{}{"key": "account_id", "type": "string"},
+			map[string]interface{}{"key": "debit", "type": "number", "total": true},
+			map[string]interface{}{"key": "credit", "type": "number", "total": true},
+		},
+	}
+	if balance != nil {
+		field["balance"] = balance
+	}
+	m["contributions"] = map[string]interface{}{
+		"actions": []interface{}{
+			map[string]interface{}{
+				"key":          "create_entry",
+				"target_model": "Entry",
+				"handler":      map[string]interface{}{"type": "wasm", "function": "OnCreate"},
+				"fields":       []interface{}{field},
+			},
+		},
+	}
+	return m
+}
+
+func TestValidate_BalanceRule_Valid(t *testing.T) {
+	m := actionWithBalance(map[string]interface{}{
+		"debit_column":  "debit",
+		"credit_column": "credit",
+	})
+	if err := Validate(mustJSON(t, m)); err != nil {
+		t.Fatalf("expected valid balance rule, got error: %v", err)
+	}
+}
+
+func TestValidate_BalanceRule_UnknownColumn(t *testing.T) {
+	m := actionWithBalance(map[string]interface{}{
+		"debit_column":  "debit",
+		"credit_column": "nope",
+	})
+	err := Validate(mustJSON(t, m))
+	if err == nil || !strings.Contains(err.Error(), "credit_column") {
+		t.Fatalf("expected credit_column validation error, got: %v", err)
+	}
+}
+
+func TestValidate_BalanceRule_RequiresItemFields(t *testing.T) {
+	m := baseValid()
+	m["contributions"] = map[string]interface{}{
+		"actions": []interface{}{
+			map[string]interface{}{
+				"key":          "create_entry",
+				"target_model": "Entry",
+				"handler":      map[string]interface{}{"type": "wasm", "function": "OnCreate"},
+				"fields": []interface{}{
+					map[string]interface{}{
+						"key":     "lines",
+						"type":    "array",
+						"balance": map[string]interface{}{"debit_column": "debit", "credit_column": "credit"},
+					},
+				},
+			},
+		},
+	}
+	err := Validate(mustJSON(t, m))
+	if err == nil || !strings.Contains(err.Error(), "no item_fields") {
+		t.Fatalf("expected no item_fields error, got: %v", err)
+	}
+}
+
+func TestParse_BalanceRoundTrip(t *testing.T) {
+	m := actionWithBalance(map[string]interface{}{
+		"debit_column":  "debit",
+		"credit_column": "credit",
+		"message":       "Σdebit must equal Σcredit",
+	})
+	parsed, err := Parse(mustJSON(t, m))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	f := parsed.Contributions.Actions[0].Fields[0]
+	if f.Balance == nil || f.Balance.DebitColumn != "debit" || f.Balance.CreditColumn != "credit" {
+		t.Fatalf("balance not parsed: %+v", f.Balance)
+	}
+	if !f.ItemFields[1].Total {
+		t.Fatalf("expected debit column total=true, got %+v", f.ItemFields[1])
+	}
+}

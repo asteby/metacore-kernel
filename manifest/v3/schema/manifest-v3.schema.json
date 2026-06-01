@@ -1017,6 +1017,40 @@
           "items": {
             "$ref": "#/$defs/ActionField"
           }
+        },
+        "total": {
+          "type": "boolean",
+          "description": "Set on an item_fields column to sum it in the line-items footer. The SDK renders a per-column total row for every numeric column flagged with total."
+        },
+        "balance": {
+          "$ref": "#/$defs/FieldBalanceRule"
+        }
+      }
+    },
+    "FieldBalanceRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "debit_column",
+        "credit_column"
+      ],
+      "description": "Optional balance constraint on a line-items (type \"array\") field. Declares that the sum of debit_column must equal the sum of credit_column across all rows; the SDK shows a balanced/out-of-balance indicator and blocks submit until they match. Generic — debit/credit are just the two column keys to reconcile (e.g. a journal entry's debit vs credit).",
+      "properties": {
+        "debit_column": {
+          "type": "string",
+          "description": "Item field key whose row values sum to the left side of the balance."
+        },
+        "credit_column": {
+          "type": "string",
+          "description": "Item field key whose row values sum to the right side of the balance."
+        },
+        "message": {
+          "type": "string",
+          "description": "Optional override for the out-of-balance message shown to the user."
+        },
+        "require_nonzero": {
+          "type": "boolean",
+          "description": "When true the field is only considered balanced if the totals match AND are greater than zero (an all-zero entry is rejected). Defaults to true."
         }
       }
     },

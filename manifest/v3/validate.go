@@ -126,6 +126,38 @@ func Validate(raw []byte) error {
 		}
 	}
 
+	if m.Contributions != nil {
+		for ai, a := range m.Contributions.Actions {
+			for fi, f := range a.Fields {
+				if f.Balance == nil {
+					continue
+				}
+				where := fmt.Sprintf("contributions.actions[%d].fields[%d]", ai, fi)
+				if len(f.ItemFields) == 0 {
+					errs = append(errs, fmt.Sprintf("%s declares a balance rule but has no item_fields (balance only applies to a line-items array field)", where))
+					continue
+				}
+				cols := map[string]struct{}{}
+				for _, it := range f.ItemFields {
+					cols[it.Key] = struct{}{}
+				}
+				if f.Balance.DebitColumn == "" || f.Balance.CreditColumn == "" {
+					errs = append(errs, fmt.Sprintf("%s.balance requires both debit_column and credit_column", where))
+				}
+				if f.Balance.DebitColumn != "" {
+					if _, ok := cols[f.Balance.DebitColumn]; !ok {
+						errs = append(errs, fmt.Sprintf("%s.balance.debit_column %q is not one of the field's item_fields", where, f.Balance.DebitColumn))
+					}
+				}
+				if f.Balance.CreditColumn != "" {
+					if _, ok := cols[f.Balance.CreditColumn]; !ok {
+						errs = append(errs, fmt.Sprintf("%s.balance.credit_column %q is not one of the field's item_fields", where, f.Balance.CreditColumn))
+					}
+				}
+			}
+		}
+	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf("v3: manifest validation failed:\n  - %s", strings.Join(errs, "\n  - "))
 	}

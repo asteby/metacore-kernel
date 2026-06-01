@@ -281,6 +281,32 @@ type ActionField struct {
 	// value is an array of objects keyed by the ItemFields keys. The SDK
 	// (dynamic-line-items) renders a row grid with add/remove controls.
 	ItemFields []ActionField `json:"item_fields,omitempty"`
+
+	// Total, on an ItemFields column, flags it for summation in the line-items
+	// footer. The SDK renders a totals row summing every numeric column marked
+	// Total (e.g. debit and credit of a journal entry). Ignored on flat fields.
+	Total bool `json:"total,omitempty"`
+
+	// Balance declares an optional, generic balance constraint on a line-items
+	// (type "array") field: the summed Total of one column must equal the summed
+	// Total of another (e.g. Σdebit == Σcredit). The SDK shows a balanced /
+	// out-of-balance indicator and blocks submit until the two sides match. It
+	// is deliberately domain-agnostic — "debit"/"credit" are just the two column
+	// keys to reconcile. Ignored when ItemFields is empty.
+	Balance *FieldBalanceRule `json:"balance,omitempty"`
+}
+
+// FieldBalanceRule is a declarative reconciliation constraint between two summed
+// columns of a line-items field. Generic by design: the SDK sums DebitColumn and
+// CreditColumn across all rows and reports balanced only when they are equal
+// (and, unless RequireNonzero is false, strictly positive). A journal entry sets
+// {debit_column:"debit", credit_column:"credit"}, but any two reconcilable
+// columns work.
+type FieldBalanceRule struct {
+	DebitColumn    string `json:"debit_column"`
+	CreditColumn   string `json:"credit_column"`
+	Message        string `json:"message,omitempty"`
+	RequireNonzero *bool  `json:"require_nonzero,omitempty"`
 }
 
 // FieldOption is a value/label choice for select-typed action fields.
