@@ -84,3 +84,52 @@ func TestEnsureInstallationUniqueIndex(t *testing.T) {
 		t.Fatalf("second ensure should be a no-op: %v", err)
 	}
 }
+
+// TestEnsureInstallationUniqueIndex_NameCollision is the regression for the prod
+// failure: a DIFFERENT table already owns an index literally named
+// "idx_org_addon" (ops' addon_installations does). Because Postgres/SQLite index
+// names are unique per schema, a generic CREATE UNIQUE INDEX IF NOT EXISTS
+// idx_org_addon would no-op and leave metacore_installations without its
+// constraint. The table-specific name must dodge the collision so the index is
+// actually created and the upsert works.
+func TestEnsureInstallationUniqueIndex_NameCollision(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		DisableForeignKeyConstraintWhenMigrating: true,
+	})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	// A pre-existing, UNRELATED table that already claims the name idx_org_addon.
+	if err := db.Exec(`CREATE TABLE addon_installations (
+		id TEXT PRIMARY KEY, organization_id TEXT, addon_key TEXT)`).Error; err != nil {
+		t.Fatalf("create other table: %v", err)
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX idx_org_addon ON addon_installations (organization_id, addon_key)`).Error; err != nil {
+		t.Fatalf("create colliding index: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE metacore_installations (
+		id TEXT PRIMARY KEY, organization_id TEXT, addon_key TEXT, version TEXT, status TEXT, source TEXT,
+		secret_hash TEXT, secret_enc TEXT, settings TEXT, manifest_hash TEXT,
+		installed_at DATETIME, enabled_at DATETIME, disabled_at DATETIME)`).Error; err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	if err := ensureInstallationUniqueIndex(db); err != nil {
+		t.Fatalf("ensure under name collision: %v", err)
+	}
+
+	// The metacore index must exist under its table-specific name…
+	if !db.Migrator().HasIndex(&Installation{}, installationOrgAddonIndex) {
+		t.Fatalf("expected %s on metacore_installations", installationOrgAddonIndex)
+	}
+	// …and the upsert must now succeed.
+	org := uuid.New()
+	if err := db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "organization_id"}, {Name: "addon_key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"version"}),
+	}).Create(&Installation{
+		ID: uuid.New(), OrganizationID: org, AddonKey: "acme", Version: "1.0.0", Status: "enabled", Source: "bundle",
+	}).Error; err != nil {
+		t.Fatalf("upsert after ensure under collision: %v", err)
+	}
+}

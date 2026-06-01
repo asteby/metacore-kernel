@@ -43,28 +43,32 @@ const maxBundleBytes int64 = 64 << 20
 // Installation is the persisted row. Hosts that wire the full
 // installer.Install pipeline can extend this with foreign keys.
 type Installation struct {
-	ID             uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	OrganizationID uuid.UUID `gorm:"type:uuid;not null;index" json:"organization_id"`
-	AddonKey       string    `gorm:"size:120;not null;index:idx_org_addon,priority:2" json:"addon_key"`
+	ID uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	// Composite (org, addon) lookup index, named table-specifically. NOT the
+	// bare "idx_org_addon": that name collides across tables (Postgres index
+	// names are unique per schema), so a generic name silently never gets
+	// created. See installer.installationOrgAddonIndex for the same hazard.
+	OrganizationID uuid.UUID `gorm:"type:uuid;not null;index:idx_marketplace_installations_org_addon,priority:1" json:"organization_id"`
+	AddonKey       string    `gorm:"size:120;not null;index:idx_marketplace_installations_org_addon,priority:2" json:"addon_key"`
 	// Name is the display title the Hub already localised to the user's
 	// language at install time. Sidebar / dashboard use it instead of the
 	// raw addon_key so users see "Activos Fijos" not "assets". Empty when
 	// the Hub didn't supply one (legacy installs).
-	Name           string    `gorm:"size:200" json:"name,omitempty"`
+	Name string `gorm:"size:200" json:"name,omitempty"`
 	// Category is the Hub-supplied taxonomy bucket ("operations",
 	// "productivity", …) — useful for grouping installed addons in the
 	// sidebar.
-	Category       string    `gorm:"size:60" json:"category,omitempty"`
-	Version        string    `gorm:"size:40;not null" json:"version"`
-	BundleURL      string    `gorm:"size:512" json:"bundle_url,omitempty"`
+	Category  string `gorm:"size:60" json:"category,omitempty"`
+	Version   string `gorm:"size:40;not null" json:"version"`
+	BundleURL string `gorm:"size:512" json:"bundle_url,omitempty"`
 	// Status: requested → downloading → installing → installed | failed
 	//      |  installed   → upgrading → installed | failed
 	//      |  installed   → uninstalling → uninstalled
-	Status         string    `gorm:"size:20;not null;default:'requested'" json:"status"`
-	ErrorMessage   string    `gorm:"size:1024" json:"error_message,omitempty"`
-	RequestedByID  uuid.UUID `gorm:"type:uuid;not null;index" json:"requested_by_id"`
-	RequestedAt    time.Time `gorm:"autoCreateTime" json:"requested_at"`
-	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	Status        string     `gorm:"size:20;not null;default:'requested'" json:"status"`
+	ErrorMessage  string     `gorm:"size:1024" json:"error_message,omitempty"`
+	RequestedByID uuid.UUID  `gorm:"type:uuid;not null;index" json:"requested_by_id"`
+	RequestedAt   time.Time  `gorm:"autoCreateTime" json:"requested_at"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
 
 	// PreviousVersion is the version this installation was on before the
 	// most recent successful upgrade. Empty for fresh installs that never
@@ -232,8 +236,8 @@ type installRequest struct {
 	// Optional metadata the iframe already has from the Hub catalog —
 	// stored verbatim so the sidebar can render the addon by display
 	// name instead of falling back to the raw key.
-	Name      string `json:"name,omitempty"`
-	Category  string `json:"category,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Category string `json:"category,omitempty"`
 }
 
 func (h *Handler) install(c fiber.Ctx) error {
@@ -1060,12 +1064,12 @@ func (h *Handler) rollback(c fiber.Ctx) error {
 // pared-down projection of Installation — the discovery list is meant to
 // drive a sidebar / launcher, not surface bundle URLs or secret material.
 type addonDiscovery struct {
-	AddonKey    string     `json:"addon_key"`
-	Name        string     `json:"name,omitempty"`
-	Version     string     `json:"version"`
-	Status      string     `json:"status"`
-	InstalledAt time.Time  `json:"installed_at"`
-	HasUpdate   bool       `json:"has_update"`
+	AddonKey    string    `json:"addon_key"`
+	Name        string    `json:"name,omitempty"`
+	Version     string    `json:"version"`
+	Status      string    `json:"status"`
+	InstalledAt time.Time `json:"installed_at"`
+	HasUpdate   bool      `json:"has_update"`
 	// LatestVersion is populated when an UpdateChecker reports a newer
 	// version is available. nil when the checker is not wired.
 	LatestVersion string `json:"latest_version,omitempty"`
