@@ -2,6 +2,7 @@ package dynamic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -63,15 +64,30 @@ func (s *Service) Options(ctx context.Context, user modelbase.AuthUser, q Option
 	}
 
 	cfg, err := s.optsResolver(ctx, q.Model, instance)
-	if err != nil {
+	// A missing config is only fatal when the self-options fallback can't
+	// rescue it — defer the decision until after we try to synthesize one.
+	if err != nil && !errors.Is(err, ErrNoOptionsConfig) {
 		return nil, err
 	}
-	if cfg == nil {
-		return nil, ErrNoOptionsConfig
+
+	var fieldCfg FieldOptionsConfig
+	found := false
+	if cfg != nil {
+		fieldCfg, found = cfg.Fields[q.Field]
 	}
-	fieldCfg, ok := cfg.Fields[q.Field]
-	if !ok {
-		return nil, ErrOptionsFieldNotFound
+	if !found {
+		// Self-referential fallback (opt-in via Config.EnableSelfOptions):
+		// list the model itself as options for its identity field. This is what
+		// makes a declarative `dynamic_select` (ref: "<Model>") searchable with
+		// zero manifest config. It never overrides a declared field.
+		synth, ok := s.selfOptionsConfig(q.Model, instance, q.Field)
+		if !ok {
+			if cfg == nil {
+				return nil, ErrNoOptionsConfig
+			}
+			return nil, ErrOptionsFieldNotFound
+		}
+		fieldCfg = synth
 	}
 
 	switch fieldCfg.Type {
@@ -117,7 +133,16 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 		return nil, ErrSourceModelNotFound
 	}
 
-	db := s.db.WithContext(ctx).Model(sourceInstance)
+	// Pin the FROM table the same way Service.Search does: .Model(instance)
+	// drives column mapping/scanning while .Table(name) resolves the real
+	// table for reflect-built addon models that carry no TableName() method.
+	// Without this, GORM pluralizes the anonymous struct name and the options
+	// query for an addon model hits a non-existent table.
+	tableName, err := s.tableNameFor(ctx, fieldCfg.Source, sourceInstance)
+	if err != nil {
+		return nil, err
+	}
+	db := s.db.WithContext(ctx).Model(sourceInstance).Table(tableName)
 
 	// Tenant scoping: only when the source model actually has organization_id.
 	sourceType := reflect.TypeOf(sourceInstance)
@@ -186,6 +211,122 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 	return projectOptions(resultsPtr.Elem(), fieldCfg), nil
 }
 
+// selfOptionsLabelPreference is the ordered list of column names tried, in
+// priority order, as the human-readable label of a self-referential options
+// listing. The first column the model actually has wins. Domain-agnostic — it
+// favours the columns a user most expects to recognise a record by.
+var selfOptionsLabelPreference = []string{
+	"name", "title", "label", "display_name", "full_name",
+	"code", "number", "reference", "slug", "email", "description",
+}
+
+// selfOptionsConfig synthesizes a self-referential dynamic options config so a
+// field's "options" are simply the rows of the model itself. It is the engine
+// behind the declarative `dynamic_select` picker: `ref: "<Model>"` resolves to
+// GET /api/options/<Model>?field=id and lists <Model>'s rows as
+// {value: <id>, label: <name-like column>} — a searchable cross-module FK
+// lookup with zero manifest configuration.
+//
+// Returns ok=false (so the caller surfaces the normal not-found error) when the
+// fallback is disabled, the requested field is not the model's identity field
+// (self-listing only makes sense when the model itself is being picked), or no
+// usable label column can be derived.
+func (s *Service) selfOptionsConfig(model string, instance any, field string) (FieldOptionsConfig, bool) {
+	if !s.selfOptions || field == "" {
+		return FieldOptionsConfig{}, false
+	}
+	// Only the identity field is well-defined for self-listing. A query for an
+	// unconfigured non-id field (e.g. a FK whose target wasn't declared) must
+	// still fail loudly so the manifest bug surfaces, rather than silently
+	// listing the wrong model.
+	if field != "id" {
+		return FieldOptionsConfig{}, false
+	}
+	label := deriveLabelColumn(instance)
+	if label == "" {
+		return FieldOptionsConfig{}, false
+	}
+	return FieldOptionsConfig{
+		Type:   "dynamic",
+		Source: model,
+		Value:  field,
+		Label:  label,
+	}, true
+}
+
+// deriveLabelColumn picks the best display column for a self-referential
+// options listing by walking the model's columns against
+// selfOptionsLabelPreference. Falls back to "id" (label == value) so the picker
+// still functions for a model with no name-like column.
+func deriveLabelColumn(instance any) string {
+	cols := structColumnSet(instance)
+	for _, c := range selfOptionsLabelPreference {
+		if _, ok := cols[c]; ok {
+			return c
+		}
+	}
+	return "id"
+}
+
+// structColumnSet collects the column names of a (possibly pointer, possibly
+// embedded) struct, reading the json tag (the column convention used across the
+// kernel) and falling back to a snake_case of the field name when untagged.
+func structColumnSet(instance any) map[string]struct{} {
+	out := map[string]struct{}{}
+	t := reflect.TypeOf(instance)
+	for t != nil && t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t == nil || t.Kind() != reflect.Struct {
+		return out
+	}
+	var walk func(reflect.Type)
+	walk = func(t reflect.Type) {
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			if f.Anonymous {
+				ft := f.Type
+				for ft.Kind() == reflect.Ptr {
+					ft = ft.Elem()
+				}
+				if ft.Kind() == reflect.Struct {
+					walk(ft)
+				}
+				continue
+			}
+			if name := columnNameFromField(f); name != "" && name != "-" {
+				out[name] = struct{}{}
+			}
+		}
+	}
+	walk(t)
+	return out
+}
+
+func columnNameFromField(f reflect.StructField) string {
+	if tag := f.Tag.Get("json"); tag != "" {
+		if c := strings.Split(tag, ",")[0]; c != "" {
+			return c
+		}
+	}
+	return toSnakeASCII(f.Name)
+}
+
+func toSnakeASCII(s string) string {
+	var b strings.Builder
+	for i, r := range s {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 {
+				b.WriteByte('_')
+			}
+			b.WriteRune(r + ('a' - 'A'))
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 func projectOptions(results reflect.Value, cfg FieldOptionsConfig) []Option {
 	valueCol := cfg.Value
 	if valueCol == "" {
@@ -249,7 +390,47 @@ func fieldValue(v reflect.Value, name string) any {
 			return f.Interface()
 		}
 	}
+	// JSON-tag fallback: resolves columns whose Go field name doesn't
+	// PascalCase cleanly — most importantly "id" → BaseUUIDModel.ID (json:"id"),
+	// which neither FieldByName("id") nor FieldByName(toPascal("id")="Id")
+	// matches because Go's reflect lookup is case-sensitive. Walks promoted
+	// fields from embedded structs too.
+	if f := fieldByJSONTag(v, name); f.IsValid() {
+		return f.Interface()
+	}
 	return nil
+}
+
+// fieldByJSONTag finds the struct field (including fields promoted from
+// embedded structs) whose `json` tag names the given column, and returns its
+// value. Returns the zero reflect.Value when no field matches.
+func fieldByJSONTag(v reflect.Value, col string) reflect.Value {
+	if v.Kind() != reflect.Struct {
+		return reflect.Value{}
+	}
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if f.Anonymous {
+			fv := v.Field(i)
+			for fv.Kind() == reflect.Ptr {
+				if fv.IsNil() {
+					break
+				}
+				fv = fv.Elem()
+			}
+			if fv.Kind() == reflect.Struct {
+				if got := fieldByJSONTag(fv, col); got.IsValid() {
+					return got
+				}
+			}
+			continue
+		}
+		if name := strings.Split(f.Tag.Get("json"), ",")[0]; name == col {
+			return v.Field(i)
+		}
+	}
+	return reflect.Value{}
 }
 
 func toPascal(s string) string {
