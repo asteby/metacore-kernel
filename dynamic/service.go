@@ -34,6 +34,22 @@ type Config struct {
 	// check an alias registry first, then HasMetadata, then the addon registry.
 	SearchConfigResolver SearchConfigResolver
 
+	// EnableSelfOptions turns on the self-referential options fallback: when
+	// Service.Options is asked for the options of a model's own identity field
+	// ("id" / its primary key) and no explicit OptionsConfig declares that
+	// field, the service synthesizes a dynamic config that lists the model
+	// itself (value = the id column, label auto-derived from the first
+	// name-like column). This makes a searchable async picker
+	// (`type: "dynamic_select"`, `ref: "<Model>"`) work for ANY model with
+	// zero manifest configuration — the declarative, cross-module FK lookup.
+	//
+	// It never shadows an explicitly declared field config (static enums like
+	// an order's status, or a hand-tuned dynamic source, always win), and it
+	// only fires for the identity field, so a genuinely-unconfigured non-id
+	// field still surfaces ErrOptionsFieldNotFound. Default false keeps the
+	// previous strict behaviour for hosts that have not opted in.
+	EnableSelfOptions bool
+
 	// SearchMatchClause builds the SQL fragment and argument used for a
 	// single OR-clause of a search query. Default: `<col> LIKE ?` with value
 	// `%<q>%` — portable across sqlite, mysql and postgres.
@@ -158,6 +174,7 @@ type Service struct {
 	actionResolver    ActionResolver
 	actionDispatchers map[string]ActionDispatcher
 	authExtractor     adapters.AuthUserExtractor
+	selfOptions       bool
 }
 
 // New constructs a dynamic Service.
@@ -205,6 +222,7 @@ func New(cfg Config) *Service {
 		actionResolver:    cfg.ActionResolver,
 		actionDispatchers: dispatchers,
 		authExtractor:     cfg.AuthUserExtractor,
+		selfOptions:       cfg.EnableSelfOptions,
 	}
 }
 
