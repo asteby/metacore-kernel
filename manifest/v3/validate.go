@@ -126,6 +126,27 @@ func Validate(raw []byte) error {
 		}
 	}
 
+	for mi, mod := range m.Models {
+		for ri, rel := range mod.Relations {
+			where := fmt.Sprintf("models[%d].relations[%d]", mi, ri)
+			switch rel.Kind {
+			case "one_to_many", "many_to_many":
+				// known
+			default:
+				errs = append(errs, fmt.Sprintf("%s.kind %q is not one of one_to_many|many_to_many", where, rel.Kind))
+			}
+			if rel.Name == "" {
+				errs = append(errs, fmt.Sprintf("%s.name is empty", where))
+			}
+			if rel.Through == "" {
+				errs = append(errs, fmt.Sprintf("%s.through is empty", where))
+			}
+			if rel.ForeignKey == "" {
+				errs = append(errs, fmt.Sprintf("%s.foreign_key is empty", where))
+			}
+		}
+	}
+
 	if m.Contributions != nil {
 		for ai, a := range m.Contributions.Actions {
 			for fi, f := range a.Fields {

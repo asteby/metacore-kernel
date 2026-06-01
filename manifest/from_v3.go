@@ -117,9 +117,11 @@ func mapCapabilities(in []v3.Capability) []Capability {
 // mapModels translates v3 Models into legacy ModelDefinitions. The kernel's
 // dynamic.CreateTable auto-injects id/organization_id/created_at/updated_at/
 // deleted_at, so those columns are stripped here and surfaced as OrgScoped /
-// SoftDelete flags instead. v3 ForeignKeys do not map cleanly onto legacy
-// owner-rooted RelationDef shapes (one_to_many / many_to_many), so Relations
-// is left empty (flat tables) rather than guessed.
+// SoftDelete flags instead. v3 ForeignKeys (the physical FK constraints carried
+// by the OWNING column) still do not map onto legacy owner-rooted RelationDef
+// shapes and are not guessed; the addon-declared inverse-view relations
+// (m.Relations) ARE mapped, via mapModelRelations, so a detail page can list a
+// model's child records.
 func mapModels(in []v3.Model) []ModelDefinition {
 	if len(in) == 0 {
 		return nil
@@ -174,7 +176,33 @@ func mapModels(in []v3.Model) []ModelDefinition {
 			}
 			def.Columns = append(def.Columns, col)
 		}
+		def.Relations = mapModelRelations(m.Relations)
 		out = append(out, def)
+	}
+	return out
+}
+
+// mapModelRelations folds v3 ModelRelations (the inverse 1:N / N:M view edges
+// an addon declares for its detail pages) onto the legacy ModelDefinition's
+// Relations slice so they survive the v3 → host conversion. The host projects
+// them into modelbase.TableMetadata.Relations. v3 ModelRelation does not carry
+// References/Pivot (the inverse-view contract only needs Through + ForeignKey
+// + an optional polymorphic Scope), so those legacy fields stay zero. Scope and
+// Label copy across verbatim.
+func mapModelRelations(in []v3.ModelRelation) []RelationDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]RelationDef, 0, len(in))
+	for _, r := range in {
+		out = append(out, RelationDef{
+			Name:       r.Name,
+			Kind:       r.Kind,
+			Through:    r.Through,
+			ForeignKey: r.ForeignKey,
+			Scope:      r.Scope,
+			Label:      r.Label,
+		})
 	}
 	return out
 }
@@ -301,13 +329,12 @@ func mapSettings(in []v3.Setting) []SettingDef {
 // Icon, Confirm, ConfirmMessage and Modal copy straight across, and each v3
 // ActionField is folded into a legacy FieldDef.
 //
-// Note: the legacy FieldDef is {Name, Label, Type, Required, Default, Options,
-// Size} — it has no widget / validation / ref / placeholder / search_endpoint
-// slot. Those v3 ActionField properties intentionally do NOT round-trip through
-// FieldDef: the SDK reads them directly off the manifest-served action metadata
-// (the raw v3 Action), so the legacy FieldDef only needs to carry the fields a
-// legacy consumer actually reads. We deliberately do not grow the legacy
-// FieldDef for them.
+// The legacy FieldDef carries matching JSON tags for the rich ActionField
+// properties (widget / ref / placeholder / search_endpoint / item_fields /
+// total / balance and the upload triplet accept / max_size / storage_path), so
+// those survive the v3 → host conversion and the SDK renders the full
+// declarative modal off the manifest-served action metadata. See
+// mapActionFields for the per-field copy.
 func mapActions(m *v3.Manifest) map[string][]ActionDef {
 	if m.Contributions == nil || len(m.Contributions.Actions) == 0 {
 		return nil
@@ -370,6 +397,11 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 			Placeholder:    f.Placeholder,
 			SearchEndpoint: f.SearchEndpoint,
 			Total:          f.Total,
+			// Upload-field properties (type:"upload") — forwarded so the host's
+			// upload widget gets the accept allow-list, byte cap and storage prefix.
+			Accept:      f.Accept,
+			MaxSize:     f.MaxSize,
+			StoragePath: f.StoragePath,
 			// ItemFields are themselves ActionFields — recurse so a line-items
 			// group's columns (debit/credit/account picker) survive intact.
 			ItemFields: mapActionFields(f.ItemFields),

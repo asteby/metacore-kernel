@@ -28,6 +28,16 @@ type RelationDef struct {
 	ForeignKey string `json:"foreign_key"`
 	References string `json:"references,omitempty"`
 	Pivot      string `json:"pivot,omitempty"`
+
+	// Scope is a static equality filter applied to the child query. It makes
+	// POLYMORPHIC children addressable: a shared Attachment/Address table with
+	// an `owner_model` discriminator declares Scope {"owner_model":"Customer"}
+	// alongside ForeignKey "owner_id". Empty = no extra filter. Mirrors
+	// manifest.RelationDef.Scope so the value survives the manifest → host hop.
+	Scope map[string]string `json:"scope,omitempty"`
+
+	// Label is an optional i18n key / human label for the related-records panel.
+	Label string `json:"label,omitempty"`
 }
 
 // HasRelations is implemented by compiled models that declare model-to-model

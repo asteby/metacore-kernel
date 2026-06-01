@@ -21,6 +21,33 @@ type TableMetadata struct {
 	PerPageOptions    []int       `json:"perPageOptions,omitempty"`
 	DefaultPerPage    int         `json:"defaultPerPage,omitempty"`
 	SearchPlaceholder string      `json:"searchPlaceholder,omitempty"`
+
+	// Relations are the inverse 1:N / N:M edges the frontend renders as
+	// "related records" panels on a detail page (e.g. a Customer's vehicles,
+	// addresses and attachments). Populated by the metadata service from the
+	// model's HasRelations / manifest-declared relations — empty for flat
+	// models, so the field is omitted from their served payload. The JSON tag
+	// is load-bearing: it MUST match what the SDK's <DynamicRelations> reads.
+	Relations []RelationMeta `json:"relations,omitempty"`
+}
+
+// RelationMeta is one inverse relation projected onto served TableMetadata so
+// the SDK can render a related-records panel without per-app wiring. It mirrors
+// the relation vocabulary the addon declares in its manifest (and that compiled
+// models expose via HasRelations); the JSON tags match manifest.RelationDef /
+// manifest/v3 ModelRelation so the value round-trips byte-for-byte through the
+// host's metadata payload.
+//
+// Scope carries a static equality filter applied to the child query, which is
+// what makes polymorphic children addressable (e.g. {"owner_model":"Customer"}
+// on a shared attachments table). Empty Scope = no extra filter.
+type RelationMeta struct {
+	Name       string            `json:"name"`
+	Kind       string            `json:"kind"` // "one_to_many" | "many_to_many"
+	Through    string            `json:"through"`
+	ForeignKey string            `json:"foreign_key"`
+	Scope      map[string]string `json:"scope,omitempty"`
+	Label      string            `json:"label,omitempty"`
 }
 
 // ColumnDef describes a single column in a TableMetadata.
@@ -128,6 +155,15 @@ type FieldDef struct {
 	// (Σdebit == Σcredit). Drives the balanced/out-of-balance indicator and the
 	// submit gate. Domain-agnostic.
 	Balance *FieldBalanceRule `json:"balance,omitempty"`
+
+	// Accept, MaxSize and StoragePath configure a Type "upload" field (a file
+	// attachment input). Mirrors manifest/v3 ActionField so the upload
+	// declaration survives the v3 → host conversion; the SDK reads them off the
+	// served action metadata and the host's upload handler honours MaxSize /
+	// StoragePath. Ignored on non-upload fields.
+	Accept      string `json:"accept,omitempty"`
+	MaxSize     int64  `json:"max_size,omitempty"`
+	StoragePath string `json:"storage_path,omitempty"`
 }
 
 // FieldBalanceRule is the host-facing mirror of manifest/v3 FieldBalanceRule.
