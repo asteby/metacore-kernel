@@ -67,9 +67,15 @@ import (
 
 // Installation is the kernel's persisted record. Host apps may extend it.
 type Installation struct {
-	ID             uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	OrganizationID uuid.UUID `gorm:"type:uuid;not null;uniqueIndex:idx_org_addon" json:"organization_id"`
-	AddonKey       string    `gorm:"size:100;not null;uniqueIndex:idx_org_addon" json:"addon_key"`
+	ID uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	// The composite unique index is named table-specifically (NOT the bare
+	// "idx_org_addon") because Postgres index names are unique per schema: a
+	// host that also owns an addon_installations/marketplace_installations table
+	// with its own "idx_org_addon" would collide, and CREATE INDEX IF NOT EXISTS
+	// / GORM's HasIndex both match by NAME — so the index here would silently
+	// never get created, breaking the ON CONFLICT upsert with 42P10.
+	OrganizationID uuid.UUID `gorm:"type:uuid;not null;uniqueIndex:uq_metacore_installations_org_addon" json:"organization_id"`
+	AddonKey       string    `gorm:"size:100;not null;uniqueIndex:uq_metacore_installations_org_addon" json:"addon_key"`
 	Version        string    `gorm:"size:40;not null" json:"version"`
 	Status         string    `gorm:"size:20;not null;default:'enabled'" json:"status"`
 	Source         string    `gorm:"size:20;not null" json:"source"` // compiled | bundle | federated
@@ -94,6 +100,14 @@ type Installation struct {
 
 func (Installation) TableName() string { return "metacore_installations" }
 
+// installationOrgAddonIndex is the table-specific name of the composite unique
+// index. It MUST stay in sync with the struct tag above. It is deliberately not
+// the bare "idx_org_addon": that name is commonly used by host-owned tables
+// (e.g. ops' addon_installations) and Postgres index names are unique per
+// schema, so a generic name silently no-ops here (IF NOT EXISTS / HasIndex match
+// by name) and leaves the ON CONFLICT upsert without its constraint → 42P10.
+const installationOrgAddonIndex = "uq_metacore_installations_org_addon"
+
 // ensureInstallationUniqueIndex idempotently creates the composite unique index
 // over (organization_id, addon_key) that Install's ON CONFLICT upsert targets.
 // It does NOT rely on GORM's AutoMigrate index reconciliation, which has been
@@ -107,16 +121,17 @@ func ensureInstallationUniqueIndex(db *gorm.DB) error {
 	switch db.Dialector.Name() {
 	case "postgres", "sqlite", "sqlite3":
 		return db.Exec(fmt.Sprintf(
-			"CREATE UNIQUE INDEX IF NOT EXISTS idx_org_addon ON %s (organization_id, addon_key)", tbl)).Error
+			"CREATE UNIQUE INDEX IF NOT EXISTS %s ON %s (organization_id, addon_key)",
+			installationOrgAddonIndex, tbl)).Error
 	default:
 		// Dialects without a portable CREATE INDEX IF NOT EXISTS (e.g. MySQL):
 		// fall back to GORM's migrator, which builds the index from the struct
 		// tag when absent.
 		m := db.Migrator()
-		if m.HasIndex(&Installation{}, "idx_org_addon") {
+		if m.HasIndex(&Installation{}, installationOrgAddonIndex) {
 			return nil
 		}
-		return m.CreateIndex(&Installation{}, "idx_org_addon")
+		return m.CreateIndex(&Installation{}, installationOrgAddonIndex)
 	}
 }
 
