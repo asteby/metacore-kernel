@@ -62,10 +62,13 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 		}
 		// Resolve the form field type: an explicit Widget wins (the manifest
 		// opted in, e.g. "textarea"/"email"), else map the storage type, then
-		// promote known long-text columns (description/notes/…) to a textarea.
+		// promote known image columns (logo/image/photo/…) to a file picker and
+		// long-text columns (description/notes/…) to a textarea.
 		ftype := FormFieldType(c.Type)
 		if c.Widget != "" {
 			ftype = c.Widget
+		} else if ftype == "text" && imageColumn(c.Name) {
+			ftype = "image"
 		} else if ftype == "text" && longTextColumn(c.Name) {
 			ftype = "textarea"
 		}
@@ -126,6 +129,20 @@ func longTextColumn(name string) bool {
 	case "description", "notes", "note", "comment", "comments", "body",
 		"content", "address", "message", "summary", "bio", "remarks",
 		"observations", "details":
+		return true
+	default:
+		return false
+	}
+}
+
+// imageColumn names columns that hold an image/file URL and should render as a
+// file picker (upload → store → save the URL) instead of a raw text input.
+// Pure heuristic on the column name (the value is still a `text` URL), so logo/
+// image/avatar fields get an uploader without hand-authoring a Widget.
+func imageColumn(name string) bool {
+	switch strings.ToLower(name) {
+	case "logo", "image", "image_url", "photo", "picture", "avatar", "icon",
+		"banner", "cover", "thumbnail", "thumb", "logo_url", "avatar_url":
 		return true
 	default:
 		return false

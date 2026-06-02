@@ -5,102 +5,216 @@
   "description": "Authoritative declarative grammar for a metacore addon, preset, theme or connector pack. The kernel only honours behaviour declared here; code-side discovery is never used as a side channel.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "kind", "metadata", "compatibility"],
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "compatibility"
+  ],
   "properties": {
     "apiVersion": {
       "type": "string",
       "const": "asteby.com/v3",
       "description": "Module Contract version. Always 'asteby.com/v3' in this revision. The kernel rejects unknown values.",
-      "examples": ["asteby.com/v3"]
+      "examples": [
+        "asteby.com/v3"
+      ]
     },
     "kind": {
       "type": "string",
-      "enum": ["Addon", "Preset", "Theme", "ConnectorPack"],
+      "enum": [
+        "Addon",
+        "Preset",
+        "Theme",
+        "ConnectorPack"
+      ],
       "description": "Top-level shape selector. Each kind imposes additional constraints (see top-level allOf).",
-      "examples": ["Addon", "Preset"]
+      "examples": [
+        "Addon",
+        "Preset"
+      ]
     },
-    "metadata": { "$ref": "#/$defs/Metadata" },
-    "compatibility": { "$ref": "#/$defs/Compatibility" },
-    "tenancy": { "$ref": "#/$defs/Tenancy" },
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "compatibility": {
+      "$ref": "#/$defs/Compatibility"
+    },
+    "tenancy": {
+      "$ref": "#/$defs/Tenancy"
+    },
     "capabilities": {
       "type": "array",
       "description": "Scoped permissions the addon requests. The host prompts the org admin for approval and the runtime enforces them by injecting a constrained AddonContext.",
-      "items": { "$ref": "#/$defs/Capability" }
+      "items": {
+        "$ref": "#/$defs/Capability"
+      }
     },
     "models": {
       "type": "array",
       "description": "Data models the addon owns. The installer materialises each as a table in the addon schema (shared) or per-tenant schema, with the declared columns, indices and RLS policies.",
-      "items": { "$ref": "#/$defs/Model" }
+      "items": {
+        "$ref": "#/$defs/Model"
+      }
     },
-    "frontend": { "$ref": "#/$defs/Frontend" },
-    "contributions": { "$ref": "#/$defs/Contributions" },
-    "extension_points": { "$ref": "#/$defs/ExtensionPoints" },
-    "lifecycle": { "$ref": "#/$defs/Lifecycle" },
-    "i18n": { "$ref": "#/$defs/I18n" },
-    "rbac": { "$ref": "#/$defs/Rbac" },
+    "frontend": {
+      "$ref": "#/$defs/Frontend"
+    },
+    "contributions": {
+      "$ref": "#/$defs/Contributions"
+    },
+    "extension_points": {
+      "$ref": "#/$defs/ExtensionPoints"
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/Lifecycle"
+    },
+    "i18n": {
+      "$ref": "#/$defs/I18n"
+    },
+    "rbac": {
+      "$ref": "#/$defs/Rbac"
+    },
     "settings": {
       "type": "array",
       "description": "User-facing tenant-scoped settings the addon reads at runtime via secrets:read or the kernel settings API.",
-      "items": { "$ref": "#/$defs/Setting" }
+      "items": {
+        "$ref": "#/$defs/Setting"
+      }
     },
-    "billing": { "$ref": "#/$defs/Billing" },
-    "preset": { "$ref": "#/$defs/Preset" },
-    "theme": { "$ref": "#/$defs/Theme" },
-    "connector_pack": { "$ref": "#/$defs/ConnectorPack" },
-    "signature": { "$ref": "#/$defs/Signature" }
+    "billing": {
+      "$ref": "#/$defs/Billing"
+    },
+    "preset": {
+      "$ref": "#/$defs/Preset"
+    },
+    "theme": {
+      "$ref": "#/$defs/Theme"
+    },
+    "connector_pack": {
+      "$ref": "#/$defs/ConnectorPack"
+    },
+    "signature": {
+      "$ref": "#/$defs/Signature"
+    }
   },
   "allOf": [
     {
-      "if": { "properties": { "kind": { "const": "Addon" } } },
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "Addon"
+          }
+        }
+      },
       "then": {
-        "not": { "required": ["preset"] },
+        "not": {
+          "required": [
+            "preset"
+          ]
+        },
         "description": "Addons must not declare a preset block."
       }
     },
     {
-      "if": { "properties": { "kind": { "const": "Preset" } } },
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "Preset"
+          }
+        }
+      },
       "then": {
-        "required": ["preset"],
-        "not": { "anyOf": [
-          { "required": ["models"] },
-          { "required": ["lifecycle"] }
-        ] },
+        "required": [
+          "preset"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "models"
+              ]
+            },
+            {
+              "required": [
+                "lifecycle"
+              ]
+            }
+          ]
+        },
         "description": "Presets must declare 'preset' and must not own models or lifecycle hooks."
       }
     },
     {
-      "if": { "properties": { "kind": { "const": "Theme" } } },
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "Theme"
+          }
+        }
+      },
       "then": {
-        "required": ["theme"],
-        "not": { "anyOf": [
-          { "required": ["models"] },
-          { "required": ["capabilities"] }
-        ] }
+        "required": [
+          "theme"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "models"
+              ]
+            },
+            {
+              "required": [
+                "capabilities"
+              ]
+            }
+          ]
+        }
       }
     },
     {
-      "if": { "properties": { "kind": { "const": "ConnectorPack" } } },
-      "then": { "required": ["connector_pack"] }
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "ConnectorPack"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "connector_pack"
+        ]
+      }
     }
   ],
   "$defs": {
     "Metadata": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["key", "name", "version"],
+      "required": [
+        "key",
+        "name",
+        "version"
+      ],
       "description": "Identity, presentation and authorship metadata for the module.",
       "properties": {
         "key": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]{1,62}$",
           "description": "Stable lowercase identifier. Used as the addon schema name and event namespace. Immutable after first publish.",
-          "examples": ["inventory", "pos_terminal"]
+          "examples": [
+            "inventory",
+            "pos_terminal"
+          ]
         },
         "name": {
           "type": "string",
           "minLength": 1,
           "description": "Human-readable display name shown in the marketplace and install UI.",
-          "examples": ["Inventory"]
+          "examples": [
+            "Inventory"
+          ]
         },
         "description": {
           "type": "string",
@@ -110,44 +224,82 @@
           "type": "string",
           "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$",
           "description": "Semver 2.0 version of this manifest payload. Drives the lifecycle.upgrade dispatcher.",
-          "examples": ["1.0.0", "2.3.1-rc.1"]
+          "examples": [
+            "1.0.0",
+            "2.3.1-rc.1"
+          ]
         },
         "category": {
           "type": "string",
           "description": "Marketplace category, free-form lowercase slug.",
-          "examples": ["sales", "logistics"]
+          "examples": [
+            "sales",
+            "logistics"
+          ]
         },
         "icon": {
           "type": "object",
           "additionalProperties": false,
           "description": "Triple (type, slug, color) used by the host to render the addon avatar.",
           "properties": {
-            "type": { "type": "string", "enum": ["brand", "lucide", "url"] },
-            "slug": { "type": "string" },
-            "color": { "type": "string" }
+            "type": {
+              "type": "string",
+              "enum": [
+                "brand",
+                "lucide",
+                "url"
+              ]
+            },
+            "slug": {
+              "type": "string"
+            },
+            "color": {
+              "type": "string"
+            }
           },
-          "required": ["type", "slug"]
+          "required": [
+            "type",
+            "slug"
+          ]
         },
-        "author": { "type": "string" },
-        "website": { "type": "string", "format": "uri" },
-        "license": { "type": "string" },
-        "readme": { "type": "string", "description": "Path inside the bundle to the long-form README markdown." },
+        "author": {
+          "type": "string"
+        },
+        "website": {
+          "type": "string",
+          "format": "uri"
+        },
+        "license": {
+          "type": "string"
+        },
+        "readme": {
+          "type": "string",
+          "description": "Path inside the bundle to the long-form README markdown."
+        },
         "screenshots": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "features": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "countries": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "ISO 3166-1 alpha-2 country codes the addon targets; empty = global."
         },
         "i18n": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/MetadataLocale" },
+          "additionalProperties": {
+            "$ref": "#/$defs/MetadataLocale"
+          },
           "description": "Marketplace catalog localizations keyed by locale (es, en, ...)."
         }
       },
@@ -166,31 +318,49 @@
       "additionalProperties": false,
       "description": "One locale's marketplace catalog copy. Every field is optional; missing fields fall back to the flat metadata.name/description/features.",
       "properties": {
-        "name": { "type": "string" },
-        "description": { "type": "string" },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
         "features": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
     "Compatibility": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requires"],
+      "required": [
+        "requires"
+      ],
       "description": "Versioned dependency declarations. 'requires' replaces the v2 trio (kernel, requires, implicit host match) with a uniform list.",
       "properties": {
         "requires": {
           "type": "array",
           "minItems": 1,
-          "items": { "$ref": "#/$defs/Requirement" }
+          "items": {
+            "$ref": "#/$defs/Requirement"
+          }
         }
       },
       "examples": [
         {
           "requires": [
-            { "key": "kernel", "version": ">=3.0.0 <4.0.0" },
-            { "key": "core_catalog", "version": ">=1.2.0", "optional": true, "reason": "richer product cards when present" }
+            {
+              "key": "kernel",
+              "version": ">=3.0.0 <4.0.0"
+            },
+            {
+              "key": "core_catalog",
+              "version": ">=1.2.0",
+              "optional": true,
+              "reason": "richer product cards when present"
+            }
           ]
         }
       ]
@@ -198,18 +368,27 @@
     "Requirement": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["key", "version"],
+      "required": [
+        "key",
+        "version"
+      ],
       "properties": {
         "key": {
           "type": "string",
           "description": "Dependency identifier. 'kernel' is reserved for the host. Anything else references another addon by metadata.key.",
-          "examples": ["kernel", "inventory"]
+          "examples": [
+            "kernel",
+            "inventory"
+          ]
         },
         "version": {
           "type": "string",
           "description": "Semver range parsed by Masterminds/semver. Empty string is not allowed.",
           "minLength": 1,
-          "examples": [">=3.0.0 <4.0.0", "^1.2.0"]
+          "examples": [
+            ">=3.0.0 <4.0.0",
+            "^1.2.0"
+          ]
         },
         "optional": {
           "type": "boolean",
@@ -229,7 +408,11 @@
       "properties": {
         "isolation": {
           "type": "string",
-          "enum": ["shared", "schema", "database"],
+          "enum": [
+            "shared",
+            "schema",
+            "database"
+          ],
           "default": "shared",
           "description": "shared: single addon schema, RLS by rls_column; schema: addon_<key>_<orgshort>; database: reserved."
         },
@@ -240,14 +423,22 @@
         }
       },
       "examples": [
-        { "isolation": "shared", "rls_column": "organization_id" },
-        { "isolation": "schema" }
+        {
+          "isolation": "shared",
+          "rls_column": "organization_id"
+        },
+        {
+          "isolation": "schema"
+        }
       ]
     },
     "Capability": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "target"],
+      "required": [
+        "kind",
+        "target"
+      ],
       "description": "A single scoped permission grant. Wildcards in target follow shell glob semantics.",
       "properties": {
         "kind": {
@@ -272,7 +463,12 @@
           "type": "string",
           "minLength": 1,
           "description": "Capability target. db:* expects 'schema.table' or 'schema.*'. http:fetch expects a URL prefix. event:* expects an event name. cron:register expects a cron expression. queue:* expects a queue name. secrets:read expects a secret key glob.",
-          "examples": ["addon_inventory.*", "https://api.stripe.com/*", "sale.created", "0 * * * *"]
+          "examples": [
+            "addon_inventory.*",
+            "https://api.stripe.com/*",
+            "sale.created",
+            "0 * * * *"
+          ]
         },
         "reason": {
           "type": "string",
@@ -280,28 +476,48 @@
         }
       },
       "examples": [
-        { "kind": "db:write", "target": "addon_inventory.*", "reason": "Persist stock movements." },
-        { "kind": "http:fetch", "target": "https://api.stripe.com/*" },
-        { "kind": "event:emit", "target": "inventory.stock_changed" }
+        {
+          "kind": "db:write",
+          "target": "addon_inventory.*",
+          "reason": "Persist stock movements."
+        },
+        {
+          "kind": "http:fetch",
+          "target": "https://api.stripe.com/*"
+        },
+        {
+          "kind": "event:emit",
+          "target": "inventory.stock_changed"
+        }
       ]
     },
     "Model": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["key", "table", "columns"],
+      "required": [
+        "key",
+        "table",
+        "columns"
+      ],
       "description": "A data model the addon owns. Materialised by the installer.",
       "properties": {
         "key": {
           "type": "string",
           "pattern": "^[A-Z][A-Za-z0-9]+$",
           "description": "PascalCase logical identifier the SDK exposes (e.g. 'Product').",
-          "examples": ["Product", "StockMovement"]
+          "examples": [
+            "Product",
+            "StockMovement"
+          ]
         },
         "table": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]+$",
           "description": "Physical SQL table name inside the addon schema.",
-          "examples": ["products", "stock_movements"]
+          "examples": [
+            "products",
+            "stock_movements"
+          ]
         },
         "label": {
           "type": "string",
@@ -310,25 +526,35 @@
         "columns": {
           "type": "array",
           "minItems": 1,
-          "items": { "$ref": "#/$defs/Column" }
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
         },
         "indices": {
           "type": "array",
-          "items": { "$ref": "#/$defs/Index" }
+          "items": {
+            "$ref": "#/$defs/Index"
+          }
         },
         "foreign_keys": {
           "type": "array",
-          "items": { "$ref": "#/$defs/ForeignKey" }
+          "items": {
+            "$ref": "#/$defs/ForeignKey"
+          }
         },
         "extensions": {
           "type": "array",
           "description": "Columns this addon attaches to another addon's model. The target model must opt in via extension_points.model_extensions_accepted[].",
-          "items": { "$ref": "#/$defs/ModelExtension" }
+          "items": {
+            "$ref": "#/$defs/ModelExtension"
+          }
         },
         "relations": {
           "type": "array",
           "description": "Inverse 1:N / N:M view edges the host projects into served TableMetadata so a detail page can list the model's child records (e.g. a Customer's vehicles, addresses, attachments).",
-          "items": { "$ref": "#/$defs/ModelRelation" }
+          "items": {
+            "$ref": "#/$defs/ModelRelation"
+          }
         }
       },
       "examples": [
@@ -336,12 +562,30 @@
           "key": "Product",
           "table": "products",
           "columns": [
-            { "name": "id", "type": "uuid", "primary_key": true },
-            { "name": "sku", "type": "text", "not_null": true },
-            { "name": "name", "type": "text", "not_null": true }
+            {
+              "name": "id",
+              "type": "uuid",
+              "primary_key": true
+            },
+            {
+              "name": "sku",
+              "type": "text",
+              "not_null": true
+            },
+            {
+              "name": "name",
+              "type": "text",
+              "not_null": true
+            }
           ],
           "indices": [
-            { "name": "products_sku_uq", "columns": ["sku"], "unique": true }
+            {
+              "name": "products_sku_uq",
+              "columns": [
+                "sku"
+              ],
+              "unique": true
+            }
           ]
         }
       ]
@@ -349,23 +593,59 @@
     "ModelRelation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "kind", "through", "foreign_key"],
+      "required": [
+        "name",
+        "kind",
+        "through",
+        "foreign_key"
+      ],
       "description": "An inverse 1:N / N:M edge rooted at the owning model. The host projects it into TableMetadata.relations so a detail page can list the owner's child records.",
       "properties": {
-        "name": { "type": "string", "description": "Stable identifier for the relation, scoped to the owning model (e.g. 'vehicles')." },
-        "kind": { "type": "string", "enum": ["one_to_many", "many_to_many"], "description": "one_to_many: foreign_key is the column on 'through' pointing back at the owner. many_to_many: 'through' is the target model joined via foreign_key." },
-        "through": { "type": "string", "description": "Child / target model key, e.g. 'Vehicle'." },
-        "foreign_key": { "type": "string", "description": "Child column pointing back at the owner, e.g. 'customer_id'." },
-        "scope": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Static equality filter applied to the child query. Makes polymorphic children addressable (e.g. {\"owner_model\":\"Customer\"} on a shared attachments table)." },
-        "label": { "type": "string", "description": "Optional i18n key / human label for the related-records panel." }
+        "name": {
+          "type": "string",
+          "description": "Stable identifier for the relation, scoped to the owning model (e.g. 'vehicles')."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "one_to_many",
+            "many_to_many"
+          ],
+          "description": "one_to_many: foreign_key is the column on 'through' pointing back at the owner. many_to_many: 'through' is the target model joined via foreign_key."
+        },
+        "through": {
+          "type": "string",
+          "description": "Child / target model key, e.g. 'Vehicle'."
+        },
+        "foreign_key": {
+          "type": "string",
+          "description": "Child column pointing back at the owner, e.g. 'customer_id'."
+        },
+        "scope": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Static equality filter applied to the child query. Makes polymorphic children addressable (e.g. {\"owner_model\":\"Customer\"} on a shared attachments table)."
+        },
+        "label": {
+          "type": "string",
+          "description": "Optional i18n key / human label for the related-records panel."
+        }
       }
     },
     "Column": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "type"],
+      "required": [
+        "name",
+        "type"
+      ],
       "properties": {
-        "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$" },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]+$"
+        },
         "type": {
           "type": "string",
           "description": "Logical type the kernel maps to a Postgres type. Closed set kept narrow to keep cross-driver portability.",
@@ -384,45 +664,85 @@
             "vector"
           ]
         },
-        "primary_key": { "type": "boolean", "default": false },
-        "not_null": { "type": "boolean", "default": false },
+        "primary_key": {
+          "type": "boolean",
+          "default": false
+        },
+        "not_null": {
+          "type": "boolean",
+          "default": false
+        },
         "default": {
           "description": "Default value as JSON literal or recognised SQL expression token (e.g. 'now()', 'gen_random_uuid()')."
         },
-        "label": { "type": "string" },
-        "comment": { "type": "string", "description": "Column-level documentation string." }
+        "label": {
+          "type": "string"
+        },
+        "comment": {
+          "type": "string",
+          "description": "Column-level documentation string."
+        }
       }
     },
     "Index": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "columns"],
+      "required": [
+        "name",
+        "columns"
+      ],
       "properties": {
-        "name": { "type": "string" },
+        "name": {
+          "type": "string"
+        },
         "columns": {
           "type": "array",
           "minItems": 1,
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
-        "unique": { "type": "boolean", "default": false },
-        "method": { "type": "string", "enum": ["btree", "gin", "gist", "hash", "ivfflat", "hnsw"] }
+        "unique": {
+          "type": "boolean",
+          "default": false
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "btree",
+            "gin",
+            "gist",
+            "hash",
+            "ivfflat",
+            "hnsw"
+          ]
+        }
       }
     },
     "ForeignKey": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["columns", "references", "policy"],
+      "required": [
+        "columns",
+        "references",
+        "policy"
+      ],
       "description": "Cross-model reference. 'policy' selects whether the installer materialises a physical FK constraint or only validates the link in application code.",
       "properties": {
         "columns": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "minItems": 1
         },
         "references": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["model", "columns"],
+          "required": [
+            "model",
+            "columns"
+          ],
           "properties": {
             "model": {
               "type": "string",
@@ -430,37 +750,54 @@
             },
             "columns": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "minItems": 1
             }
           }
         },
         "policy": {
           "type": "string",
-          "enum": ["logical", "physical"],
+          "enum": [
+            "logical",
+            "physical"
+          ],
           "description": "logical: kernel enforces in application code only (safe across schemas/tenants). physical: kernel emits an SQL FK constraint."
         },
         "on_delete": {
           "type": "string",
-          "enum": ["restrict", "cascade", "set_null", "no_action"]
+          "enum": [
+            "restrict",
+            "cascade",
+            "set_null",
+            "no_action"
+          ]
         }
       }
     },
     "ModelExtension": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["target_model", "columns"],
+      "required": [
+        "target_model",
+        "columns"
+      ],
       "description": "Columns this addon attaches to another addon's model.",
       "properties": {
         "target_model": {
           "type": "string",
           "description": "Fully qualified '<addon_key>.<ModelKey>' of the model being extended.",
-          "examples": ["catalog.Product"]
+          "examples": [
+            "catalog.Product"
+          ]
         },
         "columns": {
           "type": "array",
           "minItems": 1,
-          "items": { "$ref": "#/$defs/Column" }
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
         }
       }
     },
@@ -471,60 +808,99 @@
       "properties": {
         "navigation": {
           "type": "array",
-          "items": { "$ref": "#/$defs/NavGroup" }
+          "items": {
+            "$ref": "#/$defs/NavGroup"
+          }
         },
         "slots": {
           "type": "array",
           "description": "Renders into a slot_kind published by another addon (or the host).",
-          "items": { "$ref": "#/$defs/SlotContribution" }
+          "items": {
+            "$ref": "#/$defs/SlotContribution"
+          }
         },
         "actions": {
           "type": "array",
-          "items": { "$ref": "#/$defs/Action" }
+          "items": {
+            "$ref": "#/$defs/Action"
+          }
         },
         "tools": {
           "type": "array",
           "description": "LLM-facing actions registered into the host agent-tool registry on install.",
-          "items": { "$ref": "#/$defs/Tool" }
+          "items": {
+            "$ref": "#/$defs/Tool"
+          }
         },
         "subscriptions": {
           "type": "array",
           "description": "Event handlers. Each subscription must be backed by an 'event:subscribe' capability.",
-          "items": { "$ref": "#/$defs/Subscription" }
+          "items": {
+            "$ref": "#/$defs/Subscription"
+          }
         }
       }
     },
     "NavGroup": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["title", "items"],
+      "required": [
+        "title",
+        "items"
+      ],
       "properties": {
-        "title": { "type": "string" },
-        "icon": { "type": "string" },
-        "target": { "type": "string", "description": "Merges into an existing host group (e.g. 'sidebar.sales')." },
+        "title": {
+          "type": "string"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string",
+          "description": "Merges into an existing host group (e.g. 'sidebar.sales')."
+        },
         "items": {
           "type": "array",
-          "items": { "$ref": "#/$defs/NavItem" }
+          "items": {
+            "$ref": "#/$defs/NavItem"
+          }
         }
       }
     },
     "NavItem": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["title"],
+      "required": [
+        "title"
+      ],
       "properties": {
-        "title": { "type": "string" },
-        "url": { "type": "string" },
-        "icon": { "type": "string" },
-        "model": { "type": "string", "description": "Binds the item to a dynamic CRUD screen for that model." },
-        "permission": { "type": "string" },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string",
+          "description": "Binds the item to a dynamic CRUD screen for that model."
+        },
+        "permission": {
+          "type": "string"
+        },
         "items": {
           "type": "array",
-          "items": { "$ref": "#/$defs/NavItem" }
+          "items": {
+            "$ref": "#/$defs/NavItem"
+          }
         },
         "filter": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
+          "additionalProperties": {
+            "type": "string"
+          },
           "description": "Static column→value filter the host applies when rendering this entry's list view (e.g. {\"status\":\"reception\"}), so an addon can publish one nav entry per status."
         }
       }
@@ -532,7 +908,10 @@
     "SlotContribution": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["slot_kind", "entry"],
+      "required": [
+        "slot_kind",
+        "entry"
+      ],
       "properties": {
         "slot_kind": {
           "type": "string",
@@ -542,99 +921,218 @@
           "type": "string",
           "description": "Bundle-relative path or federation expose pointing at the React component."
         },
-        "order": { "type": "integer", "default": 0 },
-        "permission": { "type": "string" }
+        "order": {
+          "type": "integer",
+          "default": 0
+        },
+        "permission": {
+          "type": "string"
+        }
       }
     },
     "Frontend": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["entry", "format"],
+      "required": [
+        "entry",
+        "format"
+      ],
       "description": "The federated UI bundle the host loads at runtime for this addon.",
       "properties": {
-        "entry": { "type": "string", "description": "URL or relative path of the remoteEntry.js / bundle." },
-        "format": { "type": "string", "enum": ["federation", "script"], "description": "Module loading strategy." },
-        "expose": { "type": "string", "description": "Federation module name to import (e.g. './plugin')." },
-        "integrity": { "type": "string", "description": "SRI hash for the bundle." },
-        "container": { "type": "string", "description": "Global name the remoteEntry.js assigns itself on window." },
-        "layout": { "type": "string", "enum": ["shell", "immersive"], "description": "How the host frames the addon UI." }
+        "entry": {
+          "type": "string",
+          "description": "URL or relative path of the remoteEntry.js / bundle."
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "federation",
+            "script"
+          ],
+          "description": "Module loading strategy."
+        },
+        "expose": {
+          "type": "string",
+          "description": "Federation module name to import (e.g. './plugin')."
+        },
+        "integrity": {
+          "type": "string",
+          "description": "SRI hash for the bundle."
+        },
+        "container": {
+          "type": "string",
+          "description": "Global name the remoteEntry.js assigns itself on window."
+        },
+        "layout": {
+          "type": "string",
+          "enum": [
+            "shell",
+            "immersive"
+          ],
+          "description": "How the host frames the addon UI."
+        }
       }
     },
     "Action": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["key", "handler"],
+      "required": [
+        "key",
+        "handler"
+      ],
       "description": "A UI-triggered operation. May declare a rich declarative action modal (fields[]) and/or delegate to a custom federated modal component (modal).",
       "properties": {
-        "key": { "type": "string" },
-        "label": { "type": "string" },
-        "icon": { "type": "string" },
+        "key": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "icon": {
+          "type": "string"
+        },
         "handler": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type"],
+          "required": [
+            "type"
+          ],
           "properties": {
-            "type": { "type": "string", "enum": ["wasm", "webhook", "compiled"] },
-            "function": { "type": "string" },
-            "url": { "type": "string" }
+            "type": {
+              "type": "string",
+              "enum": [
+                "wasm",
+                "webhook",
+                "compiled"
+              ]
+            },
+            "function": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
           }
         },
-        "target_model": { "type": "string" },
+        "target_model": {
+          "type": "string"
+        },
         "fields": {
           "type": "array",
           "description": "Declarative form rendered in the action modal before dispatch.",
-          "items": { "$ref": "#/$defs/ActionField" }
+          "items": {
+            "$ref": "#/$defs/ActionField"
+          }
         },
         "modal": {
           "type": "string",
           "description": "slot_kind of a custom federated modal component the host mounts instead of (or alongside) the declarative form."
         },
-        "confirm": { "type": "boolean", "description": "Show a confirmation step before dispatch." },
-        "confirm_message": { "type": "string", "description": "Body shown in the confirmation step." },
+        "confirm": {
+          "type": "boolean",
+          "description": "Show a confirmation step before dispatch."
+        },
+        "confirm_message": {
+          "type": "string",
+          "description": "Body shown in the confirmation step."
+        },
         "requires_state": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Gates the action on the target record's `status` column: the action is only valid when the record's status is one of these values. Enforced by the kernel at dispatch. Empty/omitted means no state gate."
+        },
+        "modal_width": {
+          "type": [
+            "string",
+            "number"
+          ],
+          "description": "Explicit modal width (CSS length or px number)."
         }
       }
     },
     "ActionField": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["key", "type"],
+      "required": [
+        "key",
+        "type"
+      ],
       "description": "One input in an action modal's declarative form. Mirrors the SDK ActionFieldDef.",
       "properties": {
-        "key": { "type": "string" },
-        "label": { "type": "string" },
-        "type": { "type": "string" },
-        "required": { "type": "boolean" },
+        "key": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
         "options": {
           "type": "array",
-          "items": { "$ref": "#/$defs/FieldOption" }
+          "items": {
+            "$ref": "#/$defs/FieldOption"
+          }
         },
         "default": {},
-        "placeholder": { "type": "string" },
-        "widget": { "type": "string" },
-        "ref": { "type": "string", "description": "Target model key for reference/relation fields." },
-        "search_endpoint": { "type": "string", "description": "Endpoint backing an async-search widget." },
-        "validation": { "$ref": "#/$defs/FieldValidation" },
+        "placeholder": {
+          "type": "string"
+        },
+        "widget": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string",
+          "description": "Target model key for reference/relation fields."
+        },
+        "search_endpoint": {
+          "type": "string",
+          "description": "Endpoint backing an async-search widget."
+        },
+        "validation": {
+          "$ref": "#/$defs/FieldValidation"
+        },
         "item_fields": {
           "type": "array",
           "description": "Columns of a repeatable line-items group. Set on a field with type \"array\"; each entry is the cell widget for one column. The field value is an array of objects keyed by these item field keys.",
-          "items": { "$ref": "#/$defs/ActionField" }
+          "items": {
+            "$ref": "#/$defs/ActionField"
+          }
         },
-        "accept": { "type": "string", "description": "On a type:\"upload\" field, a comma-separated MIME / extension allow-list passed to the file picker's accept attribute, e.g. \"image/*,.pdf\". Ignored on non-upload fields." },
-        "max_size": { "type": "integer", "minimum": 0, "description": "On a type:\"upload\" field, the maximum accepted file size in BYTES (0 = host default). Ignored on non-upload fields." },
-        "storage_path": { "type": "string", "description": "On a type:\"upload\" field, the logical storage bucket / path prefix the host stores the file under, e.g. \"attachments/customers\". Empty = host default. Ignored on non-upload fields." }
+        "accept": {
+          "type": "string",
+          "description": "On a type:\"upload\" field, a comma-separated MIME / extension allow-list passed to the file picker's accept attribute, e.g. \"image/*,.pdf\". Ignored on non-upload fields."
+        },
+        "max_size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "On a type:\"upload\" field, the maximum accepted file size in BYTES (0 = host default). Ignored on non-upload fields."
+        },
+        "storage_path": {
+          "type": "string",
+          "description": "On a type:\"upload\" field, the logical storage bucket / path prefix the host stores the file under, e.g. \"attachments/customers\". Empty = host default. Ignored on non-upload fields."
+        }
       }
     },
     "FieldOption": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["value", "label"],
+      "required": [
+        "value",
+        "label"
+      ],
       "properties": {
-        "value": { "type": "string" },
-        "label": { "type": "string" }
+        "value": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
       }
     },
     "FieldValidation": {
@@ -642,28 +1140,58 @@
       "additionalProperties": false,
       "description": "Client-side validation hints the SDK reads off the manifest-served action metadata.",
       "properties": {
-        "regex": { "type": "string" },
-        "min": { "type": "number" },
-        "max": { "type": "number" },
-        "custom": { "type": "string" }
+        "regex": {
+          "type": "string"
+        },
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        },
+        "custom": {
+          "type": "string"
+        }
       }
     },
     "Tool": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["key", "description"],
+      "required": [
+        "key",
+        "description"
+      ],
       "properties": {
-        "key": { "type": "string" },
-        "description": { "type": "string" },
-        "input_schema": { "type": "object" },
+        "key": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "input_schema": {
+          "type": "object"
+        },
         "handler": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type"],
+          "required": [
+            "type"
+          ],
           "properties": {
-            "type": { "type": "string", "enum": ["wasm", "webhook", "compiled"] },
-            "function": { "type": "string" },
-            "url": { "type": "string" }
+            "type": {
+              "type": "string",
+              "enum": [
+                "wasm",
+                "webhook",
+                "compiled"
+              ]
+            },
+            "function": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
           }
         }
       }
@@ -671,7 +1199,10 @@
     "Subscription": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["event", "handler"],
+      "required": [
+        "event",
+        "handler"
+      ],
       "properties": {
         "event": {
           "type": "string",
@@ -680,15 +1211,34 @@
         "handler": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type"],
+          "required": [
+            "type"
+          ],
           "properties": {
-            "type": { "type": "string", "enum": ["wasm", "webhook", "compiled"] },
-            "function": { "type": "string" },
-            "url": { "type": "string" }
+            "type": {
+              "type": "string",
+              "enum": [
+                "wasm",
+                "webhook",
+                "compiled"
+              ]
+            },
+            "function": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
           }
         },
-        "filter": { "type": "string", "description": "CEL expression over the event payload; only matching events dispatch." },
-        "comment": { "type": "string", "description": "Author note; ignored by the runtime." }
+        "filter": {
+          "type": "string",
+          "description": "CEL expression over the event payload; only matching events dispatch."
+        },
+        "comment": {
+          "type": "string",
+          "description": "Author note; ignored by the runtime."
+        }
       }
     },
     "ExtensionPoints": {
@@ -698,49 +1248,69 @@
       "properties": {
         "events": {
           "type": "array",
-          "items": { "$ref": "#/$defs/PublishedEvent" }
+          "items": {
+            "$ref": "#/$defs/PublishedEvent"
+          }
         },
         "slot_kinds": {
           "type": "array",
-          "items": { "$ref": "#/$defs/PublishedSlot" }
+          "items": {
+            "$ref": "#/$defs/PublishedSlot"
+          }
         },
         "model_extensions_accepted": {
           "type": "array",
           "description": "Names of own models that opt into accepting model extensions from other addons.",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
     "PublishedEvent": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "properties": {
         "name": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
           "description": "Dotted '<addon_key>.<event>' identifier.",
-          "examples": ["inventory.stock_changed"]
+          "examples": [
+            "inventory.stock_changed"
+          ]
         },
         "payload_schema": {
           "type": "string",
           "description": "Bundle-relative path or HTTPS URL to the JSON Schema describing the payload."
         },
-        "description": { "type": "string" }
+        "description": {
+          "type": "string"
+        }
       }
     },
     "PublishedSlot": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "properties": {
         "name": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
-          "examples": ["inventory.product_detail_panel"]
+          "examples": [
+            "inventory.product_detail_panel"
+          ]
         },
-        "props_schema": { "type": "string" },
-        "description": { "type": "string" }
+        "props_schema": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
       }
     },
     "Lifecycle": {
@@ -748,47 +1318,77 @@
       "additionalProperties": false,
       "description": "Hook map plus the upgrade ladder. The installer dispatches each entry through the addon backend runtime.",
       "properties": {
-        "install": { "type": "string", "description": "Exported function or webhook path to run on first install." },
-        "uninstall": { "type": "string" },
-        "enable": { "type": "string" },
-        "disable": { "type": "string" },
+        "install": {
+          "type": "string",
+          "description": "Exported function or webhook path to run on first install."
+        },
+        "uninstall": {
+          "type": "string"
+        },
+        "enable": {
+          "type": "string"
+        },
+        "disable": {
+          "type": "string"
+        },
         "upgrade": {
           "type": "array",
-          "items": { "$ref": "#/$defs/UpgradeStep" }
+          "items": {
+            "$ref": "#/$defs/UpgradeStep"
+          }
         }
       }
     },
     "UpgradeStep": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["from", "type", "function"],
+      "required": [
+        "from",
+        "type",
+        "function"
+      ],
       "properties": {
         "from": {
           "type": "string",
           "description": "Semver range matching the previously installed version. The first matching step runs.",
-          "examples": [">=1.0.0 <1.3.0"]
+          "examples": [
+            ">=1.0.0 <1.3.0"
+          ]
         },
         "type": {
           "type": "string",
-          "enum": ["wasm", "sql", "webhook"],
+          "enum": [
+            "wasm",
+            "sql",
+            "webhook"
+          ],
           "description": "wasm: exported function in the addon backend. sql: goose-compatible file inside the bundle. webhook: remote HTTP."
         },
         "function": {
           "type": "string",
           "description": "Function symbol, file path or URL depending on type.",
-          "examples": ["MigrateTo_1_3", "migrations/1_3_to_2_0.sql"]
+          "examples": [
+            "MigrateTo_1_3",
+            "migrations/1_3_to_2_0.sql"
+          ]
         }
       }
     },
     "I18n": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["default_locale", "bundles"],
+      "required": [
+        "default_locale",
+        "bundles"
+      ],
       "properties": {
         "default_locale": {
           "type": "string",
           "pattern": "^[a-z]{2}(?:-[A-Z]{2})?$",
-          "examples": ["es-MX", "en"]
+          "examples": [
+            "es-MX",
+            "en"
+          ]
         },
         "bundles": {
           "type": "array",
@@ -796,10 +1396,18 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["locale", "path"],
+            "required": [
+              "locale",
+              "path"
+            ],
             "properties": {
-              "locale": { "type": "string", "pattern": "^[a-z]{2}(?:-[A-Z]{2})?$" },
-              "path": { "type": "string" }
+              "locale": {
+                "type": "string",
+                "pattern": "^[a-z]{2}(?:-[A-Z]{2})?$"
+              },
+              "path": {
+                "type": "string"
+              }
             }
           }
         }
@@ -812,63 +1420,120 @@
       "properties": {
         "roles": {
           "type": "array",
-          "items": { "$ref": "#/$defs/Role" }
+          "items": {
+            "$ref": "#/$defs/Role"
+          }
         },
         "permissions": {
           "type": "array",
-          "items": { "$ref": "#/$defs/PermissionDef" }
+          "items": {
+            "$ref": "#/$defs/PermissionDef"
+          }
         }
       }
     },
     "Role": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["key", "label"],
+      "required": [
+        "key",
+        "label"
+      ],
       "properties": {
-        "key": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$" },
-        "label": { "type": "string" },
-        "description": { "type": "string" },
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]+$"
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
         "permissions": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
     "PermissionDef": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["key"],
+      "required": [
+        "key"
+      ],
       "properties": {
         "key": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_:]*)+$",
           "description": "Dotted permission identifier. Conventionally '<addon_key>.<resource>.<action>' (e.g. 'inventory.product.read').",
-          "examples": ["inventory.product.read", "inventory.product.write"]
+          "examples": [
+            "inventory.product.read",
+            "inventory.product.write"
+          ]
         },
-        "label": { "type": "string" },
-        "description": { "type": "string" }
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
       }
     },
     "Setting": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["key", "type"],
+      "required": [
+        "key",
+        "type"
+      ],
       "properties": {
-        "key": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$" },
-        "type": { "type": "string", "enum": ["string", "integer", "number", "boolean", "secret", "json", "select"] },
-        "label": { "type": "string" },
-        "description": { "type": "string", "description": "Human description of the setting." },
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]+$"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "string",
+            "integer",
+            "number",
+            "boolean",
+            "secret",
+            "json",
+            "select"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human description of the setting."
+        },
         "default": {},
-        "required": { "type": "boolean", "default": false },
+        "required": {
+          "type": "boolean",
+          "default": false
+        },
         "options": {
           "type": "array",
           "description": "When type=select.",
           "items": {
             "type": "object",
-            "required": ["value", "label"],
+            "required": [
+              "value",
+              "label"
+            ],
             "properties": {
-              "value": { "type": "string" },
-              "label": { "type": "string" }
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
             }
           }
         }
@@ -881,24 +1546,34 @@
       "properties": {
         "metered_events": {
           "type": "array",
-          "items": { "$ref": "#/$defs/MeteredEvent" }
+          "items": {
+            "$ref": "#/$defs/MeteredEvent"
+          }
         }
       }
     },
     "MeteredEvent": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["event", "unit"],
+      "required": [
+        "event",
+        "unit"
+      ],
       "properties": {
         "event": {
           "type": "string",
           "description": "Event name (must also be declared in extension_points.events[] when emitted by this addon).",
-          "examples": ["inventory.stock_changed"]
+          "examples": [
+            "inventory.stock_changed"
+          ]
         },
         "unit": {
           "type": "string",
           "description": "What one event counts as (e.g. 'movement', 'invoice', 'mb_transferred').",
-          "examples": ["movement", "invoice"]
+          "examples": [
+            "movement",
+            "invoice"
+          ]
         },
         "revenue_share": {
           "type": "number",
@@ -911,7 +1586,9 @@
     "Preset": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["addons"],
+      "required": [
+        "addons"
+      ],
       "description": "Preset-specific block: which addons to install in which order with which defaults.",
       "properties": {
         "addons": {
@@ -920,14 +1597,26 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["key", "version"],
+            "required": [
+              "key",
+              "version"
+            ],
             "properties": {
-              "key": { "type": "string" },
-              "version": { "type": "string" },
-              "optional": { "type": "boolean", "default": false },
+              "key": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "optional": {
+                "type": "boolean",
+                "default": false
+              },
               "requires": {
                 "type": "array",
-                "items": { "type": "string" },
+                "items": {
+                  "type": "string"
+                },
                 "uniqueItems": true,
                 "description": "Keys of other addons in this preset that must install before this one. The preset resolver topologically sorts on this field."
               }
@@ -946,14 +1635,21 @@
       "additionalProperties": false,
       "description": "Theme-specific block. Themes are pure visual contributions.",
       "properties": {
-        "tokens": { "type": "string", "description": "Bundle-relative path to a JSON file with design tokens." },
+        "tokens": {
+          "type": "string",
+          "description": "Bundle-relative path to a JSON file with design tokens."
+        },
         "fonts": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "icon_overrides": {
           "type": "object",
-          "additionalProperties": { "type": "string" }
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     },
@@ -967,13 +1663,22 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["key", "credentials"],
+            "required": [
+              "key",
+              "credentials"
+            ],
             "properties": {
-              "key": { "type": "string" },
-              "label": { "type": "string" },
+              "key": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
               "credentials": {
                 "type": "array",
-                "items": { "$ref": "#/$defs/Setting" }
+                "items": {
+                  "$ref": "#/$defs/Setting"
+                }
               }
             }
           }
@@ -983,7 +1688,12 @@
     "Signature": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["algorithm", "key_id", "value", "signed_at"],
+      "required": [
+        "algorithm",
+        "key_id",
+        "value",
+        "signed_at"
+      ],
       "description": "Detached signature over the canonical JSON of the manifest minus this block.",
       "properties": {
         "algorithm": {
@@ -995,7 +1705,9 @@
           "type": "string",
           "minLength": 1,
           "description": "Identifier of the public key registered with the marketplace key registry.",
-          "examples": ["marketplace:asteby:2026Q1"]
+          "examples": [
+            "marketplace:asteby:2026Q1"
+          ]
         },
         "value": {
           "type": "string",
@@ -1005,7 +1717,9 @@
         "signed_at": {
           "type": "string",
           "format": "date-time",
-          "examples": ["2026-05-21T15:04:05Z"]
+          "examples": [
+            "2026-05-21T15:04:05Z"
+          ]
         }
       }
     }

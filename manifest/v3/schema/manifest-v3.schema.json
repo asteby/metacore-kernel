@@ -1000,7 +1000,11 @@
         },
         "placement": {
           "type": "string",
-          "enum": ["row", "table", "create"],
+          "enum": [
+            "row",
+            "table",
+            "create"
+          ],
           "description": "Where the host surfaces the trigger: 'row' (per-row table action, default), 'table' (page toolbar button), or 'create' (toolbar button that replaces the generic create button for a custom create experience)."
         },
         "fields": {
@@ -1028,6 +1032,13 @@
             "type": "string"
           },
           "description": "Gates the action on the target record's `status` column: the action is only valid when the record's status is one of these values. Enforced by the kernel at dispatch. Empty/omitted means no state gate."
+        },
+        "modal_width": {
+          "type": [
+            "string",
+            "number"
+          ],
+          "description": "Explicit modal width (CSS length or px number)."
         }
       }
     },
