@@ -144,7 +144,7 @@ func TestFormFieldType(t *testing.T) {
 		"date":        "date",
 		"timestamp":   "date",
 		"timestamptz": "date",
-		"text":        "textarea",
+		"text":        "text",
 		"jsonb":       "textarea",
 		"json":        "textarea",
 		"string":      "text",

@@ -60,10 +60,20 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 		if _, managed := managedFormColumns[c.Name]; managed {
 			continue
 		}
+		// Resolve the form field type: an explicit Widget wins (the manifest
+		// opted in, e.g. "textarea"/"email"), else map the storage type, then
+		// promote known long-text columns (description/notes/…) to a textarea.
+		ftype := FormFieldType(c.Type)
+		if c.Widget != "" {
+			ftype = c.Widget
+		} else if ftype == "text" && longTextColumn(c.Name) {
+			ftype = "textarea"
+		}
 		out = append(out, modelbase.FieldDef{
 			Key:      c.Name,
 			Label:    humanizeColumnName(c.Name),
-			Type:     FormFieldType(c.Type),
+			Type:     ftype,
+			Widget:   c.Widget,
 			Required: c.Required,
 		})
 	}
@@ -95,10 +105,30 @@ func FormFieldType(storageType string) string {
 		return "boolean"
 	case "date", "datetime", "timestamp", "timestamptz":
 		return "date"
-	case "text", "jsonb", "json":
+	case "jsonb", "json":
+		// Structured blobs need the room; a single-line input can't show them.
 		return "textarea"
 	default:
+		// `text`, `varchar`, `string`, … all default to a single-line input.
+		// Most text columns (sku, name, email, slug) are short; a textarea for
+		// every one of them turns forms into a wall of giant boxes. Long-text
+		// fields opt into a textarea via an explicit Widget or the name
+		// heuristic applied in DeriveFormFields.
 		return "text"
+	}
+}
+
+// longTextColumn names columns that read better as a multi-line textarea even
+// though they're stored as plain `text`. Pure heuristic on the column name so
+// addons get sensible forms without hand-authoring a Widget for every field.
+func longTextColumn(name string) bool {
+	switch strings.ToLower(name) {
+	case "description", "notes", "note", "comment", "comments", "body",
+		"content", "address", "message", "summary", "bio", "remarks",
+		"observations", "details":
+		return true
+	default:
+		return false
 	}
 }
 
