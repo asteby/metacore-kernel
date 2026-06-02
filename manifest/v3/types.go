@@ -303,6 +303,12 @@ type Action struct {
 	// rejected. Empty/omitted means no state gate (the action is always valid),
 	// so existing actions are unaffected.
 	RequiresState []string `json:"requires_state,omitempty"`
+
+	// ModalWidth lets an addon size the action's modal explicitly: a CSS length
+	// ("720px", "60rem") or a number (px). Empty = the host's default (compact
+	// for a flat field list, roomy for line-items). The SDK reads it as
+	// `action.modalWidth`. Lets a rich create/edit form declare a wider modal.
+	ModalWidth string `json:"modal_width,omitempty"`
 }
 
 // ActionField is one input in an action modal's declarative form. It mirrors
