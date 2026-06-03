@@ -210,6 +210,16 @@ type Installer struct {
 	// host glue in bridge/installer_broadcaster.go is what closes the loop.
 	Broadcaster ManifestChangeBroadcaster
 
+	// CompiledHandlers is the optional host registry the installer cross-checks
+	// declared `handler.type=compiled` symbols against at Install/Upgrade time
+	// (S7 bootstrap validation). When set, an addon that references a compiled
+	// handler the host has not registered fails the install with a clear error
+	// instead of installing and then 403-ing on first dispatch. When nil
+	// (default) the installer downgrades to a logged warning per declared
+	// compiled handler, so hosts that have not adopted the registry keep
+	// working unchanged. Wired via WithCompiledHandlers. See compiled_handlers.go.
+	CompiledHandlers CompiledHandlerRegistry
+
 	// BackendRuntime materialises an addon's in-process backend (today: WASM)
 	// after the database state has been persisted. Defaults to a no-op so
 	// hosts that don't run in-process backends (CLI tools, schema-only smoke
@@ -311,6 +321,19 @@ func (i *Installer) WithBroadcaster(b ManifestChangeBroadcaster) *Installer {
 	return i
 }
 
+// WithCompiledHandlers wires the host's compiled-handler registry so the
+// installer hard-validates declared `handler.type=compiled` symbols at install
+// time (S7). Passing nil disables the gate (the installer falls back to a
+// logged warning per declared compiled handler). Returns the receiver so it
+// chains on construction:
+//
+//	inst := installer.New(db, "2.0.0").
+//	    WithCompiledHandlers(installer.CompiledHandlerRegistryFunc(ops.HasCompiledHandler))
+func (i *Installer) WithCompiledHandlers(r CompiledHandlerRegistry) *Installer {
+	i.CompiledHandlers = r
+	return i
+}
+
 // loadTrustedKeysFromEnv reads MARKETPLACE_PUBKEYS first (the rotation-
 // friendly form), then falls back to MARKETPLACE_PUBKEY. Both can be set
 // simultaneously; entries are concatenated and de-duplication is left to
@@ -367,6 +390,14 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 			"addon", b.Manifest.Key,
 			"version", b.Manifest.Version,
 			"warning", w)
+	}
+	// S7 bootstrap gate: every declared compiled handler must resolve against
+	// the host registry (when wired) BEFORE any DB/schema state is created, so
+	// a missing implementation fails the install fast instead of leaking into a
+	// runtime 403. A nil registry downgrades this to a logged warning inside
+	// validateCompiledHandlers.
+	if err := validateCompiledHandlers(b, i.CompiledHandlers); err != nil {
+		return nil, nil, err
 	}
 	if err := i.DB.AutoMigrate(&Installation{}); err != nil {
 		return nil, nil, err
@@ -830,6 +861,12 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 			"addon", newBundle.Manifest.Key,
 			"version", newBundle.Manifest.Version,
 			"warning", w)
+	}
+	// S7 bootstrap gate (symmetric with Install): a version bump must not
+	// introduce a compiled handler the host cannot resolve. Validated before
+	// the BEFORE upgrade hook fires / any schema work runs. Nil registry → warn.
+	if err := validateCompiledHandlers(newBundle, i.CompiledHandlers); err != nil {
+		return nil, err
 	}
 
 	// Pre-flight: the installation row must exist; capture its current

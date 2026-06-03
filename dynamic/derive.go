@@ -29,18 +29,31 @@ var managedFormColumns = map[string]struct{}{
 // derived column is sortable and gets a widget type mapped from its storage
 // type via ColumnUIType.
 //
-// The function is PURE and host-agnostic: it does NOT localize. Label is a
-// humanized form of the raw column name (snake_case → Title Case, trailing
-// " Id" stripped) so a host with no i18n still gets readable headers. Hosts
-// that own an i18n dictionary should overwrite Label per column after calling
-// this (e.g. via a `field.<name>` lookup) — the kernel deliberately keeps no
-// translation vocabulary.
+// The function is PURE and host-agnostic: it does NOT itself translate. Label
+// resolution follows a two-stage contract:
+//
+//  1. DERIVE (here): the served ColumnDef.Label is the column's DECLARED label
+//     when the manifest author set one (manifest.ColumnDef.Label, carried from
+//     v3 Column.label), otherwise a humanized form of the raw column name
+//     (snake_case → Title Case, trailing " Id" stripped). So a host with no
+//     i18n still gets readable headers, and an author-declared label is never
+//     thrown away.
+//  2. LOCALIZE (host, optional): when the declared label is an i18n KEY (it
+//     starts with the host's configured prefix, e.g. "models.") the host's
+//     metadata.NewLocalizedTableTransformer rewrites it to the browsed locale
+//     at serve time via the registered Translator. A plain (non-prefixed)
+//     label passes through untouched. The kernel deliberately keeps no
+//     translation vocabulary; it only preserves the key so the transformer
+//     can resolve it instead of the SDK rendering the raw key.
+//
+// Hosts that adopt a different i18n convention can still overwrite Label per
+// column after calling this; the derivation only sets a sensible default.
 func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 	out := make([]modelbase.ColumnDef, 0, len(def.Columns))
 	for _, c := range def.Columns {
 		col := modelbase.ColumnDef{
 			Key:      c.Name,
-			Label:    humanizeColumnName(c.Name),
+			Label:    columnLabel(c),
 			Type:     ColumnUIType(c.Type),
 			Sortable: true,
 			// Display hints declared on the column (manifest authors) ride
@@ -157,13 +170,25 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 		}
 		out = append(out, modelbase.FieldDef{
 			Key:      c.Name,
-			Label:    humanizeColumnName(c.Name),
+			Label:    columnLabel(c),
 			Type:     ftype,
 			Widget:   c.Widget,
 			Required: c.Required,
 		})
 	}
 	return out
+}
+
+// columnLabel returns the label the derivation should emit for a column: the
+// author-DECLARED label when present (a literal header or an i18n key the
+// host's localized transformer resolves at serve time — see DeriveTableColumns'
+// two-stage contract), else the humanized column name. Keeping this in one
+// place means table and form derivation stay in lock-step on label resolution.
+func columnLabel(c manifest.ColumnDef) string {
+	if c.Label != "" {
+		return c.Label
+	}
+	return humanizeColumnName(c.Name)
 }
 
 // ColumnUIType maps a physical/storage column type to the table column display

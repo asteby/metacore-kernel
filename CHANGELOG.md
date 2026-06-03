@@ -9,6 +9,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **feat(v3): generic select/option visuals, dynamic_select remote-label
+  mapping, image/upload form widget, and column display i18n round-trip
+  (audit S5 + S6).**
+  Extends the v3 contract with GENERIC (non-niche) visual + localization hints,
+  all OPTIONAL so every existing manifest keeps validating:
+
+  - **S5.1 — static option visuals.** `FieldOption` gains `icon` / `color` /
+    `image` so a static `select` option list can render a coloured status dot, a
+    brand icon or a thumbnail. `FromV3` forwards them onto `manifest.Option` and
+    they land on the served `modelbase.OptionDef` (which gains `image`;
+    `color`/`icon` already existed).
+  - **S5.2 — dynamic_select remote-label mapping.** `ActionField` gains
+    `label_image` / `label_icon` / `label_color`, each naming a column on the
+    REMOTE model a relation picker resolves against, so a product thumbnail /
+    brand icon / status colour renders beside each option without hardcoding
+    per-option visuals. Forwarded verbatim onto `manifest.FieldDef` and
+    `modelbase.FieldDef`.
+  - **S5.3 — image / upload form widget.** The v3 `Column` gains `widget` (the
+    DDL-agnostic FORM input plane, distinct from the read-only `display` cell
+    plane): a `text` column can declare `widget: "image"` / `"upload"` so a
+    photo/logo/attachment renders a file picker. `FromV3` carries it onto
+    `manifest.ColumnDef.Widget`, which `dynamic.DeriveFormFields` already honours.
+  - **S6 — column display i18n.** The v3 `Column.label` (documented as an i18n
+    KEY) now survives the v3 → host conversion: `FromV3` carries it onto a new
+    `manifest.ColumnDef.Label`, and `dynamic.DeriveTableColumns` /
+    `DeriveFormFields` prefer the declared label over the humanized column name.
+    When the label is an i18n key (host-configured prefix, e.g. `models.`) the
+    host's `metadata.NewLocalizedTableTransformer` resolves it to the browsed
+    locale at serve time instead of the SDK rendering the raw key. The two-stage
+    DERIVE→LOCALIZE contract is documented on `DeriveTableColumns`. Previously
+    the declared label was dropped entirely.
+
+  Both the embedded JSON schema and the `docs/spec/v3` copy permit the new
+  properties (the schema is `additionalProperties:false` + `DisallowUnknownFields`,
+  so without this a manifest using them was rejected at publish/install).
+
+- **feat(installer): bootstrap validation of `handler.type=compiled` symbols
+  (audit S7).** Addons can declare `handler: { type: "compiled", function:
+  "<symbol>" }` on actions / tools / subscriptions, but the Go implementation
+  lives in the HOST (e.g. ops). The installer now extracts every declared
+  compiled handler from the bundle's v3 manifest and, when the host wires a
+  `CompiledHandlerRegistry` (via `Installer.WithCompiledHandlers`), HARD-FAILS
+  the install with a clear, per-handler error if a symbol is unregistered —
+  instead of installing "successfully" and 403-ing on first dispatch. When no
+  registry is wired (the default) it SOFT-WARNS one log line per declared
+  compiled handler, so hosts that have not adopted the registry are not blocked.
+  The gate runs before any DB/schema state is created, symmetric in Install and
+  Upgrade, and is zero-cost for wasm/webhook/declarative addons.
+
 - **feat(v3): column display hints (`display` / `display_config` / `tooltip` /
   `description`) + auto-detected cell styles.**
   The v3 `Column` contract gains four OPTIONAL display fields so declarative

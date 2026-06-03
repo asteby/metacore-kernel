@@ -164,6 +164,15 @@ type FieldDef struct {
 	Accept      string `json:"accept,omitempty"`
 	MaxSize     int64  `json:"max_size,omitempty"`
 	StoragePath string `json:"storage_path,omitempty"`
+
+	// LabelImage/LabelIcon/LabelColor name a column on the REMOTE model a
+	// dynamic_select / search field resolves against whose value the SDK
+	// renders as a visual beside each option's label (a product thumbnail, a
+	// brand icon, a status colour). Mirrors manifest/v3 ActionField so the
+	// mapping survives the v3 → host conversion. Ignored on non-reference fields.
+	LabelImage string `json:"label_image,omitempty"`
+	LabelIcon  string `json:"label_icon,omitempty"`
+	LabelColor string `json:"label_color,omitempty"`
 }
 
 // FieldBalanceRule is the host-facing mirror of manifest/v3 FieldBalanceRule.
@@ -186,9 +195,9 @@ type ActionDef struct {
 	Icon           string      `json:"icon,omitempty"`
 	Class          string      `json:"class,omitempty"`
 	Color          string      `json:"color,omitempty"`
-	Type           string      `json:"type,omitempty"`      // custom, link
-	LinkURL        string      `json:"linkUrl,omitempty"`   // URL pattern for type=link
-	Placement      string      `json:"placement,omitempty"` // "row" (default), "table", or "create" — see manifest/v3.Action.Placement
+	Type           string      `json:"type,omitempty"`       // custom, link
+	LinkURL        string      `json:"linkUrl,omitempty"`    // URL pattern for type=link
+	Placement      string      `json:"placement,omitempty"`  // "row" (default), "table", or "create" — see manifest/v3.Action.Placement
 	ModalWidth     string      `json:"modalWidth,omitempty"` // explicit modal width (CSS length / px); SDK reads action.modalWidth. Must match manifest.ActionDef.ModalWidth so the host→SDK JSON round-trip preserves it.
 	Condition      interface{} `json:"condition,omitempty"`
 	Confirm        bool        `json:"confirm,omitempty"`
@@ -216,6 +225,10 @@ type OptionDef struct {
 	Label string      `json:"label"`
 	Color string      `json:"color,omitempty"`
 	Icon  string      `json:"icon,omitempty"`
+	// Image is a URL (or bundle-relative path) to a small image / avatar /
+	// logo the SDK renders beside the option label. Mirrors manifest/v3
+	// FieldOption.image so a static option list can show a thumbnail. Optional.
+	Image string `json:"image,omitempty"`
 }
 
 // KV is an alias retained for backwards compatibility with older call-sites
