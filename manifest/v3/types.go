@@ -199,6 +199,17 @@ type Column struct {
 	// image, boolean, date. Empty = inferred from name/type (see auto-detect
 	// in dynamic.DeriveTableColumns) or the plain text fallback.
 	Display string `json:"display,omitempty"`
+	// Widget selects the FORM input the SDK renders for this column in the
+	// create/edit modal, mapping to modelbase.FieldDef.Type/Widget. It is the
+	// DDL-agnostic input plane (Display is the read-only cell plane): a column
+	// stored as `text` can declare widget "image" or "upload" so a product
+	// photo / logo / attachment renders a file picker (upload → store → save
+	// the URL) instead of a raw text box. Other useful values: textarea,
+	// select, email, url, date, number, boolean, dynamic_select. Empty = the
+	// host infers the widget from the storage type plus the name heuristics in
+	// dynamic.DeriveFormFields (which already promote logo/image/photo columns
+	// to a picker). Pure UI metadata; ignored by the DDL plane.
+	Widget string `json:"widget,omitempty"`
 	// DisplayConfig carries renderer-specific options (maps to
 	// modelbase.ColumnDef.StyleConfig). Common keys: label_field, url_field,
 	// currency, decimals, base_path, new_tab, name_field, max_length.
@@ -375,6 +386,23 @@ type ActionField struct {
 	MaxSize     int64  `json:"max_size,omitempty"`
 	StoragePath string `json:"storage_path,omitempty"`
 
+	// LabelImage, LabelIcon and LabelColor map a column of the REMOTE model a
+	// dynamic_select (Ref / search_endpoint) resolves against to a visual the
+	// SDK renders beside each option's label. They make a relation picker read
+	// richly — a product thumbnail, a brand icon, a status colour — without
+	// hardcoding per-option visuals (which Options[] covers for STATIC lists).
+	// Each is the NAME of a field on the referenced model whose value the SDK
+	// reads:
+	//   LabelImage — a column holding an image URL (e.g. "image_url" → product
+	//                photo / contact avatar / brand logo).
+	//   LabelIcon  — a column holding an icon identifier.
+	//   LabelColor — a column holding a CSS colour.
+	// All optional and ignored on non-reference fields; existing pickers are
+	// unaffected.
+	LabelImage string `json:"label_image,omitempty"`
+	LabelIcon  string `json:"label_icon,omitempty"`
+	LabelColor string `json:"label_color,omitempty"`
+
 	// Total, on an ItemFields column, flags it for summation in the line-items
 	// footer. The SDK renders a totals row summing every numeric column marked
 	// Total (e.g. debit and credit of a journal entry). Ignored on flat fields.
@@ -403,9 +431,25 @@ type FieldBalanceRule struct {
 }
 
 // FieldOption is a value/label choice for select-typed action fields.
+//
+// Beyond {value,label} an option can carry OPTIONAL visual hints the SDK
+// renders alongside the label so a static choice list reads richly (a coloured
+// status dot, a brand icon, a thumbnail). They are generic, domain-agnostic
+// presentation metadata — the runtime ignores them entirely; only the SDK
+// option renderer reads them. All optional, so existing two-field options keep
+// working unchanged.
+//
+//	Icon  — an icon identifier (lucide PascalCase or simple-icons slug) shown
+//	        before the label.
+//	Color — a CSS colour (hex / token) used for a dot / chip / text accent.
+//	Image — a URL (or bundle-relative path) to a small image / avatar / logo
+//	        rendered beside the label.
 type FieldOption struct {
 	Value string `json:"value"`
 	Label string `json:"label"`
+	Icon  string `json:"icon,omitempty"`
+	Color string `json:"color,omitempty"`
+	Image string `json:"image,omitempty"`
 }
 
 // FieldValidation carries client-side validation hints for an action field.

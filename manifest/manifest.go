@@ -245,9 +245,18 @@ type SettingDef struct {
 }
 
 // Option is a select-field choice.
+//
+// Icon/Color/Image are OPTIONAL visual hints forwarded verbatim from
+// manifest/v3 FieldOption so a STATIC option list can render richly (a coloured
+// status dot, a brand icon, a thumbnail). They ride the legacy Option as a
+// carrier so they survive the v3 → host conversion and land on the served
+// modelbase.OptionDef. All optional; the runtime ignores them.
 type Option struct {
 	Value string `json:"value"`
 	Label string `json:"label"`
+	Icon  string `json:"icon,omitempty"`
+	Color string `json:"color,omitempty"`
+	Image string `json:"image,omitempty"`
 }
 
 // ToolDef is an LLM-callable function the addon exposes. Hosts with
@@ -295,8 +304,8 @@ type ActionDef struct {
 	RequiresState  []string   `json:"requiresState,omitempty"`
 	Confirm        bool       `json:"confirm,omitempty"`
 	ConfirmMessage string     `json:"confirmMessage,omitempty"`
-	Modal          string     `json:"modal,omitempty"`     // slot name for a custom modal
-	Placement      string     `json:"placement,omitempty"` // "row" (default), "table", or "create" — see v3.Action.Placement
+	Modal          string     `json:"modal,omitempty"`      // slot name for a custom modal
+	Placement      string     `json:"placement,omitempty"`  // "row" (default), "table", or "create" — see v3.Action.Placement
 	ModalWidth     string     `json:"modalWidth,omitempty"` // explicit modal width (CSS length / px); SDK reads action.modalWidth
 
 	// Trigger declares how the action dispatches when invoked. Optional —
@@ -378,6 +387,16 @@ type FieldDef struct {
 	Accept      string `json:"accept,omitempty"`
 	MaxSize     int64  `json:"max_size,omitempty"`
 	StoragePath string `json:"storage_path,omitempty"`
+
+	// LabelImage/LabelIcon/LabelColor name a column on the REMOTE model a
+	// dynamic_select resolves against whose value the SDK renders as a visual
+	// beside each option's label (a product thumbnail, a brand icon, a status
+	// colour). Forwarded verbatim from manifest/v3 ActionField with matching
+	// JSON tags so they survive the v3 → host conversion and reach the SDK off
+	// the served action metadata. Ignored on non-reference fields.
+	LabelImage string `json:"label_image,omitempty"`
+	LabelIcon  string `json:"label_icon,omitempty"`
+	LabelColor string `json:"label_color,omitempty"`
 }
 
 // FieldBalanceRule mirrors manifest/v3 FieldBalanceRule with identical JSON
@@ -542,6 +561,16 @@ type ColumnDef struct {
 	// literals from JSON. They are coerced to a DDL-safe string at install.
 	Default any    `json:"default,omitempty"`
 	Ref     string `json:"ref,omitempty"` // foreign key target: "orders" or "addon_tickets.comments"
+
+	// Label is the column's human header OR an i18n key resolving to it. It
+	// rides the legacy ColumnDef as a carrier for the v3 Column.label so a
+	// declared label survives the v3 → host conversion: dynamic.DeriveTableColumns
+	// / DeriveFormFields prefer it over the humanized column name, and when it
+	// is an i18n key (e.g. "models.product.sku") the host's localized metadata
+	// transformer (metadata.NewLocalizedTableTransformer) resolves it to the
+	// browsed locale at serve time instead of showing the raw key. Empty =
+	// fall back to the humanized column name. Pure UI metadata; never DDL.
+	Label string `json:"label,omitempty"`
 
 	// Visibility scopes where the column is rendered. Allowed values:
 	//   ""      — legacy / current behaviour (visible everywhere).

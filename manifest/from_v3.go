@@ -167,6 +167,11 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				Type:     c.Type,
 				Required: c.NotNull,
 				Default:  renderColumnDefault(c.Default),
+				// Label (a literal header or an i18n key like "models.x.y")
+				// rides across so the derived metadata keeps the author's
+				// header and the localized transformer can resolve a key at
+				// serve time instead of falling back to the humanized name.
+				Label: c.Label,
 				// Display hints are pure UI metadata: they ride the legacy
 				// ColumnDef as a carrier so they survive the v3 → host
 				// conversion and land on the served modelbase.ColumnDef. They
@@ -175,6 +180,10 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				StyleConfig: c.DisplayConfig,
 				Tooltip:     c.Tooltip,
 				Description: c.Description,
+				// Widget is the FORM input plane (image/upload/textarea/…). It
+				// rides the legacy ColumnDef.Widget so DeriveFormFields renders
+				// the declared picker instead of inferring one. Pure UI metadata.
+				Widget: c.Widget,
 			}
 			// A base_path inside display_config is also projected onto the
 			// dedicated BasePath slot the SDK reads for URL/route prefixes.
@@ -416,12 +425,25 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 			Accept:      f.Accept,
 			MaxSize:     f.MaxSize,
 			StoragePath: f.StoragePath,
+			// Remote-model visual mapping for dynamic_select — forwarded so the
+			// SDK can render a thumbnail/icon/colour beside each option's label.
+			LabelImage: f.LabelImage,
+			LabelIcon:  f.LabelIcon,
+			LabelColor: f.LabelColor,
 			// ItemFields are themselves ActionFields — recurse so a line-items
 			// group's columns (debit/credit/account picker) survive intact.
 			ItemFields: mapActionFields(f.ItemFields),
 		}
 		for _, o := range f.Options {
-			fd.Options = append(fd.Options, Option{Value: o.Value, Label: o.Label})
+			// Static-option visual hints (icon/color/image) ride across so a
+			// status/brand option list renders richly in the SDK.
+			fd.Options = append(fd.Options, Option{
+				Value: o.Value,
+				Label: o.Label,
+				Icon:  o.Icon,
+				Color: o.Color,
+				Image: o.Image,
+			})
 		}
 		if f.Balance != nil {
 			fd.Balance = &FieldBalanceRule{

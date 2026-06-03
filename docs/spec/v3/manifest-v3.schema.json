@@ -686,6 +686,10 @@
           "type": "string",
           "description": "Optional cell renderer the SDK applies to the column's values (maps to ColumnDef.cellStyle). Pure UI metadata; ignored by the DDL plane. e.g. url, email, phone, currency, creator, status, badge, tags, color, code, percent, image, boolean, date."
         },
+        "widget": {
+          "type": "string",
+          "description": "Optional FORM input the SDK renders for this column in the create/edit modal (maps to FieldDef.type/widget). DDL-agnostic input plane: a text column can declare 'image' or 'upload' so a product photo / logo / attachment renders a file picker instead of a raw text box. Other values: textarea, select, email, url, date, number, boolean, dynamic_select. Pure UI metadata; ignored by the DDL plane."
+        },
         "display_config": {
           "type": "object",
           "description": "Renderer-specific options (maps to ColumnDef.styleConfig). Common keys: label_field, url_field, currency, decimals, base_path, new_tab, name_field, max_length. A base_path here is also projected onto ColumnDef.basePath."
@@ -1132,6 +1136,18 @@
         "storage_path": {
           "type": "string",
           "description": "On a type:\"upload\" field, the logical storage bucket / path prefix the host stores the file under, e.g. \"attachments/customers\". Empty = host default. Ignored on non-upload fields."
+        },
+        "label_image": {
+          "type": "string",
+          "description": "Name of a column on the REMOTE model a dynamic_select (ref / search_endpoint) resolves against whose value (an image URL) the SDK renders as a thumbnail beside each option's label — e.g. a product photo or contact avatar. Optional; ignored on non-reference fields."
+        },
+        "label_icon": {
+          "type": "string",
+          "description": "Name of a column on the REMOTE model whose value (an icon identifier) the SDK renders as an icon beside each option's label. Optional; ignored on non-reference fields."
+        },
+        "label_color": {
+          "type": "string",
+          "description": "Name of a column on the REMOTE model whose value (a CSS colour) the SDK uses to accent each option. Optional; ignored on non-reference fields."
         }
       }
     },
@@ -1148,6 +1164,18 @@
         },
         "label": {
           "type": "string"
+        },
+        "icon": {
+          "type": "string",
+          "description": "Optional icon identifier (lucide PascalCase or simple-icons slug) the SDK renders before the option label. Pure presentation; ignored by the runtime."
+        },
+        "color": {
+          "type": "string",
+          "description": "Optional CSS colour (hex / token) the SDK uses for a dot / chip / text accent on the option. Pure presentation; ignored by the runtime."
+        },
+        "image": {
+          "type": "string",
+          "description": "Optional URL or bundle-relative path to a small image / avatar / logo the SDK renders beside the option label. Pure presentation; ignored by the runtime."
         }
       }
     },
