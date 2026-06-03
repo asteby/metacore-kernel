@@ -567,6 +567,22 @@ type ColumnDef struct {
 	// empty the host infers it from Type (e.g. "text" for string, "number"
 	// for int). The whitelist lives in validate.go (validWidgets).
 	Widget string `json:"widget,omitempty"`
+
+	// Display hints — pure table/cell rendering metadata projected onto the
+	// served modelbase.ColumnDef. They never touch the DDL plane. They exist
+	// on the legacy struct only as a carrier so the v3 Column display hints
+	// survive the v3 → legacy ModelDefinition conversion (mapModels) and the
+	// subsequent derivation into modelbase.ColumnDef. All optional.
+	//
+	// CellStyle selects the SDK cell renderer (url, email, currency, creator,
+	// status, badge, image, …). StyleConfig carries renderer options
+	// (label_field, currency, decimals, base_path, …). Tooltip/Description are
+	// paths to a primary text and a subtitle. BasePath is a URL/route prefix.
+	CellStyle   string                 `json:"cellStyle,omitempty"`
+	StyleConfig map[string]interface{} `json:"styleConfig,omitempty"`
+	Tooltip     string                 `json:"tooltip,omitempty"`
+	Description string                 `json:"description,omitempty"`
+	BasePath    string                 `json:"basePath,omitempty"`
 }
 
 // ValidationRule expresses server-side input constraints. All fields are

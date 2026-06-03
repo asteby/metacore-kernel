@@ -167,6 +167,19 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				Type:     c.Type,
 				Required: c.NotNull,
 				Default:  renderColumnDefault(c.Default),
+				// Display hints are pure UI metadata: they ride the legacy
+				// ColumnDef as a carrier so they survive the v3 → host
+				// conversion and land on the served modelbase.ColumnDef. They
+				// never touch the DDL plane.
+				CellStyle:   c.Display,
+				StyleConfig: c.DisplayConfig,
+				Tooltip:     c.Tooltip,
+				Description: c.Description,
+			}
+			// A base_path inside display_config is also projected onto the
+			// dedicated BasePath slot the SDK reads for URL/route prefixes.
+			if bp, ok := c.DisplayConfig["base_path"].(string); ok {
+				col.BasePath = bp
 			}
 			if _, ok := uniqueCols[c.Name]; ok {
 				col.Unique = true

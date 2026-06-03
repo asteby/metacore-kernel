@@ -38,14 +38,97 @@ var managedFormColumns = map[string]struct{}{
 func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 	out := make([]modelbase.ColumnDef, 0, len(def.Columns))
 	for _, c := range def.Columns {
-		out = append(out, modelbase.ColumnDef{
+		col := modelbase.ColumnDef{
 			Key:      c.Name,
 			Label:    humanizeColumnName(c.Name),
 			Type:     ColumnUIType(c.Type),
 			Sortable: true,
-		})
+			// Display hints declared on the column (manifest authors) ride
+			// straight through to the served metadata.
+			CellStyle:   c.CellStyle,
+			StyleConfig: c.StyleConfig,
+			Tooltip:     c.Tooltip,
+			Description: c.Description,
+			BasePath:    c.BasePath,
+		}
+		// Auto-detect a prettier cell renderer for columns that ship no
+		// explicit Display/CellStyle, inferred from the column name/type. An
+		// author-declared CellStyle always wins.
+		if col.CellStyle == "" {
+			col.CellStyle = inferCellStyle(c.Name, c.Type)
+		}
+		out = append(out, col)
 	}
 	return out
+}
+
+// inferCellStyle guesses a rich cell renderer from a column's name and storage
+// type when the manifest declares none. Heuristics are case-insensitive and key
+// off common naming conventions (suffixes like `_url`/`_by`/`_at`, or whole
+// names like `email`/`status`/`color`). It returns "" when nothing better than
+// the plain text fallback applies, so the caller keeps CellStyle empty and the
+// SDK renders the default text cell.
+func inferCellStyle(name, storageType string) string {
+	n := strings.ToLower(name)
+	ui := ColumnUIType(storageType)
+
+	// Timestamps/dates: by name suffix or storage type.
+	if strings.HasSuffix(n, "_at") || ui == "datetime" {
+		return "date"
+	}
+	switch n {
+	case "url", "website", "link":
+		return "url"
+	case "email", "correo":
+		return "email"
+	case "phone", "telefono", "tel":
+		return "phone"
+	case "status", "state", "estado":
+		return "status"
+	case "color":
+		return "color"
+	case "image", "photo", "logo":
+		return "image"
+	}
+	if strings.HasSuffix(n, "_url") || strings.HasSuffix(n, "_link") {
+		return "url"
+	}
+	if strings.HasSuffix(n, "_image") || strings.HasSuffix(n, "_photo") ||
+		strings.HasSuffix(n, "avatar") {
+		return "image"
+	}
+	// Creator/owner audit columns → render the actor (avatar + name).
+	switch n {
+	case "created_by", "updated_by", "owner", "author":
+		return "creator"
+	}
+	if strings.HasSuffix(n, "_by") {
+		return "creator"
+	}
+	// Money columns: name match AND a numeric storage type.
+	if ui == "number" && moneyColumn(n) {
+		return "currency"
+	}
+	// Booleans get a dedicated renderer.
+	if ui == "boolean" {
+		return "boolean"
+	}
+	return ""
+}
+
+// moneyColumn reports whether a (lowercased) column name reads as a monetary
+// amount. Pure name heuristic; the caller additionally gates on a numeric type.
+func moneyColumn(n string) bool {
+	switch n {
+	case "price", "amount", "total", "cost", "subtotal", "balance", "paid":
+		return true
+	}
+	for _, suf := range []string{"_price", "_amount", "_total", "_cost", "_subtotal", "_balance", "_paid"} {
+		if strings.HasSuffix(n, suf) {
+			return true
+		}
+	}
+	return false
 }
 
 // DeriveFormFields builds default create/edit form fields from a model

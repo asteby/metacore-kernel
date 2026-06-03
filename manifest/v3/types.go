@@ -177,6 +177,13 @@ type ModelRelation struct {
 }
 
 // Column is a single physical column declaration.
+//
+// Beyond the DDL plane (Name/Type/PrimaryKey/NotNull/Default) the struct also
+// carries OPTIONAL display hints the host projects onto the served
+// modelbase.ColumnDef so the SDK can render a column richly (a clickable URL,
+// the creator's avatar, a currency, a status badge) without per-app wiring.
+// These hints are pure UI metadata: they never touch the SQL/DDL plane — the
+// installer ignores them exactly as it ignores Label and Comment.
 type Column struct {
 	Name       string      `json:"name"`
 	Type       string      `json:"type"`
@@ -185,6 +192,24 @@ type Column struct {
 	Default    interface{} `json:"default,omitempty"`
 	Label      string      `json:"label,omitempty"`
 	Comment    string      `json:"comment,omitempty"`
+
+	// Display selects the cell renderer the SDK applies to the column's
+	// values, mapping to modelbase.ColumnDef.CellStyle. Examples: url, email,
+	// phone, currency, creator, status, badge, tags, color, code, percent,
+	// image, boolean, date. Empty = inferred from name/type (see auto-detect
+	// in dynamic.DeriveTableColumns) or the plain text fallback.
+	Display string `json:"display,omitempty"`
+	// DisplayConfig carries renderer-specific options (maps to
+	// modelbase.ColumnDef.StyleConfig). Common keys: label_field, url_field,
+	// currency, decimals, base_path, new_tab, name_field, max_length.
+	// A `base_path` here is additionally projected onto ColumnDef.BasePath.
+	DisplayConfig map[string]interface{} `json:"display_config,omitempty"`
+	// Tooltip is a path to the primary text rendered on hover/secondary slot
+	// (e.g. the creator's name). Maps to modelbase.ColumnDef.Tooltip.
+	Tooltip string `json:"tooltip,omitempty"`
+	// Description is a path to a subtitle (e.g. the creator's email). Maps to
+	// modelbase.ColumnDef.Description.
+	Description string `json:"description,omitempty"`
 }
 
 // Index is a single index declaration.
