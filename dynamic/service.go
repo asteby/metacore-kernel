@@ -125,6 +125,17 @@ type Config struct {
 	// See the adapters package for built-in extractors
 	// (ModelbaseExtractor / FiberLocalsExtractor / JWTClaimsExtractor).
 	AuthUserExtractor adapters.AuthUserExtractor
+
+	// FileDeleter disposes of file/image assets a dynamic record referenced
+	// once that reference is removed — when the record is DELETED, or when a
+	// file/image column's value is REPLACED on update. The kernel detects which
+	// stored values are orphaned (by inspecting the model's file/image columns
+	// against the pre/post row snapshots) but is storage-agnostic: it never
+	// touches a filesystem. It hands the orphaned values to this host callback,
+	// which resolves them to its backing store and removes them with its own
+	// safety guards. nil disables file cleanup entirely (the prior behaviour).
+	// See the FileDeleter type doc for the best-effort, non-fatal contract.
+	FileDeleter FileDeleter
 }
 
 // Publisher is the minimal subset of events.Bus that dynamic.Service depends
@@ -175,6 +186,7 @@ type Service struct {
 	actionDispatchers map[string]ActionDispatcher
 	authExtractor     adapters.AuthUserExtractor
 	selfOptions       bool
+	fileDeleter       FileDeleter
 }
 
 // New constructs a dynamic Service.
@@ -223,6 +235,7 @@ func New(cfg Config) *Service {
 		actionDispatchers: dispatchers,
 		authExtractor:     cfg.AuthUserExtractor,
 		selfOptions:       cfg.EnableSelfOptions,
+		fileDeleter:       cfg.FileDeleter,
 	}
 }
 
@@ -391,7 +404,7 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 
 // Update modifies a record by ID.
 func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID, input map[string]any) (map[string]any, error) {
-	instance, _, err := s.resolveModel(ctx, model)
+	instance, tableMeta, err := s.resolveModel(ctx, model)
 	if err != nil {
 		return nil, err
 	}
@@ -435,6 +448,16 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	}
 
 	after := toMap(instance)
+
+	// Orphaned-file cleanup: any file/image column whose value changed leaves
+	// its OLD asset unreferenced. Storage-agnostic — we hand the orphaned values
+	// to the host's FileDeleter (best-effort, post-commit). nil deleter = no-op.
+	if s.fileDeleter != nil {
+		if orphaned := collectOrphanedFromUpdate(before, after, tableMeta); len(orphaned) > 0 {
+			s.fileDeleter(ctx, model, orphaned)
+		}
+	}
+
 	s.publishCanonical(ctx, model, "updated", user, id.String(), before, after)
 
 	_ = s.hooks.runAfterUpdate(ctx, hc, instance)
@@ -443,7 +466,7 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 
 // Delete soft-deletes a record by ID.
 func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID) error {
-	instance, _, err := s.resolveModel(ctx, model)
+	instance, tableMeta, err := s.resolveModel(ctx, model)
 	if err != nil {
 		return err
 	}
@@ -465,11 +488,13 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 	db = s.scope.ScopeQuery(db, user)
 
 	// Snapshot the row before the delete so the canonical event can carry
-	// `before`. A miss here is tolerated: the delete itself drives the error
+	// `before` AND so we can route the deleted row's file/image assets to the
+	// FileDeleter. A miss here is tolerated: the delete itself drives the error
 	// semantics and subscribers see `before == nil` to mean the row was
-	// already gone (or out of tenant scope) at publish time.
+	// already gone (or out of tenant scope) at publish time. We load whenever a
+	// bus OR a file deleter is wired — either consumer needs the pre-delete row.
 	var before map[string]any
-	if s.bus != nil {
+	if s.bus != nil || s.fileDeleter != nil {
 		loadDB := s.db.WithContext(ctx).Table(tableName)
 		loadDB = s.scope.ScopeQuery(loadDB, user)
 		if err := loadDB.First(instance, "id = ?", id).Error; err == nil {
@@ -479,6 +504,15 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 
 	if err := db.Delete(instance, "id = ?", id).Error; err != nil {
 		return fmt.Errorf("dynamic: delete: %w", err)
+	}
+
+	// Orphaned-file cleanup: the row is gone, so every file/image asset it
+	// referenced is now unreachable. Storage-agnostic — hand the values to the
+	// host's FileDeleter (best-effort, post-commit). nil deleter = no-op.
+	if s.fileDeleter != nil {
+		if orphaned := collectOrphanedFromDelete(before, tableMeta); len(orphaned) > 0 {
+			s.fileDeleter(ctx, model, orphaned)
+		}
 	}
 
 	s.publishCanonical(ctx, model, "deleted", user, id.String(), before, nil)
