@@ -7,7 +7,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Added
+
+- **feat(v3): column display hints (`display` / `display_config` / `tooltip` /
+  `description`) + auto-detected cell styles.**
+  The v3 `Column` contract gains four OPTIONAL display fields so declarative
+  addon tables can express how a column RENDERS (a clickable URL, the creator's
+  avatar, a currency, a status badge) instead of always falling back to plain
+  text. They are pure UI metadata — the DDL/installer plane ignores them exactly
+  like `label`/`comment`.
+
+  - `manifest/v3` `Column` adds `display`, `display_config`, `tooltip`,
+    `description`. The embedded JSON schema (and the `docs/spec` copy) now permit
+    them on a column (the schema is `additionalProperties:false` +
+    `DisallowUnknownFields`, so without this a manifest using `display` was
+    rejected at publish/install).
+  - `FromV3` projects them onto the legacy `manifest.ColumnDef` carrier
+    (`display→CellStyle`, `display_config→StyleConfig`, `tooltip→Tooltip`,
+    `description→Description`, and `display_config.base_path→BasePath`), which
+    `dynamic.DeriveTableColumns` copies onto the served `modelbase.ColumnDef`.
+  - `dynamic.DeriveTableColumns` AUTO-DETECTS a cell style by column name/type
+    when none is declared: `*_url`/`url`/`website`→`url`, `email`→`email`,
+    `phone`→`phone`, `*_by`/`created_by`/`owner`→`creator`, money names on a
+    numeric type→`currency`, `status`/`estado`→`status`, `color`→`color`,
+    `*_at`/date type→`date`, boolean→`boolean`, image names→`image`. An
+    author-declared cell style always wins; the plain `text` fallback is kept.
 
 ## [0.24.0] - 2026-05-28
 

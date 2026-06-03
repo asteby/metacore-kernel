@@ -51,6 +51,73 @@ func TestDeriveTableColumns(t *testing.T) {
 	}
 }
 
+func TestInferCellStyle(t *testing.T) {
+	cases := []struct {
+		name string
+		typ  string
+		want string
+	}{
+		// URLs by name and suffix.
+		{"url", "text", "url"},
+		{"website", "text", "url"},
+		{"link", "text", "url"},
+		{"profile_url", "text", "url"},
+		{"docs_link", "text", "url"},
+		// Contact.
+		{"email", "text", "email"},
+		{"correo", "text", "email"},
+		{"phone", "text", "phone"},
+		{"telefono", "text", "phone"},
+		// Creator/owner audit columns.
+		{"created_by", "uuid", "creator"},
+		{"updated_by", "uuid", "creator"},
+		{"owner", "uuid", "creator"},
+		{"author", "uuid", "creator"},
+		{"approved_by", "uuid", "creator"},
+		// Money requires a numeric type.
+		{"price", "numeric", "currency"},
+		{"total_amount", "numeric", "currency"},
+		{"balance", "integer", "currency"},
+		{"price", "text", ""}, // not numeric → no currency
+		// Status / color.
+		{"status", "text", "status"},
+		{"estado", "text", "status"},
+		{"color", "text", "color"},
+		// Dates (suffix or type) take precedence.
+		{"created_at", "timestamp", "date"},
+		{"start_date", "date", "date"},
+		// Images.
+		{"image", "text", "image"},
+		{"logo", "text", "image"},
+		{"banner_image", "text", "image"},
+		{"user_avatar", "text", "image"},
+		// Booleans.
+		{"is_active", "boolean", "boolean"},
+		// Plain text fallback stays empty.
+		{"name", "text", ""},
+		{"sku", "text", ""},
+		{"description", "text", ""},
+	}
+	for _, c := range cases {
+		if got := inferCellStyle(c.name, c.typ); got != c.want {
+			t.Errorf("inferCellStyle(%q, %q) = %q, want %q", c.name, c.typ, got, c.want)
+		}
+	}
+}
+
+func TestDeriveTableColumnsExplicitWins(t *testing.T) {
+	def := manifest.ModelDefinition{
+		Columns: []manifest.ColumnDef{
+			// price would auto-detect to currency, but explicit code wins.
+			{Name: "price", Type: "numeric", CellStyle: "code"},
+		},
+	}
+	cols := DeriveTableColumns(def)
+	if cols[0].CellStyle != "code" {
+		t.Errorf("explicit CellStyle overridden: got %q, want code", cols[0].CellStyle)
+	}
+}
+
 func TestDeriveTableColumnsEmpty(t *testing.T) {
 	cols := DeriveTableColumns(manifest.ModelDefinition{})
 	if cols == nil {

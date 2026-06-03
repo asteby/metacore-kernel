@@ -681,6 +681,22 @@
         "comment": {
           "type": "string",
           "description": "Column-level documentation string."
+        },
+        "display": {
+          "type": "string",
+          "description": "Optional cell renderer the SDK applies to the column's values (maps to ColumnDef.cellStyle). Pure UI metadata; ignored by the DDL plane. e.g. url, email, phone, currency, creator, status, badge, tags, color, code, percent, image, boolean, date."
+        },
+        "display_config": {
+          "type": "object",
+          "description": "Renderer-specific options (maps to ColumnDef.styleConfig). Common keys: label_field, url_field, currency, decimals, base_path, new_tab, name_field, max_length. A base_path here is also projected onto ColumnDef.basePath."
+        },
+        "tooltip": {
+          "type": "string",
+          "description": "Path to the primary text shown on hover / secondary slot (e.g. the creator's name). Maps to ColumnDef.tooltip."
+        },
+        "description": {
+          "type": "string",
+          "description": "Path to a subtitle (e.g. the creator's email). Maps to ColumnDef.description."
         }
       }
     },
