@@ -423,9 +423,14 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	if err := dynamic.EnsureSchema(i.DB, b.Manifest.Key, orgID, iso); err != nil {
 		return nil, nil, err
 	}
-	if err := dynamic.Apply(i.DB, b.Manifest.Key, orgID, iso, b.Migrations); err != nil {
-		return nil, nil, err
-	}
+	// Materialise the model_definitions tables (the manifest is the schema
+	// source of truth) BEFORE running the SQL migrations. An additive migration
+	// that ALTERs a model table must find it already present; running migrations
+	// first (the old order) broke installs whose 00N migration altered a table
+	// the migrations themselves didn't (re)create — e.g. addon-pos 002 ALTERing
+	// addon_pos.pos_sessions, addon-inventory 002 ALTERing fulfillments. With
+	// metadata-driven creation first, every ALTER lands on an existing table and
+	// the migrations are pure additive alignment on top.
 	for _, def := range b.Manifest.ModelDefinitions {
 		if err := dynamic.CreateTable(i.DB, b.Manifest.Key, orgID, iso, def); err != nil {
 			return nil, nil, err
@@ -433,6 +438,9 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 		if err := dynamic.SyncSchema(i.DB, b.Manifest.Key, orgID, iso, def); err != nil {
 			return nil, nil, err
 		}
+	}
+	if err := dynamic.Apply(i.DB, b.Manifest.Key, orgID, iso, b.Migrations); err != nil {
+		return nil, nil, err
 	}
 	// Install doubles as the marketplace "Actualizar" (upgrade) path — the
 	// embed re-runs Install with the NEW bundle rather than calling Upgrade.
@@ -1288,18 +1296,19 @@ type schemaApplier interface {
 }
 
 // defaultSchemaApplier is the production implementation — runs EnsureSchema,
-// dynamic.Apply over the bundle's migrations, then CreateTable / SyncSchema
-// for every model definition. Order matches the original Install flow so
-// hosts upgrading from a manifest that adds a new model see the table
-// created without manual SQL.
+// then CreateTable / SyncSchema for every model definition (the manifest is the
+// schema source of truth), and ONLY THEN dynamic.Apply over the bundle's
+// migrations. Materialising the model tables before the SQL migrations means an
+// additive migration that ALTERs a model table always finds it present —
+// running migrations first broke installs/upgrades whose 00N migration altered
+// a table the migrations themselves didn't (re)create (addon-pos 002 →
+// pos_sessions, addon-inventory 002 → fulfillments). The migrations become pure
+// additive alignment on top of the metadata-driven schema.
 type defaultSchemaApplier struct{}
 
 func (defaultSchemaApplier) ApplyForUpgrade(db *gorm.DB, orgID uuid.UUID, iso dynamic.Isolation, b *bundle.Bundle) error {
 	if err := dynamic.EnsureSchema(db, b.Manifest.Key, orgID, iso); err != nil {
 		return fmt.Errorf("EnsureSchema: %w", err)
-	}
-	if err := dynamic.Apply(db, b.Manifest.Key, orgID, iso, b.Migrations); err != nil {
-		return fmt.Errorf("apply migrations: %w", err)
 	}
 	for _, def := range b.Manifest.ModelDefinitions {
 		if err := dynamic.CreateTable(db, b.Manifest.Key, orgID, iso, def); err != nil {
@@ -1308,6 +1317,9 @@ func (defaultSchemaApplier) ApplyForUpgrade(db *gorm.DB, orgID uuid.UUID, iso dy
 		if err := dynamic.SyncSchema(db, b.Manifest.Key, orgID, iso, def); err != nil {
 			return fmt.Errorf("SyncSchema %s: %w", def.ModelKey, err)
 		}
+	}
+	if err := dynamic.Apply(db, b.Manifest.Key, orgID, iso, b.Migrations); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
 	}
 	return nil
 }
