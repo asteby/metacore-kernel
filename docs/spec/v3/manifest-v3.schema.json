@@ -701,6 +701,17 @@
         "description": {
           "type": "string",
           "description": "Path to a subtitle (e.g. the creator's email). Maps to ColumnDef.description."
+        },
+        "ref": {
+          "type": "string",
+          "description": "Foreign-key target (model key or table) the column points at. The host projects it onto ColumnDef.ref / FieldDef.ref so the SDK renders a searchable dynamic_select relation picker in the native create/edit form (resolving options against /api/options/:ref) with no per-app action. Pure UI metadata; ignored by the DDL plane."
+        },
+        "options": {
+          "type": "array",
+          "description": "Static select choice list for the column (value/label, plus optional icon/color/image visuals). The host projects it onto ColumnDef.options / FieldDef.options so the SDK renders a plain select in the native create/edit form with no custom action. Use 'ref' for a relation picker and 'options' for a hardcoded enum. Pure UI metadata; ignored by the DDL plane.",
+          "items": {
+            "$ref": "#/$defs/FieldOption"
+          }
         }
       }
     },

@@ -221,6 +221,25 @@ type Column struct {
 	// Description is a path to a subtitle (e.g. the creator's email). Maps to
 	// modelbase.ColumnDef.Description.
 	Description string `json:"description,omitempty"`
+
+	// Ref turns the column into a FOREIGN-KEY picker: it names the target
+	// model key or table (e.g. "Customer" or "addon_customers") the column
+	// points at. The host projects it onto modelbase.ColumnDef.Ref /
+	// modelbase.FieldDef.Ref so the SDK renders a searchable dynamic_select
+	// in the native create/edit form (resolving options against
+	// `/api/options/:Ref`) — no per-app action required. It is the explicit,
+	// declarative twin of the host's belongs_to auto-derivation: an author
+	// states the relation directly on the column instead of relying on name
+	// heuristics. Pure UI metadata; the DDL/install plane ignores it.
+	Ref string `json:"ref,omitempty"`
+	// Options declares a STATIC select for the column: a fixed value/label
+	// choice list (with optional icon/color/image visuals per FieldOption,
+	// from #127) the host projects onto modelbase.ColumnDef.Options /
+	// modelbase.FieldDef.Options so the SDK renders a plain select in the
+	// native create/edit form — again with no custom action. Use Ref for a
+	// relation picker and Options for a hardcoded enum (status, type, …).
+	// Both are pure UI metadata and never touch the SQL/DDL plane.
+	Options []FieldOption `json:"options,omitempty"`
 }
 
 // Index is a single index declaration.
