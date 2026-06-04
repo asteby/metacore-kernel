@@ -63,6 +63,13 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			Tooltip:     c.Tooltip,
 			Description: c.Description,
 			BasePath:    c.BasePath,
+			// Ref (FK target → dynamic_select) and Options (static select)
+			// ride straight through from the declared manifest column onto the
+			// served metadata so the SDK renders a relation picker / plain
+			// select without any per-app wiring or belongs_to auto-derivation.
+			Ref:        c.Ref,
+			Options:    toOptionDefs(c.Options),
+			UseOptions: len(c.Options) > 0,
 		}
 		// Auto-detect a prettier cell renderer for columns that ship no
 		// explicit Display/CellStyle, inferred from the column name/type. An
@@ -144,6 +151,28 @@ func moneyColumn(n string) bool {
 	return false
 }
 
+// toOptionDefs projects a declared column's static choice list
+// (manifest.Option, carried from the v3 Column.Options) onto the served
+// modelbase.OptionDef list the SDK reads. The optional icon/color/image visuals
+// ride across verbatim so a status/brand select renders richly. Returns nil for
+// an empty list so the omitempty json tag drops the field for plain columns.
+func toOptionDefs(in []manifest.Option) []modelbase.OptionDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]modelbase.OptionDef, 0, len(in))
+	for _, o := range in {
+		out = append(out, modelbase.OptionDef{
+			Value: o.Value,
+			Label: o.Label,
+			Icon:  o.Icon,
+			Color: o.Color,
+			Image: o.Image,
+		})
+	}
+	return out
+}
+
 // DeriveFormFields builds default create/edit form fields from a model
 // definition's physical column list, for addon models that ship no modal spec.
 // Managed columns (id/created_at/updated_at/organization_id/deleted_at) are
@@ -163,6 +192,13 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 		ftype := FormFieldType(c.Type)
 		if c.Widget != "" {
 			ftype = c.Widget
+		} else if c.Ref != "" {
+			// A column declaring a FK target renders as a searchable relation
+			// picker in the native form even when the author left Widget empty.
+			ftype = "dynamic_select"
+		} else if len(c.Options) > 0 {
+			// A column declaring a static choice list renders as a plain select.
+			ftype = "select"
 		} else if ftype == "text" && imageColumn(c.Name) {
 			ftype = "image"
 		} else if ftype == "text" && longTextColumn(c.Name) {
@@ -174,6 +210,11 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 			Type:     ftype,
 			Widget:   c.Widget,
 			Required: c.Required,
+			// Ref (dynamic_select target) and Options (static select) project
+			// onto the served form field so the SDK renders the picker/select
+			// in the native create/edit modal without a custom action.
+			Ref:     c.Ref,
+			Options: toOptionDefs(c.Options),
 		})
 	}
 	return out

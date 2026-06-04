@@ -562,6 +562,16 @@ type ColumnDef struct {
 	Default any    `json:"default,omitempty"`
 	Ref     string `json:"ref,omitempty"` // foreign key target: "orders" or "addon_tickets.comments"
 
+	// Options is a STATIC select choice list for the column. It rides the
+	// legacy ColumnDef as a carrier for the v3 Column.Options so a declared
+	// enum survives the v3 → host conversion and lands on the served
+	// modelbase.ColumnDef.Options / modelbase.FieldDef.Options — the SDK then
+	// renders a plain select in the native create/edit form. Ref (above) is the
+	// relation-picker twin (dynamic_select). Both are pure UI metadata; the DDL
+	// plane ignores them. The Icon/Color/Image hints on each Option forward the
+	// v3 FieldOption visuals so a status/brand list renders richly.
+	Options []Option `json:"options,omitempty"`
+
 	// Label is the column's human header OR an i18n key resolving to it. It
 	// rides the legacy ColumnDef as a carrier for the v3 Column.label so a
 	// declared label survives the v3 → host conversion: dynamic.DeriveTableColumns

@@ -184,6 +184,25 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// rides the legacy ColumnDef.Widget so DeriveFormFields renders
 				// the declared picker instead of inferring one. Pure UI metadata.
 				Widget: c.Widget,
+				// Ref turns the column into a dynamic_select (FK picker): it
+				// rides the legacy ColumnDef.Ref so DeriveTableColumns /
+				// DeriveFormFields project it onto the served modelbase Ref and
+				// the SDK renders a searchable relation picker — without a
+				// belongs_to relation or a custom action. Pure UI metadata.
+				Ref: c.Ref,
+			}
+			// Options is the STATIC-select twin of Ref: a fixed value/label
+			// choice list (with optional icon/color/image visuals) that rides
+			// the legacy ColumnDef.Options so the host projects it onto the
+			// served modelbase Options and the SDK renders a plain select.
+			for _, o := range c.Options {
+				col.Options = append(col.Options, Option{
+					Value: o.Value,
+					Label: o.Label,
+					Icon:  o.Icon,
+					Color: o.Color,
+					Image: o.Image,
+				})
 			}
 			// A base_path inside display_config is also projected onto the
 			// dedicated BasePath slot the SDK reads for URL/route prefixes.

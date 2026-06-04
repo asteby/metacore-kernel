@@ -9,6 +9,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **feat(v3): column `ref` (FK → dynamic_select) and `options` (static select)
+  so the NATIVE create/edit form of any addon renders a relation picker / select
+  with no custom action.** The v3 `Column` gains two OPTIONAL fields (every
+  existing manifest keeps validating):
+
+  - `ref` — names the FK target model/table the column points at. The host
+    projects it onto `modelbase.ColumnDef.Ref` / `modelbase.FieldDef.Ref` so the
+    SDK renders a searchable `dynamic_select` resolving against
+    `/api/options/:ref`. It is the explicit, declarative twin of the host's
+    belongs_to auto-derivation (no relation or name heuristic required).
+  - `options` — a static value/label choice list (reusing `FieldOption`, so each
+    option carries the optional `icon`/`color`/`image` visuals from the prior
+    release). Projected onto `modelbase.ColumnDef.Options` /
+    `modelbase.FieldDef.Options` so the SDK renders a plain `select`.
+
+  Projection path: `FromV3` carries both onto `manifest.ColumnDef` (`Ref`
+  already existed; `Options []Option` is new), and `dynamic.DeriveTableColumns`
+  + `dynamic.DeriveFormFields` forward them to the served metadata —
+  `DeriveFormFields` additionally sets the field `type` to `dynamic_select`
+  (when `ref` is set) or `select` (when `options` is set) so the native modal
+  picks the right widget. Both are pure UI metadata; the DDL/install plane
+  ignores them. Schema (`manifest-v3.schema.json`, `additionalProperties:false`)
+  and the docs spec mirror gain the two Column props.
+
 - **feat(v3): generic select/option visuals, dynamic_select remote-label
   mapping, image/upload form widget, and column display i18n round-trip
   (audit S5 + S6).**
