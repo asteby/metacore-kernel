@@ -29,6 +29,10 @@ const (
 // degrades to a dropped clause (the kernel's "garbage in → safe degrade"
 // policy), never a panic.
 const (
+	// OpNeq is `<col> <> ?`. Value: string. The SDK emits `neq` as a
+	// first-class operator; without it not-equal filters degraded to a
+	// literal exact-match on the whole "neq:<val>" token.
+	OpNeq FilterOp = "neq"
 	// OpNotIn is `<col> NOT IN ?`. Value: []string.
 	OpNotIn FilterOp = "not_in"
 	// OpLike is a CASE-SENSITIVE `<col> LIKE ? ESCAPE '\'` wrapped in

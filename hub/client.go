@@ -30,7 +30,7 @@
 // Configuration is environment-driven so apps don't need to thread URLs
 // through their config layer:
 //
-//	HUB_BASE_URL        base URL (default https://hub.metacore.dev)
+//	HUB_BASE_URL        base URL (default https://hub.asteby.com)
 //	HUB_LICENSE_TOKEN   optional Bearer token sent on every request
 package hub
 
@@ -49,7 +49,12 @@ import (
 )
 
 const (
-	defaultBaseURL = "https://hub.metacore.dev"
+	// defaultBaseURL is the public marketplace hub used when HUB_BASE_URL is
+	// unset. It must be a LIVE host: a vanilla install relies on this default to
+	// reach the catalog/bundle API, so a stale placeholder silently broke every
+	// install/upgrade/resync with "no such host". hub.asteby.com is the
+	// production hub; air-gapped deployments override via HUB_BASE_URL.
+	defaultBaseURL = "https://hub.asteby.com"
 	defaultTimeout = 60 * time.Second
 	// userAgent identifies clients to the Hub. We deliberately use a
 	// kernel-scoped UA so server-side logs/metrics show the kernel version

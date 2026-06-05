@@ -83,6 +83,21 @@ func ParseOpsFilterValue(raw string) Filter {
 	arg := raw[idx+1:]
 
 	switch op {
+	case "EQ":
+		// Explicit exact-match operator. This is the SDK's DEFAULT operator —
+		// every column filter, relation FK filter and polymorphic scope param is
+		// emitted as `f_<col>=eq:<val>` (see runtime-react dynamic-table /
+		// dynamic-relation-helpers). Without this case `eq:10` fell through to
+		// the `default` branch and exact-matched the WHOLE literal "eq:10",
+		// which silently never matched on text columns and 500'd on numeric ones
+		// (`invalid input syntax for type numeric: "eq:10"`). Strip the operator
+		// and match on the bare argument.
+		return Filter{Op: OpEq, Value: arg}
+	case "NEQ", "NE":
+		// Not-equal. The SDK exposes `neq` as a first-class operator
+		// (runtime-react types FilterOperator) but the dialect never decoded it,
+		// so it degraded to the same literal-match footgun as EQ.
+		return Filter{Op: OpNeq, Value: arg}
 	case "IN":
 		return Filter{Op: OpIn, Value: splitCSVNonEmpty(arg)}
 	case "NOT_IN":

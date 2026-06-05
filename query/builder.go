@@ -407,6 +407,12 @@ func applyOneFilter(db *gorm.DB, col string, f Filter) *gorm.DB {
 			return db
 		}
 		return db.Where(fmt.Sprintf("%s = ?", col), v)
+	case OpNeq:
+		v, ok := f.Value.(string)
+		if !ok || v == "" {
+			return db
+		}
+		return db.Where(fmt.Sprintf("%s <> ?", col), v)
 	case OpIlike:
 		v, ok := f.Value.(string)
 		if !ok || v == "" {
