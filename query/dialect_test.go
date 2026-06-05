@@ -23,6 +23,8 @@ func TestParseOpsFilterValue_Operators(t *testing.T) {
 		{"not_in", "NOT_IN:x,y", Filter{Op: OpNotIn, Value: []string{"x", "y"}}},
 		{"like", "LIKE:foo", Filter{Op: OpLike, Value: "foo"}},
 		{"ilike", "ILIKE:bar", Filter{Op: OpUnaccentIlike, Value: "bar"}},
+		{"contains alias of ilike", "CONTAINS:bar", Filter{Op: OpUnaccentIlike, Value: "bar"}},
+		{"contains lowercase", "contains:bar", Filter{Op: OpUnaccentIlike, Value: "bar"}},
 		{"gt", "GT:10", Filter{Op: OpGt, Value: float64(10)}},
 		{"lt", "LT:5.5", Filter{Op: OpLt, Value: float64(5.5)}},
 		{"gte", "GTE:1", Filter{Op: OpNumGte, Value: float64(1)}},
