@@ -89,7 +89,12 @@ func ParseOpsFilterValue(raw string) Filter {
 		return Filter{Op: OpNotIn, Value: splitCSVNonEmpty(arg)}
 	case "LIKE":
 		return Filter{Op: OpLike, Value: arg}
-	case "ILIKE":
+	case "ILIKE", "CONTAINS":
+		// CONTAINS is the SDK runtime's internal operator name for an accent/
+		// case-insensitive substring match. The client SHOULD map it to the
+		// ILIKE alias, but accept the raw name too so a text filter works either
+		// way — an unrecognised operator silently exact-matched the whole
+		// "contains:foo" literal, so the filter appeared to do nothing.
 		return Filter{Op: OpUnaccentIlike, Value: arg}
 	case "GT":
 		if n, ok := parseFloat(arg); ok {
