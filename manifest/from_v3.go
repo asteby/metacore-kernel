@@ -147,6 +147,24 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				indexCols[idx.Columns[0]] = struct{}{}
 			}
 		}
+		// Index of single-column foreign_keys so we can DERIVE a column ref from
+		// the FK's target model. A model commonly declares its relations at the
+		// MODEL level (foreign_keys: [{columns:["product_id"], references:{model:
+		// "inventory.Product"}}]) and leaves the column's own `ref` empty. The
+		// host resolves relation display names ONLY from a column's ref, so such
+		// FK columns would render the raw UUID instead of the related record's
+		// name. Auto-setting Ref to references.model here (when the column carries
+		// no explicit ref) makes every model-level FK render as a relation picker
+		// + resolved name with zero per-addon wiring. An author-provided column
+		// ref always wins (we only fill the gap). Composite FKs have no single
+		// ColumnDef equivalent and are skipped.
+		fkRef := map[string]string{}
+		for _, fk := range m.ForeignKeys {
+			if len(fk.Columns) != 1 || fk.References.Model == "" {
+				continue
+			}
+			fkRef[fk.Columns[0]] = fk.References.Model
+		}
 		for _, c := range m.Columns {
 			switch c.Name {
 			case "organization_id":
@@ -214,6 +232,13 @@ func mapModels(in []v3.Model) []ModelDefinition {
 			}
 			if _, ok := indexCols[c.Name]; ok {
 				col.Index = true
+			}
+			// Derive the column ref from a model-level foreign_keys entry when the
+			// author did not state one explicitly (an explicit c.Ref above wins).
+			if col.Ref == "" {
+				if target, ok := fkRef[c.Name]; ok {
+					col.Ref = target
+				}
 			}
 			def.Columns = append(def.Columns, col)
 		}
