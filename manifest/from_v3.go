@@ -243,6 +243,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 			def.Columns = append(def.Columns, col)
 		}
 		def.Relations = mapModelRelations(m.Relations)
+		def.Seed = mapModelSeed(m.Seed)
 		out = append(out, def)
 	}
 	return out
@@ -271,6 +272,21 @@ func mapModelRelations(in []v3.ModelRelation) []RelationDef {
 		})
 	}
 	return out
+}
+
+// mapModelSeed folds a v3 model's seed block (declarative default data the
+// installer inserts on install, idempotent by a natural key column) onto the
+// host ModelDefinition.Seed so it survives the v3 → host conversion. The host
+// (ops executor) reads def.Seed to perform the seeding. Key and Rows copy
+// across verbatim; a nil v3 seed maps to a nil host seed (the common case).
+func mapModelSeed(in *v3.Seed) *SeedDef {
+	if in == nil {
+		return nil
+	}
+	return &SeedDef{
+		Key:  in.Key,
+		Rows: in.Rows,
+	}
 }
 
 // renderColumnDefault translates a v3 column default into a DDL-safe legacy

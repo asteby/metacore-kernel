@@ -469,6 +469,25 @@ type ModelDefinition struct {
 	Relations []RelationDef `json:"relations,omitempty"`
 	Table     interface{}   `json:"table,omitempty"` // UI table spec (opaque)
 	Modal     interface{}   `json:"modal,omitempty"` // UI modal spec (opaque)
+
+	// Seed declares default data the installer inserts on install, idempotent
+	// by a natural key column (Seed.Key). The host (ops executor) reads
+	// def.Seed to perform the seeding after migrations. Optional — flat models
+	// without seed data leave it nil and keep the legacy behaviour.
+	Seed *SeedDef `json:"seed,omitempty"`
+}
+
+// SeedDef is the host-side projection of a v3 model's seed block. The installer
+// inserts each row in Rows on install, treating Key as the natural key for
+// idempotency: a row is only inserted when no existing row (scoped to the
+// installing org) already carries that Key value. Key names a declared column
+// on the owning ModelDefinition; each Row is an object of column name → value.
+type SeedDef struct {
+	// Key is the column used for idempotency (the natural key the installer
+	// matches on to decide whether a row already exists).
+	Key string `json:"key"`
+	// Rows are the default records, each an object of column name → value.
+	Rows []map[string]any `json:"rows"`
 }
 
 // RelationDef declares an inter-model relationship rooted at the owning

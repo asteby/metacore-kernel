@@ -293,6 +293,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 		if err := validateRelations(md.Relations); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
+		if err := validateSeed(md.Seed, md.Columns); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
+		}
 	}
 	for i, c := range m.Capabilities {
 		if !strings.Contains(c.Kind, ":") {
@@ -537,6 +540,39 @@ func validateRelations(rels []RelationDef) error {
 			if !pivotRe.MatchString(r.Pivot) {
 				return fmt.Errorf("relations[%d]: many_to_many requires a valid pivot, got %q", i, r.Pivot)
 			}
+		}
+	}
+	return nil
+}
+
+// validateSeed checks a model's seed block: the natural key must be non-empty
+// and name a declared column on the model, there must be at least one row, and
+// every row must be a non-empty object. Mirrors the lenient v3 validator so a
+// manifest with seeds passes both the v3 and the legacy/install paths. A nil
+// seed (the common case) is accepted unconditionally.
+func validateSeed(seed *SeedDef, cols []ColumnDef) error {
+	if seed == nil {
+		return nil
+	}
+	if seed.Key == "" {
+		return fmt.Errorf("seed.key required")
+	}
+	known := false
+	for _, c := range cols {
+		if c.Name == seed.Key {
+			known = true
+			break
+		}
+	}
+	if !known {
+		return fmt.Errorf("seed.key %q is not a declared column on the model", seed.Key)
+	}
+	if len(seed.Rows) == 0 {
+		return fmt.Errorf("seed.rows required")
+	}
+	for i, row := range seed.Rows {
+		if len(row) == 0 {
+			return fmt.Errorf("seed.rows[%d]: empty object", i)
 		}
 	}
 	return nil

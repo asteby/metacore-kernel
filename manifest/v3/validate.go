@@ -127,6 +127,31 @@ func Validate(raw []byte) error {
 	}
 
 	for mi, mod := range m.Models {
+		if mod.Seed != nil {
+			where := fmt.Sprintf("models[%d].seed", mi)
+			if mod.Seed.Key == "" {
+				errs = append(errs, fmt.Sprintf("%s.key is empty", where))
+			} else {
+				known := false
+				for _, c := range mod.Columns {
+					if c.Name == mod.Seed.Key {
+						known = true
+						break
+					}
+				}
+				if !known {
+					errs = append(errs, fmt.Sprintf("%s.key %q is not a declared column on the model", where, mod.Seed.Key))
+				}
+			}
+			if len(mod.Seed.Rows) == 0 {
+				errs = append(errs, fmt.Sprintf("%s.rows is empty", where))
+			}
+			for rri, row := range mod.Seed.Rows {
+				if len(row) == 0 {
+					errs = append(errs, fmt.Sprintf("%s.rows[%d] is an empty object", where, rri))
+				}
+			}
+		}
 		for ri, rel := range mod.Relations {
 			where := fmt.Sprintf("models[%d].relations[%d]", mi, ri)
 			switch rel.Kind {
