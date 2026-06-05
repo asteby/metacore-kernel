@@ -151,6 +151,27 @@ type Model struct {
 	// flat models omit it and keep the legacy behaviour. See ModelRelation for
 	// the supported shapes (including polymorphic children via Scope).
 	Relations []ModelRelation `json:"relations,omitempty"`
+
+	// Seed declares DEFAULT seed data the installer inserts on install,
+	// analogous to how it runs migrations — but declarative and idempotent.
+	// On install the host upserts/skips each row keyed by Seed.Key (a natural
+	// key column) scoped to the installing org, so re-installs and upgrades do
+	// not duplicate rows. Optional — models without seed data omit it and are
+	// unaffected. See Seed for the shape.
+	Seed *Seed `json:"seed,omitempty"`
+}
+
+// Seed is a model's declarative default-data block. The installer inserts Rows
+// on install, treating Key as the natural key for idempotency: a row is only
+// inserted when no existing row (for the installing org) already carries that
+// Key value. Key MUST name a declared column on the owning model; each entry in
+// Rows is an object mapping column name → value.
+type Seed struct {
+	// Key is the column used for idempotency — the natural key the installer
+	// matches on to decide whether a row already exists (upsert/skip).
+	Key string `json:"key"`
+	// Rows are the default records, each an object of column name → value.
+	Rows []map[string]any `json:"rows"`
 }
 
 // ModelRelation is one inverse 1:N / N:M edge rooted at the owning Model. The

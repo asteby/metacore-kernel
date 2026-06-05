@@ -536,6 +536,10 @@
           "items": {
             "$ref": "#/$defs/ModelRelation"
           }
+        },
+        "seed": {
+          "$ref": "#/$defs/Seed",
+          "description": "Default seed data the installer inserts on install, idempotent by a natural key column."
         }
       },
       "examples": [
@@ -566,6 +570,44 @@
                 "sku"
               ],
               "unique": true
+            }
+          ]
+        }
+      ]
+    },
+    "Seed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "rows"
+      ],
+      "description": "Declarative default-data block. The installer inserts rows on install, treating key as the natural key for idempotency (skip/upsert if a row with that key value already exists for the org).",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "The column used for idempotency — must name a declared column on the owning model."
+        },
+        "rows": {
+          "type": "array",
+          "minItems": 1,
+          "description": "The default records, each an object mapping column name to value.",
+          "items": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": true
+          }
+        }
+      },
+      "examples": [
+        {
+          "key": "code",
+          "rows": [
+            {
+              "name": "Efectivo",
+              "code": "cash",
+              "is_active": true,
+              "sort_order": 0
             }
           ]
         }

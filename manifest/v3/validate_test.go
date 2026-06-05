@@ -379,3 +379,83 @@ func TestParse_BalanceRoundTrip(t *testing.T) {
 		t.Fatalf("expected debit column total=true, got %+v", f.ItemFields[1])
 	}
 }
+
+// modelWithSeed builds a baseValid Addon carrying one model whose columns
+// include `code` and an optional seed block (key + rows).
+func modelWithSeed(key string, rows []interface{}) map[string]interface{} {
+	m := baseValid()
+	model := map[string]interface{}{
+		"key":   "PaymentMethod",
+		"table": "payment_methods",
+		"columns": []interface{}{
+			map[string]interface{}{"name": "id", "type": "uuid", "primary_key": true},
+			map[string]interface{}{"name": "name", "type": "text", "not_null": true},
+			map[string]interface{}{"name": "code", "type": "text", "not_null": true},
+			map[string]interface{}{"name": "is_active", "type": "boolean"},
+			map[string]interface{}{"name": "sort_order", "type": "integer"},
+		},
+	}
+	if key != "" || rows != nil {
+		model["seed"] = map[string]interface{}{"key": key, "rows": rows}
+	}
+	m["models"] = []interface{}{model}
+	return m
+}
+
+func seedRows() []interface{} {
+	return []interface{}{
+		map[string]interface{}{"name": "Efectivo", "code": "cash", "is_active": true, "sort_order": 0},
+		map[string]interface{}{"name": "Tarjeta", "code": "card", "is_active": true, "sort_order": 1},
+	}
+}
+
+// TestValidate_Seed_Valid confirms a model.seed{key,rows} where key names a
+// declared column passes the strict v3 schema + cross-field validator.
+func TestValidate_Seed_Valid(t *testing.T) {
+	if err := Validate(mustJSON(t, modelWithSeed("code", seedRows()))); err != nil {
+		t.Fatalf("expected valid seed, got error: %v", err)
+	}
+}
+
+// TestParse_Seed_RoundTrip confirms the seed block parses onto the typed model.
+func TestParse_Seed_RoundTrip(t *testing.T) {
+	parsed, err := Parse(mustJSON(t, modelWithSeed("code", seedRows())))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	s := parsed.Models[0].Seed
+	if s == nil {
+		t.Fatal("expected seed on model, got nil")
+	}
+	if s.Key != "code" {
+		t.Fatalf("expected seed.key=code, got %q", s.Key)
+	}
+	if len(s.Rows) != 2 || s.Rows[0]["code"] != "cash" {
+		t.Fatalf("seed rows not parsed: %+v", s.Rows)
+	}
+}
+
+// TestValidate_Seed_KeyNotAColumn rejects a seed whose key is not a declared
+// column on the model.
+func TestValidate_Seed_KeyNotAColumn(t *testing.T) {
+	err := Validate(mustJSON(t, modelWithSeed("nope", seedRows())))
+	if err == nil || !strings.Contains(err.Error(), "not a declared column") {
+		t.Fatalf("expected not-a-column error, got: %v", err)
+	}
+}
+
+// TestValidate_Seed_EmptyRow rejects a seed with an empty row object.
+func TestValidate_Seed_EmptyRow(t *testing.T) {
+	err := Validate(mustJSON(t, modelWithSeed("code", []interface{}{map[string]interface{}{}})))
+	if err == nil {
+		t.Fatalf("expected error for empty seed row, got nil")
+	}
+}
+
+// TestValidate_Seed_OmittedIsBackwardsCompat confirms a model without a seed
+// block still validates (additive, backward-compatible).
+func TestValidate_Seed_OmittedIsBackwardsCompat(t *testing.T) {
+	if err := Validate(mustJSON(t, modelWithSeed("", nil))); err != nil {
+		t.Fatalf("expected valid model without seed, got error: %v", err)
+	}
+}
