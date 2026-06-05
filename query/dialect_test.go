@@ -18,6 +18,10 @@ func TestParseOpsFilterValue_Operators(t *testing.T) {
 		want Filter
 	}{
 		{"exact default", "active", Filter{Op: OpEq, Value: "active"}},
+		{"eq explicit strips operator", "eq:10", Filter{Op: OpEq, Value: "10"}},
+		{"eq uppercase", "EQ:active", Filter{Op: OpEq, Value: "active"}},
+		{"neq", "neq:5", Filter{Op: OpNeq, Value: "5"}},
+		{"ne alias", "NE:x", Filter{Op: OpNeq, Value: "x"}},
 		{"in", "IN:a,b,c", Filter{Op: OpIn, Value: []string{"a", "b", "c"}}},
 		{"in lowercase op", "in:a,b", Filter{Op: OpIn, Value: []string{"a", "b"}}},
 		{"not_in", "NOT_IN:x,y", Filter{Op: OpNotIn, Value: []string{"x", "y"}}},
