@@ -17,6 +17,12 @@ type Item struct {
 	Icon       string `json:"icon,omitempty"`
 	Model      string `json:"model,omitempty"`
 	Permission string `json:"permission,omitempty"`
+	// Filter is a static column→value filter the host applies when rendering
+	// this entry's list view. It lets an addon publish one nav entry per status
+	// (e.g. {"status":"open"} for an "Open" entry pointing at the same model),
+	// so the host can deep-link each entry to a distinct, pre-filtered URL.
+	// Carried verbatim from the manifest NavItem; omitted when empty.
+	Filter map[string]string `json:"filter,omitempty"`
 	// Owner identifies where this item came from: "core" or "addon:<key>".
 	Owner string `json:"owner,omitempty"`
 	Items []Item `json:"items,omitempty"`
@@ -89,6 +95,7 @@ func toItems(src []manifest.NavItem, addonKey string) []Item {
 			Icon:       it.Icon,
 			Model:      it.Model,
 			Permission: it.Permission,
+			Filter:     it.Filter,
 			Owner:      "addon:" + addonKey,
 			Items:      toItems(it.Items, addonKey),
 		})
