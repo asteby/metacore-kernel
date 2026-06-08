@@ -8,8 +8,63 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/asteby/metacore-kernel/manifest/computeexpr"
 	"github.com/santhosh-tekuri/jsonschema/v5"
 )
+
+// validFns is the rollup aggregate-function allowlist, shared with the legacy
+// validator via the schema enum. count ignores from/expr.
+var validFns = map[string]struct{}{
+	"sum": {}, "count": {}, "avg": {}, "min": {}, "max": {},
+}
+
+// validateArithExpr parses a Tier-2 formula / Tier-1 rollup expression under
+// the strict arithmetic allowlist and verifies every identifier is a column in
+// `cols`. Returns nil on success.
+func validateArithExpr(expr string, cols map[string]struct{}) error {
+	return computeexpr.Validate(expr, cols)
+}
+
+// validateRollupSpec checks one Tier-1 rollup: target on the PARENT (ownCols),
+// fn in the enum, from on the CHILD (childCols), exactly one of from/expr
+// (count may omit both), expr under the arithmetic allowlist against childCols.
+// Returns a slice of human-readable errors prefixed with `where`.
+func validateRollupSpec(where string, r Rollup, ownCols, childCols map[string]struct{}) []string {
+	var errs []string
+	if r.Target == "" {
+		errs = append(errs, fmt.Sprintf("%s.target is empty", where))
+	} else if _, ok := ownCols[r.Target]; !ok {
+		errs = append(errs, fmt.Sprintf("%s.target %q is not a declared column on the parent model", where, r.Target))
+	}
+	fn := strings.ToLower(strings.TrimSpace(r.Fn))
+	if fn == "" {
+		fn = "sum"
+	}
+	if _, ok := validFns[fn]; !ok {
+		errs = append(errs, fmt.Sprintf("%s.fn %q is not one of sum|count|avg|min|max", where, r.Fn))
+	}
+	hasFrom := strings.TrimSpace(r.From) != ""
+	hasExpr := strings.TrimSpace(r.Expr) != ""
+	if hasFrom && hasExpr {
+		errs = append(errs, fmt.Sprintf("%s declares both from and expr (use exactly one)", where))
+	}
+	if fn != "count" && !hasFrom && !hasExpr {
+		errs = append(errs, fmt.Sprintf("%s.fn=%s requires either from or expr", where, fn))
+	}
+	if hasFrom {
+		if !computeexpr.IdentRe.MatchString(r.From) {
+			errs = append(errs, fmt.Sprintf("%s.from %q is not a valid column identifier", where, r.From))
+		} else if _, ok := childCols[r.From]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.from %q is not a declared column on the child model", where, r.From))
+		}
+	}
+	if hasExpr {
+		if err := validateArithExpr(r.Expr, childCols); err != nil {
+			errs = append(errs, fmt.Sprintf("%s.expr %q: %v", where, r.Expr, err))
+		}
+	}
+	return errs
+}
 
 //go:embed schema/manifest-v3.schema.json
 var schemaBytes []byte
@@ -126,7 +181,36 @@ func Validate(raw []byte) error {
 		}
 	}
 
+	// Index every model's declared columns by model KEY so rollup/formula
+	// cross-field checks can resolve targets/identifiers on the PARENT (the
+	// model owning the relation) and on the CHILD (relation.Through). Built
+	// once for the whole manifest.
+	colsByModel := make(map[string]map[string]struct{}, len(m.Models))
+	for _, mod := range m.Models {
+		set := make(map[string]struct{}, len(mod.Columns))
+		for _, c := range mod.Columns {
+			set[c.Name] = struct{}{}
+		}
+		colsByModel[mod.Key] = set
+	}
+
 	for mi, mod := range m.Models {
+		ownCols := colsByModel[mod.Key]
+		// Tier-2 formulas: target + every identifier in expr must be a column
+		// on THIS model; expr must pass the strict arithmetic allowlist.
+		for fi, f := range mod.Formulas {
+			where := fmt.Sprintf("models[%d].formulas[%d]", mi, fi)
+			if f.Target == "" {
+				errs = append(errs, fmt.Sprintf("%s.target is empty", where))
+			} else if _, ok := ownCols[f.Target]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.target %q is not a declared column on the model", where, f.Target))
+			}
+			if strings.TrimSpace(f.Expr) == "" {
+				errs = append(errs, fmt.Sprintf("%s.expr is empty", where))
+			} else if err := validateArithExpr(f.Expr, ownCols); err != nil {
+				errs = append(errs, fmt.Sprintf("%s.expr %q: %v", where, f.Expr, err))
+			}
+		}
 		if mod.Seed != nil {
 			where := fmt.Sprintf("models[%d].seed", mi)
 			if mod.Seed.Key == "" {
@@ -168,6 +252,16 @@ func Validate(raw []byte) error {
 			}
 			if rel.ForeignKey == "" {
 				errs = append(errs, fmt.Sprintf("%s.foreign_key is empty", where))
+			}
+			// Tier-1 rollups: target must be a column on the PARENT (this
+			// model); from (if present) must be a column on the CHILD
+			// (relation.Through); fn must be in the enum; exactly one of
+			// from/expr (count may omit both); expr must pass the strict
+			// arithmetic allowlist against the CHILD's columns.
+			childCols := colsByModel[rel.Through]
+			for ki, rl := range rel.Rollups {
+				rw := fmt.Sprintf("%s.rollups[%d]", where, ki)
+				errs = append(errs, validateRollupSpec(rw, rl, ownCols, childCols)...)
 			}
 		}
 	}

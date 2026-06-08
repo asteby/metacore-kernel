@@ -9,6 +9,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **feat(compute): declarative compute engine — Tier-1 ROLLUP and Tier-2 FORMULA
+  fields, recomputed automatically by a generic, domain-agnostic kernel engine
+  with ZERO addon code (Salesforce Roll-Up Summary + Odoo stored-computed
+  parity).** Two new OPTIONAL manifest blocks (every existing manifest keeps
+  validating):
+
+  - **Tier-1 rollup** — declared on a PARENT model's relation:
+    `models[].relations[].rollups[] = [{ "target": "<parent col>", "fn":
+    "sum|count|avg|min|max", "from": "<child col>" }]`, or with an arithmetic
+    expression aggregated over the children:
+    `{ "target": "total", "fn": "sum", "expr": "subtotal + tax_amount" }`. On
+    every CHILD create/update/delete the engine recomputes every rollup target
+    on the affected parent via ONE `UPDATE … SET col = COALESCE((SELECT <FN>(…)
+    FROM child WHERE fk = ?), 0) … WHERE id = ? AND organization_id = ?`. The
+    child subquery is scoped ONLY by the FK (child tables are not org-scoped);
+    the parent UPDATE is org-scoped. Delete uses a `BeforeDelete` recompute with
+    an `AND id <> ?` exclusion (no `AfterDelete` state handoff). `count` →
+    `COUNT(*)`; empty child set zeroes the parent via `COALESCE(…,0)`.
+
+  - **Tier-2 formula** — declared on the model:
+    `models[].formulas[] = [{ "target": "<col>", "expr": "quantity *
+    unit_price - discount" }]`. Evaluated on that model's own `BeforeCreate` /
+    `BeforeUpdate` against the incoming input (merged with the existing row on
+    update) and written into the input map BEFORE the DB write, so a line item
+    self-computes and the parent rollup sums correct values within one write.
+
+  - **Tier-3 (reserved)** — wasm-backed computed fields; contract reserved, not
+    implemented here.
+
+  Engine lives in `dynamic/compute.go` (+ `dynamic.RegisterComputeHooks`, wired
+  in `installer.go` right after `RegisterManifestHooks`), with a small, safe
+  numeric expression engine in the new leaf package `manifest/computeexpr`
+  (recursive-descent parser shared by the runtime and both validators —
+  `Eval`/`RenderSQL`/`Validate`). SECURITY: rollup/formula `expr` is parsed with
+  a strict allowlist (identifiers resolving to real child/own columns, decimal
+  numbers, `+ - * /` and parentheses only — no quotes, semicolons, comments,
+  function calls or SQL keywords); every identifier is double-quoted when SQL is
+  built, so the raw-SQL Tier-1 `expr` path cannot inject. Types
+  (`Rollup`/`Formula`) land on BOTH the v3 (`Rollup`, `Formula`) and legacy
+  (`manifest.Rollup`, `manifest.Formula`) contracts and are carried through
+  `FromV3` (`mapRollups`, `mapModelFormulas`). Validation added to ALL THREE
+  surfaces — the v3 JSON schema (`manifest-v3.schema.json`: `Rollup`/`Formula`
+  defs + `rollups`/`formulas` arrays, `fn` enum), v3 `Validate` (cross-field:
+  rollup target on the parent, `from` on the child, formula target/identifiers
+  on the model), and the legacy/install `validateStrict` (same checks, the one
+  the hub enforces) — so a manifest cannot pass v3 yet 400 on install.
+
 - **feat(v3): column `ref` (FK → dynamic_select) and `options` (static select)
   so the NATIVE create/edit form of any addon renders a relation picker / select
   with no custom action.** The v3 `Column` gains two OPTIONAL fields (every

@@ -475,6 +475,44 @@ type ModelDefinition struct {
 	// def.Seed to perform the seeding after migrations. Optional — flat models
 	// without seed data leave it nil and keep the legacy behaviour.
 	Seed *SeedDef `json:"seed,omitempty"`
+
+	// Formulas declare columns whose value the kernel computes from a pure
+	// arithmetic expression over the SAME row's other columns, evaluated
+	// before every create/update write (Tier-2 of the declarative compute
+	// engine). Optional. See Formula and dynamic.RegisterComputeHooks.
+	Formulas []Formula `json:"formulas,omitempty"`
+}
+
+// Formula declares a column on the owning model whose value the kernel
+// computes from a pure arithmetic expression over the SAME row's other
+// columns, evaluated before every create/update DB write (Tier-2 of the
+// declarative compute engine). See manifest/v3.Formula for the full contract;
+// this is the legacy/runtime projection the installer and dynamic engine read.
+//
+// SECURITY: Expr is parsed with a strict allowlist (identifiers resolving to
+// real columns, decimal numbers, + - * / and parentheses only); anything else
+// is rejected at validation time.
+type Formula struct {
+	Target string `json:"target"`
+	Expr   string `json:"expr"`
+}
+
+// Rollup declares a PARENT column the kernel maintains as an aggregate
+// (sum/count/avg/min/max) over a relation's child rows (Tier-1 of the
+// declarative compute engine). See manifest/v3.Rollup for the full contract;
+// this is the legacy/runtime projection the dynamic engine reads.
+//
+// Either From (a single child column) or Expr (a child arithmetic expression)
+// supplies the aggregated value; fn=count ignores both. Exactly one of
+// From/Expr may be set (count may omit both).
+//
+// SECURITY: Expr goes raw into aggregate SQL — parsed with the same strict
+// arithmetic allowlist as Formula.Expr and every identifier double-quoted.
+type Rollup struct {
+	Target string `json:"target"`
+	Fn     string `json:"fn,omitempty"`
+	From   string `json:"from,omitempty"`
+	Expr   string `json:"expr,omitempty"`
 }
 
 // SeedDef is the host-side projection of a v3 model's seed block. The installer
@@ -559,6 +597,13 @@ type RelationDef struct {
 	// Label is an optional i18n key / human label for the related-records
 	// panel the SDK renders on a detail page. Empty falls back to Name.
 	Label string `json:"label,omitempty"`
+
+	// Rollups declare PARENT columns the kernel maintains as aggregates over
+	// this relation's child rows (Tier-1 of the declarative compute engine).
+	// On every child create/update/delete the dynamic engine recomputes each
+	// rollup target on the affected parent. Optional; only meaningful for
+	// one_to_many. See Rollup.
+	Rollups []Rollup `json:"rollups,omitempty"`
 }
 
 // ColumnDef is a column on an addon-installed table.

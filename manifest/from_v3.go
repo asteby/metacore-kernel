@@ -244,6 +244,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		}
 		def.Relations = mapModelRelations(m.Relations)
 		def.Seed = mapModelSeed(m.Seed)
+		def.Formulas = mapModelFormulas(m.Formulas)
 		out = append(out, def)
 	}
 	return out
@@ -269,6 +270,45 @@ func mapModelRelations(in []v3.ModelRelation) []RelationDef {
 			ForeignKey: r.ForeignKey,
 			Scope:      r.Scope,
 			Label:      r.Label,
+			Rollups:    mapRollups(r.Rollups),
+		})
+	}
+	return out
+}
+
+// mapRollups folds a v3 relation's rollups (Tier-1 parent-aggregate specs)
+// onto the legacy RelationDef.Rollups slice so they survive the v3 → host
+// conversion. The dynamic compute engine reads them off the legacy shape at
+// install time. A nil/empty input maps to nil (the common case).
+func mapRollups(in []v3.Rollup) []Rollup {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Rollup, 0, len(in))
+	for _, r := range in {
+		out = append(out, Rollup{
+			Target: r.Target,
+			Fn:     r.Fn,
+			From:   r.From,
+			Expr:   r.Expr,
+		})
+	}
+	return out
+}
+
+// mapModelFormulas folds a v3 model's formulas (Tier-2 same-row computed
+// columns) onto the legacy ModelDefinition.Formulas slice so they survive the
+// v3 → host conversion. The dynamic compute engine reads them off the legacy
+// shape at install time. A nil/empty input maps to nil (the common case).
+func mapModelFormulas(in []v3.Formula) []Formula {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Formula, 0, len(in))
+	for _, f := range in {
+		out = append(out, Formula{
+			Target: f.Target,
+			Expr:   f.Expr,
 		})
 	}
 	return out

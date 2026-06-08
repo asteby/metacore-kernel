@@ -159,6 +159,33 @@ type Model struct {
 	// not duplicate rows. Optional — models without seed data omit it and are
 	// unaffected. See Seed for the shape.
 	Seed *Seed `json:"seed,omitempty"`
+
+	// Formulas declare columns whose value is COMPUTED from other columns on
+	// the SAME row via a pure arithmetic expression, evaluated by the kernel
+	// before every create/update write (Tier-2 of the declarative compute
+	// engine). Optional — models without computed columns omit it. See Formula
+	// for the shape and the security contract on Expr.
+	Formulas []Formula `json:"formulas,omitempty"`
+}
+
+// Formula declares a column on the owning model whose value the kernel
+// computes from a pure arithmetic expression over the SAME row's other
+// columns, evaluated before every create/update DB write. This is Tier-2 of
+// the declarative compute engine (e.g. SalesOrderItem.subtotal =
+// quantity * unit_price - discount), so the parent's Tier-1 rollup sums
+// already-correct values.
+//
+// SECURITY: Expr is parsed with a strict allowlist — only identifiers
+// ([A-Za-z_][A-Za-z0-9_]*) that resolve to real columns on the model,
+// decimal numbers, whitespace, the operators + - * / and parentheses. Any
+// other character (quotes, semicolons, comments, function calls) is rejected
+// at validation time.
+type Formula struct {
+	// Target is the column this formula writes. Must be a declared column on
+	// the owning model.
+	Target string `json:"target"`
+	// Expr is the arithmetic expression, e.g. "quantity * unit_price - discount".
+	Expr string `json:"expr"`
 }
 
 // Seed is a model's declarative default-data block. The installer inserts Rows
@@ -195,6 +222,40 @@ type ModelRelation struct {
 	ForeignKey string            `json:"foreign_key"`     // child column pointing back, e.g. "customer_id"
 	Scope      map[string]string `json:"scope,omitempty"` // static child filter for polymorphic children
 	Label      string            `json:"label,omitempty"` // i18n key / human label for the panel
+
+	// Rollups declare PARENT columns whose value is an aggregate over this
+	// relation's child rows (Tier-1 of the declarative compute engine, akin to
+	// a Salesforce Roll-Up Summary or an Odoo stored computed field). On every
+	// child create/update/delete the kernel recomputes each rollup target on
+	// the affected parent via a single UPDATE. Optional — relations without
+	// aggregates omit it. Only meaningful for one_to_many. See Rollup.
+	Rollups []Rollup `json:"rollups,omitempty"`
+}
+
+// Rollup declares a PARENT column whose value the kernel maintains as an
+// aggregate (sum/count/avg/min/max) over the child rows of the relation it is
+// attached to. This is Tier-1 of the declarative compute engine.
+//
+// Either From (a single child column) or Expr (a child arithmetic expression)
+// supplies the aggregated value; fn=count ignores both. Exactly one of
+// From/Expr may be set (count may omit both).
+//
+// SECURITY: Expr goes RAW into the aggregate SQL, so it is parsed with the
+// same strict arithmetic allowlist as Formula.Expr (identifiers resolving to
+// real child columns, decimal numbers, + - * / and parentheses only). Any
+// other character is rejected at validation time, and every identifier is
+// double-quoted when the SQL is built.
+type Rollup struct {
+	// Target is the PARENT column the aggregate is written to. Must be a
+	// declared column on the model owning the relation.
+	Target string `json:"target"`
+	// Fn is the aggregate function: sum (default) | count | avg | min | max.
+	Fn string `json:"fn,omitempty"`
+	// From is a single child column to aggregate. Mutually exclusive with Expr.
+	From string `json:"from,omitempty"`
+	// Expr is a child arithmetic expression to aggregate, e.g.
+	// "subtotal + tax_amount". Mutually exclusive with From.
+	Expr string `json:"expr,omitempty"`
 }
 
 // Column is a single physical column declaration.

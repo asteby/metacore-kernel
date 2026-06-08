@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/asteby/metacore-kernel/manifest/computeexpr"
 )
 
 var (
@@ -265,6 +266,20 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 	if err := m.checkKernelRange(kernelVersion); err != nil {
 		return err
 	}
+	// Index every model's declared columns by model KEY so the compute-engine
+	// cross-field checks (rollup target on the parent, rollup from on the
+	// child, formula identifiers on the model) can resolve columns across
+	// models. Mirrors the v3 validator so a manifest fails identically on both
+	// the v3 and the legacy/install surfaces ("dual validation gotcha").
+	colsByModel := make(map[string]map[string]struct{}, len(m.ModelDefinitions))
+	for _, md := range m.ModelDefinitions {
+		set := make(map[string]struct{}, len(md.Columns))
+		for _, c := range md.Columns {
+			set[c.Name] = struct{}{}
+		}
+		colsByModel[md.ModelKey] = set
+	}
+
 	for i, md := range m.ModelDefinitions {
 		if !modelRe.MatchString(md.TableName) {
 			return fmt.Errorf("manifest.model_definitions[%d]: invalid table_name %q", i, md.TableName)
@@ -294,6 +309,12 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
 		if err := validateSeed(md.Seed, md.Columns); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
+		}
+		if err := validateComputeFormulas(md.Formulas, colsByModel[md.ModelKey]); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
+		}
+		if err := validateComputeRollups(md.Relations, colsByModel[md.ModelKey], colsByModel); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
 	}
@@ -573,6 +594,87 @@ func validateSeed(seed *SeedDef, cols []ColumnDef) error {
 	for i, row := range seed.Rows {
 		if len(row) == 0 {
 			return fmt.Errorf("seed.rows[%d]: empty object", i)
+		}
+	}
+	return nil
+}
+
+// validFns is the rollup aggregate-function allowlist (mirrors v3.validFns and
+// the schema enum). count ignores from/expr.
+var validFns = map[string]struct{}{
+	"sum": {}, "count": {}, "avg": {}, "min": {}, "max": {},
+}
+
+// validateComputeFormulas mirrors the v3 Tier-2 check on the legacy/install
+// surface: every formula's target + expr identifiers must be columns on the
+// owning model, and expr must pass the strict arithmetic allowlist. A nil/empty
+// slice is accepted (the common case). ownCols is the owning model's column set.
+func validateComputeFormulas(formulas []Formula, ownCols map[string]struct{}) error {
+	for i, f := range formulas {
+		if f.Target == "" {
+			return fmt.Errorf("formulas[%d]: target required", i)
+		}
+		if _, ok := ownCols[f.Target]; !ok {
+			return fmt.Errorf("formulas[%d]: target %q is not a declared column on the model", i, f.Target)
+		}
+		if strings.TrimSpace(f.Expr) == "" {
+			return fmt.Errorf("formulas[%d]: expr required", i)
+		}
+		if err := computeexpr.Validate(f.Expr, ownCols); err != nil {
+			return fmt.Errorf("formulas[%d]: expr %q: %w", i, f.Expr, err)
+		}
+	}
+	return nil
+}
+
+// validateComputeRollups mirrors the v3 Tier-1 check on the legacy/install
+// surface: for each relation's rollups, target must be a column on the PARENT
+// (ownCols), from (if present) must be a column on the CHILD (relation.Through,
+// resolved via colsByModel), fn must be in the enum, exactly one of from/expr
+// (count may omit both), and expr must pass the strict arithmetic allowlist
+// against the child's columns. Nil/empty rollups are accepted.
+func validateComputeRollups(rels []RelationDef, ownCols map[string]struct{}, colsByModel map[string]map[string]struct{}) error {
+	for ri, rel := range rels {
+		if len(rel.Rollups) == 0 {
+			continue
+		}
+		childCols := colsByModel[rel.Through]
+		for ki, r := range rel.Rollups {
+			where := fmt.Sprintf("relations[%d].rollups[%d]", ri, ki)
+			if r.Target == "" {
+				return fmt.Errorf("%s: target required", where)
+			}
+			if _, ok := ownCols[r.Target]; !ok {
+				return fmt.Errorf("%s: target %q is not a declared column on the parent model", where, r.Target)
+			}
+			fn := strings.ToLower(strings.TrimSpace(r.Fn))
+			if fn == "" {
+				fn = "sum"
+			}
+			if _, ok := validFns[fn]; !ok {
+				return fmt.Errorf("%s: fn %q is not one of sum|count|avg|min|max", where, r.Fn)
+			}
+			hasFrom := strings.TrimSpace(r.From) != ""
+			hasExpr := strings.TrimSpace(r.Expr) != ""
+			if hasFrom && hasExpr {
+				return fmt.Errorf("%s: declares both from and expr (use exactly one)", where)
+			}
+			if fn != "count" && !hasFrom && !hasExpr {
+				return fmt.Errorf("%s: fn=%s requires either from or expr", where, fn)
+			}
+			if hasFrom {
+				if !computeexpr.IdentRe.MatchString(r.From) {
+					return fmt.Errorf("%s: from %q is not a valid column identifier", where, r.From)
+				}
+				if _, ok := childCols[r.From]; !ok {
+					return fmt.Errorf("%s: from %q is not a declared column on the child model", where, r.From)
+				}
+			}
+			if hasExpr {
+				if err := computeexpr.Validate(r.Expr, childCols); err != nil {
+					return fmt.Errorf("%s: expr %q: %w", where, r.Expr, err)
+				}
+			}
 		}
 	}
 	return nil

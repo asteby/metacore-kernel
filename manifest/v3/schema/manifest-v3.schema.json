@@ -540,6 +540,13 @@
         "seed": {
           "$ref": "#/$defs/Seed",
           "description": "Default seed data the installer inserts on install, idempotent by a natural key column."
+        },
+        "formulas": {
+          "type": "array",
+          "description": "Tier-2 computed columns over the same row, evaluated before every create/update write.",
+          "items": {
+            "$ref": "#/$defs/Formula"
+          }
         }
       },
       "examples": [
@@ -586,7 +593,7 @@
       "properties": {
         "key": {
           "type": "string",
-          "description": "The column used for idempotency — must name a declared column on the owning model."
+          "description": "The column used for idempotency \u2014 must name a declared column on the owning model."
         },
         "rows": {
           "type": "array",
@@ -654,6 +661,13 @@
         "label": {
           "type": "string",
           "description": "Optional i18n key / human label for the related-records panel."
+        },
+        "rollups": {
+          "type": "array",
+          "description": "Tier-1 parent-aggregate specs over this relation's child rows. Only meaningful for one_to_many.",
+          "items": {
+            "$ref": "#/$defs/Rollup"
+          }
         }
       }
     },
@@ -955,7 +969,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Static column→value filter the host applies when rendering this entry's list view (e.g. {\"status\":\"reception\"}), so an addon can publish one nav entry per status."
+          "description": "Static column\u2192value filter the host applies when rendering this entry's list view (e.g. {\"status\":\"reception\"}), so an addon can publish one nav entry per status."
         }
       }
     },
@@ -1189,7 +1203,7 @@
         },
         "label_image": {
           "type": "string",
-          "description": "Name of a column on the REMOTE model a dynamic_select (ref / search_endpoint) resolves against whose value (an image URL) the SDK renders as a thumbnail beside each option's label — e.g. a product photo or contact avatar. Optional; ignored on non-reference fields."
+          "description": "Name of a column on the REMOTE model a dynamic_select (ref / search_endpoint) resolves against whose value (an image URL) the SDK renders as a thumbnail beside each option's label \u2014 e.g. a product photo or contact avatar. Optional; ignored on non-reference fields."
         },
         "label_icon": {
           "type": "string",
@@ -1208,7 +1222,7 @@
         "debit_column",
         "credit_column"
       ],
-      "description": "Optional balance constraint on a line-items (type \"array\") field. Declares that the sum of debit_column must equal the sum of credit_column across all rows; the SDK shows a balanced/out-of-balance indicator and blocks submit until they match. Generic — debit/credit are just the two column keys to reconcile (e.g. a journal entry's debit vs credit).",
+      "description": "Optional balance constraint on a line-items (type \"array\") field. Declares that the sum of debit_column must equal the sum of credit_column across all rows; the SDK shows a balanced/out-of-balance indicator and blocks submit until they match. Generic \u2014 debit/credit are just the two column keys to reconcile (e.g. a journal entry's debit vs credit).",
       "properties": {
         "debit_column": {
           "type": "string",
@@ -1859,6 +1873,58 @@
           "items": {
             "type": "string"
           }
+        }
+      }
+    },
+    "Rollup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target"
+      ],
+      "description": "Tier-1 parent-aggregate spec. Either from (a single child column) or expr (a child arithmetic expression) supplies the aggregated value; fn=count ignores both.",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "PARENT column the aggregate is written to. Must be a declared column on the model owning the relation."
+        },
+        "fn": {
+          "type": "string",
+          "enum": [
+            "sum",
+            "count",
+            "avg",
+            "min",
+            "max"
+          ],
+          "description": "Aggregate function. Defaults to sum. count ignores from/expr."
+        },
+        "from": {
+          "type": "string",
+          "description": "A single child column to aggregate. Mutually exclusive with expr."
+        },
+        "expr": {
+          "type": "string",
+          "description": "A child arithmetic expression to aggregate. Mutually exclusive with from. Strict arithmetic allowlist only."
+        }
+      }
+    },
+    "Formula": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "expr"
+      ],
+      "description": "Tier-2 computed column: value computed from a pure arithmetic expression over the SAME row, before every create/update write.",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Column this formula writes. Must be a declared column on the owning model."
+        },
+        "expr": {
+          "type": "string",
+          "description": "Arithmetic expression. Strict arithmetic allowlist: identifiers resolving to columns, decimal numbers, + - * / and parentheses only."
         }
       }
     }
