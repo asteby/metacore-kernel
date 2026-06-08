@@ -471,6 +471,14 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	if i.DynamicHooks != nil && i.HookRunner != nil {
 		i.DynamicHooks.RegisterManifestHooks(b.Manifest.Key, b.Manifest, i.HookRunner)
 	}
+	// Wire the declarative COMPUTE ENGINE (Tier-1 rollups / Tier-2 formulas)
+	// onto the same dynamic HookRegistry. Unlike the manifest CRUD hooks above
+	// this does NOT need a HookRunner — the rollup/formula logic is interpreted
+	// by the kernel itself off the manifest, using the per-request hc.DB/hc.User
+	// at fire time.
+	if i.DynamicHooks != nil {
+		dynamic.RegisterComputeHooks(i.DynamicHooks, b.Manifest)
+	}
 	secret, err := newSecret()
 	if err != nil {
 		return nil, nil, err
