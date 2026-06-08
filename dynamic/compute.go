@@ -192,6 +192,13 @@ func buildRollupSQL(b rollupBinding, parentID, orgID string, excludeChildID *str
 	var sets []string
 	var args []any
 
+	// Defense-in-depth: the FK column comes from the manifest relation and is
+	// interpolated into the WHERE clause. It's validated at publish/install, but
+	// re-check here so a malformed identifier can never reach raw SQL.
+	if !computeexpr.IdentRe.MatchString(b.fk) {
+		return "", nil, fmt.Errorf("rollup fk %q is not a valid column identifier", b.fk)
+	}
+
 	exclusion := ""
 	if excludeChildID != nil {
 		exclusion = ` AND "id" <> ?`
