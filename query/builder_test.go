@@ -196,6 +196,18 @@ func TestApply_SortRejectsSQLInjection(t *testing.T) {
 	}
 }
 
+func TestApplyForCount_OmitsOrderBy(t *testing.T) {
+	b := New(testMeta())
+	db := openDryDB(t)
+	// Even with a whitelisted sort, the count path must NOT emit ORDER BY — a
+	// bare COUNT(*) ordered by a non-grouped column 42803s in Postgres.
+	q := b.ApplyForCount(db.Model(&testRow{}), Params{SortBy: "name", Order: "asc"})
+	sql := renderSQL(t, q)
+	if strings.Contains(strings.ToUpper(sql), "ORDER BY") {
+		t.Errorf("ApplyForCount must not emit ORDER BY, got %q", sql)
+	}
+}
+
 // -----------------------------------------------------------------
 // Apply — filters
 // -----------------------------------------------------------------
