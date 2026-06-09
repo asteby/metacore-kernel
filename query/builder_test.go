@@ -208,6 +208,34 @@ func TestApplyForCount_OmitsOrderBy(t *testing.T) {
 	}
 }
 
+func TestApplyForAggregate_EmitsSumWithFiltersNoOrderBy(t *testing.T) {
+	b := New(testMeta())
+	db := openDryDB(t)
+	// The aggregate path must emit the SUM(...) SELECT and the WHERE filter, but
+	// NEVER an ORDER BY — a bare aggregate ordered by a non-grouped column
+	// 42803s in Postgres, same hazard as ApplyForCount.
+	q := b.ApplyForAggregate(db.Model(&testRow{}), Params{
+		SortBy: "name",
+		Order:  "asc",
+		Filters: map[string]Filter{
+			"amount": {Op: OpGte, Value: "10"},
+		},
+		Aggregations: []Aggregation{
+			{Func: AggSum, Field: "amount", Alias: "amount"},
+		},
+	})
+	sql := renderSQL(t, q)
+	if !strings.Contains(sql, "SUM(amount) AS amount") {
+		t.Errorf("ApplyForAggregate must emit SUM(amount) AS amount, got %q", sql)
+	}
+	if !strings.Contains(strings.ToUpper(sql), "WHERE") {
+		t.Errorf("ApplyForAggregate must emit the filter WHERE clause, got %q", sql)
+	}
+	if strings.Contains(strings.ToUpper(sql), "ORDER BY") {
+		t.Errorf("ApplyForAggregate must not emit ORDER BY, got %q", sql)
+	}
+}
+
 // -----------------------------------------------------------------
 // Apply — filters
 // -----------------------------------------------------------------

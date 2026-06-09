@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.51.0] - 2026-06-09
+
+### Added
+
+- **feat(dynamic): table footer totals — a declarative per-column SUM over the
+  FILTERED set.** A column opts in via its manifest `display_config.aggregate:
+  "sum"` (mapped by the kernel to `styleConfig.aggregate = "sum"` at runtime —
+  no contract change, `display_config` is free-form). New read route
+  `GET /dynamic/:model/aggregate?<same query as the list>` returns
+  `{success, data: {<col>: <number>}}` — the SUM of each aggregate-flagged column
+  over the same `f_*`, search and org/branch scope as the list, with NO sort and
+  NO pagination (so the footer matches the filtered set, not the visible page).
+  - `Builder.ApplyForAggregate` mirrors `ApplyForCount` (relation filters +
+    filters + search) and adds the aggregation SELECT + GROUP BY, deliberately
+    omitting sort/pagination/preloads (a non-grouped aggregate ordered by a
+    column 42803s, same hazard as count).
+  - `dynamic.Service.Aggregate(ctx, model, user, params, columns)` builds one
+    `SUM(col) AS col` per requested column, reusing the SAME scope and table
+    resolution as `List`. Columns flow through the builder's existing whitelist
+    (`applyAggregations`: allowed-set + `isSafeIdent`), so a raw column name can
+    never be interpolated.
+  - The `aggregate` handler reads the model's `TableMetadata` and selects the
+    columns whose `StyleConfig["aggregate"]` is a non-empty string.
+
 ## [0.50.1] - 2026-06-09
 
 ### Fixed

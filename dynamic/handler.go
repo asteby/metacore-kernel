@@ -65,6 +65,7 @@ func (h *Handler) MountWith(opts MountOpts) func(r fiber.Router) {
 
 		// Read paths — no mutation middleware.
 		g.Get("/:model", h.list)
+		g.Get("/:model/aggregate", h.aggregate)
 		g.Get("/:model/export", h.exportData)
 		g.Get("/:model/export/template", h.exportTemplate)
 		g.Post("/:model/import/validate", h.importValidate)
@@ -168,6 +169,61 @@ func (h *Handler) list(c fiber.Ctx) error {
 		return h.handleError(c, err)
 	}
 	return c.JSON(fiber.Map{"success": true, "data": items, "meta": meta})
+}
+
+// aggregate returns the per-column SUM over the FILTERED set for every column
+// whose metadata opts in via StyleConfig["aggregate"] == "sum" (mapped by the
+// kernel from a manifest's display_config.aggregate). It parses the same query
+// params as list — so the footer carries the identical f_*, search and
+// org/branch scope — but runs a single aggregate query with no sort/pagination.
+// The response envelope mirrors get: {success, data:{<col>:<number>}}.
+func (h *Handler) aggregate(c fiber.Ctx) error {
+	u := h.user(c)
+	if u == nil {
+		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
+	}
+	model := c.Params("model")
+	params, err := query.ParseFiber(c)
+	if err != nil {
+		return respondErr(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	// Pick the aggregate-flagged columns from the model's metadata. A column
+	// opts in when StyleConfig["aggregate"] is a non-empty string (e.g. "sum").
+	meta, err := h.service.TableMetadata(c, model)
+	if err != nil {
+		return h.handleError(c, err)
+	}
+	columns := aggregateColumns(meta)
+	if len(columns) == 0 {
+		// No column opts in — return an empty totals map rather than running a
+		// pointless query. The footer simply renders nothing.
+		return c.JSON(fiber.Map{"success": true, "data": fiber.Map{}})
+	}
+
+	totals, err := h.service.Aggregate(c, model, u, params, columns)
+	if err != nil {
+		return h.handleError(c, err)
+	}
+	return c.JSON(fiber.Map{"success": true, "data": totals})
+}
+
+// aggregateColumns returns the column keys whose metadata declares
+// StyleConfig["aggregate"] as a non-empty string. nil-safe.
+func aggregateColumns(meta *modelbase.TableMetadata) []string {
+	if meta == nil {
+		return nil
+	}
+	var cols []string
+	for _, col := range meta.Columns {
+		if col.StyleConfig == nil {
+			continue
+		}
+		if v, ok := col.StyleConfig["aggregate"].(string); ok && v != "" {
+			cols = append(cols, col.Key)
+		}
+	}
+	return cols
 }
 
 func (h *Handler) get(c fiber.Ctx) error {

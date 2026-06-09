@@ -228,6 +228,23 @@ func (b *Builder) ApplyForCount(db *gorm.DB, params Params) *gorm.DB {
 	return db
 }
 
+// ApplyForAggregate applies the WHERE-shaping clauses (relation filters,
+// column filters, search) plus the SELECT-list aggregation expressions and
+// GROUP BY used to compute a list's footer totals. Like ApplyForCount it
+// deliberately omits sort, pagination and preloads: a footer total is a single
+// aggregate over the filtered set, so an ORDER BY would both be meaningless and
+// — over a non-grouped aggregate — 42803 in Postgres. Callers that want the SUM
+// of a column over the SAME filtered set the list shows should use this so the
+// footer matches the body row-for-row (minus pagination).
+func (b *Builder) ApplyForAggregate(db *gorm.DB, params Params) *gorm.DB {
+	db = b.applyRelationFilters(db, params)
+	db = b.applyAggregations(db, params)
+	db = b.applyGroupBy(db, params)
+	db = b.applyFilters(db, params)
+	db = b.applySearch(db, params)
+	return db
+}
+
 // Paginate applies LIMIT/OFFSET from params. Call this AFTER Count, on
 // the same base query returned by Apply. Pagination is idempotent: calling
 // Paginate twice yields the same limit/offset (GORM overwrites prior
