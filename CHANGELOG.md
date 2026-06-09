@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.50.1] - 2026-06-09
+
+### Fixed
+
+- **fix(query): `Count` no longer applies the `ORDER BY`.** `Builder.Apply`
+  chains `applySort`, and `dynamic.Service.List` reused it to build the COUNT(*)
+  query — so a sorted list emitted `SELECT count(*) ... ORDER BY <col>`, which
+  Postgres rejects for a non-grouped column ("must appear in the GROUP BY
+  clause", SQLSTATE 42803), 500ing the whole list. New `Builder.ApplyForCount`
+  applies only the WHERE-shaping clauses (relation filters, column filters,
+  search); `List` uses it for the count. Sorted/filtered declarative lists now
+  count correctly.
+
 ## [0.50.0] - 2026-06-08
 
 ### Added

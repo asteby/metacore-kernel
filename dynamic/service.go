@@ -309,7 +309,9 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	db = builder.Apply(db, params)
 
 	total, err := builder.Count(s.db.WithContext(ctx).Table(tableName).Scopes(func(d *gorm.DB) *gorm.DB {
-		return s.scope.ScopeQuery(builder.Apply(d, params), user)
+		// Count must NOT carry the ORDER BY (applySort) — a COUNT(*) ordered by a
+		// non-grouped column 42803s. Apply only the WHERE-shaping clauses.
+		return s.scope.ScopeQuery(builder.ApplyForCount(d, params), user)
 	}), params)
 	if err != nil {
 		return nil, query.PageMeta{}, fmt.Errorf("dynamic: count: %w", err)

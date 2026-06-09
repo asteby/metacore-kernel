@@ -214,6 +214,20 @@ func (b *Builder) Apply(db *gorm.DB, params Params) *gorm.DB {
 	return db
 }
 
+// ApplyForCount applies only the WHERE-shaping clauses (relation filters,
+// column filters, search) used to compute a list's total. It deliberately
+// omits sort, pagination and preloads: a bare COUNT(*) must NOT carry an
+// ORDER BY, because Postgres rejects ordering an aggregate by a non-grouped
+// column ("column must appear in the GROUP BY clause", SQLSTATE 42803) — which
+// otherwise 500s the whole list whenever a sort is active. Callers that count
+// a filtered list should use this instead of Apply.
+func (b *Builder) ApplyForCount(db *gorm.DB, params Params) *gorm.DB {
+	db = b.applyRelationFilters(db, params)
+	db = b.applyFilters(db, params)
+	db = b.applySearch(db, params)
+	return db
+}
+
 // Paginate applies LIMIT/OFFSET from params. Call this AFTER Count, on
 // the same base query returned by Apply. Pagination is idempotent: calling
 // Paginate twice yields the same limit/offset (GORM overwrites prior
