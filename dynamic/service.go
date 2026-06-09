@@ -326,6 +326,59 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	return items, builder.PageMeta(total, params), nil
 }
 
+// Aggregate runs a single SELECT SUM(col) ... over the FILTERED set for each
+// column in `columns`, applying the SAME relation filters, column filters,
+// search and org/branch scope as List — but NO sort, pagination or preloads.
+// It returns one map keyed by column name to the summed value, so the host can
+// render a table footer whose totals match the filtered list (not the visible
+// page). Columns that are unknown or unsafe are dropped by the builder's
+// whitelist (applyAggregations) exactly like a garbage sort param, so the
+// caller never has to pre-validate the column set.
+func (s *Service) Aggregate(ctx context.Context, model string, user modelbase.AuthUser, params query.Params, columns []string) (map[string]any, error) {
+	instance, tableMeta, err := s.resolveModel(ctx, model)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.checkPerm(ctx, user, model, "read"); err != nil {
+		return nil, err
+	}
+
+	tableName, err := s.tableNameFor(ctx, model, instance)
+	if err != nil {
+		return nil, err
+	}
+
+	// Each requested column becomes a SUM(col) AS col aggregation. The builder
+	// re-validates Field/Alias against its allowed set + isSafeIdent, so a raw
+	// column name can never be interpolated — unknown columns are dropped.
+	aggs := make([]query.Aggregation, 0, len(columns))
+	for _, col := range columns {
+		aggs = append(aggs, query.Aggregation{Func: query.AggSum, Field: col, Alias: col})
+	}
+	// Overlay the aggregations onto the parsed list params so the footer carries
+	// the SAME relation filters / column filters / search the list does.
+	params.Aggregations = aggs
+	// A footer total is one aggregate over the whole filtered set — never grouped
+	// or sorted. Drop any inbound group_by/sort so the SELECT stays a single row.
+	params.GroupBy = nil
+	params.SortBy = ""
+
+	db := s.db.WithContext(ctx).Table(tableName)
+	db = s.scope.ScopeQuery(db, user)
+
+	builder := query.New(tableMeta, s.listBuilderOpts()...).WithTableName(tableName)
+	if rels, ok := instance.(modelbase.HasRelations); ok {
+		builder = builder.WithRelations(rels.DefineRelations())
+	}
+	db = builder.ApplyForAggregate(db, params)
+
+	row := map[string]any{}
+	if err := db.Take(&row).Error; err != nil {
+		return nil, fmt.Errorf("dynamic: aggregate: %w", err)
+	}
+	return row, nil
+}
+
 // TableMetadata is a thin accessor over the metadata service so the export /
 // import handlers in this package can read column definitions without
 // pulling another dependency through the constructor.
