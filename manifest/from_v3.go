@@ -98,6 +98,7 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.LifecycleHooks = mapLifecycle(m.Lifecycle)
 	out.I18n = mapI18n(m.I18n)
 	out.Signature = mapSignature(m.Signature)
+	out.Backend = deriveBackend(m)
 
 	return out
 }
@@ -686,6 +687,75 @@ func mapMetadataI18n(in map[string]v3.MetadataLocale) map[string]MetadataLocale 
 		return nil
 	}
 	return out
+}
+
+// deriveBackend synthesises a BackendSpec from the handlers a v3 manifest
+// declares. A v3 manifest cannot carry an explicit top-level "backend" block
+// (the JSON schema is additionalProperties:false), so the backend spec must be
+// derived from the wasm handler references embedded in contributions.actions[],
+// contributions.subscriptions[], and lifecycle hooks.
+//
+// If ANY handler in those sources has type "wasm" a BackendSpec{Runtime:"wasm"}
+// is returned with Exports set to the deduplicated set of function names
+// declared by those handlers. The Entry defaults to the conventional path
+// "backend/backend.wasm" when none of the handlers specify a URL (v3 Handler
+// does not carry an Entry path; the bundle loader uses the default).
+//
+// Returns nil when no wasm handler is declared — the caller then leaves
+// Manifest.Backend nil, which preserves the legacy webhook behaviour.
+func deriveBackend(m *v3.Manifest) *BackendSpec {
+	seen := map[string]struct{}{}
+	var exports []string
+	add := func(fn string) {
+		if fn == "" {
+			return
+		}
+		if _, ok := seen[fn]; ok {
+			return
+		}
+		seen[fn] = struct{}{}
+		exports = append(exports, fn)
+	}
+
+	if m.Contributions != nil {
+		for _, a := range m.Contributions.Actions {
+			if a.Handler.Type == "wasm" {
+				add(a.Handler.Function)
+			}
+		}
+		for _, s := range m.Contributions.Subscriptions {
+			if s.Handler.Type == "wasm" {
+				add(s.Handler.Function)
+			}
+		}
+	}
+
+	// Lifecycle hooks declared with wasm function names also contribute
+	// to the export list so the wasm host can resolve them at dispatch time.
+	if m.Lifecycle != nil {
+		for _, fn := range []string{
+			m.Lifecycle.Install,
+			m.Lifecycle.Uninstall,
+			m.Lifecycle.Enable,
+			m.Lifecycle.Disable,
+		} {
+			// Lifecycle fields hold just a function name (no type field).
+			// Only add them when there is already a wasm backend implied by
+			// contributions, to avoid promoting a pure-webhook addon.
+			if fn != "" && len(seen) > 0 {
+				add(fn)
+			}
+		}
+	}
+
+	if len(exports) == 0 {
+		return nil
+	}
+	return &BackendSpec{
+		Runtime: "wasm",
+		Entry:   "backend/backend.wasm",
+		Exports: exports,
+	}
 }
 
 // mapSignature maps the v3 detached-signature block into the legacy Signature.
