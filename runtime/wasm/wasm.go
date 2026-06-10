@@ -31,6 +31,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
+	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 	"gorm.io/gorm"
 )
 
@@ -79,6 +80,13 @@ func NewHost(ctx context.Context, caps *security.Capabilities, logger *log.Logge
 	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().
 		WithCloseOnContextDone(true).
 		WithMemoryLimitPages(uint32(256*1024/64))) // 256 MiB hard ceiling
+	// Guests compiled with GOOS=wasip1 (standard Go toolchain) import
+	// wasi_snapshot_preview1.* for their runtime initialisation (memory
+	// management, clock, random). Without this the instantiator returns
+	// "module[wasi_snapshot_preview1] not instantiated" and the addon
+	// never loads. MustInstantiate panics only if the runtime is already
+	// closed — safe to call unconditionally at boot.
+	wasi_snapshot_preview1.MustInstantiate(ctx, rt)
 	h := &Host{rt: rt, caps: caps, logger: logger}
 	if err := registerHostModule(ctx, h); err != nil {
 		_ = rt.Close(ctx)

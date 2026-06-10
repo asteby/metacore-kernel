@@ -629,6 +629,127 @@ func eventEmitWasm() []byte {
 	return buf
 }
 
+// TestHost_WASIRegistered confirms that wasi_snapshot_preview1 is instantiated
+// in the runtime before any guest module loads. A Go module compiled with
+// GOOS=wasip1 imports wasi_snapshot_preview1.* for its runtime initialisation
+// (memory management, rand, clocks); without WASI the Load call returns
+// "module[wasi_snapshot_preview1] not instantiated". We use a hand-built
+// minimal WAT module that IMPORTS one WASI symbol (proc_exit, the simplest
+// one) to trigger that exact failure path when WASI is absent.
+func TestHost_WASIRegistered(t *testing.T) {
+	ctx := context.Background()
+	caps := security.Compile("testwasi", nil)
+	h, err := NewHost(ctx, caps, nil)
+	if err != nil {
+		t.Fatalf("NewHost: %v", err)
+	}
+	defer h.Close(ctx)
+
+	// wasip1MinimalWasm imports wasi_snapshot_preview1.proc_exit to force the
+	// runtime to resolve the module. If WASI is not instantiated, Load will
+	// fail with "module[wasi_snapshot_preview1] not instantiated".
+	spec := &manifest.BackendSpec{
+		Runtime: "wasm",
+		Entry:   "backend.wasm",
+		Exports: []string{"echo"},
+	}
+	if err := h.Load(ctx, "testwasi", wasip1MinimalWasm(), spec); err != nil {
+		t.Fatalf("Load with wasip1 import failed — WASI likely not registered: %v", err)
+	}
+}
+
+// wasip1MinimalWasm builds a WASM module that:
+//   - imports wasi_snapshot_preview1.proc_exit  (forces WASI resolution)
+//   - exports alloc(i32)->i32 and echo(i32,i32)->i64  (satisfies BackendSpec)
+//
+// The module itself does nothing dangerous: echo just returns the packed
+// ptr|len, and alloc is a trivial bump allocator. proc_exit is imported but
+// never called so the host does not terminate.
+func wasip1MinimalWasm() []byte {
+	var buf []byte
+	buf = append(buf, 0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00)
+
+	// Type section: 3 signatures.
+	//   type 0: () -> ()                  for proc_exit (imported WASI; signature is (i32)->())
+	//   type 1: (i32) -> i32              for alloc
+	//   type 2: (i32, i32) -> i64         for echo
+	types := []byte{
+		0x03,
+		0x60, 0x01, 0x7F, 0x00, // (i32) -> ()   proc_exit
+		0x60, 0x01, 0x7F, 0x01, 0x7F, // (i32) -> i32
+		0x60, 0x02, 0x7F, 0x7F, 0x01, 0x7E, // (i32,i32) -> i64
+	}
+	buf = append(buf, section(0x01, types)...)
+
+	// Import section: wasi_snapshot_preview1.proc_exit (func index 0, type 0).
+	var imports []byte
+	imports = append(imports, 0x01)
+	imports = append(imports, encodeName("wasi_snapshot_preview1")...)
+	imports = append(imports, encodeName("proc_exit")...)
+	imports = append(imports, 0x00, 0x00) // func, typeidx 0
+	buf = append(buf, section(0x02, imports)...)
+
+	// Function section: alloc (type 1) and echo (type 2).
+	funcs := []byte{0x02, 0x01, 0x02}
+	buf = append(buf, section(0x03, funcs)...)
+
+	// Memory: 1 page.
+	mem := []byte{0x01, 0x00, 0x01}
+	buf = append(buf, section(0x05, mem)...)
+
+	// Global: bump pointer at 1024.
+	globals := []byte{0x01, 0x7F, 0x01}
+	globals = append(globals, 0x41)
+	globals = append(globals, encodeSLEB128(1024)...)
+	globals = append(globals, 0x0B)
+	buf = append(buf, section(0x06, globals)...)
+
+	// Export section: memory, alloc (func 1), echo (func 2).
+	var exports []byte
+	exports = append(exports, 0x03)
+	exports = append(exports, encodeName("memory")...)
+	exports = append(exports, 0x02, 0x00)
+	exports = append(exports, encodeName("alloc")...)
+	exports = append(exports, 0x00, 0x01) // func, idx 1 (import shifts indices)
+	exports = append(exports, encodeName("echo")...)
+	exports = append(exports, 0x00, 0x02) // func, idx 2
+	buf = append(buf, section(0x07, exports)...)
+
+	// Code section: alloc + echo bodies (identical to echoWasm).
+	allocBody := []byte{
+		0x01, 0x01, 0x7F,
+		0x23, 0x00, // global.get 0
+		0x22, 0x01, // local.tee 1
+		0x20, 0x00, // local.get 0
+		0x6A,       // i32.add
+		0x24, 0x00, // global.set 0
+		0x20, 0x01, // local.get 1
+		0x0B,
+	}
+	allocBody = withSize(allocBody)
+
+	echoBody := []byte{
+		0x00,
+		0x20, 0x00, // local.get 0
+		0xAD,       // i64.extend_i32_u
+		0x42, 0x20, // i64.const 32
+		0x86,       // i64.shl
+		0x20, 0x01, // local.get 1
+		0xAD,       // i64.extend_i32_u
+		0x84,       // i64.or
+		0x0B,
+	}
+	echoBody = withSize(echoBody)
+
+	var code []byte
+	code = append(code, 0x02)
+	code = append(code, allocBody...)
+	code = append(code, echoBody...)
+	buf = append(buf, section(0x0A, code)...)
+
+	return buf
+}
+
 // emitDropWasm is the "legacy guest" variant of eventEmitWasm. The export
 // `emit_drop(ptr,len) -> i64` calls event_emit but `drop`s the i64 return
 // value and ends with `i64.const 0`, matching the pre-envelope contract
