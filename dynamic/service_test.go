@@ -405,6 +405,24 @@ func TestEvents_FanOut(t *testing.T) {
 		t.Errorf("event[2].after = %v, want nil", d.payload.After)
 	}
 
+	// Verify Model/Action/AddonKey/ActorID envelope fields on each event.
+	wantActions := []string{"created", "updated", "deleted"}
+	for i, r := range received {
+		ev := r.payload
+		if ev.Model != "test_products" {
+			t.Errorf("event[%d].Model = %q, want test_products", i, ev.Model)
+		}
+		if ev.Action != wantActions[i] {
+			t.Errorf("event[%d].Action = %q, want %q", i, ev.Action, wantActions[i])
+		}
+		if ev.AddonKey != addonKey {
+			t.Errorf("event[%d].AddonKey = %q, want %q", i, ev.AddonKey, addonKey)
+		}
+		if ev.ActorID != user.GetID().String() {
+			t.Errorf("event[%d].ActorID = %q, want %q", i, ev.ActorID, user.GetID().String())
+		}
+	}
+
 	// Verify the producer addonKey + event names also reached Publish — proves
 	// the wiring uses the resolver, not just hardcoded "kernel".
 	bus.mu.Lock()
@@ -437,6 +455,152 @@ func TestEvents_NoBusIsNoop(t *testing.T) {
 	}
 	if err := svc.Delete(context.Background(), "test_products", user, id); err != nil {
 		t.Fatalf("delete: %v", err)
+	}
+}
+
+// TestEvents_CorrelationIDPropagation verifies that a correlation ID injected
+// into the context via WithCorrelationID is surfaced on the published
+// CanonicalEvent and that CorrelationIDFromContext returns "" on a plain ctx.
+func TestEvents_CorrelationIDPropagation(t *testing.T) {
+	db := setupTestDB(t)
+	modelbase.Register("test_products", func() modelbase.ModelDefiner { return &TestProduct{} })
+	meta := metadata.New(metadata.Config{CacheTTL: -1})
+	bus := newFanOutBus()
+
+	var captured *CanonicalEvent
+	bus.Subscribe("kernel.test_products.created", func(_ context.Context, _ uuid.UUID, payload any) error {
+		captured, _ = payload.(*CanonicalEvent)
+		return nil
+	})
+
+	svc := New(Config{DB: db, Metadata: meta, Bus: bus})
+	user := newUser(uuid.New())
+
+	const wantCorrID = "req-abc-123"
+	ctx := WithCorrelationID(context.Background(), wantCorrID)
+
+	if _, err := svc.Create(ctx, "test_products", user, map[string]any{"name": "Correlated", "price": 1.0}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if captured == nil {
+		t.Fatal("no event received")
+	}
+	if captured.CorrelationID != wantCorrID {
+		t.Errorf("CorrelationID = %q, want %q", captured.CorrelationID, wantCorrID)
+	}
+
+	// A plain context should produce an empty CorrelationID.
+	if got := CorrelationIDFromContext(context.Background()); got != "" {
+		t.Errorf("CorrelationIDFromContext(plain) = %q, want empty", got)
+	}
+}
+
+// TestEvents_NoCorrelationID verifies that events published without an
+// enriched context leave CorrelationID empty (not a panic, not a placeholder).
+func TestEvents_NoCorrelationID(t *testing.T) {
+	db := setupTestDB(t)
+	modelbase.Register("test_products", func() modelbase.ModelDefiner { return &TestProduct{} })
+	meta := metadata.New(metadata.Config{CacheTTL: -1})
+	bus := newFanOutBus()
+
+	var captured *CanonicalEvent
+	bus.Subscribe("kernel.test_products.created", func(_ context.Context, _ uuid.UUID, payload any) error {
+		captured, _ = payload.(*CanonicalEvent)
+		return nil
+	})
+
+	svc := New(Config{DB: db, Metadata: meta, Bus: bus})
+	user := newUser(uuid.New())
+
+	if _, err := svc.Create(context.Background(), "test_products", user, map[string]any{"name": "No corr", "price": 2.0}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if captured == nil {
+		t.Fatal("no event received")
+	}
+	if captured.CorrelationID != "" {
+		t.Errorf("CorrelationID = %q, want empty string", captured.CorrelationID)
+	}
+}
+
+// TestEvents_BackwardCompatFields guards the ID/Before/After contract relied on
+// by existing consumers (e.g. ops services/sales_stock_effects.go). The new
+// envelope fields must not displace or rename these.
+func TestEvents_BackwardCompatFields(t *testing.T) {
+	db := setupTestDB(t)
+	modelbase.Register("test_products", func() modelbase.ModelDefiner { return &TestProduct{} })
+	meta := metadata.New(metadata.Config{CacheTTL: -1})
+	bus := newFanOutBus()
+
+	var createdEv, updatedEv, deletedEv *CanonicalEvent
+	bus.Subscribe("kernel.test_products.created", func(_ context.Context, _ uuid.UUID, p any) error {
+		createdEv, _ = p.(*CanonicalEvent)
+		return nil
+	})
+	bus.Subscribe("kernel.test_products.updated", func(_ context.Context, _ uuid.UUID, p any) error {
+		updatedEv, _ = p.(*CanonicalEvent)
+		return nil
+	})
+	bus.Subscribe("kernel.test_products.deleted", func(_ context.Context, _ uuid.UUID, p any) error {
+		deletedEv, _ = p.(*CanonicalEvent)
+		return nil
+	})
+
+	svc := New(Config{DB: db, Metadata: meta, Bus: bus})
+	user := newUser(uuid.New())
+	ctx := context.Background()
+
+	createdMap := createProduct(t, svc, user, "Compat", 5.0)
+	id, _ := uuid.Parse(createdMap["id"].(string))
+
+	if _, err := svc.Update(ctx, "test_products", user, id, map[string]any{"name": "CompatRenamed"}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if err := svc.Delete(ctx, "test_products", user, id); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	// created: ID set, Before nil, After contains the row.
+	if createdEv == nil {
+		t.Fatal("createdEv is nil")
+	}
+	if createdEv.ID != id.String() {
+		t.Errorf("created.ID = %q, want %q", createdEv.ID, id.String())
+	}
+	if createdEv.Before != nil {
+		t.Errorf("created.Before = %v, want nil", createdEv.Before)
+	}
+	if createdEv.After == nil {
+		t.Error("created.After is nil, want map with row data")
+	}
+
+	// updated: ID set, Before contains old name, After contains new name.
+	if updatedEv == nil {
+		t.Fatal("updatedEv is nil")
+	}
+	if updatedEv.ID != id.String() {
+		t.Errorf("updated.ID = %q, want %q", updatedEv.ID, id.String())
+	}
+	if updatedEv.Before == nil || updatedEv.Before["name"] != "Compat" {
+		t.Errorf("updated.Before[name] = %v, want Compat", updatedEv.Before["name"])
+	}
+	if updatedEv.After == nil || updatedEv.After["name"] != "CompatRenamed" {
+		t.Errorf("updated.After[name] = %v, want CompatRenamed", updatedEv.After["name"])
+	}
+
+	// deleted: ID set, Before contains last-known row, After nil.
+	if deletedEv == nil {
+		t.Fatal("deletedEv is nil")
+	}
+	if deletedEv.ID != id.String() {
+		t.Errorf("deleted.ID = %q, want %q", deletedEv.ID, id.String())
+	}
+	if deletedEv.Before == nil {
+		t.Error("deleted.Before is nil, want pre-delete snapshot")
+	}
+	if deletedEv.After != nil {
+		t.Errorf("deleted.After = %v, want nil", deletedEv.After)
 	}
 }
 
