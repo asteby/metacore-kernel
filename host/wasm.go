@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/asteby/metacore-kernel/bundle"
+	"github.com/asteby/metacore-kernel/dispatch"
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/runtime/wasm"
 	"github.com/asteby/metacore-kernel/security"
@@ -127,6 +128,24 @@ func (h *Host) InvokeWASMFor(ctx context.Context, orgID uuid.UUID, installation 
 		return nil, fmt.Errorf("host: WASM runtime not enabled")
 	}
 	return h.WASM.InvokeFor(ctx, orgID, installation, addonKey, funcName, payload, settings)
+}
+
+// WASMInvoker returns the host's wasm runtime as a dispatch.WasmInvoker so a
+// host can wire the event-subscription dispatcher in one line:
+//
+//	cancel, err := dispatch.Wire(bus, h.WASMInvoker(), db, provider,
+//	    dispatch.WithCapabilityChecker(dispatch.NewEnforcerChecker(enforcer)))
+//
+// Returns a real nil interface when the wasm runtime is not enabled (so the
+// dispatcher's `invoker == nil` guard fires and a wasm subscription
+// dead-letters cleanly rather than panicking on a typed-nil). Call EnableWASM
+// first if any addon ships a wasm subscription handler. Kept here (not in the
+// dispatch package) so dispatch stays free of the runtime/wasm CGO dependency.
+func (h *Host) WASMInvoker() dispatch.WasmInvoker {
+	if h.WASM == nil {
+		return nil
+	}
+	return h.WASM
 }
 
 // manifestBackend is re-exported for call sites that only import kernel/host.
