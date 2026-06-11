@@ -70,6 +70,10 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			Ref:        c.Ref,
 			Options:    toOptionDefs(c.Options),
 			UseOptions: len(c.Options) > 0,
+			// OptionsSource (dynamic provider key) rides through so the HOST
+			// can materialise the provider's localized options onto the served
+			// column at metadata-serve time. The kernel only carries the key.
+			OptionsSource: c.OptionsSource,
 		}
 		// Auto-detect a prettier cell renderer for columns that ship no
 		// explicit Display/CellStyle, inferred from the column name/type. An
@@ -199,6 +203,12 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 		} else if len(c.Options) > 0 {
 			// A column declaring a static choice list renders as a plain select.
 			ftype = "select"
+		} else if c.OptionsSource != "" {
+			// A column declaring a dynamic options provider also renders as a
+			// select: the HOST materialises the provider's localized options
+			// onto the served field, so the input plane is the same as a
+			// static choice list — only the option source differs.
+			ftype = "select"
 		} else if ftype == "text" && imageColumn(c.Name) {
 			ftype = "image"
 		} else if ftype == "text" && longTextColumn(c.Name) {
@@ -215,6 +225,9 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 			// in the native create/edit modal without a custom action.
 			Ref:     c.Ref,
 			Options: toOptionDefs(c.Options),
+			// OptionsSource rides through so the host materialises the
+			// provider's options onto the served form field.
+			OptionsSource: c.OptionsSource,
 		})
 	}
 	return out

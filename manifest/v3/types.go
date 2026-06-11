@@ -322,6 +322,19 @@ type Column struct {
 	// relation picker and Options for a hardcoded enum (status, type, …).
 	// Both are pure UI metadata and never touch the SQL/DDL plane.
 	Options []FieldOption `json:"options,omitempty"`
+	// OptionsSource declares a DYNAMIC select for the column: instead of a
+	// hardcoded Options list, it names a PROVIDER key (e.g.
+	// "registered_models", "installed_addons") the HOST registers and resolves
+	// at metadata-serve time, materialising the localized value/label list
+	// onto the served modelbase Options. The kernel itself implements no
+	// providers — it only carries the key through the v3 → host conversion
+	// (manifest.ColumnDef.OptionsSource → modelbase OptionsSource) so any host
+	// in the ecosystem can plug its own sources. Open enum (schema pattern
+	// ^[a-z][a-z0-9_]*$): an unknown key simply yields no options on hosts
+	// that don't register it. Use Ref for a row-level relation picker, Options
+	// for a hardcoded enum, OptionsSource for host-computed lists. Pure UI
+	// metadata; the DDL/install plane ignores it.
+	OptionsSource string `json:"options_source,omitempty"`
 }
 
 // Index is a single index declaration.

@@ -5,6 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **feat(manifest/v3): `options_source` — declarative DYNAMIC options on a
+  column.** A column names a host-registered provider key (e.g.
+  `"registered_models"`, `"installed_addons"`) instead of hardcoding an
+  `options` list; the HOST resolves the provider at metadata-serve time and
+  materialises the localized value/label list onto the served `options`. Open
+  enum (pattern `^[a-z][a-z0-9_]*$`): the kernel only carries the key — no
+  providers in the kernel. Full passthrough: v3 `Column.options_source` →
+  `manifest.ColumnDef.OptionsSource` (FromV3) → served
+  `modelbase.ColumnDef.OptionsSource` / `modelbase.FieldDef.OptionsSource`
+  (DeriveTableColumns / DeriveFormFields; the form field derives as a
+  `select`). Both validation planes agree: the strict v3 jsonschema gates the
+  pattern and the legacy `Manifest.Validate` enforces the same alphabet.
+
+---
+
 ## [0.51.0] - 2026-06-09
 
 ### Added
