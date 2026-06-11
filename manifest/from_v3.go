@@ -209,6 +209,12 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// the SDK renders a searchable relation picker — without a
 				// belongs_to relation or a custom action. Pure UI metadata.
 				Ref: c.Ref,
+				// OptionsSource is the DYNAMIC twin of Options: a provider key
+				// (e.g. "registered_models") the HOST resolves at serve time to
+				// materialise localized options. It rides the legacy
+				// ColumnDef.OptionsSource so the key survives the v3 → host
+				// conversion; the kernel implements no providers.
+				OptionsSource: c.OptionsSource,
 			}
 			// Options is the STATIC-select twin of Ref: a fixed value/label
 			// choice list (with optional icon/color/image visuals) that rides

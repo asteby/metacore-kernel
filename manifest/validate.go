@@ -35,6 +35,13 @@ var (
 	// resolution to org config. The key alphabet matches columnRe (snake
 	// identifiers) so it stays grep-friendly across audits.
 	orgRefRe = regexp.MustCompile(`^\$org\.[a-z][a-z0-9_]*$`)
+
+	// optionsSourceRe matches a dynamic options-provider key on
+	// ColumnDef.OptionsSource. Deliberately the SAME pattern as the v3 schema's
+	// Column.options_source so the strict (jsonschema) and legacy validation
+	// planes accept exactly the same keys. Open enum: format only — the actual
+	// provider registry lives in the host.
+	optionsSourceRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 	// validVisibility is the closed set of ColumnDef.Visibility values.
 	// Empty string is also accepted at the call site as the legacy default.
 	validVisibility = map[string]struct{}{
@@ -509,6 +516,14 @@ func validateColumnExtensions(col ColumnDef) error {
 		if _, ok := validWidgets[col.Widget]; !ok {
 			return fmt.Errorf("widget %q not allowed", col.Widget)
 		}
+	}
+	// OptionsSource is an OPEN enum (providers are host-registered, so the
+	// kernel cannot whitelist them); only the key FORMAT is enforced, with the
+	// same alphabet as the v3 schema pattern (^[a-z][a-z0-9_]*$) so a manifest
+	// that passes v3.Validate never fails here — the "double validation"
+	// planes stay in agreement.
+	if col.OptionsSource != "" && !optionsSourceRe.MatchString(col.OptionsSource) {
+		return fmt.Errorf("options_source %q must match %s", col.OptionsSource, optionsSourceRe)
 	}
 	if col.Validation != nil {
 		if err := col.Validation.validate(); err != nil {

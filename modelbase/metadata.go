@@ -79,6 +79,15 @@ type ColumnDef struct {
 	// targeting a belongs-to relation reports Ref="customers" without any
 	// per-column declaration.
 	Ref string `json:"ref,omitempty"`
+	// OptionsSource names a DYNAMIC options provider (e.g.
+	// "registered_models", "installed_addons") the HOST resolves when serving
+	// this metadata: it materialises the provider's localized value/label list
+	// onto Options (and typically sets UseOptions) so the SDK renders a select
+	// / multi-select filter without the manifest hardcoding choices. The
+	// kernel only carries the key (mirrors manifest/v3 Column.options_source —
+	// json tag matches the v3 contract so it round-trips); providers are
+	// host-registered, and an unknown key simply leaves Options empty.
+	OptionsSource string `json:"options_source,omitempty"`
 	// Validation declares server-side input constraints that the SDK can
 	// also pre-flight in the form layer. Strings prefixed with `$org.`
 	// (e.g. `$org.tax_id_validator`) are resolved at runtime against the
@@ -132,6 +141,14 @@ type FieldDef struct {
 	SearchEndpoint string      `json:"searchEndpoint,omitempty"`
 	Placeholder    string      `json:"placeholder,omitempty"`
 	Ref            string      `json:"ref,omitempty"`
+
+	// OptionsSource names a DYNAMIC options provider the HOST resolves when
+	// serving this metadata, materialising the localized value/label list onto
+	// Options so the form renders a select without hardcoded choices. Mirrors
+	// manifest/v3 Column.options_source (json tag matches the v3 contract so
+	// it round-trips). Providers are host-registered; unknown keys leave
+	// Options empty.
+	OptionsSource string `json:"options_source,omitempty"`
 
 	// Widget overrides the renderer inferred from Type (e.g. "textarea",
 	// "dynamic_select"). Optional — empty lets the SDK infer from Type.

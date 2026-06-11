@@ -636,6 +636,17 @@ type ColumnDef struct {
 	// v3 FieldOption visuals so a status/brand list renders richly.
 	Options []Option `json:"options,omitempty"`
 
+	// OptionsSource names a DYNAMIC options provider (e.g. "registered_models",
+	// "installed_addons") the HOST resolves at metadata-serve time instead of a
+	// hardcoded Options list. It rides the legacy ColumnDef as a carrier for the
+	// v3 Column.options_source so the key survives the v3 → host conversion and
+	// lands on the served modelbase.ColumnDef.OptionsSource /
+	// modelbase.FieldDef.OptionsSource — the host then materialises the
+	// localized value/label list onto the served Options. The kernel implements
+	// no providers (open enum, host-registered); an unknown key yields no
+	// options. Pure UI metadata; the DDL plane ignores it.
+	OptionsSource string `json:"options_source,omitempty"`
+
 	// Label is the column's human header OR an i18n key resolving to it. It
 	// rides the legacy ColumnDef as a carrier for the v3 Column.label so a
 	// declared label survives the v3 → host conversion: dynamic.DeriveTableColumns
