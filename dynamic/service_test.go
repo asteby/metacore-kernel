@@ -775,10 +775,14 @@ func reflectDynType() reflect.Type {
 // this, the service asserted instance.(modelbase.ModelDefiner) and panicked.
 func TestTableNameResolver_MethodlessModel(t *testing.T) {
 	db := setupTestDB(t)
+	// created_at mirrors what CreateDynamicTable always stamps on a dynamic
+	// table — the builder now defaults to ORDER BY created_at desc, so the
+	// column must exist (it always does in production).
 	db.Exec(`CREATE TABLE IF NOT EXISTS dyn_items (
 		id TEXT PRIMARY KEY,
 		organization_id TEXT,
 		created_by_id TEXT,
+		created_at DATETIME,
 		label TEXT
 	)`)
 	// Compiled twin for metadata resolution only.

@@ -141,6 +141,15 @@ func buildAllowed(b *Builder, meta *modelbase.TableMetadata) {
 		}
 		b.allowed[col.Key] = struct{}{}
 	}
+	// Framework columns CreateDynamicTable always stamps but the manifest never
+	// declares (they are not business fields). Whitelisting them makes the
+	// newest-first default ORDER BY actually fire on delegated lists — without
+	// this, `created_at` was not in `allowed`, defaultSort found no timestamp
+	// column, and the list came back in heap order (the sales-orders "not
+	// newest first" report). They are also legitimately sortable by the user.
+	for _, fw := range []string{"id", "created_at", "updated_at"} {
+		b.allowed[fw] = struct{}{}
+	}
 	for _, s := range meta.SearchColumns {
 		if _, ok := b.allowed[s]; !ok {
 			continue
