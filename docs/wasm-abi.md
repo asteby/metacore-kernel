@@ -1,4 +1,4 @@
-# WASM ABI (v1.3 — proposal, kernel-side)
+# WASM ABI (v1.4 — proposal, kernel-side)
 
 The metacore kernel can run addon backends as sandboxed WebAssembly modules
 via [wazero](https://wazero.io). This document is the kernel-side contract
@@ -11,9 +11,9 @@ keep them in sync.
 > `github.com/asteby/metacore-kernel/guest` package wraps `event_emit`
 > (and, over time, the rest of the host surface) behind typed Go APIs.
 
-> ABI version: **1.3** (proposal — `event_emit` host import added on top of
-> v1.2; guests built against 1.0 / 1.1 / 1.2 keep working — purely additive).
-> Bundled via `manifest.backend.runtime = "wasm"`.
+> ABI version: **1.4** (proposal — `data_mutate` host import added on top of
+> v1.3; guests built against 1.0 / 1.1 / 1.2 / 1.3 keep working — purely
+> additive). Bundled via `manifest.backend.runtime = "wasm"`.
 > Implementation: `runtime/wasm/abi.go`, `runtime/wasm/capabilities.go`.
 
 ### Version history
@@ -24,6 +24,7 @@ keep them in sync.
 | 1.1     | proposal | adds `db_query` host import; guests built against 1.0 keep working. |
 | 1.2     | proposal | adds `db_exec` host import (writes, scoped to `addon_<key>.*`, auto-rollback on error); requires the action handler to invoke the guest with `Host.InvokeInTx` so the guest's writes piggy-back on the action's `*gorm.DB` transaction. |
 | 1.3     | proposal | adds `event_emit` host import; guests publish a `<name>, <payload>` pair through the kernel's in-process `events.Bus`. Capability gated by `event:emit <name>` and tenant-scoped by the per-invocation `orgID` the host carries on the context bag. |
+| 1.4     | proposal | adds `data_mutate` host import; ONE org-scoped row mutation (`create` / `update` / `delete` with atomic `inc`) against a LOGICAL table resolved through the embedder-injected `TableResolver` (NOT the addon-schema `search_path`), followed by a post-commit `*dynamic.CanonicalEvent` on the host bus. Gated by `db:write <logical table>`. |
 
 ## 1. Declaration
 
@@ -110,6 +111,17 @@ event_emit(eventPtr i32, eventLen i32, payloadPtr i32, payloadLen i32) -> i64 [v
      per-invocation `orgID` the host stashed on the context bag. Delivery is
      synchronous and best-effort: subscriber errors are logged but do not
      surface to the publisher. See § 12 for the full contract.
+
+data_mutate(reqPtr i32, reqLen i32) -> i64                          [v1.4]
+  -> packed (ptr, len) of a JSON envelope carrying `{id, before, after}`.
+     One org-scoped row mutation (`create` / `update` / `delete`, with
+     atomic `inc` deltas on update) against a LOGICAL table the embedding
+     host resolves via `Host.WithTableResolver` — deliberately NOT the
+     addon-schema search_path `db_exec` uses, so the write lands in the
+     same physical rows the host's dynamic CRUD runtime serves. Gated by
+     `db:write <logical table>`. After commit the host publishes the
+     matching `*dynamic.CanonicalEvent` (`<addonKey>.<Model>.<action>`)
+     on the events.Bus. See § 14 for the full contract.
 ```
 
 The host allocates response buffers inside guest memory via `alloc`, writes
@@ -1348,3 +1360,162 @@ v0.11.0 closes the gap inside `runtime/wasm/dbexec.go`:
 
 The kernel row cap (`dbQueryMaxRows`) applies to `RETURNING` results too;
 exceeding it triggers `row_limit_exceeded` and rolls back the action.
+
+## 14. `data_mutate` — org-scoped row mutation + canonical event (v1.4)
+
+`data_mutate` is the structured sibling of `db_exec`: instead of raw SQL the
+guest sends an operation descriptor (`create` / `update` / `delete`) for ONE
+row of a LOGICAL table, and the host owns everything dangerous — tenant
+scoping, table resolution, identifier quoting, timestamps, the transaction,
+and (the reason this import exists) the post-commit publish of the matching
+`*dynamic.CanonicalEvent` on the host `events.Bus`. A guest that mutates
+live host data through `data_mutate` produces exactly the same event stream
+the host's dynamic CRUD runtime produces, so downstream subscribers
+(activity bridges, other addons) cannot tell the difference.
+
+### 14.1 Signature
+
+```
+data_mutate(reqPtr i32, reqLen i32) -> i64
+```
+
+| Param      | Type | Meaning                                                    |
+|------------|------|------------------------------------------------------------|
+| `reqPtr`   | i32  | Guest pointer to the UTF-8 JSON request (§ 14.2).          |
+| `reqLen`   | i32  | Request length in bytes. Hard cap: 64 KiB (§ 14.6).        |
+| **return** | i64  | Packed `(ptr<<32)\|len` of the response envelope (§ 14.5). |
+
+### 14.2 Request contract
+
+```jsonc
+{
+  "op": "create" | "update" | "delete",
+  "table": "stock",              // LOGICAL table name (unqualified)
+  "model": "Stock",              // canonical ModelKey → CanonicalEvent.Model
+  "id": "<uuid>",                // required for update/delete; optional on create (host generates)
+  "data": { "col": value },      // create: columns; update: absolute SETs
+  "inc": { "col": delta },       // update only: SET col = col + delta (atomic). data/inc columns must be disjoint
+  "returning": true              // default true: response carries the full after row
+}
+```
+
+- `organization_id` NEVER comes from the guest: the host reads it from the
+  invocation context (same rule as `event_emit`, § 12.6). Every operation is
+  org-scoped by construction — `WHERE organization_id = ?` on update/delete,
+  stamp on create. A guest-supplied `organization_id` (or any other
+  host-stamped column: `id`, `created_at`, `updated_at`, `deleted_at`) inside
+  `data` / `inc` is rejected with `invalid_request`.
+- **create** — the host stamps `id` (when absent), `organization_id`,
+  `created_at` and `updated_at`, then `INSERT … RETURNING *`. Column names
+  must match `^[a-z_][a-z0-9_]{0,62}$`; unknown columns surface as
+  `db_error` from the driver (only declared model columns exist — defense
+  mirrors the host's seeding path).
+- **update** — `WHERE id = ? AND organization_id = ?`; the host stamps
+  `updated_at`. `inc` deltas compile to `col = col + $n` so concurrent
+  increments never lose updates (no read-modify-write). Zero matching rows →
+  `not_found`.
+- **delete** — soft delete (`SET deleted_at = now()`) when the table carries
+  a `deleted_at` column — detected from the pre-delete snapshot, no
+  `information_schema` round-trip — physical `DELETE` otherwise. A row whose
+  `deleted_at` is already non-null answers `not_found`.
+- Values follow the `db_query` argument rules (§ 9.6): JSON scalars ride
+  natively, `{"$uuid": …}` / `{"$ts": …}` / `{"$bytes": …}` markers cover
+  the non-JSON-native Postgres types. Nested objects/arrays are rejected —
+  pre-serialise to a string for `jsonb` columns.
+
+### 14.3 Table resolution (CRITICAL — not the `db_exec` search_path)
+
+The host resolves the physical table with the SAME resolution the embedding
+host's dynamic CRUD runtime uses (in ops: unqualified → `public.*`), via the
+resolver injected with `Host.WithTableResolver(func(table string) string)`.
+Default (no resolver) is the identity mapping.
+
+`data_mutate` deliberately does NOT use the `SET LOCAL search_path TO
+addon_<key>` scoping `db_exec` applies: an addon's bundle schema
+(`addon_<key>.*`) and the live host data are dual — a write landing in
+`addon_<key>.stock` would be invisible to the UI serving `public.stock`.
+The resolver may return an unqualified (`stock`) or schema-qualified
+(`public.stock`) name; each part is quoted independently before
+interpolation.
+
+### 14.4 Security
+
+- Capability `db:write <logical table>` (e.g. `db:write stock`), enforced by
+  the same `security.Enforcer` that gates `db_exec`. The implicit
+  `addon_<key>.*` grant does NOT cover logical tables — the manifest must
+  declare the capability explicitly. No new manifest field is involved
+  (no v3-schema / hub change).
+- Tenant scope comes exclusively from the invocation context (`InvokeFor` /
+  `InvokeForInTx`); a missing org answers `invalid_request` before any DB
+  work.
+- Logical table and column names are validated against
+  `^[a-z_][a-z0-9_]{0,62}$` before quoting — the request shape leaves no
+  raw-SQL surface.
+
+### 14.5 Response envelope
+
+```jsonc
+{ "success": true,
+  "data": { "id": "<uuid>", "before": {...}|null, "after": {...}|null },
+  "meta": { "addon": "...", "orgId": "...", "durationMs": N, "envelopeVersion": 1 } }
+// error:
+{ "success": false,
+  "error": { "code": "forbidden|not_found|invalid_request|bus_unavailable|db_error", "message": "..." },
+  "meta": { ... } }
+```
+
+- `create`: `before` is `null`, `after` is the `RETURNING *` row.
+- `update`: `before` is the pre-update snapshot (SELECT inside the same
+  transaction), `after` the `RETURNING *` row.
+- `delete`: `before` is the snapshot, `after` is `null`.
+- `returning: false` trims `after` from the RESPONSE only — the canonical
+  event always carries the full rows.
+
+### 14.6 Limits
+
+| Limit            | Value  | On violation               |
+|------------------|--------|----------------------------|
+| Request bytes    | 64 KiB | `invalid_request`          |
+| Deadline         | 5 s    | `db_error` (ctx timeout)   |
+| Response bytes   | 8 MiB  | `db_error`                 |
+
+Deadline and response cap mirror `db_exec` (§ 10.5).
+
+### 14.7 Transaction shape & event ordering
+
+`data_mutate` ALWAYS opens its own short-lived transaction on the host's
+standalone `*gorm.DB` — unlike `db_exec` it never piggy-backs on an action
+handler's open transaction, even under `InvokeInTx`. Rationale: the
+canonical event must describe COMMITTED state; publishing from inside a
+caller-owned transaction would emit phantom events whenever the surrounding
+action rolls back. The before-snapshot, the mutation and (for soft deletes)
+the stamp all run inside that one transaction; the publish happens strictly
+after `COMMIT`.
+
+The event is `<addonKey>.<Model>.<created|updated|deleted>` with payload
+`*dynamic.CanonicalEvent{ID, Model, Action, AddonKey, CorrelationID, Before,
+After}`; `CorrelationID` rides in from the invocation context
+(`dynamic.WithCorrelationID` / `dynamic.CorrelationIDFromContext`). The host
+publishes as the trusted `"kernel"` producer: the event name is
+host-constructed under the calling addon's own namespace (no spoofing
+surface) and the mutation was already gated by `db:write` — requiring a
+separate `event:emit` declaration would silently break the import's purpose.
+Publish errors after commit are logged and swallowed (same policy as
+`dynamic.Service.publishCanonical`): committed data must never be undone by
+a side-effect failure. A nil bus, however, fails the call up-front with
+`bus_unavailable` — without the event the mutation must not run at all.
+
+### 14.8 Wiring
+
+```go
+host, _ := wasm.NewHost(ctx, caps, logger)
+host.WithBus(bus).
+     WithDB(db).
+     WithEnforcer(enforcer).
+     WithTableResolver(func(table string) string {
+         return "public." + table // ops: logical → live host data
+     })
+```
+
+Implementation: `runtime/wasm/datamutate.go`; tests:
+`runtime/wasm/datamutate_test.go`.

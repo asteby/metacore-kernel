@@ -48,6 +48,9 @@ type invocation struct {
 	db       *gorm.DB
 	tx       *gorm.DB
 	enforcer *security.Enforcer
+	// resolveTable is the embedder-injected logical→physical table mapping
+	// the data_mutate import uses (Host.WithTableResolver). nil = identity.
+	resolveTable func(table string) string
 }
 
 type invKey struct{}
@@ -300,6 +303,26 @@ func registerHostModule(ctx context.Context, h *Host) error {
 			return writeToGuest(ctx, mod, env)
 		}).
 		Export("db_exec")
+
+	// data_mutate(reqPtr, reqLen) -> i64 (ptr|len envelope)
+	// One org-scoped row mutation (create/update/delete) against a LOGICAL
+	// table resolved through the embedder's TableResolver, followed by a
+	// post-commit *dynamic.CanonicalEvent on the host bus. Tenant scope
+	// (orgID) is taken from the invocation context — never from the guest —
+	// exactly like event_emit. Gated by `db:write <logical table>`.
+	// See docs/wasm-abi.md § 14.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			reqPtr, reqLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			req := readBytes(mod, reqPtr, reqLen)
+			env := executeDataMutate(ctx, inv, req)
+			return writeToGuest(ctx, mod, env)
+		}).
+		Export("data_mutate")
 
 	if _, err := b.Instantiate(ctx); err != nil {
 		return fmt.Errorf("instantiate metacore_host: %w", err)
