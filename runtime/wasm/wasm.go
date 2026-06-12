@@ -46,14 +46,15 @@ const (
 // caches. Safe for concurrent use: caches are sync.Maps and wazero's
 // runtime API is concurrency-safe.
 type Host struct {
-	rt       wazero.Runtime
-	caps     *security.Capabilities
-	bus      *events.Bus
-	db       *gorm.DB
-	enforcer *security.Enforcer
-	logger   *log.Logger
-	compiled sync.Map // addonKey -> *compiledEntry
-	modules  sync.Map // instanceKey(addonKey, installation) -> *Module
+	rt            wazero.Runtime
+	caps          *security.Capabilities
+	bus           *events.Bus
+	db            *gorm.DB
+	enforcer      *security.Enforcer
+	tableResolver func(table string) string
+	logger        *log.Logger
+	compiled      sync.Map // addonKey -> *compiledEntry
+	modules       sync.Map // instanceKey(addonKey, installation) -> *Module
 }
 
 type compiledEntry struct {
@@ -118,6 +119,18 @@ func (h *Host) WithDB(db *gorm.DB) *Host {
 // setups, but production hosts should always provide an Enforcer.
 func (h *Host) WithEnforcer(e *security.Enforcer) *Host {
 	h.enforcer = e
+	return h
+}
+
+// WithTableResolver injects the embedder's logical→physical table resolution
+// for the `metacore_host.data_mutate` import. The resolver MUST mirror the
+// host application's dynamic CRUD table resolution (in ops: unqualified →
+// `public.*`) so the rows data_mutate touches are the same rows the UI
+// serves — data_mutate deliberately does NOT use the addon-schema
+// search_path that scopes db_exec (docs/wasm-abi.md § 14.3). When unset,
+// resolution is the identity function.
+func (h *Host) WithTableResolver(r func(table string) string) *Host {
+	h.tableResolver = r
 	return h
 }
 
@@ -224,6 +237,7 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		db:           h.db,
 		tx:           tx,
 		enforcer:     h.enforcer,
+		resolveTable: h.tableResolver,
 		logger:       h.logger,
 	})
 

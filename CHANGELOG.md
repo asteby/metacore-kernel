@@ -9,6 +9,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **feat(runtime/wasm): `metacore_host.data_mutate` — structured org-scoped
+  row mutation + post-commit canonical event (ABI v1.4, § 14 of
+  docs/wasm-abi.md).** The guest sends `{op, table, model, id?, data?, inc?,
+  returning?}` (op: create/update/delete; `inc` compiles to atomic
+  `col = col + delta` SETs); the host owns tenant scope (`organization_id`
+  ALWAYS from the invocation context, never the guest), id/timestamp stamps,
+  soft-delete when the row carries `deleted_at`, and the transaction. After
+  COMMIT the host publishes the matching `*dynamic.CanonicalEvent`
+  (`<addonKey>.<Model>.<created|updated|deleted>`, with `CorrelationID` from
+  the context) on the events.Bus, so guest mutations feed the same event
+  stream as the host's dynamic CRUD. The physical table comes from the new
+  embedder hook `Host.WithTableResolver(func(table string) string)` (identity
+  by default) — NOT from the addon-schema search_path `db_exec` uses, because
+  writes must land in the live host data (in ops: `public.*`). Gated by
+  `db:write <logical table>` through the same `security.Enforcer` as
+  `db_exec`; limits mirror `db_exec` (request 64 KiB, deadline 5 s, response
+  8 MiB); envelope `{success, data: {id, before, after}, meta}` v1. Unlike
+  `db_exec`, the import always opens its own short-lived transaction (never
+  the action handler's tx) so the event can only ever describe committed
+  state.
+
 - **feat(manifest/v3): `options_source` — declarative DYNAMIC options on a
   column.** A column names a host-registered provider key (e.g.
   `"registered_models"`, `"installed_addons"`) instead of hardcoding an

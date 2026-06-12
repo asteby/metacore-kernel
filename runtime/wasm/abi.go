@@ -22,6 +22,10 @@ import (
 //	  - log(msgPtr, msgLen)
 //	  - env_get(keyPtr, keyLen) -> i64 (ptr|len, 0 if missing)
 //	  - http_fetch(urlPtr, urlLen, methodPtr, methodLen, bodyPtr, bodyLen) -> i64
+//	  - data_mutate(reqPtr, reqLen) -> i64
+//	      Packed (ptr<<32)|len of the v1 `{success, data, meta}` envelope
+//	      documented in docs/wasm-abi.md § 14. One org-scoped row mutation
+//	      (create/update/delete) + a post-commit canonical event.
 //	  - event_emit(eventPtr, eventLen, payloadPtr, payloadLen) -> i64
 //	      Packed (ptr<<32)|len of the v1 `{success, data, meta}` envelope
 //	      documented in docs/wasm-abi.md § 12.4. Legacy guests that ignore
