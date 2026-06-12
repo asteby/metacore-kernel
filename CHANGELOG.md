@@ -9,6 +9,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **feat(runtime/wasm): `metacore_host.data_query` — org-scoped logical-table
+  read, the read sibling of `data_mutate` (ABI v1.5, § 15 of
+  docs/wasm-abi.md).** The guest sends `{table, where?, limit?}` and gets
+  `{success, data: {rows}, meta}` back: ONE equality-filtered SELECT against
+  a LOGICAL table resolved through the SAME `Host.WithTableResolver` hook
+  `data_mutate` writes through — NOT the addon-schema search_path `db_query`
+  scopes to, whose shadow schemas exist but hold no live rows in embedding
+  hosts like ops (a guest reading bare `stock` via db_query would see an
+  empty table; data_query keeps the addon portable without hardcoding
+  `public.*`). The host injects `organization_id = ?` (from the invocation
+  context, never the guest) as the first predicate of every query, and
+  appends `deleted_at IS NULL` when the table is soft-deletable — detected
+  via a zero-row probe (`SELECT * FROM <tbl> LIMIT 0`) whose result-set
+  metadata yields the column set (deterministic, no 42703 error-sniffing).
+  `where` values are scalars only (string/number/bool/null; null compiles to
+  `IS NULL`); guest filters on `organization_id`/`deleted_at` are rejected.
+  `limit` defaults to 50, clamps at 200. Gated by `db:read <logical table>`
+  through the same `security.Enforcer` (a `db:write` grant implies read);
+  limits mirror `data_mutate` (request 64 KiB, deadline 5 s, response
+  8 MiB); same v1 envelope and error codes. Pure read: no transaction, no
+  events.
+
 - **feat(runtime/wasm): `metacore_host.data_mutate` — structured org-scoped
   row mutation + post-commit canonical event (ABI v1.4, § 14 of
   docs/wasm-abi.md).** The guest sends `{op, table, model, id?, data?, inc?,
