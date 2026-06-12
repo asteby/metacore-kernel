@@ -175,12 +175,31 @@ func TestApply_SortDefaultsToDesc(t *testing.T) {
 }
 
 func TestApply_SortUnknownColumnDropped(t *testing.T) {
+	// An unknown sort column must never reach the SQL — but instead of
+	// leaving the list in heap order it now falls back to the newest-first
+	// default (created_at desc), same as an unspecified sort.
 	b := New(testMeta())
 	db := openDryDB(t)
 	q := b.Apply(db.Model(&testRow{}), Params{SortBy: "evil_col", Order: "asc"})
 	sql := renderSQL(t, q)
-	if strings.Contains(strings.ToUpper(sql), "ORDER BY") {
-		t.Errorf("unknown column should be dropped, got %q", sql)
+	if strings.Contains(sql, "evil_col") {
+		t.Fatalf("unknown column leaked into SQL: %q", sql)
+	}
+	if !strings.Contains(sql, "ORDER BY created_at desc") {
+		t.Errorf("expected default newest-first order, got %q", sql)
+	}
+}
+
+func TestApply_SortDefaultsToCreatedAtDesc(t *testing.T) {
+	// No SortBy at all → newest-first on created_at. "The caller applies its
+	// own default" was a promise nobody kept (delegated lists rendered in
+	// heap order).
+	b := New(testMeta())
+	db := openDryDB(t)
+	q := b.Apply(db.Model(&testRow{}), Params{})
+	sql := renderSQL(t, q)
+	if !strings.Contains(sql, "ORDER BY created_at desc") {
+		t.Errorf("expected default newest-first order, got %q", sql)
 	}
 }
 

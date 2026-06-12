@@ -388,25 +388,39 @@ func (b *Builder) normalizePage(params Params) (int, int) {
 }
 
 // applySort emits an ORDER BY clause if SortBy is whitelisted. When SortBy
-// is empty or unknown, applySort is a no-op so the caller's default ordering
-// (typically DESC on created_at via a scope) survives untouched.
+// is empty or unknown it falls back to newest-first on the first timestamp
+// column the model actually has (created_at → occurred_at → updated_at) —
+// "the caller applies its own default" was a promise nobody kept, so every
+// delegated list rendered in heap order (oldest rows first, inserts shuffle).
+// Models with none of those columns stay unordered, as before.
 func (b *Builder) applySort(db *gorm.DB, params Params) *gorm.DB {
 	col := strings.TrimSpace(params.SortBy)
-	if col == "" {
-		return db
-	}
-	if _, ok := b.allowed[col]; !ok {
-		return db
-	}
-	if !isSafeIdent(col) {
-		return db
-	}
 	order := strings.ToLower(params.Order)
 	if order != "asc" && order != "desc" {
 		order = "desc"
 	}
-	// Safe: col passed isSafeIdent, order is a fixed string literal.
+	if col == "" || !isSafeIdent(col) {
+		col, order = b.defaultSort()
+	} else if _, ok := b.allowed[col]; !ok {
+		col, order = b.defaultSort()
+	}
+	if col == "" {
+		return db
+	}
+	// Safe: col passed isSafeIdent / comes from the fixed default list,
+	// order is a fixed string literal.
 	return db.Order(col + " " + order)
+}
+
+// defaultSort picks the newest-first timestamp column for unspecified sorts.
+// Returns ("", "") when the model has no recognised timestamp column.
+func (b *Builder) defaultSort() (string, string) {
+	for _, cand := range []string{"created_at", "occurred_at", "updated_at"} {
+		if _, ok := b.allowed[cand]; ok {
+			return cand, "desc"
+		}
+	}
+	return "", ""
 }
 
 // applyFilters fans params.Filters out to typed GORM Where clauses. Each

@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.58.2] - 2026-06-12
+
+### Fixed
+
+- **query: delegated lists rendered in heap order.** `applySort` was a no-op
+  when `SortBy` was empty or unknown, trusting "the caller's default ordering"
+  — which no caller applied. Lists served through `dynamic.Service.List`
+  (every delegated addon model) now default to newest-first on the first
+  timestamp column the model has (`created_at` → `occurred_at` →
+  `updated_at`); models with none stay unordered as before.
+
 ## [0.58.1] - 2026-06-12
 
 ### Fixed
