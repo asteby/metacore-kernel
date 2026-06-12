@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.58.4] - 2026-06-12
+
+### Fixed
+
+- **query: delegated lists still came back in heap order.** v0.58.2 added a
+  newest-first default sort, but it only fired when `created_at` was in the
+  column whitelist — and the whitelist is built from the manifest, which never
+  declares the framework columns `CreateDynamicTable` stamps. So `created_at`
+  was absent, `defaultSort` found no timestamp, and lists (e.g. sales orders)
+  rendered unsorted. `buildAllowed` now always whitelists `id`/`created_at`/
+  `updated_at` — the default sort fires and users can sort by them too.
+
 ## [0.58.3] - 2026-06-12
 
 ### Fixed

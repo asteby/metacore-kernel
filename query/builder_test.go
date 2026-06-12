@@ -128,8 +128,18 @@ func TestNew_DropsUnsafeColumnNames(t *testing.T) {
 	if _, ok := b.allowed["ok_col"]; !ok {
 		t.Errorf("ok_col should be allowed")
 	}
-	if len(b.allowed) != 1 {
-		t.Errorf("allowed = %v, want only ok_col", b.allowed)
+	if _, ok := b.allowed["bad col"]; ok {
+		t.Errorf("unsafe column should be dropped")
+	}
+	// ok_col + the 3 universal framework columns always added for default sort.
+	want := map[string]struct{}{"ok_col": {}, "id": {}, "created_at": {}, "updated_at": {}}
+	if len(b.allowed) != len(want) {
+		t.Errorf("allowed = %v, want %v", b.allowed, want)
+	}
+	for k := range want {
+		if _, ok := b.allowed[k]; !ok {
+			t.Errorf("expected %q in allowed", k)
+		}
 	}
 }
 
