@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -40,10 +41,12 @@ type Dispatcher struct {
 // delivery key + the JSON it forwards to handlers; it re-marshals the original
 // payload so guests receive the full canonical event.
 type canonicalEvent struct {
-	ID       string `json:"id"`
-	Model    string `json:"model"`
-	Action   string `json:"action"`
-	AddonKey string `json:"addon_key"`
+	ID            string `json:"id"`
+	Model         string `json:"model"`
+	Action        string `json:"action"`
+	AddonKey      string `json:"addon_key"`
+	ActorID       string `json:"actor_id"`
+	CorrelationID string `json:"correlation_id"`
 }
 
 // handle is the events.Handler the dispatcher registers under "*". It runs
@@ -92,7 +95,7 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, payload any) e
 		if !eventMatches(sub.Event, eventName) {
 			continue
 		}
-		d.enqueue(ctx, orgID, eventName, ce.ID, raw, sub)
+		d.enqueue(ctx, orgID, eventName, ce, raw, sub)
 	}
 	return nil
 }
@@ -101,8 +104,8 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, payload any) e
 // the row is newly created (or still pending), launches the async worker. A
 // duplicate event that hits the unique index — or a row already delivered/dead —
 // short-circuits with no invocation.
-func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName, rowID string, payload []byte, sub Subscription) {
-	id := deliveryID(eventName, rowID, sub)
+func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName string, ce canonicalEvent, payload []byte, sub Subscription) {
+	id := deliveryID(eventName, ce.ID, sub)
 
 	row := Delivery{
 		ID:             uuid.New(),
@@ -139,9 +142,17 @@ func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName, ro
 		defer d.wg.Done()
 		// Detach from the request ctx: the source HTTP request may complete
 		// (and cancel its ctx) long before a slow subscriber finishes. Carry a
-		// fresh background ctx with a generous per-delivery deadline.
+		// fresh background ctx with a generous per-delivery deadline — but
+		// re-attach the originating EVENT's identity (actor + correlation):
+		// host imports the handler calls (data_mutate above all) stamp their
+		// own canonical events from this ctx, so without it every downstream
+		// mutation surfaced as an anonymous actor in the audit trail.
 		bg, cancel := context.WithTimeout(context.Background(), d.deliveryTimeout())
 		defer cancel()
+		bg = dynamic.WithActorID(bg, ce.ActorID)
+		if ce.CorrelationID != "" {
+			bg = dynamic.WithCorrelationID(bg, ce.CorrelationID)
+		}
 		d.deliver(bg, orgID, eventName, id, payload, sub)
 	}()
 }

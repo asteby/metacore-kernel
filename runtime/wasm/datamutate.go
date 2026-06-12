@@ -333,9 +333,14 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 	// (same policy as dynamic.Service.publishCanonical).
 	event := fmt.Sprintf("%s.%s.%s", addonKey, req.Model, action)
 	payload := &dynamic.CanonicalEvent{
-		ID:            rowID,
-		Model:         req.Model,
-		Action:        action,
+		ID:     rowID,
+		Model:  req.Model,
+		Action: action,
+		// ActorID rides in from the delivery ctx (the dispatcher re-attaches
+		// the originating event's actor): the human whose action caused this
+		// chain, so the audit trail never shows an anonymous system actor for
+		// a user-driven side effect.
+		ActorID:       dynamic.ActorIDFromContext(ctx),
 		AddonKey:      addonKey,
 		CorrelationID: dynamic.CorrelationIDFromContext(ctx),
 		Before:        before,
