@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.58.1] - 2026-06-12
+
+### Fixed
+
+- **runtime/wasm: WASI reactors never initialized.** Guest modules built with
+  `GOOS=wasip1 -buildmode=c-shared` export `_initialize` (reactor model), but
+  module instantiation used wazero's default start list (`_start` only) — the
+  Go runtime init never ran and the first `alloc` host call crashed with
+  "out of bounds memory access". `WithStartFunctions("_initialize", "_start")`
+  now invokes whichever entry point the module exports.
+
 ## [Unreleased]
 
 ### Added

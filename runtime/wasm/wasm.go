@@ -287,7 +287,14 @@ func (h *Host) getOrInstantiate(ctx context.Context, addonKey string, installati
 		// wall clock without stdin/stdout; we still omit stdio on purpose.
 		WithRandSource(rand.Reader).
 		WithSysNanotime().
-		WithSysWalltime()
+		WithSysWalltime().
+		// Addon guests are WASI REACTORS (GOOS=wasip1 -buildmode=c-shared):
+		// they export `_initialize`, not `_start`. wazero's default start list
+		// is just "_start", so reactors were instantiated WITHOUT running the
+		// Go runtime init — the first host call into `alloc` then died with
+		// "out of bounds memory access" (no heap). List both: wazero invokes
+		// whichever the module actually exports.
+		WithStartFunctions("_initialize", "_start")
 
 	inst, err := h.rt.InstantiateModule(ctx, entry.mod, cfg)
 	if err != nil {
