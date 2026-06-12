@@ -1,4 +1,4 @@
-# WASM ABI (v1.4 — proposal, kernel-side)
+# WASM ABI (v1.5 — proposal, kernel-side)
 
 The metacore kernel can run addon backends as sandboxed WebAssembly modules
 via [wazero](https://wazero.io). This document is the kernel-side contract
@@ -11,9 +11,9 @@ keep them in sync.
 > `github.com/asteby/metacore-kernel/guest` package wraps `event_emit`
 > (and, over time, the rest of the host surface) behind typed Go APIs.
 
-> ABI version: **1.4** (proposal — `data_mutate` host import added on top of
-> v1.3; guests built against 1.0 / 1.1 / 1.2 / 1.3 keep working — purely
-> additive). Bundled via `manifest.backend.runtime = "wasm"`.
+> ABI version: **1.5** (proposal — `data_query` host import added on top of
+> v1.4; guests built against 1.0 – 1.4 keep working — purely additive).
+> Bundled via `manifest.backend.runtime = "wasm"`.
 > Implementation: `runtime/wasm/abi.go`, `runtime/wasm/capabilities.go`.
 
 ### Version history
@@ -25,6 +25,7 @@ keep them in sync.
 | 1.2     | proposal | adds `db_exec` host import (writes, scoped to `addon_<key>.*`, auto-rollback on error); requires the action handler to invoke the guest with `Host.InvokeInTx` so the guest's writes piggy-back on the action's `*gorm.DB` transaction. |
 | 1.3     | proposal | adds `event_emit` host import; guests publish a `<name>, <payload>` pair through the kernel's in-process `events.Bus`. Capability gated by `event:emit <name>` and tenant-scoped by the per-invocation `orgID` the host carries on the context bag. |
 | 1.4     | proposal | adds `data_mutate` host import; ONE org-scoped row mutation (`create` / `update` / `delete` with atomic `inc`) against a LOGICAL table resolved through the embedder-injected `TableResolver` (NOT the addon-schema `search_path`), followed by a post-commit `*dynamic.CanonicalEvent` on the host bus. Gated by `db:write <logical table>`. |
+| 1.5     | proposal | adds `data_query` host import; read-only sibling of `data_mutate`: ONE org-scoped, equality-filtered SELECT against a LOGICAL table resolved through the SAME `TableResolver` (NOT the addon-schema `search_path` of `db_query`, whose shadow schemas hold no live rows in embedding hosts). Soft-delete aware (`deleted_at IS NULL` auto-appended). Gated by `db:read <logical table>`. No events. |
 
 ## 1. Declaration
 
@@ -122,6 +123,18 @@ data_mutate(reqPtr i32, reqLen i32) -> i64                          [v1.4]
      `db:write <logical table>`. After commit the host publishes the
      matching `*dynamic.CanonicalEvent` (`<addonKey>.<Model>.<action>`)
      on the events.Bus. See § 14 for the full contract.
+
+data_query(reqPtr i32, reqLen i32) -> i64                           [v1.5]
+  -> packed (ptr, len) of a JSON envelope carrying `{rows}`. Read-only
+     sibling of data_mutate: one org-scoped, equality-filtered SELECT
+     against a LOGICAL table resolved via the SAME `Host.WithTableResolver`
+     hook — deliberately NOT the addon-schema search_path `db_query` scopes
+     to, whose shadow schemas hold no live rows in embedding hosts (ops).
+     The host injects `organization_id = ?` on every query and appends
+     `deleted_at IS NULL` when the table is soft-deletable. Gated by
+     `db:read <logical table>` (a `db:write` grant implies read). Limit
+     default 50, max 200. Publishes nothing. See § 15 for the full
+     contract.
 ```
 
 The host allocates response buffers inside guest memory via `alloc`, writes
@@ -1519,3 +1532,126 @@ host.WithBus(bus).
 
 Implementation: `runtime/wasm/datamutate.go`; tests:
 `runtime/wasm/datamutate_test.go`.
+
+## 15. `data_query` — org-scoped logical-table read (v1.5)
+
+`data_query` is the read-only sibling of `data_mutate` (§ 14). It exists
+because `db_query` resolves bare table names through `SET LOCAL search_path
+TO addon_<key>, public` — and in embedding hosts like ops the addon shadow
+schemas exist but hold no live rows, so a guest reading `stock` through
+`db_query` would see an empty table. `data_query` routes the read through
+the SAME embedder-injected `TableResolver` `data_mutate` writes through, so
+an addon reads exactly the rows the host's dynamic CRUD runtime serves —
+without hardcoding `public.*` and giving up portability.
+
+It is deliberately a lookup primitive, not a SQL surface: equality filters
+only, no joins, no projections, no ordering, hard row cap. Guests that need
+richer reads keep using `db_query` with explicit qualified names and
+`db:read <schema>.<table>` grants.
+
+### 15.1 Signature
+
+```
+data_query(reqPtr i32, reqLen i32) -> i64
+```
+
+| Param      | Type | Meaning                                                    |
+|------------|------|------------------------------------------------------------|
+| `reqPtr`   | i32  | Guest pointer to the UTF-8 JSON request (§ 15.2).          |
+| `reqLen`   | i32  | Request length in bytes. Hard cap: 64 KiB (§ 15.6).        |
+| **return** | i64  | Packed `(ptr<<32)\|len` of the response envelope (§ 15.5). |
+
+### 15.2 Request contract
+
+```jsonc
+{
+  "table": "stock",                  // LOGICAL table name (unqualified)
+  "where": { "col": value, ... },    // equality-only; scalars (string/number/bool/null)
+  "limit": 50                        // default 50, hard max 200 (clamped)
+}
+```
+
+- `organization_id` NEVER comes from the guest: the host injects
+  `organization_id = ?` (from the invocation context) as the FIRST predicate
+  of every query. A missing org answers `invalid_request` before any DB
+  work. Guest filters on `organization_id` or `deleted_at` (host-managed)
+  are rejected with `invalid_request`.
+- `where` values are scalars only — string, number, bool or `null`. A
+  `null` value compiles to `col IS NULL` (an `= NULL` predicate never
+  matches in SQL). Objects/arrays — including the `$uuid`/`$ts`/`$bytes`
+  markers `db_query` args accept — are rejected: uuids and timestamps ride
+  as plain strings in equality predicates.
+- Table and column names are validated against `^[a-z_][a-z0-9_]{0,62}$`
+  before quoting (same rule as `data_mutate`); guest filters append in
+  alphabetical order, so the generated SQL is deterministic.
+- `limit` ≤ 0 is rejected (`invalid_request`) when negative and defaults to
+  50 when absent/zero; values above 200 clamp to 200. The limit is a
+  host-validated integer literal — never guest text.
+
+### 15.3 Table resolution & soft-delete filter
+
+The physical table comes from `Host.WithTableResolver` — identical to
+`data_mutate` (§ 14.3), identity mapping when no resolver is injected, and
+deliberately NOT the addon-schema search_path.
+
+When the table carries a `deleted_at` column the host appends
+`deleted_at IS NULL` so guests only ever see live rows — the read mirror of
+`data_mutate`'s soft delete. Detection runs through a zero-row probe
+(`SELECT * FROM <tbl> LIMIT 0`) whose result-set metadata yields the column
+set. The probe was chosen over try-with-filter-and-retry on a 42703
+(undefined column) error because it is deterministic, requires no
+error-string sniffing across drivers, and mocks cleanly in tests; the extra
+round-trip is noise next to the 5 s budget. No transaction wraps the two
+statements — there is no session state (no `SET LOCAL`) to contain, and a
+column added between probe and query is not a coherence concern for a
+bounded lookup.
+
+### 15.4 Security
+
+- Capability `db:read <logical table>` (e.g. `db:read warehouses`), enforced
+  by the same `security.Enforcer` as `db_exec` / `data_mutate`. A declared
+  `db:write` on the table satisfies the read gate
+  (`security.CanReadModel` semantics) — the `data_mutate` consumer reads
+  back what it writes without a second declaration. The implicit
+  `addon_<key>.*` grant does NOT cover logical tables.
+- Tenant scope comes exclusively from the invocation context
+  (`InvokeFor` / `InvokeForInTx`).
+- Identifier validation + quoting leave no raw-SQL surface; the only
+  non-parameterised fragment is the host-clamped integer limit.
+
+### 15.5 Response envelope
+
+```jsonc
+{ "success": true,
+  "data": { "rows": [ {...}, ... ] },
+  "meta": { "addon": "...", "orgId": "...", "durationMs": N, "envelopeVersion": 1 } }
+// error:
+{ "success": false,
+  "error": { "code": "forbidden|invalid_request|db_error", "message": "..." },
+  "meta": { ... } }
+```
+
+Same v1 envelope family as `data_mutate` (§ 14.5). Zero matching rows is a
+SUCCESS with `rows: []` — `not_found` is not used by this import (it has no
+single-row contract to violate). `bus_unavailable` never occurs: data_query
+publishes nothing.
+
+### 15.6 Limits
+
+| Limit            | Value  | On violation             |
+|------------------|--------|--------------------------|
+| Request bytes    | 64 KiB | `invalid_request`        |
+| Deadline         | 5 s    | `db_error` (ctx timeout) |
+| Rows             | 200    | silently clamped `limit` |
+| Response bytes   | 8 MiB  | `db_error`               |
+
+Request/deadline/response mirror `data_mutate` (§ 14.6).
+
+### 15.7 Wiring
+
+Same host setup as `data_mutate` (§ 14.8) — `WithDB`, `WithEnforcer` and
+`WithTableResolver`; no bus required.
+
+Implementation: `runtime/wasm/dataquery_records.go` (named to avoid
+colliding with `dbquery.go`); tests:
+`runtime/wasm/dataquery_records_test.go`.

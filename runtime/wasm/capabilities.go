@@ -324,6 +324,27 @@ func registerHostModule(ctx context.Context, h *Host) error {
 		}).
 		Export("data_mutate")
 
+	// data_query(reqPtr, reqLen) -> i64 (ptr|len envelope)
+	// Read-only sibling of data_mutate: one org-scoped, equality-filtered
+	// SELECT against a LOGICAL table resolved through the embedder's
+	// TableResolver (NOT the addon-schema search_path db_query scopes to —
+	// shadow schemas hold no live rows in embedding hosts). Tenant scope
+	// comes from the invocation context; soft-deleted rows are filtered out
+	// automatically. Gated by `db:read <logical table>`. No events.
+	// See docs/wasm-abi.md § 15.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			reqPtr, reqLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			req := readBytes(mod, reqPtr, reqLen)
+			env := executeDataQueryRecords(ctx, inv, req)
+			return writeToGuest(ctx, mod, env)
+		}).
+		Export("data_query")
+
 	if _, err := b.Instantiate(ctx); err != nil {
 		return fmt.Errorf("instantiate metacore_host: %w", err)
 	}
