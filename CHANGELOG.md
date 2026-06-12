@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.58.3] - 2026-06-12
+
+### Fixed
+
+- **dispatch + runtime/wasm: subscription side effects lost their actor.**
+  The dispatcher detaches deliveries onto a background context (correct — the
+  source request may die first), but that dropped the originating event's
+  identity: every canonical event a wasm handler emitted via `data_mutate`
+  surfaced as an anonymous actor in the audit trail. The dispatcher now
+  re-attaches the event's `actor_id` + `correlation_id` to the delivery
+  context (`dynamic.WithActorID`, new), and `data_mutate` stamps
+  `CanonicalEvent.ActorID` from it.
+
 ## [0.58.2] - 2026-06-12
 
 ### Fixed

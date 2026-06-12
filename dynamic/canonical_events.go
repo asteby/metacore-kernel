@@ -57,6 +57,29 @@ func CorrelationIDFromContext(ctx context.Context) string {
 	return v
 }
 
+// actorIDKey is the unexported typed key for the acting user's id. Mirrors
+// correlationIDKey: the dispatcher re-attaches the originating event's actor
+// to the (detached) delivery context so downstream host imports — data_mutate
+// above all — can stamp their own canonical events with the human that caused
+// the chain, not an anonymous system actor.
+type actorIDKey struct{}
+
+// WithActorID returns a child context carrying the acting user's id. An empty
+// id returns ctx unchanged.
+func WithActorID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, actorIDKey{}, id)
+}
+
+// ActorIDFromContext extracts the actor id previously stored by WithActorID.
+// It returns an empty string when no id was set.
+func ActorIDFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(actorIDKey{}).(string)
+	return v
+}
+
 // publishCanonical builds the event name `<addonKey>.<model>.<action>` and
 // fans it out through the Bus. It is a no-op when no Bus was wired, keeping
 // pre-event apps unchanged. The producer addonKey passed to Bus.Publish is
