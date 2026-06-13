@@ -911,6 +911,200 @@
           "items": {
             "$ref": "#/$defs/Subscription"
           }
+        },
+        "dashboard": {
+          "type": "array",
+          "description": "Widgets this addon contributes to the host's modular dashboard. Declarative kinds carry a query the host aggregates; kind 'custom' references a federated expose.",
+          "items": {
+            "$ref": "#/$defs/DashboardWidget"
+          }
+        }
+      }
+    },
+    "DashboardWidget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "title",
+        "kind"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Unique within the addon. Capability = '<addon>.dashboard.<key>'."
+        },
+        "title": {
+          "type": "string",
+          "description": "i18n key for the widget heading."
+        },
+        "subtitle": {
+          "type": "string",
+          "description": "Optional i18n key shown under the title."
+        },
+        "icon": {
+          "type": "string",
+          "description": "Optional lucide slug."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "stat",
+            "bar",
+            "line",
+            "area",
+            "pie",
+            "donut",
+            "list",
+            "progress",
+            "custom"
+          ]
+        },
+        "size": {
+          "type": "string",
+          "enum": [
+            "sm",
+            "md",
+            "lg",
+            "full"
+          ],
+          "description": "Grid span over a 4-column grid. Default sm."
+        },
+        "group": {
+          "type": "string",
+          "description": "Optional i18n key the widget is bucketed under. Default: addon name."
+        },
+        "order": {
+          "type": "integer",
+          "description": "Order within the group. Default 100."
+        },
+        "accent": {
+          "type": "string",
+          "enum": [
+            "emerald",
+            "sky",
+            "violet",
+            "amber",
+            "rose",
+            "slate"
+          ]
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "number",
+            "currency",
+            "percent",
+            "compact"
+          ],
+          "description": "Applies to the scalar value and series points. Default number."
+        },
+        "permission": {
+          "type": "string",
+          "description": "Optional. If empty and query.model is set the host derives '<table>.index'."
+        },
+        "empty": {
+          "type": "string",
+          "description": "Optional i18n key for the empty state."
+        },
+        "query": {
+          "$ref": "#/$defs/WidgetQuery"
+        },
+        "compare": {
+          "$ref": "#/$defs/WidgetCompare"
+        },
+        "slot": {
+          "type": "string",
+          "description": "Federation slot a kind:'custom' widget mounts into. Default 'dashboard.widgets'."
+        },
+        "expose": {
+          "type": "string",
+          "description": "Federated module name from the addon's frontend bundle (kind:'custom')."
+        }
+      }
+    },
+    "WidgetQuery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model"
+      ],
+      "properties": {
+        "model": {
+          "type": "string",
+          "description": "Model key of the SAME addon to aggregate over."
+        },
+        "aggregate": {
+          "type": "string",
+          "enum": [
+            "count",
+            "sum",
+            "avg",
+            "min",
+            "max"
+          ],
+          "description": "count ignores field. Default count."
+        },
+        "field": {
+          "type": "string",
+          "description": "Column to aggregate. Required unless aggregate=count."
+        },
+        "where": {
+          "type": "object",
+          "description": "Filter map. Equality by default, or {op: value} where op is eq|neq|gt|gte|lt|lte|contains.",
+          "additionalProperties": true
+        },
+        "group_by": {
+          "type": "string"
+        },
+        "label_field": {
+          "type": "string"
+        },
+        "date_field": {
+          "type": "string"
+        },
+        "interval": {
+          "type": "string",
+          "enum": [
+            "day",
+            "week",
+            "month"
+          ]
+        },
+        "range": {
+          "type": "string",
+          "enum": [
+            "last_7_days",
+            "last_30_days",
+            "last_12_months",
+            "this_month",
+            "this_year",
+            "this_day",
+            "all"
+          ]
+        },
+        "order": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ]
+        },
+        "limit": {
+          "type": "integer"
+        }
+      }
+    },
+    "WidgetCompare": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "to"
+      ],
+      "properties": {
+        "to": {
+          "type": "string",
+          "description": "Comparison window, e.g. 'previous_period'."
         }
       }
     },
