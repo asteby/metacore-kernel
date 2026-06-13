@@ -8,6 +8,8 @@
 // 1:1 so json.Unmarshal followed by Validate is a faithful round trip.
 package v3
 
+import "encoding/json"
+
 // APIVersion is the only accepted value for the top-level apiVersion field
 // in a v3 manifest. The kernel rejects anything else.
 const APIVersion = "asteby.com/v3"
@@ -372,6 +374,115 @@ type Contributions struct {
 	Actions       []Action           `json:"actions,omitempty"`
 	Tools         []Tool             `json:"tools,omitempty"`
 	Subscriptions []Subscription     `json:"subscriptions,omitempty"`
+
+	// Dashboard contributes one or more widgets to the host's modular
+	// dashboard. Two flavours coexist in the same grid: DECLARATIVE widgets
+	// (every kind except "custom") carry a Query the host computes with the
+	// kernel aggregation engine (org-scoped, soft-delete aware, permission-
+	// gated) and the SDK paints with a built-in renderer — zero per-addon
+	// code. FEDERATED widgets (kind "custom") reference an Expose from the
+	// addon's frontend bundle so the addon ships a 100%-custom React widget,
+	// placed and sized inside the same grid. Optional — addons with no
+	// dashboard surface omit it. See DashboardWidget for the full contract.
+	Dashboard []DashboardWidget `json:"dashboard,omitempty"`
+}
+
+// DashboardWidget is one tile an addon contributes to the host's modular
+// dashboard (manifest.contributions.dashboard[]). The host renders the union
+// of every enabled addon's widgets, grouped by Group and ordered by Order,
+// filtered by the viewer's permissions.
+//
+// Kind selects the shape. Every kind except "custom" is DECLARATIVE: the host
+// computes the aggregate from Query with the kernel aggregation engine and the
+// SDK paints it with a built-in renderer. Kind "custom" is FEDERATED: the host
+// mounts the addon's own React component (named by Expose, from the addon's
+// frontend bundle) into Slot, with the same Card chrome so it blends in.
+type DashboardWidget struct {
+	// Key is the widget's stable id, unique within the addon. The capability
+	// gating it is "<addon>.dashboard.<key>". Required, snake_case.
+	Key string `json:"key"`
+	// Title is the i18n key for the widget heading. Required.
+	Title string `json:"title"`
+	// Subtitle is an optional i18n key shown under the title.
+	Subtitle string `json:"subtitle,omitempty"`
+	// Icon is an optional lucide slug rendered in the accent colour.
+	Icon string `json:"icon,omitempty"`
+	// Kind is the renderer selector: stat|bar|line|area|pie|donut|list|
+	// progress|custom. Required.
+	Kind string `json:"kind"`
+	// Size is the grid span over a 4-column grid: sm(1)|md(2)|lg(3)|full(4).
+	// Default sm.
+	Size string `json:"size,omitempty"`
+	// Group is the optional i18n key the widget is bucketed under. Default:
+	// the addon's name.
+	Group string `json:"group,omitempty"`
+	// Order positions the widget within its group (ascending). Default 100.
+	Order int `json:"order,omitempty"`
+	// Accent is an optional colour token: emerald|sky|violet|amber|rose|slate.
+	Accent string `json:"accent,omitempty"`
+	// Format applies to the scalar value and series points:
+	// number|currency|percent|compact. Default number.
+	Format string `json:"format,omitempty"`
+	// Permission optionally gates visibility. If empty and Query.Model is set
+	// the host derives "<table>.index".
+	Permission string `json:"permission,omitempty"`
+	// Empty is an optional i18n key for the widget's empty state.
+	Empty string `json:"empty,omitempty"`
+
+	// Query is the aggregation spec for declarative widgets (every kind but
+	// "custom"). Required for those kinds; ignored for "custom".
+	Query *WidgetQuery `json:"query,omitempty"`
+	// Compare optionally requests a delta vs the previous window (a "+14.2%"
+	// chip). Requires Query.DateField + Query.Range.
+	Compare *WidgetCompare `json:"compare,omitempty"`
+
+	// Slot is the federation slot the host mounts a kind:"custom" widget into.
+	// Default "dashboard.widgets". Ignored for declarative kinds.
+	Slot string `json:"slot,omitempty"`
+	// Expose is the federated module name from the addon's frontend bundle
+	// (e.g. "./StockHeatmap") rendered for a kind:"custom" widget. Required for
+	// "custom"; the addon must also declare a frontend block. Ignored otherwise.
+	Expose string `json:"expose,omitempty"`
+}
+
+// WidgetQuery is the aggregation spec a declarative DashboardWidget carries.
+// The host resolves Model to a logical table, then runs the kernel aggregation
+// engine org-scoped and soft-delete aware.
+type WidgetQuery struct {
+	// Model is the model key of the SAME addon to aggregate over. Required.
+	Model string `json:"model"`
+	// Aggregate is the aggregate function: count|sum|avg|min|max. count
+	// ignores Field. Default count.
+	Aggregate string `json:"aggregate,omitempty"`
+	// Field is the column to aggregate. Required unless Aggregate is count.
+	Field string `json:"field,omitempty"`
+	// Where is a filter map: equality by default, or {op: value} where op is
+	// eq|neq|gt|gte|lt|lte|contains — the same operators the list builder uses.
+	// Values are raw JSON so booleans/numbers/strings round-trip faithfully.
+	Where map[string]json.RawMessage `json:"where,omitempty"`
+	// GroupBy buckets the result by a column (bar/line/area/pie/donut/list).
+	GroupBy string `json:"group_by,omitempty"`
+	// LabelField names a column whose value labels each bucket. If it is a ref
+	// (FK) the host resolves a human-readable name.
+	LabelField string `json:"label_field,omitempty"`
+	// DateField drives a time series for line/area widgets.
+	DateField string `json:"date_field,omitempty"`
+	// Interval buckets the time series: day|week|month. Used with DateField.
+	Interval string `json:"interval,omitempty"`
+	// Range is the time window: last_7_days|last_30_days|last_12_months|
+	// this_month|this_year|this_day|all.
+	Range string `json:"range,omitempty"`
+	// Order sorts buckets by value: asc|desc.
+	Order string `json:"order,omitempty"`
+	// Limit caps the number of buckets (host clamps to 1..24).
+	Limit int `json:"limit,omitempty"`
+}
+
+// WidgetCompare requests a delta computation against an earlier window.
+type WidgetCompare struct {
+	// To is the comparison window. "previous_period" compares against the
+	// window immediately preceding Query.Range.
+	To string `json:"to"`
 }
 
 // NavGroup is a sidebar group.

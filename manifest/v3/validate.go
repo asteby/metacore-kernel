@@ -66,6 +66,118 @@ func validateRollupSpec(where string, r Rollup, ownCols, childCols map[string]st
 	return errs
 }
 
+// Dashboard widget enums, shared with the JSON schema so the struct-level
+// checks and the schema agree byte-for-byte (the "dual validation" contract).
+var (
+	dashKinds = map[string]struct{}{
+		"stat": {}, "bar": {}, "line": {}, "area": {}, "pie": {},
+		"donut": {}, "list": {}, "progress": {}, "custom": {},
+	}
+	dashAggregates = map[string]struct{}{
+		"count": {}, "sum": {}, "avg": {}, "min": {}, "max": {},
+	}
+	dashSizes   = map[string]struct{}{"sm": {}, "md": {}, "lg": {}, "full": {}}
+	dashFormats = map[string]struct{}{
+		"number": {}, "currency": {}, "percent": {}, "compact": {},
+	}
+)
+
+// validateDashboard enforces the §1 cross-field rules of the dashboard-widget
+// contract that the JSON schema cannot express (kind-conditional requirements).
+// Each error is prefixed with the offending widget's key so an author can find
+// it immediately. Returns a slice (possibly empty) so the caller can append.
+func validateDashboard(m *Manifest) []string {
+	if m.Contributions == nil || len(m.Contributions.Dashboard) == 0 {
+		return nil
+	}
+	var errs []string
+	seen := make(map[string]struct{}, len(m.Contributions.Dashboard))
+	for i, w := range m.Contributions.Dashboard {
+		id := w.Key
+		if id == "" {
+			id = fmt.Sprintf("#%d", i)
+		}
+		where := fmt.Sprintf("contributions.dashboard[%s]", id)
+
+		if w.Key == "" {
+			errs = append(errs, fmt.Sprintf("%s.key is required", where))
+		} else if _, dup := seen[w.Key]; dup {
+			errs = append(errs, fmt.Sprintf("%s.key %q is duplicated within the addon", where, w.Key))
+		} else {
+			seen[w.Key] = struct{}{}
+		}
+		if w.Title == "" {
+			errs = append(errs, fmt.Sprintf("%s.title is required", where))
+		}
+		if w.Kind == "" {
+			errs = append(errs, fmt.Sprintf("%s.kind is required", where))
+			// Without a kind the conditional rules below are meaningless.
+			continue
+		}
+		if _, ok := dashKinds[w.Kind]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.kind %q is not one of stat|bar|line|area|pie|donut|list|progress|custom", where, w.Kind))
+		}
+		if w.Size != "" {
+			if _, ok := dashSizes[w.Size]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.size %q is not one of sm|md|lg|full", where, w.Size))
+			}
+		}
+		if w.Format != "" {
+			if _, ok := dashFormats[w.Format]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.format %q is not one of number|currency|percent|compact", where, w.Format))
+			}
+		}
+
+		if w.Kind == "custom" {
+			// Federated escape hatch: needs an expose + a frontend bundle.
+			if w.Expose == "" {
+				errs = append(errs, fmt.Sprintf("%s is kind=custom and must declare expose", where))
+			}
+			if m.Frontend == nil {
+				errs = append(errs, fmt.Sprintf("%s is kind=custom and requires a top-level frontend block (federation)", where))
+			}
+			continue
+		}
+
+		// Declarative kinds: a query (with a model) is mandatory.
+		if w.Query == nil {
+			errs = append(errs, fmt.Sprintf("%s.query is required for kind=%s", where, w.Kind))
+			continue
+		}
+		q := w.Query
+		if q.Model == "" {
+			errs = append(errs, fmt.Sprintf("%s.query.model is required", where))
+		}
+		agg := q.Aggregate
+		if agg == "" {
+			agg = "count"
+		}
+		if _, ok := dashAggregates[agg]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.query.aggregate %q is not one of count|sum|avg|min|max", where, q.Aggregate))
+		}
+		if agg != "count" && q.Field == "" {
+			errs = append(errs, fmt.Sprintf("%s.query.field is required when aggregate=%s", where, agg))
+		}
+		switch w.Kind {
+		case "bar", "pie", "donut", "list":
+			if q.GroupBy == "" {
+				errs = append(errs, fmt.Sprintf("%s.query.group_by is required for kind=%s", where, w.Kind))
+			}
+		case "line", "area":
+			if q.DateField == "" {
+				errs = append(errs, fmt.Sprintf("%s.query.date_field is required for kind=%s", where, w.Kind))
+			}
+			if q.Interval == "" {
+				errs = append(errs, fmt.Sprintf("%s.query.interval is required for kind=%s", where, w.Kind))
+			}
+		}
+		if w.Compare != nil && (q.DateField == "" || q.Range == "") {
+			errs = append(errs, fmt.Sprintf("%s.compare requires query.date_field and query.range", where))
+		}
+	}
+	return errs
+}
+
 //go:embed schema/manifest-v3.schema.json
 var schemaBytes []byte
 
@@ -264,6 +376,10 @@ func Validate(raw []byte) error {
 				errs = append(errs, validateRollupSpec(rw, rl, ownCols, childCols)...)
 			}
 		}
+	}
+
+	if m.Contributions != nil {
+		errs = append(errs, validateDashboard(&m)...)
 	}
 
 	if m.Contributions != nil {

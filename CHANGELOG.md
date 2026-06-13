@@ -5,6 +5,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.59.0] - 2026-06-13
+
+### Added
+
+- **manifest/v3: `contributions.dashboard[]` — declarative + federated dashboard
+  widgets.** Addons can now contribute tiles to the host's modular dashboard
+  without per-app code. New types `DashboardWidget`, `WidgetQuery` and
+  `WidgetCompare` on `v3.Contributions.Dashboard`. Two flavours coexist in one
+  grid: DECLARATIVE kinds (`stat|bar|line|area|pie|donut|list|progress`) carry a
+  `query` the host aggregates; the FEDERATED `custom` kind references a frontend
+  `expose`. `v3.Validate` enforces the §1 cross-field rules (key/title/kind
+  required; kind enum; `kind!=custom ⇒ query+query.model`; `aggregate!=count ⇒
+  field`; `bar/pie/donut/list ⇒ group_by`; `line/area ⇒ date_field+interval`;
+  `custom ⇒ expose+frontend`; size/format enums; unique keys; compare needs
+  date_field+range). The JSON schema (both the embedded
+  `manifest/v3/schema/manifest-v3.schema.json` and the published
+  `docs/spec/v3/manifest-v3.schema.json`) gained the matching `dashboard`
+  definitions so the hub's strict jsonschema publish-gate accepts the block.
+  Dashboard is pure host/SDK UI metadata — `FromV3` does not project it into the
+  legacy `manifest.Manifest`, so the legacy strict validator is unaffected.
+
+- **query: host-side aggregation engine for the dashboard.** New
+  `query.Aggregate(ctx, db, AggregateSpec) (AggregateResult, error)`, always
+  org-scoped (`organization_id = ?`) and soft-delete aware
+  (`deleted_at IS NULL`). Supports `count` (`COUNT(*)`) and `sum/avg/min/max`
+  over a field; scalar, `group_by` (ordered by value, clamped to 1..24) and
+  `date_field`+`interval` time series (`date_trunc`, dialect-aware, empty
+  buckets back-filled to 0 inside the resolved `TimeRange`). The `where` map
+  reuses the list builder's filter operators (`eq/neq/gt/gte/lt/lte/contains`).
+  An optional `LabelResolver` turns foreign-key bucket keys into readable
+  labels. Exported helpers: `AggregateBucket`, `AggregateResult`, `TimeRange`
+  (+ range tokens), `Interval`, `PreviousRange` (for `compare`). No CGO — the
+  engine lives in `query`, not `runtime/wasm`.
+
 ## [0.58.4] - 2026-06-12
 
 ### Fixed
