@@ -40,6 +40,21 @@ type FieldOptionsConfig struct {
 	OrderBy     string `json:"orderBy"`
 	OrderDir    string `json:"orderDir"`
 
+	// LabelRef names a RELATED model (key or table) whose row, looked up by the
+	// option's Value (a foreign id), supplies the human-readable label. It is the
+	// relational twin of Label: Label reads a column ON the Source row, LabelRef
+	// resolves the label from ANOTHER model by id. Use it when Source is a join /
+	// scope table (e.g. a stock ledger) whose "name" column is itself a foreign
+	// id — the picker shows the related record's name instead of the raw id.
+	//
+	// When set, Service.Options batch-resolves the labels from LabelRef in a
+	// SINGLE query (no N+1) and fills Option.Label/Name for every option whose
+	// projected label is blank or equal to its value. The target label column is
+	// derived generically from LabelRef's model metadata (the same name-like
+	// column preference EnableSelfOptions uses) — no model name is hardcoded.
+	// Empty = no enrichment (label stays whatever Label projected). Optional.
+	LabelRef string `json:"label_ref"`
+
 	// Static options — used when Type == "static".
 	Options []StaticOption `json:"options"`
 }

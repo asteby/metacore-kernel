@@ -8,7 +8,10 @@
 // 1:1 so json.Unmarshal followed by Validate is a faithful round trip.
 package v3
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // APIVersion is the only accepted value for the top-level apiVersion field
 // in a v3 manifest. The kernel rejects anything else.
@@ -323,7 +326,20 @@ type Column struct {
 	// native create/edit form — again with no custom action. Use Ref for a
 	// relation picker and Options for a hardcoded enum (status, type, …).
 	// Both are pure UI metadata and never touch the SQL/DDL plane.
-	Options []FieldOption `json:"options,omitempty"`
+	//
+	// Options may ALSO be the OBJECT form (DynamicOptions): a dependent-picker
+	// declaration {source, filter_by, value, label_ref, description} that the
+	// host projects onto modelbase.FieldOptionsConfig so a dynamic_select column
+	// scopes its candidates by a sibling field and resolves its label from a
+	// related model. The array form (static enum) and object form (dynamic
+	// source) are mutually exclusive on one column.
+	Options FieldOptions `json:"options,omitempty"`
+	// DependsOn names a SIBLING column whose current value supplies the cascade
+	// `filter_value` for this column's dependent picker (used with the
+	// Options object form). The host projects it onto modelbase.ColumnDef.DependsOn
+	// (json `depends_on`) so the SDK re-fetches the options whenever the
+	// depended-on field changes. Empty = no cascade (lists everything). Optional.
+	DependsOn string `json:"depends_on,omitempty"`
 	// OptionsSource declares a DYNAMIC select for the column: instead of a
 	// hardcoded Options list, it names a PROVIDER key (e.g.
 	// "registered_models", "installed_addons") the HOST registers and resolves
@@ -580,13 +596,21 @@ type ActionField struct {
 	Label          string           `json:"label,omitempty"`
 	Type           string           `json:"type"`
 	Required       bool             `json:"required,omitempty"`
-	Options        []FieldOption    `json:"options,omitempty"`
+	Options        FieldOptions     `json:"options,omitempty"`
 	Default        any              `json:"default,omitempty"`
 	Placeholder    string           `json:"placeholder,omitempty"`
 	Widget         string           `json:"widget,omitempty"`
 	Ref            string           `json:"ref,omitempty"`
 	SearchEndpoint string           `json:"search_endpoint,omitempty"`
 	Validation     *FieldValidation `json:"validation,omitempty"`
+
+	// DependsOn names ANOTHER field in the same action form (a header field or a
+	// sibling item-field) whose current value supplies this picker's cascade
+	// `filter_value`. Used with the Options object form (DynamicOptions) on a
+	// dynamic_select. The host projects it onto modelbase.FieldDef.DependsOn
+	// (json `depends_on`) so the SDK scopes + re-fetches the picker's options
+	// when the depended-on field changes. Empty = no cascade. Optional.
+	DependsOn string `json:"depends_on,omitempty"`
 
 	// ItemFields declares the columns of a repeatable line-items group. It is
 	// set on a field with type "array" (the multi-row container — e.g. the
@@ -653,6 +677,108 @@ type FieldBalanceRule struct {
 	CreditColumn   string `json:"credit_column"`
 	Message        string `json:"message,omitempty"`
 	RequireNonzero *bool  `json:"require_nonzero,omitempty"`
+}
+
+// DynamicOptions is the OBJECT form of a field/column `options` block: instead
+// of a static value/label list, it declares WHERE a dependent picker's choices
+// come from and HOW to project each option. It is the kernel-side mirror of the
+// dependent-options contract — a dynamic_select whose candidates are scoped by a
+// sibling field (DependsOn) and whose label is resolved from a related model.
+//
+// All fields map onto modelbase.FieldOptionsConfig so the host's
+// OptionsConfigResolver can build the runtime query with zero per-app glue:
+//
+//	Source      — the real table the candidates come from (scope + computed cols).
+//	FilterBy    — column on Source compared to the cascade `filter_value`.
+//	Value       — column on Source that becomes the option's value.
+//	LabelRef    — related model (key/table) whose row, looked up by Value (a
+//	              foreign id), supplies the human label. Optional: when empty the
+//	              label is Value itself.
+//	Description — column on Source projected onto option.description (e.g. qty).
+//
+// Generic by design — no domain model name is baked into the kernel; an addon
+// names its own tables here.
+type DynamicOptions struct {
+	Source      string `json:"source,omitempty"`
+	FilterBy    string `json:"filter_by,omitempty"`
+	Value       string `json:"value,omitempty"`
+	LabelRef    string `json:"label_ref,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// FieldOptions carries a field/column `options` declaration that is EITHER a
+// static value/label list (the historical array form) OR a dynamic-source
+// object (DynamicOptions). The two never coexist for one field — a static enum
+// uses the array, a dependent picker uses the object — so a single json key
+// (`options`) holds whichever shape the author wrote. UnmarshalJSON peeks the
+// first significant byte (`[` vs `{`) to pick the branch; MarshalJSON re-emits
+// the shape that was set so the value round-trips byte-compatibly. A nil/empty
+// FieldOptions marshals to nothing (omitempty-friendly via len()/IsZero()).
+type FieldOptions struct {
+	Static  []FieldOption
+	Dynamic *DynamicOptions
+}
+
+// Len reports the number of static options (0 for a dynamic or empty block).
+// Lets existing call-sites that did `len(c.Options)` keep working.
+func (o FieldOptions) Len() int { return len(o.Static) }
+
+// IsZero reports whether neither shape is set, so the field can be omitted.
+func (o FieldOptions) IsZero() bool { return len(o.Static) == 0 && o.Dynamic == nil }
+
+// UnmarshalJSON decodes either the array (static) or object (dynamic) form.
+func (o *FieldOptions) UnmarshalJSON(data []byte) error {
+	trimmed := bytesTrimSpace(data)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		o.Static = nil
+		o.Dynamic = nil
+		return nil
+	}
+	switch trimmed[0] {
+	case '[':
+		var arr []FieldOption
+		if err := json.Unmarshal(data, &arr); err != nil {
+			return err
+		}
+		o.Static = arr
+		o.Dynamic = nil
+		return nil
+	case '{':
+		var dyn DynamicOptions
+		if err := json.Unmarshal(data, &dyn); err != nil {
+			return err
+		}
+		o.Dynamic = &dyn
+		o.Static = nil
+		return nil
+	default:
+		return fmt.Errorf("v3: options must be an array (static) or object (dynamic), got %q", string(trimmed[:1]))
+	}
+}
+
+// MarshalJSON re-emits whichever shape is set.
+func (o FieldOptions) MarshalJSON() ([]byte, error) {
+	if o.Dynamic != nil {
+		return json.Marshal(o.Dynamic)
+	}
+	if len(o.Static) > 0 {
+		return json.Marshal(o.Static)
+	}
+	return []byte("null"), nil
+}
+
+// bytesTrimSpace trims leading/trailing JSON whitespace without importing
+// bytes for a single call-site.
+func bytesTrimSpace(b []byte) []byte {
+	i := 0
+	for i < len(b) && (b[i] == ' ' || b[i] == '\t' || b[i] == '\n' || b[i] == '\r') {
+		i++
+	}
+	j := len(b)
+	for j > i && (b[j-1] == ' ' || b[j-1] == '\t' || b[j-1] == '\n' || b[j-1] == '\r') {
+		j--
+	}
+	return b[i:j]
 }
 
 // FieldOption is a value/label choice for select-typed action fields.

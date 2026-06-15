@@ -379,6 +379,16 @@ type FieldDef struct {
 	Total          bool              `json:"total,omitempty"`
 	Balance        *FieldBalanceRule `json:"balance,omitempty"`
 
+	// DependsOn and OptionsConfig forward the v3 dependent-picker declaration
+	// (ActionField.depends_on + the `options` object form). DependsOn names the
+	// sibling field whose value supplies the cascade filter_value; OptionsConfig
+	// carries the dynamic source declaration (source/filter_by/value/label_ref/
+	// description) the host projects onto modelbase.FieldDef so the served action
+	// spec reaches the SDK and the host's OptionsConfigResolver. JSON tags match
+	// modelbase.FieldDef so they survive the host round-trip. Nil/empty = none.
+	DependsOn     string             `json:"depends_on,omitempty"`
+	OptionsConfig *DynamicOptionsDef `json:"optionsConfig,omitempty"`
+
 	// Upload-field properties forwarded verbatim from manifest/v3 ActionField
 	// for a field with type "upload". Accept is the file-picker allow-list,
 	// MaxSize the byte cap and StoragePath the logical storage prefix. The SDK
@@ -406,6 +416,25 @@ type FieldBalanceRule struct {
 	CreditColumn   string `json:"credit_column"`
 	Message        string `json:"message,omitempty"`
 	RequireNonzero *bool  `json:"require_nonzero,omitempty"`
+}
+
+// DynamicOptionsDef is the legacy carrier for the v3 `options` OBJECT form (a
+// dependent-picker source declaration). It rides ColumnDef/FieldDef so the
+// {source, filter_by, value, label_ref, description} block survives the v3 →
+// host conversion and lands on the served modelbase.FieldOptionsConfig the host
+// reads to build the kernel's OptionsConfigResolver entry. JSON tags match both
+// modelbase.FieldOptionsConfig and the v3 contract so it round-trips intact.
+type DynamicOptionsDef struct {
+	// Type is always "dynamic" for this carrier (the object form is the dynamic
+	// source declaration). It rides so the JSON round-trip onto
+	// modelbase.FieldOptionsConfig.Type lands "dynamic" and the kernel's
+	// Service.Options takes the query branch without the host re-stamping it.
+	Type        string `json:"type,omitempty"`
+	Source      string `json:"source,omitempty"`
+	FilterBy    string `json:"filter_by,omitempty"`
+	Value       string `json:"value,omitempty"`
+	LabelRef    string `json:"label_ref,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // HookDef is one declared lifecycle hook entry. The kernel dispatches
@@ -697,6 +726,16 @@ type ColumnDef struct {
 	Tooltip     string                 `json:"tooltip,omitempty"`
 	Description string                 `json:"description,omitempty"`
 	BasePath    string                 `json:"basePath,omitempty"`
+
+	// DependsOn and OptionsConfig forward the v3 dependent-picker declaration
+	// (Column.depends_on + the `options` object form) so a dynamic_select column
+	// scopes its candidates by a sibling field and resolves its label from a
+	// related model. DependsOn names the sibling whose value supplies the cascade
+	// filter_value; OptionsConfig carries the dynamic source declaration. The
+	// host projects both onto the served modelbase.ColumnDef so they reach the
+	// SDK and the OptionsConfigResolver. Pure UI/query metadata; never DDL.
+	DependsOn     string             `json:"depends_on,omitempty"`
+	OptionsConfig *DynamicOptionsDef `json:"optionsConfig,omitempty"`
 }
 
 // ValidationRule expresses server-side input constraints. All fields are

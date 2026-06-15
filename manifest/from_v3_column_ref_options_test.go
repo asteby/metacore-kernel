@@ -53,13 +53,13 @@ func TestColumnRefOptionsParseAndProject(t *testing.T) {
 	if cols3["customer_id"].Ref != "Customer" {
 		t.Errorf("v3 customer_id.Ref = %q, want Customer", cols3["customer_id"].Ref)
 	}
-	if got := len(cols3["status"].Options); got != 2 {
+	if got := len(cols3["status"].Options.Static); got != 2 {
 		t.Fatalf("v3 status.Options len = %d, want 2", got)
 	}
-	if o := cols3["status"].Options[0]; o.Value != "open" || o.Label != "Open" || o.Color != "#22c55e" || o.Icon != "Circle" {
+	if o := cols3["status"].Options.Static[0]; o.Value != "open" || o.Label != "Open" || o.Color != "#22c55e" || o.Icon != "Circle" {
 		t.Errorf("v3 status.Options[0] = %+v", o)
 	}
-	if o := cols3["status"].Options[1]; o.Image != "closed.png" {
+	if o := cols3["status"].Options.Static[1]; o.Image != "closed.png" {
 		t.Errorf("v3 status.Options[1].Image = %q, want closed.png", o.Image)
 	}
 
