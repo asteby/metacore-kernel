@@ -88,6 +88,21 @@ type ColumnDef struct {
 	// json tag matches the v3 contract so it round-trips); providers are
 	// host-registered, and an unknown key simply leaves Options empty.
 	OptionsSource string `json:"options_source,omitempty"`
+	// DependsOn names a SIBLING field whose current value supplies the cascade
+	// `filter_value` of this column's dependent picker. Mirrors manifest/v3
+	// Column.depends_on (json `depends_on`) so the SDK scopes + re-fetches the
+	// dynamic_select options when the depended-on field changes. Empty = no
+	// cascade (lists everything). Pure UI metadata; the DDL plane ignores it.
+	DependsOn string `json:"depends_on,omitempty"`
+	// OptionsConfig carries the DYNAMIC options DECLARATION (source / filter_by /
+	// value / label_ref / description) for a dependent picker — the object form
+	// of the v3 `options` block. The host reads it off the served metadata to
+	// build the OptionsConfigResolver entry that the kernel's Service.Options
+	// uses (scope by filter_by, project description, resolve label from
+	// label_ref). It is distinct from the STATIC Options list above: a column
+	// declares EITHER a static enum OR a dynamic source, never both. Nil = no
+	// dynamic source. Pure UI/query metadata; the DDL plane ignores it.
+	OptionsConfig *FieldOptionsConfig `json:"optionsConfig,omitempty"`
 	// Validation declares server-side input constraints that the SDK can
 	// also pre-flight in the form layer. Strings prefixed with `$org.`
 	// (e.g. `$org.tax_id_validator`) are resolved at runtime against the
@@ -149,6 +164,21 @@ type FieldDef struct {
 	// it round-trips). Providers are host-registered; unknown keys leave
 	// Options empty.
 	OptionsSource string `json:"options_source,omitempty"`
+
+	// DependsOn names ANOTHER field in the same form whose current value supplies
+	// this dependent picker's cascade `filter_value`. Mirrors manifest/v3
+	// ActionField.depends_on / Column.depends_on (json `depends_on`) so the SDK
+	// scopes + re-fetches the dynamic_select options when the depended-on field
+	// changes. Empty = no cascade. Pure UI metadata.
+	DependsOn string `json:"depends_on,omitempty"`
+
+	// OptionsConfig carries the DYNAMIC options DECLARATION (source / filter_by /
+	// value / label_ref / description) for a dependent picker — the object form
+	// of the v3 `options` block. The host reads it off the served metadata to
+	// build the OptionsConfigResolver entry Service.Options uses. Distinct from
+	// the static Options list: a field declares EITHER a static enum OR a
+	// dynamic source, never both. Nil = no dynamic source.
+	OptionsConfig *FieldOptionsConfig `json:"optionsConfig,omitempty"`
 
 	// Widget overrides the renderer inferred from Type (e.g. "textarea",
 	// "dynamic_select"). Optional — empty lets the SDK infer from Type.

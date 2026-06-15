@@ -215,12 +215,18 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// ColumnDef.OptionsSource so the key survives the v3 → host
 				// conversion; the kernel implements no providers.
 				OptionsSource: c.OptionsSource,
+				// DependsOn names a sibling column whose value scopes this
+				// dependent picker (cascade filter_value). Rides the legacy
+				// ColumnDef so the SDK re-fetches on change.
+				DependsOn: c.DependsOn,
 			}
-			// Options is the STATIC-select twin of Ref: a fixed value/label
-			// choice list (with optional icon/color/image visuals) that rides
-			// the legacy ColumnDef.Options so the host projects it onto the
-			// served modelbase Options and the SDK renders a plain select.
-			for _, o := range c.Options {
+			// Options is EITHER the STATIC-select list (array form) OR the
+			// DYNAMIC dependent-source object (DynamicOptions). The static list
+			// (with optional icon/color/image visuals) rides ColumnDef.Options;
+			// the dynamic object rides ColumnDef.OptionsConfig so the
+			// {source,filter_by,value,label_ref,description} block survives to the
+			// served modelbase.FieldOptionsConfig.
+			for _, o := range c.Options.Static {
 				col.Options = append(col.Options, Option{
 					Value: o.Value,
 					Label: o.Label,
@@ -228,6 +234,16 @@ func mapModels(in []v3.Model) []ModelDefinition {
 					Color: o.Color,
 					Image: o.Image,
 				})
+			}
+			if d := c.Options.Dynamic; d != nil {
+				col.OptionsConfig = &DynamicOptionsDef{
+					Type:        "dynamic",
+					Source:      d.Source,
+					FilterBy:    d.FilterBy,
+					Value:       d.Value,
+					LabelRef:    d.LabelRef,
+					Description: d.Description,
+				}
 			}
 			// A base_path inside display_config is also projected onto the
 			// dedicated BasePath slot the SDK reads for URL/route prefixes.
@@ -540,8 +556,16 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 			// ItemFields are themselves ActionFields — recurse so a line-items
 			// group's columns (debit/credit/account picker) survive intact.
 			ItemFields: mapActionFields(f.ItemFields),
+			// DependsOn forwards the cascade dependency so the SDK scopes +
+			// re-fetches this picker's options from the depended-on field's value.
+			DependsOn: f.DependsOn,
 		}
-		for _, o := range f.Options {
+		// Options is EITHER the static value/label list (array form) OR the
+		// dynamic dependent-source object (DynamicOptions). The static list rides
+		// FieldDef.Options; the dynamic object rides FieldDef.OptionsConfig so the
+		// {source,filter_by,value,label_ref,description} block reaches the served
+		// action spec and the host's OptionsConfigResolver.
+		for _, o := range f.Options.Static {
 			// Static-option visual hints (icon/color/image) ride across so a
 			// status/brand option list renders richly in the SDK.
 			fd.Options = append(fd.Options, Option{
@@ -551,6 +575,16 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 				Color: o.Color,
 				Image: o.Image,
 			})
+		}
+		if d := f.Options.Dynamic; d != nil {
+			fd.OptionsConfig = &DynamicOptionsDef{
+				Type:        "dynamic",
+				Source:      d.Source,
+				FilterBy:    d.FilterBy,
+				Value:       d.Value,
+				LabelRef:    d.LabelRef,
+				Description: d.Description,
+			}
 		}
 		if f.Balance != nil {
 			fd.Balance = &FieldBalanceRule{

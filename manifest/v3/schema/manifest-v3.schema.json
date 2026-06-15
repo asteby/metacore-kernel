@@ -744,11 +744,22 @@
           "description": "Foreign-key target (model key or table) the column points at. The host projects it onto ColumnDef.ref / FieldDef.ref so the SDK renders a searchable dynamic_select relation picker in the native create/edit form (resolving options against /api/options/:ref) with no per-app action. Pure UI metadata; ignored by the DDL plane."
         },
         "options": {
-          "type": "array",
-          "description": "Static select choice list for the column (value/label, plus optional icon/color/image visuals). The host projects it onto ColumnDef.options / FieldDef.options so the SDK renders a plain select in the native create/edit form with no custom action. Use 'ref' for a relation picker and 'options' for a hardcoded enum. Pure UI metadata; ignored by the DDL plane.",
-          "items": {
-            "$ref": "#/$defs/FieldOption"
-          }
+          "description": "Select choice source for the column. EITHER the STATIC array form (value/label, plus optional icon/color/image visuals → plain select) OR the DYNAMIC object form (DynamicOptions: a dependent-picker source declaration → searchable dynamic_select scoped by depends_on). Mutually exclusive. Use 'ref' for a simple relation picker, the array for a hardcoded enum, the object for a scoped/relational picker. Pure UI metadata; ignored by the DDL plane.",
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/FieldOption"
+              }
+            },
+            {
+              "$ref": "#/$defs/DynamicOptions"
+            }
+          ]
+        },
+        "depends_on": {
+          "type": "string",
+          "description": "Name of a SIBLING column whose current value supplies the cascade filter_value for this column's dependent picker (used with the 'options' object form). The host projects it onto ColumnDef.depends_on so the SDK re-fetches the options when the depended-on field changes. Empty = no cascade. Pure UI metadata."
         },
         "options_source": {
           "type": "string",
@@ -1350,10 +1361,22 @@
           "type": "boolean"
         },
         "options": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/FieldOption"
-          }
+          "description": "Select choice source for the field. EITHER the STATIC array form (value/label choices → plain select) OR the DYNAMIC object form (DynamicOptions: a dependent-picker source declaration → searchable dynamic_select scoped by depends_on). Mutually exclusive.",
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/FieldOption"
+              }
+            },
+            {
+              "$ref": "#/$defs/DynamicOptions"
+            }
+          ]
+        },
+        "depends_on": {
+          "type": "string",
+          "description": "Name of ANOTHER field in the same action form (a header field or a sibling item-field) whose current value supplies this picker's cascade filter_value (used with the 'options' object form). The host projects it onto FieldDef.depends_on so the SDK scopes + re-fetches the dynamic_select options when the depended-on field changes. Empty = no cascade."
         },
         "default": {},
         "placeholder": {
@@ -1466,6 +1489,33 @@
         "image": {
           "type": "string",
           "description": "Optional URL or bundle-relative path to a small image / avatar / logo the SDK renders beside the option label. Pure presentation; ignored by the runtime."
+        }
+      }
+    },
+    "DynamicOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "OBJECT form of a field/column 'options' block: a dependent-picker source declaration. Maps onto modelbase.FieldOptionsConfig so a dynamic_select scopes its candidates by a sibling field (depends_on) and resolves its label from a related model. Mutually exclusive with the static array form. Generic — the addon names its own tables; no domain model is baked into the kernel.",
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Real table the candidate rows come from (scope + computed columns). The host's OptionsConfigResolver queries it for /api/options."
+        },
+        "filter_by": {
+          "type": "string",
+          "description": "Column on 'source' compared to the cascade filter_value (the value of the depends_on field). Scopes the candidate list."
+        },
+        "value": {
+          "type": "string",
+          "description": "Column on 'source' that becomes each option's value."
+        },
+        "label_ref": {
+          "type": "string",
+          "description": "Related model (key or table) whose row, looked up by the option's value (a foreign id), supplies the human-readable label. Optional: when empty the label is the value itself. The kernel batch-resolves the label in a single query (no N+1)."
+        },
+        "description": {
+          "type": "string",
+          "description": "Column on 'source' projected onto option.description (e.g. available quantity)."
         }
       }
     },

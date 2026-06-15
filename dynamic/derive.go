@@ -74,6 +74,11 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			// can materialise the provider's localized options onto the served
 			// column at metadata-serve time. The kernel only carries the key.
 			OptionsSource: c.OptionsSource,
+			// DependsOn + OptionsConfig forward the dependent-picker declaration
+			// (cascade scope + dynamic source) so the SDK re-fetches on change and
+			// the host's OptionsConfigResolver can build the runtime query.
+			DependsOn:     c.DependsOn,
+			OptionsConfig: toFieldOptionsConfig(c.OptionsConfig),
 		}
 		// Auto-detect a prettier cell renderer for columns that ship no
 		// explicit Display/CellStyle, inferred from the column name/type. An
@@ -177,6 +182,26 @@ func toOptionDefs(in []manifest.Option) []modelbase.OptionDef {
 	return out
 }
 
+// toFieldOptionsConfig projects the legacy DYNAMIC options carrier
+// (manifest.DynamicOptionsDef, from the v3 `options` object form) onto the
+// served modelbase.FieldOptionsConfig so the host's OptionsConfigResolver reads
+// {source,filter_by,value,label_ref,description} straight off the metadata. The
+// served Type is "dynamic" so the kernel's Service.Options queries Source.
+// Returns nil for an absent declaration so the omitempty json tag drops it.
+func toFieldOptionsConfig(in *manifest.DynamicOptionsDef) *modelbase.FieldOptionsConfig {
+	if in == nil {
+		return nil
+	}
+	return &modelbase.FieldOptionsConfig{
+		Type:        "dynamic",
+		Source:      in.Source,
+		FilterBy:    in.FilterBy,
+		Value:       in.Value,
+		LabelRef:    in.LabelRef,
+		Description: in.Description,
+	}
+}
+
 // DeriveFormFields builds default create/edit form fields from a model
 // definition's physical column list, for addon models that ship no modal spec.
 // Managed columns (id/created_at/updated_at/organization_id/deleted_at) are
@@ -199,6 +224,11 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 		} else if c.Ref != "" {
 			// A column declaring a FK target renders as a searchable relation
 			// picker in the native form even when the author left Widget empty.
+			ftype = "dynamic_select"
+		} else if c.OptionsConfig != nil {
+			// A column declaring a DYNAMIC options source (the object form, a
+			// dependent picker) renders as a searchable dynamic_select whose
+			// candidates stream from /api/options scoped by the cascade field.
 			ftype = "dynamic_select"
 		} else if len(c.Options) > 0 {
 			// A column declaring a static choice list renders as a plain select.
@@ -228,6 +258,10 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 			// OptionsSource rides through so the host materialises the
 			// provider's options onto the served form field.
 			OptionsSource: c.OptionsSource,
+			// DependsOn + OptionsConfig forward the dependent-picker declaration
+			// so the SDK scopes + re-fetches and the host resolves the options.
+			DependsOn:     c.DependsOn,
+			OptionsConfig: toFieldOptionsConfig(c.OptionsConfig),
 		})
 	}
 	return out

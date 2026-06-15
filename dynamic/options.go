@@ -98,6 +98,11 @@ func (s *Service) Options(ctx context.Context, user modelbase.AuthUser, q Option
 		if err != nil {
 			return nil, err
 		}
+		if fieldCfg.LabelRef != "" {
+			if err := s.enrichOptionsFromRef(ctx, user, fieldCfg, items); err != nil {
+				return nil, err
+			}
+		}
 		return &OptionsResult{Type: "dynamic", Options: items}, nil
 	default:
 		return nil, fmt.Errorf("%w: unknown field type %q", ErrInvalidInput, fieldCfg.Type)
@@ -165,7 +170,13 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 	// same dialect override used for Service.Search (e.g. unaccent/ILIKE on
 	// Postgres) also applies to the options endpoint.
 	if q.Q != "" {
+		// Match against the label column; when none is declared (a dependent
+		// picker whose label comes from LabelRef, not a column on Source) match
+		// against the value column so q still narrows the candidate ids.
 		labelCol := fieldCfg.Label
+		if labelCol == "" {
+			labelCol = fieldCfg.Value
+		}
 		if labelCol == "" {
 			labelCol = "name"
 		}
@@ -180,7 +191,13 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 
 	orderBy := fieldCfg.OrderBy
 	if orderBy == "" {
+		// Prefer the label column; fall back to the value column (a dependent
+		// picker whose label is resolved from LabelRef has no label column ON
+		// the Source — e.g. a stock ledger has no "name"), then to "name".
 		orderBy = fieldCfg.Label
+		if orderBy == "" {
+			orderBy = fieldCfg.Value
+		}
 		if orderBy == "" {
 			orderBy = "name"
 		}
@@ -212,6 +229,108 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 	}
 
 	return projectOptions(resultsPtr.Elem(), fieldCfg), nil
+}
+
+// enrichOptionsFromRef fills in option labels by resolving them from a RELATED
+// model (fieldCfg.LabelRef) keyed by the option's value (a foreign id). It is
+// the relational-label primitive behind a dependent picker whose Source is a
+// scope/ledger table (e.g. stock rows scoped by warehouse) but whose label is
+// the name of ANOTHER record (the product). It runs ONLY for options whose
+// projected label is missing or equal to their value — i.e. the value is a raw
+// id with no usable label yet — so a Source that already projects a real label
+// is left untouched.
+//
+// The lookup is a SINGLE batched `WHERE <pk> IN (...)` query (no N+1), mirroring
+// the image-enrich batch pattern. The target table and label column are derived
+// generically from LabelRef's model metadata (the same name-like column
+// preference EnableSelfOptions uses) — no domain model name is hardcoded.
+func (s *Service) enrichOptionsFromRef(ctx context.Context, user modelbase.AuthUser, fieldCfg FieldOptionsConfig, items []Option) error {
+	// Collect the ids that still need a label: blank label, or label == value
+	// (the projection fell back to the id). De-duplicate so the IN list is tight.
+	idSet := map[string]struct{}{}
+	ids := make([]any, 0, len(items))
+	for i := range items {
+		if !optionNeedsLabel(items[i]) {
+			continue
+		}
+		key := fmt.Sprint(items[i].Value)
+		if key == "" {
+			continue
+		}
+		if _, dup := idSet[key]; dup {
+			continue
+		}
+		idSet[key] = struct{}{}
+		ids = append(ids, items[i].Value)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	refInstance, ok := s.lookupModel(ctx, fieldCfg.LabelRef)
+	if !ok {
+		return ErrSourceModelNotFound
+	}
+	tableName, err := s.tableNameFor(ctx, fieldCfg.LabelRef, refInstance)
+	if err != nil {
+		return err
+	}
+	labelCol := deriveLabelColumn(refInstance)
+	if labelCol == "" || !safeColumn.MatchString(labelCol) {
+		// No usable label column on the ref model — nothing to enrich with.
+		return nil
+	}
+
+	// Pin Model+Table the same way queryDynamicOptions does so reflect-built
+	// addon models resolve to their real table. Resolve labels by primary key
+	// (id) regardless of org scope: the value came from a row the caller can
+	// already see, and a label lookup by id must not be filtered out by tenant
+	// scoping (which would blank legitimate labels).
+	db := s.db.WithContext(ctx).Model(refInstance).Table(tableName).
+		Where("id IN ?", ids)
+
+	sliceType := reflect.SliceOf(reflect.TypeOf(refInstance))
+	resultsPtr := reflect.New(sliceType)
+	if err := db.Find(resultsPtr.Interface()).Error; err != nil {
+		return fmt.Errorf("dynamic: label_ref query: %w", err)
+	}
+
+	// Build id → label from the fetched ref rows.
+	labelByID := map[string]any{}
+	results := resultsPtr.Elem()
+	for i := 0; i < results.Len(); i++ {
+		row := results.Index(i)
+		if row.Kind() == reflect.Ptr {
+			row = row.Elem()
+		}
+		id := fieldValue(row, "id")
+		if id == nil {
+			continue
+		}
+		labelByID[fmt.Sprint(id)] = fieldValue(row, labelCol)
+	}
+
+	// Fill labels for the options that needed one.
+	for i := range items {
+		if !optionNeedsLabel(items[i]) {
+			continue
+		}
+		if lbl, ok := labelByID[fmt.Sprint(items[i].Value)]; ok && lbl != nil && lbl != "" {
+			items[i].Label = lbl
+			items[i].Name = lbl
+		}
+	}
+	return nil
+}
+
+// optionNeedsLabel reports whether an option still lacks a human label: its
+// label is empty, or it merely echoes the value (the projection fell back to the
+// id). Such options are the ones enrichOptionsFromRef resolves from LabelRef.
+func optionNeedsLabel(o Option) bool {
+	if o.Label == nil || o.Label == "" {
+		return true
+	}
+	return fmt.Sprint(o.Label) == fmt.Sprint(o.Value)
 }
 
 // selfOptionsLabelPreference is the ordered list of column names tried, in
