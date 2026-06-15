@@ -4,6 +4,7 @@
 package dynamic
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -119,7 +120,14 @@ func columnGoType(c manifest.ColumnDef) (reflect.Type, string, error) {
 	case "date":
 		return reflect.TypeOf(time.Time{}), "date", nil
 	case "jsonb", "json":
-		return reflect.TypeOf(map[string]any{}), "jsonb", nil
+		// json.RawMessage (not map[string]any): a jsonb column must accept ANY
+		// JSON value — an OBJECT (e.g. address, display_config) OR an ARRAY (e.g.
+		// transfer/adjust line-items items[]/lines[]). map[string]any makes
+		// json.Unmarshal reject arrays ("cannot unmarshal array into map"), which
+		// surfaced as a 400 "invalid request body" on every line-items create.
+		// RawMessage stores the raw JSON bytes and GORM passes them straight to
+		// the jsonb column; toMap re-marshals to the original object/array.
+		return reflect.TypeOf(json.RawMessage{}), "jsonb", nil
 	default:
 		// Parameterized Postgres-native forms (e.g. numeric(6,2), varchar(120))
 		// that v3 manifests declare verbatim — pass the validated form through.
