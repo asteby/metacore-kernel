@@ -101,9 +101,20 @@ func (s *Service) publishCanonical(ctx context.Context, model, action string, us
 			addonKey = k
 		}
 	}
+	// Canonicalize the model segment to the manifest ModelKey. Create/Update/
+	// Delete may be called with the table/route name (the action-create path
+	// passes "transfers"); subscribers register on the ModelKey ("Transfer"),
+	// per the contract `<addon>.<ModelKey>.<action>`. Without this the names
+	// diverge and the subscribed handler never fires.
+	modelKey := model
+	if s.modelKeyForModel != nil {
+		if mk := s.modelKeyForModel(ctx, model); mk != "" {
+			modelKey = mk
+		}
+	}
 	payload := &CanonicalEvent{
 		ID:            id,
-		Model:         model,
+		Model:         modelKey,
 		Action:        action,
 		AddonKey:      addonKey,
 		ActorID:       user.GetID().String(),
@@ -111,6 +122,6 @@ func (s *Service) publishCanonical(ctx context.Context, model, action string, us
 		Before:        before,
 		After:         after,
 	}
-	event := fmt.Sprintf("%s.%s.%s", addonKey, model, action)
+	event := fmt.Sprintf("%s.%s.%s", addonKey, modelKey, action)
 	_ = s.bus.Publish(ctx, addonKey, event, user.GetOrganizationID(), payload)
 }
