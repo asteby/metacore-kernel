@@ -98,6 +98,16 @@ type Config struct {
 	// that have not yet wired an addon registry.
 	AddonKeyForModel func(ctx context.Context, model string) string
 
+	// ModelKeyForModel canonicalizes the model segment of a canonical event
+	// name to the manifest ModelKey (e.g. table "transfers" -> "Transfer").
+	// Create/Update/Delete may be invoked with EITHER the ModelKey or the
+	// table/route name (the action-create path passes the route's table name);
+	// without this the event fires as `<addon>.transfers.created` while
+	// subscribers register on `<addon>.Transfer.created` (the documented
+	// contract `<addon>.<ModelKey>.<action>`), so the handler never matches.
+	// nil (or returning "") leaves the model segment as passed (retrocompat).
+	ModelKeyForModel func(ctx context.Context, model string) string
+
 	// ActionResolver returns the manifest.ActionDef declared for a
 	// (model, key) pair. nil disables the action endpoint — calls return
 	// ErrNoActionResolver. Hosts wire it from their addon registry: the
@@ -182,6 +192,7 @@ type Service struct {
 	tableNameResolver TableNameResolver
 	bus               Publisher
 	addonKeyForModel  func(ctx context.Context, model string) string
+	modelKeyForModel  func(ctx context.Context, model string) string
 	actionResolver    ActionResolver
 	actionDispatchers map[string]ActionDispatcher
 	authExtractor     adapters.AuthUserExtractor
@@ -231,6 +242,7 @@ func New(cfg Config) *Service {
 		tableNameResolver: cfg.TableNameResolver,
 		bus:               cfg.Bus,
 		addonKeyForModel:  cfg.AddonKeyForModel,
+		modelKeyForModel:  cfg.ModelKeyForModel,
 		actionResolver:    cfg.ActionResolver,
 		actionDispatchers: dispatchers,
 		authExtractor:     cfg.AuthUserExtractor,
