@@ -49,7 +49,7 @@ func TestExecuteDBExec_HappyPathTx(t *testing.T) {
 		WithArgs("hello", "open").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	out := executeDBExec(context.Background(), gdb, nil, "tickets",
+	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
 		permissiveEnforcer(),
 		"INSERT INTO tickets (title, status) VALUES ($1, $2)",
 		[]byte(`["hello", "open"]`))
@@ -69,6 +69,38 @@ func TestExecuteDBExec_HappyPathTx(t *testing.T) {
 	}
 }
 
+// TestExecuteDBExec_ExecSchemaOverride asserts the embedder override
+// (Host.WithExecSchema, e.g. ops → "public") routes bare names to the given
+// schema in the runtime search_path WITHOUT relaxing the capability gate: the
+// envelope's schema (gate identity) stays the addon's own `addon_tickets`.
+func TestExecuteDBExec_ExecSchemaOverride(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+
+	// search_path points at the host's shared schema (public), not addon_tickets.
+	mock.ExpectExec(`SET LOCAL search_path TO "public", public`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`UPDATE tickets`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	out := executeDBExec(context.Background(), gdb, nil, "tickets", "public",
+		permissiveEnforcer(),
+		"UPDATE tickets SET status = 'closed' WHERE id = 1", nil)
+
+	env := unmarshalExec(t, out)
+	if !env.Success {
+		t.Fatalf("expected success, got %s", out)
+	}
+	// Gate identity is unchanged — bare names are still authorised as addon
+	// writes, only their physical resolution moved to public.
+	if env.Meta["schema"] != "addon_tickets" {
+		t.Fatalf("expected gate schema addon_tickets, got %v", env.Meta["schema"])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations not met: %v", err)
+	}
+}
+
 func TestExecuteDBExec_HappyPathStandalone(t *testing.T) {
 	gdb, mock, cleanup := newMockGorm(t)
 	defer cleanup()
@@ -82,7 +114,7 @@ func TestExecuteDBExec_HappyPathStandalone(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		permissiveEnforcer(),
 		"UPDATE tickets SET status = $1 WHERE id = $2",
 		[]byte(`["closed", 7]`))
@@ -103,7 +135,7 @@ func TestExecuteDBExec_RejectsSelect(t *testing.T) {
 	gdb, mock, cleanup := newMockGorm(t)
 	defer cleanup()
 
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		permissiveEnforcer(),
 		"SELECT * FROM tickets", nil)
 
@@ -123,7 +155,7 @@ func TestExecuteDBExec_RejectsMultiStatement(t *testing.T) {
 	gdb, _, cleanup := newMockGorm(t)
 	defer cleanup()
 
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		permissiveEnforcer(),
 		"INSERT INTO tickets DEFAULT VALUES; DELETE FROM tickets", nil)
 
@@ -137,7 +169,7 @@ func TestExecuteDBExec_RejectsIntrospection(t *testing.T) {
 	gdb, _, cleanup := newMockGorm(t)
 	defer cleanup()
 
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		permissiveEnforcer(),
 		"DELETE FROM information_schema.tables", nil)
 
@@ -153,7 +185,7 @@ func TestExecuteDBExec_RejectsBannedKeyword(t *testing.T) {
 
 	// DROP wrapped behind a leading INSERT — the leading-word check passes
 	// but the banned-keyword scan must still catch DROP.
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		permissiveEnforcer(),
 		"INSERT INTO tickets DEFAULT VALUES; DROP TABLE tickets", nil)
 
@@ -174,7 +206,7 @@ func TestExecuteDBExec_LiteralWithKeyword(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO tickets`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	out := executeDBExec(context.Background(), gdb, nil, "tickets",
+	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
 		permissiveEnforcer(),
 		"INSERT INTO tickets (note) VALUES ('DROP me')", nil)
 
@@ -196,7 +228,7 @@ func TestExecuteDBExec_CapabilityDenied(t *testing.T) {
 	denying := security.NewEnforcer(func(string) *security.Capabilities { return nil })
 	denying.SetMode(security.ModeEnforce)
 
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		denying, "INSERT INTO tickets DEFAULT VALUES", nil)
 
 	env := unmarshalExec(t, out)
@@ -224,7 +256,7 @@ func TestExecuteDBExec_CapabilityMissingDbWrite(t *testing.T) {
 	})
 	enforcer.SetMode(security.ModeEnforce)
 
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		enforcer, "INSERT INTO tickets DEFAULT VALUES", nil)
 
 	env := unmarshalExec(t, out)
@@ -240,7 +272,7 @@ func TestExecuteDBExec_CapabilityMissingDbWrite(t *testing.T) {
 }
 
 func TestExecuteDBExec_DBUnavailable(t *testing.T) {
-	out := executeDBExec(context.Background(), nil, nil, "tickets",
+	out := executeDBExec(context.Background(), nil, nil, "tickets", "",
 		permissiveEnforcer(), "INSERT INTO tickets DEFAULT VALUES", nil)
 	env := unmarshalExec(t, out)
 	if env.Success || env.Error == nil || env.Error.Code != "db_unavailable" {
@@ -258,7 +290,7 @@ func TestExecuteDBExec_DriverError(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO tickets`).WillReturnError(sqlErr("kaboom"))
 	mock.ExpectRollback()
 
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		permissiveEnforcer(),
 		"INSERT INTO tickets DEFAULT VALUES", nil)
 	env := unmarshalExec(t, out)
@@ -277,7 +309,7 @@ func TestExecuteDBExec_BadArgs(t *testing.T) {
 	gdb, _, cleanup := newMockGorm(t)
 	defer cleanup()
 
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		permissiveEnforcer(),
 		"INSERT INTO tickets DEFAULT VALUES",
 		[]byte(`{"not":"an array"}`))
@@ -302,7 +334,7 @@ func TestExecuteDBExec_InsertReturningIncludesRows(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "title"}).
 			AddRow(int64(42), "hello"))
 
-	out := executeDBExec(context.Background(), gdb, nil, "tickets",
+	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
 		permissiveEnforcer(),
 		"INSERT INTO tickets (title, status) VALUES ($1, $2) RETURNING id, title",
 		[]byte(`["hello", "open"]`))
@@ -345,7 +377,7 @@ func TestExecuteDBExec_UpdateReturningStarIncludesRows(t *testing.T) {
 		RowsWillBeClosed()
 	mock.ExpectCommit()
 
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		permissiveEnforcer(),
 		"UPDATE tickets SET status = $1 WHERE id = $2 RETURNING *",
 		[]byte(`["closed", 7]`))
@@ -380,7 +412,7 @@ func TestExecuteDBExec_InsertWithoutReturningOmitsRows(t *testing.T) {
 		WithArgs("hello", "open").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	out := executeDBExec(context.Background(), gdb, nil, "tickets",
+	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
 		permissiveEnforcer(),
 		"INSERT INTO tickets (title, status) VALUES ($1, $2)",
 		[]byte(`["hello", "open"]`))
@@ -415,7 +447,7 @@ func TestExecuteDBExec_ReturningLiteralDoesNotTrigger(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO tickets`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	out := executeDBExec(context.Background(), gdb, nil, "tickets",
+	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
 		permissiveEnforcer(),
 		"INSERT INTO tickets (note) VALUES ('returning home')", nil)
 

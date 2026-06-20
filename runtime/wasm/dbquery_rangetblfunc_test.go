@@ -315,7 +315,7 @@ func TestExecuteDBExec_XMLTableInsideInsert_Denied(t *testing.T) {
 			SELECT t.id FROM XMLTABLE('//r'
 				PASSING (SELECT data FROM other.src)
 				COLUMNS id INT PATH 'id') AS t`
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		enforcerWithCaps("tickets", nil), sql, nil)
 
 	env := unmarshalExec(t, out)
@@ -347,7 +347,7 @@ func TestExecuteDBExec_XMLTableInsideInsert_WithReadCap_Allowed(t *testing.T) {
 			SELECT t.id FROM XMLTABLE('//r'
 				PASSING (SELECT data FROM other.src)
 				COLUMNS id INT PATH 'id') AS t`
-	out := executeDBExec(context.Background(), gdb, nil, "tickets",
+	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
 		enforcerWithCaps("tickets", caps), sql, nil)
 
 	env := unmarshalExec(t, out)

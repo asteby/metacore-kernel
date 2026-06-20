@@ -213,7 +213,7 @@ func TestExecuteDBExec_BareTableAllowed(t *testing.T) {
 	mock.ExpectExec(`UPDATE tickets SET status`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	out := executeDBExec(context.Background(), gdb, nil, "tickets",
+	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
 		enforcerWithCaps("tickets", nil),
 		"UPDATE tickets SET status = 'closed' WHERE id = 1", nil)
 
@@ -237,7 +237,7 @@ func TestExecuteDBExec_OwnSchemaQualifiedAllowed(t *testing.T) {
 	mock.ExpectExec(`UPDATE addon_tickets.tickets SET status`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	out := executeDBExec(context.Background(), gdb, nil, "tickets",
+	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
 		enforcerWithCaps("tickets", nil),
 		"UPDATE addon_tickets.tickets SET status = 'closed'", nil)
 
@@ -258,7 +258,7 @@ func TestExecuteDBExec_UpdatePublicUsersWithoutCap_Denied(t *testing.T) {
 	gdb, mock, cleanup := newMockGorm(t)
 	defer cleanup()
 
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		enforcerWithCaps("tickets", nil),
 		"UPDATE public.users SET role = 'admin'", nil)
 
@@ -291,7 +291,7 @@ func TestExecuteDBExec_UpdatePublicUsersWithStarCap_Allowed(t *testing.T) {
 	mock.ExpectCommit()
 
 	caps := []manifest.Capability{{Kind: "db:write", Target: "public.*"}}
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		enforcerWithCaps("tickets", caps),
 		"UPDATE public.users SET role = 'admin'", nil)
 
@@ -318,7 +318,7 @@ func TestExecuteDBExec_UpdatePublicUsersWithTableCap_Allowed(t *testing.T) {
 	mock.ExpectCommit()
 
 	caps := []manifest.Capability{{Kind: "db:write", Target: "public.users"}}
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		enforcerWithCaps("tickets", caps),
 		"UPDATE public.users SET role = 'admin'", nil)
 
@@ -337,7 +337,7 @@ func TestExecuteDBExec_InsertCrossSchemaWithoutCap_Denied(t *testing.T) {
 	gdb, mock, cleanup := newMockGorm(t)
 	defer cleanup()
 
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		enforcerWithCaps("tickets", nil),
 		"INSERT INTO public.audit (note) VALUES ('hi')", nil)
 
@@ -358,7 +358,7 @@ func TestExecuteDBExec_DeleteCrossSchemaWithoutCap_Denied(t *testing.T) {
 	gdb, mock, cleanup := newMockGorm(t)
 	defer cleanup()
 
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		enforcerWithCaps("tickets", nil),
 		"DELETE FROM billing.invoices WHERE id = 1", nil)
 
@@ -382,7 +382,7 @@ func TestExecuteDBExec_MergeCrossSchemaWithoutCap_Denied(t *testing.T) {
 	sql := `MERGE INTO billing.invoices i
 			  USING staging s ON i.id = s.id
 			  WHEN MATCHED THEN UPDATE SET amount = s.amount`
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		enforcerWithCaps("tickets", nil), sql, nil)
 
 	env := unmarshalExec(t, out)
@@ -407,7 +407,7 @@ func TestExecuteDBExec_UpdateFromCrossSchemaSource_Denied(t *testing.T) {
 	sql := `UPDATE addon_tickets.tickets t
 			  SET status = s.status
 			  FROM staging.s WHERE t.id = s.tid`
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		enforcerWithCaps("tickets", nil), sql, nil)
 
 	env := unmarshalExec(t, out)
@@ -442,7 +442,7 @@ func TestExecuteDBExec_UpdateFromCrossSchemaSourceWithReadCap_Allowed(t *testing
 	sql := `UPDATE addon_tickets.tickets t
 			  SET status = s.status
 			  FROM staging.s WHERE t.id = s.tid`
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		enforcerWithCaps("tickets", caps), sql, nil)
 
 	env := unmarshalExec(t, out)
@@ -465,7 +465,7 @@ func TestExecuteDBExec_CTEDMLCrossSchema_Denied(t *testing.T) {
 				UPDATE public.users SET role = 'admin' RETURNING id
 			)
 			INSERT INTO tickets (uid) SELECT id FROM x`
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		enforcerWithCaps("tickets", nil), sql, nil)
 
 	env := unmarshalExec(t, out)
@@ -492,7 +492,7 @@ func TestExecuteDBExec_RejectsWithSelect(t *testing.T) {
 	gdb, mock, cleanup := newMockGorm(t)
 	defer cleanup()
 
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		enforcerWithCaps("tickets", nil),
 		"WITH x AS (SELECT 1) SELECT * FROM x", nil)
 
@@ -513,7 +513,7 @@ func TestExecuteDBExec_ParseError_RejectedNotDegraded(t *testing.T) {
 
 	// validateMutationOnly lets this through (leading word is UPDATE, no
 	// banned keywords); only the parser catches it.
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		enforcerWithCaps("tickets", nil),
 		"UPDATE tickets SET (((", nil)
 
@@ -627,7 +627,7 @@ func TestExecuteDBExec_RangeFunctionInsideInsert_OnlyReadDeclared_Denied(t *test
 	caps := []manifest.Capability{{Kind: "db:read", Target: "other_addon.iterate"}}
 	sql := `INSERT INTO tickets (uid)
 			SELECT id FROM other_addon.iterate()`
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		enforcerWithCaps("tickets", caps), sql, nil)
 
 	env := unmarshalExec(t, out)
@@ -664,7 +664,7 @@ func TestExecuteDBExec_RangeFunctionInsideInsert_BothCapsDeclared_Allowed(t *tes
 	}
 	sql := `INSERT INTO tickets (uid)
 			SELECT id FROM other_addon.iterate()`
-	out := executeDBExec(context.Background(), nil, gdb, "tickets",
+	out := executeDBExec(context.Background(), nil, gdb, "tickets", "",
 		enforcerWithCaps("tickets", caps), sql, nil)
 
 	env := unmarshalExec(t, out)
