@@ -52,6 +52,7 @@ type Host struct {
 	db            *gorm.DB
 	enforcer      *security.Enforcer
 	tableResolver func(table string) string
+	execSchema    func(addonKey string) string
 	logger        *log.Logger
 	compiled      sync.Map // addonKey -> *compiledEntry
 	modules       sync.Map // instanceKey(addonKey, installation) -> *Module
@@ -131,6 +132,24 @@ func (h *Host) WithEnforcer(e *security.Enforcer) *Host {
 // resolution is the identity function.
 func (h *Host) WithTableResolver(r func(table string) string) *Host {
 	h.tableResolver = r
+	return h
+}
+
+// WithExecSchema injects the schema the `metacore_host.db_exec` import scopes
+// bare table names to via `SET LOCAL search_path`. By default db_exec scopes to
+// the addon's isolated schema (`addon_<key>`), assuming an embedding host that
+// materialises addon data in per-addon schemas. Hosts that keep all addon data
+// in a single shared schema (ops: everything in `public`) MUST override this so
+// the addon's raw-SQL handlers hit the SAME rows the declarative CRUD /
+// data_mutate touch — otherwise db_exec writes land in an empty shadow schema.
+//
+// This changes ONLY the runtime search_path, NOT the capability gate: the gate
+// still authorises writes against `addon_<key>.*` (the addon's declared
+// capability), so an explicit cross-schema write (`UPDATE public.users …`) is
+// still denied. Bare names stay gated as addon writes but resolve to the
+// host-configured schema. When unset, resolution is `AddonSchema(addonKey)`.
+func (h *Host) WithExecSchema(fn func(addonKey string) string) *Host {
+	h.execSchema = fn
 	return h
 }
 
@@ -238,6 +257,7 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		tx:           tx,
 		enforcer:     h.enforcer,
 		resolveTable: h.tableResolver,
+		execSchema:   h.execSchema,
 		logger:       h.logger,
 	})
 

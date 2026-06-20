@@ -46,12 +46,19 @@ func executeDBExec(
 	tx *gorm.DB,
 	db *gorm.DB,
 	addonKey string,
+	searchSchema string,
 	enforcer *security.Enforcer,
 	sqlText string,
 	argsJSON []byte,
 ) []byte {
 	start := time.Now()
+	// schema authorises the capability gate (always the addon's own schema).
+	// searchSchema scopes the runtime search_path — defaults to schema, but the
+	// embedder may route bare names elsewhere (ops → public) via WithExecSchema.
 	schema := AddonSchema(addonKey)
+	if searchSchema == "" {
+		searchSchema = schema
+	}
 	durMs := func() int64 { return time.Since(start).Milliseconds() }
 
 	// Prefer the action handler's tx so the guest's writes piggy-back on
@@ -124,7 +131,7 @@ func executeDBExec(
 	}
 
 	if err := work.Exec(fmt.Sprintf(
-		`SET LOCAL search_path TO %s, public`, quoteIdent(schema),
+		`SET LOCAL search_path TO %s, public`, quoteIdent(searchSchema),
 	)).Error; err != nil {
 		if standalone {
 			_ = work.Rollback()

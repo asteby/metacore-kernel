@@ -51,6 +51,10 @@ type invocation struct {
 	// resolveTable is the embedder-injected logical→physical table mapping
 	// the data_mutate import uses (Host.WithTableResolver). nil = identity.
 	resolveTable func(table string) string
+	// execSchema overrides the schema db_exec scopes bare names to via
+	// search_path (Host.WithExecSchema). nil = AddonSchema(addonKey). The
+	// capability gate still authorises against AddonSchema regardless.
+	execSchema func(addonKey string) string
 }
 
 type invKey struct{}
@@ -299,7 +303,17 @@ func registerHostModule(ctx context.Context, h *Host) error {
 			}
 			sqlText := readString(mod, sqlPtr, sqlLen)
 			argsJSON := readBytes(mod, argsPtr, argsLen)
-			env := executeDBExec(ctx, inv.tx, inv.db, inv.addonKey, inv.enforcer, sqlText, argsJSON)
+			// search_path schema: the addon's isolated schema by default, or
+			// the embedder's override (Host.WithExecSchema) — e.g. ops routes
+			// bare names to `public` where its live declarative rows are. The
+			// capability gate inside executeDBExec still uses AddonSchema.
+			searchSchema := AddonSchema(inv.addonKey)
+			if inv.execSchema != nil {
+				if s := inv.execSchema(inv.addonKey); s != "" {
+					searchSchema = s
+				}
+			}
+			env := executeDBExec(ctx, inv.tx, inv.db, inv.addonKey, searchSchema, inv.enforcer, sqlText, argsJSON)
 			return writeToGuest(ctx, mod, env)
 		}).
 		Export("db_exec")
