@@ -178,6 +178,110 @@ func validateDashboard(m *Manifest) []string {
 	return errs
 }
 
+// validHookPrefixes is the allowlist of TransitionHook.Do dispatch targets,
+// shared with the JSON schema pattern so the struct-level checks and the schema
+// agree (the "dual validation" contract).
+var validHookPrefixes = map[string]struct{}{
+	"wasm": {}, "webhook": {}, "compiled": {},
+}
+
+// validateStageMachine enforces the cross-field invariants of a model's stage
+// machine that the JSON schema cannot express: stage_field names a real column,
+// stage keys are unique, transitions reference declared stages, and each
+// on_transition hook matches declared stages (or "*") and carries a valid
+// wasm:/webhook:/compiled: `do`. Returns a slice (possibly empty) prefixed with
+// the offending model's index so the caller can append. Empty stages is a
+// no-op (the model has no stage machine).
+func validateStageMachine(mi int, mod Model, ownCols map[string]struct{}) []string {
+	if len(mod.Stages) == 0 && mod.StageField == "" && len(mod.Transitions) == 0 && len(mod.OnTransition) == 0 {
+		return nil
+	}
+	var errs []string
+	where := fmt.Sprintf("models[%d]", mi)
+
+	// stage_field is mandatory once any stage-machine field is declared, and
+	// must name a declared column.
+	if mod.StageField == "" {
+		errs = append(errs, fmt.Sprintf("%s declares stages/transitions/on_transition but no stage_field", where))
+	} else if _, ok := ownCols[mod.StageField]; !ok {
+		errs = append(errs, fmt.Sprintf("%s.stage_field %q is not a declared column on the model", where, mod.StageField))
+	}
+
+	// Stage keys: non-empty and unique.
+	stageKeys := make(map[string]struct{}, len(mod.Stages))
+	for si, st := range mod.Stages {
+		if st.Key == "" {
+			errs = append(errs, fmt.Sprintf("%s.stages[%d].key is empty", where, si))
+			continue
+		}
+		if _, dup := stageKeys[st.Key]; dup {
+			errs = append(errs, fmt.Sprintf("%s.stages[%d].key %q is duplicated", where, si, st.Key))
+		}
+		stageKeys[st.Key] = struct{}{}
+	}
+	if len(mod.Stages) == 0 && mod.StageField != "" {
+		errs = append(errs, fmt.Sprintf("%s declares stage_field %q but no stages", where, mod.StageField))
+	}
+
+	// Transitions: from/to must reference declared stage keys.
+	for ti, t := range mod.Transitions {
+		if _, ok := stageKeys[t.From]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.transitions[%d].from %q is not a declared stage key", where, ti, t.From))
+		}
+		if _, ok := stageKeys[t.To]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.transitions[%d].to %q is not a declared stage key", where, ti, t.To))
+		}
+	}
+
+	// Hooks: from/to must be "*" or a declared stage key; `do` must carry a
+	// known prefix (the schema pattern enforces the shape, this enforces the set).
+	for hi, h := range mod.OnTransition {
+		if h.From != "*" && h.From != "" {
+			if _, ok := stageKeys[h.From]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.on_transition[%d].from %q is not a declared stage key (or \"*\")", where, hi, h.From))
+			}
+		}
+		if h.To != "*" {
+			if _, ok := stageKeys[h.To]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.on_transition[%d].to %q is not a declared stage key (or \"*\")", where, hi, h.To))
+			}
+		}
+		prefix, _, found := strings.Cut(h.Do, ":")
+		if !found {
+			errs = append(errs, fmt.Sprintf("%s.on_transition[%d].do %q must be wasm:<export> | webhook:<key> | compiled:<fn>", where, hi, h.Do))
+		} else if _, ok := validHookPrefixes[prefix]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.on_transition[%d].do %q has an unknown prefix (want wasm|webhook|compiled)", where, hi, prefix))
+		}
+	}
+	return errs
+}
+
+// validateNavViewTypes enforces that a kanban nav entry declares the group_by
+// column it groups its board by. view_type is otherwise free (hosts fall back
+// to a table for an unknown value). Walks the nested NavItem tree.
+func validateNavViewTypes(m *Manifest) []string {
+	if m.Contributions == nil {
+		return nil
+	}
+	var errs []string
+	var walk func(items []NavItem, path string)
+	walk = func(items []NavItem, path string) {
+		for i, it := range items {
+			where := fmt.Sprintf("%s[%d]", path, i)
+			if it.ViewType == "kanban" && it.GroupBy == "" {
+				errs = append(errs, fmt.Sprintf("%s declares view_type=kanban but no group_by", where))
+			}
+			if len(it.Items) > 0 {
+				walk(it.Items, where+".items")
+			}
+		}
+	}
+	for gi, g := range m.Contributions.Navigation {
+		walk(g.Items, fmt.Sprintf("contributions.navigation[%d].items", gi))
+	}
+	return errs
+}
+
 //go:embed schema/manifest-v3.schema.json
 var schemaBytes []byte
 
@@ -348,6 +452,12 @@ func Validate(raw []byte) error {
 				}
 			}
 		}
+		// Stage machine: stage_field must name a declared column; stage keys
+		// unique; transitions/hooks must reference declared stage keys (or "*"
+		// for hooks); a hook's `do` carries a wasm:/webhook:/compiled: prefix
+		// (the schema pattern already enforces the shape). Mirrors the legacy
+		// validator so a manifest fails identically on both surfaces.
+		errs = append(errs, validateStageMachine(mi, mod, ownCols)...)
 		for ri, rel := range mod.Relations {
 			where := fmt.Sprintf("models[%d].relations[%d]", mi, ri)
 			switch rel.Kind {
@@ -380,6 +490,7 @@ func Validate(raw []byte) error {
 
 	if m.Contributions != nil {
 		errs = append(errs, validateDashboard(&m)...)
+		errs = append(errs, validateNavViewTypes(&m)...)
 	}
 
 	if m.Contributions != nil {

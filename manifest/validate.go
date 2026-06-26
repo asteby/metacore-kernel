@@ -324,6 +324,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 		if err := validateComputeRollups(md.Relations, colsByModel[md.ModelKey], colsByModel); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
+		if err := validateStageMachine(md); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
+		}
 	}
 	for i, c := range m.Capabilities {
 		if !strings.Contains(c.Kind, ":") {
@@ -618,6 +621,79 @@ func validateSeed(seed *SeedDef, cols []ColumnDef) error {
 // the schema enum). count ignores from/expr.
 var validFns = map[string]struct{}{
 	"sum": {}, "count": {}, "avg": {}, "min": {}, "max": {},
+}
+
+// validHookPrefixes mirrors v3.validHookPrefixes: the TransitionHook.Do dispatch
+// targets the dynamic engine knows how to route.
+var validHookPrefixes = map[string]struct{}{
+	"wasm": {}, "webhook": {}, "compiled": {},
+}
+
+// validateStageMachine is the legacy/install-surface twin of v3.validateStageMachine:
+// stage_field must name a declared column, stage keys must be unique, transitions
+// must reference declared stages, and each on_transition hook must match declared
+// stages (or "*") with a wasm:/webhook:/compiled: `do`. An empty stage machine
+// (no StageField/Stages/Transitions/OnTransition) is accepted unconditionally so
+// flat models pass unchanged. Mirrors the v3 validator so a manifest fails
+// identically on both the v3 and the legacy/install surfaces ("dual validation").
+func validateStageMachine(md ModelDefinition) error {
+	if len(md.Stages) == 0 && md.StageField == "" && len(md.Transitions) == 0 && len(md.OnTransition) == 0 {
+		return nil
+	}
+	if md.StageField == "" {
+		return fmt.Errorf("stage machine declared without stage_field")
+	}
+	known := false
+	for _, c := range md.Columns {
+		if c.Name == md.StageField {
+			known = true
+			break
+		}
+	}
+	if !known {
+		return fmt.Errorf("stage_field %q is not a declared column on the model", md.StageField)
+	}
+	if len(md.Stages) == 0 {
+		return fmt.Errorf("stage_field %q declared but no stages", md.StageField)
+	}
+	stageKeys := make(map[string]struct{}, len(md.Stages))
+	for i, st := range md.Stages {
+		if st.Key == "" {
+			return fmt.Errorf("stages[%d].key required", i)
+		}
+		if _, dup := stageKeys[st.Key]; dup {
+			return fmt.Errorf("stages[%d].key %q duplicated", i, st.Key)
+		}
+		stageKeys[st.Key] = struct{}{}
+	}
+	for i, t := range md.Transitions {
+		if _, ok := stageKeys[t.From]; !ok {
+			return fmt.Errorf("transitions[%d].from %q is not a declared stage key", i, t.From)
+		}
+		if _, ok := stageKeys[t.To]; !ok {
+			return fmt.Errorf("transitions[%d].to %q is not a declared stage key", i, t.To)
+		}
+	}
+	for i, h := range md.OnTransition {
+		if h.From != "*" && h.From != "" {
+			if _, ok := stageKeys[h.From]; !ok {
+				return fmt.Errorf("onTransition[%d].from %q is not a declared stage key (or \"*\")", i, h.From)
+			}
+		}
+		if h.To != "*" {
+			if _, ok := stageKeys[h.To]; !ok {
+				return fmt.Errorf("onTransition[%d].to %q is not a declared stage key (or \"*\")", i, h.To)
+			}
+		}
+		prefix, _, found := strings.Cut(h.Do, ":")
+		if !found {
+			return fmt.Errorf("onTransition[%d].do %q must be wasm:<export> | webhook:<key> | compiled:<fn>", i, h.Do)
+		}
+		if _, ok := validHookPrefixes[prefix]; !ok {
+			return fmt.Errorf("onTransition[%d].do %q has an unknown prefix (want wasm|webhook|compiled)", i, prefix)
+		}
+	}
+	return nil
 }
 
 // validateComputeFormulas mirrors the v3 Tier-2 check on the legacy/install

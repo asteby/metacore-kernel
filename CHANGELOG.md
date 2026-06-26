@@ -5,6 +5,57 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.62.0] - 2026-06-26
+
+### Added
+
+- **manifest/v3: stage machine on models (`stage_field`, `stages[]`,
+  `transitions[]`, `on_transition[]`).** A model can now declare a Bitrix-style
+  pipeline: `stage_field` names the lifecycle column, `stages[]` enumerates its
+  ordered stages (`{key,label,color,order,is_final}`), `transitions[]`
+  whitelists the allowed `{from,to}` moves, and `on_transition[]` declares hooks
+  (`{from,to,do,required}`, `*` = wildcard) the kernel fires on a valid move.
+  New v3 types `Stage`, `Transition`, `TransitionHook` on `v3.Model`; mirrored
+  on the host `manifest.ModelDefinition` as `StageDef`/`TransitionDef`/
+  `TransitionHookDef` and projected by `FromV3`. Both the embedded
+  `manifest/v3/schema/manifest-v3.schema.json` and the published
+  `docs/spec/v3/manifest-v3.schema.json` gained the `Stage`/`Transition`/
+  `TransitionHook` definitions so the hub's strict publish-gate accepts the
+  block. Additive — a model without `stages` keeps the legacy unrestricted
+  behaviour.
+
+- **manifest/v3: kanban view-type on nav (`view_type`, `group_by`).** A
+  `NavItem` can declare `view_type: "kanban"` + `group_by` so the SDK renders a
+  board grouped by a column (default stays `table`). The same model can have a
+  table nav and a kanban nav. Mapped through `FromV3` onto `manifest.NavItem`
+  for the host to project into served `TableMetadata`.
+
+- **dynamic: stage-transition enforcement + hooks in `Service.Update`.** When a
+  host wires the new `Config.StageMachineResolver`, an `Update` that changes a
+  model's `stage_field` is validated against the declared `transitions[]` BEFORE
+  any write — a non-whitelisted move is rejected with the new
+  `ErrInvalidTransition` (HTTP 422 `invalid_transition`). After a valid move is
+  persisted and before the canonical event, the matching `on_transition` hooks
+  fire: each hook's `do` (`wasm:<export>` | `webhook:<key>` | `compiled:<fn>`)
+  is split on its prefix and routed through the existing `ActionDispatchers`
+  with a `{before, after, actor, org}` payload. A failing hook is logged and
+  skipped unless `required: true`, in which case the save + hooks (run together
+  in a transaction) roll back. `stages` empty = no restriction (full
+  back-compat).
+
+- **dynamic: `status` display derived from `stages[]`.** `DeriveTableColumns`
+  now sets the `stage_field` column's `CellStyle` to `status` and materialises
+  its options (`value/label/color`, ordered by `Stage.Order`) straight from
+  `stages[]`, so a board / status badge renders without a separate `options`
+  declaration. An explicit column `display`/`options` still wins.
+
+- **Validation (dual surface):** `v3.Validate` (lenient) and the strict
+  `manifest.Validate` both enforce the stage-machine cross-field rules
+  (`stage_field` names a real column; unique stage keys; transitions/hooks
+  reference declared stages or `*`; `do` carries a known `wasm|webhook|compiled`
+  prefix) and the kanban rule (`view_type:kanban ⇒ group_by`), so a manifest
+  fails identically on both the publish and install paths.
+
 ## [0.59.0] - 2026-06-13
 
 ### Added

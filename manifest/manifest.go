@@ -150,6 +150,12 @@ type NavItem struct {
 	// this entry's list view (e.g. {"status":"reception"}), so an addon can
 	// publish one nav entry per status. Empty/omitted means no filter.
 	Filter map[string]string `json:"filter,omitempty"`
+
+	// ViewType / GroupBy are the host projection of the v3 NavItem kanban hint:
+	// ViewType "kanban" makes the SDK render a board grouped by GroupBy (else the
+	// default DynamicTable). Empty ViewType = table. See manifest/v3.NavItem.
+	ViewType string `json:"viewType,omitempty"`
+	GroupBy  string `json:"groupBy,omitempty"`
 }
 
 // FrontendSpec describes the federated module the host loads at runtime.
@@ -510,6 +516,43 @@ type ModelDefinition struct {
 	// before every create/update write (Tier-2 of the declarative compute
 	// engine). Optional. See Formula and dynamic.RegisterComputeHooks.
 	Formulas []Formula `json:"formulas,omitempty"`
+
+	// StageField / Stages / Transitions / OnTransition are the host-side
+	// projection of a v3 model's stage machine (see manifest/v3.Model). The
+	// dynamic engine reads them to derive the `status` display of StageField, to
+	// validate stage moves on Update, and to fire OnTransition hooks. Empty
+	// StageField/Stages = no stage machine (the legacy, unrestricted behaviour).
+	StageField   string              `json:"stageField,omitempty"`
+	Stages       []StageDef          `json:"stages,omitempty"`
+	Transitions  []TransitionDef     `json:"transitions,omitempty"`
+	OnTransition []TransitionHookDef `json:"onTransition,omitempty"`
+}
+
+// StageDef is the host/runtime projection of a v3 Stage. See manifest/v3.Stage
+// for the full contract.
+type StageDef struct {
+	Key     string `json:"key"`
+	Label   string `json:"label,omitempty"`
+	Color   string `json:"color,omitempty"`
+	Order   int    `json:"order,omitempty"`
+	IsFinal bool   `json:"isFinal,omitempty"`
+}
+
+// TransitionDef is the host/runtime projection of a v3 Transition: one allowed
+// (from → to) stage move.
+type TransitionDef struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// TransitionHookDef is the host/runtime projection of a v3 TransitionHook. Do
+// references the dispatchable handler (`wasm:`/`webhook:`/`compiled:`); Required
+// makes a dispatch failure roll back the transition. See manifest/v3.TransitionHook.
+type TransitionHookDef struct {
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Do       string `json:"do"`
+	Required bool   `json:"required,omitempty"`
 }
 
 // Formula declares a column on the owning model whose value the kernel

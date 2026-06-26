@@ -559,6 +559,32 @@
         "seed": {
           "$ref": "#/$defs/Seed",
           "description": "Default seed data the installer inserts on install, idempotent by a natural key column."
+        },
+        "stage_field": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Column carrying the model's pipeline stage. With 'stages' it turns the model into a stage machine: the kernel derives a 'status' display for the column and validates moves + fires on_transition hooks on every Update that changes it."
+        },
+        "stages": {
+          "type": "array",
+          "description": "Ordered lifecycle stages of stage_field. The kernel projects them onto the column's derived status display (value/label/colour). Empty = no stage machine.",
+          "items": {
+            "$ref": "#/$defs/Stage"
+          }
+        },
+        "transitions": {
+          "type": "array",
+          "description": "Whitelisted (from -> to) stage moves. An Update that moves stage_field to a pair not listed here is rejected 422 (invalid_transition). Only enforced when stages is non-empty.",
+          "items": {
+            "$ref": "#/$defs/Transition"
+          }
+        },
+        "on_transition": {
+          "type": "array",
+          "description": "Bitrix-style hooks the kernel fires after a valid stage move is persisted and before the canonical event. Matched by from/to ('*' = wildcard); 'do' references a wasm:/webhook:/compiled: handler.",
+          "items": {
+            "$ref": "#/$defs/TransitionHook"
+          }
         }
       },
       "examples": [
@@ -1174,6 +1200,95 @@
             "type": "string"
           },
           "description": "Static column→value filter the host applies when rendering this entry's list view (e.g. {\"status\":\"reception\"}), so an addon can publish one nav entry per status."
+        },
+        "view_type": {
+          "type": "string",
+          "enum": [
+            "table",
+            "kanban"
+          ],
+          "description": "Renderer the SDK mounts for this entry's model: 'table' (default) or 'kanban' (a board grouped by group_by). The same model can have one table nav and one kanban nav."
+        },
+        "group_by": {
+          "type": "string",
+          "description": "Column the kanban board groups its columns by (typically the model's stage_field). Required when view_type is 'kanban'; ignored otherwise."
+        }
+      }
+    },
+    "Stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key"
+      ],
+      "description": "One lifecycle stage of a model's stage_field column. The kernel projects the set onto the column's derived status display (value/label/colour), ordered by 'order'.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Stored column value for this stage (e.g. 'in_progress')."
+        },
+        "label": {
+          "type": "string",
+          "description": "Human/i18n label rendered for the stage."
+        },
+        "color": {
+          "type": "string",
+          "description": "Colour token for the badge (e.g. 'slate', 'blue', 'green')."
+        },
+        "order": {
+          "type": "integer",
+          "description": "Position left-to-right on a board / in a status select."
+        },
+        "is_final": {
+          "type": "boolean",
+          "description": "Marks a terminal stage (no outgoing transitions expected)."
+        }
+      }
+    },
+    "Transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to"
+      ],
+      "description": "One allowed move between two stages. from/to are Stage keys; a move to a (from, to) pair not present in transitions is rejected.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "Source stage key."
+        },
+        "to": {
+          "type": "string",
+          "description": "Destination stage key."
+        }
+      }
+    },
+    "TransitionHook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "to",
+        "do"
+      ],
+      "description": "A declarative side effect the kernel fires when a record transitions between stages. from/to select the matching moves ('*' matches any stage); 'do' references the handler to dispatch as wasm:<export> | webhook:<key> | compiled:<fn>.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "Source stage key, or '*' to match any source."
+        },
+        "to": {
+          "type": "string",
+          "description": "Destination stage key, or '*' to match any destination."
+        },
+        "do": {
+          "type": "string",
+          "pattern": "^(wasm|webhook|compiled):.+$",
+          "description": "Handler reference: 'wasm:<export>', 'webhook:<key>' or 'compiled:<fn>'."
+        },
+        "required": {
+          "type": "boolean",
+          "description": "When true a dispatch failure rolls back the whole transition (422); otherwise the failure is logged and the transition stands."
         }
       }
     },

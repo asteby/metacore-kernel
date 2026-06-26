@@ -268,6 +268,14 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		def.Relations = mapModelRelations(m.Relations)
 		def.Seed = mapModelSeed(m.Seed)
 		def.Formulas = mapModelFormulas(m.Formulas)
+		// Stage machine: the field/stages/transitions/hooks ride across so the
+		// dynamic engine derives the status display, validates moves and fires
+		// on_transition hooks. Empty StageField/Stages leaves the model
+		// unrestricted (the legacy behaviour).
+		def.StageField = m.StageField
+		def.Stages = mapModelStages(m.Stages)
+		def.Transitions = mapModelTransitions(m.Transitions)
+		def.OnTransition = mapModelTransitionHooks(m.OnTransition)
 		out = append(out, def)
 	}
 	return out
@@ -332,6 +340,55 @@ func mapModelFormulas(in []v3.Formula) []Formula {
 		out = append(out, Formula{
 			Target: f.Target,
 			Expr:   f.Expr,
+		})
+	}
+	return out
+}
+
+// mapModelStages / mapModelTransitions / mapModelTransitionHooks fold a v3
+// model's stage machine onto the host ModelDefinition so the dynamic engine can
+// derive the status display, validate stage moves and fire on_transition hooks.
+// Each is a 1:1 field copy; an empty input maps to nil (the no-stage-machine
+// default that leaves the model unrestricted).
+func mapModelStages(in []v3.Stage) []StageDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]StageDef, 0, len(in))
+	for _, s := range in {
+		out = append(out, StageDef{
+			Key:     s.Key,
+			Label:   s.Label,
+			Color:   s.Color,
+			Order:   s.Order,
+			IsFinal: s.IsFinal,
+		})
+	}
+	return out
+}
+
+func mapModelTransitions(in []v3.Transition) []TransitionDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]TransitionDef, 0, len(in))
+	for _, t := range in {
+		out = append(out, TransitionDef{From: t.From, To: t.To})
+	}
+	return out
+}
+
+func mapModelTransitionHooks(in []v3.TransitionHook) []TransitionHookDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]TransitionHookDef, 0, len(in))
+	for _, h := range in {
+		out = append(out, TransitionHookDef{
+			From:     h.From,
+			To:       h.To,
+			Do:       h.Do,
+			Required: h.Required,
 		})
 	}
 	return out
@@ -432,6 +489,10 @@ func mapNavItems(in []v3.NavItem, modelTable map[string]string) []NavItem {
 			Permission: it.Permission,
 			Items:      mapNavItems(it.Items, modelTable),
 			Filter:     it.Filter,
+			// Kanban view-type hint rides across so the host can project it onto
+			// the served TableMetadata and the SDK picks the board renderer.
+			ViewType: it.ViewType,
+			GroupBy:  it.GroupBy,
 		})
 	}
 	return out

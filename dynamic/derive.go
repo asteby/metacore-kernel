@@ -1,6 +1,7 @@
 package dynamic
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/asteby/metacore-kernel/manifest"
@@ -80,6 +81,20 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			DependsOn:     c.DependsOn,
 			OptionsConfig: toFieldOptionsConfig(c.OptionsConfig),
 		}
+		// Stage machine: when this column is the model's stage_field and the
+		// model declares stages, derive a `status` display + the option list
+		// (value/label/colour, ordered) straight from stages[] — the author does
+		// not declare `options` separately. An explicit CellStyle/Options on the
+		// column still wins (we only fill the gap).
+		if c.Name == def.StageField && len(def.Stages) > 0 {
+			if col.CellStyle == "" {
+				col.CellStyle = "status"
+			}
+			if len(col.Options) == 0 {
+				col.Options = stageOptions(def.Stages)
+				col.UseOptions = len(col.Options) > 0
+			}
+		}
 		// Auto-detect a prettier cell renderer for columns that ship no
 		// explicit Display/CellStyle, inferred from the column name/type. An
 		// author-declared CellStyle always wins.
@@ -87,6 +102,35 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			col.CellStyle = inferCellStyle(c.Name, c.Type)
 		}
 		out = append(out, col)
+	}
+	return out
+}
+
+// stageOptions projects a model's declarative stages onto the served
+// modelbase.OptionDef list the SDK renders for the stage_field column: each
+// stage becomes a {value:key, label, color} option, ordered by Stage.Order so a
+// status select / board renders the lifecycle left-to-right without a separate
+// `options` declaration. Returns nil for an empty list.
+func stageOptions(stages []manifest.StageDef) []modelbase.OptionDef {
+	if len(stages) == 0 {
+		return nil
+	}
+	ordered := make([]manifest.StageDef, len(stages))
+	copy(ordered, stages)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].Order < ordered[j].Order
+	})
+	out := make([]modelbase.OptionDef, 0, len(ordered))
+	for _, st := range ordered {
+		label := st.Label
+		if label == "" {
+			label = st.Key
+		}
+		out = append(out, modelbase.OptionDef{
+			Value: st.Key,
+			Label: label,
+			Color: st.Color,
+		})
 	}
 	return out
 }
