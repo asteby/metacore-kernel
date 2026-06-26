@@ -56,6 +56,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   prefix) and the kanban rule (`view_type:kanban ⇒ group_by`), so a manifest
   fails identically on both the publish and install paths.
 
+- **manifest/v3: addon-level pipeline-runtime primitives (`connectors[]`,
+  `schedules[]`, `webhooks[]`).** An addon can now declare, alongside its models:
+  `connectors[]` (`{key,label,auth,credentials[]}`) — third-party credential
+  providers the host stores per org (encrypted); `schedules[]` (`{key,every,do}`)
+  — declarative cron jobs; and `webhooks[]`
+  (`{key,path,verify,secret_ref,do}`) — inbound webhook routes. New v3 types
+  `Connector`/`Schedule`/`InboundWebhook` (credentials reuse `Setting`, which
+  gained an optional `validation` field) projected by `FromV3` onto host
+  `ConnectorDef`/`ScheduleDef`/`InboundWebhookDef` (a `secret`-typed credential
+  maps to `Secret:true`). Both JSON schemas gained the `Connector`/`Schedule`/
+  `InboundWebhook` definitions. Dual validation (`v3.Validate` + strict
+  `manifest.Validate`) enforces: unique connector keys; a schedule's `every`
+  parses as a positive Go duration and its `do` carries a known dispatch prefix;
+  a webhook's `do` carries a known prefix and, when it declares a `verify`, its
+  `secret_ref` resolves (`<connector>.<credential>`) to a declared connector
+  credential. Additive — an addon with none of these blocks is unaffected.
+
+- **connectors/ (new): credential-resolution runtime.** `connectors.Store` is a
+  host-implemented per-org credential backend (ops owns the encryption);
+  `connectors.Resolver` resolves a connector key → credential map (`Get`) and a
+  `secret_ref` → a single value (`Secret`). A nil Resolver/Store is the
+  feature-off state (every lookup returns `ErrNoStore`).
+
+- **runtime/schedule/ (new): declarative cron scheduler.** `schedule.Scheduler`
+  runs one ticker per `(orgID, scheduleKey)` and fires the schedule's `do`
+  through a prefix-keyed `Dispatcher` set (the same `wasm|webhook|compiled`
+  mechanism as the stage-machine hooks), with a `{org, schedule}` payload. API:
+  `New`, `Register`, `Unregister`, `Start`, `Stop`. Idempotent on boot
+  (re-registering a key replaces its ticker, never duplicates). Time is injected
+  via the `Clock` interface (`SystemClock` in prod) so fires are testable
+  without sleeping.
+
+- **runtime/webhookin/ (new): inbound-webhook receiver.** `webhookin.Receiver`
+  registers the routes from `webhooks[]` and exposes
+  `Dispatch(ctx, orgID, path, headers, body)` for the host's HTTP layer to call.
+  It verifies the signature (`hmac-sha256`: HMAC of the raw body with the secret
+  resolved from `secret_ref` via a `SecretResolver` — `connectors.Resolver`
+  satisfies it; accepts a `sha256=`-prefixed or bare-hex signature in
+  `X-Hub-Signature-256` / `X-Signature-256` / `X-Signature`) and routes the body
+  to `do`. Returns typed errors (`ErrRouteNotFound`, `ErrSignatureInvalid`,
+  `ErrSignatureMissing`, `ErrUnsupportedVerify`, …) for the host to map to HTTP
+  status. An empty `verify` skips verification.
+
+- **runtime/wasm: `connector_get` host import + `connector:read` capability.**
+  Guests resolve one of their declared connector's credentials for the
+  invocation's org via `connector_get(keyPtr,keyLen) -> i64` (JSON object
+  envelope), gated by the new `connector:read <key>` capability
+  (`security.Capabilities.CanReadConnector`) and wired through
+  `Host.WithConnectors(*connectors.Resolver)`. Unconfigured resolver →
+  `connector_unavailable` envelope (feature-off).
+
+- **runtime/wasm: `http_request` host import (headers).** New
+  `http_request(urlPtr,urlLen, methodPtr,methodLen, headersPtr,headersLen,
+  bodyPtr,bodyLen) -> i64` sends outbound HTTP with caller-supplied request
+  headers (JSON object, e.g. `{"Authorization":"token …"}`), enabling
+  authenticated third-party calls. Same `http:fetch` capability, SSRF guard, 30s
+  timeout and 8 MiB response cap as `http_fetch`, which is **unchanged** (it now
+  delegates to the shared path with empty headers) — existing guests keep
+  working. ABI bumped to 1.6 (purely additive).
+
 ## [0.59.0] - 2026-06-13
 
 ### Added

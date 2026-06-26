@@ -19,6 +19,7 @@ type Capabilities struct {
 	httpHost []string // host globs: "api.stripe.com", "*.slack.com"
 	eventPub []string
 	eventSub []string
+	connRead []string // connector keys: "github", "*" for any
 }
 
 // Compile turns a manifest's declarations into a Capabilities policy.
@@ -36,6 +37,8 @@ func Compile(addonKey string, caps []manifest.Capability) *Capabilities {
 			c.eventPub = append(c.eventPub, cap.Target)
 		case "event:subscribe":
 			c.eventSub = append(c.eventSub, cap.Target)
+		case "connector:read":
+			c.connRead = append(c.connRead, cap.Target)
 		}
 	}
 	// Every addon is implicitly allowed to read/write its own schema.
@@ -173,6 +176,17 @@ func (c *Capabilities) CanSubscribe(event string) error {
 		return nil
 	}
 	return fmt.Errorf("addon %q lacks event:subscribe %q", c.addonKey, event)
+}
+
+// CanReadConnector returns nil if the addon may read the credentials of a given
+// connector via the connector_get capability. The target is the connector key
+// ("github") or "*" for any. Without a matching `connector:read` capability the
+// guest's connector_get returns a forbidden envelope.
+func (c *Capabilities) CanReadConnector(connectorKey string) error {
+	if matchAny(c.connRead, connectorKey) {
+		return nil
+	}
+	return fmt.Errorf("addon %q lacks connector:read %q", c.addonKey, connectorKey)
 }
 
 // matchAny reports whether value matches any of the glob patterns. A pattern

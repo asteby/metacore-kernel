@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/asteby/metacore-kernel/manifest/computeexpr"
@@ -282,6 +283,114 @@ func validateNavViewTypes(m *Manifest) []string {
 	return errs
 }
 
+// validateDoRef checks a Schedule/InboundWebhook `do` carries a known
+// wasm:/webhook:/compiled: dispatch prefix (the schema pattern enforces the
+// shape; this enforces the set, mirroring validateStageMachine). Returns an
+// error string suffix or "" when valid.
+func validateDoRef(do string) string {
+	prefix, _, found := strings.Cut(do, ":")
+	if !found {
+		return fmt.Sprintf("%q must be wasm:<export> | webhook:<key> | compiled:<fn>", do)
+	}
+	if _, ok := validHookPrefixes[prefix]; !ok {
+		return fmt.Sprintf("%q has an unknown prefix (want wasm|webhook|compiled)", do)
+	}
+	return ""
+}
+
+// validatePipelineRuntime enforces the cross-field invariants of the addon-level
+// pipeline-runtime primitives (connectors / schedules / webhooks) that the JSON
+// schema cannot express: connector keys are unique; a schedule's `every` parses
+// as a Go duration and its `do` carries a known prefix; a webhook's `do` carries
+// a known prefix and, when it declares a `verify`, it supplies a `secret_ref`
+// that resolves to a declared connector credential. Empty blocks are a no-op
+// (the addon has no runtime primitives — the back-compat default).
+func validatePipelineRuntime(m *Manifest) []string {
+	if len(m.Connectors) == 0 && len(m.Schedules) == 0 && len(m.Webhooks) == 0 {
+		return nil
+	}
+	var errs []string
+
+	// Connectors: unique keys; index their credential keys for secret_ref checks.
+	connectorCreds := make(map[string]map[string]struct{}, len(m.Connectors))
+	seenConn := make(map[string]struct{}, len(m.Connectors))
+	for ci, c := range m.Connectors {
+		if c.Key == "" {
+			errs = append(errs, fmt.Sprintf("connectors[%d].key is empty", ci))
+			continue
+		}
+		if _, dup := seenConn[c.Key]; dup {
+			errs = append(errs, fmt.Sprintf("connectors[%d].key %q is duplicated", ci, c.Key))
+		}
+		seenConn[c.Key] = struct{}{}
+		creds := make(map[string]struct{}, len(c.Credentials))
+		for _, cr := range c.Credentials {
+			creds[cr.Key] = struct{}{}
+		}
+		connectorCreds[c.Key] = creds
+	}
+
+	// Schedules: unique keys; every parses; do prefix known.
+	seenSched := make(map[string]struct{}, len(m.Schedules))
+	for si, s := range m.Schedules {
+		if s.Key == "" {
+			errs = append(errs, fmt.Sprintf("schedules[%d].key is empty", si))
+		} else {
+			if _, dup := seenSched[s.Key]; dup {
+				errs = append(errs, fmt.Sprintf("schedules[%d].key %q is duplicated", si, s.Key))
+			}
+			seenSched[s.Key] = struct{}{}
+		}
+		if d, err := time.ParseDuration(s.Every); err != nil || d <= 0 {
+			errs = append(errs, fmt.Sprintf("schedules[%d].every %q is not a positive Go duration (e.g. \"30s\", \"5m\")", si, s.Every))
+		}
+		if msg := validateDoRef(s.Do); msg != "" {
+			errs = append(errs, fmt.Sprintf("schedules[%d].do %s", si, msg))
+		}
+	}
+
+	// Webhooks: unique keys + paths; do prefix known; verify ⇒ secret_ref → a
+	// declared connector credential.
+	seenHook := make(map[string]struct{}, len(m.Webhooks))
+	seenPath := make(map[string]struct{}, len(m.Webhooks))
+	for wi, w := range m.Webhooks {
+		if w.Key == "" {
+			errs = append(errs, fmt.Sprintf("webhooks[%d].key is empty", wi))
+		} else {
+			if _, dup := seenHook[w.Key]; dup {
+				errs = append(errs, fmt.Sprintf("webhooks[%d].key %q is duplicated", wi, w.Key))
+			}
+			seenHook[w.Key] = struct{}{}
+		}
+		if w.Path == "" {
+			errs = append(errs, fmt.Sprintf("webhooks[%d].path is empty", wi))
+		} else {
+			if _, dup := seenPath[w.Path]; dup {
+				errs = append(errs, fmt.Sprintf("webhooks[%d].path %q is duplicated", wi, w.Path))
+			}
+			seenPath[w.Path] = struct{}{}
+		}
+		if msg := validateDoRef(w.Do); msg != "" {
+			errs = append(errs, fmt.Sprintf("webhooks[%d].do %s", wi, msg))
+		}
+		if w.Verify != "" {
+			if w.SecretRef == "" {
+				errs = append(errs, fmt.Sprintf("webhooks[%d] declares verify=%q but no secret_ref", wi, w.Verify))
+			} else {
+				conn, cred, ok := strings.Cut(w.SecretRef, ".")
+				if !ok {
+					errs = append(errs, fmt.Sprintf("webhooks[%d].secret_ref %q must be \"<connector>.<credential>\"", wi, w.SecretRef))
+				} else if creds, ok := connectorCreds[conn]; !ok {
+					errs = append(errs, fmt.Sprintf("webhooks[%d].secret_ref %q references undeclared connector %q", wi, w.SecretRef, conn))
+				} else if _, ok := creds[cred]; !ok {
+					errs = append(errs, fmt.Sprintf("webhooks[%d].secret_ref %q references undeclared credential %q on connector %q", wi, w.SecretRef, cred, conn))
+				}
+			}
+		}
+	}
+	return errs
+}
+
 //go:embed schema/manifest-v3.schema.json
 var schemaBytes []byte
 
@@ -492,6 +601,9 @@ func Validate(raw []byte) error {
 		errs = append(errs, validateDashboard(&m)...)
 		errs = append(errs, validateNavViewTypes(&m)...)
 	}
+
+	// Addon-level pipeline-runtime primitives (connectors / schedules / webhooks).
+	errs = append(errs, validatePipelineRuntime(&m)...)
 
 	if m.Contributions != nil {
 		for ai, a := range m.Contributions.Actions {

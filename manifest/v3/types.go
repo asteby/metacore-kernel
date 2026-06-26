@@ -45,7 +45,78 @@ type Manifest struct {
 	Preset          *Preset          `json:"preset,omitempty"`
 	Theme           *Theme           `json:"theme,omitempty"`
 	ConnectorPack   *ConnectorPack   `json:"connector_pack,omitempty"`
-	Signature       *Signature       `json:"signature,omitempty"`
+
+	// Connectors declares the third-party credential providers this addon needs
+	// (e.g. "github"). Unlike the standalone kind:ConnectorPack manifest, these
+	// ride embedded in a normal Addon: the host stores their Credentials per org
+	// (encrypted) and the connectors runtime resolves them for wasm handlers
+	// (connector_get) and for a webhook's secret_ref. Empty = no connectors.
+	Connectors []Connector `json:"connectors,omitempty"`
+
+	// Schedules declares declarative cron jobs the kernel scheduler fires per
+	// org: every Schedule.Every it dispatches Schedule.Do (a wasm:/webhook:/
+	// compiled: handler). The webhook-primary + cron-reconcile pattern uses this
+	// as the backstop that reconciles what an inbound webhook missed. Empty = none.
+	Schedules []Schedule `json:"schedules,omitempty"`
+
+	// Webhooks declares inbound webhook routes the host mounts and the kernel
+	// webhookin receiver routes: a verified request to InboundWebhook.Path
+	// dispatches InboundWebhook.Do. Signature is checked per Verify, the secret
+	// resolved from SecretRef (a connector credential). Empty = no webhooks.
+	Webhooks []InboundWebhook `json:"webhooks,omitempty"`
+
+	Signature *Signature `json:"signature,omitempty"`
+}
+
+// Connector declares a third-party credential provider an addon depends on. The
+// host (ops) collects + encrypts the Credentials per org and the connectors
+// runtime resolves them; wasm handlers read a credential via connector_get
+// (gated by the connector:read capability) and a webhook's secret_ref resolves
+// to one of these credentials.
+type Connector struct {
+	// Key identifies the connector (e.g. "github"); connector_get(key) and a
+	// webhook's secret_ref ("<key>.<credential>") reference it.
+	Key string `json:"key"`
+	// Label is the human/i18n name shown in the authorization UI.
+	Label string `json:"label,omitempty"`
+	// Auth is the credential-acquisition flow: "oauth2" | "token".
+	Auth string `json:"auth,omitempty"`
+	// Credentials enumerates the fields the org supplies (an access_token,
+	// repo, webhook_secret …). Reuses the Setting shape (key/type/default/
+	// required/validation); "secret"-typed fields are stored encrypted.
+	Credentials []Setting `json:"credentials,omitempty"`
+}
+
+// Schedule is one declarative cron job. The kernel scheduler parses Every as a
+// Go duration ("30s","5m","1h") and, per installed org, fires Do on that
+// interval. Do references the same dispatchable handler set as a transition
+// hook: "wasm:<export>" | "webhook:<key>" | "compiled:<fn>".
+type Schedule struct {
+	// Key identifies the schedule within the addon (e.g. "sync_issues").
+	Key string `json:"key"`
+	// Every is the Go duration between fires (time.ParseDuration).
+	Every string `json:"every"`
+	// Do is the handler reference dispatched on each tick.
+	Do string `json:"do"`
+}
+
+// InboundWebhook declares a webhook route the host mounts under the addon+org
+// namespace. On a verified request the kernel webhookin receiver routes the
+// body to Do. Verify selects the signature scheme; SecretRef names the connector
+// credential holding the signing secret.
+type InboundWebhook struct {
+	// Key identifies the webhook within the addon (e.g. "github_push").
+	Key string `json:"key"`
+	// Path is the route mounted under the addon+org namespace (e.g.
+	// "/webhooks/github").
+	Path string `json:"path"`
+	// Verify is the signature scheme: "" (none) | "hmac-sha256".
+	Verify string `json:"verify,omitempty"`
+	// SecretRef resolves the signing secret as "<connector>.<credential>"
+	// (e.g. "github.webhook_secret"). Required when Verify is set.
+	SecretRef string `json:"secret_ref,omitempty"`
+	// Do is the handler reference the verified body is routed to.
+	Do string `json:"do"`
 }
 
 // Frontend describes the federated UI bundle the host loads at runtime for
@@ -990,6 +1061,9 @@ type Setting struct {
 	Default     interface{}     `json:"default,omitempty"`
 	Required    bool            `json:"required,omitempty"`
 	Options     []SettingOption `json:"options,omitempty"`
+	// Validation is an optional constraint hint (e.g. a regex or a named rule)
+	// the host applies when collecting the value. Used by connector credentials.
+	Validation string `json:"validation,omitempty"`
 }
 
 // SettingOption is a value/label pair for select-typed settings.

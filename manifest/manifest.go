@@ -113,6 +113,59 @@ type Manifest struct {
 	// "metadata_i18n" because the top-level Manifest.I18n (app-UI string
 	// bundles) already owns the "i18n" JSON key.
 	MetadataI18n map[string]MetadataLocale `json:"metadata_i18n,omitempty"`
+
+	// Connectors / Schedules / Webhooks are the host projection of the v3
+	// pipeline-runtime primitives (see manifest/v3.Connector/Schedule/
+	// InboundWebhook). Connectors enumerate the per-org credential providers the
+	// host stores and the connectors runtime resolves; Schedules are the cron
+	// jobs the kernel scheduler fires per org; Webhooks are the inbound routes
+	// the host mounts and the kernel webhookin receiver routes. All optional —
+	// empty slices leave the addon with no runtime primitives (back-compat).
+	Connectors []ConnectorDef      `json:"connectors,omitempty"`
+	Schedules  []ScheduleDef       `json:"schedules,omitempty"`
+	Webhooks   []InboundWebhookDef `json:"webhooks,omitempty"`
+}
+
+// ConnectorDef is the host/runtime projection of a v3 Connector: a third-party
+// credential provider whose Credentials the host stores per org (encrypted) and
+// the connectors runtime resolves for wasm handlers and webhook secrets.
+type ConnectorDef struct {
+	Key         string          `json:"key"`
+	Label       string          `json:"label,omitempty"`
+	Auth        string          `json:"auth,omitempty"`
+	Credentials []CredentialDef `json:"credentials,omitempty"`
+}
+
+// CredentialDef is one field of a ConnectorDef the org supplies. Secret==true
+// (derived from a "secret" credential type) signals the host to store it
+// encrypted. Mirrors the v3 Setting fields used by connector credentials.
+type CredentialDef struct {
+	Key        string      `json:"key"`
+	Type       string      `json:"type,omitempty"`
+	Default    interface{} `json:"default,omitempty"`
+	Required   bool        `json:"required,omitempty"`
+	Validation string      `json:"validation,omitempty"`
+	Secret     bool        `json:"secret,omitempty"`
+}
+
+// ScheduleDef is the host/runtime projection of a v3 Schedule: a cron job the
+// kernel scheduler fires per org. Every is a Go duration string; Do is the
+// dispatchable handler reference ("wasm:"/"webhook:"/"compiled:").
+type ScheduleDef struct {
+	Key   string `json:"key"`
+	Every string `json:"every"`
+	Do    string `json:"do"`
+}
+
+// InboundWebhookDef is the host/runtime projection of a v3 InboundWebhook: a
+// route the host mounts and the kernel webhookin receiver routes after
+// verifying the signature (Verify) against the secret resolved from SecretRef.
+type InboundWebhookDef struct {
+	Key       string `json:"key"`
+	Path      string `json:"path"`
+	Verify    string `json:"verify,omitempty"`
+	SecretRef string `json:"secret_ref,omitempty"`
+	Do        string `json:"do"`
 }
 
 // MetadataLocale is one locale's catalog copy (name/description/features).

@@ -11,8 +11,9 @@ keep them in sync.
 > `github.com/asteby/metacore-kernel/guest` package wraps `event_emit`
 > (and, over time, the rest of the host surface) behind typed Go APIs.
 
-> ABI version: **1.5** (proposal — `data_query` host import added on top of
-> v1.4; guests built against 1.0 – 1.4 keep working — purely additive).
+> ABI version: **1.6** (proposal — `http_request` + `connector_get` host
+> imports added on top of v1.5; guests built against 1.0 – 1.5 keep working —
+> purely additive, `http_fetch` is unchanged).
 > Bundled via `manifest.backend.runtime = "wasm"`.
 > Implementation: `runtime/wasm/abi.go`, `runtime/wasm/capabilities.go`.
 
@@ -26,6 +27,7 @@ keep them in sync.
 | 1.3     | proposal | adds `event_emit` host import; guests publish a `<name>, <payload>` pair through the kernel's in-process `events.Bus`. Capability gated by `event:emit <name>` and tenant-scoped by the per-invocation `orgID` the host carries on the context bag. |
 | 1.4     | proposal | adds `data_mutate` host import; ONE org-scoped row mutation (`create` / `update` / `delete` with atomic `inc`) against a LOGICAL table resolved through the embedder-injected `TableResolver` (NOT the addon-schema `search_path`), followed by a post-commit `*dynamic.CanonicalEvent` on the host bus. Gated by `db:write <logical table>`. |
 | 1.5     | proposal | adds `data_query` host import; read-only sibling of `data_mutate`: ONE org-scoped, equality-filtered SELECT against a LOGICAL table resolved through the SAME `TableResolver` (NOT the addon-schema `search_path` of `db_query`, whose shadow schemas hold no live rows in embedding hosts). Soft-delete aware (`deleted_at IS NULL` auto-appended). Gated by `db:read <logical table>`. No events. |
+| 1.6     | proposal | adds `http_request` (outbound HTTP with caller-supplied request headers as a JSON object — enables `Authorization`/`Accept` for authenticated third-party calls; same `http:fetch` capability + SSRF guard + 30 s timeout + 8 MiB cap as `http_fetch`, which is left unchanged and now delegates to the shared path with empty headers) and `connector_get` (resolves one org's credentials for a declared connector — the v3 `connectors` block — returning a JSON object; gated by `connector:read <key>` and tenant-scoped by the invocation `orgID`). Guests built against 1.0 – 1.5 keep working. |
 
 ## 1. Declaration
 

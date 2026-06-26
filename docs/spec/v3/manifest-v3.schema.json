@@ -94,6 +94,27 @@
     "connector_pack": {
       "$ref": "#/$defs/ConnectorPack"
     },
+    "connectors": {
+      "type": "array",
+      "description": "Third-party credential providers this addon needs. The host stores their credentials per org (encrypted); the connectors runtime resolves them for wasm handlers (connector_get) and for a webhook's secret_ref.",
+      "items": {
+        "$ref": "#/$defs/Connector"
+      }
+    },
+    "schedules": {
+      "type": "array",
+      "description": "Declarative cron jobs the kernel scheduler fires per org: every 'every' it dispatches 'do'. The webhook-primary + cron-reconcile backstop.",
+      "items": {
+        "$ref": "#/$defs/Schedule"
+      }
+    },
+    "webhooks": {
+      "type": "array",
+      "description": "Inbound webhook routes the host mounts and the kernel webhookin receiver routes after verifying the signature against the secret resolved from secret_ref.",
+      "items": {
+        "$ref": "#/$defs/InboundWebhook"
+      }
+    },
     "signature": {
       "$ref": "#/$defs/Signature"
     }
@@ -1947,6 +1968,108 @@
               }
             }
           }
+        },
+        "validation": {
+          "type": "string",
+          "description": "Optional constraint hint (regex or named rule) the host applies when collecting the value. Used by connector credentials."
+        }
+      }
+    },
+    "Connector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key"
+      ],
+      "description": "A third-party credential provider an addon depends on. The host collects + encrypts the credentials per org; wasm handlers read one via connector_get (gated by connector:read) and a webhook's secret_ref resolves to one.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Connector identifier (e.g. 'github'); connector_get(key) and a webhook secret_ref ('<key>.<credential>') reference it."
+        },
+        "label": {
+          "type": "string",
+          "description": "Human/i18n name shown in the authorization UI."
+        },
+        "auth": {
+          "type": "string",
+          "enum": [
+            "oauth2",
+            "token"
+          ],
+          "description": "Credential-acquisition flow."
+        },
+        "credentials": {
+          "type": "array",
+          "description": "Fields the org supplies (access_token, repo, webhook_secret, ...). 'secret'-typed fields are stored encrypted.",
+          "items": {
+            "$ref": "#/$defs/Setting"
+          }
+        }
+      }
+    },
+    "Schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "every",
+        "do"
+      ],
+      "description": "One declarative cron job. The scheduler parses 'every' as a Go duration and, per installed org, fires 'do' on that interval.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Schedule identifier within the addon (e.g. 'sync_issues')."
+        },
+        "every": {
+          "type": "string",
+          "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)([0-9]+(ns|us|µs|ms|s|m|h))*$",
+          "description": "Go duration between fires (e.g. '30s', '5m', '1h')."
+        },
+        "do": {
+          "type": "string",
+          "pattern": "^(wasm|webhook|compiled):.+$",
+          "description": "Handler reference dispatched on each tick: 'wasm:<export>' | 'webhook:<key>' | 'compiled:<fn>'."
+        }
+      }
+    },
+    "InboundWebhook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "path",
+        "do"
+      ],
+      "description": "A webhook route the host mounts under the addon+org namespace. On a verified request the kernel webhookin receiver routes the body to 'do'.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Webhook identifier within the addon (e.g. 'github_push')."
+        },
+        "path": {
+          "type": "string",
+          "description": "Route mounted under the addon+org namespace (e.g. '/webhooks/github')."
+        },
+        "verify": {
+          "type": "string",
+          "enum": [
+            "hmac-sha256"
+          ],
+          "description": "Signature scheme. Omit for no verification."
+        },
+        "secret_ref": {
+          "type": "string",
+          "description": "Signing secret as '<connector>.<credential>' (e.g. 'github.webhook_secret'). Required when verify is set."
+        },
+        "do": {
+          "type": "string",
+          "pattern": "^(wasm|webhook|compiled):.+$",
+          "description": "Handler reference the verified body is routed to: 'wasm:<export>' | 'webhook:<key>' | 'compiled:<fn>'."
         }
       }
     },

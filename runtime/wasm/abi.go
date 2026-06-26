@@ -22,6 +22,14 @@ import (
 //	  - log(msgPtr, msgLen)
 //	  - env_get(keyPtr, keyLen) -> i64 (ptr|len, 0 if missing)
 //	  - http_fetch(urlPtr, urlLen, methodPtr, methodLen, bodyPtr, bodyLen) -> i64
+//	  - http_request(urlPtr, urlLen, methodPtr, methodLen, headersPtr, headersLen, bodyPtr, bodyLen) -> i64
+//	      Like http_fetch but with caller-supplied request headers (JSON object,
+//	      e.g. {"Authorization":"token ..."}). Same http:fetch gate + SSRF guard
+//	      + 30s timeout + 8 MiB cap. http_fetch delegates here with no headers.
+//	  - connector_get(keyPtr, keyLen) -> i64
+//	      Packed (ptr<<32)|len of the resolved connector credentials as a JSON
+//	      object. Gated by connector:read <key>, tenant-scoped by the invocation
+//	      orgID. See docs/wasm-abi.md § 1.6.
 //	  - data_mutate(reqPtr, reqLen) -> i64
 //	      Packed (ptr<<32)|len of the v1 `{success, data, meta}` envelope
 //	      documented in docs/wasm-abi.md § 14. One org-scoped row mutation

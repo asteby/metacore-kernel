@@ -99,7 +99,80 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.I18n = mapI18n(m.I18n)
 	out.Signature = mapSignature(m.Signature)
 	out.Backend = deriveBackend(m)
+	out.Connectors = mapConnectors(m.Connectors)
+	out.Schedules = mapSchedules(m.Schedules)
+	out.Webhooks = mapWebhooks(m.Webhooks)
 
+	return out
+}
+
+// mapConnectors / mapSchedules / mapWebhooks fold the v3 pipeline-runtime
+// primitives onto the host Manifest so the connectors runtime, the scheduler
+// and the webhookin receiver can read them off the installed manifest. Each is
+// a near-1:1 field copy; an empty input maps to nil (no primitive declared,
+// the back-compat default).
+func mapConnectors(in []v3.Connector) []ConnectorDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ConnectorDef, 0, len(in))
+	for _, c := range in {
+		out = append(out, ConnectorDef{
+			Key:         c.Key,
+			Label:       c.Label,
+			Auth:        c.Auth,
+			Credentials: mapCredentials(c.Credentials),
+		})
+	}
+	return out
+}
+
+// mapCredentials projects v3 connector credential Settings onto CredentialDefs.
+// A credential whose type is "secret" sets Secret so the host stores it
+// encrypted (mirroring SettingDef.Secret).
+func mapCredentials(in []v3.Setting) []CredentialDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]CredentialDef, 0, len(in))
+	for _, s := range in {
+		out = append(out, CredentialDef{
+			Key:        s.Key,
+			Type:       s.Type,
+			Default:    s.Default,
+			Required:   s.Required,
+			Validation: s.Validation,
+			Secret:     s.Type == "secret",
+		})
+	}
+	return out
+}
+
+func mapSchedules(in []v3.Schedule) []ScheduleDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ScheduleDef, 0, len(in))
+	for _, s := range in {
+		out = append(out, ScheduleDef{Key: s.Key, Every: s.Every, Do: s.Do})
+	}
+	return out
+}
+
+func mapWebhooks(in []v3.InboundWebhook) []InboundWebhookDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]InboundWebhookDef, 0, len(in))
+	for _, w := range in {
+		out = append(out, InboundWebhookDef{
+			Key:       w.Key,
+			Path:      w.Path,
+			Verify:    w.Verify,
+			SecretRef: w.SecretRef,
+			Do:        w.Do,
+		})
+	}
 	return out
 }
 

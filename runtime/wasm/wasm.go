@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/asteby/metacore-kernel/connectors"
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/security"
@@ -53,6 +54,7 @@ type Host struct {
 	enforcer      *security.Enforcer
 	tableResolver func(table string) string
 	execSchema    func(addonKey string) string
+	connectors    *connectors.Resolver
 	logger        *log.Logger
 	compiled      sync.Map // addonKey -> *compiledEntry
 	modules       sync.Map // instanceKey(addonKey, installation) -> *Module
@@ -150,6 +152,16 @@ func (h *Host) WithTableResolver(r func(table string) string) *Host {
 // host-configured schema. When unset, resolution is `AddonSchema(addonKey)`.
 func (h *Host) WithExecSchema(fn func(addonKey string) string) *Host {
 	h.execSchema = fn
+	return h
+}
+
+// WithConnectors binds the connectors.Resolver the `metacore_host.connector_get`
+// import resolves credentials through. The import is gated by the addon's
+// `connector:read <key>` capability and scoped to the invocation's org. When
+// unset, connector_get returns a `connector_unavailable` JSON error to the
+// guest (the feature-off state).
+func (h *Host) WithConnectors(r *connectors.Resolver) *Host {
+	h.connectors = r
 	return h
 }
 
@@ -258,6 +270,7 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		enforcer:     h.enforcer,
 		resolveTable: h.tableResolver,
 		execSchema:   h.execSchema,
+		connectors:   h.connectors,
 		logger:       h.logger,
 	})
 
