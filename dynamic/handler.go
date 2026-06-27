@@ -394,6 +394,9 @@ func (h *Handler) handleError(c fiber.Ctx, err error) error {
 	if errors.Is(err, ErrInvalidState) {
 		return respondErr(c, fiber.StatusConflict, err.Error())
 	}
+	if errors.Is(err, ErrInvalidTransition) {
+		return respondErr(c, fiber.StatusUnprocessableEntity, err.Error())
+	}
 	switch err {
 	case ErrModelNotFound, ErrRecordNotFound, ErrSourceModelNotFound, ErrOptionsFieldNotFound, ErrActionNotFound:
 		return respondErr(c, fiber.StatusNotFound, err.Error())

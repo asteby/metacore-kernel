@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/asteby/metacore-kernel/manifest/computeexpr"
@@ -324,6 +325,12 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 		if err := validateComputeRollups(md.Relations, colsByModel[md.ModelKey], colsByModel); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
+		if err := validateStageMachine(md); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
+		}
+	}
+	if err := m.validatePipelineRuntime(); err != nil {
+		return err
 	}
 	for i, c := range m.Capabilities {
 		if !strings.Contains(c.Kind, ":") {
@@ -618,6 +625,175 @@ func validateSeed(seed *SeedDef, cols []ColumnDef) error {
 // the schema enum). count ignores from/expr.
 var validFns = map[string]struct{}{
 	"sum": {}, "count": {}, "avg": {}, "min": {}, "max": {},
+}
+
+// validHookPrefixes mirrors v3.validHookPrefixes: the TransitionHook.Do dispatch
+// targets the dynamic engine knows how to route.
+var validHookPrefixes = map[string]struct{}{
+	"wasm": {}, "webhook": {}, "compiled": {},
+}
+
+// validateStageMachine is the legacy/install-surface twin of v3.validateStageMachine:
+// stage_field must name a declared column, stage keys must be unique, transitions
+// must reference declared stages, and each on_transition hook must match declared
+// stages (or "*") with a wasm:/webhook:/compiled: `do`. An empty stage machine
+// (no StageField/Stages/Transitions/OnTransition) is accepted unconditionally so
+// flat models pass unchanged. Mirrors the v3 validator so a manifest fails
+// identically on both the v3 and the legacy/install surfaces ("dual validation").
+func validateStageMachine(md ModelDefinition) error {
+	if len(md.Stages) == 0 && md.StageField == "" && len(md.Transitions) == 0 && len(md.OnTransition) == 0 {
+		return nil
+	}
+	if md.StageField == "" {
+		return fmt.Errorf("stage machine declared without stage_field")
+	}
+	known := false
+	for _, c := range md.Columns {
+		if c.Name == md.StageField {
+			known = true
+			break
+		}
+	}
+	if !known {
+		return fmt.Errorf("stage_field %q is not a declared column on the model", md.StageField)
+	}
+	if len(md.Stages) == 0 {
+		return fmt.Errorf("stage_field %q declared but no stages", md.StageField)
+	}
+	stageKeys := make(map[string]struct{}, len(md.Stages))
+	for i, st := range md.Stages {
+		if st.Key == "" {
+			return fmt.Errorf("stages[%d].key required", i)
+		}
+		if _, dup := stageKeys[st.Key]; dup {
+			return fmt.Errorf("stages[%d].key %q duplicated", i, st.Key)
+		}
+		stageKeys[st.Key] = struct{}{}
+	}
+	for i, t := range md.Transitions {
+		if _, ok := stageKeys[t.From]; !ok {
+			return fmt.Errorf("transitions[%d].from %q is not a declared stage key", i, t.From)
+		}
+		if _, ok := stageKeys[t.To]; !ok {
+			return fmt.Errorf("transitions[%d].to %q is not a declared stage key", i, t.To)
+		}
+	}
+	for i, h := range md.OnTransition {
+		if h.From != "*" && h.From != "" {
+			if _, ok := stageKeys[h.From]; !ok {
+				return fmt.Errorf("onTransition[%d].from %q is not a declared stage key (or \"*\")", i, h.From)
+			}
+		}
+		if h.To != "*" {
+			if _, ok := stageKeys[h.To]; !ok {
+				return fmt.Errorf("onTransition[%d].to %q is not a declared stage key (or \"*\")", i, h.To)
+			}
+		}
+		prefix, _, found := strings.Cut(h.Do, ":")
+		if !found {
+			return fmt.Errorf("onTransition[%d].do %q must be wasm:<export> | webhook:<key> | compiled:<fn>", i, h.Do)
+		}
+		if _, ok := validHookPrefixes[prefix]; !ok {
+			return fmt.Errorf("onTransition[%d].do %q has an unknown prefix (want wasm|webhook|compiled)", i, prefix)
+		}
+	}
+	return nil
+}
+
+// validateDoRef is the legacy/install twin of v3.validateDoRef: a Schedule /
+// InboundWebhook `do` must carry a known wasm:/webhook:/compiled: prefix.
+func validateDoRef(do string) error {
+	prefix, _, found := strings.Cut(do, ":")
+	if !found {
+		return fmt.Errorf("%q must be wasm:<export> | webhook:<key> | compiled:<fn>", do)
+	}
+	if _, ok := validHookPrefixes[prefix]; !ok {
+		return fmt.Errorf("%q has an unknown prefix (want wasm|webhook|compiled)", do)
+	}
+	return nil
+}
+
+// validatePipelineRuntime is the legacy/install-surface twin of
+// v3.validatePipelineRuntime: connector keys unique; a schedule's `every` parses
+// as a positive Go duration and its `do` carries a known prefix; a webhook's
+// `do` carries a known prefix and, when it declares a `verify`, its `secret_ref`
+// resolves to a declared connector credential. Empty blocks pass unchanged so
+// addons without runtime primitives are unaffected. Mirrors the v3 validator so
+// a manifest fails identically on both surfaces ("dual validation").
+func (m *Manifest) validatePipelineRuntime() error {
+	if len(m.Connectors) == 0 && len(m.Schedules) == 0 && len(m.Webhooks) == 0 {
+		return nil
+	}
+	connectorCreds := make(map[string]map[string]struct{}, len(m.Connectors))
+	seenConn := make(map[string]struct{}, len(m.Connectors))
+	for ci, c := range m.Connectors {
+		if c.Key == "" {
+			return fmt.Errorf("connectors[%d].key required", ci)
+		}
+		if _, dup := seenConn[c.Key]; dup {
+			return fmt.Errorf("connectors[%d].key %q duplicated", ci, c.Key)
+		}
+		seenConn[c.Key] = struct{}{}
+		creds := make(map[string]struct{}, len(c.Credentials))
+		for _, cr := range c.Credentials {
+			creds[cr.Key] = struct{}{}
+		}
+		connectorCreds[c.Key] = creds
+	}
+	seenSched := make(map[string]struct{}, len(m.Schedules))
+	for si, s := range m.Schedules {
+		if s.Key == "" {
+			return fmt.Errorf("schedules[%d].key required", si)
+		}
+		if _, dup := seenSched[s.Key]; dup {
+			return fmt.Errorf("schedules[%d].key %q duplicated", si, s.Key)
+		}
+		seenSched[s.Key] = struct{}{}
+		if d, err := time.ParseDuration(s.Every); err != nil || d <= 0 {
+			return fmt.Errorf("schedules[%d].every %q is not a positive Go duration", si, s.Every)
+		}
+		if err := validateDoRef(s.Do); err != nil {
+			return fmt.Errorf("schedules[%d].do %w", si, err)
+		}
+	}
+	seenHook := make(map[string]struct{}, len(m.Webhooks))
+	seenPath := make(map[string]struct{}, len(m.Webhooks))
+	for wi, w := range m.Webhooks {
+		if w.Key == "" {
+			return fmt.Errorf("webhooks[%d].key required", wi)
+		}
+		if _, dup := seenHook[w.Key]; dup {
+			return fmt.Errorf("webhooks[%d].key %q duplicated", wi, w.Key)
+		}
+		seenHook[w.Key] = struct{}{}
+		if w.Path == "" {
+			return fmt.Errorf("webhooks[%d].path required", wi)
+		}
+		if _, dup := seenPath[w.Path]; dup {
+			return fmt.Errorf("webhooks[%d].path %q duplicated", wi, w.Path)
+		}
+		seenPath[w.Path] = struct{}{}
+		if err := validateDoRef(w.Do); err != nil {
+			return fmt.Errorf("webhooks[%d].do %w", wi, err)
+		}
+		if w.Verify != "" {
+			if w.SecretRef == "" {
+				return fmt.Errorf("webhooks[%d] declares verify=%q but no secret_ref", wi, w.Verify)
+			}
+			conn, cred, ok := strings.Cut(w.SecretRef, ".")
+			if !ok {
+				return fmt.Errorf("webhooks[%d].secret_ref %q must be \"<connector>.<credential>\"", wi, w.SecretRef)
+			}
+			creds, ok := connectorCreds[conn]
+			if !ok {
+				return fmt.Errorf("webhooks[%d].secret_ref %q references undeclared connector %q", wi, w.SecretRef, conn)
+			}
+			if _, ok := creds[cred]; !ok {
+				return fmt.Errorf("webhooks[%d].secret_ref %q references undeclared credential %q on connector %q", wi, w.SecretRef, cred, conn)
+			}
+		}
+	}
+	return nil
 }
 
 // validateComputeFormulas mirrors the v3 Tier-2 check on the legacy/install

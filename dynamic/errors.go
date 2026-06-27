@@ -24,6 +24,12 @@ var (
 	// Trigger.Type the kernel has no dispatcher for.
 	ErrUnsupportedTriggerType = errors.New("unsupported trigger type")
 
+	// ErrInvalidTransition is returned when an Update moves a stage-machine
+	// model's stage_field to a (from, to) pair that is not one of the model's
+	// declared transitions (or when a required on_transition hook declines). The
+	// handler maps it to HTTP 422 Unprocessable Entity.
+	ErrInvalidTransition = errors.New("invalid stage transition")
+
 	// ErrInvalidState is returned when an action declares RequiresState and the
 	// target record's `status` column is not one of the allowed values. The
 	// action is gated on the record's lifecycle state, so dispatching it from a

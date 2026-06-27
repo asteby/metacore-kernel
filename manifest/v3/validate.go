@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/asteby/metacore-kernel/manifest/computeexpr"
@@ -173,6 +174,218 @@ func validateDashboard(m *Manifest) []string {
 		}
 		if w.Compare != nil && (q.DateField == "" || q.Range == "") {
 			errs = append(errs, fmt.Sprintf("%s.compare requires query.date_field and query.range", where))
+		}
+	}
+	return errs
+}
+
+// validHookPrefixes is the allowlist of TransitionHook.Do dispatch targets,
+// shared with the JSON schema pattern so the struct-level checks and the schema
+// agree (the "dual validation" contract).
+var validHookPrefixes = map[string]struct{}{
+	"wasm": {}, "webhook": {}, "compiled": {},
+}
+
+// validateStageMachine enforces the cross-field invariants of a model's stage
+// machine that the JSON schema cannot express: stage_field names a real column,
+// stage keys are unique, transitions reference declared stages, and each
+// on_transition hook matches declared stages (or "*") and carries a valid
+// wasm:/webhook:/compiled: `do`. Returns a slice (possibly empty) prefixed with
+// the offending model's index so the caller can append. Empty stages is a
+// no-op (the model has no stage machine).
+func validateStageMachine(mi int, mod Model, ownCols map[string]struct{}) []string {
+	if len(mod.Stages) == 0 && mod.StageField == "" && len(mod.Transitions) == 0 && len(mod.OnTransition) == 0 {
+		return nil
+	}
+	var errs []string
+	where := fmt.Sprintf("models[%d]", mi)
+
+	// stage_field is mandatory once any stage-machine field is declared, and
+	// must name a declared column.
+	if mod.StageField == "" {
+		errs = append(errs, fmt.Sprintf("%s declares stages/transitions/on_transition but no stage_field", where))
+	} else if _, ok := ownCols[mod.StageField]; !ok {
+		errs = append(errs, fmt.Sprintf("%s.stage_field %q is not a declared column on the model", where, mod.StageField))
+	}
+
+	// Stage keys: non-empty and unique.
+	stageKeys := make(map[string]struct{}, len(mod.Stages))
+	for si, st := range mod.Stages {
+		if st.Key == "" {
+			errs = append(errs, fmt.Sprintf("%s.stages[%d].key is empty", where, si))
+			continue
+		}
+		if _, dup := stageKeys[st.Key]; dup {
+			errs = append(errs, fmt.Sprintf("%s.stages[%d].key %q is duplicated", where, si, st.Key))
+		}
+		stageKeys[st.Key] = struct{}{}
+	}
+	if len(mod.Stages) == 0 && mod.StageField != "" {
+		errs = append(errs, fmt.Sprintf("%s declares stage_field %q but no stages", where, mod.StageField))
+	}
+
+	// Transitions: from/to must reference declared stage keys.
+	for ti, t := range mod.Transitions {
+		if _, ok := stageKeys[t.From]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.transitions[%d].from %q is not a declared stage key", where, ti, t.From))
+		}
+		if _, ok := stageKeys[t.To]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.transitions[%d].to %q is not a declared stage key", where, ti, t.To))
+		}
+	}
+
+	// Hooks: from/to must be "*" or a declared stage key; `do` must carry a
+	// known prefix (the schema pattern enforces the shape, this enforces the set).
+	for hi, h := range mod.OnTransition {
+		if h.From != "*" && h.From != "" {
+			if _, ok := stageKeys[h.From]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.on_transition[%d].from %q is not a declared stage key (or \"*\")", where, hi, h.From))
+			}
+		}
+		if h.To != "*" {
+			if _, ok := stageKeys[h.To]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.on_transition[%d].to %q is not a declared stage key (or \"*\")", where, hi, h.To))
+			}
+		}
+		prefix, _, found := strings.Cut(h.Do, ":")
+		if !found {
+			errs = append(errs, fmt.Sprintf("%s.on_transition[%d].do %q must be wasm:<export> | webhook:<key> | compiled:<fn>", where, hi, h.Do))
+		} else if _, ok := validHookPrefixes[prefix]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.on_transition[%d].do %q has an unknown prefix (want wasm|webhook|compiled)", where, hi, prefix))
+		}
+	}
+	return errs
+}
+
+// validateNavViewTypes enforces that a kanban nav entry declares the group_by
+// column it groups its board by. view_type is otherwise free (hosts fall back
+// to a table for an unknown value). Walks the nested NavItem tree.
+func validateNavViewTypes(m *Manifest) []string {
+	if m.Contributions == nil {
+		return nil
+	}
+	var errs []string
+	var walk func(items []NavItem, path string)
+	walk = func(items []NavItem, path string) {
+		for i, it := range items {
+			where := fmt.Sprintf("%s[%d]", path, i)
+			if it.ViewType == "kanban" && it.GroupBy == "" {
+				errs = append(errs, fmt.Sprintf("%s declares view_type=kanban but no group_by", where))
+			}
+			if len(it.Items) > 0 {
+				walk(it.Items, where+".items")
+			}
+		}
+	}
+	for gi, g := range m.Contributions.Navigation {
+		walk(g.Items, fmt.Sprintf("contributions.navigation[%d].items", gi))
+	}
+	return errs
+}
+
+// validateDoRef checks a Schedule/InboundWebhook `do` carries a known
+// wasm:/webhook:/compiled: dispatch prefix (the schema pattern enforces the
+// shape; this enforces the set, mirroring validateStageMachine). Returns an
+// error string suffix or "" when valid.
+func validateDoRef(do string) string {
+	prefix, _, found := strings.Cut(do, ":")
+	if !found {
+		return fmt.Sprintf("%q must be wasm:<export> | webhook:<key> | compiled:<fn>", do)
+	}
+	if _, ok := validHookPrefixes[prefix]; !ok {
+		return fmt.Sprintf("%q has an unknown prefix (want wasm|webhook|compiled)", do)
+	}
+	return ""
+}
+
+// validatePipelineRuntime enforces the cross-field invariants of the addon-level
+// pipeline-runtime primitives (connectors / schedules / webhooks) that the JSON
+// schema cannot express: connector keys are unique; a schedule's `every` parses
+// as a Go duration and its `do` carries a known prefix; a webhook's `do` carries
+// a known prefix and, when it declares a `verify`, it supplies a `secret_ref`
+// that resolves to a declared connector credential. Empty blocks are a no-op
+// (the addon has no runtime primitives — the back-compat default).
+func validatePipelineRuntime(m *Manifest) []string {
+	if len(m.Connectors) == 0 && len(m.Schedules) == 0 && len(m.Webhooks) == 0 {
+		return nil
+	}
+	var errs []string
+
+	// Connectors: unique keys; index their credential keys for secret_ref checks.
+	connectorCreds := make(map[string]map[string]struct{}, len(m.Connectors))
+	seenConn := make(map[string]struct{}, len(m.Connectors))
+	for ci, c := range m.Connectors {
+		if c.Key == "" {
+			errs = append(errs, fmt.Sprintf("connectors[%d].key is empty", ci))
+			continue
+		}
+		if _, dup := seenConn[c.Key]; dup {
+			errs = append(errs, fmt.Sprintf("connectors[%d].key %q is duplicated", ci, c.Key))
+		}
+		seenConn[c.Key] = struct{}{}
+		creds := make(map[string]struct{}, len(c.Credentials))
+		for _, cr := range c.Credentials {
+			creds[cr.Key] = struct{}{}
+		}
+		connectorCreds[c.Key] = creds
+	}
+
+	// Schedules: unique keys; every parses; do prefix known.
+	seenSched := make(map[string]struct{}, len(m.Schedules))
+	for si, s := range m.Schedules {
+		if s.Key == "" {
+			errs = append(errs, fmt.Sprintf("schedules[%d].key is empty", si))
+		} else {
+			if _, dup := seenSched[s.Key]; dup {
+				errs = append(errs, fmt.Sprintf("schedules[%d].key %q is duplicated", si, s.Key))
+			}
+			seenSched[s.Key] = struct{}{}
+		}
+		if d, err := time.ParseDuration(s.Every); err != nil || d <= 0 {
+			errs = append(errs, fmt.Sprintf("schedules[%d].every %q is not a positive Go duration (e.g. \"30s\", \"5m\")", si, s.Every))
+		}
+		if msg := validateDoRef(s.Do); msg != "" {
+			errs = append(errs, fmt.Sprintf("schedules[%d].do %s", si, msg))
+		}
+	}
+
+	// Webhooks: unique keys + paths; do prefix known; verify ⇒ secret_ref → a
+	// declared connector credential.
+	seenHook := make(map[string]struct{}, len(m.Webhooks))
+	seenPath := make(map[string]struct{}, len(m.Webhooks))
+	for wi, w := range m.Webhooks {
+		if w.Key == "" {
+			errs = append(errs, fmt.Sprintf("webhooks[%d].key is empty", wi))
+		} else {
+			if _, dup := seenHook[w.Key]; dup {
+				errs = append(errs, fmt.Sprintf("webhooks[%d].key %q is duplicated", wi, w.Key))
+			}
+			seenHook[w.Key] = struct{}{}
+		}
+		if w.Path == "" {
+			errs = append(errs, fmt.Sprintf("webhooks[%d].path is empty", wi))
+		} else {
+			if _, dup := seenPath[w.Path]; dup {
+				errs = append(errs, fmt.Sprintf("webhooks[%d].path %q is duplicated", wi, w.Path))
+			}
+			seenPath[w.Path] = struct{}{}
+		}
+		if msg := validateDoRef(w.Do); msg != "" {
+			errs = append(errs, fmt.Sprintf("webhooks[%d].do %s", wi, msg))
+		}
+		if w.Verify != "" {
+			if w.SecretRef == "" {
+				errs = append(errs, fmt.Sprintf("webhooks[%d] declares verify=%q but no secret_ref", wi, w.Verify))
+			} else {
+				conn, cred, ok := strings.Cut(w.SecretRef, ".")
+				if !ok {
+					errs = append(errs, fmt.Sprintf("webhooks[%d].secret_ref %q must be \"<connector>.<credential>\"", wi, w.SecretRef))
+				} else if creds, ok := connectorCreds[conn]; !ok {
+					errs = append(errs, fmt.Sprintf("webhooks[%d].secret_ref %q references undeclared connector %q", wi, w.SecretRef, conn))
+				} else if _, ok := creds[cred]; !ok {
+					errs = append(errs, fmt.Sprintf("webhooks[%d].secret_ref %q references undeclared credential %q on connector %q", wi, w.SecretRef, cred, conn))
+				}
+			}
 		}
 	}
 	return errs
@@ -348,6 +561,12 @@ func Validate(raw []byte) error {
 				}
 			}
 		}
+		// Stage machine: stage_field must name a declared column; stage keys
+		// unique; transitions/hooks must reference declared stage keys (or "*"
+		// for hooks); a hook's `do` carries a wasm:/webhook:/compiled: prefix
+		// (the schema pattern already enforces the shape). Mirrors the legacy
+		// validator so a manifest fails identically on both surfaces.
+		errs = append(errs, validateStageMachine(mi, mod, ownCols)...)
 		for ri, rel := range mod.Relations {
 			where := fmt.Sprintf("models[%d].relations[%d]", mi, ri)
 			switch rel.Kind {
@@ -380,7 +599,11 @@ func Validate(raw []byte) error {
 
 	if m.Contributions != nil {
 		errs = append(errs, validateDashboard(&m)...)
+		errs = append(errs, validateNavViewTypes(&m)...)
 	}
+
+	// Addon-level pipeline-runtime primitives (connectors / schedules / webhooks).
+	errs = append(errs, validatePipelineRuntime(&m)...)
 
 	if m.Contributions != nil {
 		for ai, a := range m.Contributions.Actions {

@@ -21,8 +21,8 @@ type Config struct {
 	DB          *gorm.DB
 	Metadata    *metadata.Service
 	Permissions *permission.Service // optional — nil skips authz
-	Hooks       *HookRegistry      // optional
-	Scoper      TenantScoper       // optional — default OrganizationScoper
+	Hooks       *HookRegistry       // optional
+	Scoper      TenantScoper        // optional — default OrganizationScoper
 
 	// OptionsConfigResolver returns the OptionsConfig for a model. Apps
 	// typically check (a) a compiled HasMetadata interface on the model and
@@ -120,7 +120,21 @@ type Config struct {
 	// override it; "wasm" / "webhook" must be wired by the host (the
 	// kernel deliberately does not import runtime/wasm or net/http here to
 	// keep the dynamic package minimal).
+	//
+	// The same dispatchers double as the on_transition hook backends: a hook's
+	// `do` ("wasm:<export>" | "webhook:<key>" | "compiled:<fn>") is split on its
+	// prefix and routed to ActionDispatchers[prefix]. A model with stage hooks
+	// therefore needs the matching dispatcher wired (a missing one is logged and
+	// skipped for a non-required hook).
 	ActionDispatchers map[string]ActionDispatcher
+
+	// StageMachineResolver returns the stage-machine config for a model name —
+	// the host wires it from its addon registry (the kernel owns no global model
+	// index). When it returns a non-empty machine, Service.Update validates every
+	// move of the StageField against Transitions and fires the matching
+	// OnTransition hooks. nil (or returning ok=false / an empty machine) disables
+	// the stage machine entirely, leaving Update unrestricted (back-compat).
+	StageMachineResolver StageMachineResolver
 
 	// AuthUserExtractor optionally lets the Handler pull the authenticated
 	// principal from the request context using the narrow AuthUserProvider
@@ -195,6 +209,7 @@ type Service struct {
 	modelKeyForModel  func(ctx context.Context, model string) string
 	actionResolver    ActionResolver
 	actionDispatchers map[string]ActionDispatcher
+	stageMachines     StageMachineResolver
 	authExtractor     adapters.AuthUserExtractor
 	selfOptions       bool
 	fileDeleter       FileDeleter
@@ -245,6 +260,7 @@ func New(cfg Config) *Service {
 		modelKeyForModel:  cfg.ModelKeyForModel,
 		actionResolver:    cfg.ActionResolver,
 		actionDispatchers: dispatchers,
+		stageMachines:     cfg.StageMachineResolver,
 		authExtractor:     cfg.AuthUserExtractor,
 		selfOptions:       cfg.EnableSelfOptions,
 		fileDeleter:       cfg.FileDeleter,
@@ -498,6 +514,19 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	// as `before`.
 	before := toMap(instance)
 
+	// Stage machine: when the model declares one and this Update changes the
+	// stage_field, validate the move against the declared transitions BEFORE we
+	// persist anything (a disallowed move is rejected 422, never written).
+	sm := s.resolveStageMachine(ctx, model)
+	var fromStage, toStage string
+	var stageChanged bool
+	if sm != nil {
+		fromStage, toStage, stageChanged, err = s.checkTransition(sm, before, input)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// Normalize string-encoded typed fields before merging into the record.
 	coerceInputToStruct(input, instance)
 
@@ -510,11 +539,30 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		return nil, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
 
-	if err := s.db.WithContext(ctx).Table(tableName).Save(instance).Error; err != nil {
-		return nil, fmt.Errorf("dynamic: update: %w", err)
+	// When the stage changed and the machine declares on_transition hooks, the
+	// save + hook dispatch run together in a transaction so a REQUIRED hook
+	// failure rolls back the whole transition. Otherwise the save is a plain
+	// write (unchanged from the legacy path) and any (non-required) hooks fire
+	// best-effort post-commit.
+	var after map[string]any
+	runHooksInTx := stageChanged && len(sm.matchingHooks(fromStage, toStage)) > 0
+	if runHooksInTx {
+		txErr := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Table(tableName).Save(instance).Error; err != nil {
+				return fmt.Errorf("dynamic: update: %w", err)
+			}
+			after = toMap(instance)
+			return s.runTransitionHooks(ctx, model, user, tx, sm, fromStage, toStage, before, after)
+		})
+		if txErr != nil {
+			return nil, txErr
+		}
+	} else {
+		if err := s.db.WithContext(ctx).Table(tableName).Save(instance).Error; err != nil {
+			return nil, fmt.Errorf("dynamic: update: %w", err)
+		}
+		after = toMap(instance)
 	}
-
-	after := toMap(instance)
 
 	// Orphaned-file cleanup: any file/image column whose value changed leaves
 	// its OLD asset unreferenced. Storage-agnostic — we hand the orphaned values

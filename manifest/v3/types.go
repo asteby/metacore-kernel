@@ -45,7 +45,78 @@ type Manifest struct {
 	Preset          *Preset          `json:"preset,omitempty"`
 	Theme           *Theme           `json:"theme,omitempty"`
 	ConnectorPack   *ConnectorPack   `json:"connector_pack,omitempty"`
-	Signature       *Signature       `json:"signature,omitempty"`
+
+	// Connectors declares the third-party credential providers this addon needs
+	// (e.g. "github"). Unlike the standalone kind:ConnectorPack manifest, these
+	// ride embedded in a normal Addon: the host stores their Credentials per org
+	// (encrypted) and the connectors runtime resolves them for wasm handlers
+	// (connector_get) and for a webhook's secret_ref. Empty = no connectors.
+	Connectors []Connector `json:"connectors,omitempty"`
+
+	// Schedules declares declarative cron jobs the kernel scheduler fires per
+	// org: every Schedule.Every it dispatches Schedule.Do (a wasm:/webhook:/
+	// compiled: handler). The webhook-primary + cron-reconcile pattern uses this
+	// as the backstop that reconciles what an inbound webhook missed. Empty = none.
+	Schedules []Schedule `json:"schedules,omitempty"`
+
+	// Webhooks declares inbound webhook routes the host mounts and the kernel
+	// webhookin receiver routes: a verified request to InboundWebhook.Path
+	// dispatches InboundWebhook.Do. Signature is checked per Verify, the secret
+	// resolved from SecretRef (a connector credential). Empty = no webhooks.
+	Webhooks []InboundWebhook `json:"webhooks,omitempty"`
+
+	Signature *Signature `json:"signature,omitempty"`
+}
+
+// Connector declares a third-party credential provider an addon depends on. The
+// host (ops) collects + encrypts the Credentials per org and the connectors
+// runtime resolves them; wasm handlers read a credential via connector_get
+// (gated by the connector:read capability) and a webhook's secret_ref resolves
+// to one of these credentials.
+type Connector struct {
+	// Key identifies the connector (e.g. "github"); connector_get(key) and a
+	// webhook's secret_ref ("<key>.<credential>") reference it.
+	Key string `json:"key"`
+	// Label is the human/i18n name shown in the authorization UI.
+	Label string `json:"label,omitempty"`
+	// Auth is the credential-acquisition flow: "oauth2" | "token".
+	Auth string `json:"auth,omitempty"`
+	// Credentials enumerates the fields the org supplies (an access_token,
+	// repo, webhook_secret …). Reuses the Setting shape (key/type/default/
+	// required/validation); "secret"-typed fields are stored encrypted.
+	Credentials []Setting `json:"credentials,omitempty"`
+}
+
+// Schedule is one declarative cron job. The kernel scheduler parses Every as a
+// Go duration ("30s","5m","1h") and, per installed org, fires Do on that
+// interval. Do references the same dispatchable handler set as a transition
+// hook: "wasm:<export>" | "webhook:<key>" | "compiled:<fn>".
+type Schedule struct {
+	// Key identifies the schedule within the addon (e.g. "sync_issues").
+	Key string `json:"key"`
+	// Every is the Go duration between fires (time.ParseDuration).
+	Every string `json:"every"`
+	// Do is the handler reference dispatched on each tick.
+	Do string `json:"do"`
+}
+
+// InboundWebhook declares a webhook route the host mounts under the addon+org
+// namespace. On a verified request the kernel webhookin receiver routes the
+// body to Do. Verify selects the signature scheme; SecretRef names the connector
+// credential holding the signing secret.
+type InboundWebhook struct {
+	// Key identifies the webhook within the addon (e.g. "github_push").
+	Key string `json:"key"`
+	// Path is the route mounted under the addon+org namespace (e.g.
+	// "/webhooks/github").
+	Path string `json:"path"`
+	// Verify is the signature scheme: "" (none) | "hmac-sha256".
+	Verify string `json:"verify,omitempty"`
+	// SecretRef resolves the signing secret as "<connector>.<credential>"
+	// (e.g. "github.webhook_secret"). Required when Verify is set.
+	SecretRef string `json:"secret_ref,omitempty"`
+	// Do is the handler reference the verified body is routed to.
+	Do string `json:"do"`
 }
 
 // Frontend describes the federated UI bundle the host loads at runtime for
@@ -171,6 +242,70 @@ type Model struct {
 	// engine). Optional — models without computed columns omit it. See Formula
 	// for the shape and the security contract on Expr.
 	Formulas []Formula `json:"formulas,omitempty"`
+
+	// StageField names the column that carries the model's pipeline stage
+	// (e.g. "stage"). Declaring it — together with Stages — turns the model
+	// into a stage machine: the kernel derives a `status` display type for the
+	// column from Stages (colour/label/order, no separate `options` needed) and,
+	// on every Update that changes the column, validates the move against
+	// Transitions and fires the matching OnTransition hooks. Empty = the model
+	// has no stage machine (the default; flat models are unaffected).
+	StageField string `json:"stage_field,omitempty"`
+
+	// Stages enumerates the ordered lifecycle stages of the StageField column.
+	// Each Stage supplies the value/label/colour the kernel projects onto the
+	// derived `status` display. Empty = no stage machine (back-compat): the
+	// Update path applies no transition restriction at all.
+	Stages []Stage `json:"stages,omitempty"`
+
+	// Transitions whitelists the allowed (from → to) stage moves. On an Update
+	// that changes StageField, the kernel rejects a move that is not listed here
+	// with HTTP 422 (invalid_transition). Only enforced when Stages is non-empty.
+	Transitions []Transition `json:"transitions,omitempty"`
+
+	// OnTransition declares Bitrix-style hooks the kernel fires AFTER a valid
+	// stage move is persisted and BEFORE the canonical event. Each hook matches a
+	// (from, to) pair ("*" = wildcard) and dispatches Do (a `wasm:`/`webhook:`/
+	// `compiled:` handler reference) with the {before, after, actor, org} payload.
+	OnTransition []TransitionHook `json:"on_transition,omitempty"`
+}
+
+// Stage is one lifecycle stage of a model's StageField column. The kernel
+// projects the set onto the column's derived `status` display (each Stage
+// becoming a value/label option with a colour), ordered by Order, so a board
+// or a status badge renders without a separate `options` declaration.
+type Stage struct {
+	// Key is the stored column value for this stage (e.g. "in_progress").
+	Key string `json:"key"`
+	// Label is the human/i18n label rendered for the stage.
+	Label string `json:"label,omitempty"`
+	// Color is a colour token (e.g. "slate", "blue", "green") for the badge.
+	Color string `json:"color,omitempty"`
+	// Order positions the stage left-to-right on a board / in a status select.
+	Order int `json:"order,omitempty"`
+	// IsFinal marks a terminal stage (no outgoing transitions expected).
+	IsFinal bool `json:"is_final,omitempty"`
+}
+
+// Transition is one allowed move between two stages of a stage machine. From
+// and To are Stage keys; the kernel rejects any Update that moves the
+// StageField to a (from, to) pair not present in the model's Transitions.
+type Transition struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// TransitionHook is a declarative side effect the kernel fires when a record
+// transitions between stages. From/To select the matching moves ("*" matches
+// any stage); Do references the handler to dispatch as
+// `wasm:<export>` | `webhook:<key>` | `compiled:<fn>`. When Required is true a
+// dispatch failure rolls back the whole transition (HTTP 422); otherwise the
+// failure is logged and the transition stands.
+type TransitionHook struct {
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Do       string `json:"do"`
+	Required bool   `json:"required,omitempty"`
 }
 
 // Formula declares a column on the owning model whose value the kernel
@@ -524,6 +659,18 @@ type NavItem struct {
 	// at the same model). The host AND-combines these with any runtime filters.
 	// Empty/omitted means no filter (the default, unfiltered list).
 	Filter map[string]string `json:"filter,omitempty"`
+
+	// ViewType selects the renderer the SDK mounts for this entry's model.
+	// "table" (the default when empty) renders the DynamicTable; "kanban"
+	// renders a board grouped by GroupBy. The same model can have one table nav
+	// and one kanban nav. Hosts that don't understand a value fall back to table.
+	ViewType string `json:"view_type,omitempty"`
+
+	// GroupBy names the column the kanban board groups its columns by (typically
+	// the model's stage_field). Required when ViewType is "kanban"; ignored
+	// otherwise. The host projects ViewType + GroupBy onto the served
+	// TableMetadata so the SDK picks the renderer with zero per-app wiring.
+	GroupBy string `json:"group_by,omitempty"`
 }
 
 // SlotContribution renders into a slot_kind published by another addon.
@@ -914,6 +1061,9 @@ type Setting struct {
 	Default     interface{}     `json:"default,omitempty"`
 	Required    bool            `json:"required,omitempty"`
 	Options     []SettingOption `json:"options,omitempty"`
+	// Validation is an optional constraint hint (e.g. a regex or a named rule)
+	// the host applies when collecting the value. Used by connector credentials.
+	Validation string `json:"validation,omitempty"`
 }
 
 // SettingOption is a value/label pair for select-typed settings.

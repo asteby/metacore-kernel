@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/asteby/metacore-kernel/connectors"
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
@@ -55,6 +56,10 @@ type invocation struct {
 	// search_path (Host.WithExecSchema). nil = AddonSchema(addonKey). The
 	// capability gate still authorises against AddonSchema regardless.
 	execSchema func(addonKey string) string
+	// connectors resolves connector credentials for the connector_get import
+	// (Host.WithConnectors), scoped to orgID and gated by connector:read. nil =
+	// the connectors runtime is off (connector_get returns connector_unavailable).
+	connectors *connectors.Resolver
 }
 
 type invKey struct{}
@@ -147,8 +152,12 @@ func registerHostModule(ctx context.Context, h *Host) error {
 		Export("env_get")
 
 	// http_fetch(urlPtr, urlLen, methodPtr, methodLen, bodyPtr, bodyLen) -> ptr|len
-	// Enforces Capabilities.CanFetch *before* any syscall happens, so the
-	// SSRF guard applies uniformly to webhook and wasm backends.
+	// The original header-less outbound HTTP import. Kept verbatim for ABI
+	// back-compat (existing guests — inventory, tire-warranty — call it): it
+	// simply delegates to the shared doHTTP with no custom headers. New guests
+	// that need request headers (e.g. Authorization) use http_request below.
+	// Enforces Capabilities.CanFetch *before* any syscall, so the SSRF guard
+	// applies uniformly to webhook and wasm backends.
 	b.NewFunctionBuilder().
 		WithFunc(func(ctx context.Context, mod api.Module,
 			urlPtr, urlLen, methodPtr, methodLen, bodyPtr, bodyLen uint32) uint64 {
@@ -159,34 +168,73 @@ func registerHostModule(ctx context.Context, h *Host) error {
 			url := readString(mod, urlPtr, urlLen)
 			method := readString(mod, methodPtr, methodLen)
 			body := readBytes(mod, bodyPtr, bodyLen)
-			if method == "" {
-				method = http.MethodGet
-			}
-			if err := inv.caps.CanFetch(url); err != nil {
-				return writeToGuest(ctx, mod, jsonError("forbidden", err.Error()))
-			}
-			req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
-			if err != nil {
-				return writeToGuest(ctx, mod, jsonError("bad_request", err.Error()))
-			}
-			if len(body) > 0 {
-				req.Header.Set("Content-Type", "application/json")
-			}
-			client := &http.Client{Timeout: 30 * time.Second}
-			resp, err := client.Do(req)
-			if err != nil {
-				return writeToGuest(ctx, mod, jsonError("transport", err.Error()))
-			}
-			defer resp.Body.Close()
-			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20)) // 8 MiB safety cap
-			env := map[string]any{
-				"status": resp.StatusCode,
-				"body":   string(respBody),
-			}
-			buf, _ := json.Marshal(env)
-			return writeToGuest(ctx, mod, buf)
+			return doHTTP(ctx, mod, inv, url, method, nil, body)
 		}).
 		Export("http_fetch")
+
+	// http_request(urlPtr,urlLen, methodPtr,methodLen, headersPtr,headersLen, bodyPtr,bodyLen) -> ptr|len
+	// Like http_fetch but accepts request headers as a JSON object
+	// ({"Authorization":"token ...","Accept":"application/vnd.github+json"}),
+	// so a guest can authenticate to a third-party API. Same capability gate
+	// (http:fetch), same SSRF guard, same 30s timeout and 8 MiB response cap.
+	// A malformed headers JSON returns a bad_request envelope. Empty/zero-length
+	// headers behaves exactly like http_fetch.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			urlPtr, urlLen, methodPtr, methodLen, headersPtr, headersLen, bodyPtr, bodyLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			url := readString(mod, urlPtr, urlLen)
+			method := readString(mod, methodPtr, methodLen)
+			body := readBytes(mod, bodyPtr, bodyLen)
+			var headers map[string]string
+			if headersLen > 0 {
+				raw := readBytes(mod, headersPtr, headersLen)
+				if err := json.Unmarshal(raw, &headers); err != nil {
+					return writeToGuest(ctx, mod, jsonError("bad_request", "headers must be a JSON object: "+err.Error()))
+				}
+			}
+			return doHTTP(ctx, mod, inv, url, method, headers, body)
+		}).
+		Export("http_request")
+
+	// connector_get(keyPtr, keyLen) -> ptr|len
+	// Resolves the org's credentials for a connector (the v3 `connectors` block)
+	// and returns them as a JSON object envelope. Gated by the addon's
+	// `connector:read <key>` capability and scoped to the invocation's orgID, so
+	// a guest can only read connectors it declared and only for its own org.
+	// Returns a JSON error envelope ({"error":...}) on a missing capability,
+	// an unconfigured resolver, or an unauthorised/absent connector — guests
+	// must handle the error shape.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module, keyPtr, keyLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			key := readString(mod, keyPtr, keyLen)
+			if key == "" {
+				return writeToGuest(ctx, mod, jsonError("bad_request", "connector key is empty"))
+			}
+			if err := inv.caps.CanReadConnector(key); err != nil {
+				return writeToGuest(ctx, mod, jsonError("forbidden", err.Error()))
+			}
+			if inv.connectors == nil {
+				return writeToGuest(ctx, mod, jsonError("connector_unavailable", "host has no connectors resolver configured"))
+			}
+			if inv.orgID == uuid.Nil {
+				return writeToGuest(ctx, mod, jsonError("no_active_org", "invocation has no bound orgID"))
+			}
+			creds, err := inv.connectors.Get(ctx, inv.orgID, key)
+			if err != nil {
+				return writeToGuest(ctx, mod, jsonError("not_found", err.Error()))
+			}
+			buf, _ := json.Marshal(creds)
+			return writeToGuest(ctx, mod, buf)
+		}).
+		Export("connector_get")
 
 	// event_emit(eventPtr, eventLen, payloadPtr, payloadLen) -> i64
 	// Publishes to the in-process events.Bus on behalf of the guest. The
@@ -363,6 +411,43 @@ func registerHostModule(ctx context.Context, h *Host) error {
 		return fmt.Errorf("instantiate metacore_host: %w", err)
 	}
 	return nil
+}
+
+// doHTTP is the shared outbound-HTTP implementation behind the http_fetch and
+// http_request imports. It applies the capability gate + SSRF guard (CanFetch)
+// before any syscall, sets the custom request headers (when provided), defaults
+// a JSON Content-Type for a body unless the caller set one, and returns the
+// {status, body} JSON envelope (capped at 8 MiB). headers may be nil.
+func doHTTP(ctx context.Context, mod api.Module, inv *invocation, url, method string, headers map[string]string, body []byte) uint64 {
+	if method == "" {
+		method = http.MethodGet
+	}
+	if err := inv.caps.CanFetch(url); err != nil {
+		return writeToGuest(ctx, mod, jsonError("forbidden", err.Error()))
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
+	if err != nil {
+		return writeToGuest(ctx, mod, jsonError("bad_request", err.Error()))
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	if len(body) > 0 && req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return writeToGuest(ctx, mod, jsonError("transport", err.Error()))
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20)) // 8 MiB safety cap
+	env := map[string]any{
+		"status": resp.StatusCode,
+		"body":   string(respBody),
+	}
+	buf, _ := json.Marshal(env)
+	return writeToGuest(ctx, mod, buf)
 }
 
 func readString(mod api.Module, ptr, n uint32) string {

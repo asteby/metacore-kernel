@@ -5,6 +5,117 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.62.0] - 2026-06-26
+
+### Added
+
+- **manifest/v3: stage machine on models (`stage_field`, `stages[]`,
+  `transitions[]`, `on_transition[]`).** A model can now declare a Bitrix-style
+  pipeline: `stage_field` names the lifecycle column, `stages[]` enumerates its
+  ordered stages (`{key,label,color,order,is_final}`), `transitions[]`
+  whitelists the allowed `{from,to}` moves, and `on_transition[]` declares hooks
+  (`{from,to,do,required}`, `*` = wildcard) the kernel fires on a valid move.
+  New v3 types `Stage`, `Transition`, `TransitionHook` on `v3.Model`; mirrored
+  on the host `manifest.ModelDefinition` as `StageDef`/`TransitionDef`/
+  `TransitionHookDef` and projected by `FromV3`. Both the embedded
+  `manifest/v3/schema/manifest-v3.schema.json` and the published
+  `docs/spec/v3/manifest-v3.schema.json` gained the `Stage`/`Transition`/
+  `TransitionHook` definitions so the hub's strict publish-gate accepts the
+  block. Additive — a model without `stages` keeps the legacy unrestricted
+  behaviour.
+
+- **manifest/v3: kanban view-type on nav (`view_type`, `group_by`).** A
+  `NavItem` can declare `view_type: "kanban"` + `group_by` so the SDK renders a
+  board grouped by a column (default stays `table`). The same model can have a
+  table nav and a kanban nav. Mapped through `FromV3` onto `manifest.NavItem`
+  for the host to project into served `TableMetadata`.
+
+- **dynamic: stage-transition enforcement + hooks in `Service.Update`.** When a
+  host wires the new `Config.StageMachineResolver`, an `Update` that changes a
+  model's `stage_field` is validated against the declared `transitions[]` BEFORE
+  any write — a non-whitelisted move is rejected with the new
+  `ErrInvalidTransition` (HTTP 422 `invalid_transition`). After a valid move is
+  persisted and before the canonical event, the matching `on_transition` hooks
+  fire: each hook's `do` (`wasm:<export>` | `webhook:<key>` | `compiled:<fn>`)
+  is split on its prefix and routed through the existing `ActionDispatchers`
+  with a `{before, after, actor, org}` payload. A failing hook is logged and
+  skipped unless `required: true`, in which case the save + hooks (run together
+  in a transaction) roll back. `stages` empty = no restriction (full
+  back-compat).
+
+- **dynamic: `status` display derived from `stages[]`.** `DeriveTableColumns`
+  now sets the `stage_field` column's `CellStyle` to `status` and materialises
+  its options (`value/label/color`, ordered by `Stage.Order`) straight from
+  `stages[]`, so a board / status badge renders without a separate `options`
+  declaration. An explicit column `display`/`options` still wins.
+
+- **Validation (dual surface):** `v3.Validate` (lenient) and the strict
+  `manifest.Validate` both enforce the stage-machine cross-field rules
+  (`stage_field` names a real column; unique stage keys; transitions/hooks
+  reference declared stages or `*`; `do` carries a known `wasm|webhook|compiled`
+  prefix) and the kanban rule (`view_type:kanban ⇒ group_by`), so a manifest
+  fails identically on both the publish and install paths.
+
+- **manifest/v3: addon-level pipeline-runtime primitives (`connectors[]`,
+  `schedules[]`, `webhooks[]`).** An addon can now declare, alongside its models:
+  `connectors[]` (`{key,label,auth,credentials[]}`) — third-party credential
+  providers the host stores per org (encrypted); `schedules[]` (`{key,every,do}`)
+  — declarative cron jobs; and `webhooks[]`
+  (`{key,path,verify,secret_ref,do}`) — inbound webhook routes. New v3 types
+  `Connector`/`Schedule`/`InboundWebhook` (credentials reuse `Setting`, which
+  gained an optional `validation` field) projected by `FromV3` onto host
+  `ConnectorDef`/`ScheduleDef`/`InboundWebhookDef` (a `secret`-typed credential
+  maps to `Secret:true`). Both JSON schemas gained the `Connector`/`Schedule`/
+  `InboundWebhook` definitions. Dual validation (`v3.Validate` + strict
+  `manifest.Validate`) enforces: unique connector keys; a schedule's `every`
+  parses as a positive Go duration and its `do` carries a known dispatch prefix;
+  a webhook's `do` carries a known prefix and, when it declares a `verify`, its
+  `secret_ref` resolves (`<connector>.<credential>`) to a declared connector
+  credential. Additive — an addon with none of these blocks is unaffected.
+
+- **connectors/ (new): credential-resolution runtime.** `connectors.Store` is a
+  host-implemented per-org credential backend (ops owns the encryption);
+  `connectors.Resolver` resolves a connector key → credential map (`Get`) and a
+  `secret_ref` → a single value (`Secret`). A nil Resolver/Store is the
+  feature-off state (every lookup returns `ErrNoStore`).
+
+- **runtime/schedule/ (new): declarative cron scheduler.** `schedule.Scheduler`
+  runs one ticker per `(orgID, scheduleKey)` and fires the schedule's `do`
+  through a prefix-keyed `Dispatcher` set (the same `wasm|webhook|compiled`
+  mechanism as the stage-machine hooks), with a `{org, schedule}` payload. API:
+  `New`, `Register`, `Unregister`, `Start`, `Stop`. Idempotent on boot
+  (re-registering a key replaces its ticker, never duplicates). Time is injected
+  via the `Clock` interface (`SystemClock` in prod) so fires are testable
+  without sleeping.
+
+- **runtime/webhookin/ (new): inbound-webhook receiver.** `webhookin.Receiver`
+  registers the routes from `webhooks[]` and exposes
+  `Dispatch(ctx, orgID, path, headers, body)` for the host's HTTP layer to call.
+  It verifies the signature (`hmac-sha256`: HMAC of the raw body with the secret
+  resolved from `secret_ref` via a `SecretResolver` — `connectors.Resolver`
+  satisfies it; accepts a `sha256=`-prefixed or bare-hex signature in
+  `X-Hub-Signature-256` / `X-Signature-256` / `X-Signature`) and routes the body
+  to `do`. Returns typed errors (`ErrRouteNotFound`, `ErrSignatureInvalid`,
+  `ErrSignatureMissing`, `ErrUnsupportedVerify`, …) for the host to map to HTTP
+  status. An empty `verify` skips verification.
+
+- **runtime/wasm: `connector_get` host import + `connector:read` capability.**
+  Guests resolve one of their declared connector's credentials for the
+  invocation's org via `connector_get(keyPtr,keyLen) -> i64` (JSON object
+  envelope), gated by the new `connector:read <key>` capability
+  (`security.Capabilities.CanReadConnector`) and wired through
+  `Host.WithConnectors(*connectors.Resolver)`. Unconfigured resolver →
+  `connector_unavailable` envelope (feature-off).
+
+- **runtime/wasm: `http_request` host import (headers).** New
+  `http_request(urlPtr,urlLen, methodPtr,methodLen, headersPtr,headersLen,
+  bodyPtr,bodyLen) -> i64` sends outbound HTTP with caller-supplied request
+  headers (JSON object, e.g. `{"Authorization":"token …"}`), enabling
+  authenticated third-party calls. Same `http:fetch` capability, SSRF guard, 30s
+  timeout and 8 MiB response cap as `http_fetch`, which is **unchanged** (it now
+  delegates to the shared path with empty headers) — existing guests keep
+  working. ABI bumped to 1.6 (purely additive).
+
 ## [0.59.0] - 2026-06-13
 
 ### Added

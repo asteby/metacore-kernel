@@ -99,7 +99,80 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.I18n = mapI18n(m.I18n)
 	out.Signature = mapSignature(m.Signature)
 	out.Backend = deriveBackend(m)
+	out.Connectors = mapConnectors(m.Connectors)
+	out.Schedules = mapSchedules(m.Schedules)
+	out.Webhooks = mapWebhooks(m.Webhooks)
 
+	return out
+}
+
+// mapConnectors / mapSchedules / mapWebhooks fold the v3 pipeline-runtime
+// primitives onto the host Manifest so the connectors runtime, the scheduler
+// and the webhookin receiver can read them off the installed manifest. Each is
+// a near-1:1 field copy; an empty input maps to nil (no primitive declared,
+// the back-compat default).
+func mapConnectors(in []v3.Connector) []ConnectorDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ConnectorDef, 0, len(in))
+	for _, c := range in {
+		out = append(out, ConnectorDef{
+			Key:         c.Key,
+			Label:       c.Label,
+			Auth:        c.Auth,
+			Credentials: mapCredentials(c.Credentials),
+		})
+	}
+	return out
+}
+
+// mapCredentials projects v3 connector credential Settings onto CredentialDefs.
+// A credential whose type is "secret" sets Secret so the host stores it
+// encrypted (mirroring SettingDef.Secret).
+func mapCredentials(in []v3.Setting) []CredentialDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]CredentialDef, 0, len(in))
+	for _, s := range in {
+		out = append(out, CredentialDef{
+			Key:        s.Key,
+			Type:       s.Type,
+			Default:    s.Default,
+			Required:   s.Required,
+			Validation: s.Validation,
+			Secret:     s.Type == "secret",
+		})
+	}
+	return out
+}
+
+func mapSchedules(in []v3.Schedule) []ScheduleDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ScheduleDef, 0, len(in))
+	for _, s := range in {
+		out = append(out, ScheduleDef{Key: s.Key, Every: s.Every, Do: s.Do})
+	}
+	return out
+}
+
+func mapWebhooks(in []v3.InboundWebhook) []InboundWebhookDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]InboundWebhookDef, 0, len(in))
+	for _, w := range in {
+		out = append(out, InboundWebhookDef{
+			Key:       w.Key,
+			Path:      w.Path,
+			Verify:    w.Verify,
+			SecretRef: w.SecretRef,
+			Do:        w.Do,
+		})
+	}
 	return out
 }
 
@@ -268,6 +341,14 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		def.Relations = mapModelRelations(m.Relations)
 		def.Seed = mapModelSeed(m.Seed)
 		def.Formulas = mapModelFormulas(m.Formulas)
+		// Stage machine: the field/stages/transitions/hooks ride across so the
+		// dynamic engine derives the status display, validates moves and fires
+		// on_transition hooks. Empty StageField/Stages leaves the model
+		// unrestricted (the legacy behaviour).
+		def.StageField = m.StageField
+		def.Stages = mapModelStages(m.Stages)
+		def.Transitions = mapModelTransitions(m.Transitions)
+		def.OnTransition = mapModelTransitionHooks(m.OnTransition)
 		out = append(out, def)
 	}
 	return out
@@ -332,6 +413,55 @@ func mapModelFormulas(in []v3.Formula) []Formula {
 		out = append(out, Formula{
 			Target: f.Target,
 			Expr:   f.Expr,
+		})
+	}
+	return out
+}
+
+// mapModelStages / mapModelTransitions / mapModelTransitionHooks fold a v3
+// model's stage machine onto the host ModelDefinition so the dynamic engine can
+// derive the status display, validate stage moves and fire on_transition hooks.
+// Each is a 1:1 field copy; an empty input maps to nil (the no-stage-machine
+// default that leaves the model unrestricted).
+func mapModelStages(in []v3.Stage) []StageDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]StageDef, 0, len(in))
+	for _, s := range in {
+		out = append(out, StageDef{
+			Key:     s.Key,
+			Label:   s.Label,
+			Color:   s.Color,
+			Order:   s.Order,
+			IsFinal: s.IsFinal,
+		})
+	}
+	return out
+}
+
+func mapModelTransitions(in []v3.Transition) []TransitionDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]TransitionDef, 0, len(in))
+	for _, t := range in {
+		out = append(out, TransitionDef{From: t.From, To: t.To})
+	}
+	return out
+}
+
+func mapModelTransitionHooks(in []v3.TransitionHook) []TransitionHookDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]TransitionHookDef, 0, len(in))
+	for _, h := range in {
+		out = append(out, TransitionHookDef{
+			From:     h.From,
+			To:       h.To,
+			Do:       h.Do,
+			Required: h.Required,
 		})
 	}
 	return out
@@ -432,6 +562,10 @@ func mapNavItems(in []v3.NavItem, modelTable map[string]string) []NavItem {
 			Permission: it.Permission,
 			Items:      mapNavItems(it.Items, modelTable),
 			Filter:     it.Filter,
+			// Kanban view-type hint rides across so the host can project it onto
+			// the served TableMetadata and the SDK picks the board renderer.
+			ViewType: it.ViewType,
+			GroupBy:  it.GroupBy,
 		})
 	}
 	return out
