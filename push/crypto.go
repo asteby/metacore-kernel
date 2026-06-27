@@ -61,26 +61,32 @@ func encryptPayload(p256dh, authSecret string, payload []byte) (*encryptedPayloa
 		return nil, err
 	}
 
-	// HKDF key derivation (RFC 8291 §3.4)
-	// info = "WebPush: info\x00" || subPub || ephPub
-	info := append([]byte("WebPush: info\x00"), subPubBytes...)
-	info = append(info, ephPub.Bytes()...)
+	// Key derivation per RFC 8291 §3.4 (key agreement) + RFC 8188 §2.2 (aes128gcm).
+	//
+	// IMPORTANT: this previously mixed the legacy "aesgcm" draft step
+	// (Content-Encoding: auth) into the combine and used the message salt where
+	// the auth secret belongs, producing a CEK/nonce the browser could NOT
+	// reproduce — so the User Agent failed to decrypt and silently dropped every
+	// push (the push service still returns 201 Created, so it looked like it
+	// "sent"). The correct derivation is a single combine keyed on auth_secret:
+	//
+	//   IKM = HKDF(salt=auth_secret, ikm=ecdh_secret,
+	//              info="WebPush: info\0" || ua_public || as_public, 32)
+	//   CEK   = HKDF(salt=salt, ikm=IKM, "Content-Encoding: aes128gcm\0", 16)
+	//   NONCE = HKDF(salt=salt, ikm=IKM, "Content-Encoding: nonce\0", 12)
+	//
+	// key_info = "WebPush: info\0" || ua_public (subscriber) || as_public (ephemeral)
+	keyInfo := append([]byte("WebPush: info\x00"), subPubBytes...)
+	keyInfo = append(keyInfo, ephPub.Bytes()...)
 
-	// PRK = HKDF-Extract(auth_secret, shared_secret)
-	prkReader := hkdf.New(sha256.New, shared, authBytes, []byte("Content-Encoding: auth\x00"))
-	prk := make([]byte, 32)
-	if _, err := io.ReadFull(prkReader, prk); err != nil {
-		return nil, err
-	}
-
-	// IKM = HKDF-Expand(PRK, info, 32)
-	ikmReader := hkdf.New(sha256.New, prk, salt, info)
+	// IKM = HKDF(salt=auth_secret, IKM=ecdh_secret, info=key_info, 32)
+	ikmReader := hkdf.New(sha256.New, shared, authBytes, keyInfo)
 	ikm := make([]byte, 32)
 	if _, err := io.ReadFull(ikmReader, ikm); err != nil {
 		return nil, err
 	}
 
-	// CEK (16 bytes) and nonce (12 bytes)
+	// CEK (16 bytes) and nonce (12 bytes), derived from the per-message salt.
 	cekReader := hkdf.New(sha256.New, ikm, salt, []byte("Content-Encoding: aes128gcm\x00"))
 	cek := make([]byte, 16)
 	if _, err := io.ReadFull(cekReader, cek); err != nil {
