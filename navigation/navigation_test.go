@@ -82,3 +82,59 @@ func TestBuildCarriesFilter(t *testing.T) {
 		t.Errorf("unfiltered item must omit filter key, got %s", string(b0))
 	}
 }
+
+// TestBuildCarriesViewType verifies the v3 kanban hint (ViewType/GroupBy)
+// survives aggregation + JSON marshaling. Two sibling entries on the SAME model
+// that differ only by view_type (github's Board=kanban vs Issues=table) must
+// reach the host carrying their view so it can encode a DISTINCT ?view= URL per
+// entry — otherwise both collapse to the same /m/<model> href and the sidebar
+// highlights both at once (the "both green" bug) and clicking Board never opens
+// the kanban surface.
+func TestBuildCarriesViewType(t *testing.T) {
+	contribs := []Contribution{
+		{
+			AddonKey: "integration_github",
+			Groups: []manifest.NavGroup{
+				{
+					Title: "integration_github.nav.group",
+					Items: []manifest.NavItem{
+						{Title: "Board", Model: "Issue", ViewType: "kanban", GroupBy: "stage"},
+						{Title: "Issues", Model: "Issue", ViewType: "table"},
+					},
+				},
+			},
+		},
+	}
+
+	groups := Build(nil, contribs)
+	if len(groups) != 1 || len(groups[0].Items) != 2 {
+		t.Fatalf("expected 1 group / 2 items, got %d groups", len(groups))
+	}
+	board, issues := groups[0].Items[0], groups[0].Items[1]
+	if board.ViewType != "kanban" || board.GroupBy != "stage" {
+		t.Errorf("board = %+v, want view_type=kanban group_by=stage", board)
+	}
+	if issues.ViewType != "table" {
+		t.Errorf("issues view_type = %q, want table", issues.ViewType)
+	}
+
+	// JSON wire shape must use snake_case keys the host reader expects, and omit
+	// group_by when empty.
+	b, _ := json.Marshal(board)
+	var decoded map[string]any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded["view_type"] != "kanban" {
+		t.Errorf("expected JSON view_type=kanban, got %s", string(b))
+	}
+	if decoded["group_by"] != "stage" {
+		t.Errorf("expected JSON group_by=stage, got %s", string(b))
+	}
+	bi, _ := json.Marshal(issues)
+	var di map[string]any
+	_ = json.Unmarshal(bi, &di)
+	if _, present := di["group_by"]; present {
+		t.Errorf("table item must omit group_by, got %s", string(bi))
+	}
+}

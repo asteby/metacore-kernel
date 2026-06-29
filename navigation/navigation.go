@@ -23,6 +23,16 @@ type Item struct {
 	// so the host can deep-link each entry to a distinct, pre-filtered URL.
 	// Carried verbatim from the manifest NavItem; omitted when empty.
 	Filter map[string]string `json:"filter,omitempty"`
+	// ViewType / GroupBy are the v3 kanban hint carried verbatim from the
+	// manifest NavItem. ViewType ("kanban" | "table") lets two sibling entries
+	// target the SAME model and differ only by presentation (e.g. github's
+	// "Board" view_type=kanban vs "Issues" view_type=table); the host encodes
+	// them as a real `?view=…&group_by=…` query so each entry gets a DISTINCT,
+	// exact href and the sidebar active-state matcher highlights only the open
+	// one instead of every sibling at once. Omitted when empty. Snake-case JSON
+	// to match the host's NavItem reader (`view_type` / `group_by`).
+	ViewType string `json:"view_type,omitempty"`
+	GroupBy  string `json:"group_by,omitempty"`
 	// Owner identifies where this item came from: "core" or "addon:<key>".
 	Owner string `json:"owner,omitempty"`
 	Items []Item `json:"items,omitempty"`
@@ -96,6 +106,8 @@ func toItems(src []manifest.NavItem, addonKey string) []Item {
 			Model:      it.Model,
 			Permission: it.Permission,
 			Filter:     it.Filter,
+			ViewType:   it.ViewType,
+			GroupBy:    it.GroupBy,
 			Owner:      "addon:" + addonKey,
 			Items:      toItems(it.Items, addonKey),
 		})
