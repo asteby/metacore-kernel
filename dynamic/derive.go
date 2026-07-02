@@ -306,6 +306,10 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 			// so the SDK scopes + re-fetches and the host resolves the options.
 			DependsOn:     c.DependsOn,
 			OptionsConfig: toFieldOptionsConfig(c.OptionsConfig),
+			// Readonly marks a system-generated field: the SDK hides it from the
+			// create form and disables it in edit (the value is written
+			// server-side, e.g. by an addon's outbound sync).
+			Readonly: c.Readonly,
 		})
 	}
 	return out

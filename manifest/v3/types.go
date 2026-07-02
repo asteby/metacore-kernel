@@ -488,6 +488,17 @@ type Column struct {
 	// for a hardcoded enum, OptionsSource for host-computed lists. Pure UI
 	// metadata; the DDL/install plane ignores it.
 	OptionsSource string `json:"options_source,omitempty"`
+
+	// Readonly marks a SYSTEM-GENERATED column: a value the addon/host populates
+	// (e.g. an id or number a remote API returns after a write), NOT something a
+	// user types. It is pure UI-plane metadata that the host projects onto
+	// modelbase.ColumnDef.Readonly / FieldDef.Readonly so DeriveFormFields
+	// EXCLUDES the column from the create form and marks it read-only in edit;
+	// the column still renders normally in tables/kanban/detail. The DDL and
+	// write planes ignore it — an addon (or a compute rule) writes the value
+	// server-side as usual. Use it for columns filled by an outbound sync, an
+	// external id, or any value the user must never hand-edit.
+	Readonly bool `json:"readonly,omitempty"`
 }
 
 // Index is a single index declaration.

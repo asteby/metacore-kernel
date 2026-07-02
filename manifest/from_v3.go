@@ -292,6 +292,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// dependent picker (cascade filter_value). Rides the legacy
 				// ColumnDef so the SDK re-fetches on change.
 				DependsOn: c.DependsOn,
+				// Readonly rides through so DeriveFormFields excludes the
+				// system-generated column from create and marks it read-only in edit.
+				Readonly: c.Readonly,
 			}
 			// Options is EITHER the STATIC-select list (array form) OR the
 			// DYNAMIC dependent-source object (DynamicOptions). The static list

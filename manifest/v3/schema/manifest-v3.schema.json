@@ -812,6 +812,10 @@
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
           "description": "DYNAMIC options provider key (e.g. 'registered_models', 'installed_addons'). Instead of a hardcoded 'options' list, the column declares WHERE its choices come from: a provider the HOST registers and resolves at metadata-serve time, materialising the localized value/label list onto the served ColumnDef.options / FieldDef.options. Open enum: the kernel only passes the key through; unknown keys simply yield no options on hosts that don't register them. Use 'ref' for a row-level relation picker, 'options' for a hardcoded enum, and 'options_source' for host-computed lists. Pure UI metadata; ignored by the DDL plane."
+        },
+        "readonly": {
+          "type": "boolean",
+          "description": "Marks a SYSTEM-GENERATED column: a value the addon/host populates server-side (e.g. an external id or number a remote API returns after a create), never something a user types. The host projects it onto ColumnDef.readonly / FieldDef.readonly so form derivation EXCLUDES the column from the create form and marks it read-only in edit; the column still renders in tables/kanban/detail. Pure UI metadata; the DDL and write planes ignore it (an addon or compute rule writes the value as usual)."
         }
       }
     },

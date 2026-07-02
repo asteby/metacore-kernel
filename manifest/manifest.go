@@ -772,6 +772,12 @@ type ColumnDef struct {
 	// options. Pure UI metadata; the DDL plane ignores it.
 	OptionsSource string `json:"options_source,omitempty"`
 
+	// Readonly carries the v3 Column.readonly flag through the v3 → host
+	// conversion onto modelbase.ColumnDef/FieldDef.Readonly, marking a
+	// SYSTEM-GENERATED column that DeriveFormFields excludes from the create form
+	// and marks read-only in edit. Pure UI metadata; the DDL plane ignores it.
+	Readonly bool `json:"readonly,omitempty"`
+
 	// Label is the column's human header OR an i18n key resolving to it. It
 	// rides the legacy ColumnDef as a carrier for the v3 Column.label so a
 	// declared label survives the v3 → host conversion: dynamic.DeriveTableColumns
