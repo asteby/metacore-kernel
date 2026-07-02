@@ -357,6 +357,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 	if err := m.validateActionTriggers(); err != nil {
 		return err
 	}
+	if err := m.validateActionFields(); err != nil {
+		return err
+	}
 	if err := m.validateLifecycleHooks(); err != nil {
 		return err
 	}
@@ -436,6 +439,49 @@ func (m *Manifest) validateActionTriggers() error {
 		for j := range ext.Actions {
 			if err := validateActionTrigger(ext.Actions[j].Trigger, exports); err != nil {
 				return fmt.Errorf("manifest.extensions[%d].actions[%d].%w", i, j, err)
+			}
+		}
+	}
+	return nil
+}
+
+// validateActionFields walks every action FieldDef the manifest carries (the
+// Actions map keyed by model and the Actions slice on each ModelExtension,
+// recursing into item_fields line-item groups) and enforces the FORMAT of any
+// options_source key with the SAME alphabet as the v3 schema pattern
+// (^[a-z][a-z0-9_]*$). This mirrors validateColumnExtensions for columns so a
+// manifest that passes v3.Validate never fails the strict legacy validation —
+// the "double validation" planes stay in agreement. Fields without an
+// options_source are a no-op, so legacy action forms keep validating.
+func (m *Manifest) validateActionFields() error {
+	for model, defs := range m.Actions {
+		for i := range defs {
+			if err := validateFieldOptionsSource(defs[i].Fields); err != nil {
+				return fmt.Errorf("manifest.actions[%q][%d].%w", model, i, err)
+			}
+		}
+	}
+	for i, ext := range m.Extensions {
+		for j := range ext.Actions {
+			if err := validateFieldOptionsSource(ext.Actions[j].Fields); err != nil {
+				return fmt.Errorf("manifest.extensions[%d].actions[%d].%w", i, j, err)
+			}
+		}
+	}
+	return nil
+}
+
+// validateFieldOptionsSource enforces the options_source key format on a list
+// of action fields, recursing into each field's item_fields (line-items).
+func validateFieldOptionsSource(fields []FieldDef) error {
+	for i := range fields {
+		f := fields[i]
+		if f.OptionsSource != "" && !optionsSourceRe.MatchString(f.OptionsSource) {
+			return fmt.Errorf("fields[%d].options_source %q must match %s", i, f.OptionsSource, optionsSourceRe)
+		}
+		if len(f.ItemFields) > 0 {
+			if err := validateFieldOptionsSource(f.ItemFields); err != nil {
+				return fmt.Errorf("fields[%d].%w", i, err)
 			}
 		}
 	}
