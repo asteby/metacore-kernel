@@ -693,6 +693,10 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 			// DependsOn forwards the cascade dependency so the SDK scopes +
 			// re-fetches this picker's options from the depended-on field's value.
 			DependsOn: f.DependsOn,
+			// OptionsSource forwards the host-registered dynamic options provider
+			// key (e.g. "connector_repos") so the host materialises the field's
+			// choices from its registry at metadata-serve time.
+			OptionsSource: f.OptionsSource,
 		}
 		// Options is EITHER the static value/label list (array form) OR the
 		// dynamic dependent-source object (DynamicOptions). The static list rides

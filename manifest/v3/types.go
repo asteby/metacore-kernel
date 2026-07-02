@@ -751,6 +751,19 @@ type ActionField struct {
 	SearchEndpoint string           `json:"search_endpoint,omitempty"`
 	Validation     *FieldValidation `json:"validation,omitempty"`
 
+	// OptionsSource declares a DYNAMIC select for this action field: instead of
+	// a hardcoded Options list, it names a PROVIDER key (e.g. "connector_repos",
+	// "installed_addons") the HOST registers and resolves at metadata-serve time,
+	// materialising the localized value/label list onto the served
+	// modelbase.FieldDef.Options. It is the action-field twin of Column.OptionsSource
+	// (both map onto modelbase FieldDef.OptionsSource); the kernel implements no
+	// providers — it only carries the key through the v3 → host conversion so any
+	// host can plug its own sources. Open enum (schema pattern ^[a-z][a-z0-9_]*$):
+	// an unknown key simply yields no options on hosts that don't register it. Use
+	// Ref for a relation picker, Options for a hardcoded enum, OptionsSource for
+	// host-computed lists. Pure UI metadata.
+	OptionsSource string `json:"options_source,omitempty"`
+
 	// DependsOn names ANOTHER field in the same action form (a header field or a
 	// sibling item-field) whose current value supplies this picker's cascade
 	// `filter_value`. Used with the Options object form (DynamicOptions) on a

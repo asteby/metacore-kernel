@@ -1502,6 +1502,11 @@
           "type": "string",
           "description": "Endpoint backing an async-search widget."
         },
+        "options_source": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "DYNAMIC options provider key for this action field (e.g. 'connector_repos', 'installed_addons'). Instead of a hardcoded 'options' list, the field declares WHERE its choices come from: a provider the HOST registers and resolves at metadata-serve time, materialising the localized value/label list onto the served FieldDef.options. Open enum: the kernel only passes the key through; unknown keys simply yield no options on hosts that don't register them. Use 'ref' for a relation picker, 'options' for a hardcoded enum, and 'options_source' for host-computed lists. Pure UI metadata."
+        },
         "validation": {
           "$ref": "#/$defs/FieldValidation"
         },

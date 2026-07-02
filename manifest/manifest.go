@@ -448,6 +448,13 @@ type FieldDef struct {
 	DependsOn     string             `json:"depends_on,omitempty"`
 	OptionsConfig *DynamicOptionsDef `json:"optionsConfig,omitempty"`
 
+	// OptionsSource forwards the v3 ActionField.options_source (a host-registered
+	// dynamic options provider key, e.g. "connector_repos"). It rides the matching
+	// modelbase.FieldDef json tag so the key survives the v3 → host conversion and
+	// lands on the served action metadata; the host then materialises the
+	// value/label list from its provider registry. Empty = static/no options.
+	OptionsSource string `json:"options_source,omitempty"`
+
 	// Upload-field properties forwarded verbatim from manifest/v3 ActionField
 	// for a field with type "upload". Accept is the file-picker allow-list,
 	// MaxSize the byte cap and StoragePath the logical storage prefix. The SDK
