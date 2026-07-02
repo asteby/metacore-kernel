@@ -174,6 +174,25 @@ func TestDeriveFormFieldsSkipsManaged(t *testing.T) {
 	}
 }
 
+func TestDeriveFormFieldsCarriesReadonly(t *testing.T) {
+	def := manifest.ModelDefinition{
+		Columns: []manifest.ColumnDef{
+			{Name: "title", Type: "text", Required: true},
+			{Name: "number", Type: "bigint", Readonly: true},
+		},
+	}
+	fields := DeriveFormFields(def)
+	if len(fields) != 2 {
+		t.Fatalf("expected 2 fields, got %d", len(fields))
+	}
+	if fields[0].Readonly {
+		t.Errorf("title must not be readonly")
+	}
+	if !fields[1].Readonly {
+		t.Errorf("number must carry Readonly=true so the SDK excludes it from create / disables it in edit")
+	}
+}
+
 func TestColumnUIType(t *testing.T) {
 	cases := map[string]string{
 		"integer":     "number",

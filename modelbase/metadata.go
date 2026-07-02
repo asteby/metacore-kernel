@@ -69,6 +69,10 @@ type ColumnDef struct {
 	RelationPath   string                 `json:"relationPath,omitempty"`
 	SearchEndpoint string                 `json:"searchEndpoint,omitempty"`
 	Hidden         bool                   `json:"hidden,omitempty"`
+	// Readonly marks a SYSTEM-GENERATED column (see manifest/v3 Column.readonly):
+	// the host projects it so form derivation excludes it from create and marks
+	// it read-only in edit. The column still renders in tables/detail. Pure UI.
+	Readonly bool `json:"readonly,omitempty"`
 	// Ref is the foreign-key target model the column points at (e.g.
 	// "customers", "addon_tickets.comments"). When populated, the SDK
 	// resolves the column's options against `/api/options/:Ref?field=id`
@@ -183,6 +187,13 @@ type FieldDef struct {
 	// Widget overrides the renderer inferred from Type (e.g. "textarea",
 	// "dynamic_select"). Optional — empty lets the SDK infer from Type.
 	Widget string `json:"widget,omitempty"`
+
+	// Readonly marks a SYSTEM-GENERATED field the user must never hand-edit — a
+	// value the addon/host populates server-side (e.g. an external id/number a
+	// remote API returns). Mirrors manifest/v3 Column.readonly (json `readonly`).
+	// The SDK hides a readonly field from the create form and disables it in the
+	// edit form; the value still shows in read views. Pure UI metadata.
+	Readonly bool `json:"readonly,omitempty"`
 
 	// ItemFields declares the columns of a repeatable line-items group, set on a
 	// field with Type "array" (e.g. the debit/credit lines of a journal entry).
