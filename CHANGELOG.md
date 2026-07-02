@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.63.0] - 2026-07-01
+
+### Added
+
+- **dynamic: column facets endpoint (`GET /:model/facets`).** A new read path
+  returns the distinct values of a column together with their row counts,
+  org/branch scoped, so a text-column filter can offer the values that actually
+  exist in the table (e.g. the real `repo` / `assignee` values in the
+  `github_issues` addon) instead of only a free-text "contains…" match. New
+  `Service.Facets(ctx, user, FacetsQuery) ([]FacetBucket, error)` runs
+  `SELECT <col> AS value, COUNT(*) AS count FROM <table> WHERE <org scope> AND
+  <col> IS NOT NULL [AND <col> <> ''] [AND <col> ILIKE <q>] GROUP BY <col>
+  ORDER BY count DESC, value ASC LIMIT <n>`. `FacetsQuery{Model,Field,Q,Limit}`
+  and `FacetBucket{Value,Label,Count}` (json `value`/`label`/`count`). The
+  column must exist on the model and pass `safeColumn` (`ErrOptionsFieldNotFound`
+  / `ErrInvalidInput` otherwise, mapped to 404/400 like options); the empty-string
+  guard is applied only for text columns; the `q` filter reuses the configured
+  `SearchMatchClause` (unaccent/ILIKE on Postgres) with the same `%`/`_` escaping
+  as `Service.Options`; `Limit` defaults to `DefaultOptionsLimit` (50) and clamps
+  to `MaxOptionsLimit` (200). Tenant scoping fires only when the model carries an
+  `organization_id` column (`hasOrgColumn`). The handler emits the standard
+  `{success, data:[…], meta:{count,field}}` envelope. Additive — hosts that do
+  not mount the route are unaffected.
+
 ## [0.62.0] - 2026-06-26
 
 ### Added

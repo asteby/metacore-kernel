@@ -66,6 +66,7 @@ func (h *Handler) MountWith(opts MountOpts) func(r fiber.Router) {
 		// Read paths — no mutation middleware.
 		g.Get("/:model", h.list)
 		g.Get("/:model/aggregate", h.aggregate)
+		g.Get("/:model/facets", h.facets)
 		g.Get("/:model/export", h.exportData)
 		g.Get("/:model/export/template", h.exportTemplate)
 		g.Post("/:model/import/validate", h.importValidate)
@@ -224,6 +225,41 @@ func aggregateColumns(meta *modelbase.TableMetadata) []string {
 		}
 	}
 	return cols
+}
+
+// facets returns the distinct values (with counts) of a column, org/branch
+// scoped, so a text-column filter can offer the values that actually exist in
+// the table instead of only a free-text "contains…" match. The envelope mirrors
+// the other dynamic handlers: {success, data:[{value,label,count}], meta}.
+//
+//	GET /:model/facets?field=<col>&q=<text>&limit=<n>
+func (h *Handler) facets(c fiber.Ctx) error {
+	u := h.user(c)
+	if u == nil {
+		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
+	}
+	q := FacetsQuery{
+		Model: c.Params("model"),
+		Field: c.Query("field"),
+		Q:     c.Query("q"),
+	}
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			q.Limit = n
+		}
+	}
+	buckets, err := h.service.Facets(c, u, q)
+	if err != nil {
+		return h.handleError(c, err)
+	}
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    buckets,
+		"meta": fiber.Map{
+			"count": len(buckets),
+			"field": q.Field,
+		},
+	})
 }
 
 func (h *Handler) get(c fiber.Ctx) error {
