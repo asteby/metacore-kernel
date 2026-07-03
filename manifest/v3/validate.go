@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 
@@ -490,6 +491,26 @@ func Validate(raw []byte) error {
 			if _, err := semver.NewConstraint(step.From); err != nil {
 				errs = append(errs, fmt.Sprintf("lifecycle.upgrade[%d].from %q is not a valid semver range: %v", i, step.From, err))
 			}
+		}
+	}
+
+	// When metadata.icon.type is "svg", the slug is a path RELATIVE to an
+	// asset bundled inside the addon. The kernel never sees the bundle, so it
+	// cannot check the file exists or its size (the hub does that on publish);
+	// here we only guarantee the path is clean and cannot escape the bundle.
+	if m.Metadata.Icon != nil && m.Metadata.Icon.Type == "svg" {
+		slug := m.Metadata.Icon.Slug
+		switch {
+		case strings.TrimSpace(slug) == "":
+			errs = append(errs, "metadata.icon.slug is empty (type=svg requires a relative path to a bundled asset)")
+		case len(slug) > 256:
+			errs = append(errs, fmt.Sprintf("metadata.icon.slug is too long (%d chars, max 256)", len(slug)))
+		case strings.HasPrefix(slug, "/"):
+			errs = append(errs, fmt.Sprintf("metadata.icon.slug %q must be a relative path, not absolute", slug))
+		case strings.Contains(slug, ".."), strings.Contains(path.Clean(slug), ".."), path.Clean(slug) != strings.TrimPrefix(slug, "./"):
+			errs = append(errs, fmt.Sprintf("metadata.icon.slug %q must not contain path traversal (\"..\") and must be a clean relative path", slug))
+		case !strings.HasSuffix(strings.ToLower(slug), ".svg"):
+			errs = append(errs, fmt.Sprintf("metadata.icon.slug %q must reference an .svg asset", slug))
 		}
 	}
 
