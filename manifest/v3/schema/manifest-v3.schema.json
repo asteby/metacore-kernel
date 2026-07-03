@@ -261,14 +261,15 @@
         "icon": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Triple (type, slug, color) used by the host to render the addon avatar.",
+          "description": "Triple (type, slug, color) used by the host to render the addon avatar. When type is \"svg\", slug is a relative path to an SVG asset bundled inside the addon (e.g. \"assets/link.svg\"), served by the hub under a sandboxed CSP and rendered by the frontend as an <img>.",
           "properties": {
             "type": {
               "type": "string",
               "enum": [
                 "brand",
                 "lucide",
-                "url"
+                "url",
+                "svg"
               ]
             },
             "slug": {

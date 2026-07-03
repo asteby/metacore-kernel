@@ -22,8 +22,9 @@ type Manifest struct {
 	// slug). Prefer the explicit triplet below for richer rendering.
 	Icon string `json:"icon,omitempty"`
 	// IconType: "brand" (simple-icons slug), "lucide" (PascalCase icon
-	// name) or "url" (absolute URL). Mirrors the host MarketplaceIntegration
-	// shape so frontends consume them identically.
+	// name), "url" (absolute URL) or "svg" (IconSlug is a relative path to an
+	// SVG asset bundled inside the addon, served by the hub). Mirrors the host
+	// MarketplaceIntegration shape so frontends consume them identically.
 	IconType  string `json:"icon_type,omitempty"`
 	IconSlug  string `json:"icon_slug,omitempty"`
 	IconColor string `json:"icon_color,omitempty"`

@@ -54,6 +54,56 @@ func TestValidate_ValidManifest(t *testing.T) {
 	}
 }
 
+// setIcon mutates the base manifest's metadata to carry an icon triple.
+func setIcon(m map[string]interface{}, typ, slug string) {
+	md := m["metadata"].(map[string]interface{})
+	md["icon"] = map[string]interface{}{"type": typ, "slug": slug}
+}
+
+func TestValidate_IconSVG_ValidRelativePath(t *testing.T) {
+	m := baseValid()
+	setIcon(m, "svg", "assets/link.svg")
+	if err := Validate(mustJSON(t, m)); err != nil {
+		t.Fatalf("expected valid svg icon, got error: %v", err)
+	}
+}
+
+func TestValidate_IconSVG_AbsolutePathRejected(t *testing.T) {
+	m := baseValid()
+	setIcon(m, "svg", "/etc/passwd")
+	err := Validate(mustJSON(t, m))
+	if err == nil {
+		t.Fatal("expected error for absolute svg icon path, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.icon.slug") {
+		t.Fatalf("expected error to mention metadata.icon.slug, got: %v", err)
+	}
+}
+
+func TestValidate_IconSVG_TraversalRejected(t *testing.T) {
+	m := baseValid()
+	setIcon(m, "svg", "../../secret.svg")
+	err := Validate(mustJSON(t, m))
+	if err == nil {
+		t.Fatal("expected error for path traversal in svg icon, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.icon.slug") {
+		t.Fatalf("expected error to mention metadata.icon.slug, got: %v", err)
+	}
+}
+
+func TestValidate_IconSVG_NonSVGExtensionRejected(t *testing.T) {
+	m := baseValid()
+	setIcon(m, "svg", "assets/logo.png")
+	err := Validate(mustJSON(t, m))
+	if err == nil {
+		t.Fatal("expected error for non-.svg icon asset, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.icon.slug") {
+		t.Fatalf("expected error to mention metadata.icon.slug, got: %v", err)
+	}
+}
+
 func TestValidate_MissingAPIVersion(t *testing.T) {
 	m := baseValid()
 	delete(m, "apiVersion")
