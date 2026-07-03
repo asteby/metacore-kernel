@@ -463,6 +463,7 @@ func mapModelTransitionHooks(in []v3.TransitionHook) []TransitionHookDef {
 		out = append(out, TransitionHookDef{
 			From:     h.From,
 			To:       h.To,
+			Set:      h.Set,
 			Do:       h.Do,
 			Required: h.Required,
 		})

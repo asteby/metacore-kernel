@@ -525,6 +525,27 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		if err != nil {
 			return nil, err
 		}
+		// Declarative `set`: when the move fires hooks that stamp fields on the
+		// row itself, apply them into `input` BEFORE we persist so they ride the
+		// same Save and surface in the canonical event (subscribers see them). We
+		// resolve "+tag"/"-tag" against the merged current-plus-incoming view, then
+		// fold only the set keys back onto input.
+		if stageChanged {
+			merged := make(map[string]any, len(before)+len(input))
+			for k, v := range before {
+				merged[k] = v
+			}
+			for k, v := range input {
+				merged[k] = v
+			}
+			if ApplyTransitionSets(sm, fromStage, toStage, merged) {
+				for _, h := range sm.matchingHooks(fromStage, toStage) {
+					for k := range h.Set {
+						input[k] = merged[k]
+					}
+				}
+			}
+		}
 	}
 
 	// Normalize string-encoded typed fields before merging into the record.

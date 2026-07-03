@@ -724,6 +724,10 @@ func validateStageMachine(md ModelDefinition) error {
 			return fmt.Errorf("transitions[%d].to %q is not a declared stage key", i, t.To)
 		}
 	}
+	colNames := make(map[string]struct{}, len(md.Columns))
+	for _, c := range md.Columns {
+		colNames[c.Name] = struct{}{}
+	}
 	for i, h := range md.OnTransition {
 		if h.From != "*" && h.From != "" {
 			if _, ok := stageKeys[h.From]; !ok {
@@ -735,12 +739,22 @@ func validateStageMachine(md ModelDefinition) error {
 				return fmt.Errorf("onTransition[%d].to %q is not a declared stage key (or \"*\")", i, h.To)
 			}
 		}
-		prefix, _, found := strings.Cut(h.Do, ":")
-		if !found {
-			return fmt.Errorf("onTransition[%d].do %q must be wasm:<export> | webhook:<key> | compiled:<fn>", i, h.Do)
+		if h.Do == "" && len(h.Set) == 0 {
+			return fmt.Errorf("onTransition[%d] must declare `set`, `do`, or both", i)
 		}
-		if _, ok := validHookPrefixes[prefix]; !ok {
-			return fmt.Errorf("onTransition[%d].do %q has an unknown prefix (want wasm|webhook|compiled)", i, prefix)
+		for col := range h.Set {
+			if _, ok := colNames[col]; !ok {
+				return fmt.Errorf("onTransition[%d].set key %q is not a declared column on the model", i, col)
+			}
+		}
+		if h.Do != "" {
+			prefix, _, found := strings.Cut(h.Do, ":")
+			if !found {
+				return fmt.Errorf("onTransition[%d].do %q must be wasm:<export> | webhook:<key> | compiled:<fn>", i, h.Do)
+			}
+			if _, ok := validHookPrefixes[prefix]; !ok {
+				return fmt.Errorf("onTransition[%d].do %q has an unknown prefix (want wasm|webhook|compiled)", i, prefix)
+			}
 		}
 	}
 	return nil

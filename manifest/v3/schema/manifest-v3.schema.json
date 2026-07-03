@@ -1299,10 +1299,21 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "to",
-        "do"
+        "to"
       ],
-      "description": "A declarative side effect the kernel fires when a record transitions between stages. from/to select the matching moves ('*' matches any stage); 'do' references the handler to dispatch as wasm:<export> | webhook:<key> | compiled:<fn>.",
+      "anyOf": [
+        {
+          "required": [
+            "set"
+          ]
+        },
+        {
+          "required": [
+            "do"
+          ]
+        }
+      ],
+      "description": "A declarative side effect the kernel fires when a record transitions between stages. from/to select the matching moves ('*' matches any stage). A hook carries 'set' (assign fields on the transitioning row itself, applied before persist), 'do' (a handler dispatched as wasm:<export> | webhook:<key> | compiled:<fn>), or both.",
       "properties": {
         "from": {
           "type": "string",
@@ -1311,6 +1322,11 @@
         "to": {
           "type": "string",
           "description": "Destination stage key, or '*' to match any destination."
+        },
+        "set": {
+          "type": "object",
+          "description": "Fields to assign on the transitioning row itself, applied before persist so they ride the same Save and appear in the canonical event. Scalar value = direct assignment; on a json/array column a '+tag' string appends idempotently and a '-tag' string removes. Keys must name declared columns of the model.",
+          "additionalProperties": true
         },
         "do": {
           "type": "string",
