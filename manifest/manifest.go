@@ -605,14 +605,18 @@ type TransitionDef struct {
 	To   string `json:"to"`
 }
 
-// TransitionHookDef is the host/runtime projection of a v3 TransitionHook. Do
-// references the dispatchable handler (`wasm:`/`webhook:`/`compiled:`); Required
-// makes a dispatch failure roll back the transition. See manifest/v3.TransitionHook.
+// TransitionHookDef is the host/runtime projection of a v3 TransitionHook. Set
+// assigns fields on the transitioning row itself (scalar = direct assignment;
+// "+tag"/"-tag" on a json column = idempotent append/remove) and is applied
+// before the row is persisted. Do references the dispatchable handler
+// (`wasm:`/`webhook:`/`compiled:`); Required makes a dispatch failure roll back
+// the transition. A hook carries Set, Do, or both. See manifest/v3.TransitionHook.
 type TransitionHookDef struct {
-	From     string `json:"from"`
-	To       string `json:"to"`
-	Do       string `json:"do"`
-	Required bool   `json:"required,omitempty"`
+	From     string         `json:"from"`
+	To       string         `json:"to"`
+	Set      map[string]any `json:"set,omitempty"`
+	Do       string         `json:"do,omitempty"`
+	Required bool           `json:"required,omitempty"`
 }
 
 // Formula declares a column on the owning model whose value the kernel

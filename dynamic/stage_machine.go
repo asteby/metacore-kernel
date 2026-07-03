@@ -2,8 +2,10 @@ package dynamic
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"reflect"
 	"strings"
 
 	"gorm.io/gorm"
@@ -64,6 +66,119 @@ func (sm *StageMachine) matchingHooks(from, to string) []manifest.TransitionHook
 		}
 	}
 	return out
+}
+
+// ApplyTransitionSets applies the declarative `set` blocks of every OnTransition
+// hook that matches a from → to move to `record`, mutating it in place, and
+// reports whether anything changed. It is the host-reusable twin of the set
+// application the kernel runs inside Service.Update: a host with a legacy
+// transition route (ops) calls it so a manifest's `set` behaves identically on
+// both surfaces.
+//
+// Value semantics per set entry:
+//   - a "+tag" / "-tag" string on a json/array column (the current value is a
+//     slice, or absent) appends idempotently / removes the tag;
+//   - any other value is assigned to the column directly (scalar set).
+//
+// Matching hooks apply in declaration order; a later hook sees an earlier hook's
+// writes. A nil machine (or one with no matching hooks / no sets) is a no-op.
+func ApplyTransitionSets(sm *StageMachine, from, to string, record map[string]any) (changed bool) {
+	if sm == nil || record == nil {
+		return false
+	}
+	for _, h := range sm.matchingHooks(from, to) {
+		for key, val := range h.Set {
+			if applySetValue(record, key, val) {
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+// applySetValue applies one `set` entry to record[key], returning whether the
+// stored value changed. A "+tag"/"-tag" string over a slice-or-absent column is
+// treated as an idempotent append/remove; anything else is a direct assignment.
+func applySetValue(record map[string]any, key string, val any) bool {
+	if s, ok := val.(string); ok && len(s) >= 1 && (s[0] == '+' || s[0] == '-') {
+		if cur, isArray := asStringSlice(record[key]); isArray {
+			tag := s[1:]
+			if s[0] == '+' {
+				for _, e := range cur {
+					if e == tag {
+						return false // already present: idempotent no-op
+					}
+				}
+				record[key] = append(append([]string{}, cur...), tag)
+				return true
+			}
+			// '-': remove if present.
+			out := make([]string, 0, len(cur))
+			found := false
+			for _, e := range cur {
+				if e == tag {
+					found = true
+					continue
+				}
+				out = append(out, e)
+			}
+			if !found {
+				return false
+			}
+			record[key] = out
+			return true
+		}
+	}
+	if reflect.DeepEqual(record[key], val) {
+		return false
+	}
+	record[key] = val
+	return true
+}
+
+// asStringSlice coerces a json/array column's current value into a []string so a
+// "+tag"/"-tag" set can append/remove. It accepts a nil/absent value (empty
+// slice), a []string, a []any of strings, or raw JSON bytes (json.RawMessage /
+// []byte holding a string array — how a persisted jsonb column round-trips). It
+// returns (nil, false) when the value is a non-array scalar, signalling the
+// caller to fall back to a direct assignment.
+func asStringSlice(v any) ([]string, bool) {
+	switch t := v.(type) {
+	case nil:
+		return []string{}, true
+	case []string:
+		return t, true
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			s, ok := e.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	case json.RawMessage:
+		return decodeJSONStringArray(t)
+	case []byte:
+		return decodeJSONStringArray(t)
+	default:
+		return nil, false
+	}
+}
+
+// decodeJSONStringArray parses raw JSON bytes into a []string, tolerating an
+// empty/`null` value (an empty slice). It returns (nil, false) when the bytes
+// are not a JSON array of strings.
+func decodeJSONStringArray(b []byte) ([]string, bool) {
+	if len(b) == 0 {
+		return []string{}, true
+	}
+	var out []string
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // resolveStageMachine looks up the active stage machine for a model, or nil when

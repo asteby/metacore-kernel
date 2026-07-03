@@ -297,15 +297,28 @@ type Transition struct {
 
 // TransitionHook is a declarative side effect the kernel fires when a record
 // transitions between stages. From/To select the matching moves ("*" matches
-// any stage); Do references the handler to dispatch as
-// `wasm:<export>` | `webhook:<key>` | `compiled:<fn>`. When Required is true a
-// dispatch failure rolls back the whole transition (HTTP 422); otherwise the
-// failure is logged and the transition stands.
+// any stage).
+//
+// A hook carries Set, Do, or both — at least one is required:
+//
+//   - Set assigns fields on the transitioning row itself, with no handler
+//     (Bitrix-style "on entering this stage, stamp these fields"). It is applied
+//     BEFORE the row is persisted, so the writes ride the same Save and appear in
+//     the Issue.updated canonical event (subscribers see them). Value semantics:
+//     a scalar is assigned directly; on a json/array column a "+tag" string
+//     appends idempotently and a "-tag" string removes. When Set is present Do
+//     becomes optional; when both are present Set is applied before Do dispatches.
+//   - Do references the handler to dispatch as
+//     `wasm:<export>` | `webhook:<key>` | `compiled:<fn>`.
+//
+// When Required is true a Do dispatch failure rolls back the whole transition
+// (HTTP 422); otherwise the failure is logged and the transition stands.
 type TransitionHook struct {
-	From     string `json:"from"`
-	To       string `json:"to"`
-	Do       string `json:"do"`
-	Required bool   `json:"required,omitempty"`
+	From     string         `json:"from"`
+	To       string         `json:"to"`
+	Set      map[string]any `json:"set,omitempty"`
+	Do       string         `json:"do,omitempty"`
+	Required bool           `json:"required,omitempty"`
 }
 
 // Formula declares a column on the owning model whose value the kernel

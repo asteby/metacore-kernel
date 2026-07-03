@@ -234,8 +234,10 @@ func validateStageMachine(mi int, mod Model, ownCols map[string]struct{}) []stri
 		}
 	}
 
-	// Hooks: from/to must be "*" or a declared stage key; `do` must carry a
-	// known prefix (the schema pattern enforces the shape, this enforces the set).
+	// Hooks: from/to must be "*" or a declared stage key. A hook must carry `set`,
+	// `do`, or both. When `do` is present it must carry a known wasm:/webhook:/
+	// compiled: prefix (the schema pattern enforces the shape, this enforces the
+	// set). When `set` is present every key must name a declared column.
 	for hi, h := range mod.OnTransition {
 		if h.From != "*" && h.From != "" {
 			if _, ok := stageKeys[h.From]; !ok {
@@ -247,11 +249,21 @@ func validateStageMachine(mi int, mod Model, ownCols map[string]struct{}) []stri
 				errs = append(errs, fmt.Sprintf("%s.on_transition[%d].to %q is not a declared stage key (or \"*\")", where, hi, h.To))
 			}
 		}
-		prefix, _, found := strings.Cut(h.Do, ":")
-		if !found {
-			errs = append(errs, fmt.Sprintf("%s.on_transition[%d].do %q must be wasm:<export> | webhook:<key> | compiled:<fn>", where, hi, h.Do))
-		} else if _, ok := validHookPrefixes[prefix]; !ok {
-			errs = append(errs, fmt.Sprintf("%s.on_transition[%d].do %q has an unknown prefix (want wasm|webhook|compiled)", where, hi, prefix))
+		if h.Do == "" && len(h.Set) == 0 {
+			errs = append(errs, fmt.Sprintf("%s.on_transition[%d] must declare `set`, `do`, or both", where, hi))
+		}
+		for col := range h.Set {
+			if _, ok := ownCols[col]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.on_transition[%d].set key %q is not a declared column on the model", where, hi, col))
+			}
+		}
+		if h.Do != "" {
+			prefix, _, found := strings.Cut(h.Do, ":")
+			if !found {
+				errs = append(errs, fmt.Sprintf("%s.on_transition[%d].do %q must be wasm:<export> | webhook:<key> | compiled:<fn>", where, hi, h.Do))
+			} else if _, ok := validHookPrefixes[prefix]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.on_transition[%d].do %q has an unknown prefix (want wasm|webhook|compiled)", where, hi, prefix))
+			}
 		}
 	}
 	return errs

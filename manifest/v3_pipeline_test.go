@@ -121,6 +121,77 @@ func TestFromV3_Pipeline_Mapped(t *testing.T) {
 	}
 }
 
+// TestValidate_Pipeline_SetHook_Accepted asserts an on_transition hook that
+// carries only a declarative `set` (no `do`) is accepted by both the schema and
+// the cross-field validator, and that the set survives Parse + FromV3.
+func TestValidate_Pipeline_SetHook_Accepted(t *testing.T) {
+	raw := strings.Replace(pipelineManifestJSON,
+		`{ "from": "*", "to": "*",    "do": "wasm:log_stage_change" }`,
+		`{ "from": "*", "to": "review", "set": { "title": "in review" } }`, 1)
+	m, err := v3.Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("v3.Parse rejected set-only hook: %v", err)
+	}
+	setHook := m.Models[0].OnTransition[1]
+	if setHook.Do != "" || setHook.Set["title"] != "in review" {
+		t.Fatalf("set hook = %+v, want do empty + set.title", setHook)
+	}
+	// Mapped host projection carries the set, and strict validation accepts it.
+	out := manifest.FromV3(m)
+	if out.ModelDefinitions[0].OnTransition[1].Set["title"] != "in review" {
+		t.Fatalf("mapped set lost: %+v", out.ModelDefinitions[0].OnTransition[1])
+	}
+	if err := out.Validate("3.5.0"); err != nil {
+		t.Fatalf("strict manifest.Validate rejected set-only hook: %v", err)
+	}
+}
+
+// TestValidate_Pipeline_SetRejections covers the two new set-related invariants:
+// a hook with neither `do` nor `set`, and a `set` key that is not a declared
+// column. Both must fail on the v3 and the strict/legacy surfaces.
+func TestValidate_Pipeline_SetRejections(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(string) string
+		want   string
+	}{
+		{
+			name: "hook with neither do nor set",
+			mutate: func(s string) string {
+				return strings.Replace(s, `{ "from": "*", "to": "done", "do": "wasm:push_on_transition", "required": true }`,
+					`{ "from": "*", "to": "done" }`, 1)
+			},
+			want: "set",
+		},
+		{
+			name: "set key not a declared column",
+			mutate: func(s string) string {
+				return strings.Replace(s, `{ "from": "*", "to": "*",    "do": "wasm:log_stage_change" }`,
+					`{ "from": "*", "to": "review", "set": { "ghost": "x" } }`, 1)
+			},
+			want: "ghost",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := tc.mutate(pipelineManifestJSON)
+			err := v3.Validate([]byte(raw))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("v3.Validate error = %v, want substring %q", err, tc.want)
+			}
+			// The strict/legacy surface must reject identically (dual validation).
+			m, perr := v3.Parse([]byte(raw))
+			if perr != nil {
+				return // Parse already rejected — dual coverage satisfied.
+			}
+			out := manifest.FromV3(m)
+			if serr := out.Validate("3.5.0"); serr == nil {
+				t.Fatalf("strict manifest.Validate accepted invalid set hook (%s)", tc.name)
+			}
+		})
+	}
+}
+
 // TestValidate_Pipeline_Rejections is table-driven over the cross-field rules the
 // schema cannot express: undeclared stage_field, transition referencing an
 // unknown stage, kanban nav without group_by, and an on_transition with a bad
