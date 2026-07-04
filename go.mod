@@ -12,7 +12,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.47
 	github.com/pganalyze/pg_query_go/v6 v6.2.2
 	github.com/pgvector/pgvector-go v0.4.0
-	github.com/pressly/goose/v3 v3.27.1
+	github.com/pressly/goose/v3 v3.27.2
 	github.com/prometheus/client_golang v1.23.2
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/tetratelabs/wazero v1.12.0
@@ -33,7 +33,7 @@ require (
 	github.com/gofiber/utils/v2 v2.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.9.2 // indirect
+	github.com/jackc/pgx/v5 v5.10.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
