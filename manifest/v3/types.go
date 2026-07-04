@@ -979,12 +979,37 @@ func bytesTrimSpace(b []byte) []byte {
 //	Color — a CSS colour (hex / token) used for a dot / chip / text accent.
 //	Image — a URL (or bundle-relative path) to a small image / avatar / logo
 //	        rendered beside the label.
+//	When  — an OPTIONAL cascade guard that gates THIS static option by the
+//	        current value of a sibling enum field. When set, the option is only
+//	        offered while the sibling's value satisfies the condition; the SDK
+//	        hides the select entirely once no option applies. Omitted = the
+//	        option always applies (retro-compatible with existing enums).
 type FieldOption struct {
-	Value string `json:"value"`
-	Label string `json:"label"`
-	Icon  string `json:"icon,omitempty"`
-	Color string `json:"color,omitempty"`
-	Image string `json:"image,omitempty"`
+	Value string           `json:"value"`
+	Label string           `json:"label"`
+	Icon  string           `json:"icon,omitempty"`
+	Color string           `json:"color,omitempty"`
+	Image string           `json:"image,omitempty"`
+	When  *OptionCondition `json:"when,omitempty"`
+}
+
+// OptionCondition gates a single STATIC FieldOption by the current value of a
+// sibling enum field — the static twin of the relational cascade (DependsOn +
+// the DynamicOptions object). It only ever appears inside the array form of
+// `options`; the object form (DynamicOptions) already scopes via FilterBy.
+//
+//	Field — the sibling field whose value is evaluated. Optional: when empty the
+//	        evaluation falls back to the container column/field's DependsOn, so an
+//	        author can name the governing field once at the field level.
+//	In    — the option applies when the sibling's value ∈ In (string compare).
+//	NotIn — the option applies when the sibling's value ∉ NotIn.
+//
+// At least one of In / NotIn must be non-empty, and at least one of Field /
+// container DependsOn must resolve a sibling — enforced by validation.
+type OptionCondition struct {
+	Field string   `json:"field,omitempty"`
+	In    []string `json:"in,omitempty"`
+	NotIn []string `json:"not_in,omitempty"`
 }
 
 // FieldValidation carries client-side validation hints for an action field.

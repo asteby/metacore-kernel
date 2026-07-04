@@ -317,6 +317,20 @@ type Option struct {
 	Icon  string `json:"icon,omitempty"`
 	Color string `json:"color,omitempty"`
 	Image string `json:"image,omitempty"`
+	// When is the OPTIONAL static cascade guard forwarded verbatim from
+	// manifest/v3 FieldOption.When so it survives the v3 → host conversion
+	// and lands on the served modelbase.OptionDef.When. Nil = always applies.
+	When *OptionCondition `json:"when,omitempty"`
+}
+
+// OptionCondition is the legacy carrier for the static option cascade guard —
+// it forwards manifest/v3 OptionCondition through the host conversion onto the
+// served modelbase.OptionCondition. Field names the sibling enum field (falls
+// back to the container's DependsOn when empty); In / NotIn scope the value.
+type OptionCondition struct {
+	Field string   `json:"field,omitempty"`
+	In    []string `json:"in,omitempty"`
+	NotIn []string `json:"not_in,omitempty"`
 }
 
 // ToolDef is an LLM-callable function the addon exposes. Hosts with

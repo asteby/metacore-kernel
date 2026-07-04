@@ -1651,6 +1651,27 @@
         "image": {
           "type": "string",
           "description": "Optional URL or bundle-relative path to a small image / avatar / logo the SDK renders beside the option label. Pure presentation; ignored by the runtime."
+        },
+        "when": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "OPTIONAL static cascade guard: gates THIS option by the current value of a sibling enum field. The SDK offers the option only while the sibling's value satisfies the condition and hides the select entirely when no option applies. Only valid on the static array form of 'options'. Omitted = the option always applies (retro-compatible).",
+          "properties": {
+            "field": {
+              "type": "string",
+              "description": "Sibling field whose current value is evaluated. Optional: when empty, falls back to the container column/field's depends_on."
+            },
+            "in": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "The option applies when the sibling's value is one of these (string compare)."
+            },
+            "not_in": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "The option applies when the sibling's value is NOT one of these (string compare)."
+            }
+          }
         }
       }
     },

@@ -479,6 +479,9 @@ func validateFieldOptionsSource(fields []FieldDef) error {
 		if f.OptionsSource != "" && !optionsSourceRe.MatchString(f.OptionsSource) {
 			return fmt.Errorf("fields[%d].options_source %q must match %s", i, f.OptionsSource, optionsSourceRe)
 		}
+		if err := validateOptionWhen(f.DependsOn, f.Options); err != nil {
+			return fmt.Errorf("fields[%d].%w", i, err)
+		}
 		if len(f.ItemFields) > 0 {
 			if err := validateFieldOptionsSource(f.ItemFields); err != nil {
 				return fmt.Errorf("fields[%d].%w", i, err)
@@ -581,6 +584,30 @@ func validateColumnExtensions(col ColumnDef) error {
 	if col.Validation != nil {
 		if err := col.Validation.validate(); err != nil {
 			return fmt.Errorf("validation: %w", err)
+		}
+	}
+	if err := validateOptionWhen(col.DependsOn, col.Options); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateOptionWhen enforces the static-option cascade guard contract on the
+// strict plane (mirrors manifest/v3.validateOptionWhen): an option's `when`
+// must resolve a governing sibling field (its own `field` or the container's
+// `depends_on`) and scope the value with a non-empty `in` or `not_in`. Options
+// without a `when` block are unaffected (retro-compatible).
+func validateOptionWhen(containerDependsOn string, opts []Option) error {
+	for i := range opts {
+		w := opts[i].When
+		if w == nil {
+			continue
+		}
+		if w.Field == "" && containerDependsOn == "" {
+			return fmt.Errorf("options[%d].when requires `field`, or the container's `depends_on`, to name the governing sibling field", i)
+		}
+		if len(w.In) == 0 && len(w.NotIn) == 0 {
+			return fmt.Errorf("options[%d].when requires a non-empty `in` or `not_in`", i)
 		}
 	}
 	return nil
