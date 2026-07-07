@@ -309,6 +309,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 					Icon:  o.Icon,
 					Color: o.Color,
 					Image: o.Image,
+					When:  mapOptionCondition(o.When),
 				})
 			}
 			if d := c.Options.Dynamic; d != nil {
@@ -651,6 +652,20 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 // mapActionFields folds v3 ActionFields into FieldDefs the host serves to the
 // SDK. v3 field.Key maps to BOTH FieldDef.Key (the tag the host/SDK read) and
 // FieldDef.Name (kept for legacy consumers); Label/Type/Required/Default and
+// mapOptionCondition projects a v3 static-option cascade guard onto the legacy
+// carrier so it survives the v3 → host conversion and lands on the served
+// modelbase.OptionDef.When. Nil stays nil (retro-compatible: no `when` block).
+func mapOptionCondition(w *v3.OptionCondition) *OptionCondition {
+	if w == nil {
+		return nil
+	}
+	return &OptionCondition{
+		Field: w.Field,
+		In:    w.In,
+		NotIn: w.NotIn,
+	}
+}
+
 // FieldOptions copy across.
 //
 // The rich properties — widget, ref, placeholder, search_endpoint, total,
@@ -716,6 +731,7 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 				Icon:  o.Icon,
 				Color: o.Color,
 				Image: o.Image,
+				When:  mapOptionCondition(o.When),
 			})
 		}
 		if d := f.Options.Dynamic; d != nil {

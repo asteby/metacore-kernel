@@ -221,9 +221,24 @@ func toOptionDefs(in []manifest.Option) []modelbase.OptionDef {
 			Icon:  o.Icon,
 			Color: o.Color,
 			Image: o.Image,
+			When:  mapModelbaseOptionCondition(o.When),
 		})
 	}
 	return out
+}
+
+// mapModelbaseOptionCondition projects the legacy static-option cascade guard
+// (manifest.OptionCondition) onto the served modelbase.OptionCondition. Nil
+// stays nil so plain enum options without a `when` block are unaffected.
+func mapModelbaseOptionCondition(w *manifest.OptionCondition) *modelbase.OptionCondition {
+	if w == nil {
+		return nil
+	}
+	return &modelbase.OptionCondition{
+		Field: w.Field,
+		In:    w.In,
+		NotIn: w.NotIn,
+	}
 }
 
 // toFieldOptionsConfig projects the legacy DYNAMIC options carrier

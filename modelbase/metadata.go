@@ -287,6 +287,25 @@ type OptionDef struct {
 	// logo the SDK renders beside the option label. Mirrors manifest/v3
 	// FieldOption.image so a static option list can show a thumbnail. Optional.
 	Image string `json:"image,omitempty"`
+	// When is the OPTIONAL static cascade guard: it gates this option by the
+	// current value of a sibling enum field (see OptionCondition). The SDK
+	// filters the option list by the parent's value and hides the select when
+	// nothing applies. Nil = the option always applies (retro-compatible).
+	When *OptionCondition `json:"when,omitempty"`
+}
+
+// OptionCondition gates a single static OptionDef by the current value of a
+// sibling enum field — the served form of the manifest/v3 OptionCondition. It
+// is the static twin of the relational cascade (DependsOn + FieldOptionsConfig).
+//
+//	Field — the sibling field whose value is evaluated. Empty = fall back to the
+//	        container ColumnDef/FieldDef.DependsOn.
+//	In    — the option applies when the sibling's value ∈ In (string compare).
+//	NotIn — the option applies when the sibling's value ∉ NotIn.
+type OptionCondition struct {
+	Field string   `json:"field,omitempty"`
+	In    []string `json:"in,omitempty"`
+	NotIn []string `json:"not_in,omitempty"`
 }
 
 // KV is an alias retained for backwards compatibility with older call-sites

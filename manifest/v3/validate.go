@@ -441,6 +441,28 @@ func SchemaJSON() []byte {
 //
 // On failure the returned error wraps a list of all violations so authors
 // get the full picture in a single round trip.
+// validateOptionWhen enforces the static-option cascade guard contract: an
+// option's `when` block must resolve a governing sibling field (its own `field`
+// or the container column/field's `depends_on`) and must scope the value with a
+// non-empty `in` or `not_in`. `when` only exists on the static array form, so no
+// coexistence check against the dynamic object form is structurally possible.
+func validateOptionWhen(where, containerDependsOn string, opts []FieldOption) []string {
+	var errs []string
+	for oi, o := range opts {
+		if o.When == nil {
+			continue
+		}
+		ow := fmt.Sprintf("%s.options[%d].when", where, oi)
+		if o.When.Field == "" && containerDependsOn == "" {
+			errs = append(errs, fmt.Sprintf("%s requires `field`, or the container's `depends_on`, to name the governing sibling field", ow))
+		}
+		if len(o.When.In) == 0 && len(o.When.NotIn) == 0 {
+			errs = append(errs, fmt.Sprintf("%s requires a non-empty `in` or `not_in`", ow))
+		}
+	}
+	return errs
+}
+
 func Validate(raw []byte) error {
 	if len(raw) == 0 {
 		return errors.New("v3: manifest is empty")
@@ -600,6 +622,14 @@ func Validate(raw []byte) error {
 		// (the schema pattern already enforces the shape). Mirrors the legacy
 		// validator so a manifest fails identically on both surfaces.
 		errs = append(errs, validateStageMachine(mi, mod, ownCols)...)
+		// Static-option cascade guards on model columns.
+		for ci, c := range mod.Columns {
+			if c.Options.Len() == 0 {
+				continue
+			}
+			where := fmt.Sprintf("models[%d].columns[%d]", mi, ci)
+			errs = append(errs, validateOptionWhen(where, c.DependsOn, c.Options.Static)...)
+		}
 		for ri, rel := range mod.Relations {
 			where := fmt.Sprintf("models[%d].relations[%d]", mi, ri)
 			switch rel.Kind {
@@ -641,6 +671,19 @@ func Validate(raw []byte) error {
 	if m.Contributions != nil {
 		for ai, a := range m.Contributions.Actions {
 			for fi, f := range a.Fields {
+				// Static-option cascade guards on action fields and their
+				// nested item_fields (line-items cells).
+				fw := fmt.Sprintf("contributions.actions[%d].fields[%d]", ai, fi)
+				if f.Options.Len() > 0 {
+					errs = append(errs, validateOptionWhen(fw, f.DependsOn, f.Options.Static)...)
+				}
+				for ii, it := range f.ItemFields {
+					if it.Options.Len() == 0 {
+						continue
+					}
+					iw := fmt.Sprintf("%s.item_fields[%d]", fw, ii)
+					errs = append(errs, validateOptionWhen(iw, it.DependsOn, it.Options.Static)...)
+				}
 				if f.Balance == nil {
 					continue
 				}
