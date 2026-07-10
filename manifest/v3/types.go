@@ -757,6 +757,26 @@ type Action struct {
 	// for a flat field list, roomy for line-items). The SDK reads it as
 	// `action.modalWidth`. Lets a rich create/edit form declare a wider modal.
 	ModalWidth string `json:"modal_width,omitempty"`
+
+	// Idempotency makes the action REPLAY-SAFE. When set, the kernel keys a
+	// stored response by (org, model, action, <the KeyField value read from the
+	// invocation payload>) and returns the SAME response on any later invocation
+	// carrying that key, WITHOUT dispatching the handler again. This is what lets
+	// a payment capture or a fiscal stamp be retried over a flaky network without
+	// double-charging / double-stamping. Optional — omit for ordinary actions.
+	Idempotency *ActionIdempotency `json:"idempotency,omitempty"`
+}
+
+// ActionIdempotency declares the payload field that carries an action's
+// idempotency key. The client supplies a stable, unique value in that field
+// (a UUID it generates per logical attempt); the kernel replays the first
+// response for any repeat of the same (org, model, action, key).
+type ActionIdempotency struct {
+	// KeyField names the field in the action PAYLOAD whose value is the
+	// idempotency key (e.g. "request_id"). Required when idempotency is set;
+	// an invocation that omits the field (empty key) is dispatched normally
+	// with no replay guarantee.
+	KeyField string `json:"key_field"`
 }
 
 // ActionField is one input in an action modal's declarative form. It mirrors

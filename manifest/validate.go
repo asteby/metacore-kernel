@@ -360,6 +360,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 	if err := m.validateActionFields(); err != nil {
 		return err
 	}
+	if err := m.validateActionIdempotency(); err != nil {
+		return err
+	}
 	if err := m.validateLifecycleHooks(); err != nil {
 		return err
 	}
@@ -439,6 +442,34 @@ func (m *Manifest) validateActionTriggers() error {
 		for j := range ext.Actions {
 			if err := validateActionTrigger(ext.Actions[j].Trigger, exports); err != nil {
 				return fmt.Errorf("manifest.extensions[%d].actions[%d].%w", i, j, err)
+			}
+		}
+	}
+	return nil
+}
+
+// validateActionIdempotency enforces that any ActionDef declaring an
+// idempotency block names a non-empty key field. This mirrors the lenient
+// v3.Validate check so a manifest that passes one plane passes the other (the
+// "double validation" contract). Actions without idempotency are a no-op.
+func (m *Manifest) validateActionIdempotency() error {
+	check := func(where string, def *ActionDef) error {
+		if def.Idempotency != nil && strings.TrimSpace(def.Idempotency.KeyField) == "" {
+			return fmt.Errorf("%s.idempotency requires a non-empty keyField", where)
+		}
+		return nil
+	}
+	for model, defs := range m.Actions {
+		for i := range defs {
+			if err := check(fmt.Sprintf("manifest.actions[%q][%d]", model, i), &defs[i]); err != nil {
+				return err
+			}
+		}
+	}
+	for i, ext := range m.Extensions {
+		for j := range ext.Actions {
+			if err := check(fmt.Sprintf("manifest.extensions[%d].actions[%d]", i, j), &ext.Actions[j]); err != nil {
+				return err
 			}
 		}
 	}

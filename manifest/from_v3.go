@@ -644,6 +644,9 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 		case "webhook":
 			def.Trigger = &ActionTrigger{Type: "webhook"}
 		}
+		if a.Idempotency != nil {
+			def.Idempotency = &IdempotencyDef{KeyField: a.Idempotency.KeyField}
+		}
 		out[a.TargetModel] = append(out[a.TargetModel], def)
 	}
 	return out

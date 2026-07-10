@@ -155,6 +155,24 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 		return ActionResult{}, fmt.Errorf("%w: %q", ErrUnsupportedTriggerType, trig.Type)
 	}
 
+	// Declarative idempotency: when the action declares a key field and the
+	// payload carries a value for it, replay the first stored response for
+	// (org, model, action, key) instead of dispatching again. The replay
+	// short-circuits BEFORE any dispatch/transaction, so a retried payment
+	// capture never re-runs the handler.
+	orgID := orgIDFromUser(user)
+	idemKey := ""
+	if def.Idempotency != nil && orgID != uuid.Nil {
+		idemKey = idempotencyKeyFromPayload(payload, def.Idempotency.KeyField)
+		if idemKey != "" {
+			if replay, found, lerr := s.lookupIdempotentResult(ctx, orgID, model, key, idemKey); lerr != nil {
+				return ActionResult{}, lerr
+			} else if found {
+				return replay, nil
+			}
+		}
+	}
+
 	runInTx := trig.Type == "wasm" && trig.RunInTx
 	kernelMeta := map[string]any{
 		"model":        model,
@@ -175,7 +193,11 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 		if derr != nil {
 			return ActionResult{}, derr
 		}
-		return buildResult(resp, kernelMeta), nil
+		result := buildResult(resp, kernelMeta)
+		if err := s.persistIdempotent(ctx, orgID, model, key, idemKey, result); err != nil {
+			return ActionResult{}, err
+		}
+		return result, nil
 	}
 
 	var resp ActionResponse
@@ -206,7 +228,23 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 
 	rolledBack := txErr != nil
 	kernelMeta["rolled_back"] = rolledBack
-	return buildResult(resp, kernelMeta), nil
+	result := buildResult(resp, kernelMeta)
+	if err := s.persistIdempotent(ctx, orgID, model, key, idemKey, result); err != nil {
+		return ActionResult{}, err
+	}
+	return result, nil
+}
+
+// persistIdempotent stores a SUCCESSFUL action result for later replay, keyed by
+// (org, model, action, idemKey). It is a no-op when the action is not
+// idempotent (idemKey == ""), when the org is unknown, or when the result was
+// not successful — a failed/declined action stays retryable so a client can
+// legitimately re-attempt it with the same key.
+func (s *Service) persistIdempotent(ctx context.Context, orgID uuid.UUID, model, action, idemKey string, result ActionResult) error {
+	if idemKey == "" || orgID == uuid.Nil || !result.Success {
+		return nil
+	}
+	return s.storeIdempotentResult(ctx, orgID, model, action, idemKey, result)
 }
 
 // buildResult merges dispatcher-supplied meta with kernel-managed meta (kernel

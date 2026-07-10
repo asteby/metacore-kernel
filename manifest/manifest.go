@@ -388,6 +388,20 @@ type ActionDef struct {
 	// type contract; consumers (bridge/actions.go, runtime/wasm) pick the
 	// new field up incrementally in follow-up PRs.
 	Trigger *ActionTrigger `json:"trigger,omitempty"`
+
+	// Idempotency is the host/runtime projection of a v3 Action.idempotency
+	// block. When non-nil the kernel's ExecAction keys a stored response by
+	// (org, model, action, <payload[KeyField]>) and replays it on repeats,
+	// skipping the dispatch. Nil = the action is not replay-guarded. See
+	// manifest/v3.ActionIdempotency and dynamic.Service.ExecAction.
+	Idempotency *IdempotencyDef `json:"idempotency,omitempty"`
+}
+
+// IdempotencyDef is the host/runtime projection of a v3 ActionIdempotency: the
+// payload field whose value is the idempotency key. See manifest/v3 for the
+// full contract.
+type IdempotencyDef struct {
+	KeyField string `json:"keyField"`
 }
 
 // ActionTrigger declares how an ActionDef is dispatched when invoked from

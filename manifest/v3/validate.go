@@ -670,6 +670,9 @@ func Validate(raw []byte) error {
 
 	if m.Contributions != nil {
 		for ai, a := range m.Contributions.Actions {
+			if a.Idempotency != nil && strings.TrimSpace(a.Idempotency.KeyField) == "" {
+				errs = append(errs, fmt.Sprintf("contributions.actions[%d].idempotency requires a non-empty key_field", ai))
+			}
 			for fi, f := range a.Fields {
 				// Static-option cascade guards on action fields and their
 				// nested item_fields (line-items cells).

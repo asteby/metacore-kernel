@@ -9,6 +9,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **manifest+dynamic: declarative action idempotency (`Action.idempotency`).** A
+  v3 action may declare `idempotency: {key_field}`; the client supplies a stable
+  unique value in that payload field and the kernel keys a stored response by
+  `(org, model, action, key)` in the new kernel-owned `metacore_action_idempotency`
+  table (lazily auto-migrated, same pattern as `metacore_addon_migrations`). A
+  repeat invocation replays the first stored response WITHOUT re-dispatching the
+  handler (meta `idempotent_replay: true`), so a payment capture or fiscal stamp
+  survives a client retry without double-execution. Only SUCCESSFUL results are
+  cached — a declined/failed action stays retryable. The guarantee is
+  persisted-replay dedup, not a distributed lock (documented). New field on
+  `manifest/v3.Action` + `manifest.ActionDef` with dual validation (v3 lenient +
+  strict) and JSON-schema coverage; wired into `dynamic.Service.ExecAction`.
+
 - **wasm: `data_batch` host import (ABI v1.7).** The atomic multi-row sibling of
   `data_mutate`: a list of create/update/delete mutations across one or more
   models, executed under ONE org-scoped transaction, each followed (post-commit)

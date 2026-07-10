@@ -1493,6 +1493,21 @@
             "number"
           ],
           "description": "Explicit modal width (CSS length or px number)."
+        },
+        "idempotency": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key_field"
+          ],
+          "description": "Makes the action replay-safe: the kernel keys a stored response by (org, model, action, payload[key_field]) and replays it on repeats without re-dispatching the handler.",
+          "properties": {
+            "key_field": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Field in the action payload whose value is the idempotency key (e.g. a client-generated request UUID)."
+            }
+          }
         }
       }
     },
