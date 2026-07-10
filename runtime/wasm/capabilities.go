@@ -386,6 +386,26 @@ func registerHostModule(ctx context.Context, h *Host) error {
 		}).
 		Export("data_mutate")
 
+	// data_batch(reqPtr, reqLen) -> i64 (ptr|len envelope)
+	// Atomic multi-row sibling of data_mutate: a list of create/update/delete
+	// mutations across one or more models, executed under ONE org-scoped
+	// transaction, each followed (post-commit) by a *dynamic.CanonicalEvent on
+	// the host bus. Tenant scope (orgID) comes from the invocation context —
+	// never from the guest. Gated by `db:write <logical table>` for EVERY table
+	// the batch touches. See docs/wasm-abi.md § 16.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			reqPtr, reqLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			req := readBytes(mod, reqPtr, reqLen)
+			env := executeDataBatch(ctx, inv, req)
+			return writeToGuest(ctx, mod, env)
+		}).
+		Export("data_batch")
+
 	// data_query(reqPtr, reqLen) -> i64 (ptr|len envelope)
 	// Read-only sibling of data_mutate: one org-scoped, equality-filtered
 	// SELECT against a LOGICAL table resolved through the embedder's

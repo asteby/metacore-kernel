@@ -5,6 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **wasm: `data_batch` host import (ABI v1.7).** The atomic multi-row sibling of
+  `data_mutate`: a list of create/update/delete mutations across one or more
+  models, executed under ONE org-scoped transaction, each followed (post-commit)
+  by its own `*dynamic.CanonicalEvent`. It is the primitive that lets a wasm
+  handler perform "sale decrements stock + writes the ledger + updates the
+  weighted cost" atomically — either every row lands or none does. Gated by
+  `db:write <logical table>` for every table the batch touches; tenant scope
+  comes from the invocation context, never from the guest. Limits: 64 KiB
+  request (the frozen ABI ceiling — many small rows, not a few huge ones), 100
+  mutations, 10 s deadline, 8 MiB response. A per-row failure rolls back the
+  whole batch and publishes no events; the error names the offending
+  `mutations[i]` index. The per-row engine (`applyMutation`) is now shared with
+  `data_mutate`. Implementation `runtime/wasm/databatch.go`; contract
+  documented in `docs/wasm-abi.md § 16`.
+
 ## [0.63.0] - 2026-07-01
 
 ### Added
