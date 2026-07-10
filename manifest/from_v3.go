@@ -295,6 +295,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// Readonly rides through so DeriveFormFields excludes the
 				// system-generated column from create and marks it read-only in edit.
 				Readonly: c.Readonly,
+				// Constraints ride through so the dynamic engine evaluates the
+				// declarative guard predicates inside the create/update transaction.
+				Constraints: mapColumnConstraints(c.Constraints),
 			}
 			// Options is EITHER the STATIC-select list (array form) OR the
 			// DYNAMIC dependent-source object (DynamicOptions). The static list
@@ -353,6 +356,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		def.Stages = mapModelStages(m.Stages)
 		def.Transitions = mapModelTransitions(m.Transitions)
 		def.OnTransition = mapModelTransitionHooks(m.OnTransition)
+		def.Locking = m.Locking
 		out = append(out, def)
 	}
 	return out
@@ -418,6 +422,20 @@ func mapModelFormulas(in []v3.Formula) []Formula {
 			Target: f.Target,
 			Expr:   f.Expr,
 		})
+	}
+	return out
+}
+
+// mapColumnConstraints folds a v3 column's declarative guard predicates onto
+// the legacy ColumnDef.Constraints slice so the dynamic engine can evaluate them
+// inside the create/update transaction. Nil/empty maps to nil (the common case).
+func mapColumnConstraints(in []v3.Constraint) []ConstraintDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ConstraintDef, 0, len(in))
+	for _, c := range in {
+		out = append(out, ConstraintDef{Expr: c.Expr, ErrorKey: c.ErrorKey})
 	}
 	return out
 }

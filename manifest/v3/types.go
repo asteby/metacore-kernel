@@ -243,6 +243,17 @@ type Model struct {
 	// for the shape and the security contract on Expr.
 	Formulas []Formula `json:"formulas,omitempty"`
 
+	// Locking selects the row-locking strategy the kernel applies on Update.
+	//   ""     — no extra locking (default; the legacy behaviour).
+	//   "row"  — the kernel wraps the whole Update in a transaction and loads
+	//            the target row with SELECT … FOR UPDATE before evaluating the
+	//            column Constraints, so an increment-then-check guard (e.g.
+	//            "quantity >= 0" after a concurrent decrement) is race-free: two
+	//            transactions touching the same row serialise instead of both
+	//            reading a stale value. Only meaningful together with column
+	//            Constraints; harmless otherwise.
+	Locking string `json:"locking,omitempty"`
+
 	// StageField names the column that carries the model's pipeline stage
 	// (e.g. "stage"). Declaring it — together with Stages — turns the model
 	// into a stage machine: the kernel derives a `status` display type for the
@@ -502,6 +513,18 @@ type Column struct {
 	// metadata; the DDL/install plane ignores it.
 	OptionsSource string `json:"options_source,omitempty"`
 
+	// Constraints declare GUARD predicates the kernel evaluates inside the
+	// create/update transaction, BEFORE the row is written. Each is a boolean
+	// comparison over the SAME row's columns (e.g. "quantity >= 0" or
+	// "price >= cost"); a false result aborts the write with a 422 carrying the
+	// ErrorKey. This is the declarative twin of a CHECK constraint that the
+	// kernel enforces at the application layer so an addon gets stock-never-
+	// negative / price-≥-cost without a wasm handler or raw db_exec. Combine with
+	// the owning Model.Locking = "row" to make an increment-then-check guard
+	// safe under concurrency (SELECT … FOR UPDATE). Optional; the SAME strict
+	// arithmetic allowlist as Formula.Expr governs each side of the comparison.
+	Constraints []Constraint `json:"constraints,omitempty"`
+
 	// Readonly marks a SYSTEM-GENERATED column: a value the addon/host populates
 	// (e.g. an id or number a remote API returns after a write), NOT something a
 	// user types. It is pure UI-plane metadata that the host projects onto
@@ -512,6 +535,22 @@ type Column struct {
 	// server-side as usual. Use it for columns filled by an outbound sync, an
 	// external id, or any value the user must never hand-edit.
 	Readonly bool `json:"readonly,omitempty"`
+}
+
+// Constraint is one declarative GUARD predicate on a column: a boolean
+// comparison the kernel evaluates before every create/update write.
+//
+// SECURITY: Expr is a single comparison `<arith> <op> <arith>` where op is one
+// of >= <= > < == != (and `=` as an alias for ==). Each side is parsed with the
+// SAME strict arithmetic allowlist as Formula.Expr (identifiers resolving to
+// real columns, decimal numbers, + - * / and parentheses only), so a constraint
+// can never inject SQL — it is evaluated in Go against the row's numeric values.
+type Constraint struct {
+	// Expr is the guard predicate, e.g. "quantity >= 0" or "price >= cost".
+	Expr string `json:"expr"`
+	// ErrorKey is the i18n key / stable code surfaced to the client (422) when
+	// the predicate is false, e.g. "stock.negative".
+	ErrorKey string `json:"error_key"`
 }
 
 // Index is a single index declaration.

@@ -27,6 +27,47 @@ func validateArithExpr(expr string, cols map[string]struct{}) error {
 	return computeexpr.Validate(expr, cols)
 }
 
+// constraintComparisonOps are the operators a declarative guard predicate may
+// use, longest-match first so ">=" is not mis-split as ">". Mirrors
+// dynamic.constraintOps (the runtime evaluator) so validation and evaluation
+// agree on the grammar.
+var constraintComparisonOps = []string{">=", "<=", "!=", "==", ">", "<", "="}
+
+// validateConstraintExpr checks a guard predicate `<arith> <op> <arith>`: it
+// must carry exactly one comparison operator, and BOTH sides must pass the
+// strict arithmetic allowlist against `cols`. This keeps the manifest planes in
+// lock-step with the runtime evaluator (dynamic.evalConstraintExpr).
+func validateConstraintExpr(expr string, cols map[string]struct{}) error {
+	op, idx := "", -1
+	for i := 0; i < len(expr) && op == ""; i++ {
+		c := expr[i]
+		if c != '>' && c != '<' && c != '=' && c != '!' {
+			continue
+		}
+		for _, o := range constraintComparisonOps {
+			if strings.HasPrefix(expr[i:], o) {
+				op, idx = o, i
+				break
+			}
+		}
+	}
+	if op == "" {
+		return fmt.Errorf("must contain a comparison operator (>= <= > < == !=)")
+	}
+	lhs := strings.TrimSpace(expr[:idx])
+	rhs := strings.TrimSpace(expr[idx+len(op):])
+	if lhs == "" || rhs == "" {
+		return fmt.Errorf("comparison is missing an operand")
+	}
+	if err := validateArithExpr(lhs, cols); err != nil {
+		return fmt.Errorf("left side %q: %v", lhs, err)
+	}
+	if err := validateArithExpr(rhs, cols); err != nil {
+		return fmt.Errorf("right side %q: %v", rhs, err)
+	}
+	return nil
+}
+
 // validateRollupSpec checks one Tier-1 rollup: target on the PARENT (ownCols),
 // fn in the enum, from on the CHILD (childCols), exactly one of from/expr
 // (count may omit both), expr under the arithmetic allowlist against childCols.
@@ -622,8 +663,23 @@ func Validate(raw []byte) error {
 		// (the schema pattern already enforces the shape). Mirrors the legacy
 		// validator so a manifest fails identically on both surfaces.
 		errs = append(errs, validateStageMachine(mi, mod, ownCols)...)
-		// Static-option cascade guards on model columns.
+		// Row-locking strategy (guards): only ""/"row" are understood.
+		if mod.Locking != "" && mod.Locking != "row" {
+			errs = append(errs, fmt.Sprintf("models[%d].locking %q is not one of \"\"|\"row\"", mi, mod.Locking))
+		}
+		// Static-option cascade guards + declarative Constraints on model columns.
 		for ci, c := range mod.Columns {
+			for cci, con := range c.Constraints {
+				cw := fmt.Sprintf("models[%d].columns[%d].constraints[%d]", mi, ci, cci)
+				if strings.TrimSpace(con.Expr) == "" {
+					errs = append(errs, fmt.Sprintf("%s.expr is empty", cw))
+				} else if err := validateConstraintExpr(con.Expr, ownCols); err != nil {
+					errs = append(errs, fmt.Sprintf("%s.expr %q: %v", cw, con.Expr, err))
+				}
+				if strings.TrimSpace(con.ErrorKey) == "" {
+					errs = append(errs, fmt.Sprintf("%s.error_key is empty", cw))
+				}
+			}
 			if c.Options.Len() == 0 {
 				continue
 			}

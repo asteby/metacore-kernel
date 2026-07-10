@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/asteby/metacore-kernel/auth/adapters"
 	"github.com/asteby/metacore-kernel/metadata"
@@ -136,6 +137,16 @@ type Config struct {
 	// the stage machine entirely, leaving Update unrestricted (back-compat).
 	StageMachineResolver StageMachineResolver
 
+	// ConstraintResolver returns the declarative guard predicates + row-locking
+	// strategy for a model name — the host wires it from its addon registry, the
+	// same way as StageMachineResolver. When it returns a non-empty set,
+	// Service.Create/Update evaluate each Constraint before writing (aborting with
+	// 422 + the ErrorKey on a false predicate) and, when Locking=="row", take a
+	// SELECT … FOR UPDATE lock inside a transaction so an increment-then-check
+	// guard is race-free. nil / ok=false / an empty set disables guards for the
+	// model (back-compat).
+	ConstraintResolver ConstraintResolver
+
 	// AuthUserExtractor optionally lets the Handler pull the authenticated
 	// principal from the request context using the narrow AuthUserProvider
 	// contract instead of the legacy UserResolver (which forces apps to
@@ -210,6 +221,7 @@ type Service struct {
 	actionResolver    ActionResolver
 	actionDispatchers map[string]ActionDispatcher
 	stageMachines     StageMachineResolver
+	constraints       ConstraintResolver
 	authExtractor     adapters.AuthUserExtractor
 	selfOptions       bool
 	fileDeleter       FileDeleter
@@ -261,6 +273,7 @@ func New(cfg Config) *Service {
 		actionResolver:    cfg.ActionResolver,
 		actionDispatchers: dispatchers,
 		stageMachines:     cfg.StageMachineResolver,
+		constraints:       cfg.ConstraintResolver,
 		authExtractor:     cfg.AuthUserExtractor,
 		selfOptions:       cfg.EnableSelfOptions,
 		fileDeleter:       cfg.FileDeleter,
@@ -467,6 +480,16 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 		return nil, err
 	}
 
+	// Declarative guards: evaluate the model's column Constraints against the
+	// (formula-computed) input BEFORE the write. A false predicate aborts with a
+	// 422 + ErrorKey and nothing is inserted. No locking is needed on create —
+	// there is no prior row to serialize against.
+	if mc := s.resolveConstraints(ctx, model); mc != nil {
+		if err := evalConstraints(mc, input); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := mapToStruct(input, instance); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
@@ -499,38 +522,84 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	if err != nil {
 		return nil, err
 	}
-	db := s.db.WithContext(ctx).Table(tableName)
-	db = s.scope.ScopeQuery(db, user)
 
-	if err := db.First(instance, "id = ?", id).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, ErrRecordNotFound
-		}
-		return nil, err
-	}
+	// Declarative guards: when the model declares column Constraints AND
+	// Locking=="row", the load → evaluate → save must share ONE transaction so
+	// the SELECT … FOR UPDATE taken on load is still held at write time (an
+	// increment-then-check guard is then race-free). When there is no row
+	// locking, execDB stays s.db and the legacy per-statement flow is unchanged.
+	mc := s.resolveConstraints(ctx, model)
+	lockRows := mc.locksRows()
 
-	// Snapshot the loaded record before BeforeUpdate hooks or input merging
-	// can mutate `instance` — the canonical event needs the pre-mutation row
-	// as `before`.
-	before := toMap(instance)
-
-	// Stage machine: when the model declares one and this Update changes the
-	// stage_field, validate the move against the declared transitions BEFORE we
-	// persist anything (a disallowed move is rejected 422, never written).
 	sm := s.resolveStageMachine(ctx, model)
-	var fromStage, toStage string
-	var stageChanged bool
-	if sm != nil {
-		fromStage, toStage, stageChanged, err = s.checkTransition(sm, before, input)
-		if err != nil {
-			return nil, err
+	var before, after map[string]any
+
+	// core runs the load/evaluate/save against execDB. inTx reports whether it
+	// runs inside a caller-owned transaction (the row-locking path) — the save +
+	// transition hooks then run directly on execDB rather than opening a nested
+	// transaction, and the FOR UPDATE lock is applied on load.
+	core := func(execDB *gorm.DB, inTx bool) error {
+		load := s.scope.ScopeQuery(execDB.WithContext(ctx).Table(tableName), user)
+		if inTx && lockRows {
+			load = load.Clauses(clause.Locking{Strength: "UPDATE"})
 		}
-		// Declarative `set`: when the move fires hooks that stamp fields on the
-		// row itself, apply them into `input` BEFORE we persist so they ride the
-		// same Save and surface in the canonical event (subscribers see them). We
-		// resolve "+tag"/"-tag" against the merged current-plus-incoming view, then
-		// fold only the set keys back onto input.
-		if stageChanged {
+		if err := load.First(instance, "id = ?", id).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return ErrRecordNotFound
+			}
+			return err
+		}
+
+		// Snapshot the loaded record before BeforeUpdate hooks or input merging
+		// can mutate `instance` — the canonical event needs the pre-mutation row
+		// as `before`.
+		before = toMap(instance)
+
+		// Stage machine: when the model declares one and this Update changes the
+		// stage_field, validate the move against the declared transitions BEFORE we
+		// persist anything (a disallowed move is rejected 422, never written).
+		var fromStage, toStage string
+		var stageChanged bool
+		if sm != nil {
+			fromStage, toStage, stageChanged, err = s.checkTransition(sm, before, input)
+			if err != nil {
+				return err
+			}
+			// Declarative `set`: when the move fires hooks that stamp fields on the
+			// row itself, apply them into `input` BEFORE we persist so they ride the
+			// same Save and surface in the canonical event (subscribers see them). We
+			// resolve "+tag"/"-tag" against the merged current-plus-incoming view, then
+			// fold only the set keys back onto input.
+			if stageChanged {
+				merged := make(map[string]any, len(before)+len(input))
+				for k, v := range before {
+					merged[k] = v
+				}
+				for k, v := range input {
+					merged[k] = v
+				}
+				if ApplyTransitionSets(sm, fromStage, toStage, merged) {
+					for _, h := range sm.matchingHooks(fromStage, toStage) {
+						for k := range h.Set {
+							input[k] = merged[k]
+						}
+					}
+				}
+			}
+		}
+
+		// Normalize string-encoded typed fields before merging into the record.
+		coerceInputToStruct(input, instance)
+
+		hc := HookContext{Model: model, User: user, DB: execDB}
+		if err := s.hooks.runBeforeUpdate(ctx, hc, id.String(), input); err != nil {
+			return err
+		}
+
+		// Declarative guards: evaluate the model's column Constraints against the
+		// merged (locked, formula-computed) row BEFORE the write. A false predicate
+		// aborts with a 422 + ErrorKey, rolling back the transaction when locking.
+		if mc != nil {
 			merged := make(map[string]any, len(before)+len(input))
 			for k, v := range before {
 				merged[k] = v
@@ -538,51 +607,58 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 			for k, v := range input {
 				merged[k] = v
 			}
-			if ApplyTransitionSets(sm, fromStage, toStage, merged) {
-				for _, h := range sm.matchingHooks(fromStage, toStage) {
-					for k := range h.Set {
-						input[k] = merged[k]
-					}
-				}
+			if err := evalConstraints(mc, merged); err != nil {
+				return err
 			}
 		}
-	}
 
-	// Normalize string-encoded typed fields before merging into the record.
-	coerceInputToStruct(input, instance)
+		if err := mapToStruct(input, instance); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidInput, err)
+		}
 
-	hc := HookContext{Model: model, User: user, DB: s.db}
-	if err := s.hooks.runBeforeUpdate(ctx, hc, id.String(), input); err != nil {
-		return nil, err
-	}
-
-	if err := mapToStruct(input, instance); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidInput, err)
-	}
-
-	// When the stage changed and the machine declares on_transition hooks, the
-	// save + hook dispatch run together in a transaction so a REQUIRED hook
-	// failure rolls back the whole transition. Otherwise the save is a plain
-	// write (unchanged from the legacy path) and any (non-required) hooks fire
-	// best-effort post-commit.
-	var after map[string]any
-	runHooksInTx := stageChanged && len(sm.matchingHooks(fromStage, toStage)) > 0
-	if runHooksInTx {
-		txErr := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			if err := tx.Table(tableName).Save(instance).Error; err != nil {
+		// When the stage changed and the machine declares on_transition hooks, the
+		// save + hook dispatch run together in a transaction so a REQUIRED hook
+		// failure rolls back the whole transition. Otherwise the save is a plain
+		// write (unchanged from the legacy path) and any (non-required) hooks fire
+		// best-effort post-commit. In the row-locking path we are ALREADY inside a
+		// transaction, so save + hooks run directly on execDB.
+		runHooksInTx := stageChanged && len(sm.matchingHooks(fromStage, toStage)) > 0
+		if inTx {
+			if err := execDB.Table(tableName).Save(instance).Error; err != nil {
 				return fmt.Errorf("dynamic: update: %w", err)
 			}
 			after = toMap(instance)
-			return s.runTransitionHooks(ctx, model, user, tx, sm, fromStage, toStage, before, after)
-		})
-		if txErr != nil {
+			if runHooksInTx {
+				return s.runTransitionHooks(ctx, model, user, execDB, sm, fromStage, toStage, before, after)
+			}
+			return nil
+		}
+		if runHooksInTx {
+			return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := tx.Table(tableName).Save(instance).Error; err != nil {
+					return fmt.Errorf("dynamic: update: %w", err)
+				}
+				after = toMap(instance)
+				return s.runTransitionHooks(ctx, model, user, tx, sm, fromStage, toStage, before, after)
+			})
+		}
+		if err := s.db.WithContext(ctx).Table(tableName).Save(instance).Error; err != nil {
+			return fmt.Errorf("dynamic: update: %w", err)
+		}
+		after = toMap(instance)
+		return nil
+	}
+
+	if lockRows {
+		if txErr := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			return core(tx, true)
+		}); txErr != nil {
 			return nil, txErr
 		}
 	} else {
-		if err := s.db.WithContext(ctx).Table(tableName).Save(instance).Error; err != nil {
-			return nil, fmt.Errorf("dynamic: update: %w", err)
+		if err := core(s.db, false); err != nil {
+			return nil, err
 		}
-		after = toMap(instance)
 	}
 
 	// Orphaned-file cleanup: any file/image column whose value changed leaves
@@ -596,7 +672,9 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 
 	s.publishCanonical(ctx, model, "updated", user, id.String(), before, after)
 
-	_ = s.hooks.runAfterUpdate(ctx, hc, instance)
+	// After-hooks fire post-commit against the standalone handle (the tx, if any,
+	// is already committed here).
+	_ = s.hooks.runAfterUpdate(ctx, HookContext{Model: model, User: user, DB: s.db}, instance)
 	return after, nil
 }
 

@@ -570,6 +570,13 @@
             "$ref": "#/$defs/Formula"
           }
         },
+        "locking": {
+          "type": "string",
+          "enum": [
+            "row"
+          ],
+          "description": "Row-locking strategy on Update. 'row' makes the kernel wrap Update in a transaction and load the target row with SELECT … FOR UPDATE before evaluating column constraints, so an increment-then-check guard is race-free. Omit for no extra locking."
+        },
         "stage_field": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
@@ -817,6 +824,34 @@
         "readonly": {
           "type": "boolean",
           "description": "Marks a SYSTEM-GENERATED column: a value the addon/host populates server-side (e.g. an external id or number a remote API returns after a create), never something a user types. The host projects it onto ColumnDef.readonly / FieldDef.readonly so form derivation EXCLUDES the column from the create form and marks it read-only in edit; the column still renders in tables/kanban/detail. Pure UI metadata; the DDL and write planes ignore it (an addon or compute rule writes the value as usual)."
+        },
+        "constraints": {
+          "type": "array",
+          "description": "Declarative GUARD predicates the kernel evaluates inside the create/update transaction before writing. A false predicate aborts with 422 + the error_key. Combine with the owning model's locking:'row' for a race-free increment-then-check guard.",
+          "items": {
+            "$ref": "#/$defs/Constraint"
+          }
+        }
+      }
+    },
+    "Constraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expr",
+        "error_key"
+      ],
+      "description": "One declarative guard predicate on a column: a boolean comparison '<arith> <op> <arith>' (op is >= <= > < == !=) over the same row's columns, evaluated before every create/update write. Each side uses the strict arithmetic allowlist, so it can never inject SQL.",
+      "properties": {
+        "expr": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Guard predicate, e.g. 'quantity >= 0' or 'price >= cost'."
+        },
+        "error_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "i18n key / stable code surfaced to the client (422) when the predicate is false, e.g. 'stock.negative'."
         }
       }
     },

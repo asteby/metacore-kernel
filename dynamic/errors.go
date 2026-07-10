@@ -1,6 +1,9 @@
 package dynamic
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 var (
 	ErrModelNotFound        = errors.New("model not found in registry")
@@ -36,4 +39,30 @@ var (
 	// disallowed state is rejected before the trigger runs. The handler maps it
 	// to HTTP 409 Conflict.
 	ErrInvalidState = errors.New("action not allowed in record's current state")
+
+	// ErrConstraintViolation is returned when a declarative column Constraint
+	// (guard predicate, e.g. "quantity >= 0") evaluates false during a
+	// create/update. The handler maps it to HTTP 422 Unprocessable Entity. The
+	// concrete error is a *ConstraintError carrying the offending ErrorKey.
+	ErrConstraintViolation = errors.New("constraint violation")
 )
+
+// ConstraintError is the typed error a failed declarative guard produces. It
+// wraps ErrConstraintViolation (so errors.Is routes it to 422) and carries the
+// manifest ErrorKey + the Expr that failed, so the client gets a stable,
+// localizable code instead of a raw message.
+type ConstraintError struct {
+	ErrorKey string
+	Expr     string
+}
+
+func (e *ConstraintError) Error() string {
+	if e == nil {
+		return ErrConstraintViolation.Error()
+	}
+	return fmt.Sprintf("constraint violation (%s): %s", e.ErrorKey, e.Expr)
+}
+
+// Unwrap ties the typed error to the ErrConstraintViolation sentinel for
+// errors.Is-based HTTP mapping.
+func (e *ConstraintError) Unwrap() error { return ErrConstraintViolation }

@@ -9,6 +9,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **manifest+dynamic: declarative column guards (`Column.constraints`) +
+  `Model.locking`.** A v3 column may declare `constraints: [{expr, error_key}]`
+  — boolean guard predicates (`quantity >= 0`, `price >= cost`) the kernel
+  evaluates INSIDE the create/update transaction before writing; a false
+  predicate aborts with HTTP 422 carrying the `error_key` (typed
+  `*ConstraintError` / `ErrConstraintViolation`). Each side of the comparison
+  reuses the exact Tier-2 arithmetic allowlist (`computeexpr`), with a thin
+  comparison layer added in `dynamic` — so a guard can never inject SQL. A model
+  may declare `locking: "row"`: `Service.Update` then wraps the whole update in a
+  transaction and loads the target row with `SELECT … FOR UPDATE` before
+  evaluating, making an increment-then-check guard (stock-never-negative under
+  concurrent decrements) race-free. New `ConstraintResolver` on `dynamic.Config`
+  (host-wired, mirrors `StageMachineResolver`). Fields on `manifest/v3.Column`
+  (`Constraint`) + `manifest/v3.Model` (`locking`), projected to
+  `manifest.ColumnDef`/`ModelDefinition`, with dual validation (v3 lenient +
+  strict, both checking the `<arith> <op> <arith>` grammar) and JSON-schema
+  coverage.
+
 - **manifest+dynamic: declarative action idempotency (`Action.idempotency`).** A
   v3 action may declare `idempotency: {key_field}`; the client supplies a stable
   unique value in that payload field and the kernel keys a stored response by

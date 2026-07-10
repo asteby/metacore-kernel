@@ -615,6 +615,13 @@ type ModelDefinition struct {
 	Stages       []StageDef          `json:"stages,omitempty"`
 	Transitions  []TransitionDef     `json:"transitions,omitempty"`
 	OnTransition []TransitionHookDef `json:"onTransition,omitempty"`
+
+	// Locking is the host/runtime projection of a v3 Model.locking. "row" makes
+	// dynamic.Service.Update take a SELECT … FOR UPDATE lock on the target row
+	// inside a transaction before evaluating column Constraints, so a concurrent
+	// increment-then-check guard is race-free. Empty = no extra locking. See
+	// manifest/v3.Model and dynamic constraint evaluation.
+	Locking string `json:"locking,omitempty"`
 }
 
 // StageDef is the host/runtime projection of a v3 Stage. See manifest/v3.Stage
@@ -660,6 +667,15 @@ type TransitionHookDef struct {
 type Formula struct {
 	Target string `json:"target"`
 	Expr   string `json:"expr"`
+}
+
+// ConstraintDef is the host/runtime projection of a v3 Column.Constraint: a
+// boolean guard predicate the dynamic engine evaluates inside the create/update
+// transaction. See manifest/v3.Constraint for the full contract and the
+// security note on Expr.
+type ConstraintDef struct {
+	Expr     string `json:"expr"`
+	ErrorKey string `json:"errorKey"`
 }
 
 // Rollup declares a PARENT column the kernel maintains as an aggregate
@@ -817,6 +833,12 @@ type ColumnDef struct {
 	// SYSTEM-GENERATED column that DeriveFormFields excludes from the create form
 	// and marks read-only in edit. Pure UI metadata; the DDL plane ignores it.
 	Readonly bool `json:"readonly,omitempty"`
+
+	// Constraints carries the v3 Column.constraints (declarative guard
+	// predicates) through the v3 → host conversion so the dynamic engine can
+	// evaluate them inside the create/update transaction. See manifest/v3.Constraint
+	// and dynamic constraint evaluation. Empty = no guards on this column.
+	Constraints []ConstraintDef `json:"constraints,omitempty"`
 
 	// Label is the column's human header OR an i18n key resolving to it. It
 	// rides the legacy ColumnDef as a carrier for the v3 Column.label so a

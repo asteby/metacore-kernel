@@ -328,6 +328,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 		if err := validateStageMachine(md); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
+		if err := validateConstraints(md, colsByModel[md.ModelKey]); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
+		}
 	}
 	if err := m.validatePipelineRuntime(); err != nil {
 		return err
@@ -932,6 +935,69 @@ func validateComputeFormulas(formulas []Formula, ownCols map[string]struct{}) er
 		if err := computeexpr.Validate(f.Expr, ownCols); err != nil {
 			return fmt.Errorf("formulas[%d]: expr %q: %w", i, f.Expr, err)
 		}
+	}
+	return nil
+}
+
+// constraintComparisonOps mirrors dynamic.constraintOps + the v3 validator so
+// all three planes agree on the guard grammar (longest-match first).
+var constraintComparisonOps = []string{">=", "<=", "!=", "==", ">", "<", "="}
+
+// validateConstraints mirrors the v3 guard check on the legacy/install surface:
+// the model's Locking must be ""|"row", and every column Constraint must carry a
+// non-empty error_key and an expr of the shape `<arith> <op> <arith>` whose both
+// sides pass the strict arithmetic allowlist against the model's columns.
+func validateConstraints(md ModelDefinition, ownCols map[string]struct{}) error {
+	if md.Locking != "" && md.Locking != "row" {
+		return fmt.Errorf(`locking %q is not one of ""|"row"`, md.Locking)
+	}
+	for j, col := range md.Columns {
+		for k, con := range col.Constraints {
+			where := fmt.Sprintf("columns[%d].constraints[%d]", j, k)
+			if strings.TrimSpace(con.ErrorKey) == "" {
+				return fmt.Errorf("%s: error_key required", where)
+			}
+			if strings.TrimSpace(con.Expr) == "" {
+				return fmt.Errorf("%s: expr required", where)
+			}
+			if err := validateConstraintExprStrict(con.Expr, ownCols); err != nil {
+				return fmt.Errorf("%s: expr %q: %w", where, con.Expr, err)
+			}
+		}
+	}
+	return nil
+}
+
+// validateConstraintExprStrict checks a guard predicate splits into two
+// arithmetic operands around a single comparison operator, each passing the
+// allowlist. Mirrors v3.validateConstraintExpr.
+func validateConstraintExprStrict(expr string, cols map[string]struct{}) error {
+	op, idx := "", -1
+	for i := 0; i < len(expr) && op == ""; i++ {
+		c := expr[i]
+		if c != '>' && c != '<' && c != '=' && c != '!' {
+			continue
+		}
+		for _, o := range constraintComparisonOps {
+			if strings.HasPrefix(expr[i:], o) {
+				op, idx = o, i
+				break
+			}
+		}
+	}
+	if op == "" {
+		return fmt.Errorf("must contain a comparison operator (>= <= > < == !=)")
+	}
+	lhs := strings.TrimSpace(expr[:idx])
+	rhs := strings.TrimSpace(expr[idx+len(op):])
+	if lhs == "" || rhs == "" {
+		return fmt.Errorf("comparison is missing an operand")
+	}
+	if err := computeexpr.Validate(lhs, cols); err != nil {
+		return fmt.Errorf("left side %q: %w", lhs, err)
+	}
+	if err := computeexpr.Validate(rhs, cols); err != nil {
+		return fmt.Errorf("right side %q: %w", rhs, err)
 	}
 	return nil
 }
