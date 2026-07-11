@@ -463,6 +463,19 @@ func (m *Manifest) validateActionIdempotency() error {
 		if def.Idempotency != nil && strings.TrimSpace(def.Idempotency.KeyField) == "" {
 			return fmt.Errorf("%s.idempotency requires a non-empty keyField", where)
 		}
+		// Wizard steps mirror the lenient v3 check: steps ⊕ fields is
+		// ambiguous, and every page needs a title + at least one field.
+		if len(def.Steps) > 0 && len(def.Fields) > 0 {
+			return fmt.Errorf("%s declares both steps and fields — declare one or the other", where)
+		}
+		for si, st := range def.Steps {
+			if strings.TrimSpace(st.Title) == "" {
+				return fmt.Errorf("%s.steps[%d]: title required", where, si)
+			}
+			if len(st.Fields) == 0 {
+				return fmt.Errorf("%s.steps[%d]: fields required (a wizard page must render something)", where, si)
+			}
+		}
 		return nil
 	}
 	for model, defs := range m.Actions {

@@ -9,6 +9,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **manifest: declarative action wizards (`Action.steps`).** A v3 action may
+  declare `steps: [{title, description?, fields[]}]` instead of a flat
+  `fields[]`: the SDK renders a multi-step wizard (one page per step, per-step
+  validation) and submits the union of all steps' values on finish — the
+  middle ground between the flat action modal and a fully federated component
+  (SDK support shipped in metacore-sdk#556, which reads `steps` off the served
+  action metadata as-is). Steps and fields are mutually exclusive; every step
+  needs a title and at least one field (dual validation). New `ActionStep` (v3),
+  `ActionStepDef` (`manifest` + `modelbase`, JSON key `steps`) so the
+  host→SDK round-trip preserves the wizard; step fields ride the same
+  `mapActionFields` projection as the flat form (line-items, cascades, uploads
+  all work per step).
+
 - **manifest+dynamic: Tier-3 wasm-backed formulas (`Formula.tier: 3`).** A v3
   formula may now declare `{target, tier: 3, handler: "wasm:<export>"}` instead
   of an arithmetic `expr`: on every create/update the kernel invokes the addon's

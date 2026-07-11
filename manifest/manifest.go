@@ -379,6 +379,10 @@ type ActionDef struct {
 	Confirm        bool       `json:"confirm,omitempty"`
 	ConfirmMessage string     `json:"confirmMessage,omitempty"`
 	Modal          string     `json:"modal,omitempty"`      // slot name for a custom modal
+	// Steps is the host/runtime projection of a v3 Action.steps wizard: one
+	// page per step, per-step validation, single submit with the union of all
+	// steps' values. Mutually exclusive with Fields. See manifest/v3.ActionStep.
+	Steps []ActionStepDef `json:"steps,omitempty"`
 	Placement      string     `json:"placement,omitempty"`  // "row" (default), "table", or "create" — see v3.Action.Placement
 	ModalWidth     string     `json:"modalWidth,omitempty"` // explicit modal width (CSS length / px); SDK reads action.modalWidth
 
@@ -395,6 +399,14 @@ type ActionDef struct {
 	// skipping the dispatch. Nil = the action is not replay-guarded. See
 	// manifest/v3.ActionIdempotency and dynamic.Service.ExecAction.
 	Idempotency *IdempotencyDef `json:"idempotency,omitempty"`
+}
+
+// ActionStepDef is the host/runtime projection of a v3 ActionStep: one wizard
+// page (title + optional description + the fields rendered on that page).
+type ActionStepDef struct {
+	Title       string     `json:"title"`
+	Description string     `json:"description,omitempty"`
+	Fields      []FieldDef `json:"fields"`
 }
 
 // IdempotencyDef is the host/runtime projection of a v3 ActionIdempotency: the

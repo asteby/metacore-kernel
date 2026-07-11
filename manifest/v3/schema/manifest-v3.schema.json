@@ -1544,6 +1544,13 @@
             "$ref": "#/$defs/ActionField"
           }
         },
+        "steps": {
+          "type": "array",
+          "description": "Multi-step declarative wizard: one page per step (title + fields) with per-step validation; submits the union of all steps' values on finish. Mutually exclusive with fields.",
+          "items": {
+            "$ref": "#/$defs/ActionStep"
+          }
+        },
         "modal": {
           "type": "string",
           "description": "slot_kind of a custom federated modal component the host mounts instead of (or alongside) the declarative form."
@@ -1583,6 +1590,32 @@
               "minLength": 1,
               "description": "Field in the action payload whose value is the idempotency key (e.g. a client-generated request UUID)."
             }
+          }
+        }
+      }
+    },
+    "ActionStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "fields"
+      ],
+      "description": "One page of a multi-step declarative action wizard: a title, optional description, and the fields rendered/validated on that page (same contract as Action.fields).",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Step heading (or an i18n key resolving to it)."
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional helper text rendered under the title."
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/ActionField"
           }
         }
       }

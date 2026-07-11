@@ -261,8 +261,20 @@ type ActionDef struct {
 	Confirm        bool        `json:"confirm,omitempty"`
 	ConfirmMessage string      `json:"confirmMessage,omitempty"`
 	Fields         []FieldDef  `json:"fields,omitempty"`
+	// Steps mirrors manifest.ActionDef.Steps (a declarative multi-step wizard);
+	// JSON key matches the SDK's ActionMetadata.steps so the host→SDK round-trip
+	// preserves it.
+	Steps          []ActionStepDef `json:"steps,omitempty"`
 	RequiresState  []string    `json:"requiresState,omitempty"`
 	IsCollection   bool        `json:"isCollection,omitempty"`
+}
+
+// ActionStepDef is one wizard page of a multi-step action form — the served
+// twin of manifest.ActionStepDef.
+type ActionStepDef struct {
+	Title       string     `json:"title"`
+	Description string     `json:"description,omitempty"`
+	Fields      []FieldDef `json:"fields"`
 }
 
 // FilterDef describes a filter chip rendered above a TableMetadata.

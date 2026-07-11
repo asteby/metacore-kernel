@@ -820,6 +820,15 @@ type Action struct {
 	// no modal is a plain one-click action.
 	Fields []ActionField `json:"fields,omitempty"`
 
+	// Steps splits the declarative action form into a MULTI-STEP WIZARD: the
+	// SDK renders one page per step (title + its fields) with per-step
+	// validation, and submits the union of all steps' values on finish —
+	// exactly as if they had been declared flat in Fields. Mutually exclusive
+	// with Fields (a wizard IS the form). Use it for guided flows a flat field
+	// list serves poorly (a workshop checklist, a purchase reception); anything
+	// richer belongs in a federated Modal.
+	Steps []ActionStep `json:"steps,omitempty"`
+
 	// Modal is the slot_kind of a custom federated modal component the host
 	// mounts instead of (or alongside) the declarative form — for actions whose
 	// UI is too rich for a flat field list (e.g. a checkout panel). It is the
@@ -864,6 +873,20 @@ type ActionIdempotency struct {
 	// an invocation that omits the field (empty key) is dispatched normally
 	// with no replay guarantee.
 	KeyField string `json:"key_field"`
+}
+
+
+// ActionStep is one page of a multi-step declarative action wizard (see
+// Action.Steps): a title, an optional description, and the fields the SDK
+// renders and validates on that page. Field semantics are identical to
+// Action.Fields entries.
+type ActionStep struct {
+	// Title is the step's heading (or an i18n key resolving to it).
+	Title string `json:"title"`
+	// Description is optional helper text rendered under the title.
+	Description string `json:"description,omitempty"`
+	// Fields are the step's form fields — same contract as Action.Fields.
+	Fields []ActionField `json:"fields"`
 }
 
 // ActionField is one input in an action modal's declarative form. It mirrors

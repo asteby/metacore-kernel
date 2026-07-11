@@ -788,6 +788,20 @@ func Validate(raw []byte) error {
 			if a.Idempotency != nil && strings.TrimSpace(a.Idempotency.KeyField) == "" {
 				errs = append(errs, fmt.Sprintf("contributions.actions[%d].idempotency requires a non-empty key_field", ai))
 			}
+			// Wizard steps: a step needs a title and at least one field, and a
+			// wizard replaces the flat form (steps ⊕ fields is ambiguous).
+			if len(a.Steps) > 0 && len(a.Fields) > 0 {
+				errs = append(errs, fmt.Sprintf("contributions.actions[%d] declares both steps and fields — a wizard replaces the flat form, declare one or the other", ai))
+			}
+			for si, st := range a.Steps {
+				sw := fmt.Sprintf("contributions.actions[%d].steps[%d]", ai, si)
+				if strings.TrimSpace(st.Title) == "" {
+					errs = append(errs, fmt.Sprintf("%s.title is empty", sw))
+				}
+				if len(st.Fields) == 0 {
+					errs = append(errs, fmt.Sprintf("%s.fields is empty (a wizard page must render something)", sw))
+				}
+			}
 			for fi, f := range a.Fields {
 				// Static-option cascade guards on action fields and their
 				// nested item_fields (line-items cells).

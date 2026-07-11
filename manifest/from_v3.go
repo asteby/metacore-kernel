@@ -674,6 +674,7 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 			ModalWidth:     a.ModalWidth,
 			RequiresState:  a.RequiresState,
 			Fields:         mapActionFields(a.Fields),
+			Steps:          mapActionSteps(a.Steps),
 		}
 		switch a.Handler.Type {
 		case "wasm":
@@ -685,6 +686,23 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 			def.Idempotency = &IdempotencyDef{KeyField: a.Idempotency.KeyField}
 		}
 		out[a.TargetModel] = append(out[a.TargetModel], def)
+	}
+	return out
+}
+
+// mapActionSteps folds a v3 action's wizard pages onto ActionStepDefs, each
+// page's fields through the same per-field copy as the flat form.
+func mapActionSteps(in []v3.ActionStep) []ActionStepDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ActionStepDef, 0, len(in))
+	for _, st := range in {
+		out = append(out, ActionStepDef{
+			Title:       st.Title,
+			Description: st.Description,
+			Fields:      mapActionFields(st.Fields),
+		})
 	}
 	return out
 }
