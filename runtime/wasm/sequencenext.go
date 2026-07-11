@@ -55,6 +55,16 @@ func executeSequenceNext(ctx context.Context, inv *invocation, reqJSON []byte) [
 		return fail("invalid_request", "invocation has no bound orgID")
 	}
 
+	// Capability gate: minting a folio is a write against the model's counter,
+	// so it demands db:write on the LOGICAL model name — same enforcer and
+	// deny-on-unregistered semantics as data_mutate. Without it any addon could
+	// burn another addon's fiscal folios (gaps) or probe its issuance volume.
+	if inv.enforcer != nil {
+		if err := inv.enforcer.CheckCapability(addonKey, "db:write", req.Model); err != nil {
+			return fail("forbidden", err.Error())
+		}
+	}
+
 	value, err := inv.sequenceNext(ctx, orgID, req.Model, req.Key)
 	if err != nil {
 		return fail("sequence_error", err.Error())

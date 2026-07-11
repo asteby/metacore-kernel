@@ -216,7 +216,21 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 		"meta":    dataBatchMeta(addonKey, orgID, start),
 	})
 	if len(env) > dataBatchMaxRespBytes {
-		return fail("db_error", "response exceeds size cap")
+		// The batch is COMMITTED at this point — returning an error here would
+		// read as a failure and provoke a retry (double-write). Degrade instead:
+		// keep success:true, drop the row bodies (ids/actions survive) and flag
+		// the truncation so the guest can re-read what it needs via data_query.
+		slim := make([]dataBatchRow, len(rows))
+		for i, r := range rows {
+			slim[i] = dataBatchRow{ID: r.ID, Model: r.Model, Action: r.Action}
+		}
+		meta := dataBatchMeta(addonKey, orgID, start)
+		meta["truncated"] = true
+		env, _ = json.Marshal(map[string]any{
+			"success": true,
+			"data":    map[string]any{"count": len(slim), "results": slim},
+			"meta":    meta,
+		})
 	}
 	return env
 }

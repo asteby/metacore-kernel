@@ -165,11 +165,26 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 	if def.Idempotency != nil && orgID != uuid.Nil {
 		idemKey = idempotencyKeyFromPayload(payload, def.Idempotency.KeyField)
 		if idemKey != "" {
-			if replay, found, lerr := s.lookupIdempotentResult(ctx, orgID, model, key, idemKey); lerr != nil {
+			state, replay, lerr := s.reserveIdempotent(ctx, orgID, model, key, idemKey)
+			if lerr != nil {
 				return ActionResult{}, lerr
-			} else if found {
-				return replay, nil
 			}
+			switch state {
+			case idemReplay:
+				return replay, nil
+			case idemInFlight:
+				// Another invocation with the same key is mid-dispatch: refusing
+				// here (instead of dispatching too) is what makes a double-sent
+				// payment capture single-fire. 409 = try again shortly.
+				return ActionResult{
+					Success:    false,
+					Error:      &ActionError{Code: "idempotency_in_flight", Message: "an invocation with this idempotency key is already in progress"},
+					Meta:       map[string]any{"model": model, "action": key},
+					HTTPStatus: 409,
+				}, nil
+			}
+			// idemReserved falls through to dispatch; the reservation is
+			// completed or released by persistIdempotent below.
 		}
 	}
 
@@ -191,6 +206,7 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 		}
 		resp, derr := dispatcher.Dispatch(ctx, req)
 		if derr != nil {
+			s.releaseIdempotentReservation(ctx, orgID, model, key, idemKey)
 			return ActionResult{}, derr
 		}
 		result := buildResult(resp, kernelMeta)
@@ -223,6 +239,7 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 	})
 
 	if dispErr != nil {
+		s.releaseIdempotentReservation(ctx, orgID, model, key, idemKey)
 		return ActionResult{}, dispErr
 	}
 
@@ -241,10 +258,27 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 // not successful — a failed/declined action stays retryable so a client can
 // legitimately re-attempt it with the same key.
 func (s *Service) persistIdempotent(ctx context.Context, orgID uuid.UUID, model, action, idemKey string, result ActionResult) error {
-	if idemKey == "" || orgID == uuid.Nil || !result.Success {
+	if idemKey == "" || orgID == uuid.Nil {
 		return nil
 	}
-	return s.storeIdempotentResult(ctx, orgID, model, action, idemKey, result)
+	if !result.Success {
+		// Declined/failed: free the reservation so the SAME key can retry.
+		s.releaseIdempotentReservation(ctx, orgID, model, action, idemKey)
+		return nil
+	}
+	return s.completeIdempotent(ctx, orgID, model, action, idemKey, result)
+}
+
+// releaseIdempotentReservation is the best-effort failure-path release: a
+// reservation we cannot delete (transient DB error) parks the key as
+// "in-flight" until it is cleaned up, which is safe (no double dispatch) —
+// so the error is logged via the wrapped call's own path and not propagated
+// over the ORIGINAL dispatch error the caller is already returning.
+func (s *Service) releaseIdempotentReservation(ctx context.Context, orgID uuid.UUID, model, action, idemKey string) {
+	if idemKey == "" || orgID == uuid.Nil {
+		return
+	}
+	_ = s.releaseIdempotent(ctx, orgID, model, action, idemKey)
 }
 
 // buildResult merges dispatcher-supplied meta with kernel-managed meta (kernel

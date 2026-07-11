@@ -489,13 +489,6 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 		return nil, err
 	}
 
-	// Folio sequences: stamp the next atomic value onto every sequence-bound
-	// column the caller left empty, before the write. An explicitly-supplied
-	// value wins (historical ETL imports keep their original number).
-	if err := s.assignSequences(ctx, model, user, input); err != nil {
-		return nil, err
-	}
-
 	// Declarative guards: evaluate the model's column Constraints against the
 	// (formula-computed) input BEFORE the write. A false predicate aborts with a
 	// 422 + ErrorKey and nothing is inserted. No locking is needed on create —
@@ -504,6 +497,15 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 		if err := evalConstraints(mc, input); err != nil {
 			return nil, err
 		}
+	}
+
+	// Folio sequences: stamp the next atomic value onto every sequence-bound
+	// column the caller left empty. Runs AFTER the guards so a rejected create
+	// never burns a folio; a failed INSERT below still can (the counter lives
+	// in its own autocommit statement) — the format is documented gap-tolerant.
+	// An explicitly-supplied value wins (ETL imports keep historical numbers).
+	if err := s.assignSequences(ctx, model, user, input); err != nil {
+		return nil, err
 	}
 
 	if err := mapToStruct(input, instance); err != nil {

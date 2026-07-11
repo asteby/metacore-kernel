@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -65,50 +66,83 @@ func ensureIdempotencyTable(db *gorm.DB) error {
 	return nil
 }
 
-// lookupIdempotentResult returns the stored ActionResult for the tuple, or
-// ok=false when none exists yet. It ensures the backing table on first use.
-func (s *Service) lookupIdempotentResult(ctx context.Context, orgID uuid.UUID, model, action, key string) (ActionResult, bool, error) {
+// idemReservation is the outcome of reserveIdempotent: exactly one of the
+// three states holds.
+type idemReservation int
+
+const (
+	// idemReserved — this caller won the slot and MUST dispatch, then either
+	// completeIdempotent (success) or releaseIdempotent (failure).
+	idemReserved idemReservation = iota
+	// idemReplay — a finished response exists; replay it, do not dispatch.
+	idemReplay
+	// idemInFlight — another invocation holds the slot and has not finished;
+	// the caller must NOT dispatch (409, retryable).
+	idemInFlight
+)
+
+// reserveIdempotent claims the (org, model, action, key) slot BEFORE the
+// dispatch, closing the classic check-then-act race: the INSERT with an empty
+// Response is the reservation, and the unique index arbitrates concurrent
+// claimants — exactly one wins, every simultaneous loser sees the pending row
+// and backs off with idemInFlight instead of double-dispatching a payment
+// capture. It ensures the backing table on first use.
+func (s *Service) reserveIdempotent(ctx context.Context, orgID uuid.UUID, model, action, key string) (idemReservation, ActionResult, error) {
 	if err := ensureIdempotencyTable(s.db); err != nil {
-		return ActionResult{}, false, err
+		return idemInFlight, ActionResult{}, err
 	}
-	var rec ActionIdempotencyRecord
+	rec := ActionIdempotencyRecord{OrgID: orgID, Model: model, Action: action, Key: key}
+	res := s.db.WithContext(ctx).
+		Clauses(clause.OnConflict{DoNothing: true}).
+		Create(&rec)
+	if res.Error != nil {
+		return idemInFlight, ActionResult{}, res.Error
+	}
+	if res.RowsAffected == 1 {
+		return idemReserved, ActionResult{}, nil
+	}
+
+	// Lost the insert — someone holds (or held) the slot. Load it.
+	var existing ActionIdempotencyRecord
 	err := s.db.WithContext(ctx).
 		Where("org_id = ? AND model = ? AND action = ? AND idem_key = ?", orgID, model, action, key).
-		First(&rec).Error
+		First(&existing).Error
 	if err != nil {
 		if isNotFound(err) {
-			return ActionResult{}, false, nil
+			// The holder released between our insert and this read (its dispatch
+			// failed). Retryable — surface as in-flight so the client re-sends.
+			return idemInFlight, ActionResult{}, nil
 		}
-		return ActionResult{}, false, err
+		return idemInFlight, ActionResult{}, err
+	}
+	if len(existing.Response) == 0 {
+		// Reservation without a response: the first invocation is still running.
+		return idemInFlight, ActionResult{}, nil
 	}
 	var st storedActionResult
-	if uerr := json.Unmarshal(rec.Response, &st); uerr != nil {
-		// A corrupt row must not wedge the action forever — treat it as a miss
-		// so the handler re-dispatches and the row is overwritten below.
-		return ActionResult{}, false, nil
+	if uerr := json.Unmarshal(existing.Response, &st); uerr != nil {
+		// A corrupt row must not wedge the action forever — drop it and report
+		// in-flight so the NEXT retry re-reserves cleanly.
+		_ = s.releaseIdempotent(ctx, orgID, model, action, key)
+		return idemInFlight, ActionResult{}, nil
 	}
-	res := ActionResult{
+	replay := ActionResult{
 		Success:    st.Success,
 		Data:       st.Data,
 		Meta:       st.Meta,
 		Error:      st.Error,
 		HTTPStatus: st.HTTPStatus,
 	}
-	if res.Meta == nil {
-		res.Meta = map[string]any{}
+	if replay.Meta == nil {
+		replay.Meta = map[string]any{}
 	}
-	res.Meta["idempotent_replay"] = true
-	return res, true, nil
+	replay.Meta["idempotent_replay"] = true
+	return idemReplay, replay, nil
 }
 
-// storeIdempotentResult persists the result for later replay. A concurrent
-// duplicate (unique-index conflict) is ignored: the first committed response
-// wins and this call becomes a no-op, which is the correct at-least-once
-// semantics for a retry guard. NOTE: this is single-transaction dedup, not a
-// distributed lock — two simultaneous in-flight invocations with the same key
-// may both dispatch before either stores; the persisted replay only guarantees
-// that every LATER retry returns the first stored response.
-func (s *Service) storeIdempotentResult(ctx context.Context, orgID uuid.UUID, model, action, key string, res ActionResult) error {
+// completeIdempotent finishes a reservation by attaching the response that
+// every later retry will replay.
+func (s *Service) completeIdempotent(ctx context.Context, orgID uuid.UUID, model, action, key string, res ActionResult) error {
 	body, err := json.Marshal(storedActionResult{
 		Success:    res.Success,
 		Data:       res.Data,
@@ -119,10 +153,19 @@ func (s *Service) storeIdempotentResult(ctx context.Context, orgID uuid.UUID, mo
 	if err != nil {
 		return err
 	}
-	rec := ActionIdempotencyRecord{OrgID: orgID, Model: model, Action: action, Key: key, Response: body}
 	return s.db.WithContext(ctx).
-		Clauses(clause.OnConflict{DoNothing: true}).
-		Create(&rec).Error
+		Model(&ActionIdempotencyRecord{}).
+		Where("org_id = ? AND model = ? AND action = ? AND idem_key = ?", orgID, model, action, key).
+		Update("response", body).Error
+}
+
+// releaseIdempotent frees a reservation whose dispatch failed or was declined,
+// so a later retry gets to run the handler again (only SUCCESSFUL results are
+// cached — a declined payment stays retryable).
+func (s *Service) releaseIdempotent(ctx context.Context, orgID uuid.UUID, model, action, key string) error {
+	return s.db.WithContext(ctx).
+		Where("org_id = ? AND model = ? AND action = ? AND idem_key = ?", orgID, model, action, key).
+		Delete(&ActionIdempotencyRecord{}).Error
 }
 
 // idempotencyKeyFromPayload extracts and stringifies the idempotency key from
@@ -140,8 +183,10 @@ func idempotencyKeyFromPayload(payload map[string]any, keyField string) string {
 	case string:
 		return t
 	case float64:
-		// JSON numbers arrive as float64; render without trailing zeros.
-		return fmt.Sprintf("%v", t)
+		// JSON numbers arrive as float64. Render in plain decimal notation
+		// (never scientific) with the minimal digits that round-trip, so the
+		// same payload number always yields the same key string.
+		return strconv.FormatFloat(t, 'f', -1, 64)
 	case fmt.Stringer:
 		return t.String()
 	default:
