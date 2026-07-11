@@ -9,6 +9,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **manifest+dynamic+wasm: declarative folio sequences (`Model.sequences`).** A
+  v3 model may declare `sequences: [{key, scope, format}]` — atomic counters the
+  kernel maintains per org (default) or per branch, formatted through a template
+  (`"A-{seq:06}"` → `"A-000042"`). A column binds to one via `sequence: <key>`
+  and the dynamic engine stamps the next value automatically on create when the
+  caller left it empty (an explicit value wins, so ETL imports keep historical
+  folios and do not consume the counter). Counters live in the kernel-owned
+  `metacore_sequences` table (lazily auto-migrated); the increment is a single
+  `INSERT … ON CONFLICT … DO UPDATE … RETURNING`, race-free without explicit
+  locks. New `SequenceResolver` on `dynamic.Config` (host-wired, mirrors
+  `ConstraintResolver`), `Service.NextSequence` as the public entry point, and a
+  new wasm host import `sequence_next` (ABI v1.7, `Host.WithSequenceNext`,
+  docs/wasm-abi.md § 17) so action handlers can mint folios outside a plain
+  create. Dual validation (v3 lenient + strict): unique keys, `org|branch`
+  scope, exactly one `{seq}`/`{seq:0N}` placeholder, and column bindings must
+  reference a declared key.
+
 - **manifest+dynamic: declarative column guards (`Column.constraints`) +
   `Model.locking`.** A v3 column may declare `constraints: [{expr, error_key}]`
   — boolean guard predicates (`quantity >= 0`, `price >= cost`) the kernel

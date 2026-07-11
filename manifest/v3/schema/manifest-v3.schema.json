@@ -577,6 +577,13 @@
           ],
           "description": "Row-locking strategy on Update. 'row' makes the kernel wrap Update in a transaction and load the target row with SELECT … FOR UPDATE before evaluating column constraints, so an increment-then-check guard is race-free. Omit for no extra locking."
         },
+        "sequences": {
+          "type": "array",
+          "description": "Atomic folio counters the kernel maintains per org (or branch) for this model — invoice folios, remission numbers, tickets. A column binds to one via 'sequence' for auto-stamping on create; a wasm handler pulls one via the sequence_next host import.",
+          "items": {
+            "$ref": "#/$defs/Sequence"
+          }
+        },
         "stage_field": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
@@ -831,6 +838,40 @@
           "items": {
             "$ref": "#/$defs/Constraint"
           }
+        },
+        "sequence": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Binds this column to one of the owning model's sequences by key: on create, when the column is empty, the kernel stamps the next formatted folio value automatically (treated as system-generated for form derivation)."
+        }
+      }
+    },
+    "Sequence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "format"
+      ],
+      "description": "One atomic folio counter the kernel maintains for the owning model, formatted through a template. Increments atomically (UPDATE … RETURNING) so concurrent creates never collide.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Sequence identifier, unique within the model (e.g. 'invoice')."
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "org",
+            "branch"
+          ],
+          "description": "Counter partitioning: 'org' (one series per organization, the default) or 'branch' (one series per branch). Omit for org."
+        },
+        "format": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Template rendered around the numeric value; MUST contain exactly one {seq} or zero-padded {seq:0N} placeholder, e.g. 'A-{seq:06}' → 'A-000042'."
         }
       }
     },

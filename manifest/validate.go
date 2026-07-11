@@ -331,6 +331,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 		if err := validateConstraints(md, colsByModel[md.ModelKey]); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
+		if err := validateSequences(md); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
+		}
 	}
 	if err := m.validatePipelineRuntime(); err != nil {
 		return err
@@ -942,6 +945,45 @@ func validateComputeFormulas(formulas []Formula, ownCols map[string]struct{}) er
 // constraintComparisonOps mirrors dynamic.constraintOps + the v3 validator so
 // all three planes agree on the guard grammar (longest-match first).
 var constraintComparisonOps = []string{">=", "<=", "!=", "==", ">", "<", "="}
+
+// seqPlaceholderRe mirrors dynamic.seqPlaceholderRe + the v3 validator so all
+// three planes agree on the folio placeholder grammar.
+var seqPlaceholderRe = regexp.MustCompile(`\{seq(?::0(\d+))?\}`)
+
+// validateSequences mirrors the v3 folio check on the legacy/install surface:
+// unique keys, scope enum, a format with exactly one {seq}/{seq:0N} placeholder,
+// and every Column.Sequence binding referencing a declared key.
+func validateSequences(md ModelDefinition) error {
+	keys := make(map[string]struct{}, len(md.Sequences))
+	for i, sq := range md.Sequences {
+		where := fmt.Sprintf("sequences[%d]", i)
+		if strings.TrimSpace(sq.Key) == "" {
+			return fmt.Errorf("%s: key required", where)
+		}
+		if _, dup := keys[sq.Key]; dup {
+			return fmt.Errorf("%s: key %q duplicated on the model", where, sq.Key)
+		}
+		keys[sq.Key] = struct{}{}
+		if sq.Scope != "" && sq.Scope != "org" && sq.Scope != "branch" {
+			return fmt.Errorf(`%s: scope %q is not one of ""|"org"|"branch"`, where, sq.Scope)
+		}
+		if strings.TrimSpace(sq.Format) == "" {
+			return fmt.Errorf("%s: format required", where)
+		}
+		if n := len(seqPlaceholderRe.FindAllString(sq.Format, -1)); n != 1 {
+			return fmt.Errorf("%s: format %q must contain exactly one {seq}/{seq:0N} placeholder (found %d)", where, sq.Format, n)
+		}
+	}
+	for j, col := range md.Columns {
+		if col.Sequence == "" {
+			continue
+		}
+		if _, ok := keys[col.Sequence]; !ok {
+			return fmt.Errorf("columns[%d]: sequence %q is not a declared sequence key on the model", j, col.Sequence)
+		}
+	}
+	return nil
+}
 
 // validateConstraints mirrors the v3 guard check on the legacy/install surface:
 // the model's Locking must be ""|"row", and every column Constraint must carry a

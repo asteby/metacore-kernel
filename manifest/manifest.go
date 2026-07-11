@@ -616,6 +616,12 @@ type ModelDefinition struct {
 	Transitions  []TransitionDef     `json:"transitions,omitempty"`
 	OnTransition []TransitionHookDef `json:"onTransition,omitempty"`
 
+	// Sequences carries the v3 Model.sequences (atomic per-org/branch folio
+	// counters) through the v3 → host conversion so the dynamic engine can stamp
+	// auto-folios on create and the wasm sequence_next import can resolve them.
+	// See manifest/v3.Sequence. Empty = the model has no folios.
+	Sequences []SequenceDef `json:"sequences,omitempty"`
+
 	// Locking is the host/runtime projection of a v3 Model.locking. "row" makes
 	// dynamic.Service.Update take a SELECT … FOR UPDATE lock on the target row
 	// inside a transaction before evaluating column Constraints, so a concurrent
@@ -667,6 +673,14 @@ type TransitionHookDef struct {
 type Formula struct {
 	Target string `json:"target"`
 	Expr   string `json:"expr"`
+}
+
+// SequenceDef is the host/runtime projection of a v3 Model.Sequence: an atomic
+// folio counter the kernel maintains per org (or branch). See manifest/v3.Sequence.
+type SequenceDef struct {
+	Key    string `json:"key"`
+	Scope  string `json:"scope,omitempty"`
+	Format string `json:"format"`
 }
 
 // ConstraintDef is the host/runtime projection of a v3 Column.Constraint: a
@@ -839,6 +853,11 @@ type ColumnDef struct {
 	// evaluate them inside the create/update transaction. See manifest/v3.Constraint
 	// and dynamic constraint evaluation. Empty = no guards on this column.
 	Constraints []ConstraintDef `json:"constraints,omitempty"`
+
+	// Sequence carries the v3 Column.sequence binding (the sequence key whose
+	// next formatted value is auto-stamped on create) through the v3 → host
+	// conversion. Empty = no auto-folio on this column.
+	Sequence string `json:"sequence,omitempty"`
 
 	// Label is the column's human header OR an i18n key resolving to it. It
 	// rides the legacy ColumnDef as a carrier for the v3 Column.label so a

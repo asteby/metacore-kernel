@@ -298,6 +298,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// Constraints ride through so the dynamic engine evaluates the
 				// declarative guard predicates inside the create/update transaction.
 				Constraints: mapColumnConstraints(c.Constraints),
+				// Sequence binds the column to a model folio counter (auto-stamped
+				// on create).
+				Sequence: c.Sequence,
 			}
 			// Options is EITHER the STATIC-select list (array form) OR the
 			// DYNAMIC dependent-source object (DynamicOptions). The static list
@@ -357,6 +360,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		def.Transitions = mapModelTransitions(m.Transitions)
 		def.OnTransition = mapModelTransitionHooks(m.OnTransition)
 		def.Locking = m.Locking
+		def.Sequences = mapModelSequences(m.Sequences)
 		out = append(out, def)
 	}
 	return out
@@ -436,6 +440,19 @@ func mapColumnConstraints(in []v3.Constraint) []ConstraintDef {
 	out := make([]ConstraintDef, 0, len(in))
 	for _, c := range in {
 		out = append(out, ConstraintDef{Expr: c.Expr, ErrorKey: c.ErrorKey})
+	}
+	return out
+}
+
+// mapModelSequences folds a v3 model's folio counters onto the legacy
+// ModelDefinition.Sequences slice. Nil/empty maps to nil (the common case).
+func mapModelSequences(in []v3.Sequence) []SequenceDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]SequenceDef, 0, len(in))
+	for _, s := range in {
+		out = append(out, SequenceDef{Key: s.Key, Scope: s.Scope, Format: s.Format})
 	}
 	return out
 }

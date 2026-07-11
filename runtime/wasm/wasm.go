@@ -54,6 +54,7 @@ type Host struct {
 	enforcer      *security.Enforcer
 	tableResolver func(table string) string
 	execSchema    func(addonKey string) string
+	sequenceNext  func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)
 	connectors    *connectors.Resolver
 	logger        *log.Logger
 	compiled      sync.Map // addonKey -> *compiledEntry
@@ -134,6 +135,16 @@ func (h *Host) WithEnforcer(e *security.Enforcer) *Host {
 // resolution is the identity function.
 func (h *Host) WithTableResolver(r func(table string) string) *Host {
 	h.tableResolver = r
+	return h
+}
+
+// WithSequenceNext injects the embedder's folio-sequence backend for the
+// `metacore_host.sequence_next` import. The function issues the next formatted
+// value for (model, key) in the given org (the embedder wires it to
+// dynamic.Service.NextSequence). When unset the import returns a
+// `sequence_unavailable` envelope. See docs/wasm-abi.md § 17.
+func (h *Host) WithSequenceNext(f func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)) *Host {
+	h.sequenceNext = f
 	return h
 }
 
@@ -270,6 +281,7 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		enforcer:     h.enforcer,
 		resolveTable: h.tableResolver,
 		execSchema:   h.execSchema,
+		sequenceNext: h.sequenceNext,
 		connectors:   h.connectors,
 		logger:       h.logger,
 	})

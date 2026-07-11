@@ -147,6 +147,13 @@ type Config struct {
 	// model (back-compat).
 	ConstraintResolver ConstraintResolver
 
+	// SequenceResolver returns the folio-sequence config for a model name —
+	// host-wired from the addon registry, like the resolvers above. When set,
+	// Service.Create auto-stamps every sequence-bound column left empty with the
+	// next atomic folio value, and Service.NextSequence (the wasm sequence_next
+	// backend) resolves a counter by (model, key). nil = no folios.
+	SequenceResolver SequenceResolver
+
 	// AuthUserExtractor optionally lets the Handler pull the authenticated
 	// principal from the request context using the narrow AuthUserProvider
 	// contract instead of the legacy UserResolver (which forces apps to
@@ -222,6 +229,7 @@ type Service struct {
 	actionDispatchers map[string]ActionDispatcher
 	stageMachines     StageMachineResolver
 	constraints       ConstraintResolver
+	sequences         SequenceResolver
 	authExtractor     adapters.AuthUserExtractor
 	selfOptions       bool
 	fileDeleter       FileDeleter
@@ -274,6 +282,7 @@ func New(cfg Config) *Service {
 		actionDispatchers: dispatchers,
 		stageMachines:     cfg.StageMachineResolver,
 		constraints:       cfg.ConstraintResolver,
+		sequences:         cfg.SequenceResolver,
 		authExtractor:     cfg.AuthUserExtractor,
 		selfOptions:       cfg.EnableSelfOptions,
 		fileDeleter:       cfg.FileDeleter,
@@ -477,6 +486,13 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 
 	hc := HookContext{Model: model, User: user, DB: s.db}
 	if err := s.hooks.runBeforeCreate(ctx, hc, input); err != nil {
+		return nil, err
+	}
+
+	// Folio sequences: stamp the next atomic value onto every sequence-bound
+	// column the caller left empty, before the write. An explicitly-supplied
+	// value wins (historical ETL imports keep their original number).
+	if err := s.assignSequences(ctx, model, user, input); err != nil {
 		return nil, err
 	}
 

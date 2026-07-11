@@ -1755,3 +1755,55 @@ Same host setup as `data_mutate` (§ 14.8) — `WithDB`, `WithEnforcer`,
 `runtime/wasm/databatch.go` (the per-row engine `applyMutation` is shared with
 `data_mutate` in `runtime/wasm/datamutate.go`); tests:
 `runtime/wasm/databatch_test.go`.
+
+## 17. `sequence_next` — atomic folio counters (v1.7)
+
+Issues the next formatted value of a folio sequence declared on a model
+(manifest v3 `Model.sequences`) — invoice folios, remission numbers, service
+tickets. Counters increment atomically per org (or per branch when the
+sequence declares `scope: "branch"`), so concurrent callers never collide.
+
+### 17.1 Signature
+
+```
+sequence_next(reqPtr: u32, reqLen: u32) -> u64   // ptr|len envelope
+```
+
+### 17.2 Request contract
+
+```json
+{ "model": "sales_orders", "key": "folio" }
+```
+
+`organization_id` is deliberately absent — tenant scope ALWAYS comes from the
+invocation context, same rule as `data_mutate` (§ 14). The `(model, key)` pair
+must reference a sequence declared on the installed manifest; unknown pairs
+fail with `sequence_error`.
+
+### 17.3 Response envelope
+
+```json
+{ "success": true,
+  "data": { "value": "A-000042" },
+  "meta": { "addon": "sales", "orgId": "…", "durationMs": 1, "envelopeVersion": 1 } }
+```
+
+Failure codes: `invalid_request` (malformed JSON, missing model/key, no bound
+org), `sequence_unavailable` (host has no sequence backend configured),
+`sequence_error` (unknown sequence or storage failure).
+
+### 17.4 Semantics & wiring
+
+The counter lives in the kernel-owned `metacore_sequences` table (lazily
+auto-migrated), one row per `(org, scope_value, model, seq_key)`; the increment
+is a single `INSERT … ON CONFLICT … DO UPDATE … RETURNING`, so no explicit
+lock is taken. Formatting applies the sequence's `format` template —
+`"A-{seq:06}"` → `"A-000042"`.
+
+Note that the dynamic engine ALREADY auto-stamps sequence-bound columns
+(`Column.sequence`) on create; a guest only needs this import when it mints
+folios outside a plain create (e.g. a document produced by an action handler).
+
+Hosts wire the backend with `Host.WithSequenceNext(...)`, normally pointing at
+`dynamic.Service.NextSequence`. Implementation: `runtime/wasm/sequencenext.go`,
+`dynamic/sequence.go`; tests: `dynamic/sequence_test.go`.

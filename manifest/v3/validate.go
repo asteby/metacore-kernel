@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 
@@ -25,6 +26,24 @@ var validFns = map[string]struct{}{
 // `cols`. Returns nil on success.
 func validateArithExpr(expr string, cols map[string]struct{}) error {
 	return computeexpr.Validate(expr, cols)
+}
+
+// seqPlaceholderRe matches a {seq} or {seq:0N} folio placeholder. Mirrors
+// dynamic.seqPlaceholderRe so validation and rendering agree on the grammar.
+var seqPlaceholderRe = regexp.MustCompile(`\{seq(?::0(\d+))?\}`)
+
+// validateSequenceFormat enforces that a folio Format is non-empty and carries
+// exactly one {seq}/{seq:0N} placeholder (zero placeholders would make every
+// folio identical; more than one is almost certainly an authoring mistake).
+func validateSequenceFormat(format string) error {
+	if strings.TrimSpace(format) == "" {
+		return fmt.Errorf("is empty")
+	}
+	n := len(seqPlaceholderRe.FindAllString(format, -1))
+	if n != 1 {
+		return fmt.Errorf("must contain exactly one {seq} or {seq:0N} placeholder (found %d)", n)
+	}
+	return nil
 }
 
 // constraintComparisonOps are the operators a declarative guard predicate may
@@ -667,8 +686,32 @@ func Validate(raw []byte) error {
 		if mod.Locking != "" && mod.Locking != "row" {
 			errs = append(errs, fmt.Sprintf("models[%d].locking %q is not one of \"\"|\"row\"", mi, mod.Locking))
 		}
+		// Folio sequences: unique keys, scope enum, a well-formed format with
+		// exactly one {seq}/{seq:0N} placeholder.
+		seqKeys := make(map[string]struct{}, len(mod.Sequences))
+		for si, sq := range mod.Sequences {
+			where := fmt.Sprintf("models[%d].sequences[%d]", mi, si)
+			if strings.TrimSpace(sq.Key) == "" {
+				errs = append(errs, fmt.Sprintf("%s.key is empty", where))
+			} else if _, dup := seqKeys[sq.Key]; dup {
+				errs = append(errs, fmt.Sprintf("%s.key %q is duplicated on the model", where, sq.Key))
+			} else {
+				seqKeys[sq.Key] = struct{}{}
+			}
+			if sq.Scope != "" && sq.Scope != "org" && sq.Scope != "branch" {
+				errs = append(errs, fmt.Sprintf("%s.scope %q is not one of \"\"|\"org\"|\"branch\"", where, sq.Scope))
+			}
+			if err := validateSequenceFormat(sq.Format); err != nil {
+				errs = append(errs, fmt.Sprintf("%s.format %q: %v", where, sq.Format, err))
+			}
+		}
 		// Static-option cascade guards + declarative Constraints on model columns.
 		for ci, c := range mod.Columns {
+			if c.Sequence != "" {
+				if _, ok := seqKeys[c.Sequence]; !ok {
+					errs = append(errs, fmt.Sprintf("models[%d].columns[%d].sequence %q is not a declared sequence key on the model", mi, ci, c.Sequence))
+				}
+			}
 			for cci, con := range c.Constraints {
 				cw := fmt.Sprintf("models[%d].columns[%d].constraints[%d]", mi, ci, cci)
 				if strings.TrimSpace(con.Expr) == "" {

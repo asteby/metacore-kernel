@@ -243,6 +243,15 @@ type Model struct {
 	// for the shape and the security contract on Expr.
 	Formulas []Formula `json:"formulas,omitempty"`
 
+	// Sequences declare atomic, gap-tolerant counters the kernel maintains per
+	// org (or per branch) for this model — the primitive behind invoice folios,
+	// remission numbers, service-order tickets, etc. Each Sequence has a Key, a
+	// Scope (org|branch) and a Format template ("A-{seq:06}"). A Column may bind
+	// to a sequence via Column.Sequence so the next value is stamped
+	// automatically on create; a wasm handler can also pull one via the
+	// `sequence_next` host import. Optional — models without folios omit it.
+	Sequences []Sequence `json:"sequences,omitempty"`
+
 	// Locking selects the row-locking strategy the kernel applies on Update.
 	//   ""     — no extra locking (default; the legacy behaviour).
 	//   "row"  — the kernel wraps the whole Update in a transaction and loads
@@ -525,6 +534,12 @@ type Column struct {
 	// arithmetic allowlist as Formula.Expr governs each side of the comparison.
 	Constraints []Constraint `json:"constraints,omitempty"`
 
+	// Sequence binds this column to one of the owning Model.Sequences by key: on
+	// create, when the column is empty, the kernel stamps the next formatted
+	// folio value automatically. The column is treated as system-generated (like
+	// Readonly) for form derivation. Empty = the column carries no auto-folio.
+	Sequence string `json:"sequence,omitempty"`
+
 	// Readonly marks a SYSTEM-GENERATED column: a value the addon/host populates
 	// (e.g. an id or number a remote API returns after a write), NOT something a
 	// user types. It is pure UI-plane metadata that the host projects onto
@@ -535,6 +550,24 @@ type Column struct {
 	// server-side as usual. Use it for columns filled by an outbound sync, an
 	// external id, or any value the user must never hand-edit.
 	Readonly bool `json:"readonly,omitempty"`
+}
+
+// Sequence declares one atomic counter the kernel maintains for the owning
+// model, formatted through a template. The counter increments atomically
+// (UPDATE … RETURNING) so concurrent creates never collide on a folio.
+type Sequence struct {
+	// Key is the sequence identifier, unique within the model (e.g. "invoice").
+	// A Column binds to it via Column.Sequence, and the wasm `sequence_next`
+	// import addresses it by (model, key).
+	Key string `json:"key"`
+	// Scope selects the counter's partitioning: "org" (one counter per
+	// organization, the default) or "branch" (one counter per branch, so each
+	// branch has its own folio series). Empty = "org".
+	Scope string `json:"scope,omitempty"`
+	// Format is the template rendered around the numeric value. It MUST contain
+	// exactly one `{seq}` or zero-padded `{seq:0N}` placeholder (e.g. "A-{seq:06}"
+	// → "A-000042"). Any other text is emitted verbatim.
+	Format string `json:"format"`
 }
 
 // Constraint is one declarative GUARD predicate on a column: a boolean
