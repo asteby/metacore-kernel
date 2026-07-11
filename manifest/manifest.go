@@ -125,6 +125,25 @@ type Manifest struct {
 	Connectors []ConnectorDef      `json:"connectors,omitempty"`
 	Schedules  []ScheduleDef       `json:"schedules,omitempty"`
 	Webhooks   []InboundWebhookDef `json:"webhooks,omitempty"`
+
+	// Documents is the host projection of v3 contributions.documents[]: the
+	// printable-document templates the addon binds to its models. The host
+	// render engine reads these off the installed manifest to serve per-record
+	// PDFs. Empty = the addon prints nothing (back-compat default).
+	Documents []DocumentDef `json:"documents,omitempty"`
+}
+
+// DocumentDef is the host/runtime projection of a v3 DocumentDef: a printable
+// document template bound to a model. Template is a bundle-relative path to an
+// HTML file the host render engine hydrates (with {{record.*}},
+// {{org.branding.*}}, {{line_items}}, {{now}} tokens) and converts to PDF.
+// Paper is A4|letter|ticket80; Filename is an optional download-name template.
+type DocumentDef struct {
+	Key      string `json:"key"`
+	Model    string `json:"model"`
+	Template string `json:"template"`
+	Paper    string `json:"paper"`
+	Filename string `json:"filename,omitempty"`
 }
 
 // ConnectorDef is the host/runtime projection of a v3 Connector: a third-party

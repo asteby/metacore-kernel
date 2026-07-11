@@ -102,7 +102,29 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.Connectors = mapConnectors(m.Connectors)
 	out.Schedules = mapSchedules(m.Schedules)
 	out.Webhooks = mapWebhooks(m.Webhooks)
+	out.Documents = mapDocuments(m)
 
+	return out
+}
+
+// mapDocuments folds v3 contributions.documents[] onto the host Manifest so the
+// render engine can read the printable-document templates off the installed
+// manifest. Near-1:1 field copy; no contributions or an empty slice maps to nil
+// (the addon prints nothing, the back-compat default).
+func mapDocuments(m *v3.Manifest) []DocumentDef {
+	if m.Contributions == nil || len(m.Contributions.Documents) == 0 {
+		return nil
+	}
+	out := make([]DocumentDef, 0, len(m.Contributions.Documents))
+	for _, d := range m.Contributions.Documents {
+		out = append(out, DocumentDef{
+			Key:      d.Key,
+			Model:    d.Model,
+			Template: d.Template,
+			Paper:    d.Paper,
+			Filename: d.Filename,
+		})
+	}
 	return out
 }
 
