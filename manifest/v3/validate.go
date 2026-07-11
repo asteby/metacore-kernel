@@ -636,8 +636,9 @@ func Validate(raw []byte) error {
 
 	for mi, mod := range m.Models {
 		ownCols := colsByModel[mod.Key]
-		// Tier-2 formulas: target + every identifier in expr must be a column
-		// on THIS model; expr must pass the strict arithmetic allowlist.
+		// Formulas: target must be a column on THIS model. Tier-2 (default)
+		// exprs pass the strict arithmetic allowlist; Tier-3 swaps the expr for
+		// a "wasm:<export>" handler.
 		for fi, f := range mod.Formulas {
 			where := fmt.Sprintf("models[%d].formulas[%d]", mi, fi)
 			if f.Target == "" {
@@ -645,10 +646,25 @@ func Validate(raw []byte) error {
 			} else if _, ok := ownCols[f.Target]; !ok {
 				errs = append(errs, fmt.Sprintf("%s.target %q is not a declared column on the model", where, f.Target))
 			}
-			if strings.TrimSpace(f.Expr) == "" {
-				errs = append(errs, fmt.Sprintf("%s.expr is empty", where))
-			} else if err := validateArithExpr(f.Expr, ownCols); err != nil {
-				errs = append(errs, fmt.Sprintf("%s.expr %q: %v", where, f.Expr, err))
+			switch f.Tier {
+			case 0, 2: // arithmetic Tier-2 (the default)
+				if f.Handler != "" {
+					errs = append(errs, fmt.Sprintf("%s.handler is only allowed when tier is 3", where))
+				}
+				if strings.TrimSpace(f.Expr) == "" {
+					errs = append(errs, fmt.Sprintf("%s.expr is empty", where))
+				} else if err := validateArithExpr(f.Expr, ownCols); err != nil {
+					errs = append(errs, fmt.Sprintf("%s.expr %q: %v", where, f.Expr, err))
+				}
+			case 3: // wasm-backed Tier-3
+				if strings.TrimSpace(f.Expr) != "" {
+					errs = append(errs, fmt.Sprintf("%s.expr must be empty when tier is 3 (the handler replaces it)", where))
+				}
+				if !strings.HasPrefix(f.Handler, "wasm:") || len(f.Handler) <= len("wasm:") {
+					errs = append(errs, fmt.Sprintf("%s.handler %q must be \"wasm:<export>\" when tier is 3", where, f.Handler))
+				}
+			default:
+				errs = append(errs, fmt.Sprintf("%s.tier %d is not one of 2|3", where, f.Tier))
 			}
 		}
 		if mod.Seed != nil {

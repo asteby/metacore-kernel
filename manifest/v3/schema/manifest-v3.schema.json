@@ -2538,10 +2538,9 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "target",
-        "expr"
+        "target"
       ],
-      "description": "Tier-2 computed column: value computed from a pure arithmetic expression over the SAME row, before every create/update write.",
+      "description": "Computed column: Tier-2 (default) computes a pure arithmetic expression over the SAME row before every create/update write; Tier-3 delegates the computation to a wasm handler.",
       "properties": {
         "target": {
           "type": "string",
@@ -2549,7 +2548,20 @@
         },
         "expr": {
           "type": "string",
-          "description": "Arithmetic expression. Strict arithmetic allowlist: identifiers resolving to columns, decimal numbers, + - * / and parentheses only."
+          "description": "Arithmetic expression (Tier-2). Strict arithmetic allowlist: identifiers resolving to columns, decimal numbers, + - * / and parentheses only. Required unless tier is 3; must be omitted when tier is 3."
+        },
+        "tier": {
+          "type": "integer",
+          "enum": [
+            2,
+            3
+          ],
+          "description": "Compute engine: 2 (default) = arithmetic expression; 3 = wasm handler. Omit for 2."
+        },
+        "handler": {
+          "type": "string",
+          "pattern": "^wasm:[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Tier-3 backend, 'wasm:<export>' — an export of the addon's wasm module invoked with the merged row as payload; its returned value is written into target. Required (and only allowed) when tier is 3."
         }
       }
     }

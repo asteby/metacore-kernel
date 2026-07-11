@@ -672,7 +672,13 @@ type TransitionHookDef struct {
 // is rejected at validation time.
 type Formula struct {
 	Target string `json:"target"`
-	Expr   string `json:"expr"`
+	Expr   string `json:"expr,omitempty"`
+	// Tier selects the compute engine: 0/2 = arithmetic Tier-2 over Expr (the
+	// default); 3 = a wasm handler (Handler) computes the value. See
+	// manifest/v3.Formula.
+	Tier int `json:"tier,omitempty"`
+	// Handler is the Tier-3 backend, "wasm:<export>". Set only when Tier is 3.
+	Handler string `json:"handler,omitempty"`
 }
 
 // SequenceDef is the host/runtime projection of a v3 Model.Sequence: an atomic

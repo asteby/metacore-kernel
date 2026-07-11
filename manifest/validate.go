@@ -932,11 +932,26 @@ func validateComputeFormulas(formulas []Formula, ownCols map[string]struct{}) er
 		if _, ok := ownCols[f.Target]; !ok {
 			return fmt.Errorf("formulas[%d]: target %q is not a declared column on the model", i, f.Target)
 		}
-		if strings.TrimSpace(f.Expr) == "" {
-			return fmt.Errorf("formulas[%d]: expr required", i)
-		}
-		if err := computeexpr.Validate(f.Expr, ownCols); err != nil {
-			return fmt.Errorf("formulas[%d]: expr %q: %w", i, f.Expr, err)
+		switch f.Tier {
+		case 0, 2: // arithmetic Tier-2 (the default)
+			if f.Handler != "" {
+				return fmt.Errorf("formulas[%d]: handler is only allowed when tier is 3", i)
+			}
+			if strings.TrimSpace(f.Expr) == "" {
+				return fmt.Errorf("formulas[%d]: expr required", i)
+			}
+			if err := computeexpr.Validate(f.Expr, ownCols); err != nil {
+				return fmt.Errorf("formulas[%d]: expr %q: %w", i, f.Expr, err)
+			}
+		case 3: // wasm-backed Tier-3
+			if strings.TrimSpace(f.Expr) != "" {
+				return fmt.Errorf("formulas[%d]: expr must be empty when tier is 3", i)
+			}
+			if !strings.HasPrefix(f.Handler, "wasm:") || len(f.Handler) <= len("wasm:") {
+				return fmt.Errorf("formulas[%d]: handler %q must be \"wasm:<export>\" when tier is 3", i, f.Handler)
+			}
+		default:
+			return fmt.Errorf("formulas[%d]: tier %d is not one of 2|3", i, f.Tier)
 		}
 	}
 	return nil

@@ -423,8 +423,10 @@ func mapModelFormulas(in []v3.Formula) []Formula {
 	out := make([]Formula, 0, len(in))
 	for _, f := range in {
 		out = append(out, Formula{
-			Target: f.Target,
-			Expr:   f.Expr,
+			Target:  f.Target,
+			Expr:    f.Expr,
+			Tier:    f.Tier,
+			Handler: f.Handler,
 		})
 	}
 	return out

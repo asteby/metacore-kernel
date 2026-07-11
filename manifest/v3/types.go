@@ -358,7 +358,22 @@ type Formula struct {
 	// the owning model.
 	Target string `json:"target"`
 	// Expr is the arithmetic expression, e.g. "quantity * unit_price - discount".
-	Expr string `json:"expr"`
+	// Required for the arithmetic tiers; MUST be empty when Tier is 3 (the wasm
+	// handler replaces the expression entirely).
+	Expr string `json:"expr,omitempty"`
+	// Tier selects the compute engine for this formula:
+	//   0 / 2 — the default pure-arithmetic Tier-2 evaluator over Expr.
+	//   3     — a wasm handler computes the value: the kernel invokes Handler
+	//           with the (merged) row as payload and writes the returned value
+	//           into Target. Use it when the computation needs data or logic an
+	//           arithmetic expression cannot express (price-list resolution,
+	//           tiered margins, rounding policies).
+	Tier int `json:"tier,omitempty"`
+	// Handler is the Tier-3 backend, "wasm:<export>" — an export the addon's
+	// wasm module declares. Required (and only allowed) when Tier is 3. The
+	// invocation is host-wired (dynamic.HookRegistry.SetFormulaInvoker); when no
+	// invoker is configured the formula is skipped, never a hard failure.
+	Handler string `json:"handler,omitempty"`
 }
 
 // Seed is a model's declarative default-data block. The installer inserts Rows

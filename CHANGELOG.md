@@ -9,6 +9,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **manifest+dynamic: Tier-3 wasm-backed formulas (`Formula.tier: 3`).** A v3
+  formula may now declare `{target, tier: 3, handler: "wasm:<export>"}` instead
+  of an arithmetic `expr`: on every create/update the kernel invokes the addon's
+  wasm export with the merged row (existing ⊕ incoming) as payload and writes
+  the returned value into `target`, before the DB write — the primitive for
+  computations an arithmetic expression cannot express (price-list resolution,
+  tiered margins, rounding policies). The invocation backend is host-wired via
+  the new `dynamic.HookRegistry.SetFormulaInvoker` (`FormulaInvoker`); with no
+  invoker configured Tier-3 formulas are skipped, never a hard failure, and an
+  invoker error aborts the write. A Tier-3 result is visible to subsequent
+  Tier-2 formulas in declared order. Dual validation: tier ∈ {2,3}, Tier-3
+  requires a `wasm:`-prefixed handler and an empty expr, Tier-2 keeps the strict
+  arithmetic allowlist.
+
 - **manifest+dynamic+wasm: declarative folio sequences (`Model.sequences`).** A
   v3 model may declare `sequences: [{key, scope, format}]` — atomic counters the
   kernel maintains per org (default) or per branch, formatted through a template
