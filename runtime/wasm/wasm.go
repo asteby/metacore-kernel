@@ -55,6 +55,7 @@ type Host struct {
 	tableResolver func(table string) string
 	execSchema    func(addonKey string) string
 	sequenceNext  func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)
+	mutationGuard func(ctx context.Context, logicalTable string, row map[string]any) error
 	connectors    *connectors.Resolver
 	logger        *log.Logger
 	compiled      sync.Map // addonKey -> *compiledEntry
@@ -145,6 +146,22 @@ func (h *Host) WithTableResolver(r func(table string) string) *Host {
 // `sequence_unavailable` envelope. See docs/wasm-abi.md § 17.
 func (h *Host) WithSequenceNext(f func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)) *Host {
 	h.sequenceNext = f
+	return h
+}
+
+// WithMutationGuard injects the embedder's declarative-constraints check for
+// the `metacore_host.data_mutate` / `data_batch` imports. After each create /
+// update is applied (still inside the open transaction), the guard receives
+// the LOGICAL table name and the post-mutation row; a non-nil error rolls the
+// whole mutation (or batch) back and surfaces to the guest as a
+// `constraint_violation` envelope. Deletes are not guarded — guards predicate
+// over the row's resulting state, and a deleted row has none. Embedders wire
+// this to dynamic.EvalRowConstraints over the model's declared Column
+// constraints, so `stock.quantity >= 0` holds on the wasm write path exactly
+// as it does on Service.Create/Update. When unset, no guard runs (the
+// pre-guards behaviour).
+func (h *Host) WithMutationGuard(g func(ctx context.Context, logicalTable string, row map[string]any) error) *Host {
+	h.mutationGuard = g
 	return h
 }
 
@@ -270,20 +287,21 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 	// Stash settings + caller id on the ctx so the host module imports
 	// (env_get, http_fetch, log) can read them without global state.
 	callCtx = withInvocation(callCtx, &invocation{
-		addonKey:     addonKey,
-		installation: installation,
-		settings:     settings,
-		caps:         h.caps,
-		bus:          h.bus,
-		orgID:        orgID,
-		db:           h.db,
-		tx:           tx,
-		enforcer:     h.enforcer,
-		resolveTable: h.tableResolver,
-		execSchema:   h.execSchema,
-		sequenceNext: h.sequenceNext,
-		connectors:   h.connectors,
-		logger:       h.logger,
+		addonKey:      addonKey,
+		installation:  installation,
+		settings:      settings,
+		caps:          h.caps,
+		bus:           h.bus,
+		orgID:         orgID,
+		db:            h.db,
+		tx:            tx,
+		enforcer:      h.enforcer,
+		resolveTable:  h.tableResolver,
+		execSchema:    h.execSchema,
+		sequenceNext:  h.sequenceNext,
+		mutationGuard: h.mutationGuard,
+		connectors:    h.connectors,
+		logger:        h.logger,
 	})
 
 	mod.mu.Lock()
@@ -326,7 +344,7 @@ func (h *Host) getOrInstantiate(ctx context.Context, addonKey string, installati
 	_ = entry.spec.MemoryLimitMB
 
 	cfg := wazero.NewModuleConfig().
-		WithName(addonKey + "-" + installation.String()).
+		WithName(addonKey+"-"+installation.String()).
 		// RandSource is required by some toolchains' runtime init (e.g. Go's
 		// runtime.fastrand). SysNanotime/Walltime give guests a monotonic +
 		// wall clock without stdin/stdout; we still omit stdio on purpose.

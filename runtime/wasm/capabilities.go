@@ -55,6 +55,11 @@ type invocation struct {
 	// sequenceNext is the embedder-injected folio-sequence backend the
 	// sequence_next import calls (Host.WithSequenceNext). nil = unavailable.
 	sequenceNext func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)
+	// mutationGuard is the embedder-injected declarative-constraints check
+	// (Host.WithMutationGuard) run after every data_mutate/data_batch create
+	// or update, inside the transaction, against the post-mutation row keyed
+	// by LOGICAL table. non-nil error → rollback + constraint_violation.
+	mutationGuard func(ctx context.Context, logicalTable string, row map[string]any) error
 	// execSchema overrides the schema db_exec scopes bare names to via
 	// search_path (Host.WithExecSchema). nil = AddonSchema(addonKey). The
 	// capability gate still authorises against AddonSchema regardless.

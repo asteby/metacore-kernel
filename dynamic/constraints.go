@@ -53,6 +53,16 @@ func (s *Service) resolveConstraints(ctx context.Context, model string) *ModelCo
 	return mc
 }
 
+// EvalRowConstraints is the exported form of evalConstraints for embedders
+// that enforce declarative guards on writes that bypass Service (the wasm
+// data_mutate/data_batch imports route through it via Host.WithMutationGuard).
+func EvalRowConstraints(mc *ModelConstraints, row map[string]any) error {
+	if mc == nil {
+		return nil
+	}
+	return evalConstraints(mc, row)
+}
+
 // evalConstraints evaluates every guard predicate against the row's numeric
 // environment (missing / non-numeric identifiers resolve to 0, matching the
 // Tier-2 formula engine). The FIRST false predicate aborts with a

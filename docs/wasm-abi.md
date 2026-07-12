@@ -1475,9 +1475,13 @@ interpolation.
   "meta": { "addon": "...", "orgId": "...", "durationMs": N, "envelopeVersion": 1 } }
 // error:
 { "success": false,
-  "error": { "code": "forbidden|not_found|invalid_request|bus_unavailable|db_error", "message": "..." },
+  "error": { "code": "forbidden|not_found|invalid_request|bus_unavailable|db_error|constraint_violation", "message": "..." },
   "meta": { ... } }
 ```
+
+`constraint_violation` is returned when the embedder's mutation guard
+(`Host.WithMutationGuard`, § 14.9) rejects the post-mutation row — the
+transaction is rolled back and no canonical event is published.
 
 - `create`: `before` is `null`, `after` is the `RETURNING *` row.
 - `update`: `before` is the pre-update snapshot (SELECT inside the same
@@ -1534,6 +1538,29 @@ host.WithBus(bus).
 
 Implementation: `runtime/wasm/datamutate.go`; tests:
 `runtime/wasm/datamutate_test.go`.
+
+### 14.9 Declarative guards on the wasm write path (v1.8)
+
+The dynamic CRUD path (`Service.Create`/`Update`) evaluates the model's
+declared `Column.constraints` guards before committing. `data_mutate` and
+`data_batch` bypass `Service`, so the host closes the gap with an
+embedder-injected guard:
+
+```go
+host.WithMutationGuard(func(ctx context.Context, logicalTable string, row map[string]any) error {
+    mc := lookupConstraintsForLogicalTable(logicalTable) // embedder-side model registry
+    return dynamic.EvalRowConstraints(mc, row)
+})
+```
+
+The guard runs INSIDE the open transaction, after each applied `create` /
+`update`, against the post-mutation row (the `RETURNING *` snapshot) keyed by
+the LOGICAL table name. A non-nil error rolls the mutation — for `data_batch`,
+the ENTIRE batch — back and surfaces to the guest as `constraint_violation`.
+`delete` is exempt: guards predicate over the row's resulting state and a
+deleted row has none. When no guard is injected the imports behave as before
+(no declarative enforcement on the wasm path — embedding hosts SHOULD wire
+one).
 
 ## 15. `data_query` — org-scoped logical-table read (v1.5)
 
@@ -1719,7 +1746,11 @@ addon-schema `search_path` is NOT used.
 row's `after` from the RESPONSE only — the canonical event always carries the
 full rows. On failure the envelope is `{success:false, error:{code,message}}`
 with the message prefixed by the offending `mutations[i]` index; `code` is one
-of `forbidden | not_found | invalid_request | bus_unavailable | db_error`.
+of `forbidden | not_found | invalid_request | bus_unavailable | db_error |
+constraint_violation`. `constraint_violation` comes from the embedder's
+mutation guard (§ 14.9): the guard checks every applied create/update's
+post-mutation row inside the shared transaction, and one violation rolls the
+ENTIRE batch back with no events published.
 
 ### 16.5 Limits
 

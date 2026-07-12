@@ -172,6 +172,15 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 			_ = work.Rollback()
 			return fail(code, fmt.Sprintf("mutations[%d]: %s", i, mErr.Error()))
 		}
+		// Declarative guards (Host.WithMutationGuard) check the post-mutation
+		// row inside the shared transaction — one violated constraint rolls the
+		// ENTIRE batch back. Deletes are exempt (no resulting row state).
+		if inv.mutationGuard != nil && res.action != "deleted" {
+			if gErr := inv.mutationGuard(execCtx, p.req.Table, res.after); gErr != nil {
+				_ = work.Rollback()
+				return fail("constraint_violation", fmt.Sprintf("mutations[%d]: %s", i, gErr.Error()))
+			}
+		}
 		results[i] = res
 	}
 

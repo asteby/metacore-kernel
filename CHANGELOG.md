@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **runtime/wasm: declarative guards on the wasm write path
+  (`Host.WithMutationGuard`, ABI v1.8, § 14.9).** `data_mutate` and
+  `data_batch` bypass `dynamic.Service`, so declared `Column.constraints`
+  guards (e.g. `stock.quantity >= 0`) did not apply to wasm-driven writes. The
+  host now accepts an embedder-injected guard that runs INSIDE the open
+  transaction after each applied create/update, against the post-mutation
+  `RETURNING *` row keyed by the LOGICAL table; a non-nil error rolls the
+  mutation — for `data_batch`, the entire batch — back and surfaces as a
+  `constraint_violation` envelope with no canonical events published. Deletes
+  are exempt (no resulting row state). New exported
+  `dynamic.EvalRowConstraints(mc, row)` lets embedders reuse the exact
+  Service-path guard evaluator.
 - **manifest: declarative action wizards (`Action.steps`).** A v3 action may
   declare `steps: [{title, description?, fields[]}]` instead of a flat
   `fields[]`: the SDK renders a multi-step wizard (one page per step, per-step

@@ -181,6 +181,17 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 	}
 	action, rowID, before, after := res.action, res.rowID, res.before, res.after
 
+	// Declarative guards (Host.WithMutationGuard) evaluate the post-mutation
+	// row INSIDE the transaction, so a violated constraint (stock.quantity >= 0)
+	// rolls the write back exactly like on the Service.Create/Update path.
+	// Deletes are exempt: guards predicate over resulting row state.
+	if inv.mutationGuard != nil && action != "deleted" {
+		if gErr := inv.mutationGuard(execCtx, req.Table, after); gErr != nil {
+			rollback()
+			return fail("constraint_violation", gErr.Error())
+		}
+	}
+
 	if err := work.Commit().Error; err != nil {
 		return fail("db_error", err.Error())
 	}
@@ -554,7 +565,7 @@ func dataMutateMeta(addonKey string, orgID uuid.UUID, start time.Time) map[strin
 
 // dataMutateErr builds the failure envelope per docs/wasm-abi.md § 14.5.
 // `code` is one of: forbidden | not_found | invalid_request |
-// bus_unavailable | db_error.
+// bus_unavailable | db_error | constraint_violation.
 func dataMutateErr(addonKey, code, message string, orgID uuid.UUID, start time.Time) []byte {
 	b, _ := json.Marshal(map[string]any{
 		"success": false,
