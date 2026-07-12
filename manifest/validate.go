@@ -338,6 +338,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 	if err := m.validatePipelineRuntime(); err != nil {
 		return err
 	}
+	if err := m.validateDocuments(); err != nil {
+		return err
+	}
 	for i, c := range m.Capabilities {
 		if !strings.Contains(c.Kind, ":") {
 			return fmt.Errorf("manifest.capabilities[%d]: kind must be namespaced (e.g. db:read)", i)
@@ -846,6 +849,57 @@ func validateDoRef(do string) error {
 	}
 	if _, ok := validHookPrefixes[prefix]; !ok {
 		return fmt.Errorf("%q has an unknown prefix (want wasm|webhook|compiled)", do)
+	}
+	return nil
+}
+
+// validateDocuments is the legacy/install-surface twin of
+// v3.validateDocuments: printable-document keys are unique, each binds to a
+// model the addon owns (ModelDefinitions) or extends (Extensions.TargetModel),
+// the paper size is in the enum and the template is a non-empty .html path.
+// Empty Documents passes unchanged. Mirrors the v3 validator so a manifest
+// fails identically on both surfaces ("dual validation").
+func (m *Manifest) validateDocuments() error {
+	if len(m.Documents) == 0 {
+		return nil
+	}
+	known := make(map[string]struct{}, len(m.ModelDefinitions)+len(m.Extensions))
+	for _, md := range m.ModelDefinitions {
+		known[md.ModelKey] = struct{}{}
+	}
+	for _, ext := range m.Extensions {
+		if ext.Model != "" {
+			known[ext.Model] = struct{}{}
+		}
+	}
+	seen := make(map[string]struct{}, len(m.Documents))
+	for i, d := range m.Documents {
+		if d.Key == "" {
+			return fmt.Errorf("documents[%d].key required", i)
+		}
+		if _, dup := seen[d.Key]; dup {
+			return fmt.Errorf("documents[%d].key %q duplicated", i, d.Key)
+		}
+		seen[d.Key] = struct{}{}
+		if d.Model == "" {
+			return fmt.Errorf("documents[%d].model required", i)
+		}
+		if _, ok := known[d.Model]; !ok {
+			return fmt.Errorf("documents[%d].model %q is not a model of this addon (nor a model it extends)", i, d.Model)
+		}
+		if d.Template == "" {
+			return fmt.Errorf("documents[%d].template required", i)
+		}
+		if !strings.HasSuffix(d.Template, ".html") {
+			return fmt.Errorf("documents[%d].template %q must be a bundle-relative .html path", i, d.Template)
+		}
+		switch d.Paper {
+		case "A4", "letter", "ticket80":
+		case "":
+			return fmt.Errorf("documents[%d].paper required", i)
+		default:
+			return fmt.Errorf("documents[%d].paper %q is not one of A4|letter|ticket80", i, d.Paper)
+		}
 	}
 	return nil
 }

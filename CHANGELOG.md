@@ -110,6 +110,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `mutations[i]` index. The per-row engine (`applyMutation`) is now shared with
   `data_mutate`. Implementation `runtime/wasm/databatch.go`; contract
   documented in `docs/wasm-abi.md § 16`.
+- **manifest: printable documents (`contributions.documents[]`).** A new v3
+  contribution binds a bundle-relative HTML template to one of the addon's
+  models so the host can render a per-record PDF (delivery notes, POS tickets,
+  invoices). Each `DocumentDef` carries `{key, model, template, paper, filename?}`
+  where `paper` is `A4|letter|ticket80` and `template` is a `.html` path packaged
+  in the addon bundle. The template body uses `{{record.<col>}}`,
+  `{{org.branding.<field>}}`, `{{line_items}}` and `{{now}}` tokens the host
+  substitutes at render time. Dual validation (v3 lenient + strict/install
+  surface): keys unique within the addon, `model` must exist among the addon's
+  own models or the models it extends, `paper` in the enum, non-empty `.html`
+  template. `FromV3` projects the entries onto `manifest.Manifest.Documents`
+  (`[]DocumentDef`) so the host render engine reads them off the installed
+  manifest. JSON schema updated (`$defs/DocumentDef`).
+
+---
 
 ## [0.63.0] - 2026-07-01
 

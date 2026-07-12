@@ -240,6 +240,71 @@ func validateDashboard(m *Manifest) []string {
 	return errs
 }
 
+// docPapers is the page-geometry enum for printable documents, shared with the
+// JSON schema so the struct-level checks and the schema agree byte-for-byte
+// (the "dual validation" contract).
+var docPapers = map[string]struct{}{"A4": {}, "letter": {}, "ticket80": {}}
+
+// validateDocuments enforces the cross-field rules of the printable-document
+// contract (contributions.documents[]) the JSON schema cannot express: unique
+// keys, a model that exists among the addon's own models or its model
+// extensions, a paper size in the enum, and a non-empty .html template path.
+// colsByModel is the manifest's own-model index (keyed by model key); model
+// extensions target models owned by OTHER addons, so their target names are
+// added to the resolvable set. Returns a slice (possibly empty) so the caller
+// can append.
+func validateDocuments(m *Manifest, colsByModel map[string]map[string]struct{}) []string {
+	if m.Contributions == nil || len(m.Contributions.Documents) == 0 {
+		return nil
+	}
+	// Models the addon may bind a document to: its own models plus the models
+	// it extends (columns attached to another addon's model).
+	known := make(map[string]struct{}, len(colsByModel))
+	for k := range colsByModel {
+		known[k] = struct{}{}
+	}
+	for _, mod := range m.Models {
+		for _, ext := range mod.Extensions {
+			if ext.TargetModel != "" {
+				known[ext.TargetModel] = struct{}{}
+			}
+		}
+	}
+	var errs []string
+	seen := make(map[string]struct{}, len(m.Contributions.Documents))
+	for i, d := range m.Contributions.Documents {
+		id := d.Key
+		if id == "" {
+			id = fmt.Sprintf("#%d", i)
+		}
+		where := fmt.Sprintf("contributions.documents[%s]", id)
+
+		if d.Key == "" {
+			errs = append(errs, fmt.Sprintf("%s.key is required", where))
+		} else if _, dup := seen[d.Key]; dup {
+			errs = append(errs, fmt.Sprintf("%s.key %q is duplicated within the addon", where, d.Key))
+		} else {
+			seen[d.Key] = struct{}{}
+		}
+		if d.Model == "" {
+			errs = append(errs, fmt.Sprintf("%s.model is required", where))
+		} else if _, ok := known[d.Model]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.model %q is not a model of this addon (nor a model it extends)", where, d.Model))
+		}
+		if d.Template == "" {
+			errs = append(errs, fmt.Sprintf("%s.template is required", where))
+		} else if !strings.HasSuffix(d.Template, ".html") {
+			errs = append(errs, fmt.Sprintf("%s.template %q must be a bundle-relative .html path", where, d.Template))
+		}
+		if d.Paper == "" {
+			errs = append(errs, fmt.Sprintf("%s.paper is required", where))
+		} else if _, ok := docPapers[d.Paper]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.paper %q is not one of A4|letter|ticket80", where, d.Paper))
+		}
+	}
+	return errs
+}
+
 // validHookPrefixes is the allowlist of TransitionHook.Do dispatch targets,
 // shared with the JSON schema pattern so the struct-level checks and the schema
 // agree (the "dual validation" contract).
@@ -778,6 +843,7 @@ func Validate(raw []byte) error {
 	if m.Contributions != nil {
 		errs = append(errs, validateDashboard(&m)...)
 		errs = append(errs, validateNavViewTypes(&m)...)
+		errs = append(errs, validateDocuments(&m, colsByModel)...)
 	}
 
 	// Addon-level pipeline-runtime primitives (connectors / schedules / webhooks).

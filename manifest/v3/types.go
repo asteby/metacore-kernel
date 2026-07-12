@@ -647,6 +647,41 @@ type Contributions struct {
 	// placed and sized inside the same grid. Optional — addons with no
 	// dashboard surface omit it. See DashboardWidget for the full contract.
 	Dashboard []DashboardWidget `json:"dashboard,omitempty"`
+
+	// Documents contributes printable document templates. Each entry binds a
+	// bundle-relative HTML template to one of the addon's models; the host
+	// hydrates the template with the record (and its child rows) and the org
+	// branding, then renders it to PDF. Optional — addons with nothing to
+	// print omit it. See DocumentDef for the full contract.
+	Documents []DocumentDef `json:"documents,omitempty"`
+}
+
+// DocumentDef is one printable document an addon contributes
+// (contributions.documents[]). It binds a bundle-relative HTML template to a
+// model so the host can render a per-record PDF (delivery notes, tickets,
+// invoices) hydrated with the record, its line-items and the org branding.
+//
+// The host serves it at GET /api/data/:model/:id/documents/:key.pdf, gated by
+// the model's read permission and scoped to the caller's organization. The
+// template body uses {{record.<col>}}, {{org.branding.<field>}}, {{line_items}}
+// and {{now}} tokens the host substitutes at render time.
+type DocumentDef struct {
+	// Key is the document's stable id, unique within the addon. It is the
+	// ":key" path segment of the PDF route. Required, snake_case.
+	Key string `json:"key"`
+	// Model is the model key (from this addon's models or model extensions)
+	// the document renders a record of. Required.
+	Model string `json:"model"`
+	// Template is the bundle-relative path to the HTML template, e.g.
+	// "templates/remision.html". Required, must end in .html.
+	Template string `json:"template"`
+	// Paper is the page geometry: A4|letter|ticket80. ticket80 is an 80mm-wide
+	// receipt roll for POS. Required.
+	Paper string `json:"paper"`
+	// Filename is an optional download filename (without the .pdf extension).
+	// It may contain {{record.<col>}} tokens the host expands. When empty the
+	// host falls back to "<key>-<id>".
+	Filename string `json:"filename,omitempty"`
 }
 
 // DashboardWidget is one tile an addon contributes to the host's modular
