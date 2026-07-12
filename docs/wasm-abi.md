@@ -1475,9 +1475,13 @@ interpolation.
   "meta": { "addon": "...", "orgId": "...", "durationMs": N, "envelopeVersion": 1 } }
 // error:
 { "success": false,
-  "error": { "code": "forbidden|not_found|invalid_request|bus_unavailable|db_error", "message": "..." },
+  "error": { "code": "forbidden|not_found|invalid_request|bus_unavailable|db_error|constraint_violation", "message": "..." },
   "meta": { ... } }
 ```
+
+`constraint_violation` is returned when the embedder's mutation guard
+(`Host.WithMutationGuard`, § 14.9) rejects the post-mutation row — the
+transaction is rolled back and no canonical event is published.
 
 - `create`: `before` is `null`, `after` is the `RETURNING *` row.
 - `update`: `before` is the pre-update snapshot (SELECT inside the same
@@ -1534,6 +1538,29 @@ host.WithBus(bus).
 
 Implementation: `runtime/wasm/datamutate.go`; tests:
 `runtime/wasm/datamutate_test.go`.
+
+### 14.9 Declarative guards on the wasm write path (v1.8)
+
+The dynamic CRUD path (`Service.Create`/`Update`) evaluates the model's
+declared `Column.constraints` guards before committing. `data_mutate` and
+`data_batch` bypass `Service`, so the host closes the gap with an
+embedder-injected guard:
+
+```go
+host.WithMutationGuard(func(ctx context.Context, logicalTable string, row map[string]any) error {
+    mc := lookupConstraintsForLogicalTable(logicalTable) // embedder-side model registry
+    return dynamic.EvalRowConstraints(mc, row)
+})
+```
+
+The guard runs INSIDE the open transaction, after each applied `create` /
+`update`, against the post-mutation row (the `RETURNING *` snapshot) keyed by
+the LOGICAL table name. A non-nil error rolls the mutation — for `data_batch`,
+the ENTIRE batch — back and surfaces to the guest as `constraint_violation`.
+`delete` is exempt: guards predicate over the row's resulting state and a
+deleted row has none. When no guard is injected the imports behave as before
+(no declarative enforcement on the wasm path — embedding hosts SHOULD wire
+one).
 
 ## 15. `data_query` — org-scoped logical-table read (v1.5)
 
@@ -1657,3 +1684,157 @@ Same host setup as `data_mutate` (§ 14.8) — `WithDB`, `WithEnforcer` and
 Implementation: `runtime/wasm/dataquery_records.go` (named to avoid
 colliding with `dbquery.go`); tests:
 `runtime/wasm/dataquery_records_test.go`.
+
+## 16. `data_batch` — atomic multi-row mutation + canonical events (v1.7)
+
+`data_batch` is the atomic multi-row sibling of `data_mutate` (§ 14): a list of
+create/update/delete mutations, across one or more models, executed under **one
+org-scoped transaction**, each followed (post-commit) by its own
+`*dynamic.CanonicalEvent` on the host bus. It is the primitive that lets a wasm
+handler perform "sale decrements stock + writes the ledger + updates the
+weighted cost" **atomically** — either every row lands or none does.
+
+### 16.1 Signature
+
+```
+data_batch(reqPtr i32, reqLen i32) -> i64   // (ptr<<32)|len of the JSON envelope
+```
+
+### 16.2 Request contract
+
+```json
+{
+  "mutations": [
+    { "op": "update", "table": "stock",  "model": "Stock",  "id": "…", "inc": {"quantity": -3} },
+    { "op": "create", "table": "ledger", "model": "Ledger", "data": {"delta": -3} }
+  ]
+}
+```
+
+Each element is exactly the `data_mutate` request object (§ 14.2) — same
+`op`/`table`/`model`/`id`/`data`/`inc`/`returning` fields, same rules (reserved
+host-stamped columns rejected, `inc` numeric-only, uuid ids, soft-delete aware).
+`organization_id` is absent everywhere: tenant scope ALWAYS comes from the
+invocation context, never from the guest. Mutations run in array order, so a row
+created earlier in the batch is visible to a later mutation in the same
+transaction.
+
+### 16.3 Security
+
+Gated by `db:write <logical table>` for **every** table the batch touches — a
+batch spanning N tables needs the grant for all N. Each table is resolved
+through the host `TableResolver` exactly like `data_mutate` (§ 14.3); the
+addon-schema `search_path` is NOT used.
+
+### 16.4 Response envelope
+
+```json
+{
+  "success": true,
+  "data": {
+    "count": 2,
+    "results": [
+      { "id": "…", "model": "Stock",  "action": "updated", "before": {…}, "after": {…} },
+      { "id": "…", "model": "Ledger", "action": "created", "after": {…} }
+    ]
+  },
+  "meta": { "addon": "…", "orgId": "…", "durationMs": 1, "envelopeVersion": 1 }
+}
+```
+
+`results` is in request order. A per-mutation `"returning": false` trims that
+row's `after` from the RESPONSE only — the canonical event always carries the
+full rows. On failure the envelope is `{success:false, error:{code,message}}`
+with the message prefixed by the offending `mutations[i]` index; `code` is one
+of `forbidden | not_found | invalid_request | bus_unavailable | db_error |
+constraint_violation`. `constraint_violation` comes from the embedder's
+mutation guard (§ 14.9): the guard checks every applied create/update's
+post-mutation row inside the shared transaction, and one violation rolls the
+ENTIRE batch back with no events published.
+
+### 16.5 Limits
+
+| Limit            | Value  | On violation                     |
+|------------------|--------|----------------------------------|
+| Request bytes    | 64 KiB | `invalid_request`                |
+| Mutations        | 100    | `invalid_request`                |
+| Deadline         | 10 s   | `db_error` (ctx timeout)         |
+| Response bytes   | 8 MiB  | `db_error`                       |
+
+The request cap is the same 64 KiB frozen ABI request ceiling as `data_mutate`,
+so a batch trades per-row headroom for atomicity — **many small rows, not a few
+huge ones**. A payload that would exceed the cap must be split by the guest
+(which forfeits cross-split atomicity). The mutation count is bounded
+independently so an all-tiny-rows payload still cannot open an unbounded
+transaction.
+
+### 16.6 Transaction shape & event ordering
+
+The batch opens ONE transaction on `inv.db`, applies every mutation in order,
+and commits. Any per-row failure rolls back the WHOLE batch and publishes NO
+events. Canonical events are published only AFTER the commit (the bus sees only
+committed state), one per row, in request order, under the caller's addon
+namespace (`<addon>.<model>.<action>`). Publish errors are logged and swallowed
+— the data is committed and its side-effects must not undo it. Validation,
+capability checks and column decoding all happen BEFORE the transaction opens,
+so a malformed row never leaves a half-open transaction.
+
+### 16.7 Wiring
+
+Same host setup as `data_mutate` (§ 14.8) — `WithDB`, `WithEnforcer`,
+`WithTableResolver`, and a bus (`WithBus`). Implementation:
+`runtime/wasm/databatch.go` (the per-row engine `applyMutation` is shared with
+`data_mutate` in `runtime/wasm/datamutate.go`); tests:
+`runtime/wasm/databatch_test.go`.
+
+## 17. `sequence_next` — atomic folio counters (v1.7)
+
+Issues the next formatted value of a folio sequence declared on a model
+(manifest v3 `Model.sequences`) — invoice folios, remission numbers, service
+tickets. Counters increment atomically per org (or per branch when the
+sequence declares `scope: "branch"`), so concurrent callers never collide.
+
+### 17.1 Signature
+
+```
+sequence_next(reqPtr: u32, reqLen: u32) -> u64   // ptr|len envelope
+```
+
+### 17.2 Request contract
+
+```json
+{ "model": "sales_orders", "key": "folio" }
+```
+
+`organization_id` is deliberately absent — tenant scope ALWAYS comes from the
+invocation context, same rule as `data_mutate` (§ 14). The `(model, key)` pair
+must reference a sequence declared on the installed manifest; unknown pairs
+fail with `sequence_error`.
+
+### 17.3 Response envelope
+
+```json
+{ "success": true,
+  "data": { "value": "A-000042" },
+  "meta": { "addon": "sales", "orgId": "…", "durationMs": 1, "envelopeVersion": 1 } }
+```
+
+Failure codes: `invalid_request` (malformed JSON, missing model/key, no bound
+org), `sequence_unavailable` (host has no sequence backend configured),
+`sequence_error` (unknown sequence or storage failure).
+
+### 17.4 Semantics & wiring
+
+The counter lives in the kernel-owned `metacore_sequences` table (lazily
+auto-migrated), one row per `(org, scope_value, model, seq_key)`; the increment
+is a single `INSERT … ON CONFLICT … DO UPDATE … RETURNING`, so no explicit
+lock is taken. Formatting applies the sequence's `format` template —
+`"A-{seq:06}"` → `"A-000042"`.
+
+Note that the dynamic engine ALREADY auto-stamps sequence-bound columns
+(`Column.sequence`) on create; a guest only needs this import when it mints
+folios outside a plain create (e.g. a document produced by an action handler).
+
+Hosts wire the backend with `Host.WithSequenceNext(...)`, normally pointing at
+`dynamic.Service.NextSequence`. Implementation: `runtime/wasm/sequencenext.go`,
+`dynamic/sequence.go`; tests: `dynamic/sequence_test.go`.

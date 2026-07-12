@@ -509,3 +509,90 @@ func TestValidate_Seed_OmittedIsBackwardsCompat(t *testing.T) {
 		t.Fatalf("expected valid model without seed, got error: %v", err)
 	}
 }
+
+// --- Action.steps (declarative wizard) ---
+
+func actionWithSteps(steps []interface{}, alsoFields bool) map[string]interface{} {
+	m := baseValid()
+	action := map[string]interface{}{
+		"key":          "receive_purchase",
+		"target_model": "Entry",
+		"handler":      map[string]interface{}{"type": "wasm", "function": "OnReceive"},
+	}
+	if steps != nil {
+		action["steps"] = steps
+	}
+	if alsoFields {
+		action["fields"] = []interface{}{
+			map[string]interface{}{"key": "note", "type": "text"},
+		}
+	}
+	m["contributions"] = map[string]interface{}{
+		"actions": []interface{}{action},
+	}
+	return m
+}
+
+func TestValidate_ActionSteps_Valid(t *testing.T) {
+	m := actionWithSteps([]interface{}{
+		map[string]interface{}{
+			"title":       "Datos",
+			"description": "Información general",
+			"fields": []interface{}{
+				map[string]interface{}{"key": "supplier", "type": "text"},
+			},
+		},
+		map[string]interface{}{
+			"title": "Confirmación",
+			"fields": []interface{}{
+				map[string]interface{}{"key": "note", "type": "textarea"},
+			},
+		},
+	}, false)
+	if err := Validate(mustJSON(t, m)); err != nil {
+		t.Fatalf("expected valid wizard steps, got error: %v", err)
+	}
+}
+
+func TestValidate_ActionSteps_StepsAndFieldsAreExclusive(t *testing.T) {
+	m := actionWithSteps([]interface{}{
+		map[string]interface{}{
+			"title":  "Datos",
+			"fields": []interface{}{map[string]interface{}{"key": "supplier", "type": "text"}},
+		},
+	}, true)
+	err := Validate(mustJSON(t, m))
+	if err == nil || !strings.Contains(err.Error(), "both steps and fields") {
+		t.Fatalf("expected steps⊕fields exclusivity error, got: %v", err)
+	}
+}
+
+func TestValidate_ActionSteps_EmptyTitleRejected(t *testing.T) {
+	m := actionWithSteps([]interface{}{
+		map[string]interface{}{
+			"title":  " ",
+			"fields": []interface{}{map[string]interface{}{"key": "supplier", "type": "text"}},
+		},
+	}, false)
+	err := Validate(mustJSON(t, m))
+	if err == nil || !strings.Contains(err.Error(), "title is empty") {
+		t.Fatalf("expected empty-title error, got: %v", err)
+	}
+}
+
+func TestParse_ActionSteps_RoundTrip(t *testing.T) {
+	m := actionWithSteps([]interface{}{
+		map[string]interface{}{
+			"title":  "Datos",
+			"fields": []interface{}{map[string]interface{}{"key": "supplier", "type": "text"}},
+		},
+	}, false)
+	parsed, err := Parse(mustJSON(t, m))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	steps := parsed.Contributions.Actions[0].Steps
+	if len(steps) != 1 || steps[0].Title != "Datos" || len(steps[0].Fields) != 1 {
+		t.Fatalf("steps not parsed: %+v", steps)
+	}
+}

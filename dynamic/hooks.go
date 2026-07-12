@@ -51,6 +51,25 @@ type HookRegistry struct {
 	// RegisterManifestHooks so UnregisterAddon can rip them out wholesale.
 	// nil until the first RegisterManifestHooks call.
 	owners        map[string][]addonHookRegistration
+	// formulaInvoker is the host-wired backend for Tier-3 (wasm) formulas.
+	// nil = Tier-3 formulas are skipped (declarative-only deployments).
+	formulaInvoker FormulaInvoker
+}
+
+// SetFormulaInvoker wires the Tier-3 formula backend (normally a thin adapter
+// over the wasm runtime's export invocation). Hosts call it once at boot,
+// before manifests register compute hooks; formulas declared with tier 3 are
+// silently skipped while no invoker is configured.
+func (r *HookRegistry) SetFormulaInvoker(f FormulaInvoker) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.formulaInvoker = f
+}
+
+func (r *HookRegistry) getFormulaInvoker() FormulaInvoker {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.formulaInvoker
 }
 
 func NewHookRegistry() *HookRegistry {

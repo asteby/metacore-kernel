@@ -2,6 +2,7 @@ package dynamic
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -153,7 +154,7 @@ func TestApplyFormulas(t *testing.T) {
 
 	// Create path: all values in input.
 	input := map[string]any{"quantity": 3, "unit_price": 10.0, "discount": 5.0}
-	if err := applyFormulas(fb, input, nil); err != nil {
+	if err := applyFormulas(context.Background(), nil, fb, input, nil); err != nil {
 		t.Fatalf("applyFormulas: %v", err)
 	}
 	if got := input["subtotal"]; got != 25.0 {
@@ -163,7 +164,7 @@ func TestApplyFormulas(t *testing.T) {
 	// Update path: partial input, existing supplies the rest.
 	input2 := map[string]any{"quantity": 4} // unit_price/discount from existing
 	existing := map[string]any{"unit_price": 10.0, "discount": 0.0, "subtotal": 30.0}
-	if err := applyFormulas(fb, input2, existing); err != nil {
+	if err := applyFormulas(context.Background(), nil, fb, input2, existing); err != nil {
 		t.Fatalf("applyFormulas update: %v", err)
 	}
 	if got := input2["subtotal"]; got != 40.0 {
@@ -315,4 +316,60 @@ func readOrder(t *testing.T, db *gorm.DB, id string) (total float64, count int) 
 		t.Fatalf("read order: %v", err)
 	}
 	return row.Total, row.LineCount
+}
+
+func TestApplyFormulas_Tier3WasmHandler(t *testing.T) {
+	fb := formulaBinding{
+		model: "test_products",
+		table: "test_products",
+		formulas: []manifest.Formula{
+			{Target: "price", Tier: 3, Handler: "wasm:resolve_price"},
+			// A subsequent Tier-2 formula must see the Tier-3 result in its env.
+			{Target: "total", Expr: "price * 2"},
+		},
+	}
+	invoked := false
+	invoke := func(_ context.Context, model, handler string, row map[string]any) (any, error) {
+		invoked = true
+		if model != "test_products" || handler != "wasm:resolve_price" {
+			t.Errorf("invoker got (%q, %q)", model, handler)
+		}
+		// The merged row must carry both existing and incoming values.
+		if row["cost"] != 8.0 || row["quantity"] != 2.0 {
+			t.Errorf("merged row = %v", row)
+		}
+		return 12.5, nil
+	}
+
+	input := map[string]any{"quantity": 2.0}
+	existing := map[string]any{"cost": 8.0}
+	if err := applyFormulas(context.Background(), invoke, fb, input, existing); err != nil {
+		t.Fatalf("applyFormulas: %v", err)
+	}
+	if !invoked {
+		t.Fatal("invoker was not called")
+	}
+	if input["price"] != 12.5 {
+		t.Errorf("price = %v, want 12.5", input["price"])
+	}
+	if input["total"] != 25.0 {
+		t.Errorf("total = %v, want 25 (Tier-2 must see the Tier-3 result)", input["total"])
+	}
+
+	// No invoker configured -> the Tier-3 formula is skipped, not an error.
+	input2 := map[string]any{"quantity": 2.0}
+	if err := applyFormulas(context.Background(), nil, fb, input2, existing); err != nil {
+		t.Fatalf("applyFormulas nil invoker: %v", err)
+	}
+	if _, set := input2["price"]; set {
+		t.Error("price must stay unset when no invoker is configured")
+	}
+
+	// Invoker failure aborts the write.
+	fail := func(context.Context, string, string, map[string]any) (any, error) {
+		return nil, errors.New("boom")
+	}
+	if err := applyFormulas(context.Background(), fail, fb, map[string]any{}, nil); err == nil {
+		t.Error("invoker error must propagate")
+	}
 }

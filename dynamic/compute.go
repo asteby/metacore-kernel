@@ -25,6 +25,7 @@ package dynamic
 
 import (
 	"context"
+	"maps"
 	"fmt"
 	"strings"
 
@@ -54,6 +55,14 @@ type formulaBinding struct {
 	table    string
 	formulas []manifest.Formula
 }
+
+// FormulaInvoker executes one Tier-3 (wasm-backed) formula: it invokes the
+// owning addon's `handler` (the "wasm:<export>" string, prefix included) with
+// the merged row as payload and returns the value to write into the target
+// column. Hosts wire it via HookRegistry.SetFormulaInvoker, normally adapting
+// the wasm runtime's export invocation; `model` identifies the owning model so
+// the host can resolve which addon module to call.
+type FormulaInvoker func(ctx context.Context, model, handler string, row map[string]any) (any, error)
 
 // ComputeBindings is the precomputed index the hooks consult at runtime.
 type ComputeBindings struct {
@@ -237,7 +246,7 @@ func buildRollupSQL(b rollupBinding, parentID, orgID string, excludeChildID *str
 // columns on update; pass nil on create). Missing / non-numeric identifiers
 // resolve to 0. Formulas are a single pass in declared order — if formula B
 // references a column formula A sets, A must be declared first.
-func applyFormulas(b formulaBinding, input map[string]any, existing map[string]any) error {
+func applyFormulas(ctx context.Context, invoke FormulaInvoker, b formulaBinding, input map[string]any, existing map[string]any) error {
 	if len(b.formulas) == 0 {
 		return nil
 	}
@@ -249,6 +258,23 @@ func applyFormulas(b formulaBinding, input map[string]any, existing map[string]a
 		env[k] = computeexpr.ToFloat(v)
 	}
 	for _, f := range b.formulas {
+		if f.Tier == 3 {
+			// Tier-3: a wasm handler computes the value from the merged row.
+			// No invoker configured -> skipped (declarative-only deployment).
+			if invoke == nil {
+				continue
+			}
+			row := make(map[string]any, len(existing)+len(input))
+			maps.Copy(row, existing)
+			maps.Copy(row, input)
+			val, err := invoke(ctx, b.model, f.Handler, row)
+			if err != nil {
+				return fmt.Errorf("formula %q handler %q: %w", f.Target, f.Handler, err)
+			}
+			input[f.Target] = val
+			env[f.Target] = computeexpr.ToFloat(val)
+			continue
+		}
 		val, err := computeexpr.Eval(f.Expr, env)
 		if err != nil {
 			return fmt.Errorf("formula %q expr %q: %w", f.Target, f.Expr, err)
@@ -349,14 +375,14 @@ func RegisterComputeHooks(reg *HookRegistry, m manifest.Manifest) {
 		fb := fb // capture
 
 		reg.RegisterBeforeCreate(model, func(ctx context.Context, hc HookContext, input map[string]any) error {
-			return applyFormulas(fb, input, nil)
+			return applyFormulas(ctx, reg.getFormulaInvoker(), fb, input, nil)
 		})
 
 		reg.RegisterBeforeUpdate(model, func(ctx context.Context, hc HookContext, id string, input map[string]any) error {
 			// Merge with the existing row so a formula referencing a column the
 			// caller didn't include in the partial update still sees its value.
 			existing := loadRowValues(ctx, hc.DB, fb.table, id)
-			return applyFormulas(fb, input, existing)
+			return applyFormulas(ctx, reg.getFormulaInvoker(), fb, input, existing)
 		})
 	}
 }

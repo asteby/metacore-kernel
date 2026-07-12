@@ -5,6 +5,112 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **runtime/wasm: declarative guards on the wasm write path
+  (`Host.WithMutationGuard`, ABI v1.8, § 14.9).** `data_mutate` and
+  `data_batch` bypass `dynamic.Service`, so declared `Column.constraints`
+  guards (e.g. `stock.quantity >= 0`) did not apply to wasm-driven writes. The
+  host now accepts an embedder-injected guard that runs INSIDE the open
+  transaction after each applied create/update, against the post-mutation
+  `RETURNING *` row keyed by the LOGICAL table; a non-nil error rolls the
+  mutation — for `data_batch`, the entire batch — back and surfaces as a
+  `constraint_violation` envelope with no canonical events published. Deletes
+  are exempt (no resulting row state). New exported
+  `dynamic.EvalRowConstraints(mc, row)` lets embedders reuse the exact
+  Service-path guard evaluator.
+- **manifest: declarative action wizards (`Action.steps`).** A v3 action may
+  declare `steps: [{title, description?, fields[]}]` instead of a flat
+  `fields[]`: the SDK renders a multi-step wizard (one page per step, per-step
+  validation) and submits the union of all steps' values on finish — the
+  middle ground between the flat action modal and a fully federated component
+  (SDK support shipped in metacore-sdk#556, which reads `steps` off the served
+  action metadata as-is). Steps and fields are mutually exclusive; every step
+  needs a title and at least one field (dual validation). New `ActionStep` (v3),
+  `ActionStepDef` (`manifest` + `modelbase`, JSON key `steps`) so the
+  host→SDK round-trip preserves the wizard; step fields ride the same
+  `mapActionFields` projection as the flat form (line-items, cascades, uploads
+  all work per step).
+
+- **manifest+dynamic: Tier-3 wasm-backed formulas (`Formula.tier: 3`).** A v3
+  formula may now declare `{target, tier: 3, handler: "wasm:<export>"}` instead
+  of an arithmetic `expr`: on every create/update the kernel invokes the addon's
+  wasm export with the merged row (existing ⊕ incoming) as payload and writes
+  the returned value into `target`, before the DB write — the primitive for
+  computations an arithmetic expression cannot express (price-list resolution,
+  tiered margins, rounding policies). The invocation backend is host-wired via
+  the new `dynamic.HookRegistry.SetFormulaInvoker` (`FormulaInvoker`); with no
+  invoker configured Tier-3 formulas are skipped, never a hard failure, and an
+  invoker error aborts the write. A Tier-3 result is visible to subsequent
+  Tier-2 formulas in declared order. Dual validation: tier ∈ {2,3}, Tier-3
+  requires a `wasm:`-prefixed handler and an empty expr, Tier-2 keeps the strict
+  arithmetic allowlist.
+
+- **manifest+dynamic+wasm: declarative folio sequences (`Model.sequences`).** A
+  v3 model may declare `sequences: [{key, scope, format}]` — atomic counters the
+  kernel maintains per org (default) or per branch, formatted through a template
+  (`"A-{seq:06}"` → `"A-000042"`). A column binds to one via `sequence: <key>`
+  and the dynamic engine stamps the next value automatically on create when the
+  caller left it empty (an explicit value wins, so ETL imports keep historical
+  folios and do not consume the counter). Counters live in the kernel-owned
+  `metacore_sequences` table (lazily auto-migrated); the increment is a single
+  `INSERT … ON CONFLICT … DO UPDATE … RETURNING`, race-free without explicit
+  locks. New `SequenceResolver` on `dynamic.Config` (host-wired, mirrors
+  `ConstraintResolver`), `Service.NextSequence` as the public entry point, and a
+  new wasm host import `sequence_next` (ABI v1.7, `Host.WithSequenceNext`,
+  docs/wasm-abi.md § 17) so action handlers can mint folios outside a plain
+  create. Dual validation (v3 lenient + strict): unique keys, `org|branch`
+  scope, exactly one `{seq}`/`{seq:0N}` placeholder, and column bindings must
+  reference a declared key.
+
+- **manifest+dynamic: declarative column guards (`Column.constraints`) +
+  `Model.locking`.** A v3 column may declare `constraints: [{expr, error_key}]`
+  — boolean guard predicates (`quantity >= 0`, `price >= cost`) the kernel
+  evaluates INSIDE the create/update transaction before writing; a false
+  predicate aborts with HTTP 422 carrying the `error_key` (typed
+  `*ConstraintError` / `ErrConstraintViolation`). Each side of the comparison
+  reuses the exact Tier-2 arithmetic allowlist (`computeexpr`), with a thin
+  comparison layer added in `dynamic` — so a guard can never inject SQL. A model
+  may declare `locking: "row"`: `Service.Update` then wraps the whole update in a
+  transaction and loads the target row with `SELECT … FOR UPDATE` before
+  evaluating, making an increment-then-check guard (stock-never-negative under
+  concurrent decrements) race-free. New `ConstraintResolver` on `dynamic.Config`
+  (host-wired, mirrors `StageMachineResolver`). Fields on `manifest/v3.Column`
+  (`Constraint`) + `manifest/v3.Model` (`locking`), projected to
+  `manifest.ColumnDef`/`ModelDefinition`, with dual validation (v3 lenient +
+  strict, both checking the `<arith> <op> <arith>` grammar) and JSON-schema
+  coverage.
+
+- **manifest+dynamic: declarative action idempotency (`Action.idempotency`).** A
+  v3 action may declare `idempotency: {key_field}`; the client supplies a stable
+  unique value in that payload field and the kernel keys a stored response by
+  `(org, model, action, key)` in the new kernel-owned `metacore_action_idempotency`
+  table (lazily auto-migrated, same pattern as `metacore_addon_migrations`). A
+  repeat invocation replays the first stored response WITHOUT re-dispatching the
+  handler (meta `idempotent_replay: true`), so a payment capture or fiscal stamp
+  survives a client retry without double-execution. Only SUCCESSFUL results are
+  cached — a declined/failed action stays retryable. The guarantee is
+  persisted-replay dedup, not a distributed lock (documented). New field on
+  `manifest/v3.Action` + `manifest.ActionDef` with dual validation (v3 lenient +
+  strict) and JSON-schema coverage; wired into `dynamic.Service.ExecAction`.
+
+- **wasm: `data_batch` host import (ABI v1.7).** The atomic multi-row sibling of
+  `data_mutate`: a list of create/update/delete mutations across one or more
+  models, executed under ONE org-scoped transaction, each followed (post-commit)
+  by its own `*dynamic.CanonicalEvent`. It is the primitive that lets a wasm
+  handler perform "sale decrements stock + writes the ledger + updates the
+  weighted cost" atomically — either every row lands or none does. Gated by
+  `db:write <logical table>` for every table the batch touches; tenant scope
+  comes from the invocation context, never from the guest. Limits: 64 KiB
+  request (the frozen ABI ceiling — many small rows, not a few huge ones), 100
+  mutations, 10 s deadline, 8 MiB response. A per-row failure rolls back the
+  whole batch and publishes no events; the error names the offending
+  `mutations[i]` index. The per-row engine (`applyMutation`) is now shared with
+  `data_mutate`. Implementation `runtime/wasm/databatch.go`; contract
+  documented in `docs/wasm-abi.md § 16`.
+
 ## [0.63.0] - 2026-07-01
 
 ### Added

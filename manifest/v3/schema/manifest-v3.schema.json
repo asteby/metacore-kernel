@@ -570,6 +570,20 @@
             "$ref": "#/$defs/Formula"
           }
         },
+        "locking": {
+          "type": "string",
+          "enum": [
+            "row"
+          ],
+          "description": "Row-locking strategy on Update. 'row' makes the kernel wrap Update in a transaction and load the target row with SELECT … FOR UPDATE before evaluating column constraints, so an increment-then-check guard is race-free. Omit for no extra locking."
+        },
+        "sequences": {
+          "type": "array",
+          "description": "Atomic folio counters the kernel maintains per org (or branch) for this model — invoice folios, remission numbers, tickets. A column binds to one via 'sequence' for auto-stamping on create; a wasm handler pulls one via the sequence_next host import.",
+          "items": {
+            "$ref": "#/$defs/Sequence"
+          }
+        },
         "stage_field": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
@@ -817,6 +831,68 @@
         "readonly": {
           "type": "boolean",
           "description": "Marks a SYSTEM-GENERATED column: a value the addon/host populates server-side (e.g. an external id or number a remote API returns after a create), never something a user types. The host projects it onto ColumnDef.readonly / FieldDef.readonly so form derivation EXCLUDES the column from the create form and marks it read-only in edit; the column still renders in tables/kanban/detail. Pure UI metadata; the DDL and write planes ignore it (an addon or compute rule writes the value as usual)."
+        },
+        "constraints": {
+          "type": "array",
+          "description": "Declarative GUARD predicates the kernel evaluates inside the create/update transaction before writing. A false predicate aborts with 422 + the error_key. Combine with the owning model's locking:'row' for a race-free increment-then-check guard.",
+          "items": {
+            "$ref": "#/$defs/Constraint"
+          }
+        },
+        "sequence": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Binds this column to one of the owning model's sequences by key: on create, when the column is empty, the kernel stamps the next formatted folio value automatically (treated as system-generated for form derivation)."
+        }
+      }
+    },
+    "Sequence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "format"
+      ],
+      "description": "One atomic folio counter the kernel maintains for the owning model, formatted through a template. Increments atomically (UPDATE … RETURNING) so concurrent creates never collide.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Sequence identifier, unique within the model (e.g. 'invoice')."
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "org",
+            "branch"
+          ],
+          "description": "Counter partitioning: 'org' (one series per organization, the default) or 'branch' (one series per branch). Omit for org."
+        },
+        "format": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Template rendered around the numeric value; MUST contain exactly one {seq} or zero-padded {seq:0N} placeholder, e.g. 'A-{seq:06}' → 'A-000042'."
+        }
+      }
+    },
+    "Constraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expr",
+        "error_key"
+      ],
+      "description": "One declarative guard predicate on a column: a boolean comparison '<arith> <op> <arith>' (op is >= <= > < == !=) over the same row's columns, evaluated before every create/update write. Each side uses the strict arithmetic allowlist, so it can never inject SQL.",
+      "properties": {
+        "expr": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Guard predicate, e.g. 'quantity >= 0' or 'price >= cost'."
+        },
+        "error_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "i18n key / stable code surfaced to the client (422) when the predicate is false, e.g. 'stock.negative'."
         }
       }
     },
@@ -1468,6 +1544,13 @@
             "$ref": "#/$defs/ActionField"
           }
         },
+        "steps": {
+          "type": "array",
+          "description": "Multi-step declarative wizard: one page per step (title + fields) with per-step validation; submits the union of all steps' values on finish. Mutually exclusive with fields.",
+          "items": {
+            "$ref": "#/$defs/ActionStep"
+          }
+        },
         "modal": {
           "type": "string",
           "description": "slot_kind of a custom federated modal component the host mounts instead of (or alongside) the declarative form."
@@ -1493,6 +1576,47 @@
             "number"
           ],
           "description": "Explicit modal width (CSS length or px number)."
+        },
+        "idempotency": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key_field"
+          ],
+          "description": "Makes the action replay-safe: the kernel keys a stored response by (org, model, action, payload[key_field]) and replays it on repeats without re-dispatching the handler.",
+          "properties": {
+            "key_field": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Field in the action payload whose value is the idempotency key (e.g. a client-generated request UUID)."
+            }
+          }
+        }
+      }
+    },
+    "ActionStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "fields"
+      ],
+      "description": "One page of a multi-step declarative action wizard: a title, optional description, and the fields rendered/validated on that page (same contract as Action.fields).",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Step heading (or an i18n key resolving to it)."
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional helper text rendered under the title."
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/ActionField"
+          }
         }
       }
     },
@@ -2447,10 +2571,9 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "target",
-        "expr"
+        "target"
       ],
-      "description": "Tier-2 computed column: value computed from a pure arithmetic expression over the SAME row, before every create/update write.",
+      "description": "Computed column: Tier-2 (default) computes a pure arithmetic expression over the SAME row before every create/update write; Tier-3 delegates the computation to a wasm handler.",
       "properties": {
         "target": {
           "type": "string",
@@ -2458,7 +2581,20 @@
         },
         "expr": {
           "type": "string",
-          "description": "Arithmetic expression. Strict arithmetic allowlist: identifiers resolving to columns, decimal numbers, + - * / and parentheses only."
+          "description": "Arithmetic expression (Tier-2). Strict arithmetic allowlist: identifiers resolving to columns, decimal numbers, + - * / and parentheses only. Required unless tier is 3; must be omitted when tier is 3."
+        },
+        "tier": {
+          "type": "integer",
+          "enum": [
+            2,
+            3
+          ],
+          "description": "Compute engine: 2 (default) = arithmetic expression; 3 = wasm handler. Omit for 2."
+        },
+        "handler": {
+          "type": "string",
+          "pattern": "^wasm:[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Tier-3 backend, 'wasm:<export>' — an export of the addon's wasm module invoked with the merged row as payload; its returned value is written into target. Required (and only allowed) when tier is 3."
         }
       }
     }

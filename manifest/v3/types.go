@@ -243,6 +243,26 @@ type Model struct {
 	// for the shape and the security contract on Expr.
 	Formulas []Formula `json:"formulas,omitempty"`
 
+	// Sequences declare atomic, gap-tolerant counters the kernel maintains per
+	// org (or per branch) for this model — the primitive behind invoice folios,
+	// remission numbers, service-order tickets, etc. Each Sequence has a Key, a
+	// Scope (org|branch) and a Format template ("A-{seq:06}"). A Column may bind
+	// to a sequence via Column.Sequence so the next value is stamped
+	// automatically on create; a wasm handler can also pull one via the
+	// `sequence_next` host import. Optional — models without folios omit it.
+	Sequences []Sequence `json:"sequences,omitempty"`
+
+	// Locking selects the row-locking strategy the kernel applies on Update.
+	//   ""     — no extra locking (default; the legacy behaviour).
+	//   "row"  — the kernel wraps the whole Update in a transaction and loads
+	//            the target row with SELECT … FOR UPDATE before evaluating the
+	//            column Constraints, so an increment-then-check guard (e.g.
+	//            "quantity >= 0" after a concurrent decrement) is race-free: two
+	//            transactions touching the same row serialise instead of both
+	//            reading a stale value. Only meaningful together with column
+	//            Constraints; harmless otherwise.
+	Locking string `json:"locking,omitempty"`
+
 	// StageField names the column that carries the model's pipeline stage
 	// (e.g. "stage"). Declaring it — together with Stages — turns the model
 	// into a stage machine: the kernel derives a `status` display type for the
@@ -338,7 +358,22 @@ type Formula struct {
 	// the owning model.
 	Target string `json:"target"`
 	// Expr is the arithmetic expression, e.g. "quantity * unit_price - discount".
-	Expr string `json:"expr"`
+	// Required for the arithmetic tiers; MUST be empty when Tier is 3 (the wasm
+	// handler replaces the expression entirely).
+	Expr string `json:"expr,omitempty"`
+	// Tier selects the compute engine for this formula:
+	//   0 / 2 — the default pure-arithmetic Tier-2 evaluator over Expr.
+	//   3     — a wasm handler computes the value: the kernel invokes Handler
+	//           with the (merged) row as payload and writes the returned value
+	//           into Target. Use it when the computation needs data or logic an
+	//           arithmetic expression cannot express (price-list resolution,
+	//           tiered margins, rounding policies).
+	Tier int `json:"tier,omitempty"`
+	// Handler is the Tier-3 backend, "wasm:<export>" — an export the addon's
+	// wasm module declares. Required (and only allowed) when Tier is 3. The
+	// invocation is host-wired (dynamic.HookRegistry.SetFormulaInvoker); when no
+	// invoker is configured the formula is skipped, never a hard failure.
+	Handler string `json:"handler,omitempty"`
 }
 
 // Seed is a model's declarative default-data block. The installer inserts Rows
@@ -502,6 +537,24 @@ type Column struct {
 	// metadata; the DDL/install plane ignores it.
 	OptionsSource string `json:"options_source,omitempty"`
 
+	// Constraints declare GUARD predicates the kernel evaluates inside the
+	// create/update transaction, BEFORE the row is written. Each is a boolean
+	// comparison over the SAME row's columns (e.g. "quantity >= 0" or
+	// "price >= cost"); a false result aborts the write with a 422 carrying the
+	// ErrorKey. This is the declarative twin of a CHECK constraint that the
+	// kernel enforces at the application layer so an addon gets stock-never-
+	// negative / price-≥-cost without a wasm handler or raw db_exec. Combine with
+	// the owning Model.Locking = "row" to make an increment-then-check guard
+	// safe under concurrency (SELECT … FOR UPDATE). Optional; the SAME strict
+	// arithmetic allowlist as Formula.Expr governs each side of the comparison.
+	Constraints []Constraint `json:"constraints,omitempty"`
+
+	// Sequence binds this column to one of the owning Model.Sequences by key: on
+	// create, when the column is empty, the kernel stamps the next formatted
+	// folio value automatically. The column is treated as system-generated (like
+	// Readonly) for form derivation. Empty = the column carries no auto-folio.
+	Sequence string `json:"sequence,omitempty"`
+
 	// Readonly marks a SYSTEM-GENERATED column: a value the addon/host populates
 	// (e.g. an id or number a remote API returns after a write), NOT something a
 	// user types. It is pure UI-plane metadata that the host projects onto
@@ -512,6 +565,40 @@ type Column struct {
 	// server-side as usual. Use it for columns filled by an outbound sync, an
 	// external id, or any value the user must never hand-edit.
 	Readonly bool `json:"readonly,omitempty"`
+}
+
+// Sequence declares one atomic counter the kernel maintains for the owning
+// model, formatted through a template. The counter increments atomically
+// (UPDATE … RETURNING) so concurrent creates never collide on a folio.
+type Sequence struct {
+	// Key is the sequence identifier, unique within the model (e.g. "invoice").
+	// A Column binds to it via Column.Sequence, and the wasm `sequence_next`
+	// import addresses it by (model, key).
+	Key string `json:"key"`
+	// Scope selects the counter's partitioning: "org" (one counter per
+	// organization, the default) or "branch" (one counter per branch, so each
+	// branch has its own folio series). Empty = "org".
+	Scope string `json:"scope,omitempty"`
+	// Format is the template rendered around the numeric value. It MUST contain
+	// exactly one `{seq}` or zero-padded `{seq:0N}` placeholder (e.g. "A-{seq:06}"
+	// → "A-000042"). Any other text is emitted verbatim.
+	Format string `json:"format"`
+}
+
+// Constraint is one declarative GUARD predicate on a column: a boolean
+// comparison the kernel evaluates before every create/update write.
+//
+// SECURITY: Expr is a single comparison `<arith> <op> <arith>` where op is one
+// of >= <= > < == != (and `=` as an alias for ==). Each side is parsed with the
+// SAME strict arithmetic allowlist as Formula.Expr (identifiers resolving to
+// real columns, decimal numbers, + - * / and parentheses only), so a constraint
+// can never inject SQL — it is evaluated in Go against the row's numeric values.
+type Constraint struct {
+	// Expr is the guard predicate, e.g. "quantity >= 0" or "price >= cost".
+	Expr string `json:"expr"`
+	// ErrorKey is the i18n key / stable code surfaced to the client (422) when
+	// the predicate is false, e.g. "stock.negative".
+	ErrorKey string `json:"error_key"`
 }
 
 // Index is a single index declaration.
@@ -733,6 +820,15 @@ type Action struct {
 	// no modal is a plain one-click action.
 	Fields []ActionField `json:"fields,omitempty"`
 
+	// Steps splits the declarative action form into a MULTI-STEP WIZARD: the
+	// SDK renders one page per step (title + its fields) with per-step
+	// validation, and submits the union of all steps' values on finish —
+	// exactly as if they had been declared flat in Fields. Mutually exclusive
+	// with Fields (a wizard IS the form). Use it for guided flows a flat field
+	// list serves poorly (a workshop checklist, a purchase reception); anything
+	// richer belongs in a federated Modal.
+	Steps []ActionStep `json:"steps,omitempty"`
+
 	// Modal is the slot_kind of a custom federated modal component the host
 	// mounts instead of (or alongside) the declarative form — for actions whose
 	// UI is too rich for a flat field list (e.g. a checkout panel). It is the
@@ -757,6 +853,40 @@ type Action struct {
 	// for a flat field list, roomy for line-items). The SDK reads it as
 	// `action.modalWidth`. Lets a rich create/edit form declare a wider modal.
 	ModalWidth string `json:"modal_width,omitempty"`
+
+	// Idempotency makes the action REPLAY-SAFE. When set, the kernel keys a
+	// stored response by (org, model, action, <the KeyField value read from the
+	// invocation payload>) and returns the SAME response on any later invocation
+	// carrying that key, WITHOUT dispatching the handler again. This is what lets
+	// a payment capture or a fiscal stamp be retried over a flaky network without
+	// double-charging / double-stamping. Optional — omit for ordinary actions.
+	Idempotency *ActionIdempotency `json:"idempotency,omitempty"`
+}
+
+// ActionIdempotency declares the payload field that carries an action's
+// idempotency key. The client supplies a stable, unique value in that field
+// (a UUID it generates per logical attempt); the kernel replays the first
+// response for any repeat of the same (org, model, action, key).
+type ActionIdempotency struct {
+	// KeyField names the field in the action PAYLOAD whose value is the
+	// idempotency key (e.g. "request_id"). Required when idempotency is set;
+	// an invocation that omits the field (empty key) is dispatched normally
+	// with no replay guarantee.
+	KeyField string `json:"key_field"`
+}
+
+
+// ActionStep is one page of a multi-step declarative action wizard (see
+// Action.Steps): a title, an optional description, and the fields the SDK
+// renders and validates on that page. Field semantics are identical to
+// Action.Fields entries.
+type ActionStep struct {
+	// Title is the step's heading (or an i18n key resolving to it).
+	Title string `json:"title"`
+	// Description is optional helper text rendered under the title.
+	Description string `json:"description,omitempty"`
+	// Fields are the step's form fields — same contract as Action.Fields.
+	Fields []ActionField `json:"fields"`
 }
 
 // ActionField is one input in an action modal's declarative form. It mirrors

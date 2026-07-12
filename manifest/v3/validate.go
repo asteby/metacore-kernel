@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 
@@ -25,6 +26,65 @@ var validFns = map[string]struct{}{
 // `cols`. Returns nil on success.
 func validateArithExpr(expr string, cols map[string]struct{}) error {
 	return computeexpr.Validate(expr, cols)
+}
+
+// seqPlaceholderRe matches a {seq} or {seq:0N} folio placeholder. Mirrors
+// dynamic.seqPlaceholderRe so validation and rendering agree on the grammar.
+var seqPlaceholderRe = regexp.MustCompile(`\{seq(?::0(\d+))?\}`)
+
+// validateSequenceFormat enforces that a folio Format is non-empty and carries
+// exactly one {seq}/{seq:0N} placeholder (zero placeholders would make every
+// folio identical; more than one is almost certainly an authoring mistake).
+func validateSequenceFormat(format string) error {
+	if strings.TrimSpace(format) == "" {
+		return fmt.Errorf("is empty")
+	}
+	n := len(seqPlaceholderRe.FindAllString(format, -1))
+	if n != 1 {
+		return fmt.Errorf("must contain exactly one {seq} or {seq:0N} placeholder (found %d)", n)
+	}
+	return nil
+}
+
+// constraintComparisonOps are the operators a declarative guard predicate may
+// use, longest-match first so ">=" is not mis-split as ">". Mirrors
+// dynamic.constraintOps (the runtime evaluator) so validation and evaluation
+// agree on the grammar.
+var constraintComparisonOps = []string{">=", "<=", "!=", "==", ">", "<", "="}
+
+// validateConstraintExpr checks a guard predicate `<arith> <op> <arith>`: it
+// must carry exactly one comparison operator, and BOTH sides must pass the
+// strict arithmetic allowlist against `cols`. This keeps the manifest planes in
+// lock-step with the runtime evaluator (dynamic.evalConstraintExpr).
+func validateConstraintExpr(expr string, cols map[string]struct{}) error {
+	op, idx := "", -1
+	for i := 0; i < len(expr) && op == ""; i++ {
+		c := expr[i]
+		if c != '>' && c != '<' && c != '=' && c != '!' {
+			continue
+		}
+		for _, o := range constraintComparisonOps {
+			if strings.HasPrefix(expr[i:], o) {
+				op, idx = o, i
+				break
+			}
+		}
+	}
+	if op == "" {
+		return fmt.Errorf("must contain a comparison operator (>= <= > < == !=)")
+	}
+	lhs := strings.TrimSpace(expr[:idx])
+	rhs := strings.TrimSpace(expr[idx+len(op):])
+	if lhs == "" || rhs == "" {
+		return fmt.Errorf("comparison is missing an operand")
+	}
+	if err := validateArithExpr(lhs, cols); err != nil {
+		return fmt.Errorf("left side %q: %v", lhs, err)
+	}
+	if err := validateArithExpr(rhs, cols); err != nil {
+		return fmt.Errorf("right side %q: %v", rhs, err)
+	}
+	return nil
 }
 
 // validateRollupSpec checks one Tier-1 rollup: target on the PARENT (ownCols),
@@ -576,8 +636,9 @@ func Validate(raw []byte) error {
 
 	for mi, mod := range m.Models {
 		ownCols := colsByModel[mod.Key]
-		// Tier-2 formulas: target + every identifier in expr must be a column
-		// on THIS model; expr must pass the strict arithmetic allowlist.
+		// Formulas: target must be a column on THIS model. Tier-2 (default)
+		// exprs pass the strict arithmetic allowlist; Tier-3 swaps the expr for
+		// a "wasm:<export>" handler.
 		for fi, f := range mod.Formulas {
 			where := fmt.Sprintf("models[%d].formulas[%d]", mi, fi)
 			if f.Target == "" {
@@ -585,10 +646,25 @@ func Validate(raw []byte) error {
 			} else if _, ok := ownCols[f.Target]; !ok {
 				errs = append(errs, fmt.Sprintf("%s.target %q is not a declared column on the model", where, f.Target))
 			}
-			if strings.TrimSpace(f.Expr) == "" {
-				errs = append(errs, fmt.Sprintf("%s.expr is empty", where))
-			} else if err := validateArithExpr(f.Expr, ownCols); err != nil {
-				errs = append(errs, fmt.Sprintf("%s.expr %q: %v", where, f.Expr, err))
+			switch f.Tier {
+			case 0, 2: // arithmetic Tier-2 (the default)
+				if f.Handler != "" {
+					errs = append(errs, fmt.Sprintf("%s.handler is only allowed when tier is 3", where))
+				}
+				if strings.TrimSpace(f.Expr) == "" {
+					errs = append(errs, fmt.Sprintf("%s.expr is empty", where))
+				} else if err := validateArithExpr(f.Expr, ownCols); err != nil {
+					errs = append(errs, fmt.Sprintf("%s.expr %q: %v", where, f.Expr, err))
+				}
+			case 3: // wasm-backed Tier-3
+				if strings.TrimSpace(f.Expr) != "" {
+					errs = append(errs, fmt.Sprintf("%s.expr must be empty when tier is 3 (the handler replaces it)", where))
+				}
+				if !strings.HasPrefix(f.Handler, "wasm:") || len(f.Handler) <= len("wasm:") {
+					errs = append(errs, fmt.Sprintf("%s.handler %q must be \"wasm:<export>\" when tier is 3", where, f.Handler))
+				}
+			default:
+				errs = append(errs, fmt.Sprintf("%s.tier %d is not one of 2|3", where, f.Tier))
 			}
 		}
 		if mod.Seed != nil {
@@ -622,8 +698,47 @@ func Validate(raw []byte) error {
 		// (the schema pattern already enforces the shape). Mirrors the legacy
 		// validator so a manifest fails identically on both surfaces.
 		errs = append(errs, validateStageMachine(mi, mod, ownCols)...)
-		// Static-option cascade guards on model columns.
+		// Row-locking strategy (guards): only ""/"row" are understood.
+		if mod.Locking != "" && mod.Locking != "row" {
+			errs = append(errs, fmt.Sprintf("models[%d].locking %q is not one of \"\"|\"row\"", mi, mod.Locking))
+		}
+		// Folio sequences: unique keys, scope enum, a well-formed format with
+		// exactly one {seq}/{seq:0N} placeholder.
+		seqKeys := make(map[string]struct{}, len(mod.Sequences))
+		for si, sq := range mod.Sequences {
+			where := fmt.Sprintf("models[%d].sequences[%d]", mi, si)
+			if strings.TrimSpace(sq.Key) == "" {
+				errs = append(errs, fmt.Sprintf("%s.key is empty", where))
+			} else if _, dup := seqKeys[sq.Key]; dup {
+				errs = append(errs, fmt.Sprintf("%s.key %q is duplicated on the model", where, sq.Key))
+			} else {
+				seqKeys[sq.Key] = struct{}{}
+			}
+			if sq.Scope != "" && sq.Scope != "org" && sq.Scope != "branch" {
+				errs = append(errs, fmt.Sprintf("%s.scope %q is not one of \"\"|\"org\"|\"branch\"", where, sq.Scope))
+			}
+			if err := validateSequenceFormat(sq.Format); err != nil {
+				errs = append(errs, fmt.Sprintf("%s.format %q: %v", where, sq.Format, err))
+			}
+		}
+		// Static-option cascade guards + declarative Constraints on model columns.
 		for ci, c := range mod.Columns {
+			if c.Sequence != "" {
+				if _, ok := seqKeys[c.Sequence]; !ok {
+					errs = append(errs, fmt.Sprintf("models[%d].columns[%d].sequence %q is not a declared sequence key on the model", mi, ci, c.Sequence))
+				}
+			}
+			for cci, con := range c.Constraints {
+				cw := fmt.Sprintf("models[%d].columns[%d].constraints[%d]", mi, ci, cci)
+				if strings.TrimSpace(con.Expr) == "" {
+					errs = append(errs, fmt.Sprintf("%s.expr is empty", cw))
+				} else if err := validateConstraintExpr(con.Expr, ownCols); err != nil {
+					errs = append(errs, fmt.Sprintf("%s.expr %q: %v", cw, con.Expr, err))
+				}
+				if strings.TrimSpace(con.ErrorKey) == "" {
+					errs = append(errs, fmt.Sprintf("%s.error_key is empty", cw))
+				}
+			}
 			if c.Options.Len() == 0 {
 				continue
 			}
@@ -670,6 +785,23 @@ func Validate(raw []byte) error {
 
 	if m.Contributions != nil {
 		for ai, a := range m.Contributions.Actions {
+			if a.Idempotency != nil && strings.TrimSpace(a.Idempotency.KeyField) == "" {
+				errs = append(errs, fmt.Sprintf("contributions.actions[%d].idempotency requires a non-empty key_field", ai))
+			}
+			// Wizard steps: a step needs a title and at least one field, and a
+			// wizard replaces the flat form (steps ⊕ fields is ambiguous).
+			if len(a.Steps) > 0 && len(a.Fields) > 0 {
+				errs = append(errs, fmt.Sprintf("contributions.actions[%d] declares both steps and fields — a wizard replaces the flat form, declare one or the other", ai))
+			}
+			for si, st := range a.Steps {
+				sw := fmt.Sprintf("contributions.actions[%d].steps[%d]", ai, si)
+				if strings.TrimSpace(st.Title) == "" {
+					errs = append(errs, fmt.Sprintf("%s.title is empty", sw))
+				}
+				if len(st.Fields) == 0 {
+					errs = append(errs, fmt.Sprintf("%s.fields is empty (a wizard page must render something)", sw))
+				}
+			}
 			for fi, f := range a.Fields {
 				// Static-option cascade guards on action fields and their
 				// nested item_fields (line-items cells).

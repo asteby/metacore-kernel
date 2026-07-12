@@ -379,6 +379,10 @@ type ActionDef struct {
 	Confirm        bool       `json:"confirm,omitempty"`
 	ConfirmMessage string     `json:"confirmMessage,omitempty"`
 	Modal          string     `json:"modal,omitempty"`      // slot name for a custom modal
+	// Steps is the host/runtime projection of a v3 Action.steps wizard: one
+	// page per step, per-step validation, single submit with the union of all
+	// steps' values. Mutually exclusive with Fields. See manifest/v3.ActionStep.
+	Steps []ActionStepDef `json:"steps,omitempty"`
 	Placement      string     `json:"placement,omitempty"`  // "row" (default), "table", or "create" — see v3.Action.Placement
 	ModalWidth     string     `json:"modalWidth,omitempty"` // explicit modal width (CSS length / px); SDK reads action.modalWidth
 
@@ -388,6 +392,28 @@ type ActionDef struct {
 	// type contract; consumers (bridge/actions.go, runtime/wasm) pick the
 	// new field up incrementally in follow-up PRs.
 	Trigger *ActionTrigger `json:"trigger,omitempty"`
+
+	// Idempotency is the host/runtime projection of a v3 Action.idempotency
+	// block. When non-nil the kernel's ExecAction keys a stored response by
+	// (org, model, action, <payload[KeyField]>) and replays it on repeats,
+	// skipping the dispatch. Nil = the action is not replay-guarded. See
+	// manifest/v3.ActionIdempotency and dynamic.Service.ExecAction.
+	Idempotency *IdempotencyDef `json:"idempotency,omitempty"`
+}
+
+// ActionStepDef is the host/runtime projection of a v3 ActionStep: one wizard
+// page (title + optional description + the fields rendered on that page).
+type ActionStepDef struct {
+	Title       string     `json:"title"`
+	Description string     `json:"description,omitempty"`
+	Fields      []FieldDef `json:"fields"`
+}
+
+// IdempotencyDef is the host/runtime projection of a v3 ActionIdempotency: the
+// payload field whose value is the idempotency key. See manifest/v3 for the
+// full contract.
+type IdempotencyDef struct {
+	KeyField string `json:"keyField"`
 }
 
 // ActionTrigger declares how an ActionDef is dispatched when invoked from
@@ -601,6 +627,19 @@ type ModelDefinition struct {
 	Stages       []StageDef          `json:"stages,omitempty"`
 	Transitions  []TransitionDef     `json:"transitions,omitempty"`
 	OnTransition []TransitionHookDef `json:"onTransition,omitempty"`
+
+	// Sequences carries the v3 Model.sequences (atomic per-org/branch folio
+	// counters) through the v3 → host conversion so the dynamic engine can stamp
+	// auto-folios on create and the wasm sequence_next import can resolve them.
+	// See manifest/v3.Sequence. Empty = the model has no folios.
+	Sequences []SequenceDef `json:"sequences,omitempty"`
+
+	// Locking is the host/runtime projection of a v3 Model.locking. "row" makes
+	// dynamic.Service.Update take a SELECT … FOR UPDATE lock on the target row
+	// inside a transaction before evaluating column Constraints, so a concurrent
+	// increment-then-check guard is race-free. Empty = no extra locking. See
+	// manifest/v3.Model and dynamic constraint evaluation.
+	Locking string `json:"locking,omitempty"`
 }
 
 // StageDef is the host/runtime projection of a v3 Stage. See manifest/v3.Stage
@@ -645,7 +684,30 @@ type TransitionHookDef struct {
 // is rejected at validation time.
 type Formula struct {
 	Target string `json:"target"`
-	Expr   string `json:"expr"`
+	Expr   string `json:"expr,omitempty"`
+	// Tier selects the compute engine: 0/2 = arithmetic Tier-2 over Expr (the
+	// default); 3 = a wasm handler (Handler) computes the value. See
+	// manifest/v3.Formula.
+	Tier int `json:"tier,omitempty"`
+	// Handler is the Tier-3 backend, "wasm:<export>". Set only when Tier is 3.
+	Handler string `json:"handler,omitempty"`
+}
+
+// SequenceDef is the host/runtime projection of a v3 Model.Sequence: an atomic
+// folio counter the kernel maintains per org (or branch). See manifest/v3.Sequence.
+type SequenceDef struct {
+	Key    string `json:"key"`
+	Scope  string `json:"scope,omitempty"`
+	Format string `json:"format"`
+}
+
+// ConstraintDef is the host/runtime projection of a v3 Column.Constraint: a
+// boolean guard predicate the dynamic engine evaluates inside the create/update
+// transaction. See manifest/v3.Constraint for the full contract and the
+// security note on Expr.
+type ConstraintDef struct {
+	Expr     string `json:"expr"`
+	ErrorKey string `json:"errorKey"`
 }
 
 // Rollup declares a PARENT column the kernel maintains as an aggregate
@@ -803,6 +865,17 @@ type ColumnDef struct {
 	// SYSTEM-GENERATED column that DeriveFormFields excludes from the create form
 	// and marks read-only in edit. Pure UI metadata; the DDL plane ignores it.
 	Readonly bool `json:"readonly,omitempty"`
+
+	// Constraints carries the v3 Column.constraints (declarative guard
+	// predicates) through the v3 → host conversion so the dynamic engine can
+	// evaluate them inside the create/update transaction. See manifest/v3.Constraint
+	// and dynamic constraint evaluation. Empty = no guards on this column.
+	Constraints []ConstraintDef `json:"constraints,omitempty"`
+
+	// Sequence carries the v3 Column.sequence binding (the sequence key whose
+	// next formatted value is auto-stamped on create) through the v3 → host
+	// conversion. Empty = no auto-folio on this column.
+	Sequence string `json:"sequence,omitempty"`
 
 	// Label is the column's human header OR an i18n key resolving to it. It
 	// rides the legacy ColumnDef as a carrier for the v3 Column.label so a

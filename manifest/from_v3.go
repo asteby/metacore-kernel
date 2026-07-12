@@ -295,6 +295,12 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// Readonly rides through so DeriveFormFields excludes the
 				// system-generated column from create and marks it read-only in edit.
 				Readonly: c.Readonly,
+				// Constraints ride through so the dynamic engine evaluates the
+				// declarative guard predicates inside the create/update transaction.
+				Constraints: mapColumnConstraints(c.Constraints),
+				// Sequence binds the column to a model folio counter (auto-stamped
+				// on create).
+				Sequence: c.Sequence,
 			}
 			// Options is EITHER the STATIC-select list (array form) OR the
 			// DYNAMIC dependent-source object (DynamicOptions). The static list
@@ -353,6 +359,8 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		def.Stages = mapModelStages(m.Stages)
 		def.Transitions = mapModelTransitions(m.Transitions)
 		def.OnTransition = mapModelTransitionHooks(m.OnTransition)
+		def.Locking = m.Locking
+		def.Sequences = mapModelSequences(m.Sequences)
 		out = append(out, def)
 	}
 	return out
@@ -415,9 +423,38 @@ func mapModelFormulas(in []v3.Formula) []Formula {
 	out := make([]Formula, 0, len(in))
 	for _, f := range in {
 		out = append(out, Formula{
-			Target: f.Target,
-			Expr:   f.Expr,
+			Target:  f.Target,
+			Expr:    f.Expr,
+			Tier:    f.Tier,
+			Handler: f.Handler,
 		})
+	}
+	return out
+}
+
+// mapColumnConstraints folds a v3 column's declarative guard predicates onto
+// the legacy ColumnDef.Constraints slice so the dynamic engine can evaluate them
+// inside the create/update transaction. Nil/empty maps to nil (the common case).
+func mapColumnConstraints(in []v3.Constraint) []ConstraintDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ConstraintDef, 0, len(in))
+	for _, c := range in {
+		out = append(out, ConstraintDef{Expr: c.Expr, ErrorKey: c.ErrorKey})
+	}
+	return out
+}
+
+// mapModelSequences folds a v3 model's folio counters onto the legacy
+// ModelDefinition.Sequences slice. Nil/empty maps to nil (the common case).
+func mapModelSequences(in []v3.Sequence) []SequenceDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]SequenceDef, 0, len(in))
+	for _, s := range in {
+		out = append(out, SequenceDef{Key: s.Key, Scope: s.Scope, Format: s.Format})
 	}
 	return out
 }
@@ -637,6 +674,7 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 			ModalWidth:     a.ModalWidth,
 			RequiresState:  a.RequiresState,
 			Fields:         mapActionFields(a.Fields),
+			Steps:          mapActionSteps(a.Steps),
 		}
 		switch a.Handler.Type {
 		case "wasm":
@@ -644,7 +682,27 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 		case "webhook":
 			def.Trigger = &ActionTrigger{Type: "webhook"}
 		}
+		if a.Idempotency != nil {
+			def.Idempotency = &IdempotencyDef{KeyField: a.Idempotency.KeyField}
+		}
 		out[a.TargetModel] = append(out[a.TargetModel], def)
+	}
+	return out
+}
+
+// mapActionSteps folds a v3 action's wizard pages onto ActionStepDefs, each
+// page's fields through the same per-field copy as the flat form.
+func mapActionSteps(in []v3.ActionStep) []ActionStepDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ActionStepDef, 0, len(in))
+	for _, st := range in {
+		out = append(out, ActionStepDef{
+			Title:       st.Title,
+			Description: st.Description,
+			Fields:      mapActionFields(st.Fields),
+		})
 	}
 	return out
 }

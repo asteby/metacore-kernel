@@ -174,148 +174,21 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 	rollback := func() { _ = work.Rollback() }
 
 	now := time.Now().UTC()
-	var (
-		action string
-		rowID  string
-		before map[string]any
-		after  map[string]any
-	)
+	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now)
+	if mErr != nil {
+		rollback()
+		return fail(code, mErr.Error())
+	}
+	action, rowID, before, after := res.action, res.rowID, res.before, res.after
 
-	switch req.Op {
-	case "create":
-		action = "created"
-		rowID = req.ID
-		if rowID == "" {
-			rowID = uuid.NewString()
-		}
-		cols := make([]string, 0, len(data)+4)
-		vals := map[string]any{
-			"id":              rowID,
-			"organization_id": orgID,
-			"created_at":      now,
-			"updated_at":      now,
-		}
-		for c, v := range data {
-			vals[c] = v
-		}
-		for c := range vals {
-			cols = append(cols, c)
-		}
-		sort.Strings(cols)
-		quoted := make([]string, len(cols))
-		marks := make([]string, len(cols))
-		args := make([]any, len(cols))
-		for i, c := range cols {
-			quoted[i] = quoteIdent(c)
-			marks[i] = fmt.Sprintf("$%d", i+1)
-			args[i] = vals[c]
-		}
-		stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) RETURNING *",
-			tbl, strings.Join(quoted, ", "), strings.Join(marks, ", "))
-		after, err = queryOneRow(work, stmt, args...)
-		if err != nil {
+	// Declarative guards (Host.WithMutationGuard) evaluate the post-mutation
+	// row INSIDE the transaction, so a violated constraint (stock.quantity >= 0)
+	// rolls the write back exactly like on the Service.Create/Update path.
+	// Deletes are exempt: guards predicate over resulting row state.
+	if inv.mutationGuard != nil && action != "deleted" {
+		if gErr := inv.mutationGuard(execCtx, req.Table, after); gErr != nil {
 			rollback()
-			return fail("db_error", err.Error())
-		}
-		if after == nil {
-			rollback()
-			return fail("db_error", "INSERT returned no row")
-		}
-
-	case "update":
-		action = "updated"
-		rowID = req.ID
-		before, err = queryOneRow(work,
-			fmt.Sprintf("SELECT * FROM %s WHERE id = $1 AND organization_id = $2", tbl),
-			rowID, orgID)
-		if err != nil {
-			rollback()
-			return fail("db_error", err.Error())
-		}
-		if before == nil {
-			rollback()
-			return fail("not_found",
-				fmt.Sprintf("row %s not found in %s for this organization", rowID, req.Table))
-		}
-		sets := make([]string, 0, len(data)+len(inc)+1)
-		args := make([]any, 0, len(data)+len(inc)+3)
-		n := 0
-		for _, c := range sortedCols(data) {
-			n++
-			sets = append(sets, fmt.Sprintf("%s = $%d", quoteIdent(c), n))
-			args = append(args, data[c])
-		}
-		for _, c := range sortedCols(inc) {
-			n++
-			q := quoteIdent(c)
-			sets = append(sets, fmt.Sprintf("%s = %s + $%d", q, q, n))
-			args = append(args, inc[c])
-		}
-		n++
-		sets = append(sets, fmt.Sprintf(`"updated_at" = $%d`, n))
-		args = append(args, now)
-		stmt := fmt.Sprintf("UPDATE %s SET %s WHERE id = $%d AND organization_id = $%d RETURNING *",
-			tbl, strings.Join(sets, ", "), n+1, n+2)
-		args = append(args, rowID, orgID)
-		after, err = queryOneRow(work, stmt, args...)
-		if err != nil {
-			rollback()
-			return fail("db_error", err.Error())
-		}
-		if after == nil {
-			rollback()
-			return fail("not_found",
-				fmt.Sprintf("row %s vanished during update in %s", rowID, req.Table))
-		}
-
-	case "delete":
-		action = "deleted"
-		rowID = req.ID
-		before, err = queryOneRow(work,
-			fmt.Sprintf("SELECT * FROM %s WHERE id = $1 AND organization_id = $2", tbl),
-			rowID, orgID)
-		if err != nil {
-			rollback()
-			return fail("db_error", err.Error())
-		}
-		if before == nil {
-			rollback()
-			return fail("not_found",
-				fmt.Sprintf("row %s not found in %s for this organization", rowID, req.Table))
-		}
-		// Soft delete when the table carries a deleted_at column — detected
-		// from the snapshot's column set, so no information_schema round-trip.
-		if deletedAt, soft := before["deleted_at"]; soft {
-			if deletedAt != nil {
-				rollback()
-				return fail("not_found",
-					fmt.Sprintf("row %s in %s is already deleted", rowID, req.Table))
-			}
-			res := work.Exec(fmt.Sprintf(
-				`UPDATE %s SET "deleted_at" = $1, "updated_at" = $2 WHERE id = $3 AND organization_id = $4`,
-				tbl), now, now, rowID, orgID)
-			if res.Error != nil {
-				rollback()
-				return fail("db_error", res.Error.Error())
-			}
-			if res.RowsAffected == 0 {
-				rollback()
-				return fail("not_found",
-					fmt.Sprintf("row %s vanished during delete in %s", rowID, req.Table))
-			}
-		} else {
-			res := work.Exec(fmt.Sprintf(
-				"DELETE FROM %s WHERE id = $1 AND organization_id = $2", tbl),
-				rowID, orgID)
-			if res.Error != nil {
-				rollback()
-				return fail("db_error", res.Error.Error())
-			}
-			if res.RowsAffected == 0 {
-				rollback()
-				return fail("not_found",
-					fmt.Sprintf("row %s vanished during delete in %s", rowID, req.Table))
-			}
+			return fail("constraint_violation", gErr.Error())
 		}
 	}
 
@@ -370,6 +243,153 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		return fail("db_error", "response exceeds size cap")
 	}
 	return env
+}
+
+// mutationResult is the committed-state snapshot applyMutation hands back so
+// the caller can build the canonical event (data_mutate) or accumulate a
+// per-row result set (data_batch).
+type mutationResult struct {
+	action string // created | updated | deleted
+	rowID  string
+	before map[string]any
+	after  map[string]any
+}
+
+// applyMutation executes ONE decoded mutation (create/update/delete) on the
+// already-open transaction `work`. It NEVER commits or rolls back — the caller
+// owns the transaction boundary, which is what lets data_batch run many
+// mutations under a single commit. On failure it returns a stable error code
+// (db_error | not_found) alongside the error so the caller can surface it in
+// the JSON envelope; `data`/`inc` are the pre-decoded column maps and `tbl` is
+// the already-quoted physical table.
+func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]any, orgID uuid.UUID, tbl string, now time.Time) (*mutationResult, string, error) {
+	out := &mutationResult{rowID: req.ID}
+	switch req.Op {
+	case "create":
+		out.action = "created"
+		if out.rowID == "" {
+			out.rowID = uuid.NewString()
+		}
+		cols := make([]string, 0, len(data)+4)
+		vals := map[string]any{
+			"id":              out.rowID,
+			"organization_id": orgID,
+			"created_at":      now,
+			"updated_at":      now,
+		}
+		for c, v := range data {
+			vals[c] = v
+		}
+		for c := range vals {
+			cols = append(cols, c)
+		}
+		sort.Strings(cols)
+		quoted := make([]string, len(cols))
+		marks := make([]string, len(cols))
+		args := make([]any, len(cols))
+		for i, c := range cols {
+			quoted[i] = quoteIdent(c)
+			marks[i] = fmt.Sprintf("$%d", i+1)
+			args[i] = vals[c]
+		}
+		stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) RETURNING *",
+			tbl, strings.Join(quoted, ", "), strings.Join(marks, ", "))
+		after, err := queryOneRow(work, stmt, args...)
+		if err != nil {
+			return nil, "db_error", err
+		}
+		if after == nil {
+			return nil, "db_error", fmt.Errorf("INSERT returned no row")
+		}
+		out.after = after
+
+	case "update":
+		out.action = "updated"
+		before, err := queryOneRow(work,
+			fmt.Sprintf("SELECT * FROM %s WHERE id = $1 AND organization_id = $2", tbl),
+			out.rowID, orgID)
+		if err != nil {
+			return nil, "db_error", err
+		}
+		if before == nil {
+			return nil, "not_found",
+				fmt.Errorf("row %s not found in %s for this organization", out.rowID, req.Table)
+		}
+		out.before = before
+		sets := make([]string, 0, len(data)+len(inc)+1)
+		args := make([]any, 0, len(data)+len(inc)+3)
+		n := 0
+		for _, c := range sortedCols(data) {
+			n++
+			sets = append(sets, fmt.Sprintf("%s = $%d", quoteIdent(c), n))
+			args = append(args, data[c])
+		}
+		for _, c := range sortedCols(inc) {
+			n++
+			q := quoteIdent(c)
+			sets = append(sets, fmt.Sprintf("%s = %s + $%d", q, q, n))
+			args = append(args, inc[c])
+		}
+		n++
+		sets = append(sets, fmt.Sprintf(`"updated_at" = $%d`, n))
+		args = append(args, now)
+		stmt := fmt.Sprintf("UPDATE %s SET %s WHERE id = $%d AND organization_id = $%d RETURNING *",
+			tbl, strings.Join(sets, ", "), n+1, n+2)
+		args = append(args, out.rowID, orgID)
+		after, err := queryOneRow(work, stmt, args...)
+		if err != nil {
+			return nil, "db_error", err
+		}
+		if after == nil {
+			return nil, "not_found",
+				fmt.Errorf("row %s vanished during update in %s", out.rowID, req.Table)
+		}
+		out.after = after
+
+	case "delete":
+		out.action = "deleted"
+		before, err := queryOneRow(work,
+			fmt.Sprintf("SELECT * FROM %s WHERE id = $1 AND organization_id = $2", tbl),
+			out.rowID, orgID)
+		if err != nil {
+			return nil, "db_error", err
+		}
+		if before == nil {
+			return nil, "not_found",
+				fmt.Errorf("row %s not found in %s for this organization", out.rowID, req.Table)
+		}
+		out.before = before
+		// Soft delete when the table carries a deleted_at column — detected
+		// from the snapshot's column set, so no information_schema round-trip.
+		if deletedAt, soft := before["deleted_at"]; soft {
+			if deletedAt != nil {
+				return nil, "not_found",
+					fmt.Errorf("row %s in %s is already deleted", out.rowID, req.Table)
+			}
+			res := work.Exec(fmt.Sprintf(
+				`UPDATE %s SET "deleted_at" = $1, "updated_at" = $2 WHERE id = $3 AND organization_id = $4`,
+				tbl), now, now, out.rowID, orgID)
+			if res.Error != nil {
+				return nil, "db_error", res.Error
+			}
+			if res.RowsAffected == 0 {
+				return nil, "not_found",
+					fmt.Errorf("row %s vanished during delete in %s", out.rowID, req.Table)
+			}
+		} else {
+			res := work.Exec(fmt.Sprintf(
+				"DELETE FROM %s WHERE id = $1 AND organization_id = $2", tbl),
+				out.rowID, orgID)
+			if res.Error != nil {
+				return nil, "db_error", res.Error
+			}
+			if res.RowsAffected == 0 {
+				return nil, "not_found",
+					fmt.Errorf("row %s vanished during delete in %s", out.rowID, req.Table)
+			}
+		}
+	}
+	return out, "", nil
 }
 
 // validateDataMutateRequest applies the structural rules of the contract:
@@ -545,7 +565,7 @@ func dataMutateMeta(addonKey string, orgID uuid.UUID, start time.Time) map[strin
 
 // dataMutateErr builds the failure envelope per docs/wasm-abi.md § 14.5.
 // `code` is one of: forbidden | not_found | invalid_request |
-// bus_unavailable | db_error.
+// bus_unavailable | db_error | constraint_violation.
 func dataMutateErr(addonKey, code, message string, orgID uuid.UUID, start time.Time) []byte {
 	b, _ := json.Marshal(map[string]any{
 		"success": false,

@@ -328,6 +328,12 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 		if err := validateStageMachine(md); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
+		if err := validateConstraints(md, colsByModel[md.ModelKey]); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
+		}
+		if err := validateSequences(md); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
+		}
 	}
 	if err := m.validatePipelineRuntime(); err != nil {
 		return err
@@ -358,6 +364,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 		return err
 	}
 	if err := m.validateActionFields(); err != nil {
+		return err
+	}
+	if err := m.validateActionIdempotency(); err != nil {
 		return err
 	}
 	if err := m.validateLifecycleHooks(); err != nil {
@@ -439,6 +448,47 @@ func (m *Manifest) validateActionTriggers() error {
 		for j := range ext.Actions {
 			if err := validateActionTrigger(ext.Actions[j].Trigger, exports); err != nil {
 				return fmt.Errorf("manifest.extensions[%d].actions[%d].%w", i, j, err)
+			}
+		}
+	}
+	return nil
+}
+
+// validateActionIdempotency enforces that any ActionDef declaring an
+// idempotency block names a non-empty key field. This mirrors the lenient
+// v3.Validate check so a manifest that passes one plane passes the other (the
+// "double validation" contract). Actions without idempotency are a no-op.
+func (m *Manifest) validateActionIdempotency() error {
+	check := func(where string, def *ActionDef) error {
+		if def.Idempotency != nil && strings.TrimSpace(def.Idempotency.KeyField) == "" {
+			return fmt.Errorf("%s.idempotency requires a non-empty keyField", where)
+		}
+		// Wizard steps mirror the lenient v3 check: steps ⊕ fields is
+		// ambiguous, and every page needs a title + at least one field.
+		if len(def.Steps) > 0 && len(def.Fields) > 0 {
+			return fmt.Errorf("%s declares both steps and fields — declare one or the other", where)
+		}
+		for si, st := range def.Steps {
+			if strings.TrimSpace(st.Title) == "" {
+				return fmt.Errorf("%s.steps[%d]: title required", where, si)
+			}
+			if len(st.Fields) == 0 {
+				return fmt.Errorf("%s.steps[%d]: fields required (a wizard page must render something)", where, si)
+			}
+		}
+		return nil
+	}
+	for model, defs := range m.Actions {
+		for i := range defs {
+			if err := check(fmt.Sprintf("manifest.actions[%q][%d]", model, i), &defs[i]); err != nil {
+				return err
+			}
+		}
+	}
+	for i, ext := range m.Extensions {
+		for j := range ext.Actions {
+			if err := check(fmt.Sprintf("manifest.extensions[%d].actions[%d]", i, j), &ext.Actions[j]); err != nil {
+				return err
 			}
 		}
 	}
@@ -895,12 +945,129 @@ func validateComputeFormulas(formulas []Formula, ownCols map[string]struct{}) er
 		if _, ok := ownCols[f.Target]; !ok {
 			return fmt.Errorf("formulas[%d]: target %q is not a declared column on the model", i, f.Target)
 		}
-		if strings.TrimSpace(f.Expr) == "" {
-			return fmt.Errorf("formulas[%d]: expr required", i)
+		switch f.Tier {
+		case 0, 2: // arithmetic Tier-2 (the default)
+			if f.Handler != "" {
+				return fmt.Errorf("formulas[%d]: handler is only allowed when tier is 3", i)
+			}
+			if strings.TrimSpace(f.Expr) == "" {
+				return fmt.Errorf("formulas[%d]: expr required", i)
+			}
+			if err := computeexpr.Validate(f.Expr, ownCols); err != nil {
+				return fmt.Errorf("formulas[%d]: expr %q: %w", i, f.Expr, err)
+			}
+		case 3: // wasm-backed Tier-3
+			if strings.TrimSpace(f.Expr) != "" {
+				return fmt.Errorf("formulas[%d]: expr must be empty when tier is 3", i)
+			}
+			if !strings.HasPrefix(f.Handler, "wasm:") || len(f.Handler) <= len("wasm:") {
+				return fmt.Errorf("formulas[%d]: handler %q must be \"wasm:<export>\" when tier is 3", i, f.Handler)
+			}
+		default:
+			return fmt.Errorf("formulas[%d]: tier %d is not one of 2|3", i, f.Tier)
 		}
-		if err := computeexpr.Validate(f.Expr, ownCols); err != nil {
-			return fmt.Errorf("formulas[%d]: expr %q: %w", i, f.Expr, err)
+	}
+	return nil
+}
+
+// constraintComparisonOps mirrors dynamic.constraintOps + the v3 validator so
+// all three planes agree on the guard grammar (longest-match first).
+var constraintComparisonOps = []string{">=", "<=", "!=", "==", ">", "<", "="}
+
+// seqPlaceholderRe mirrors dynamic.seqPlaceholderRe + the v3 validator so all
+// three planes agree on the folio placeholder grammar.
+var seqPlaceholderRe = regexp.MustCompile(`\{seq(?::0(\d+))?\}`)
+
+// validateSequences mirrors the v3 folio check on the legacy/install surface:
+// unique keys, scope enum, a format with exactly one {seq}/{seq:0N} placeholder,
+// and every Column.Sequence binding referencing a declared key.
+func validateSequences(md ModelDefinition) error {
+	keys := make(map[string]struct{}, len(md.Sequences))
+	for i, sq := range md.Sequences {
+		where := fmt.Sprintf("sequences[%d]", i)
+		if strings.TrimSpace(sq.Key) == "" {
+			return fmt.Errorf("%s: key required", where)
 		}
+		if _, dup := keys[sq.Key]; dup {
+			return fmt.Errorf("%s: key %q duplicated on the model", where, sq.Key)
+		}
+		keys[sq.Key] = struct{}{}
+		if sq.Scope != "" && sq.Scope != "org" && sq.Scope != "branch" {
+			return fmt.Errorf(`%s: scope %q is not one of ""|"org"|"branch"`, where, sq.Scope)
+		}
+		if strings.TrimSpace(sq.Format) == "" {
+			return fmt.Errorf("%s: format required", where)
+		}
+		if n := len(seqPlaceholderRe.FindAllString(sq.Format, -1)); n != 1 {
+			return fmt.Errorf("%s: format %q must contain exactly one {seq}/{seq:0N} placeholder (found %d)", where, sq.Format, n)
+		}
+	}
+	for j, col := range md.Columns {
+		if col.Sequence == "" {
+			continue
+		}
+		if _, ok := keys[col.Sequence]; !ok {
+			return fmt.Errorf("columns[%d]: sequence %q is not a declared sequence key on the model", j, col.Sequence)
+		}
+	}
+	return nil
+}
+
+// validateConstraints mirrors the v3 guard check on the legacy/install surface:
+// the model's Locking must be ""|"row", and every column Constraint must carry a
+// non-empty error_key and an expr of the shape `<arith> <op> <arith>` whose both
+// sides pass the strict arithmetic allowlist against the model's columns.
+func validateConstraints(md ModelDefinition, ownCols map[string]struct{}) error {
+	if md.Locking != "" && md.Locking != "row" {
+		return fmt.Errorf(`locking %q is not one of ""|"row"`, md.Locking)
+	}
+	for j, col := range md.Columns {
+		for k, con := range col.Constraints {
+			where := fmt.Sprintf("columns[%d].constraints[%d]", j, k)
+			if strings.TrimSpace(con.ErrorKey) == "" {
+				return fmt.Errorf("%s: error_key required", where)
+			}
+			if strings.TrimSpace(con.Expr) == "" {
+				return fmt.Errorf("%s: expr required", where)
+			}
+			if err := validateConstraintExprStrict(con.Expr, ownCols); err != nil {
+				return fmt.Errorf("%s: expr %q: %w", where, con.Expr, err)
+			}
+		}
+	}
+	return nil
+}
+
+// validateConstraintExprStrict checks a guard predicate splits into two
+// arithmetic operands around a single comparison operator, each passing the
+// allowlist. Mirrors v3.validateConstraintExpr.
+func validateConstraintExprStrict(expr string, cols map[string]struct{}) error {
+	op, idx := "", -1
+	for i := 0; i < len(expr) && op == ""; i++ {
+		c := expr[i]
+		if c != '>' && c != '<' && c != '=' && c != '!' {
+			continue
+		}
+		for _, o := range constraintComparisonOps {
+			if strings.HasPrefix(expr[i:], o) {
+				op, idx = o, i
+				break
+			}
+		}
+	}
+	if op == "" {
+		return fmt.Errorf("must contain a comparison operator (>= <= > < == !=)")
+	}
+	lhs := strings.TrimSpace(expr[:idx])
+	rhs := strings.TrimSpace(expr[idx+len(op):])
+	if lhs == "" || rhs == "" {
+		return fmt.Errorf("comparison is missing an operand")
+	}
+	if err := computeexpr.Validate(lhs, cols); err != nil {
+		return fmt.Errorf("left side %q: %w", lhs, err)
+	}
+	if err := computeexpr.Validate(rhs, cols); err != nil {
+		return fmt.Errorf("right side %q: %w", rhs, err)
 	}
 	return nil
 }

@@ -52,6 +52,14 @@ type invocation struct {
 	// resolveTable is the embedder-injected logical→physical table mapping
 	// the data_mutate import uses (Host.WithTableResolver). nil = identity.
 	resolveTable func(table string) string
+	// sequenceNext is the embedder-injected folio-sequence backend the
+	// sequence_next import calls (Host.WithSequenceNext). nil = unavailable.
+	sequenceNext func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)
+	// mutationGuard is the embedder-injected declarative-constraints check
+	// (Host.WithMutationGuard) run after every data_mutate/data_batch create
+	// or update, inside the transaction, against the post-mutation row keyed
+	// by LOGICAL table. non-nil error → rollback + constraint_violation.
+	mutationGuard func(ctx context.Context, logicalTable string, row map[string]any) error
 	// execSchema overrides the schema db_exec scopes bare names to via
 	// search_path (Host.WithExecSchema). nil = AddonSchema(addonKey). The
 	// capability gate still authorises against AddonSchema regardless.
@@ -386,6 +394,26 @@ func registerHostModule(ctx context.Context, h *Host) error {
 		}).
 		Export("data_mutate")
 
+	// data_batch(reqPtr, reqLen) -> i64 (ptr|len envelope)
+	// Atomic multi-row sibling of data_mutate: a list of create/update/delete
+	// mutations across one or more models, executed under ONE org-scoped
+	// transaction, each followed (post-commit) by a *dynamic.CanonicalEvent on
+	// the host bus. Tenant scope (orgID) comes from the invocation context —
+	// never from the guest. Gated by `db:write <logical table>` for EVERY table
+	// the batch touches. See docs/wasm-abi.md § 16.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			reqPtr, reqLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			req := readBytes(mod, reqPtr, reqLen)
+			env := executeDataBatch(ctx, inv, req)
+			return writeToGuest(ctx, mod, env)
+		}).
+		Export("data_batch")
+
 	// data_query(reqPtr, reqLen) -> i64 (ptr|len envelope)
 	// Read-only sibling of data_mutate: one org-scoped, equality-filtered
 	// SELECT against a LOGICAL table resolved through the embedder's
@@ -406,6 +434,24 @@ func registerHostModule(ctx context.Context, h *Host) error {
 			return writeToGuest(ctx, mod, env)
 		}).
 		Export("data_query")
+
+	// sequence_next(reqPtr, reqLen) -> i64 (ptr|len envelope)
+	// Issues the next formatted folio value for a model's declared sequence,
+	// atomically per org (or branch). Tenant scope comes from the invocation
+	// context; the actual counter lives in the host (Host.WithSequenceNext).
+	// See docs/wasm-abi.md § 17.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			reqPtr, reqLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			req := readBytes(mod, reqPtr, reqLen)
+			env := executeSequenceNext(ctx, inv, req)
+			return writeToGuest(ctx, mod, env)
+		}).
+		Export("sequence_next")
 
 	if _, err := b.Instantiate(ctx); err != nil {
 		return fmt.Errorf("instantiate metacore_host: %w", err)
