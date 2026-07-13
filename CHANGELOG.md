@@ -9,6 +9,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **licensing: instance-licensing primitive (`licensing.Service`, § docs/licensing.md).**
+  A new embedder-agnostic package that moves the whole enforcement half of
+  metacore's instance licensing to the base of the kernel, so every product —
+  ops, the verticals, self-contained appliances — is licensed for free and
+  identically. The hub (the marketplace trust anchor) mints Ed25519-signed
+  instance license tokens carrying an entitlement set (presets ∪ addons, or
+  `*`), a validity window, a grace period and an optional lease (max hours
+  between check-ins); `licensing.Verify` checks them fully OFFLINE against the
+  hub public key (same wire format as the hub's `internal/license`, ported
+  faithfully from the ops consumer). `licensing.Service` loads/caches the
+  entitlement snapshot, re-derives the posture (`valid → stale → grace →
+  expired`, plus `missing`/`invalid`), and — when the instance is linked +
+  online — auto-renews the token; the renew IS the mandatory check-in that
+  keeps a leased license from going stale and makes remote revocation
+  effective. Persistence is an embedder-supplied `LicenseStore` interface
+  (`MemoryStore` + a JSON `FileStore` included; ops keeps its GORM singleton);
+  config is a plain `Config` struct with a `NewConfigFromEnv()` helper reading
+  the same env vars ops already uses, for a frictionless migration. Pure
+  decision helpers (`State.WritesBlocked`, `State.InstallBlocked`,
+  `State.Operable`, `State.Entitles`) let hosts wire the gate into their
+  request pipeline. `dynamic/` and `runtime/` are untouched. The license
+  authorizes the instance to EXIST; it never limits what you may install
+  beyond the entitlements the hub granted.
 - **runtime/wasm: declarative guards on the wasm write path
   (`Host.WithMutationGuard`, ABI v1.8, § 14.9).** `data_mutate` and
   `data_batch` bypass `dynamic.Service`, so declared `Column.constraints`
