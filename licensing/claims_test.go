@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,12 +120,16 @@ func TestVerify_NotYetValid(t *testing.T) {
 func TestVerify_TamperedSignature(t *testing.T) {
 	priv, pubHex := testKeypair(t)
 	tok := mintToken(t, priv, baseClaims())
-	tampered := tok[:len(tok)-1]
-	if tok[len(tok)-1] == 'A' {
-		tampered += "B"
-	} else {
-		tampered += "A"
+	// Flip a character in the MIDDLE of the signature segment. Flipping the
+	// last one is flaky: base64url ignores the unused padding bits of the
+	// final symbol, so A<->B there may decode to the same signature bytes.
+	dot := strings.IndexByte(tok, '.')
+	mid := dot + 1 + (len(tok)-dot-1)/2
+	flip := byte('A')
+	if tok[mid] == 'A' {
+		flip = 'B'
 	}
+	tampered := tok[:mid] + string(flip) + tok[mid+1:]
 	if _, err := Verify(tampered, pubHex, time.Now().UTC()); !errors.Is(err, ErrBadSig) && !errors.Is(err, ErrMalformed) {
 		t.Fatalf("expected bad-sig/malformed, got %v", err)
 	}
