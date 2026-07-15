@@ -74,6 +74,14 @@ func CreateTable(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, d
 			return fmt.Errorf("ensure organization_id on %s.%s: %w", schema, def.TableName, err)
 		}
 	}
+	// Self-heal, generalized: on upgrade the table already exists and CREATE
+	// TABLE IF NOT EXISTS is a no-op, so any column the NEW manifest adds is
+	// missing — and createIndexes below would 42703 on it (seen with
+	// pos_payment_methods.currency_code). SyncSchema adds the manifest-declared
+	// columns the live table lacks; additive only, idempotent.
+	if err := SyncSchema(db, addonKey, orgID, iso, def); err != nil {
+		return err
+	}
 	if err := createIndexes(db, schema, def, needsOrgColumn); err != nil {
 		return err
 	}
