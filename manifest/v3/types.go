@@ -654,6 +654,22 @@ type Contributions struct {
 	// branding, then renders it to PDF. Optional — addons with nothing to
 	// print omit it. See DocumentDef for the full contract.
 	Documents []DocumentDef `json:"documents,omitempty"`
+
+	// Config declares the addon's configuration surface so hosts can render a
+	// "Configure" affordance (e.g. in the installed-addons view). Optional —
+	// an addon with nothing to configure omits it and hosts show nothing.
+	Config *ConfigEntry `json:"config,omitempty"`
+}
+
+// ConfigEntry points at where an addon's configuration lives: a declarative
+// model (the host renders its generic CRUD page, e.g. /m/<model>) or an
+// addon-owned URL (a custom screen the addon's frontend ships). Exactly one of
+// Model/URL should be set; Title optionally overrides the affordance label
+// with an i18n key.
+type ConfigEntry struct {
+	Model string `json:"model,omitempty"`
+	URL   string `json:"url,omitempty"`
+	Title string `json:"title,omitempty"`
 }
 
 // DocumentDef is one printable document an addon contributes
