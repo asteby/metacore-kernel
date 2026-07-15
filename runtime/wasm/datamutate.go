@@ -174,7 +174,7 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 	rollback := func() { _ = work.Rollback() }
 
 	now := time.Now().UTC()
-	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now)
+	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now, dynamic.ActorIDFromContext(ctx))
 	if mErr != nil {
 		rollback()
 		return fail(code, mErr.Error())
@@ -261,8 +261,12 @@ type mutationResult struct {
 // mutations under a single commit. On failure it returns a stable error code
 // (db_error | not_found) alongside the error so the caller can surface it in
 // the JSON envelope; `data`/`inc` are the pre-decoded column maps and `tbl` is
-// the already-quoted physical table.
-func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]any, orgID uuid.UUID, tbl string, now time.Time) (*mutationResult, string, error) {
+// the already-quoted physical table. `actorID` is the acting user carried by
+// the invocation context ("" for pure system work): a create stamps it into
+// created_by_id when the table has that column, so rows born from a
+// user-driven side effect (a transfer's destination stock row) show the human
+// behind the chain instead of a permanent "N/A".
+func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]any, orgID uuid.UUID, tbl string, now time.Time, actorID string) (*mutationResult, string, error) {
 	out := &mutationResult{rowID: req.ID}
 	switch req.Op {
 	case "create":
@@ -270,12 +274,21 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 		if out.rowID == "" {
 			out.rowID = uuid.NewString()
 		}
-		cols := make([]string, 0, len(data)+4)
+		cols := make([]string, 0, len(data)+5)
 		vals := map[string]any{
 			"id":              out.rowID,
 			"organization_id": orgID,
 			"created_at":      now,
 			"updated_at":      now,
+		}
+		if _, err := uuid.Parse(actorID); err == nil {
+			if _, supplied := data["created_by_id"]; !supplied {
+				if has, err := tableHasColumn(work, tbl, "created_by_id"); err != nil {
+					return nil, "db_error", err
+				} else if has {
+					vals["created_by_id"] = actorID
+				}
+			}
 		}
 		for c, v := range data {
 			vals[c] = v

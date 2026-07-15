@@ -167,7 +167,7 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 	now := time.Now().UTC()
 	results := make([]*mutationResult, len(prepared))
 	for i, p := range prepared {
-		res, code, mErr := applyMutation(work, p.req, p.data, p.inc, orgID, p.tbl, now)
+		res, code, mErr := applyMutation(work, p.req, p.data, p.inc, orgID, p.tbl, now, dynamic.ActorIDFromContext(ctx))
 		if mErr != nil {
 			_ = work.Rollback()
 			return fail(code, fmt.Sprintf("mutations[%d]: %s", i, mErr.Error()))

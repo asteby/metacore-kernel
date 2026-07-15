@@ -160,6 +160,81 @@ func TestExecuteDataMutate_CreateStampsOrgIDTimestamps(t *testing.T) {
 	}
 }
 
+func TestExecuteDataMutate_CreateStampsCreatedByFromActor(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+
+	orgID := uuid.New()
+	rowID := uuid.NewString()
+	actorID := uuid.NewString()
+	bus, _, _ := captureBus(t, "inventory.Stock.created")
+
+	mock.ExpectBegin()
+	// The actor in ctx triggers the zero-row column probe; the table carries
+	// created_by_id, so the INSERT stamps it (sorted into the column list).
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id", "created_by_id", "product_id", "quantity"}))
+	mock.ExpectQuery(`INSERT INTO "stock" \("created_at", "created_by_id", "id", "organization_id", "product_id", "quantity", "updated_at"\) VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7\) RETURNING \*`).
+		WithArgs(sqlmock.AnyArg(), actorID, rowID, orgID, "prod-1", int64(5), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_by_id", "product_id"}).
+			AddRow(rowID, actorID, "prod-1"))
+	mock.ExpectCommit()
+
+	inv := testInvocation(gdb, bus, orgID, stockWriteEnforcer(), nil)
+	ctx := dynamic.WithActorID(context.Background(), actorID)
+	out := executeDataMutate(ctx, inv, []byte(`{
+		"op": "create", "table": "stock", "model": "Stock",
+		"id": "`+rowID+`",
+		"data": {"product_id": "prod-1", "quantity": 5}
+	}`))
+
+	env := unmarshalMutate(t, out)
+	if !env.Success {
+		t.Fatalf("expected success, got %s", out)
+	}
+	if env.Data.After["created_by_id"] != actorID {
+		t.Fatalf("expected created_by_id %s, got %#v", actorID, env.Data.After)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations not met: %v", err)
+	}
+}
+
+func TestExecuteDataMutate_CreateSkipsCreatedByWithoutColumn(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+
+	orgID := uuid.New()
+	rowID := uuid.NewString()
+	actorID := uuid.NewString()
+	bus, _, _ := captureBus(t, "inventory.Stock.created")
+
+	mock.ExpectBegin()
+	// Probe says the table has NO created_by_id column → the INSERT keeps the
+	// original shape, no phantom column.
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id", "product_id", "quantity"}))
+	mock.ExpectQuery(`INSERT INTO "stock" \("created_at", "id", "organization_id", "product_id", "quantity", "updated_at"\) VALUES \(\$1, \$2, \$3, \$4, \$5, \$6\) RETURNING \*`).
+		WithArgs(sqlmock.AnyArg(), rowID, orgID, "prod-1", int64(5), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "product_id"}).AddRow(rowID, "prod-1"))
+	mock.ExpectCommit()
+
+	inv := testInvocation(gdb, bus, orgID, stockWriteEnforcer(), nil)
+	ctx := dynamic.WithActorID(context.Background(), actorID)
+	out := executeDataMutate(ctx, inv, []byte(`{
+		"op": "create", "table": "stock", "model": "Stock",
+		"id": "`+rowID+`",
+		"data": {"product_id": "prod-1", "quantity": 5}
+	}`))
+
+	if env := unmarshalMutate(t, out); !env.Success {
+		t.Fatalf("expected success, got %s", out)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations not met: %v", err)
+	}
+}
+
 func TestExecuteDataMutate_UpdateIncAtomicBeforeAfter(t *testing.T) {
 	gdb, mock, cleanup := newMockGorm(t)
 	defer cleanup()
