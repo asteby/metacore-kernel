@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 
+	"gorm.io/gorm"
+
 	"github.com/asteby/metacore-kernel/modelbase"
 )
 
@@ -432,6 +434,53 @@ func structColumnSet(instance any) map[string]struct{} {
 func hasOrgColumn(instance any) bool {
 	_, ok := structColumnSet(instance)["organization_id"]
 	return ok
+}
+
+// hasGormSoftDelete reports whether a model declares a gorm.DeletedAt field
+// (embedded structs included). Those are the models where GORM injects
+// `deleted_at IS NULL` into schema-aware reads (Find/First with a typed dest)
+// — schema-less reads (Count, aggregate/facet scans into map/row types) must
+// add the same predicate by hand or they see soft-deleted rows the list
+// excludes, and totals drift from the visible set. Reflect-built dynamic
+// models use *time.Time (hard delete) and correctly report false.
+func hasGormSoftDelete(instance any) bool {
+	t := reflect.TypeOf(instance)
+	for t != nil && t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t == nil || t.Kind() != reflect.Struct {
+		return false
+	}
+	deletedAtType := reflect.TypeOf(gorm.DeletedAt{})
+	var walk func(reflect.Type) bool
+	walk = func(t reflect.Type) bool {
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			if f.Type == deletedAtType {
+				return true
+			}
+			if f.Anonymous {
+				ft := f.Type
+				for ft.Kind() == reflect.Ptr {
+					ft = ft.Elem()
+				}
+				if ft.Kind() == reflect.Struct && walk(ft) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return walk(t)
+}
+
+// scopeSoftDelete appends the soft-delete predicate when the model soft
+// deletes, so hand-built queries match Find's semantics.
+func scopeSoftDelete(db *gorm.DB, instance any) *gorm.DB {
+	if hasGormSoftDelete(instance) {
+		return db.Where("deleted_at IS NULL")
+	}
+	return db
 }
 
 func columnNameFromField(f reflect.StructField) string {

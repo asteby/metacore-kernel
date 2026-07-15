@@ -361,7 +361,10 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	total, err := builder.Count(s.db.WithContext(ctx).Table(tableName).Scopes(func(d *gorm.DB) *gorm.DB {
 		// Count must NOT carry the ORDER BY (applySort) — a COUNT(*) ordered by a
 		// non-grouped column 42803s. Apply only the WHERE-shaping clauses.
-		return s.scope.ScopeQuery(builder.ApplyForCount(d, params), user)
+		// scopeSoftDelete: Find's dest schema hides soft-deleted rows; a bare
+		// COUNT has no schema, and a total above the listable set makes clients
+		// page forever after the last row.
+		return s.scope.ScopeQuery(scopeSoftDelete(builder.ApplyForCount(d, params), instance), user)
 	}), params)
 	if err != nil {
 		return nil, query.PageMeta{}, fmt.Errorf("dynamic: count: %w", err)
@@ -415,6 +418,9 @@ func (s *Service) Aggregate(ctx context.Context, model string, user modelbase.Au
 
 	db := s.db.WithContext(ctx).Table(tableName)
 	db = s.scope.ScopeQuery(db, user)
+	// The footer scans into a map (no schema) — mirror Find's soft-delete
+	// filter or totals include rows the list never shows.
+	db = scopeSoftDelete(db, instance)
 
 	builder := query.New(tableMeta, s.listBuilderOpts()...).WithTableName(tableName)
 	if rels, ok := instance.(modelbase.HasRelations); ok {

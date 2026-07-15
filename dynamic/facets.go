@@ -90,6 +90,9 @@ func (s *Service) Facets(ctx context.Context, user modelbase.AuthUser, q FacetsQ
 	if user != nil && hasOrgColumn(instance) {
 		db = s.scope.ScopeQuery(db, user)
 	}
+	// facetRow scans bypass the model schema, so add the soft-delete filter by
+	// hand — facet counts must match the list the chips filter.
+	db = scopeSoftDelete(db, instance)
 
 	// Exclude empty buckets: NULL always, and the empty string only for text
 	// columns (a `<> ''` predicate against e.g. an integer column errors on
