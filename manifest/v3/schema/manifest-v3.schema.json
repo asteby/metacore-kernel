@@ -655,7 +655,7 @@
       "properties": {
         "key": {
           "type": "string",
-          "description": "The column used for idempotency \u2014 must name a declared column on the owning model."
+          "description": "The column used for idempotency — must name a declared column on the owning model."
         },
         "rows": {
           "type": "array",
@@ -1064,6 +1064,10 @@
           "items": {
             "$ref": "#/$defs/DocumentDef"
           }
+        },
+        "config": {
+          "$ref": "#/$defs/ConfigEntry",
+          "description": "The addon's configuration surface. Hosts render a 'Configure' affordance (e.g. in the installed-addons view) linking to it; addons with nothing to configure simply omit it."
         }
       }
     },
@@ -1353,7 +1357,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Static column\u2192value filter the host applies when rendering this entry's list view (e.g. {\"status\":\"reception\"}), so an addon can publish one nav entry per status."
+          "description": "Static column→value filter the host applies when rendering this entry's list view (e.g. {\"status\":\"reception\"}), so an addon can publish one nav entry per status."
         },
         "view_type": {
           "type": "string",
@@ -1757,7 +1761,7 @@
         },
         "label_image": {
           "type": "string",
-          "description": "Name of a column on the REMOTE model a dynamic_select (ref / search_endpoint) resolves against whose value (an image URL) the SDK renders as a thumbnail beside each option's label \u2014 e.g. a product photo or contact avatar. Optional; ignored on non-reference fields."
+          "description": "Name of a column on the REMOTE model a dynamic_select (ref / search_endpoint) resolves against whose value (an image URL) the SDK renders as a thumbnail beside each option's label — e.g. a product photo or contact avatar. Optional; ignored on non-reference fields."
         },
         "label_icon": {
           "type": "string",
@@ -1776,7 +1780,7 @@
         "debit_column",
         "credit_column"
       ],
-      "description": "Optional balance constraint on a line-items (type \"array\") field. Declares that the sum of debit_column must equal the sum of credit_column across all rows; the SDK shows a balanced/out-of-balance indicator and blocks submit until they match. Generic \u2014 debit/credit are just the two column keys to reconcile (e.g. a journal entry's debit vs credit).",
+      "description": "Optional balance constraint on a line-items (type \"array\") field. Declares that the sum of debit_column must equal the sum of credit_column across all rows; the SDK shows a balanced/out-of-balance indicator and blocks submit until they match. Generic — debit/credit are just the two column keys to reconcile (e.g. a journal entry's debit vs credit).",
       "properties": {
         "debit_column": {
           "type": "string",
@@ -1833,12 +1837,16 @@
             },
             "in": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "The option applies when the sibling's value is one of these (string compare)."
             },
             "not_in": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "The option applies when the sibling's value is NOT one of these (string compare)."
             }
           }
@@ -2641,6 +2649,25 @@
           "type": "string",
           "pattern": "^wasm:[A-Za-z_][A-Za-z0-9_]*$",
           "description": "Tier-3 backend, 'wasm:<export>' — an export of the addon's wasm module invoked with the merged row as payload; its returned value is written into target. Required (and only allowed) when tier is 3."
+        }
+      }
+    },
+    "ConfigEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Where an addon's configuration lives: a declarative model (host renders its CRUD page) or an addon-owned URL. Exactly one of model/url should be set; title is an optional i18n key for the affordance label.",
+      "properties": {
+        "model": {
+          "type": "string",
+          "description": "Declarative model key whose CRUD page is the config surface (host route /m/<model> or equivalent)."
+        },
+        "url": {
+          "type": "string",
+          "description": "Host-relative or addon:// URL of a custom config screen."
+        },
+        "title": {
+          "type": "string",
+          "description": "Optional i18n key for the affordance label; hosts default to a generic 'Configure'."
         }
       }
     }

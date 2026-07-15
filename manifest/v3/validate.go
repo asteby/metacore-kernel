@@ -844,6 +844,20 @@ func Validate(raw []byte) error {
 		errs = append(errs, validateDashboard(&m)...)
 		errs = append(errs, validateNavViewTypes(&m)...)
 		errs = append(errs, validateDocuments(&m, colsByModel)...)
+		// contributions.config: exactly one target (model XOR url); a model
+		// target must reference one of the addon's own models.
+		if cfg := m.Contributions.Config; cfg != nil {
+			switch {
+			case cfg.Model == "" && cfg.URL == "":
+				errs = append(errs, "contributions.config: one of model or url is required")
+			case cfg.Model != "" && cfg.URL != "":
+				errs = append(errs, "contributions.config: model and url are mutually exclusive")
+			case cfg.Model != "":
+				if _, ok := colsByModel[cfg.Model]; !ok {
+					errs = append(errs, fmt.Sprintf("contributions.config.model %q is not a model of this addon", cfg.Model))
+				}
+			}
+		}
 	}
 
 	// Addon-level pipeline-runtime primitives (connectors / schedules / webhooks).
