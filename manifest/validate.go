@@ -322,6 +322,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 		if err := validateComputeFormulas(md.Formulas, colsByModel[md.ModelKey]); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
+		if err := validateGeneratedColumns(md.Columns, colsByModel[md.ModelKey]); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
+		}
 		if err := validateComputeRollups(md.Relations, colsByModel[md.ModelKey], colsByModel); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
@@ -1023,6 +1026,51 @@ func validateComputeFormulas(formulas []Formula, ownCols map[string]struct{}) er
 	}
 	return nil
 }
+
+// validateGeneratedColumns checks every column carrying a Generated expression:
+// the expression must pass the strict arithmetic allowlist over the model's own
+// columns, must NOT reference itself (a STORED generated column cannot depend on
+// its own value), and cannot be combined with a Default or NotNull/Required — a
+// Postgres generated column rejects both DEFAULT and NOT NULL in its DDL. A
+// column with an empty Generated is an ordinary column and is skipped. ownCols
+// is the owning model's column set.
+func validateGeneratedColumns(cols []ColumnDef, ownCols map[string]struct{}) error {
+	for i, c := range cols {
+		if strings.TrimSpace(c.Generated) == "" {
+			continue
+		}
+		if _, ok := DefaultLiteral(c.Default); ok && c.Default != nil {
+			return fmt.Errorf("columns[%d]: generated column %q cannot also declare a default (a STORED generated column rejects DEFAULT)", i, c.Name)
+		}
+		if c.Required {
+			return fmt.Errorf("columns[%d]: generated column %q cannot be required/not-null (a STORED generated column is never declared NOT NULL)", i, c.Name)
+		}
+		if err := computeexpr.Validate(c.Generated, ownCols); err != nil {
+			return fmt.Errorf("columns[%d]: generated expr %q: %w", i, c.Generated, err)
+		}
+		// A generated STORED column may not reference its own value.
+		if referencesIdent(c.Generated, c.Name) {
+			return fmt.Errorf("columns[%d]: generated column %q may not reference itself", i, c.Name)
+		}
+	}
+	return nil
+}
+
+// referencesIdent reports whether the arithmetic expression src mentions the
+// bare identifier name (whole-token match, so "reserved" does not match
+// "reserved_at"). Used to reject a self-referencing generated column.
+func referencesIdent(src, name string) bool {
+	for _, tok := range identTokenRe.FindAllString(src, -1) {
+		if tok == name {
+			return true
+		}
+	}
+	return false
+}
+
+// identTokenRe extracts bare identifiers from an arithmetic expression (the same
+// identifier shape computeexpr accepts).
+var identTokenRe = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
 
 // constraintComparisonOps mirrors dynamic.constraintOps + the v3 validator so
 // all three planes agree on the guard grammar (longest-match first).

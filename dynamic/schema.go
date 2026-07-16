@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/asteby/metacore-kernel/manifest"
+	"github.com/asteby/metacore-kernel/manifest/computeexpr"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -35,16 +36,9 @@ func CreateTable(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, d
 		cols = append(cols, `"organization_id" uuid NOT NULL`)
 	}
 	for _, c := range def.Columns {
-		pgType, err := pgColumnType(c)
+		line, err := columnDDL(c)
 		if err != nil {
 			return err
-		}
-		line := fmt.Sprintf(`%q %s`, c.Name, pgType)
-		if c.Required {
-			line += " NOT NULL"
-		}
-		if lit, ok := manifest.DefaultLiteral(c.Default); ok && lit != "" {
-			line += " DEFAULT " + lit
 		}
 		cols = append(cols, line)
 	}
@@ -120,6 +114,53 @@ func createIndexes(db *gorm.DB, schema string, def manifest.ModelDefinition, has
 	return nil
 }
 
+// columnDDL builds the per-column fragment for a CREATE TABLE. A column with a
+// Generated expression is emitted as a Postgres STORED generated column
+// (`GENERATED ALWAYS AS (<expr>) STORED`) and carries neither NOT NULL nor
+// DEFAULT (Postgres rejects both on a generated column); every other column
+// carries its optional NOT NULL / DEFAULT as before.
+func columnDDL(c manifest.ColumnDef) (string, error) {
+	pgType, err := pgColumnType(c)
+	if err != nil {
+		return "", err
+	}
+	if c.Generated != "" {
+		sqlExpr, err := computeexpr.RenderSQL(c.Generated)
+		if err != nil {
+			return "", fmt.Errorf("generated column %q: %w", c.Name, err)
+		}
+		return fmt.Sprintf(`%q %s GENERATED ALWAYS AS (%s) STORED`, c.Name, pgType, sqlExpr), nil
+	}
+	line := fmt.Sprintf(`%q %s`, c.Name, pgType)
+	if c.Required {
+		line += " NOT NULL"
+	}
+	if lit, ok := manifest.DefaultLiteral(c.Default); ok && lit != "" {
+		line += " DEFAULT " + lit
+	}
+	return line, nil
+}
+
+// addColumnDDL builds the ALTER TABLE … ADD COLUMN IF NOT EXISTS statement for a
+// single column. A Generated column becomes a STORED generated column, which
+// Postgres computes for every existing row on ADD COLUMN.
+func addColumnDDL(schema, table string, c manifest.ColumnDef) (string, error) {
+	pgType, err := pgColumnType(c)
+	if err != nil {
+		return "", err
+	}
+	if c.Generated != "" {
+		sqlExpr, err := computeexpr.RenderSQL(c.Generated)
+		if err != nil {
+			return "", fmt.Errorf("generated column %q: %w", c.Name, err)
+		}
+		return fmt.Sprintf(`ALTER TABLE %q.%q ADD COLUMN IF NOT EXISTS %q %s GENERATED ALWAYS AS (%s) STORED`,
+			schema, table, c.Name, pgType, sqlExpr), nil
+	}
+	return fmt.Sprintf(`ALTER TABLE %q.%q ADD COLUMN IF NOT EXISTS %q %s`,
+		schema, table, c.Name, pgType), nil
+}
+
 // enableRLS turns on row-level security and installs a policy that scopes
 // every SELECT / UPDATE / DELETE to `current_setting('app.current_org')`.
 // Hosts must run `SET LOCAL app.current_org = '<uuid>'` per request.
@@ -156,12 +197,10 @@ func SyncSchema(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, de
 		if _, ok := existing[c.Name]; ok {
 			continue
 		}
-		pgType, err := pgColumnType(c)
+		stmt, err := addColumnDDL(schema, def.TableName, c)
 		if err != nil {
 			return err
 		}
-		stmt := fmt.Sprintf(`ALTER TABLE %q.%q ADD COLUMN IF NOT EXISTS %q %s`,
-			schema, def.TableName, c.Name, pgType)
 		if err := db.Exec(stmt).Error; err != nil {
 			return fmt.Errorf("add column %s.%s.%s: %w", schema, def.TableName, c.Name, err)
 		}

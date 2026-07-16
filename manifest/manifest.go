@@ -879,6 +879,13 @@ type ColumnDef struct {
 	// options. Pure UI metadata; the DDL plane ignores it.
 	OptionsSource string `json:"options_source,omitempty"`
 
+	// Generated carries the v3 Column.generated expression through the v3 → host
+	// conversion so the DDL builder (dynamic.schema) can emit the column as
+	// `GENERATED ALWAYS AS (<expr>) STORED`. A pure arithmetic expression over
+	// sibling columns, validated with the strict computeexpr allowlist and
+	// incompatible with Default/Required. Empty = ordinary column.
+	Generated string `json:"generated,omitempty"`
+
 	// Readonly carries the v3 Column.readonly flag through the v3 → host
 	// conversion onto modelbase.ColumnDef/FieldDef.Readonly, marking a
 	// SYSTEM-GENERATED column that DeriveFormFields excludes from the create form
