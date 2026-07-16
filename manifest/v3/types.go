@@ -555,6 +555,19 @@ type Column struct {
 	// Readonly) for form derivation. Empty = the column carries no auto-folio.
 	Sequence string `json:"sequence,omitempty"`
 
+	// Generated declares a POSTGRES STORED GENERATED column: a pure arithmetic
+	// expression over OTHER columns of the SAME row (e.g. "quantity - reserved")
+	// that Postgres maintains on every write. The kernel emits it as
+	// `GENERATED ALWAYS AS (<expr>) STORED`, so the value is path-independent and
+	// SQL-native (filters/sorts/aggregates/exports in the database, no compute
+	// hook or wasm handler). The expression is validated with the SAME strict
+	// arithmetic allowlist as Formula.Expr (computeexpr): only +-*/, parentheses,
+	// numbers, and identifiers resolving to sibling columns — no self-reference.
+	// A STORED generated column is INCOMPATIBLE with Default and NotNull: the DDL
+	// carries no DEFAULT and is never declared NOT NULL (Postgres rejects both on
+	// a generated column). Empty = ordinary column. Optional.
+	Generated string `json:"generated,omitempty"`
+
 	// Readonly marks a SYSTEM-GENERATED column: a value the addon/host populates
 	// (e.g. an id or number a remote API returns after a write), NOT something a
 	// user types. It is pure UI-plane metadata that the host projects onto

@@ -323,6 +323,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// Sequence binds the column to a model folio counter (auto-stamped
 				// on create).
 				Sequence: c.Sequence,
+				// Generated rides through so the DDL builder emits the column as
+				// `GENERATED ALWAYS AS (<expr>) STORED` (Postgres-maintained).
+				Generated: c.Generated,
 			}
 			// Options is EITHER the STATIC-select list (array form) OR the
 			// DYNAMIC dependent-source object (DynamicOptions). The static list
