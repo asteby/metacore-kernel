@@ -1870,6 +1870,10 @@
           "type": "string",
           "description": "Column on 'source' that becomes each option's value."
         },
+        "label": {
+          "type": "string",
+          "description": "Column ON 'source' used as each option's display text (and the column the 'q' typeahead + ordering match against). When empty the projection defaults to 'name'. Use it for a same-source picker labelled by a column on 'source' itself (e.g. a product picker labelled by 'name'); 'label_ref' is the cross-model twin for when the label lives on another model keyed by 'value'."
+        },
         "label_ref": {
           "type": "string",
           "description": "Related model (key or table) whose row, looked up by the option's value (a foreign id), supplies the human-readable label. Optional: when empty the label is the value itself. The kernel batch-resolves the label in a single query (no N+1)."
