@@ -999,6 +999,12 @@ type ActionField struct {
 	// (dynamic-line-items) renders a row grid with add/remove controls.
 	ItemFields []ActionField `json:"item_fields,omitempty"`
 
+	// LockRows, set on a type:"array" line-items field, declares that its rows
+	// are FIXED: the SDK (dynamic-line-items) hides the add-row and delete-row
+	// controls so the user can only edit existing rows' cells (e.g. a receive
+	// form prefilled from the ordered lines). Ignored on non-array fields.
+	LockRows bool `json:"lock_rows,omitempty"`
+
 	// Accept, MaxSize and StoragePath configure a field with type "upload" (a
 	// file attachment input). They are declarative hints the SDK reads off the
 	// served action metadata — the actual upload HANDLER lives in the host

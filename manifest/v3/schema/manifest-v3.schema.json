@@ -1739,6 +1739,10 @@
             "$ref": "#/$defs/ActionField"
           }
         },
+        "lock_rows": {
+          "type": "boolean",
+          "description": "Set on a type:'array' line-items field: its rows are fixed — the SDK hides add-row and delete-row controls, so the user can only edit existing rows' cells (e.g. a receive form prefilled from the ordered lines). Ignored on non-array fields."
+        },
         "total": {
           "type": "boolean",
           "description": "Set on an item_fields column to sum it in the line-items footer. The SDK renders a per-column total row for every numeric column flagged with total."

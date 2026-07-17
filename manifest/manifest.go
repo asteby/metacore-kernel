@@ -495,6 +495,7 @@ type FieldDef struct {
 	Placeholder    string            `json:"placeholder,omitempty"`
 	SearchEndpoint string            `json:"searchEndpoint,omitempty"`
 	ItemFields     []FieldDef        `json:"item_fields,omitempty"`
+	LockRows       bool              `json:"lock_rows,omitempty"`
 	Total          bool              `json:"total,omitempty"`
 	Balance        *FieldBalanceRule `json:"balance,omitempty"`
 

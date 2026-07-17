@@ -1563,6 +1563,10 @@
             "$ref": "#/$defs/ActionField"
           }
         },
+        "lock_rows": {
+          "type": "boolean",
+          "description": "Set on a type:'array' line-items field: its rows are fixed — the SDK hides add-row and delete-row controls, so the user can only edit existing rows' cells (e.g. a receive form prefilled from the ordered lines). Ignored on non-array fields."
+        },
         "accept": {
           "type": "string",
           "description": "On a type:\"upload\" field, a comma-separated MIME / extension allow-list passed to the file picker's accept attribute, e.g. \"image/*,.pdf\". Ignored on non-upload fields."

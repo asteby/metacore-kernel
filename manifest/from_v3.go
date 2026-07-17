@@ -793,6 +793,9 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 			// ItemFields are themselves ActionFields — recurse so a line-items
 			// group's columns (debit/credit/account picker) survive intact.
 			ItemFields: mapActionFields(f.ItemFields),
+			// LockRows forwards the fixed-rows flag so the SDK hides the
+			// add-row/delete-row controls on a prefilled line-items grid.
+			LockRows: f.LockRows,
 			// DependsOn forwards the cascade dependency so the SDK scopes +
 			// re-fetches this picker's options from the depended-on field's value.
 			DependsOn: f.DependsOn,
