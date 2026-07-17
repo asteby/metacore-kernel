@@ -114,3 +114,75 @@ func TestFromV3_RichActionFieldsSurvive(t *testing.T) {
 		t.Errorf("host lost balance: %+v", hf[1].Balance)
 	}
 }
+
+// lockRowsManifestJSON mirrors a "receive goods" action: a line-items array
+// prefilled from the ordered lines whose rows are FIXED (lock_rows:true) — the
+// user may only edit each row's received quantity, not add or delete rows.
+const lockRowsManifestJSON = `{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": { "key": "inventory", "name": "Inventory", "version": "0.1.0" },
+  "compatibility": { "requires": [{ "key": "kernel", "version": ">=3.0.0 <4.0.0" }] },
+  "contributions": {
+    "actions": [
+      {
+        "key": "receive_goods",
+        "label": "Recibir mercancía",
+        "target_model": "Receipt",
+        "handler": { "type": "compiled", "function": "OnReceiveGoods" },
+        "placement": "row",
+        "fields": [
+          {
+            "key": "lines",
+            "label": "Renglones",
+            "type": "array",
+            "lock_rows": true,
+            "item_fields": [
+              { "key": "product_id", "label": "Producto", "type": "dynamic_select", "ref": "Product" },
+              { "key": "received_qty", "label": "Recibido", "type": "number" }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}`
+
+// TestFromV3_LockRowsSurvives verifies a type:"array" field can declare
+// lock_rows:true under the STRICT v3 schema and that the flag survives the
+// v3 → host conversion and the host JSON round-trip served to the frontend.
+func TestFromV3_LockRowsSurvives(t *testing.T) {
+	m, err := v3.Parse([]byte(lockRowsManifestJSON))
+	if err != nil {
+		t.Fatalf("v3.Parse (strict schema must accept lock_rows): %v", err)
+	}
+
+	// 1. v3 struct carries the flag.
+	af := m.Contributions.Actions[0].Fields[0]
+	if af.Key != "lines" || af.Type != "array" {
+		t.Fatalf("unexpected field: %+v", af)
+	}
+	if !af.LockRows {
+		t.Errorf("v3 ActionField.LockRows lost: %+v", af)
+	}
+
+	// 2. v3 → host conversion preserves it.
+	out := manifest.FromV3(m)
+	lines := out.Actions["Receipt"][0].Fields[0]
+	if !lines.LockRows {
+		t.Errorf("host FieldDef.LockRows lost after FromV3: %+v", lines)
+	}
+
+	// 3. Host JSON round-trip (the exact path ops serves to the SDK) keeps it.
+	raw, err := json.Marshal(out.Actions)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var host map[string][]modelbase.ActionDef
+	if err := json.Unmarshal(raw, &host); err != nil {
+		t.Fatalf("unmarshal into modelbase: %v", err)
+	}
+	if !host["Receipt"][0].Fields[0].LockRows {
+		t.Errorf("lock_rows dropped in host round-trip served to the frontend")
+	}
+}

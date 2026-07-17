@@ -205,6 +205,13 @@ type FieldDef struct {
 	// text input).
 	ItemFields []FieldDef `json:"item_fields,omitempty"`
 
+	// LockRows, set on a Type "array" line-items field, declares that its rows
+	// are FIXED: the SDK (dynamic-line-items) hides the add-row and delete-row
+	// controls so the user can only edit existing rows' cells (e.g. a receive
+	// form prefilled from the ordered lines). Mirrors manifest/v3
+	// ActionField.lock_rows. Ignored on non-array fields.
+	LockRows bool `json:"lock_rows,omitempty"`
+
 	// Total flags an ItemFields column for summation in the line-items footer.
 	Total bool `json:"total,omitempty"`
 
