@@ -256,6 +256,7 @@ func toFieldOptionsConfig(in *manifest.DynamicOptionsDef) *modelbase.FieldOption
 		Source:      in.Source,
 		FilterBy:    in.FilterBy,
 		Value:       in.Value,
+		Label:       in.Label,
 		LabelRef:    in.LabelRef,
 		Description: in.Description,
 	}

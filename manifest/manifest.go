@@ -559,6 +559,7 @@ type DynamicOptionsDef struct {
 	Source      string `json:"source,omitempty"`
 	FilterBy    string `json:"filter_by,omitempty"`
 	Value       string `json:"value,omitempty"`
+	Label       string `json:"label,omitempty"`
 	LabelRef    string `json:"label_ref,omitempty"`
 	Description string `json:"description,omitempty"`
 }

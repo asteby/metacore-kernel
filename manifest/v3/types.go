@@ -1077,9 +1077,17 @@ type FieldBalanceRule struct {
 // Generic by design — no domain model name is baked into the kernel; an addon
 // names its own tables here.
 type DynamicOptions struct {
-	Source      string `json:"source,omitempty"`
-	FilterBy    string `json:"filter_by,omitempty"`
-	Value       string `json:"value,omitempty"`
+	Source   string `json:"source,omitempty"`
+	FilterBy string `json:"filter_by,omitempty"`
+	Value    string `json:"value,omitempty"`
+	// Label names the column ON the Source row used as the option's display
+	// text (and the column the `q` typeahead + ordering match against). When
+	// empty the projection defaults to "name". Use it for a SAME-source picker
+	// whose label is a column on Source itself (e.g. a product picker labelled
+	// by `name`); LabelRef is its cross-model twin for when the label lives on
+	// ANOTHER model keyed by Value. Setting Label also fixes search/ordering,
+	// which otherwise fall back to Value (the raw id) when no label is declared.
+	Label       string `json:"label,omitempty"`
 	LabelRef    string `json:"label_ref,omitempty"`
 	Description string `json:"description,omitempty"`
 }

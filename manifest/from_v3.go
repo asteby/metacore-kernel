@@ -349,6 +349,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 					Source:      d.Source,
 					FilterBy:    d.FilterBy,
 					Value:       d.Value,
+					Label:       d.Label,
 					LabelRef:    d.LabelRef,
 					Description: d.Description,
 				}
@@ -823,6 +824,7 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 				Source:      d.Source,
 				FilterBy:    d.FilterBy,
 				Value:       d.Value,
+				Label:       d.Label,
 				LabelRef:    d.LabelRef,
 				Description: d.Description,
 			}

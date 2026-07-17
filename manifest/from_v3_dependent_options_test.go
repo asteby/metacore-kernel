@@ -38,6 +38,7 @@ const dependentOptionsManifestJSON = `{
             "source": "stock",
             "filter_by": "warehouse_id",
             "value": "product_id",
+            "label": "product_name",
             "label_ref": "products.Product",
             "description": "quantity"
           }
@@ -103,6 +104,9 @@ func TestFromV3_DependentOptionsRoundTrip(t *testing.T) {
 	if col.Options.Dynamic == nil {
 		t.Fatalf("v3 column options did not decode as the dynamic object form")
 	}
+	if d := col.Options.Dynamic; d.Label != "product_name" {
+		t.Errorf("column dynamic options Label = %q, want product_name", d.Label)
+	}
 	if d := col.Options.Dynamic; d.Source != "stock" || d.FilterBy != "warehouse_id" ||
 		d.Value != "product_id" || d.LabelRef != "products.Product" || d.Description != "quantity" {
 		t.Errorf("v3 column dynamic options = %+v", d)
@@ -140,6 +144,7 @@ func TestFromV3_DependentOptionsRoundTrip(t *testing.T) {
 		t.Errorf("legacy column depends_on = %q, want warehouse_id", legacyCol.DependsOn)
 	}
 	if legacyCol.OptionsConfig == nil || legacyCol.OptionsConfig.Source != "stock" ||
+		legacyCol.OptionsConfig.Label != "product_name" ||
 		legacyCol.OptionsConfig.LabelRef != "products.Product" || legacyCol.OptionsConfig.Description != "quantity" {
 		t.Errorf("legacy column OptionsConfig = %+v", legacyCol.OptionsConfig)
 	}
