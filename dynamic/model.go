@@ -72,6 +72,17 @@ func columnToField(c manifest.ColumnDef) (reflect.StructField, error) {
 	if err != nil {
 		return reflect.StructField{}, err
 	}
+	// A NULLABLE uuid column (an optional FK such as products.category_id) must be
+	// a POINTER type. As a non-pointer uuid.UUID its zero value is the nil UUID
+	// "00000000-…", which GORM writes verbatim on INSERT/UPDATE instead of NULL —
+	// so leaving the picker empty violates the foreign key ("insert ... violates
+	// foreign key constraint" / SQLSTATE 23503). No client-side normalization can
+	// fix this: even an explicit JSON `null` unmarshals into a non-pointer
+	// uuid.UUID as the nil UUID. As *uuid.UUID an unset value stays nil → GORM
+	// writes NULL. Required uuids keep the value (NOT NULL) form.
+	if goType == uuidType && !c.Required {
+		goType = reflect.PtrTo(uuidType)
+	}
 	name := exportName(c.Name)
 	tags := []string{fmt.Sprintf(`json:"%s"`, c.Name)}
 	gormParts := []string{"type:" + gormType}
