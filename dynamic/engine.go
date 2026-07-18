@@ -77,6 +77,36 @@ type DDLOptions struct {
 	// def.SoftDelete — matching ops, whose runtime struct always carries
 	// soft-delete.
 	AlwaysSoftDelete bool
+
+	// --- ops-compat DDL divergences (dual-run ops#847) ---
+	// The five fields below make ToDDL reproduce, byte-for-byte after
+	// normalization, quirks the ops CreateDynamicTable emitter already baked
+	// into live prod tables. Each is independently opt-in; the zero value keeps
+	// the kernel's historical DDL unchanged.
+
+	// FloatAsDoublePrecision emits float/double/real columns as
+	// `double precision` instead of the kernel's default `numeric(18,4)`.
+	// decimal/numeric are unaffected. Matches ops.
+	FloatAsDoublePrecision bool
+
+	// ImplicitBoolDefaultFalse emits `DEFAULT false` for a bool/boolean column
+	// that declares no default, matching ops' implicit boolean default.
+	ImplicitBoolDefaultFalse bool
+
+	// ImplicitJsonbDefaultObject emits `DEFAULT '{}'` for a jsonb/json column
+	// that declares no default, matching ops' implicit jsonb default.
+	ImplicitJsonbDefaultObject bool
+
+	// QuoteBarewordStringDefaults quotes a non-empty string default on a
+	// string/text column that manifest.DefaultLiteral would reject for lacking
+	// quotes (e.g. default:"draft" → DEFAULT 'draft'). Single quotes in the
+	// value are escaped. This is applied only in the DDL layer under this
+	// option; DefaultLiteral's global behavior is unchanged.
+	QuoteBarewordStringDefaults bool
+
+	// LegacyUniqueIndexName names unique indexes idx_<table>_<col> (matching
+	// ops) instead of the kernel's uidx_<table>_<col>.
+	LegacyUniqueIndexName bool
 }
 
 // SingleSchemaDDLOptions returns options that make ToDDL emit the same table
@@ -93,6 +123,13 @@ func SingleSchemaDDLOptions(schema string) DDLOptions {
 		TimestampWithoutZone: true,
 		AlwaysOrgColumn:      true,
 		AlwaysSoftDelete:     true,
+		// ops-compat DDL divergences (dual-run ops#847). This preset is THE
+		// single ops-compatibility profile, so every divergence is enabled here.
+		FloatAsDoublePrecision:      true,
+		ImplicitBoolDefaultFalse:    true,
+		ImplicitJsonbDefaultObject:  true,
+		QuoteBarewordStringDefaults: true,
+		LegacyUniqueIndexName:       true,
 	}
 }
 
@@ -106,6 +143,76 @@ func SingleSchemaDDLOptions(schema string) DDLOptions {
 // RLS). With SingleSchemaDDLOptions it mirrors the ops emitter.
 func (SchemaEngine) ToDDL(def manifest.ModelDefinition, opts DDLOptions) ([]string, error) {
 	return ToDDL(def, opts)
+}
+
+// columnDDL builds the per-column CREATE TABLE fragment applying the opts'
+// ops-compat divergences. With the zero-value options it is identical to the
+// package-level columnDDL (the executing path), so default mode is unchanged.
+func (opts DDLOptions) columnDDL(c manifest.ColumnDef) (string, error) {
+	pgType, err := opts.pgColumnType(c)
+	if err != nil {
+		return "", err
+	}
+	if c.Generated != "" {
+		// Generated columns carry neither NOT NULL nor DEFAULT — delegate to the
+		// shared helper (its type override does not matter for these).
+		return columnDDL(c)
+	}
+	line := fmt.Sprintf(`%q %s`, c.Name, pgType)
+	if c.Required {
+		line += " NOT NULL"
+	}
+	if def := opts.defaultClause(c); def != "" {
+		line += " DEFAULT " + def
+	}
+	return line, nil
+}
+
+// pgColumnType resolves the SQL type for a column, applying the
+// FloatAsDoublePrecision override before falling back to the shared resolver.
+func (opts DDLOptions) pgColumnType(c manifest.ColumnDef) (string, error) {
+	if opts.FloatAsDoublePrecision {
+		switch strings.ToLower(c.Type) {
+		case "float", "double", "real":
+			return "double precision", nil
+		}
+	}
+	return pgColumnType(c)
+}
+
+// defaultClause returns the DEFAULT literal (without the "DEFAULT " keyword) for
+// a column, or "" for none. It preserves DefaultLiteral's decisions and only
+// layers the opts' ops-compat implicit/quoted defaults on top.
+func (opts DDLOptions) defaultClause(c manifest.ColumnDef) string {
+	lit, ok := manifest.DefaultLiteral(c.Default)
+	if ok && lit != "" {
+		return lit
+	}
+	if !ok {
+		// DefaultLiteral rejected the value. The only compat recovery is a
+		// bareword string default on a string/text column.
+		if opts.QuoteBarewordStringDefaults {
+			if s, isStr := c.Default.(string); isStr && s != "" {
+				switch strings.ToLower(c.Type) {
+				case "string", "text":
+					return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+				}
+			}
+		}
+		return ""
+	}
+	// ok && lit == "" → no declared default; apply implicit type defaults.
+	switch strings.ToLower(c.Type) {
+	case "bool", "boolean":
+		if opts.ImplicitBoolDefaultFalse {
+			return "false"
+		}
+	case "jsonb", "json":
+		if opts.ImplicitJsonbDefaultObject {
+			return "'{}'"
+		}
+	}
+	return ""
 }
 
 // ToDDL is the package-level entry point behind SchemaEngine.ToDDL. See that
@@ -129,7 +236,7 @@ func ToDDL(def manifest.ModelDefinition, opts DDLOptions) ([]string, error) {
 		cols = append(cols, `"organization_id" uuid NOT NULL`)
 	}
 	for _, c := range def.Columns {
-		line, err := columnDDL(c)
+		line, err := opts.columnDDL(c)
 		if err != nil {
 			return nil, err
 		}
@@ -150,7 +257,11 @@ func ToDDL(def manifest.ModelDefinition, opts DDLOptions) ([]string, error) {
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %q.%q (%s)`,
 			schema, def.TableName, strings.Join(cols, ", ")),
 	}
-	stmts = append(stmts, indexStatements(schema, def, needsOrgColumn)...)
+	uniquePrefix := "uidx_"
+	if opts.LegacyUniqueIndexName {
+		uniquePrefix = "idx_"
+	}
+	stmts = append(stmts, indexStatementsWithPrefix(schema, def, needsOrgColumn, uniquePrefix)...)
 	if softDelete {
 		stmts = append(stmts, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %q ON %q.%q ("deleted_at")`,
 			"idx_"+def.TableName+"_deleted", schema, def.TableName))
