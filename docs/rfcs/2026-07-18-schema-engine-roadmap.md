@@ -9,7 +9,8 @@ Doc vivo. Se va tachando. Complementa el RFC `2026-07-18-schema-engine.md`.
 - [x] timestamp opcional → puntero (ops #836, kernel v0.77.0)
 - [x] numeric opcional-sin-default → puntero (ops #843, kernel v0.77.0)
 - [x] **DECISIÓN** bool opcional: se queda valor + default (NULL rompería filtros; opt-in por columna si algún día se necesita tri-estado)
-- [ ] paridad restante: timestamptz vs TIMESTAMP (ops sin tz), escala numeric(18,4) vs NUMERIC, defaults implícitos bool/jsonb
+- [x] paridad timestamptz + escala numeric(18,4) (ops #844; safe — Sync no hace ALTER de tipo sobre existentes)
+- [ ] paridad restante menor: float/double → numeric(18,4) (ops sigue DOUBLE PRECISION), defaults implícitos bool/jsonb
 
 ## Fase 1 — fundación del engine + gate marketplace
 - [x] `dynamic.ValidateColumnType` + allowlist única + `vector` (kernel v0.76.0 #193)
@@ -24,9 +25,9 @@ Doc vivo. Se va tachando. Complementa el RFC `2026-07-18-schema-engine.md`.
 - [ ] modelos con relaciones gorm en Delete (legacy hoy) — requiere cascade en kernel
 
 ## Fase 3 — engine de schema UNIFICADO (el trabajo grande, por etapas)
-- [ ] **F3.1** `SchemaEngine` facade en kernel: `ToReflectType`/`ToDDL` públicos (aditivo, envuelve lo existente)
-- [ ] **F3.2** modo DDL opt-in "single-schema/public, sin RLS, con created_by_id" en el kernel (OFF por defecto; iguala lo que ops emite hoy)
-- [ ] **F3.3** ops delega DDL al kernel en modo single-schema detrás de un feature flag (dual-run: compara salida vs su motor, sin escribir)
+- [x] **F3.1** `SchemaEngine` facade en kernel: `ToReflectType`/`ToDDL`/`ValidateType` públicos (kernel v0.78.1 #198)
+- [x] **F3.2** modo DDL opt-in `SingleSchemaDDLOptions` (public, sin RLS, created_by_id, sin tz) — OFF por defecto (kernel v0.78.1 #198)
+- [ ] **F3.3** ops delega DDL al kernel en modo single-schema detrás de un feature flag (dual-run: compara salida vs su motor, sin escribir) ← SIGUIENTE
 - [ ] **F3.4** switch de ops a `ToReflectType` del kernel (borra `BuildDynamicStructType`/`goTypeForColumn`)
 - [ ] **F3.5** switch de ops a `ToDDL` del kernel (borra `CreateDynamicTable`/`sqlTypeFor`) — **requiere ventana de migración, NO automatizable**
 - [ ] **F3.6** borrar el motor local de ops; una sola fuente de verdad
