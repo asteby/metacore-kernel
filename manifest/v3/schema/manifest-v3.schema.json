@@ -843,6 +843,10 @@
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
           "description": "Binds this column to one of the owning model's sequences by key: on create, when the column is empty, the kernel stamps the next formatted folio value automatically (treated as system-generated for form derivation)."
+        },
+        "generated": {
+          "type": "string",
+          "description": "Declares a Postgres STORED generated column: a pure arithmetic expression over OTHER columns of the SAME row (e.g. 'quantity - reserved'), emitted as `GENERATED ALWAYS AS (<expr>) STORED`. The value is maintained by the database on every write (path-independent) and is SQL-native: it filters, sorts, aggregates and exports in the database with no compute hook or wasm handler, and is excluded from INSERT/UPDATE. Expression allowlist: +-*/, parentheses, numbers, and sibling column identifiers (no self-reference). INCOMPATIBLE with default and not_null (Postgres rejects both on a generated column)."
         }
       }
     },

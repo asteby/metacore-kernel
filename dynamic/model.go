@@ -75,6 +75,23 @@ func columnToField(c manifest.ColumnDef) (reflect.StructField, error) {
 	name := exportName(c.Name)
 	tags := []string{fmt.Sprintf(`json:"%s"`, c.Name)}
 	gormParts := []string{"type:" + gormType}
+	// A Postgres STORED generated column is maintained by the database on every
+	// write, so it MUST be excluded from INSERT/UPDATE — otherwise GORM sends the
+	// field's zero value in the column list and Postgres rejects the write with
+	// "cannot insert a non-DEFAULT value into column ...". GORM's read-only
+	// permission ("->") keeps the column in SELECT/scan (so it still surfaces in
+	// list/detail/export) while omitting it from every write. Generated columns
+	// carry no NOT NULL / DEFAULT / index (validation forbids them), so we return
+	// here before those parts are appended.
+	if c.Generated != "" {
+		gormParts = append(gormParts, "->")
+		tags = append(tags, fmt.Sprintf(`gorm:"%s"`, strings.Join(gormParts, ";")))
+		return reflect.StructField{
+			Name: name,
+			Type: goType,
+			Tag:  reflect.StructTag(strings.Join(tags, " ")),
+		}, nil
+	}
 	if c.Required {
 		gormParts = append(gormParts, "not null")
 	}
