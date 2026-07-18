@@ -51,8 +51,15 @@ func coerceInputToStruct(input map[string]any, instance any) {
 		}
 		ts := strings.TrimSpace(s)
 
-		// uuid: keep valid, drop empty/invalid.
-		if ft == uuidType {
+		// uuid: keep valid, drop empty/invalid. A nullable FK is a *uuid.UUID
+		// (see columnToField) — deref so both the value and pointer forms are
+		// recognized. Dropping the key on empty/invalid leaves a pointer field
+		// nil → GORM writes NULL.
+		baseFt := ft
+		if baseFt.Kind() == reflect.Ptr {
+			baseFt = baseFt.Elem()
+		}
+		if baseFt == uuidType {
 			if ts == "" {
 				delete(input, key)
 				continue
