@@ -35,8 +35,9 @@ Doc vivo. Se va tachando. Complementa el RFC `2026-07-18-schema-engine.md`.
     4. default string bareword (`default:"draft"`): ops lo cita a `'draft'`; kernel `manifest.DefaultLiteral` lo rechaza → NO emite DEFAULT
     5. índice único: ops `idx_<t>_<col>` vs kernel `uidx_<t>_<col>`
   - Todo lo demás COINCIDE bajo el preset (id/org/base, varchar(n), numeric(18,4), timestamptz, defaults citados).
+- [x] **5 divergencias CERRADAS** (kernel v0.78.2 #201, opciones ops-compat en `SingleSchemaDDLOptions`) → **dual-run da MATCH byte-idéntico** (ops #848, test `MatchesOpsCompatPreset`)
 - [ ] **F3.4** switch de ops a `ToReflectType` del kernel (borra `BuildDynamicStructType`/`goTypeForColumn`) — struct-type only, no toca DB; verificar con el dual-run de reflect
-- [ ] **F3.5** switch de ops a `ToDDL` del kernel (borra `CreateDynamicTable`/`sqlTypeFor`) — **requiere: (a) resolver las 5 divergencias arriba, (b) ventana de migración + backup, (c) dual-run en verde. NO automatizable**
+- [ ] **F3.5** switch de ops a `ToDDL` del kernel (borra `CreateDynamicTable`/`sqlTypeFor`) — de-riskeado (dual-run MATCH ✅); queda SOLO: **(a) ventana de migración + backup, (b) ejecutar el cutover con un humano mirando. NO automatizable por diseño.**
 - [ ] **F3.6** borrar el motor local de ops; una sola fuente de verdad
 
 ## Fase 4 — nullability explícita + contrato SDK
