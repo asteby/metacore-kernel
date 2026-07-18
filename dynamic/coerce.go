@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -11,6 +12,15 @@ import (
 // uuidType is the reflect.Type of google/uuid.UUID, used to detect FK / id
 // columns that need a valid-uuid-or-drop policy.
 var uuidType = reflect.TypeOf(uuid.UUID{})
+
+// Non-pointer value types that an OPTIONAL-without-default column is pointer-ized
+// into (see columnToField) so an unset value persists NULL instead of a bogus
+// zero value.
+var (
+	timeType    = reflect.TypeOf(time.Time{})
+	float64Type = reflect.TypeOf(float64(0))
+	boolType    = reflect.TypeOf(false)
+)
 
 // coerceInputToStruct normalizes a create/update input map against the Go types
 // of the target struct BEFORE it is unmarshalled. A dynamic CRUD form sends
@@ -77,7 +87,15 @@ func coerceInputToStruct(input map[string]any, instance any) {
 			continue
 		}
 
-		switch ft.Kind() {
+		// Switch on the DEREFERENCED kind so the pointer forms of the nullable
+		// scalar family (*bool, *float64, and — via the default branch —
+		// *time.Time) are coerced exactly like their value forms. A populated
+		// "true"/"12.5" must parse to a real bool/float (marshals back correctly
+		// into *bool/*float64); an empty/invalid one is dropped → pointer stays
+		// nil → GORM writes NULL. Without the deref a *bool value "true" would fall
+		// to the default branch and be left as the string "true", which fails to
+		// unmarshal into *bool.
+		switch baseFt.Kind() {
 		case reflect.String:
 			// strings accept anything (incl. "")
 		case reflect.Bool:
