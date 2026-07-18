@@ -12,6 +12,7 @@ import (
 
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/google/uuid"
+	"github.com/pgvector/pgvector-go"
 )
 
 // QualifiedTable returns "<schema>.<table>" for the shared-isolation layout.
@@ -156,14 +157,28 @@ func columnGoType(c manifest.ColumnDef) (reflect.Type, string, error) {
 		// RawMessage stores the raw JSON bytes and GORM passes them straight to
 		// the jsonb column; toMap re-marshals to the original object/array.
 		return reflect.TypeOf(json.RawMessage{}), "jsonb", nil
+	case "vector":
+		// pgvector embedding column. pgvector.Vector implements GORM's
+		// Valuer/Scanner and driver serialization, so GORM reads/writes the
+		// column natively. Dimension comes from ColumnDef.Size (a bare "vector"
+		// leaves it unconstrained); the verbatim vector(N) form is handled below.
+		if c.Size > 0 {
+			return reflect.TypeOf(pgvector.Vector{}), fmt.Sprintf("vector(%d)", c.Size), nil
+		}
+		return reflect.TypeOf(pgvector.Vector{}), "vector", nil
 	default:
-		// Parameterized Postgres-native forms (e.g. numeric(6,2), varchar(120))
-		// that v3 manifests declare verbatim — pass the validated form through.
+		// Parameterized Postgres-native forms (e.g. numeric(6,2), varchar(120),
+		// vector(768)) that v3 manifests declare verbatim — pass the validated
+		// form through.
 		if sqlType, ok := parameterizedColumnType(c.Type); ok {
-			if strings.HasPrefix(sqlType, "varchar") {
+			switch {
+			case strings.HasPrefix(sqlType, "varchar"):
 				return reflect.TypeOf(""), sqlType, nil
+			case strings.HasPrefix(sqlType, "vector"):
+				return reflect.TypeOf(pgvector.Vector{}), sqlType, nil
+			default:
+				return reflect.TypeOf(float64(0)), sqlType, nil
 			}
-			return reflect.TypeOf(float64(0)), sqlType, nil
 		}
 		return nil, "", fmt.Errorf("unknown column type %q", c.Type)
 	}
