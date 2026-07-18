@@ -747,20 +747,27 @@
         },
         "type": {
           "type": "string",
-          "description": "Logical type the kernel maps to a Postgres type. Closed set kept narrow to keep cross-driver portability.",
-          "enum": [
-            "uuid",
-            "text",
-            "integer",
-            "bigint",
-            "numeric",
-            "boolean",
-            "timestamp",
-            "timestamptz",
-            "date",
-            "json",
-            "jsonb",
-            "vector"
+          "description": "Logical type the kernel maps to a Postgres type. Closed set kept narrow to keep cross-driver portability. Parameterized Postgres-native forms numeric(p,s), varchar(n) and vector(n) are ALSO accepted — they are a subset of what the kernel DDL plane (dynamic.ValidateColumnType / pgColumnType) materializes, so the author contract can never accept a type the engine cannot emit.",
+          "anyOf": [
+            {
+              "enum": [
+                "uuid",
+                "text",
+                "integer",
+                "bigint",
+                "numeric",
+                "boolean",
+                "timestamp",
+                "timestamptz",
+                "date",
+                "json",
+                "jsonb",
+                "vector"
+              ]
+            },
+            {
+              "pattern": "^(numeric\\(\\d{1,4},\\d{1,4}\\)|varchar\\(\\d{1,4}\\)|vector\\(\\d{1,4}\\))$"
+            }
           ]
         },
         "primary_key": {
