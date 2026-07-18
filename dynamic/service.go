@@ -179,6 +179,21 @@ type Config struct {
 	// (ModelbaseExtractor / FiberLocalsExtractor / JWTClaimsExtractor).
 	AuthUserExtractor adapters.AuthUserExtractor
 
+	// RelationResolver returns the many-to-many relations declared for a model,
+	// resolved to executable pivot descriptors (qualified pivot table + the two
+	// join columns) — host-wired from the addon registry, like
+	// StageMachineResolver / ConstraintResolver. When it returns a non-empty
+	// set, Service.Create/Update REPLACE the owner's join rows for any relation
+	// whose IDs are present in the input, and Service.Delete cleans up the join
+	// rows a deleted owner leaves behind. nil / ok=false / an empty slice
+	// disables association handling for the model — flat models (and hosts that
+	// have not wired the resolver) are entirely unaffected.
+	//
+	// Only many_to_many is acted on; one_to_many / has_many children are left
+	// untouched by design (cascading into independently-owned child rows is not
+	// an unambiguous contract). See dynamic/relations.go.
+	RelationResolver RelationResolver
+
 	// FileDeleter disposes of file/image assets a dynamic record referenced
 	// once that reference is removed — when the record is DELETED, or when a
 	// file/image column's value is REPLACED on update. The kernel detects which
@@ -245,6 +260,7 @@ type Service struct {
 	authExtractor     adapters.AuthUserExtractor
 	selfOptions       bool
 	fileDeleter       FileDeleter
+	relations         RelationResolver
 }
 
 // New constructs a dynamic Service.
@@ -299,6 +315,7 @@ func New(cfg Config) *Service {
 		authExtractor:     cfg.AuthUserExtractor,
 		selfOptions:       cfg.EnableSelfOptions,
 		fileDeleter:       cfg.FileDeleter,
+		relations:         cfg.RelationResolver,
 	}
 }
 
@@ -549,6 +566,20 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 
 	after := toMap(instance)
 	idStr, _ := after["id"].(string)
+
+	// Many-to-many associations: set the pivot rows for every declared relation
+	// whose IDs the caller supplied. Runs after the owner INSERT (the pivot needs
+	// the new owner id) on the standalone handle. A pivot failure surfaces as the
+	// create error — the row is already committed, so this is intentionally the
+	// same best-effort-but-reported boundary as the rest of the post-insert work.
+	if rels := s.resolveRelations(ctx, model); len(rels) > 0 {
+		if ownerID, perr := uuid.Parse(idStr); perr == nil {
+			if err := s.syncPivotOnWrite(ctx, s.db, rels, ownerID, input, true); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	s.publishCanonical(ctx, model, "created", user, idStr, nil, after)
 
 	_ = s.hooks.runAfterCreate(ctx, hc, instance)
@@ -727,6 +758,17 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		}
 	}
 
+	// Many-to-many associations: REPLACE the owner's pivot rows for every
+	// relation whose IDs are present in the input (PATCH semantics — a relation
+	// key absent from the input is left untouched). Runs after the row Save has
+	// committed, on the standalone handle, mirroring the post-core file-cleanup /
+	// publish boundary above.
+	if rels := s.resolveRelations(ctx, model); len(rels) > 0 {
+		if err := s.syncPivotOnWrite(ctx, s.db, rels, id, input, false); err != nil {
+			return nil, err
+		}
+	}
+
 	s.publishCanonical(ctx, model, "updated", user, id.String(), before, after)
 
 	// After-hooks fire post-commit against the standalone handle (the tx, if any,
@@ -783,6 +825,17 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 	if s.fileDeleter != nil {
 		if orphaned := collectOrphanedFromDelete(before, tableMeta); len(orphaned) > 0 {
 			s.fileDeleter(ctx, model, orphaned)
+		}
+	}
+
+	// Many-to-many pivot cleanup: the owner row is gone, so every join row it
+	// owned is now orphaned. Drop them for each declared m2m relation. We do NOT
+	// cascade into one_to_many / has_many child rows: those are independently
+	// owned records, and deleting or re-parenting them is not an unambiguous
+	// contract — see the GAP note in dynamic/relations.go.
+	if rels := s.resolveRelations(ctx, model); len(rels) > 0 {
+		if err := s.cleanupPivotsOnDelete(ctx, rels, id); err != nil {
+			return err
 		}
 	}
 
