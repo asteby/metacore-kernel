@@ -310,6 +310,13 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 			Type:     ftype,
 			Widget:   c.Widget,
 			Required: c.Required,
+			// Nullable is the EXPLICIT inverse of Required (manifest Required is
+			// itself derived from v3 Column.NotNull): a non-required column accepts
+			// NULL, so the SDK submits `null` for an empty value instead of
+			// inferring it from an empty "" / nil-UUID. An optional Ref picker is
+			// the motivating case — it is nullable here so the front stops
+			// reimplementing normalize-submit.ts.
+			Nullable: !c.Required,
 			// Ref (dynamic_select target) and Options (static select) project
 			// onto the served form field so the SDK renders the picker/select
 			// in the native create/edit modal without a custom action.

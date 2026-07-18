@@ -174,6 +174,46 @@ func TestDeriveFormFieldsSkipsManaged(t *testing.T) {
 	}
 }
 
+func TestDeriveFormFieldsMarksNullability(t *testing.T) {
+	// A required scalar, an optional scalar, an optional Ref (FK picker) and a
+	// required Ref. The served metadata must carry EXPLICIT nullability so the
+	// SDK stops inferring "optional ref ⇒ may be null" with heuristics.
+	def := manifest.ModelDefinition{
+		Columns: []manifest.ColumnDef{
+			{Name: "name", Type: "string", Required: true},
+			{Name: "notes", Type: "text"},
+			{Name: "customer_id", Type: "uuid", Ref: "customers"},
+			{Name: "owner_id", Type: "uuid", Ref: "users", Required: true},
+		},
+	}
+	fields := DeriveFormFields(def)
+	if len(fields) != 4 {
+		t.Fatalf("expected 4 fields, got %d", len(fields))
+	}
+	tests := []struct {
+		key      string
+		nullable bool
+	}{
+		{"name", false},       // required scalar → NOT NULL
+		{"notes", true},       // optional scalar → nullable
+		{"customer_id", true}, // optional Ref → nullable (SDK must submit null)
+		{"owner_id", false},   // required Ref → NOT NULL
+	}
+	for i, want := range tests {
+		got := fields[i]
+		if got.Key != want.key {
+			t.Fatalf("field[%d].Key = %q, want %q", i, got.Key, want.key)
+		}
+		if got.Nullable != want.nullable {
+			t.Errorf("field[%d] (%s).Nullable = %v, want %v", i, want.key, got.Nullable, want.nullable)
+		}
+		// Nullable must be the strict inverse of Required.
+		if got.Nullable == got.Required {
+			t.Errorf("field[%d] (%s): Nullable (%v) must be the inverse of Required (%v)", i, want.key, got.Nullable, got.Required)
+		}
+	}
+}
+
 func TestDeriveFormFieldsCarriesReadonly(t *testing.T) {
 	def := manifest.ModelDefinition{
 		Columns: []manifest.ColumnDef{

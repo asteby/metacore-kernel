@@ -149,10 +149,23 @@ type ModalMetadata struct {
 // model so the SDK can resolve the field's option list against the canonical
 // `/api/options/:ref?field=id` endpoint.
 type FieldDef struct {
-	Key            string      `json:"key"`
-	Label          string      `json:"label"`
-	Type           string      `json:"type"` // text, textarea, select, search, number, date, email, url, boolean, image, dynamic_select, array
-	Required       bool        `json:"required,omitempty"`
+	Key      string `json:"key"`
+	Label    string `json:"label"`
+	Type     string `json:"type"` // text, textarea, select, search, number, date, email, url, boolean, image, dynamic_select, array
+	Required bool   `json:"required,omitempty"`
+
+	// Nullable is the EXPLICIT nullability contract for the served form field:
+	// true means the field accepts SQL NULL and the SDK must submit `null` (not
+	// "" or the nil-UUID) when the user leaves it empty. Its canonical semantics
+	// are the inverse of Required — a field is nullable exactly when it is not
+	// NOT NULL — and in particular an OPTIONAL Ref (a relation/FK picker with
+	// !Required) is nullable, which is the case the SDK previously had to INFER
+	// with the `normalize-submit.ts` / `nil-uuid.ts` heuristics. Carrying the
+	// flag explicitly on the metadata lets the SDK stop reimplementing that
+	// inference: it reads `nullable` and emits `null` directly. `omitempty` keeps
+	// the payload retro-compatible (a NOT NULL / required field simply omits it).
+	Nullable bool `json:"nullable,omitempty"`
+
 	Validation     string      `json:"validation,omitempty"`
 	Options        []OptionDef `json:"options,omitempty"`
 	DefaultValue   interface{} `json:"defaultValue,omitempty"`
@@ -271,9 +284,9 @@ type ActionDef struct {
 	// Steps mirrors manifest.ActionDef.Steps (a declarative multi-step wizard);
 	// JSON key matches the SDK's ActionMetadata.steps so the host→SDK round-trip
 	// preserves it.
-	Steps          []ActionStepDef `json:"steps,omitempty"`
-	RequiresState  []string    `json:"requiresState,omitempty"`
-	IsCollection   bool        `json:"isCollection,omitempty"`
+	Steps         []ActionStepDef `json:"steps,omitempty"`
+	RequiresState []string        `json:"requiresState,omitempty"`
+	IsCollection  bool            `json:"isCollection,omitempty"`
 }
 
 // ActionStepDef is one wizard page of a multi-step action form — the served
