@@ -27,9 +27,16 @@ Doc vivo. Se va tachando. Complementa el RFC `2026-07-18-schema-engine.md`.
 ## Fase 3 — engine de schema UNIFICADO (el trabajo grande, por etapas)
 - [x] **F3.1** `SchemaEngine` facade en kernel: `ToReflectType`/`ToDDL`/`ValidateType` públicos (kernel v0.78.1 #198)
 - [x] **F3.2** modo DDL opt-in `SingleSchemaDDLOptions` (public, sin RLS, created_by_id, sin tz) — OFF por defecto (kernel v0.78.1 #198)
-- [ ] **F3.3** ops delega DDL al kernel en modo single-schema detrás de un feature flag (dual-run: compara salida vs su motor, sin escribir) ← SIGUIENTE
-- [ ] **F3.4** switch de ops a `ToReflectType` del kernel (borra `BuildDynamicStructType`/`goTypeForColumn`)
-- [ ] **F3.5** switch de ops a `ToDDL` del kernel (borra `CreateDynamicTable`/`sqlTypeFor`) — **requiere ventana de migración, NO automatizable**
+- [x] **F3.3** dual-run: ops compara su DDL vs el del kernel (`ToDDL` single-schema), flag `SCHEMA_ENGINE_DUALRUN`, OFF por defecto, sin escribir (ops #847)
+  - **Divergencias reveladas (a resolver antes del cutover F3.5):**
+    1. `float`/`double`: ops `DOUBLE PRECISION` vs kernel `numeric(18,4)`
+    2. `bool` sin default: ops `BOOLEAN DEFAULT false` (implícito) vs kernel `boolean` pelón
+    3. `jsonb` sin default: ops `JSONB DEFAULT '{}'` vs kernel `jsonb` pelón
+    4. default string bareword (`default:"draft"`): ops lo cita a `'draft'`; kernel `manifest.DefaultLiteral` lo rechaza → NO emite DEFAULT
+    5. índice único: ops `idx_<t>_<col>` vs kernel `uidx_<t>_<col>`
+  - Todo lo demás COINCIDE bajo el preset (id/org/base, varchar(n), numeric(18,4), timestamptz, defaults citados).
+- [ ] **F3.4** switch de ops a `ToReflectType` del kernel (borra `BuildDynamicStructType`/`goTypeForColumn`) — struct-type only, no toca DB; verificar con el dual-run de reflect
+- [ ] **F3.5** switch de ops a `ToDDL` del kernel (borra `CreateDynamicTable`/`sqlTypeFor`) — **requiere: (a) resolver las 5 divergencias arriba, (b) ventana de migración + backup, (c) dual-run en verde. NO automatizable**
 - [ ] **F3.6** borrar el motor local de ops; una sola fuente de verdad
 
 ## Fase 4 — nullability explícita + contrato SDK
