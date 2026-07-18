@@ -147,6 +147,17 @@ type Config struct {
 	// model (back-compat).
 	ConstraintResolver ConstraintResolver
 
+	// ValidationSchemaResolver returns the declarative column definitions the
+	// pre-write field-validation pass enforces for a model name — the host wires
+	// it from its addon registry / manifest, the same way as the resolvers
+	// above. When it returns a non-empty column slice, Service.Create/Update run
+	// a structured validation pass BEFORE the DB write (required / invalid_option
+	// / not_found / duplicate / invalid_type) and abort with 422 + a per-field
+	// code map (a *ValidationError) on any failure. nil / ok=false / an empty
+	// slice disables field validation for the model (back-compat: bad values are
+	// dropped by coerce and any surviving violation surfaces from Postgres).
+	ValidationSchemaResolver ValidationSchemaResolver
+
 	// SequenceResolver returns the folio-sequence config for a model name —
 	// host-wired from the addon registry, like the resolvers above. When set,
 	// Service.Create auto-stamps every sequence-bound column left empty with the
@@ -229,6 +240,7 @@ type Service struct {
 	actionDispatchers map[string]ActionDispatcher
 	stageMachines     StageMachineResolver
 	constraints       ConstraintResolver
+	validationSchema  ValidationSchemaResolver
 	sequences         SequenceResolver
 	authExtractor     adapters.AuthUserExtractor
 	selfOptions       bool
@@ -282,6 +294,7 @@ func New(cfg Config) *Service {
 		actionDispatchers: dispatchers,
 		stageMachines:     cfg.StageMachineResolver,
 		constraints:       cfg.ConstraintResolver,
+		validationSchema:  cfg.ValidationSchemaResolver,
 		sequences:         cfg.SequenceResolver,
 		authExtractor:     cfg.AuthUserExtractor,
 		selfOptions:       cfg.EnableSelfOptions,
@@ -488,6 +501,16 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 
 	// Normalize string-encoded typed fields (uuid/number/bool) so a form that
 	// sends everything as strings doesn't fail the unmarshal. See coerce.go.
+	// Structured pre-write validation: required / invalid_option / not_found /
+	// duplicate / invalid_type, collected into a per-field code map. Runs after
+	// scope injection but BEFORE coerce (so invalid_type can catch the raw
+	// string values coerce would silently drop) and before hooks/guards/
+	// mapToStruct — a bad input is rejected 422 with a field map instead of a
+	// raw Postgres 500. A model with no wired validation schema is unaffected.
+	if err := s.validateWrite(ctx, model, tableName, user, input, nil); err != nil {
+		return nil, err
+	}
+
 	coerceInputToStruct(input, instance)
 
 	hc := HookContext{Model: model, User: user, DB: s.db}
@@ -610,6 +633,16 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 					}
 				}
 			}
+		}
+
+		// Structured pre-write validation (PATCH-style: only keys present in
+		// input are checked, and this record's own id is excluded from the
+		// unique check). Runs before coerce (raw values for invalid_type) and
+		// before hooks/guards/mapToStruct; inside the lock when locking so the
+		// duplicate check is serialized with the write.
+		selfID := id
+		if err := s.validateWrite(ctx, model, tableName, user, input, &selfID); err != nil {
+			return err
 		}
 
 		// Normalize string-encoded typed fields before merging into the record.
