@@ -92,6 +92,15 @@ func CreateTable(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, d
 // index DDL, shared by createIndexes (which executes them) and ToDDL (which
 // returns them as text).
 func indexStatements(schema string, def manifest.ModelDefinition, hasOrg bool) []string {
+	// The executing path (createIndexes) keeps the kernel's historical uidx_
+	// prefix for unique indexes.
+	return indexStatementsWithPrefix(schema, def, hasOrg, "uidx_")
+}
+
+// indexStatementsWithPrefix is indexStatements parameterized by the unique-index
+// name prefix, so the ops-compat DDL preset can emit idx_ (matching ops) while
+// the default path keeps uidx_.
+func indexStatementsWithPrefix(schema string, def manifest.ModelDefinition, hasOrg bool, uniquePrefix string) []string {
 	var stmts []string
 	if hasOrg {
 		stmts = append(stmts, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %q ON %q.%q ("organization_id")`,
@@ -104,7 +113,7 @@ func indexStatements(schema string, def manifest.ModelDefinition, hasOrg bool) [
 		}
 		if c.Unique {
 			stmts = append(stmts, fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS %q ON %q.%q (%q)`,
-				"uidx_"+def.TableName+"_"+c.Name, schema, def.TableName, c.Name))
+				uniquePrefix+def.TableName+"_"+c.Name, schema, def.TableName, c.Name))
 		}
 	}
 	return stmts
