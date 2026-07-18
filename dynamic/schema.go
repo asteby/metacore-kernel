@@ -87,28 +87,33 @@ func CreateTable(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, d
 	return nil
 }
 
-func createIndexes(db *gorm.DB, schema string, def manifest.ModelDefinition, hasOrg bool) error {
+// indexStatements builds the CREATE INDEX fragments for a table's org column
+// and any indexed/unique manifest columns. It is the single source of truth for
+// index DDL, shared by createIndexes (which executes them) and ToDDL (which
+// returns them as text).
+func indexStatements(schema string, def manifest.ModelDefinition, hasOrg bool) []string {
+	var stmts []string
 	if hasOrg {
-		idx := fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %q ON %q.%q ("organization_id")`,
-			"idx_"+def.TableName+"_org", schema, def.TableName)
-		if err := db.Exec(idx).Error; err != nil {
-			return err
-		}
+		stmts = append(stmts, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %q ON %q.%q ("organization_id")`,
+			"idx_"+def.TableName+"_org", schema, def.TableName))
 	}
 	for _, c := range def.Columns {
 		if c.Index && !c.Unique {
-			idx := fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %q ON %q.%q (%q)`,
-				"idx_"+def.TableName+"_"+c.Name, schema, def.TableName, c.Name)
-			if err := db.Exec(idx).Error; err != nil {
-				return err
-			}
+			stmts = append(stmts, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %q ON %q.%q (%q)`,
+				"idx_"+def.TableName+"_"+c.Name, schema, def.TableName, c.Name))
 		}
 		if c.Unique {
-			idx := fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS %q ON %q.%q (%q)`,
-				"uidx_"+def.TableName+"_"+c.Name, schema, def.TableName, c.Name)
-			if err := db.Exec(idx).Error; err != nil {
-				return err
-			}
+			stmts = append(stmts, fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS %q ON %q.%q (%q)`,
+				"uidx_"+def.TableName+"_"+c.Name, schema, def.TableName, c.Name))
+		}
+	}
+	return stmts
+}
+
+func createIndexes(db *gorm.DB, schema string, def manifest.ModelDefinition, hasOrg bool) error {
+	for _, idx := range indexStatements(schema, def, hasOrg) {
+		if err := db.Exec(idx).Error; err != nil {
+			return err
 		}
 	}
 	return nil
@@ -164,9 +169,12 @@ func addColumnDDL(schema, table string, c manifest.ColumnDef) (string, error) {
 // enableRLS turns on row-level security and installs a policy that scopes
 // every SELECT / UPDATE / DELETE to `current_setting('app.current_org')`.
 // Hosts must run `SET LOCAL app.current_org = '<uuid>'` per request.
-func enableRLS(db *gorm.DB, schema, table string) error {
+// rlsStatements builds the ROW LEVEL SECURITY DDL for a shared-isolation table.
+// Shared by enableRLS (executes) and ToDDL (returns as text) so the two paths
+// never diverge.
+func rlsStatements(schema, table string) []string {
 	policy := "rls_org_isolation"
-	stmts := []string{
+	return []string{
 		fmt.Sprintf(`ALTER TABLE %q.%q ENABLE ROW LEVEL SECURITY`, schema, table),
 		// DROP POLICY IF EXISTS is not transactional-safe in all Postgres
 		// versions, so we attempt CREATE and tolerate "already exists".
@@ -177,7 +185,10 @@ func enableRLS(db *gorm.DB, schema, table string) error {
              WITH CHECK ("organization_id" = current_setting('app.current_org', true)::uuid)`,
 			policy, schema, table),
 	}
-	for _, s := range stmts {
+}
+
+func enableRLS(db *gorm.DB, schema, table string) error {
+	for _, s := range rlsStatements(schema, table) {
 		if err := db.Exec(s).Error; err != nil {
 			return err
 		}
