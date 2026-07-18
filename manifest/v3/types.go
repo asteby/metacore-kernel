@@ -411,6 +411,11 @@ type ModelRelation struct {
 	Scope      map[string]string `json:"scope,omitempty"` // static child filter for polymorphic children
 	Label      string            `json:"label,omitempty"` // i18n key / human label for the panel
 
+	// Readonly declares that the relation panel in the UI must not allow
+	// creating/editing/deleting child rows. Used for relations pointing at an
+	// append-only ledger (e.g. an inventory kardex). Optional; defaults false.
+	Readonly bool `json:"readonly,omitempty"`
+
 	// Rollups declare PARENT columns whose value is an aggregate over this
 	// relation's child rows (Tier-1 of the declarative compute engine, akin to
 	// a Salesforce Roll-Up Summary or an Odoo stored computed field). On every
