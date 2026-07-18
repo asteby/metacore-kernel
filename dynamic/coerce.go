@@ -64,7 +64,14 @@ func coerceInputToStruct(input map[string]any, instance any) {
 				delete(input, key)
 				continue
 			}
-			if _, err := uuid.Parse(ts); err != nil {
+			parsed, err := uuid.Parse(ts)
+			// The nil UUID ("00000000-…") is never a real target row: an empty
+			// relation picker often submits it (instead of "") — keeping it would
+			// write the zero UUID and violate the FK ("insert ... violates foreign
+			// key constraint", SQLSTATE 23503). Treat it as "no value" → drop, so
+			// an optional FK persists as NULL and a required one is caught by the
+			// pre-write validation ("required") rather than a raw Postgres 500.
+			if err != nil || parsed == uuid.Nil {
 				delete(input, key)
 			}
 			continue

@@ -56,4 +56,13 @@ func TestCoerce_NullableUUIDPointer(t *testing.T) {
 	if valid["category_id"] != "11111111-1111-1111-1111-111111111111" {
 		t.Fatalf("valid uuid must be preserved; got %v", valid["category_id"])
 	}
+
+	// The nil UUID ("00000000-…") is a valid uuid FORM but never a real row — an
+	// empty relation picker often submits it. It must be dropped (→ NULL / caught
+	// by required-validation), not written as the zero UUID (which violates the FK).
+	nilU := map[string]any{"category_id": "00000000-0000-0000-0000-000000000000"}
+	coerceInputToStruct(nilU, inst)
+	if _, ok := nilU["category_id"]; ok {
+		t.Fatalf("nil UUID must be dropped so the FK stays NULL; input = %v", nilU)
+	}
 }
