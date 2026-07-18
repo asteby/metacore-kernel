@@ -84,6 +84,28 @@ func columnToField(c manifest.ColumnDef) (reflect.StructField, error) {
 	if goType == uuidType && !c.Required {
 		goType = reflect.PtrTo(uuidType)
 	}
+	// The uuid "family of nullability": every OPTIONAL scalar column whose Go type
+	// is a NON-POINTER value (timestamp → time.Time, numeric → float64, bool →
+	// bool) has the exact same latent bug as the nullable uuid above. Their zero
+	// values (0001-01-01T00:00:00Z / 0 / false) are indistinguishable from a real
+	// "unset" and GORM writes them verbatim instead of NULL — so an empty optional
+	// timestamp persists a bogus year-1 date, an empty numeric persists 0, an empty
+	// bool persists false. Making them POINTERS lets an unset value stay nil → GORM
+	// writes NULL.
+	//
+	// CONTRACT: pointer-ize ONLY when the column is !Required AND declares no
+	// Default. When a Default is declared the VALUE form is kept: the column DEFAULT
+	// covers "unset", preserving the semantics addons chose when they declared it
+	// (a bool defaulting to false, a numeric defaulting to 0, etc.). string/text/
+	// json/jsonb/int/bigint/vector are intentionally left as-is (empty string is a
+	// legitimate value, jsonb has its own handling, ints have no ambiguous NULL vs
+	// zero need here).
+	if lit, ok := manifest.DefaultLiteral(c.Default); !c.Required && !(ok && lit != "") {
+		switch goType {
+		case timeType, float64Type, boolType:
+			goType = reflect.PtrTo(goType)
+		}
+	}
 	name := exportName(c.Name)
 	tags := []string{fmt.Sprintf(`json:"%s"`, c.Name)}
 	gormParts := []string{"type:" + gormType}
