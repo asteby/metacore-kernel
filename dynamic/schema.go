@@ -263,6 +263,16 @@ func pgColumnType(c manifest.ColumnDef) (string, error) {
 		return "date", nil
 	case "jsonb", "json":
 		return "jsonb", nil
+	case "vector":
+		// pgvector embedding column. The dimension may be declared verbatim as
+		// vector(768) (handled by parameterizedColumnType) or via ColumnDef.Size;
+		// a bare "vector" leaves the dimension unconstrained. Requires the
+		// pgvector extension (host.NewApp with EnableVectorStore, or an explicit
+		// CREATE EXTENSION vector).
+		if c.Size > 0 {
+			return fmt.Sprintf("vector(%d)", c.Size), nil
+		}
+		return "vector", nil
 	default:
 		if sqlType, ok := parameterizedColumnType(c.Type); ok {
 			return sqlType, nil
@@ -292,6 +302,11 @@ func parameterizedColumnType(raw string) (string, bool) {
 		return "numeric(" + params + ")", true
 	case "varchar", "char", "character", "character varying":
 		return "varchar(" + params + ")", true
+	case "vector":
+		// pgvector dimension declared verbatim, e.g. vector(768). The regex only
+		// allows a single integer parameter for vectors (a comma form would be
+		// rejected upstream as it is not a valid vector modifier).
+		return "vector(" + params + ")", true
 	default:
 		return "", false
 	}
