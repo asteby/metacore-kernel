@@ -424,6 +424,17 @@ func (h *Handler) search(c fiber.Ctx) error {
 }
 
 func (h *Handler) handleError(c fiber.Ctx, err error) error {
+	// Structured field-validation failure: 422 with the per-column code map the
+	// SDK localizes. Must precede the flat respondErr cases so the field map is
+	// preserved instead of being flattened to a single message.
+	var ve *ValidationError
+	if errors.As(err, &ve) {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+			"success": false,
+			"message": "validation failed",
+			"errors":  ve.Fields,
+		})
+	}
 	if errors.Is(err, ErrUnsupportedTriggerType) {
 		return respondErr(c, fiber.StatusNotImplemented, err.Error())
 	}
