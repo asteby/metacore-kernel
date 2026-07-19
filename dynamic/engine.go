@@ -28,6 +28,13 @@ func (SchemaEngine) ToReflectType(def manifest.ModelDefinition) (reflect.Type, e
 	return BuildStructType(def)
 }
 
+// ToReflectTypeWithOptions is ToReflectType with opt-in StructOptions (real GORM
+// soft-delete and/or a created_by_id column). With the zero-value opts it is
+// identical to ToReflectType. See StructOptions and OpsCompatStructOptions.
+func (SchemaEngine) ToReflectTypeWithOptions(def manifest.ModelDefinition, opts StructOptions) (reflect.Type, error) {
+	return BuildStructTypeWithOptions(def, opts)
+}
+
 // ValidateType reports whether a manifest column type is one the engine can
 // materialize. It wraps ValidateColumnType (the single allowlist) so hosts and
 // the marketplace gate validate against the same set.
@@ -143,6 +150,47 @@ func SingleSchemaDDLOptions(schema string) DDLOptions {
 // RLS). With SingleSchemaDDLOptions it mirrors the ops emitter.
 func (SchemaEngine) ToDDL(def manifest.ModelDefinition, opts DDLOptions) ([]string, error) {
 	return ToDDL(def, opts)
+}
+
+// AddColumnDDL generates the `ALTER TABLE <schema>.<table> ADD COLUMN IF NOT
+// EXISTS <col> <type ...>` statement for ONE column, reusing the SAME type/DDL
+// logic as ToDDL (opts.columnDDL / opts.pgColumnType) so an out-of-band schema
+// sync and the CREATE TABLE path never diverge. It lets a host (ops) delegate
+// its SyncDynamicTableSchema ADD COLUMN to the kernel instead of maintaining its
+// own column-body SQL.
+//
+// With the zero-value DDLOptions the column body matches the kernel's default
+// (numeric(18,4) for float, no implicit defaults); with SingleSchemaDDLOptions
+// it applies the ops-compat type divergences (e.g. double precision, implicit
+// bool/jsonb defaults). Generated columns are emitted as STORED generated
+// columns, which Postgres computes for every existing row on ADD COLUMN.
+func (SchemaEngine) AddColumnDDL(schema, table string, col manifest.ColumnDef, opts DDLOptions) (string, error) {
+	return opts.addColumnDDL(schema, table, col)
+}
+
+// AddColumnsDDL generates one ADD COLUMN statement per column, in order.
+func (SchemaEngine) AddColumnsDDL(schema, table string, cols []manifest.ColumnDef, opts DDLOptions) ([]string, error) {
+	stmts := make([]string, 0, len(cols))
+	for _, c := range cols {
+		stmt, err := opts.addColumnDDL(schema, table, c)
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, stmt)
+	}
+	return stmts, nil
+}
+
+// addColumnDDL builds an `ALTER TABLE … ADD COLUMN IF NOT EXISTS <body>`
+// statement whose column body is exactly the CREATE TABLE fragment opts.columnDDL
+// produces (same type resolution, NOT NULL, DEFAULT and STORED-generated
+// handling), so both paths stay in lockstep.
+func (opts DDLOptions) addColumnDDL(schema, table string, c manifest.ColumnDef) (string, error) {
+	body, err := opts.columnDDL(c)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`ALTER TABLE %q.%q ADD COLUMN IF NOT EXISTS %s`, schema, table, body), nil
 }
 
 // columnDDL builds the per-column CREATE TABLE fragment applying the opts'

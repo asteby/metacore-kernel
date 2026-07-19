@@ -13,6 +13,7 @@ import (
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
+	"gorm.io/gorm"
 )
 
 // QualifiedTable returns "<schema>.<table>" for the shared-isolation layout.
@@ -30,9 +31,54 @@ type BaseFields struct {
 	DeletedAt *time.Time `gorm:",omitempty" json:"deleted_at,omitempty"`
 }
 
+// StructOptions controls optional, opt-in additions to the runtime struct
+// projected by BuildStructTypeWithOptions / SchemaEngine.ToReflectTypeWithOptions.
+// The ZERO value reproduces BuildStructType's historical shape EXACTLY, so the
+// default projection is unchanged; each field is independently opt-in.
+//
+// The options exist so a host (ops) can delegate its runtime struct to the
+// kernel without losing two behaviors its own BaseUUIDModel provides today:
+// real GORM soft-delete (gorm.DeletedAt, which emits `WHERE deleted_at IS NULL`
+// and soft-deletes instead of hard-deleting) and a framework-managed
+// created_by_id column the kernel's Create path stamps by reflection.
+type StructOptions struct {
+	// SoftDeleteGorm makes the DeletedAt field a gorm.DeletedAt (instead of the
+	// default *time.Time), so GORM performs real soft-delete and filters
+	// soft-deleted rows automatically. When set the DeletedAt field is present
+	// unconditionally (matching a host whose base model always soft-deletes),
+	// regardless of def.SoftDelete.
+	SoftDeleteGorm bool
+
+	// IncludeCreatedBy adds a nullable `created_by_id` uuid column as
+	// CreatedByID *uuid.UUID, so the kernel Create path (which stamps
+	// input["created_by_id"] by reflection) populates it instead of silently
+	// dropping the value.
+	IncludeCreatedBy bool
+}
+
+// OpsCompatStructOptions returns the StructOptions preset that aligns with
+// SingleSchemaDDLOptions (the ops-compatibility DDL profile): real GORM
+// soft-delete plus the created_by_id column. It lets a host delegate BOTH its
+// struct projection and its DDL to the kernel with matching semantics.
+func OpsCompatStructOptions() StructOptions {
+	return StructOptions{
+		SoftDeleteGorm:   true,
+		IncludeCreatedBy: true,
+	}
+}
+
 // BuildStructType assembles a runtime struct type for a ModelDefinition.
 // The result is suitable for GORM AutoMigrate and reflect.New for CRUD.
+//
+// It is exactly BuildStructTypeWithOptions with the zero-value StructOptions.
 func BuildStructType(def manifest.ModelDefinition) (reflect.Type, error) {
+	return BuildStructTypeWithOptions(def, StructOptions{})
+}
+
+// BuildStructTypeWithOptions is BuildStructType with opt-in StructOptions. With
+// the zero-value opts the output is byte-for-byte identical to BuildStructType's
+// historical shape.
+func BuildStructTypeWithOptions(def manifest.ModelDefinition, opts StructOptions) (reflect.Type, error) {
 	fields := []reflect.StructField{
 		{
 			Name: "ID",
@@ -58,11 +104,28 @@ func BuildStructType(def manifest.ModelDefinition) (reflect.Type, error) {
 		reflect.StructField{Name: "CreatedAt", Type: reflect.TypeOf(time.Time{}), Tag: `json:"created_at" gorm:"autoCreateTime"`},
 		reflect.StructField{Name: "UpdatedAt", Type: reflect.TypeOf(time.Time{}), Tag: `json:"updated_at" gorm:"autoUpdateTime"`},
 	)
-	if def.SoftDelete {
+	switch {
+	case opts.SoftDeleteGorm:
+		// Real GORM soft-delete: gorm.DeletedAt makes GORM emit
+		// `WHERE deleted_at IS NULL` on reads and UPDATE deleted_at on Delete.
+		// Present unconditionally (a host whose base model always soft-deletes).
+		fields = append(fields, reflect.StructField{
+			Name: "DeletedAt",
+			Type: reflect.TypeOf(gorm.DeletedAt{}),
+			Tag:  `json:"deleted_at,omitempty" gorm:"index"`,
+		})
+	case def.SoftDelete:
 		fields = append(fields, reflect.StructField{
 			Name: "DeletedAt",
 			Type: reflect.TypeOf(&time.Time{}),
 			Tag:  `json:"deleted_at,omitempty" gorm:"index"`,
+		})
+	}
+	if opts.IncludeCreatedBy {
+		fields = append(fields, reflect.StructField{
+			Name: "CreatedByID",
+			Type: reflect.PtrTo(uuidType),
+			Tag:  `json:"created_by_id" gorm:"type:uuid;index"`,
 		})
 	}
 	return reflect.StructOf(fields), nil
