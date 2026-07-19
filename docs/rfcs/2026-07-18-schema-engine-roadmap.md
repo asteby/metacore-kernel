@@ -21,7 +21,7 @@ Doc vivo. Se va tachando. Complementa el RFC `2026-07-18-schema-engine.md`.
 - [x] Show/Get de addons → `Service.Get` (ops #838)
 - [x] Delete → `Service.Delete` con probe de 404 (ops #842)
 - [x] search-unaccent (ops #842; sub-caso relación en legacy)
-- [ ] delegar relaciones many2many (Update gate las excluye) — requiere B4
+- [x] B4 kernel-side: asociaciones m2m en Create/Update/Delete vía `RelationResolver` (kernel v0.79.0 #204). Pendiente wiring ops (poblar RelationResolver + relajar update/delete gates). Cascade has-many diferido (contrato ambiguo).
 - [ ] modelos con relaciones gorm en Delete (legacy hoy) — requiere cascade en kernel
 
 ## Fase 3 — engine de schema UNIFICADO (el trabajo grande, por etapas)
@@ -36,9 +36,9 @@ Doc vivo. Se va tachando. Complementa el RFC `2026-07-18-schema-engine.md`.
     5. índice único: ops `idx_<t>_<col>` vs kernel `uidx_<t>_<col>`
   - Todo lo demás COINCIDE bajo el preset (id/org/base, varchar(n), numeric(18,4), timestamptz, defaults citados).
 - [x] **5 divergencias CERRADAS** (kernel v0.78.2 #201, opciones ops-compat en `SingleSchemaDDLOptions`) → **dual-run da MATCH byte-idéntico** (ops #848, test `MatchesOpsCompatPreset`)
-- [ ] **F3.4** switch de ops a `ToReflectType` del kernel (borra `BuildDynamicStructType`/`goTypeForColumn`) — struct-type only, no toca DB; verificar con el dual-run de reflect
-- [ ] **F3.5** switch de ops a `ToDDL` del kernel (borra `CreateDynamicTable`/`sqlTypeFor`) — de-riskeado (dual-run MATCH ✅); queda SOLO: **(a) ventana de migración + backup, (b) ejecutar el cutover con un humano mirando. NO automatizable por diseño.**
-- [ ] **F3.6** borrar el motor local de ops; una sola fuente de verdad
+- [x] **F3.4** ops delega struct a `ToReflectTypeWithOptions(OpsCompatStructOptions())` — soft-delete gorm.DeletedAt + created_by (kernel v0.79.1 #205, ops #850). Hook BeforeCreate verificado: solo UUID (cubierto por DB default) + created_by fallback (cubierto por InjectOnCreate).
+- [x] **F3.5** ops delega DDL: create-path a `ToDDL` (ops #849), Sync ALTER a `AddColumnsDDL` (ops #850). Greenfield (sin clientes/datos) → cutover por código, sin ventana de migración necesaria.
+- [x] **F3.6** motor local de ops BORRADO (ops #850, −859 líneas: goTypeForColumn/buildColumnTag/sqlTypeFor/columnBodySQL/BuildDynamicStructType/dual-run). **Una sola fuente de verdad: el SchemaEngine del kernel.**
 
 ## Fase 4 — nullability explícita + contrato SDK
 - [x] backend `FieldDef.Nullable` en metadata (kernel v0.77.1 #196)
