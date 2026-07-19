@@ -21,7 +21,9 @@ Doc vivo. Se va tachando. Complementa el RFC `2026-07-18-schema-engine.md`.
 - [x] Show/Get de addons → `Service.Get` (ops #838)
 - [x] Delete → `Service.Delete` con probe de 404 (ops #842)
 - [x] search-unaccent (ops #842; sub-caso relación en legacy)
-- [x] B4 kernel-side: asociaciones m2m en Create/Update/Delete vía `RelationResolver` (kernel v0.79.0 #204). Pendiente wiring ops (poblar RelationResolver + relajar update/delete gates). Cascade has-many diferido (contrato ambiguo).
+- [x] B4 kernel-side: asociaciones m2m en Create/Update/Delete vía `RelationResolver` (kernel v0.79.0 #204).
+- [x] B4 wiring ops: `services.RelationResolver()` + gates relajados (ops #852). GAP conocido: la conversión v3→host (`from_v3.go mapModelRelations`) DROPEA `Pivot`/`References`, así que un m2m declarado en v3 no es delegable (queda en legacy); solo delega si el addon declara `pivot` explícito + pivote registrado. Cierre total requiere que el contrato v3 lleve pivot table + columna join target.
+- [ ] (futuro) v3 RelationDef: llevar `pivot`+target join column para delegar TODA m2m; cascade has-many.
 - [ ] modelos con relaciones gorm en Delete (legacy hoy) — requiere cascade en kernel
 
 ## Fase 3 — engine de schema UNIFICADO (el trabajo grande, por etapas)
