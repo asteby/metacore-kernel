@@ -48,6 +48,10 @@ type RelationMeta struct {
 	ForeignKey string            `json:"foreign_key"`
 	Scope      map[string]string `json:"scope,omitempty"`
 	Label      string            `json:"label,omitempty"`
+	// Readonly declares that the relation panel must not allow create/edit/delete
+	// of child rows (e.g. an append-only ledger like an inventory kardex).
+	// Projected from manifest/v3 ModelRelation.readonly. Pure UI.
+	Readonly bool `json:"readonly,omitempty"`
 }
 
 // ColumnDef describes a single column in a TableMetadata.

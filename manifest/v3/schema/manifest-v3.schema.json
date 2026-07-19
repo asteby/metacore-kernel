@@ -724,6 +724,10 @@
           "type": "string",
           "description": "Optional i18n key / human label for the related-records panel."
         },
+        "readonly": {
+          "type": "boolean",
+          "description": "When true, the related-records panel must not allow creating/editing/deleting child rows. Used for relations pointing at an append-only ledger (e.g. an inventory kardex). Pure UI metadata; defaults false."
+        },
         "rollups": {
           "type": "array",
           "description": "Tier-1 parent-aggregate specs over this relation's child rows. Only meaningful for one_to_many.",

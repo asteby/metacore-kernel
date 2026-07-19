@@ -832,6 +832,11 @@ type RelationDef struct {
 	// panel the SDK renders on a detail page. Empty falls back to Name.
 	Label string `json:"label,omitempty"`
 
+	// Readonly declares that the related-records panel must not allow
+	// creating/editing/deleting child rows. Used for relations pointing at an
+	// append-only ledger (e.g. an inventory kardex). Optional; defaults false.
+	Readonly bool `json:"readonly,omitempty"`
+
 	// Rollups declare PARENT columns the kernel maintains as aggregates over
 	// this relation's child rows (Tier-1 of the declarative compute engine).
 	// On every child create/update/delete the dynamic engine recomputes each

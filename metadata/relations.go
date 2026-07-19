@@ -79,6 +79,7 @@ func deriveRefsFromDef(def modelbase.ModelDefiner, meta *modelbase.TableMetadata
 				ForeignKey: r.ForeignKey,
 				Scope:      r.Scope,
 				Label:      r.Label,
+				Readonly:   r.Readonly,
 			})
 		}
 	}

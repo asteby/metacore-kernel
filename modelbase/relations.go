@@ -38,6 +38,12 @@ type RelationDef struct {
 
 	// Label is an optional i18n key / human label for the related-records panel.
 	Label string `json:"label,omitempty"`
+
+	// Readonly declares that the relation panel must not allow create/edit/delete
+	// of child rows (e.g. an append-only ledger like an inventory kardex).
+	// Mirrors manifest.RelationDef.Readonly so the value survives the
+	// manifest → host hop. Pure UI metadata; defaults false.
+	Readonly bool `json:"readonly,omitempty"`
 }
 
 // HasRelations is implemented by compiled models that declare model-to-model
