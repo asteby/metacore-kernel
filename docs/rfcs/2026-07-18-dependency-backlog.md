@@ -20,17 +20,17 @@ Force-merge sin build rompe (probado: ops#274 dio 3 conflictos en el boot del ap
 ## Inventario y plan
 
 ### A) Dep bumps seguros (Renovate self-rebase; merge con build verde)
-- [ ] ops #854 — kernel v0.79.2 (necesario: ops consume readonly/asociaciones)
-- [ ] ops #853 — chromedp v0.16.0
-- [ ] addons #341 — metacore platform · #174 lockfile · #5 pnpm v11
-- [ ] sdk #595 — version packages (PUBLICA runtime-react; decisión de release)
-- [ ] addons #337 — version packages
+- [x] ops kernel v0.79.2 (bump limpio #855; cerró Renovate #854 divergido)
+- [x] ops #853 — chromedp v0.16.0
+- [x] sdk #595 — version packages (publicado)
+- [ ] addons #341 — metacore platform · #174 lockfile · #5 pnpm v11 · #337 version packages (pnpm, pendientes)
 
 ### B) Majors — pasada dedicada cada uno (adaptar API, build verde, o hold documentado)
-- [ ] kernel #79 — jsonschema v5→v6
-- [ ] hub #249 / sdk #390 — stripe-go v82/v85→v86
-- [ ] hub #47 — tailwindcss v4
-- [ ] sdk #403 — react ecosystem
+- [x] kernel jsonschema v5→v6 (MIGRADO #209, API adaptada; cerró Renovate #79)
+- [x] hub stripe-go v82→v86 (MIGRADO #304; cerró #249) — + limpieza gitlinks #306
+- [x] sdk stripe-go v85→v86 (MIGRADO #599; cerró #390)
+- [ ] hub #47 — tailwindcss v4 (frontend, pesado — pendiente)
+- [ ] sdk #403 — react ecosystem (frontend, riesgo alto — pendiente)
 - [ ] hub #191 — metacore platform (major) — CUIDADO: no bajar/subir kernel a algo incompatible con lo integrado
 
 ### C) Features de otras sesiones (rebase contra la consolidación + review por su autor)
