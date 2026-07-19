@@ -12,7 +12,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/asteby/metacore-kernel/manifest/computeexpr"
-	"github.com/santhosh-tekuri/jsonschema/v5"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // validFns is the rollup aggregate-function allowlist, shared with the legacy
@@ -536,8 +536,15 @@ var compiledSchema *jsonschema.Schema
 
 func init() {
 	c := jsonschema.NewCompiler()
-	c.Draft = jsonschema.Draft2020
-	if err := c.AddResource("manifest-v3.schema.json", strings.NewReader(string(schemaBytes))); err != nil {
+	c.DefaultDraft(jsonschema.Draft2020)
+	// jsonschema/v6 takes a PARSED document (any) for AddResource, not an
+	// io.Reader — and its own UnmarshalJSON decodes numbers as json.Number so
+	// integer/number keywords validate correctly.
+	doc, err := jsonschema.UnmarshalJSON(strings.NewReader(string(schemaBytes)))
+	if err != nil {
+		panic(fmt.Errorf("v3: parse embedded schema: %w", err))
+	}
+	if err := c.AddResource("manifest-v3.schema.json", doc); err != nil {
 		panic(fmt.Errorf("v3: embed schema add resource: %w", err))
 	}
 	s, err := c.Compile("manifest-v3.schema.json")
@@ -595,11 +602,11 @@ func Validate(raw []byte) error {
 
 	// Schema check first; if the doc is structurally broken the rest is
 	// pointless.
-	var asAny interface{}
-	if err := json.Unmarshal(raw, &asAny); err != nil {
+	inst, err := jsonschema.UnmarshalJSON(strings.NewReader(string(raw)))
+	if err != nil {
 		return fmt.Errorf("v3: invalid JSON: %w", err)
 	}
-	if err := compiledSchema.Validate(asAny); err != nil {
+	if err := compiledSchema.Validate(inst); err != nil {
 		return fmt.Errorf("v3: schema validation failed: %w", err)
 	}
 
