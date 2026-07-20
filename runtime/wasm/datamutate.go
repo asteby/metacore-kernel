@@ -339,8 +339,22 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 
 	case "update":
 		out.action = "updated"
+		// Tenant predicate. A child table has no organization_id of its own —
+		// splicing it in died with 42703 — so it is scoped through its parent
+		// exactly like the read path (dataquery_orgscope.go). A row whose parent
+		// belongs to another organization simply does not match, so it reports
+		// not_found: the same answer a foreign row already gets on a table WITH
+		// the column, and it leaks no existence.
+		columns, err := tableColumns(work, tbl)
+		if err != nil {
+			return nil, "db_error", err
+		}
+		scope, err := resolveOrgScope(work, tbl, columns)
+		if err != nil {
+			return nil, "db_error", err
+		}
 		before, err := queryOneRow(work,
-			fmt.Sprintf("SELECT * FROM %s WHERE id = $1 AND organization_id = $2", tbl),
+			fmt.Sprintf("SELECT * FROM %s WHERE id = $1 AND %s", tbl, scope.predicate("$2")),
 			out.rowID, orgID)
 		if err != nil {
 			return nil, "db_error", err
@@ -367,8 +381,8 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 		n++
 		sets = append(sets, fmt.Sprintf(`"updated_at" = $%d`, n))
 		args = append(args, now)
-		stmt := fmt.Sprintf("UPDATE %s SET %s WHERE id = $%d AND organization_id = $%d RETURNING *",
-			tbl, strings.Join(sets, ", "), n+1, n+2)
+		stmt := fmt.Sprintf("UPDATE %s SET %s WHERE id = $%d AND %s RETURNING *",
+			tbl, strings.Join(sets, ", "), n+1, scope.predicate(fmt.Sprintf("$%d", n+2)))
 		args = append(args, out.rowID, orgID)
 		after, err := queryOneRow(work, stmt, args...)
 		if err != nil {
@@ -382,8 +396,18 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 
 	case "delete":
 		out.action = "deleted"
+		// Same tenant predicate as update: plain column when the table has one,
+		// parent EXISTS when it does not.
+		columns, err := tableColumns(work, tbl)
+		if err != nil {
+			return nil, "db_error", err
+		}
+		scope, err := resolveOrgScope(work, tbl, columns)
+		if err != nil {
+			return nil, "db_error", err
+		}
 		before, err := queryOneRow(work,
-			fmt.Sprintf("SELECT * FROM %s WHERE id = $1 AND organization_id = $2", tbl),
+			fmt.Sprintf("SELECT * FROM %s WHERE id = $1 AND %s", tbl, scope.predicate("$2")),
 			out.rowID, orgID)
 		if err != nil {
 			return nil, "db_error", err
@@ -401,8 +425,8 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 					fmt.Errorf("row %s in %s is already deleted", out.rowID, req.Table)
 			}
 			res := work.Exec(fmt.Sprintf(
-				`UPDATE %s SET "deleted_at" = $1, "updated_at" = $2 WHERE id = $3 AND organization_id = $4`,
-				tbl), now, now, out.rowID, orgID)
+				`UPDATE %s SET "deleted_at" = $1, "updated_at" = $2 WHERE id = $3 AND %s`,
+				tbl, scope.predicate("$4")), now, now, out.rowID, orgID)
 			if res.Error != nil {
 				return nil, "db_error", res.Error
 			}
@@ -412,7 +436,7 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 			}
 		} else {
 			res := work.Exec(fmt.Sprintf(
-				"DELETE FROM %s WHERE id = $1 AND organization_id = $2", tbl),
+				"DELETE FROM %s WHERE id = $1 AND %s", tbl, scope.predicate("$2")),
 				out.rowID, orgID)
 			if res.Error != nil {
 				return nil, "db_error", res.Error

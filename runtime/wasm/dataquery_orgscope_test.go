@@ -169,7 +169,7 @@ func TestOrgScopeClauses_TopLevelTableUnchanged(t *testing.T) {
 	gdb, mock, cleanup := newMockGorm(t)
 	defer cleanup()
 
-	got, err := orgScopeClauses(gdb, `"stock"`, map[string]bool{"organization_id": true, "id": true})
+	got, err := orgScopeClauses(gdb, `"stock"`, map[string]bool{"organization_id": true, "id": true}, "$1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

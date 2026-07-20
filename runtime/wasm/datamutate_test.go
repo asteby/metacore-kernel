@@ -245,6 +245,7 @@ func TestExecuteDataMutate_UpdateIncAtomicBeforeAfter(t *testing.T) {
 	bus, getEvents, _ := captureBus(t, "inventory.Stock.updated")
 
 	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
 	mock.ExpectQuery(`SELECT \* FROM "stock" WHERE id = \$1 AND organization_id = \$2`).
 		WithArgs(rowID, orgID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "quantity", "note"}).
@@ -298,6 +299,7 @@ func TestExecuteDataMutate_DeleteSoftWhenDeletedAtPresent(t *testing.T) {
 
 	mock.ExpectBegin()
 	// Snapshot carries a deleted_at column (NULL) → soft-delete path.
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
 	mock.ExpectQuery(`SELECT \* FROM "stock" WHERE id = \$1 AND organization_id = \$2`).
 		WithArgs(rowID, orgID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "quantity", "deleted_at"}).
@@ -337,6 +339,7 @@ func TestExecuteDataMutate_DeleteHardWithoutDeletedAt(t *testing.T) {
 	bus, _, _ := captureBus(t, "inventory.Stock.deleted")
 
 	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
 	mock.ExpectQuery(`SELECT \* FROM "stock" WHERE id = \$1 AND organization_id = \$2`).
 		WithArgs(rowID, orgID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "quantity"}).
@@ -371,6 +374,7 @@ func TestExecuteDataMutate_OrgEnforcement(t *testing.T) {
 	bus, getEvents, _ := captureBus(t, "inventory.Stock.*")
 
 	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
 	mock.ExpectQuery(`SELECT \* FROM "stock" WHERE id = \$1 AND organization_id = \$2`).
 		WithArgs(rowID, orgID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
@@ -452,6 +456,7 @@ func TestExecuteDataMutate_NotFoundOnDelete(t *testing.T) {
 	bus, _, _ := captureBus(t, "inventory.Stock.deleted")
 
 	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
 	mock.ExpectQuery(`SELECT \* FROM "stock" WHERE id = \$1 AND organization_id = \$2`).
 		WithArgs(rowID, orgID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))

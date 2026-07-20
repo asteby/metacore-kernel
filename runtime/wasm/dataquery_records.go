@@ -193,7 +193,7 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 	// child table without one is scoped through its FK to an org-scoped parent,
 	// and refused outright if it has no such parent (dataquery_orgscope.go).
 	// Both forms reference $1 only, so the guest filters keep numbering from $2.
-	orgConds, err := orgScopeClauses(work, tbl, tblCols)
+	orgConds, err := orgScopeClauses(work, tbl, tblCols, "$1")
 	if err != nil {
 		var noPath *errNoOrgScopePath
 		if errors.As(err, &noPath) {
