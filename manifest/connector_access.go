@@ -62,6 +62,12 @@ type ConnectorAccess struct {
 // `secrets:read <key>` and `connector:read <key>` are equivalent: both mean
 // "this addon reads that connector's credentials". Manifests declare the former
 // because the latter was not a valid v3 kind when they were written.
+//
+// Callers holding a *v3.Manifest (anything coming out of v3.Parse, e.g. a
+// linter) convert first — FromV3 maps capabilities and connector keys 1:1, so
+// nothing this rule reads is lost:
+//
+//	access := manifest.ConnectorAccessFor(manifest.FromV3(m))
 func ConnectorAccessFor(m Manifest) ConnectorAccess {
 	var out ConnectorAccess
 	explicit := map[string]struct{}{}
