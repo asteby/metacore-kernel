@@ -201,6 +201,25 @@ func TestValidate_UnknownCapabilityKindRejected(t *testing.T) {
 	}
 }
 
+// connector:read is how an addon declares it reads a connector another addon
+// owns (waybill-cartaporte reusing fiscal_mexico's factura_com). It was missing
+// from the closed enum, so the declaration the runtime gates on could not be
+// written at all — see ops#870.
+func TestValidate_ConnectorReadCapabilityAccepted(t *testing.T) {
+	m := baseValid()
+	m["capabilities"] = []interface{}{
+		map[string]interface{}{
+			"kind":   "connector:read",
+			"target": "factura_com",
+			"reason": "Timbrar Carta Porte con el PAC ya configurado por fiscal_mexico",
+		},
+	}
+
+	if err := Validate(mustJSON(t, m)); err != nil {
+		t.Fatalf("connector:read must be declarable: %v", err)
+	}
+}
+
 func TestParse_ReturnsTypedManifestOnSuccess(t *testing.T) {
 	got, err := Parse(mustJSON(t, baseValid()))
 	if err != nil {

@@ -31,6 +31,15 @@ const (
 // invocation is the per-call bag the host module imports read. Living on the
 // request context (not a field on Host) means concurrent invocations on the
 // same addon can carry different settings without locking.
+// logf writes a host-side line for this invocation, no-op when the host has no
+// logger. Used for audit trails that must never affect the guest's result.
+func (i *invocation) logf(format string, args ...any) {
+	if i == nil || i.logger == nil {
+		return
+	}
+	i.logger.Printf("metacore.wasm "+format, args...)
+}
+
 type invocation struct {
 	addonKey     string
 	installation uuid.UUID
@@ -226,9 +235,15 @@ func registerHostModule(ctx context.Context, h *Host) error {
 			if key == "" {
 				return writeToGuest(ctx, mod, jsonError("bad_request", "connector key is empty"))
 			}
+			// Audit every credential read attempt, allowed or not: connector
+			// creds are the most sensitive thing a guest can pull, and the
+			// (addon, connector, org) triple is what makes abuse detectable
+			// after the fact. Logged before the gate so denials are visible too.
 			if err := inv.caps.CanReadConnector(key); err != nil {
+				inv.logf("audit connector_get addon=%s connector=%s org=%s decision=denied: %v", inv.addonKey, key, inv.orgID, err)
 				return writeToGuest(ctx, mod, jsonError("forbidden", err.Error()))
 			}
+			inv.logf("audit connector_get addon=%s connector=%s org=%s decision=allowed", inv.addonKey, key, inv.orgID)
 			if inv.connectors == nil {
 				return writeToGuest(ctx, mod, jsonError("connector_unavailable", "host has no connectors resolver configured"))
 			}
