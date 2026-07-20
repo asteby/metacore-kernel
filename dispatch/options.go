@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/asteby/metacore-kernel/security"
 )
@@ -15,15 +16,30 @@ const DefaultTableName = "event_deliveries"
 // cannot retry forever.
 const defaultMaxAttempts = 3
 
+// defaultRetryBackoff / defaultRetryBackoffMax bound the exponential wait
+// inserted BEFORE each retry (never before the first attempt). Retrying a
+// failed invocation immediately is actively harmful: a guest that traps under
+// load gets three back-to-back invocations that deepen the overload, and a
+// guest whose handler already called an external service (stamping an invoice
+// with a PAC, charging a card) and then timed out is re-entered while that
+// call may still be in flight. Spacing the attempts gives an overloaded guest
+// room to recover and an in-flight external call room to land.
+const (
+	defaultRetryBackoff    = 500 * time.Millisecond
+	defaultRetryBackoffMax = 30 * time.Second
+)
+
 // Options configures a Dispatcher. Construct via With* functional options
 // passed to Wire.
 type Options struct {
-	tableName   string
-	maxAttempts int
-	capability  CapabilityChecker
-	compiled    CompiledRegistry
-	logger      *slog.Logger
-	onDelivery  func(DeliveryResult)
+	tableName       string
+	maxAttempts     int
+	retryBackoff    time.Duration
+	retryBackoffMax time.Duration
+	capability      CapabilityChecker
+	compiled        CompiledRegistry
+	logger          *slog.Logger
+	onDelivery      func(DeliveryResult)
 }
 
 // DeliveryResult is the terminal outcome of one delivery, surfaced to an
@@ -45,11 +61,13 @@ type Option func(*Options)
 
 func defaultOptions() *Options {
 	return &Options{
-		tableName:   DefaultTableName,
-		maxAttempts: defaultMaxAttempts,
-		capability:  nil, // permit-all until a host wires a checker
-		compiled:    nil, // compiled tier inert until a registry is wired
-		logger:      slog.Default(),
+		tableName:       DefaultTableName,
+		maxAttempts:     defaultMaxAttempts,
+		retryBackoff:    defaultRetryBackoff,
+		retryBackoffMax: defaultRetryBackoffMax,
+		capability:      nil, // permit-all until a host wires a checker
+		compiled:        nil, // compiled tier inert until a registry is wired
+		logger:          slog.Default(),
 	}
 }
 
@@ -70,6 +88,23 @@ func WithMaxAttempts(n int) Option {
 			n = 1
 		}
 		o.maxAttempts = n
+	}
+}
+
+// WithRetryBackoff sets the base delay of the exponential backoff between
+// delivery attempts (attempt N waits base*2^(N-2), jittered, capped at max).
+// A base of 0 disables waiting entirely — only appropriate for tests, since it
+// restores the immediate-retry behaviour described in defaultRetryBackoff. A
+// max <= 0 leaves the default cap in place.
+func WithRetryBackoff(base, max time.Duration) Option {
+	return func(o *Options) {
+		if base < 0 {
+			base = 0
+		}
+		o.retryBackoff = base
+		if max > 0 {
+			o.retryBackoffMax = max
+		}
 	}
 }
 

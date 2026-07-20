@@ -1050,9 +1050,16 @@ rather than sniffing keys:
 }
 ```
 
-- `data.subscribers` is the number of handlers
-  `events.Bus.PublishWithCount` invoked. Returns `0` when no pattern
-  matched the event name — that is a successful publish, not an error.
+- `data.subscribers` is the number of DELIVERIES
+  `events.Bus.PublishWithCount` produced. Returns `0` when nothing
+  received the event — that is a successful publish, not an error.
+  A direct subscriber counts as `1`; a routing subscriber such as the
+  dispatcher (which forwards to every matching addon subscription of the
+  org) contributes the number of deliveries it enqueued, so it adds `0`
+  when the event matched no subscription. Before kernel v0.73 this was
+  the count of bus *taps* that matched, which meant a guest emitting a
+  domain event always saw `1` — the dispatcher's wildcard tap — even
+  when the event was dropped and no handler ever ran.
 - `meta.orgId` is the tenant id the host bound to the invocation (§ 12.6).
   It is informational; it is **not** part of the addon's per-call surface
   and cannot be overridden from the guest. Omitted on error envelopes

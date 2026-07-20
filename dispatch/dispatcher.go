@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -49,37 +50,52 @@ type canonicalEvent struct {
 	CorrelationID string `json:"correlation_id"`
 }
 
-// handle is the events.Handler the dispatcher registers under "*". It runs
-// synchronously inside the bus fan-out (like every handler), so it MUST stay
-// cheap: it resolves matching subscriptions, persists each delivery row, and
-// hands the actual handler invocation off to a worker goroutine. The CRUD
+// handle is the events.RoutingHandler the dispatcher registers under "*". It
+// runs synchronously inside the bus fan-out (like every handler), so it MUST
+// stay cheap: it resolves matching subscriptions, persists each delivery row,
+// and hands the actual handler invocation off to a worker goroutine. The CRUD
 // mutation that produced the event is therefore never blocked by a subscriber.
-func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, payload any) error {
-	// Re-marshal the payload to (a) extract the canonical identity and (b)
-	// produce the JSON bytes forwarded to handlers. A non-canonical / unmarshalable
-	// payload is ignored — domain events emitted by guests flow through the same
-	// bus but carry their own shape; subscriptions still match on the event NAME,
-	// which the bus passed to us implicitly via the matched subscription. However,
-	// we cannot see the event name here (the bus does not pass it to Handler), so
-	// the dispatcher keys on the canonical envelope's reconstructed name. See note.
+//
+// It returns the number of deliveries enqueued so the bus can report an honest
+// subscriber count to the emitter (a guest calling `event_emit` gets that count
+// back in its envelope; before, it always saw 1 — this wildcard tap — even when
+// nothing was routed).
+func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName string, payload any) (int, error) {
+	// The event NAME comes from the bus and is authoritative: it is what the
+	// emitter passed to Publish / `event_emit`. The payload is re-marshalled
+	// only to (a) produce the JSON bytes forwarded to handlers and (b) read the
+	// canonical envelope's identity fields (event id, actor, correlation) when
+	// the payload happens to be a CanonicalEvent. A payload that is NOT
+	// canonical routes exactly the same way — that is the whole point: domain
+	// events emitted by guests ("pos.order_created") are first-class here.
+	//
+	// Note the name is never reconstructed from the payload any more. A domain
+	// payload that coincidentally carries `model`/`action` fields used to be
+	// re-routed under `<addon>.<Model>.<Action>`, silently ignoring the name the
+	// emitter chose. For canonical CRUD events the two are identical by
+	// construction (dynamic.publishCanonical builds the name from the same
+	// addonKey/model/action it puts in the envelope), so canonical routing is
+	// unchanged.
+	if eventName == "" {
+		return 0, nil
+	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return nil
+		return 0, nil
 	}
 	var ce canonicalEvent
-	if err := json.Unmarshal(raw, &ce); err != nil || ce.Model == "" || ce.Action == "" {
-		// Not a canonical CRUD event (e.g. a secondary domain event a guest
-		// emitted). The dispatcher only routes canonical events; domain-event
-		// routing keys on a name the Handler signature does not expose, so it
-		// is out of scope for this layer (a future bus revision that passes the
-		// event name to Handler unlocks it).
-		return nil
+	_ = json.Unmarshal(raw, &ce) // best-effort; a non-canonical payload leaves it zero
+
+	// occurrenceID is the idempotency discriminator for this publication. A
+	// canonical event has a natural one (the mutated row id), which is what
+	// makes a re-publish collapse to a single delivery. A domain event has no
+	// such key, and reusing an empty string would make every subsequent
+	// emission of the same event name a permanent no-op — so each publication
+	// gets a fresh id and is delivered on its own merits.
+	occurrenceID := ce.ID
+	if occurrenceID == "" {
+		occurrenceID = uuid.NewString()
 	}
-	addonKey := ce.AddonKey
-	if addonKey == "" {
-		addonKey = "kernel"
-	}
-	eventName := fmt.Sprintf("%s.%s.%s", addonKey, ce.Model, ce.Action)
 
 	subs, err := d.provider.SubscriptionsForOrg(ctx, orgID)
 	if err != nil {
@@ -87,25 +103,29 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, payload any) e
 			slog.String("org", orgID.String()),
 			slog.String("event", eventName),
 			slog.String("err", err.Error()))
-		return nil
+		return 0, nil
 	}
 
+	enqueued := 0
 	for i := range subs {
 		sub := subs[i]
 		if !eventMatches(sub.Event, eventName) {
 			continue
 		}
-		d.enqueue(ctx, orgID, eventName, ce, raw, sub)
+		if d.enqueue(ctx, orgID, eventName, occurrenceID, ce, raw, sub) {
+			enqueued++
+		}
 	}
-	return nil
+	return enqueued, nil
 }
 
 // enqueue persists the deterministic delivery row (idempotent INSERT) and, when
 // the row is newly created (or still pending), launches the async worker. A
 // duplicate event that hits the unique index — or a row already delivered/dead —
-// short-circuits with no invocation.
-func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName string, ce canonicalEvent, payload []byte, sub Subscription) {
-	id := deliveryID(eventName, ce.ID, sub)
+// short-circuits with no invocation. Reports whether a delivery was actually
+// enqueued, which feeds the emitter-facing subscriber count.
+func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName, occurrenceID string, ce canonicalEvent, payload []byte, sub Subscription) bool {
+	id := deliveryID(eventName, occurrenceID, sub)
 
 	row := Delivery{
 		ID:             uuid.New(),
@@ -130,11 +150,11 @@ func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName str
 		d.logger.Warn("dispatch.ledger_insert_error",
 			slog.String("delivery_id", id),
 			slog.String("err", res.Error.Error()))
-		return
+		return false
 	}
 	if res.RowsAffected == 0 {
 		// Already enqueued/delivered/dead — idempotent no-op.
-		return
+		return false
 	}
 
 	d.wg.Add(1)
@@ -155,6 +175,7 @@ func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName str
 		}
 		d.deliver(bg, orgID, eventName, id, payload, sub)
 	}()
+	return true
 }
 
 // deliveryTimeout bounds a single delivery's wall clock across its retries.
@@ -191,6 +212,14 @@ func (d *Dispatcher) deliver(ctx context.Context, orgID uuid.UUID, eventName, id
 			lastErr = err
 			break
 		}
+		// Space out retries. The wait is skipped on the first attempt and
+		// aborts early if the delivery's outer deadline expires while waiting.
+		if attempt > 1 {
+			if err := sleepCtx(ctx, d.backoffFor(attempt)); err != nil {
+				lastErr = err
+				break
+			}
+		}
 		err := d.invoke(ctx, orgID, payload, sub)
 		if err == nil {
 			d.markDelivered(id, attempt)
@@ -222,6 +251,42 @@ func (d *Dispatcher) deliver(ctx context.Context, orgID uuid.UUID, eventName, id
 		slog.String("function", sub.Function),
 		slog.String("err", msg))
 	d.notify(id, eventName, sub, StatusDead, d.opts.maxAttempts, msg)
+}
+
+// backoffFor returns the wait before `attempt` (which is always >= 2):
+// base * 2^(attempt-2), capped at retryBackoffMax, with up to +/-20% jitter so
+// a burst of deliveries that failed together does not retry in lockstep.
+func (d *Dispatcher) backoffFor(attempt int) time.Duration {
+	base := d.opts.retryBackoff
+	if base <= 0 {
+		return 0
+	}
+	wait := base << (attempt - 2)
+	if wait <= 0 || wait > d.opts.retryBackoffMax {
+		wait = d.opts.retryBackoffMax
+	}
+	// Deterministic-enough jitter; crypto randomness is pointless here.
+	jitter := time.Duration(rand.Int63n(int64(wait/5)*2+1)) - wait/5
+	if wait+jitter > 0 {
+		wait += jitter
+	}
+	return wait
+}
+
+// sleepCtx waits for d unless ctx ends first, in which case it returns the
+// ctx error so the caller can stop retrying.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // notify fires the optional WithOnDelivery observer for a terminal delivery.

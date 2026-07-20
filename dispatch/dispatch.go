@@ -20,7 +20,11 @@
 //	defer cancel()
 //
 // Wire subscribes ONE trusted "kernel" wildcard handler to the bus (mirroring
-// audit.Wire). On each CanonicalEvent it:
+// audit.Wire). It routes EVERY event on the bus, canonical or not: a CRUD
+// envelope published as `<addon>.<Model>.<action>` and a domain event a guest
+// emitted as `pos.order_created` take the identical path, because the bus now
+// hands the routing layer the event NAME (events.SubscribeRouting) instead of
+// leaving it to be inferred from the payload's shape. On each event it:
 //
 //  1. asks the SubscriptionProvider for the installed+enabled addons of THAT
 //     org and their declared subscriptions;
@@ -33,7 +37,8 @@
 //  4. records a deterministic `event_deliveries` row and dispatches the
 //     handler ASYNCHRONOUSLY on a worker goroutine so a slow subscriber never
 //     blocks the CRUD mutation that produced the event;
-//  5. retries a failed delivery up to MaxAttempts, then marks it dead.
+//  5. retries a failed delivery up to MaxAttempts — spaced by an exponential
+//     backoff, see WithRetryBackoff — then marks it dead.
 //
 // SECURITY: the bus capability check bypasses the Enforcer for the literal
 // "kernel" key (events/events.go). The dispatcher subscribes under "kernel" so
@@ -239,7 +244,7 @@ func Wire(bus *events.Bus, invoker WasmInvoker, db *gorm.DB, provider Subscripti
 		logger:   o.logger,
 	}
 
-	if err := bus.Subscribe(subscriberKey, "*", d.handle); err != nil {
+	if err := bus.SubscribeRouting(subscriberKey, "*", d.handle); err != nil {
 		return noop, fmt.Errorf("dispatch: subscribe: %w", err)
 	}
 	d.logger.Info("dispatch.wired",

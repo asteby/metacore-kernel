@@ -12,7 +12,7 @@
 // Both checks run through a security.Enforcer so operators can flip between
 // shadow (log only) and enforce (error) globally without code changes.
 //
-// Wildcard subscription
+// # Wildcard subscription
 //
 // A subscribe pattern ending in ".*" matches any event sharing the prefix:
 // "ticket.*" matches "ticket.created", "ticket.resolved", but not
@@ -37,12 +37,31 @@ import (
 // should hand work off to their own goroutine.
 type Handler func(ctx context.Context, orgID uuid.UUID, payload any) error
 
+// EventHandler is the name-aware sibling of Handler: it receives the NAME of
+// the event that matched in addition to the payload. Handler cannot express
+// this — it only ever sees the payload — which is why routing layers such as
+// the dispatcher had to reconstruct a name from the payload's shape (and could
+// therefore only route canonical CRUD envelopes). Subscribe/Handler stay as
+// they are for source compatibility; new name-dependent subscribers should use
+// SubscribeEvent.
+type EventHandler func(ctx context.Context, orgID uuid.UUID, event string, payload any) error
+
+// RoutingHandler is a subscriber that is itself a fan-out layer: rather than
+// being one subscriber, it forwards the event to N downstream handlers and
+// reports how many it actually accepted. The bus adds that number — not 1 — to
+// the count PublishWithCount returns, so an emitter learns how many deliveries
+// its event really produced instead of how many taps happened to be attached.
+// A router that drops the event returns 0.
+type RoutingHandler func(ctx context.Context, orgID uuid.UUID, event string, payload any) (int, error)
+
 // subscription binds a pattern + handler to an addon (for capability checks
 // and bulk Unsubscribe by addon key).
 type subscription struct {
 	AddonKey string
 	Pattern  string
-	Handler  Handler
+	// fn is the normalised callback: every Subscribe* variant is adapted to
+	// this one shape so Publish has a single call path.
+	fn RoutingHandler
 }
 
 // Bus is the thread-safe fan-out registry. The zero value is not usable —
@@ -85,6 +104,34 @@ func (b *Bus) Subscribe(addonKey, eventPattern string, h Handler) error {
 	if h == nil {
 		return fmt.Errorf("events: nil handler")
 	}
+	return b.SubscribeRouting(addonKey, eventPattern, func(ctx context.Context, orgID uuid.UUID, _ string, payload any) (int, error) {
+		return 1, h(ctx, orgID, payload)
+	})
+}
+
+// SubscribeEvent is Subscribe for a name-aware EventHandler. Semantics are
+// otherwise identical (same pattern rule, same capability check, same
+// logged-and-swallowed error handling); it counts as one subscriber.
+func (b *Bus) SubscribeEvent(addonKey, eventPattern string, h EventHandler) error {
+	if h == nil {
+		return fmt.Errorf("events: nil handler")
+	}
+	return b.SubscribeRouting(addonKey, eventPattern, func(ctx context.Context, orgID uuid.UUID, event string, payload any) (int, error) {
+		return 1, h(ctx, orgID, event, payload)
+	})
+}
+
+// SubscribeRouting registers a RoutingHandler — a subscriber whose reported
+// delivery count, not its mere presence, feeds the PublishWithCount total.
+// Used by the dispatcher, which is a router for every addon subscription of
+// the org rather than a subscriber in its own right.
+func (b *Bus) SubscribeRouting(addonKey, eventPattern string, h RoutingHandler) error {
+	if eventPattern == "" {
+		return fmt.Errorf("events: empty pattern")
+	}
+	if h == nil {
+		return fmt.Errorf("events: nil handler")
+	}
 	if err := b.check(addonKey, "event:subscribe", eventPattern); err != nil {
 		return err
 	}
@@ -92,7 +139,7 @@ func (b *Bus) Subscribe(addonKey, eventPattern string, h Handler) error {
 	b.subs[eventPattern] = append(b.subs[eventPattern], subscription{
 		AddonKey: addonKey,
 		Pattern:  eventPattern,
-		Handler:  h,
+		fn:       h,
 	})
 	b.mu.Unlock()
 	b.logger.Printf("metacore.events subscribe addon=%s pattern=%s", addonKey, eventPattern)
@@ -115,10 +162,14 @@ func (b *Bus) Publish(ctx context.Context, addonKey, event string, orgID uuid.UU
 
 // PublishWithCount is the count-returning sibling of Publish. It mirrors the
 // Publish semantics 1:1 (capability check → match scan → synchronous fan-out)
-// and additionally returns the number of subscriber handlers that were
-// invoked. The count is the fan-out size, not the success count — handler
-// errors are still logged-and-swallowed, so a return of `(3, nil)` means
-// three handlers ran (one or more may have errored internally).
+// and additionally returns the number of DELIVERIES the event produced. A
+// plain Handler/EventHandler subscriber counts as 1 when it runs; a
+// RoutingHandler (see SubscribeRouting) contributes the number of downstream
+// deliveries it reports, which is 0 when it drops the event. The count is
+// therefore a fan-out size, not a success count — handler errors are still
+// logged-and-swallowed, so `(3, nil)` means three deliveries were made (one or
+// more may have errored internally). What it will NOT do is report 1 because
+// some wildcard tap matched and then discarded the event.
 //
 // On capability denial (enforce mode) or input error the count is `0` and
 // the error is non-nil. Capability denial in `ModeShadow` returns
@@ -140,16 +191,21 @@ func (b *Bus) PublishWithCount(ctx context.Context, addonKey, event string, orgI
 	}
 	b.mu.RUnlock()
 
-	b.logger.Printf("metacore.events publish org=%s event=%s caller=%s subscribers=%d",
+	b.logger.Printf("metacore.events publish org=%s event=%s caller=%s matched=%d",
 		orgID, event, addonKey, len(matched))
 
+	delivered := 0
 	for _, s := range matched {
-		if err := s.Handler(ctx, orgID, payload); err != nil {
+		n, err := s.fn(ctx, orgID, event, payload)
+		if err != nil {
 			b.logger.Printf("metacore.events handler_error addon=%s pattern=%s event=%s err=%v",
 				s.AddonKey, s.Pattern, event, err)
 		}
+		if n > 0 {
+			delivered += n
+		}
 	}
-	return len(matched), nil
+	return delivered, nil
 }
 
 // Unsubscribe removes every subscription registered under addonKey. It is the
