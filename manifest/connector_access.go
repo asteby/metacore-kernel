@@ -30,24 +30,28 @@ const (
 
 // ConnectorAccess is what a manifest says about the connectors its addon reads.
 type ConnectorAccess struct {
-	// Granted is every connector key the addon may read, deduped: explicit
-	// declarations plus the implicit owner grant below.
+	// Granted is every connector key the addon may read, deduped. It comes
+	// only from explicit `connector:read` / `secrets:read` declarations:
+	// declaring a connector in the manifest's own `connectors` block defines
+	// it (and drives its configuration form in the Installed view) but does
+	// NOT authorise reading its credentials.
 	Granted []string
 
-	// Implicit is the subset of Granted that was authorised ONLY by the addon
-	// declaring the connector in its own `connectors` block, with no explicit
-	// capability. This grant is TRANSITIONAL: defining a connector ("this
-	// credential exists and is configured like so") and reading it ("this addon
-	// sees those secrets") are different claims, and an addon may define one for
-	// another to consume. It exists because no addon carries a capability over
-	// its own connector — `connector:read` was missing from the v3 enum until
-	// v0.80, so the declaration could not be written — and removing it before
-	// the manifests migrate would stop fiscal_mexico stamping every CFDI 4.0 and
-	// integration_github syncing, on the same deploy.
+	// Implicit is retired and always empty.
 	//
-	// Hosts should log these and linters should flag them. Once it is empty
-	// across the catalogue, delete the implicit branch below and the rule
-	// becomes: if a guest calls connector_get, its manifest says so.
+	// It used to carry the transitional grant that authorised an addon to read
+	// a connector purely because it declared it in its own `connectors` block,
+	// which existed only because `connector:read` was absent from the v3 enum
+	// until v0.80 and so the declaration could not be written. Every addon that
+	// actually calls connector_get — fiscal_mexico, waybill-cartaporte,
+	// integration-github — now declares the capability explicitly, so the
+	// branch was removed: defining a connector and reading its secrets are
+	// different claims, and only the latter is a grant.
+	//
+	// The field survives its branch so hosts logging it keep compiling; drop
+	// those log loops and then this field.
+	//
+	// Deprecated: always empty since v0.81.
 	Implicit []string
 
 	// Refused are declarations that were NOT honoured: a wildcard target on a
@@ -87,17 +91,8 @@ func ConnectorAccessFor(m Manifest) ConnectorAccess {
 		out.Granted = append(out.Granted, c.Target)
 	}
 
-	for _, cn := range m.Connectors {
-		if cn.Key == "" || cn.Key == "*" {
-			continue
-		}
-		if _, ok := explicit[cn.Key]; ok {
-			continue
-		}
-		explicit[cn.Key] = struct{}{}
-		out.Granted = append(out.Granted, cn.Key)
-		out.Implicit = append(out.Implicit, cn.Key)
-	}
+	// m.Connectors is deliberately NOT consulted: it defines connectors, it does
+	// not grant reads of them. See ConnectorAccess.Implicit.
 
 	return out
 }

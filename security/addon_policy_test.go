@@ -34,18 +34,48 @@ func TestCompileForAddon_RuleReachesTheGate(t *testing.T) {
 	}
 }
 
-// The implicit owner grant must reach the gate too, or fiscal_mexico stops
-// stamping every CFDI 4.0 the moment this ships.
-func TestCompileForAddon_ImplicitOwnerGrantReachesTheGate(t *testing.T) {
-	caps, access := security.CompileForAddon("fiscal_mexico", manifest.Manifest{
-		Capabilities: []manifest.Capability{{Kind: "http:fetch", Target: "api.factura.com"}},
-		Connectors:   []manifest.ConnectorDef{{Key: "factura_com"}},
+// A connector declared in the manifest's own `connectors` block, with no
+// `connector:read` capability, must NOT reach the gate. That block defines the
+// connector and drives its configuration form in the Installed view; it is not
+// an authorisation. link-inbox (channel_gateway) and link-agents (llm) are
+// exactly this shape and never call connector_get.
+func TestCompileForAddon_DeclaringAConnectorDoesNotGrantReadingIt(t *testing.T) {
+	caps, access := security.CompileForAddon("link_inbox", manifest.Manifest{
+		Capabilities: []manifest.Capability{{Kind: "http:fetch", Target: "*.asteby.com"}},
+		Connectors:   []manifest.ConnectorDef{{Key: "channel_gateway"}},
 	})
-	if err := caps.CanReadConnector("factura_com"); err != nil {
-		t.Fatalf("owner must keep reading its own connector: %v", err)
+	if err := caps.CanReadConnector("channel_gateway"); err == nil {
+		t.Fatal("defining a connector must not authorise reading its credentials")
 	}
-	if len(access.Implicit) != 1 || access.Implicit[0] != "factura_com" {
-		t.Fatalf("the reliance must be reported so the host can log it: %v", access.Implicit)
+	if len(access.Granted) != 0 {
+		t.Fatalf("nothing may be granted without an explicit capability: %v", access.Granted)
+	}
+	if len(access.Implicit) != 0 {
+		t.Fatalf("the implicit grant is retired and must stay empty: %v", access.Implicit)
+	}
+}
+
+// The three addons that really call connector_get must keep reaching the gate
+// on their explicit declarations, or CFDI stamping, Carta Porte stamping and
+// GitHub sync break on the same deploy.
+func TestCompileForAddon_RealConnectorGetCallersStayAuthorised(t *testing.T) {
+	for _, tc := range []struct{ addon, kind, connector string }{
+		{"fiscal_mexico", "connector:read", "factura_com"},
+		{"waybill_cartaporte", "secrets:read", "factura_com"},
+		{"integration_github", "connector:read", "github"},
+	} {
+		t.Run(tc.addon, func(t *testing.T) {
+			caps, access := security.CompileForAddon(tc.addon, manifest.Manifest{
+				Capabilities: []manifest.Capability{{Kind: tc.kind, Target: tc.connector}},
+				Connectors:   []manifest.ConnectorDef{{Key: tc.connector}},
+			})
+			if err := caps.CanReadConnector(tc.connector); err != nil {
+				t.Fatalf("%s must keep reading %s: %v", tc.addon, tc.connector, err)
+			}
+			if len(access.Implicit) != 0 {
+				t.Fatalf("must not rely on the retired implicit grant: %v", access.Implicit)
+			}
+		})
 	}
 }
 
