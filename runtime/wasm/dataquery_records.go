@@ -3,6 +3,7 @@ package wasm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -179,10 +180,25 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 	defer cancel()
 	work := inv.db.WithContext(execCtx)
 
-	// Zero-row probe: result-set metadata yields the column set so we know
-	// whether to append the soft-delete filter (see the function doc).
-	softDelete, err := tableHasColumn(work, tbl, "deleted_at")
+	// Zero-row probe: result-set metadata yields the column set, which drives
+	// both the soft-delete filter (see the function doc) and the choice of
+	// tenant-scoping strategy below.
+	tblCols, err := tableColumns(work, tbl)
 	if err != nil {
+		return fail("db_error", err.Error())
+	}
+	softDelete := tblCols["deleted_at"]
+
+	// Tenant scope. A table with `organization_id` gets the plain predicate; a
+	// child table without one is scoped through its FK to an org-scoped parent,
+	// and refused outright if it has no such parent (dataquery_orgscope.go).
+	// Both forms reference $1 only, so the guest filters keep numbering from $2.
+	orgConds, err := orgScopeClauses(work, tbl, tblCols)
+	if err != nil {
+		var noPath *errNoOrgScopePath
+		if errors.As(err, &noPath) {
+			return fail("forbidden", err.Error())
+		}
 		return fail("db_error", err.Error())
 	}
 
@@ -190,7 +206,7 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 	// then the guest filters sorted alphabetically, then the host-injected
 	// soft-delete filter. LIMIT is an int the host clamped — never guest
 	// text.
-	conds := []string{"organization_id = $1"}
+	conds := append([]string{}, orgConds...)
 	args := []any{orgID}
 	n := 1
 	for _, col := range whereCols {
@@ -256,19 +272,9 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 // `tbl` is already quote-qualified by the caller; col is a host-owned
 // literal, never guest input.
 func tableHasColumn(work *gorm.DB, tbl, col string) (bool, error) {
-	rows, err := work.Raw(fmt.Sprintf("SELECT * FROM %s LIMIT 0", tbl)).Rows()
+	cols, err := tableColumns(work, tbl)
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = rows.Close() }()
-	cols, err := rows.Columns()
-	if err != nil {
-		return false, err
-	}
-	for _, c := range cols {
-		if c == col {
-			return true, nil
-		}
-	}
-	return false, rows.Err()
+	return cols[strings.ToLower(col)], nil
 }

@@ -61,7 +61,7 @@ func TestExecuteDataQueryRecords_WhereEqualityAndOrgScope(t *testing.T) {
 
 	// No deleted_at in the probe → no soft-delete filter. The org predicate
 	// is ALWAYS first and host-injected; guest filters follow sorted.
-	expectProbe(mock, `"stock"`, "id", "product_id", "quantity", "status")
+	expectProbe(mock, `"stock"`, "id", "organization_id", "product_id", "quantity", "status")
 	mock.ExpectQuery(`SELECT \* FROM "stock" WHERE organization_id = \$1 AND "product_id" = \$2 AND "status" = \$3 LIMIT 50`).
 		WithArgs(orgID, "prod-1", "active").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "product_id", "quantity"}).
@@ -102,7 +102,7 @@ func TestExecuteDataQueryRecords_DeletedAtFilterWhenColumnExists(t *testing.T) {
 	orgID := uuid.New()
 
 	// Probe sees deleted_at → the host appends `deleted_at IS NULL`.
-	expectProbe(mock, `"stock"`, "id", "quantity", "deleted_at")
+	expectProbe(mock, `"stock"`, "id", "organization_id", "quantity", "deleted_at")
 	mock.ExpectQuery(`SELECT \* FROM "stock" WHERE organization_id = \$1 AND deleted_at IS NULL LIMIT 50`).
 		WithArgs(orgID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "quantity", "deleted_at"}).
@@ -130,13 +130,13 @@ func TestExecuteDataQueryRecords_LimitClampAndExplicit(t *testing.T) {
 	orgID := uuid.New()
 
 	// limit 999 clamps to the hard max 200.
-	expectProbe(mock, `"stock"`, "id")
+	expectProbe(mock, `"stock"`, "id", "organization_id")
 	mock.ExpectQuery(`SELECT \* FROM "stock" WHERE organization_id = \$1 LIMIT 200`).
 		WithArgs(orgID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 
 	// limit 5 passes through untouched.
-	expectProbe(mock, `"stock"`, "id")
+	expectProbe(mock, `"stock"`, "id", "organization_id")
 	mock.ExpectQuery(`SELECT \* FROM "stock" WHERE organization_id = \$1 LIMIT 5`).
 		WithArgs(orgID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
@@ -164,7 +164,7 @@ func TestExecuteDataQueryRecords_TableResolverApplied(t *testing.T) {
 
 	// Capability checked on the LOGICAL name; SQL (probe + main) runs on
 	// the resolver-produced physical name.
-	expectProbe(mock, `"public"\."stock"`, "id")
+	expectProbe(mock, `"public"\."stock"`, "id", "organization_id")
 	mock.ExpectQuery(`SELECT \* FROM "public"\."stock" WHERE organization_id = \$1 LIMIT 50`).
 		WithArgs(orgID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("r1"))
@@ -207,7 +207,7 @@ func TestExecuteDataQueryRecords_DbWriteImpliesRead(t *testing.T) {
 	defer cleanup()
 
 	orgID := uuid.New()
-	expectProbe(mock, `"stock"`, "id")
+	expectProbe(mock, `"stock"`, "id", "organization_id")
 	mock.ExpectQuery(`SELECT \* FROM "stock" WHERE organization_id = \$1 LIMIT 50`).
 		WithArgs(orgID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
@@ -251,7 +251,7 @@ func TestExecuteDataQueryRecords_NullWhereCompilesToIsNull(t *testing.T) {
 	defer cleanup()
 
 	orgID := uuid.New()
-	expectProbe(mock, `"stock"`, "id", "note")
+	expectProbe(mock, `"stock"`, "id", "organization_id", "note")
 	mock.ExpectQuery(`SELECT \* FROM "stock" WHERE organization_id = \$1 AND "note" IS NULL LIMIT 50`).
 		WithArgs(orgID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "note"}))
