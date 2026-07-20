@@ -75,6 +75,7 @@ func TestExecuteDataMutate_GuardSkippedOnDelete(t *testing.T) {
 	bus, _, _ := captureBus(t, "inventory.Stock.deleted")
 
 	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
 	mock.ExpectQuery(`SELECT \* FROM "stock" WHERE id = \$1 AND organization_id = \$2`).
 		WithArgs(rowID, orgID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id", "quantity"}).

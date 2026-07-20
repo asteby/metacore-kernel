@@ -378,7 +378,7 @@ func echoWasm() []byte {
 	//   type 0: (i32) -> i32        for alloc
 	//   type 1: (i32, i32) -> i64   for echo
 	types := []byte{
-		0x02, // count
+		0x02,                         // count
 		0x60, 0x01, 0x7F, 0x01, 0x7F, // (i32) -> (i32)
 		0x60, 0x02, 0x7F, 0x7F, 0x01, 0x7E, // (i32,i32) -> (i64)
 	}
@@ -398,9 +398,9 @@ func echoWasm() []byte {
 		0x01,       // count
 		0x7F, 0x01, // i32, mut
 	}
-	globals = append(globals, 0x41)                // i32.const
+	globals = append(globals, 0x41)                   // i32.const
 	globals = append(globals, encodeSLEB128(1024)...) // 1024
-	globals = append(globals, 0x0B)                // end
+	globals = append(globals, 0x0B)                   // end
 	buf = append(buf, section(0x06, globals)...)
 
 	// Export section: memory, alloc, echo.
@@ -463,9 +463,9 @@ func echoWasm() []byte {
 		0x42, 0x20, // i64.const 32 (SLEB128: 0x20)
 		0x86,       // i64.shl
 		0x20, 0x01, // local.get 1
-		0xAD,       // i64.extend_i32_u
-		0x84,       // i64.or
-		0x0B,       // end
+		0xAD, // i64.extend_i32_u
+		0x84, // i64.or
+		0x0B, // end
 	}
 	echoBody = withSize(echoBody)
 
@@ -735,8 +735,8 @@ func wasip1MinimalWasm() []byte {
 		0x42, 0x20, // i64.const 32
 		0x86,       // i64.shl
 		0x20, 0x01, // local.get 1
-		0xAD,       // i64.extend_i32_u
-		0x84,       // i64.or
+		0xAD, // i64.extend_i32_u
+		0x84, // i64.or
 		0x0B,
 	}
 	echoBody = withSize(echoBody)

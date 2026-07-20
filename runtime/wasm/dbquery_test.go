@@ -36,16 +36,16 @@ func newMockGorm(t *testing.T) (*gorm.DB, sqlmock.Sqlmock, func()) {
 }
 
 type dbqEnvelope struct {
-	Success bool             `json:"success"`
-	Data    *dbqData         `json:"data,omitempty"`
-	Error   *dbqError        `json:"error,omitempty"`
-	Meta    map[string]any   `json:"meta"`
+	Success bool           `json:"success"`
+	Data    *dbqData       `json:"data,omitempty"`
+	Error   *dbqError      `json:"error,omitempty"`
+	Meta    map[string]any `json:"meta"`
 }
 
 type dbqData struct {
-	Rows     []map[string]any   `json:"rows"`
-	RowCount int                `json:"rowCount"`
-	Columns  []map[string]any   `json:"columns"`
+	Rows     []map[string]any `json:"rows"`
+	RowCount int              `json:"rowCount"`
+	Columns  []map[string]any `json:"columns"`
 }
 
 type dbqError struct {

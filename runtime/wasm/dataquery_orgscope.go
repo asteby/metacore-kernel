@@ -86,32 +86,15 @@ ORDER BY att.attname`
 //   - No qualifying FK → errNoOrgScopePath. Fail closed: a table the host
 //     cannot tie to an organization is not readable through this import.
 //
-// The clauses reference `$1` only, so the caller's placeholder numbering for
-// the guest filters is unaffected.
-func orgScopeClauses(work *gorm.DB, tbl string, cols map[string]bool) ([]string, error) {
-	if cols["organization_id"] {
-		return []string{"organization_id = $1"}, nil
-	}
-
-	fks, err := orgScopedForeignKeys(work, tbl)
+// The clauses bind the caller's organization to `ph` (a placeholder like
+// "$1"), which is the ONLY parameter they introduce — callers keep full
+// control of their own numbering.
+func orgScopeClauses(work *gorm.DB, tbl string, cols map[string]bool, ph string) ([]string, error) {
+	spec, err := resolveOrgScope(work, tbl, cols)
 	if err != nil {
 		return nil, err
 	}
-	if len(fks) == 0 {
-		return nil, &errNoOrgScopePath{table: tbl}
-	}
-
-	clauses := make([]string, 0, len(fks))
-	for i, fk := range fks {
-		alias := fmt.Sprintf("__org_scope_%d", i)
-		clauses = append(clauses, fmt.Sprintf(
-			"EXISTS (SELECT 1 FROM %s %s WHERE %s.%s = %s.%s AND %s.organization_id = $1)",
-			fk.ParentTable, alias,
-			alias, quoteIdent(fk.ParentColumn),
-			tbl, quoteIdent(fk.Column),
-			alias))
-	}
-	return clauses, nil
+	return spec.clauses(ph), nil
 }
 
 // orgScopedForeignKeys returns the NOT NULL single-column foreign keys of tbl
@@ -181,4 +164,57 @@ func tableColumns(work *gorm.DB, tbl string) (map[string]bool, error) {
 		out[strings.ToLower(c)] = true
 	}
 	return out, rows.Err()
+}
+
+// orgScopeSpec is a table's resolved tenant-scoping strategy: either the plain
+// column or a set of parent links. Resolving it costs one FK introspection (and
+// one probe per candidate parent), so the mutation paths — which need the same
+// predicate at two different placeholder positions, e.g. the pre-read snapshot
+// and the UPDATE itself — resolve it ONCE and render it as many times as
+// needed. Rendering is pure string work.
+type orgScopeSpec struct {
+	hasOrgColumn bool
+	fks          []orgScopeFK
+	table        string
+}
+
+// resolveOrgScope determines how `tbl` is scoped to an organization. It returns
+// errNoOrgScopePath when the table has neither an organization_id nor a usable
+// parent link — the fail-closed case.
+func resolveOrgScope(work *gorm.DB, tbl string, cols map[string]bool) (*orgScopeSpec, error) {
+	if cols["organization_id"] {
+		return &orgScopeSpec{hasOrgColumn: true, table: tbl}, nil
+	}
+	fks, err := orgScopedForeignKeys(work, tbl)
+	if err != nil {
+		return nil, err
+	}
+	if len(fks) == 0 {
+		return nil, &errNoOrgScopePath{table: tbl}
+	}
+	return &orgScopeSpec{fks: fks, table: tbl}, nil
+}
+
+// clauses renders the scope as WHERE fragments binding the organization to ph.
+func (s *orgScopeSpec) clauses(ph string) []string {
+	if s.hasOrgColumn {
+		return []string{"organization_id = " + ph}
+	}
+	out := make([]string, 0, len(s.fks))
+	for i, fk := range s.fks {
+		alias := fmt.Sprintf("__org_scope_%d", i)
+		out = append(out, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM %s %s WHERE %s.%s = %s.%s AND %s.organization_id = %s)",
+			fk.ParentTable, alias,
+			alias, quoteIdent(fk.ParentColumn),
+			s.table, quoteIdent(fk.Column),
+			alias, ph))
+	}
+	return out
+}
+
+// predicate renders the scope as ONE ANDed WHERE fragment, for the mutation
+// paths that splice a single condition into a larger statement.
+func (s *orgScopeSpec) predicate(ph string) string {
+	return strings.Join(s.clauses(ph), " AND ")
 }
