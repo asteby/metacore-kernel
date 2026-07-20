@@ -70,6 +70,7 @@ func TestExecuteDataBatch_AtomicMultiModelCommit(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id", "quantity"}).
 			AddRow(stockID, orgID.String(), int64(7)))
 	// Mutation 1: append the ledger row.
+	mock.ExpectQuery(`SELECT \* FROM "ledger" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
 	mock.ExpectQuery(`INSERT INTO "ledger" .* RETURNING \*`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id", "delta"}).
 			AddRow(ledgerID, orgID.String(), int64(-3)))
@@ -109,6 +110,7 @@ func TestExecuteDataBatch_RollsBackOnRowFailure(t *testing.T) {
 	bus, getEvents, _ := captureBus(t, "inventory.*")
 
 	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
 	mock.ExpectQuery(`INSERT INTO "stock" .* RETURNING \*`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}).AddRow(stockID, orgID.String()))
 	// Second mutation targets a missing row → not_found → whole batch rolls back.
