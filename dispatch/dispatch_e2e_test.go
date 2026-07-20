@@ -26,6 +26,15 @@ import (
 // ---------------------------------------------------------------------------
 
 // ledgerDB returns an in-memory sqlite gorm.DB for the dispatch delivery ledger.
+//
+// The connection pool is pinned to a SINGLE connection. An sqlite ":memory:"
+// database belongs to its connection, not to the DSN: the moment database/sql
+// opens a second one — which it does as soon as two deliveries touch the
+// ledger concurrently — that connection gets its own empty database, and the
+// dispatcher's INSERT fails with "no such table: event_deliveries". Tests that
+// publish a single event never opened a second connection and so never saw it;
+// any test that publishes two does, non-deterministically. Capping the pool at
+// one makes every query hit the database Migrate actually ran against.
 func ledgerDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
@@ -34,6 +43,12 @@ func ledgerDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("ledger db: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("ledger db handle: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	return db
 }
 
