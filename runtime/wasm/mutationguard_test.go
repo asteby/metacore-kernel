@@ -22,6 +22,7 @@ func TestExecuteDataMutate_GuardViolationRollsBack(t *testing.T) {
 	bus, getEvents, _ := captureBus(t, "inventory.Stock.created")
 
 	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
 	mock.ExpectQuery(`INSERT INTO "stock" .* RETURNING \*`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id", "quantity"}).
 			AddRow(rowID, orgID.String(), int64(-3)))
@@ -116,9 +117,11 @@ func TestExecuteDataBatch_GuardViolationRollsBackWholeBatch(t *testing.T) {
 	bus, getEvents, _ := captureBus(t, "inventory.Stock.*")
 
 	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
 	mock.ExpectQuery(`INSERT INTO "stock" .* RETURNING \*`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id", "quantity"}).
 			AddRow(rowA, orgID.String(), int64(4)))
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
 	mock.ExpectQuery(`INSERT INTO "stock" .* RETURNING \*`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id", "quantity"}).
 			AddRow(rowB, orgID.String(), int64(-1)))

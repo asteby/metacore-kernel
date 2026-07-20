@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -276,18 +277,38 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 		}
 		cols := make([]string, 0, len(data)+5)
 		vals := map[string]any{
-			"id":              out.rowID,
-			"organization_id": orgID,
-			"created_at":      now,
-			"updated_at":      now,
+			"id":         out.rowID,
+			"created_at": now,
+			"updated_at": now,
 		}
+		// ONE zero-row probe drives both host-stamped columns below. It used to
+		// run only when an actor was present (for created_by_id); the tenant
+		// column needs it too, so it is hoisted and shared rather than probed
+		// twice.
+		columns, err := tableColumns(work, tbl)
+		if err != nil {
+			return nil, "db_error", err
+		}
+
+		// Tenant column, when the table has one. A CHILD table (a document's
+		// line items) does not: inserting organization_id there died with 42703.
+		// Omitting it is only half the fix — a row with no tenant column of its
+		// own belongs to an organization solely through its parent, so that link
+		// is verified before the INSERT (datamutate_orgscope.go). Tables WITH the
+		// column keep exactly the behaviour they had.
+		if columns["organization_id"] {
+			vals["organization_id"] = orgID
+		} else if err := verifyChildCreateTenancy(work, tbl, data, orgID); err != nil {
+			var unverifiable *errChildCreateUnverifiable
+			if errors.As(err, &unverifiable) {
+				return nil, "forbidden", err
+			}
+			return nil, "db_error", err
+		}
+
 		if _, err := uuid.Parse(actorID); err == nil {
-			if _, supplied := data["created_by_id"]; !supplied {
-				if has, err := tableHasColumn(work, tbl, "created_by_id"); err != nil {
-					return nil, "db_error", err
-				} else if has {
-					vals["created_by_id"] = actorID
-				}
+			if _, supplied := data["created_by_id"]; !supplied && columns["created_by_id"] {
+				vals["created_by_id"] = actorID
 			}
 		}
 		for c, v := range data {

@@ -104,6 +104,7 @@ func TestExecuteDataMutate_CreateStampsOrgIDTimestamps(t *testing.T) {
 	// Columns are sorted alphabetically and the host stamps id /
 	// organization_id / created_at / updated_at — the INSERT shape proves it.
 	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
 	mock.ExpectQuery(`INSERT INTO "stock" \("created_at", "id", "organization_id", "product_id", "quantity", "updated_at"\) VALUES \(\$1, \$2, \$3, \$4, \$5, \$6\) RETURNING \*`).
 		WithArgs(sqlmock.AnyArg(), rowID, orgID, "prod-1", int64(5), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id", "product_id", "quantity"}).
@@ -481,6 +482,7 @@ func TestExecuteDataMutate_TableResolverQualifiesPhysicalName(t *testing.T) {
 	bus, _, _ := captureBus(t, "inventory.Stock.created")
 
 	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "public"\."stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
 	mock.ExpectQuery(`INSERT INTO "public"\."stock" \(.+\) VALUES \(.+\) RETURNING \*`).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(rowID))
 	mock.ExpectCommit()
