@@ -450,6 +450,7 @@
             "db:read",
             "db:write",
             "http:fetch",
+            "connector:read",
             "event:emit",
             "event:subscribe",
             "fs:read",
@@ -460,7 +461,7 @@
             "file-storage:write",
             "time:wallclock"
           ],
-          "description": "Closed set of capability kinds the runtime enforces."
+          "description": "Closed set of capability kinds the runtime enforces. `connector:read <key>` grants connector_get for one connector key: an addon implicitly reads the connectors it declares in its own `connectors` block, so this kind is what an addon uses to read a connector DECLARED BY ANOTHER ADDON (e.g. waybill-cartaporte reading fiscal_mexico's `factura_com` so the org configures the PAC credentials once)."
         },
         "target": {
           "type": "string",

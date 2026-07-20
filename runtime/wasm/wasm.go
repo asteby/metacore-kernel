@@ -49,6 +49,7 @@ const (
 type Host struct {
 	rt            wazero.Runtime
 	caps          *security.Capabilities
+	addonCaps     func(addonKey string) *security.Capabilities
 	bus           *events.Bus
 	db            *gorm.DB
 	enforcer      *security.Enforcer
@@ -193,6 +194,39 @@ func (h *Host) WithConnectors(r *connectors.Resolver) *Host {
 	return h
 }
 
+// WithAddonCaps injects a per-addon capability resolver. The host's global
+// policy (the one handed to NewHost / EnableWASM) is a SINGLE static policy
+// shared by every addon, so the two imports that read it — connector_get and
+// http_request — can only ever be gated by the union of what all installed
+// addons declared. That is org-scoped but not addon-scoped: with a permissive
+// global policy any installed addon can read any connector the org configured,
+// and can fetch any host any other addon declared.
+//
+// When a resolver is set, each invocation is stamped with the policy it
+// returns for the invoked addonKey instead of the global one, so connector_get
+// / http_request are gated by THAT addon's own declarations. Returning nil for
+// an addon falls back to the global policy (the pre-resolver behaviour) —
+// hosts that want fail-closed semantics for an unknown addon should return an
+// empty compiled policy (security.Compile(key, nil)) rather than nil.
+//
+// db:* is unaffected: it gates through the per-addon *security.Enforcer, which
+// was already compiled per manifest.
+func (h *Host) WithAddonCaps(fn func(addonKey string) *security.Capabilities) *Host {
+	h.addonCaps = fn
+	return h
+}
+
+// capsFor returns the policy an invocation of addonKey runs under: the
+// per-addon policy when a resolver is wired and yields one, else the global.
+func (h *Host) capsFor(addonKey string) *security.Capabilities {
+	if h.addonCaps != nil {
+		if c := h.addonCaps(addonKey); c != nil {
+			return c
+		}
+	}
+	return h.caps
+}
+
 // Load compiles wasmBytes for addonKey and caches the CompiledModule. Calling
 // Load again for the same addonKey replaces the prior compile and drops any
 // installation instances — use this on addon upgrade.
@@ -290,7 +324,7 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		addonKey:      addonKey,
 		installation:  installation,
 		settings:      settings,
-		caps:          h.caps,
+		caps:          h.capsFor(addonKey),
 		bus:           h.bus,
 		orgID:         orgID,
 		db:            h.db,
