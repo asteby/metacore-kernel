@@ -14,9 +14,9 @@ import "github.com/asteby/metacore-kernel/manifest"
 // every other declared capability through to Compile untouched (including the
 // self-schema db:* grants Compile adds).
 //
-// The returned ConnectorAccess carries the transitional implicit grants and any
-// refused wildcard declarations, so the host can log them and a linter can flag
-// them without recomputing the rule.
+// The returned ConnectorAccess carries any refused wildcard declarations, so
+// the host can log them and a linter can flag them without recomputing the
+// rule. (Its Implicit field is retired and always empty.)
 func CompileForAddon(addonKey string, m manifest.Manifest) (*Capabilities, manifest.ConnectorAccess) {
 	access := manifest.ConnectorAccessFor(m)
 

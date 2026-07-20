@@ -26,22 +26,28 @@ func TestConnectorAccessFor_ProductionManifests(t *testing.T) {
 		implicit  bool
 	}{
 		{
-			name: "fiscal_mexico owns factura_com, declares no capability",
+			name: "fiscal_mexico declares connector:read over factura_com",
 			m: manifest.Manifest{
-				Capabilities: []manifest.Capability{{Kind: "http:fetch", Target: "api.factura.com"}},
-				Connectors:   []manifest.ConnectorDef{{Key: "factura_com"}},
+				Capabilities: []manifest.Capability{
+					{Kind: "http:fetch", Target: "api.factura.com"},
+					{Kind: "connector:read", Target: "factura_com"},
+				},
+				Connectors: []manifest.ConnectorDef{{Key: "factura_com"}},
 			},
 			connector: "factura_com",
-			implicit:  true,
+			implicit:  false,
 		},
 		{
-			name: "integration_github owns github, declares no capability",
+			name: "integration_github declares connector:read over github",
 			m: manifest.Manifest{
-				Capabilities: []manifest.Capability{{Kind: "http:fetch", Target: "api.github.com"}},
-				Connectors:   []manifest.ConnectorDef{{Key: "github"}},
+				Capabilities: []manifest.Capability{
+					{Kind: "http:fetch", Target: "api.github.com"},
+					{Kind: "connector:read", Target: "github"},
+				},
+				Connectors: []manifest.ConnectorDef{{Key: "github"}},
 			},
 			connector: "github",
-			implicit:  true,
+			implicit:  false,
 		},
 		{
 			name: "waybill_cartaporte reuses factura_com via secrets:read",
@@ -101,9 +107,8 @@ func TestConnectorAccessFor_KindsEquivalent(t *testing.T) {
 	}
 }
 
-// An explicit declaration by the owner must be equivalent to the implicit
-// grant, so dropping the implicit branch later is a no-op for migrated
-// manifests — and must not be double-counted.
+// An owner's explicit declaration must not be double-counted against its own
+// `connectors` block.
 func TestConnectorAccessFor_OwnerExplicitIsNotImplicit(t *testing.T) {
 	access := manifest.ConnectorAccessFor(manifest.Manifest{
 		Capabilities: []manifest.Capability{{Kind: "connector:read", Target: "factura_com"}},
@@ -117,6 +122,23 @@ func TestConnectorAccessFor_OwnerExplicitIsNotImplicit(t *testing.T) {
 	}
 	if len(access.Granted) != 1 {
 		t.Fatalf("the key must not be granted twice: %v", access.Granted)
+	}
+}
+
+// Declaring a connector is not authorising a read of it. link-inbox
+// (channel_gateway) and link-agents (llm) are exactly this shape: they define
+// the connector so the operator can fill in its configuration form, and never
+// call connector_get.
+func TestConnectorAccessFor_DeclaredConnectorIsNotAGrant(t *testing.T) {
+	access := manifest.ConnectorAccessFor(manifest.Manifest{
+		Capabilities: []manifest.Capability{{Kind: "http:fetch", Target: "*.asteby.com"}},
+		Connectors:   []manifest.ConnectorDef{{Key: "channel_gateway"}},
+	})
+	if len(access.Granted) != 0 {
+		t.Fatalf("defining a connector must grant nothing, got %v", access.Granted)
+	}
+	if len(access.Implicit) != 0 {
+		t.Fatalf("the implicit grant is retired and must stay empty: %v", access.Implicit)
 	}
 }
 
