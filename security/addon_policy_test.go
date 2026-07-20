@@ -7,77 +7,51 @@ import (
 	"github.com/asteby/metacore-kernel/security"
 )
 
-// The three addons that actually call connector_get in production, with their
-// manifests exactly as published. Every one must keep resolving its connector,
-// or GitHub sync / CFDI stamping / Carta Porte stamping break.
-func TestCompileForAddon_ProductionManifests(t *testing.T) {
-	cases := []struct {
-		name      string
-		addonKey  string
-		m         manifest.Manifest
-		connector string
-		endpoint  string
-		implicit  bool
-	}{
-		{
-			name:     "fiscal_mexico owns factura_com, declares no capability",
-			addonKey: "fiscal_mexico",
-			m: manifest.Manifest{
-				Capabilities: []manifest.Capability{{Kind: "http:fetch", Target: "api.factura.com"}},
-				Connectors:   []manifest.ConnectorDef{{Key: "factura_com"}},
-			},
-			connector: "factura_com",
-			endpoint:  "https://api.factura.com/cfdi40",
-			implicit:  true,
+// manifest.ConnectorAccessFor owns the rule and is tested there; this covers the
+// wiring — that what the rule authorises actually reaches the compiled policy
+// the wasm gate consults, which is the seam where secrets:read used to fall
+// through (valid in the schema, no case in Compile, granted nothing).
+func TestCompileForAddon_RuleReachesTheGate(t *testing.T) {
+	// waybill-cartaporte, exactly as published: reuses another addon's PAC
+	// connector via secrets:read.
+	caps, access := security.CompileForAddon("waybill_cartaporte", manifest.Manifest{
+		Capabilities: []manifest.Capability{
+			{Kind: "http:fetch", Target: "api.factura.com"},
+			{Kind: "secrets:read", Target: "factura_com"},
 		},
-		{
-			name:     "integration_github owns github, declares no capability",
-			addonKey: "integration_github",
-			m: manifest.Manifest{
-				Capabilities: []manifest.Capability{{Kind: "http:fetch", Target: "api.github.com"}},
-				Connectors:   []manifest.ConnectorDef{{Key: "github"}},
-			},
-			connector: "github",
-			endpoint:  "https://api.github.com/repos/x/y",
-			implicit:  true,
-		},
-		{
-			name:     "waybill_cartaporte reuses factura_com via secrets:read",
-			addonKey: "waybill_cartaporte",
-			m: manifest.Manifest{
-				Capabilities: []manifest.Capability{
-					{Kind: "http:fetch", Target: "api.factura.com"},
-					{Kind: "secrets:read", Target: "factura_com"},
-				},
-			},
-			connector: "factura_com",
-			endpoint:  "https://api.factura.com/timbrar",
-			implicit:  false,
-		},
+	})
+	if err := caps.CanReadConnector("factura_com"); err != nil {
+		t.Fatalf("secrets:read must reach the gate: %v", err)
 	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			caps, implicit, refused := security.CompileForAddon(tc.addonKey, tc.m)
-			if err := caps.CanReadConnector(tc.connector); err != nil {
-				t.Fatalf("must keep reading %s: %v", tc.connector, err)
-			}
-			if err := caps.CanFetch(tc.endpoint); err != nil {
-				t.Fatalf("must keep reaching %s: %v", tc.endpoint, err)
-			}
-			if len(refused) != 0 {
-				t.Fatalf("published manifest must not have refused grants: %v", refused)
-			}
-			if got := len(implicit) > 0; got != tc.implicit {
-				t.Fatalf("implicit reliance = %v, want %v (%v)", got, tc.implicit, implicit)
-			}
-		})
+	if err := caps.CanFetch("https://api.factura.com/timbrar"); err != nil {
+		t.Fatalf("declared host must reach the gate: %v", err)
+	}
+	if err := caps.CanReadConnector("github"); err == nil {
+		t.Fatal("declaring one connector must not grant the others")
+	}
+	if len(access.Implicit) != 0 {
+		t.Fatalf("explicit declaration must not report implicit reliance: %v", access.Implicit)
 	}
 }
 
-// The ops#870 regression, at the level of the rule itself.
-func TestCompileForAddon_UndeclaredConnectorDenied(t *testing.T) {
-	caps, _, _ := security.CompileForAddon("evil_addon", manifest.Manifest{
+// The implicit owner grant must reach the gate too, or fiscal_mexico stops
+// stamping every CFDI 4.0 the moment this ships.
+func TestCompileForAddon_ImplicitOwnerGrantReachesTheGate(t *testing.T) {
+	caps, access := security.CompileForAddon("fiscal_mexico", manifest.Manifest{
+		Capabilities: []manifest.Capability{{Kind: "http:fetch", Target: "api.factura.com"}},
+		Connectors:   []manifest.ConnectorDef{{Key: "factura_com"}},
+	})
+	if err := caps.CanReadConnector("factura_com"); err != nil {
+		t.Fatalf("owner must keep reading its own connector: %v", err)
+	}
+	if len(access.Implicit) != 1 || access.Implicit[0] != "factura_com" {
+		t.Fatalf("the reliance must be reported so the host can log it: %v", access.Implicit)
+	}
+}
+
+// The ops#870 regression, through the compiled policy.
+func TestCompileForAddon_UndeclaredDenied(t *testing.T) {
+	caps, _ := security.CompileForAddon("evil_addon", manifest.Manifest{
 		Capabilities: []manifest.Capability{{Kind: "db:read", Target: "addon_evil_addon.*"}},
 	})
 	if err := caps.CanReadConnector("factura_com"); err == nil {
@@ -88,58 +62,23 @@ func TestCompileForAddon_UndeclaredConnectorDenied(t *testing.T) {
 	}
 }
 
-// Both spellings must gate identically — that is what makes migrating a
-// manifest from secrets:read to connector:read a no-op.
-func TestCompileForAddon_KindsEquivalent(t *testing.T) {
-	for _, kind := range []string{"secrets:read", "connector:read"} {
-		caps, implicit, _ := security.CompileForAddon("waybill", manifest.Manifest{
-			Capabilities: []manifest.Capability{{Kind: kind, Target: "factura_com"}},
-		})
-		if err := caps.CanReadConnector("factura_com"); err != nil {
-			t.Fatalf("%s must grant connector access: %v", kind, err)
-		}
-		if err := caps.CanReadConnector("github"); err == nil {
-			t.Fatalf("%s must not grant unrelated connectors", kind)
-		}
-		if len(implicit) != 0 {
-			t.Fatalf("%s is an explicit declaration, not implicit: %v", kind, implicit)
-		}
-	}
-}
-
-// An explicit declaration by the owner must be equivalent to the implicit
-// grant, so dropping the implicit rule later is a no-op for migrated manifests.
-func TestCompileForAddon_OwnerExplicitIsEquivalentAndNotImplicit(t *testing.T) {
-	caps, implicit, _ := security.CompileForAddon("fiscal_mexico", manifest.Manifest{
-		Capabilities: []manifest.Capability{{Kind: "connector:read", Target: "factura_com"}},
-		Connectors:   []manifest.ConnectorDef{{Key: "factura_com"}},
+// A refused wildcard must not compile into a grant.
+func TestCompileForAddon_WildcardNotCompiled(t *testing.T) {
+	caps, access := security.CompileForAddon("greedy", manifest.Manifest{
+		Capabilities: []manifest.Capability{{Kind: "secrets:read", Target: "*"}},
 	})
-	if err := caps.CanReadConnector("factura_com"); err != nil {
-		t.Fatalf("migrated manifest must keep working: %v", err)
+	if err := caps.CanReadConnector("factura_com"); err == nil {
+		t.Fatal("a wildcard must not compile into a connector grant")
 	}
-	if len(implicit) != 0 {
-		t.Fatalf("a declared connector must not report implicit reliance: %v", implicit)
-	}
-}
-
-// A manifest must not be able to grant itself the wildcard the host gave up.
-func TestCompileForAddon_WildcardRefused(t *testing.T) {
-	for _, kind := range []string{"secrets:read", "connector:read"} {
-		caps, _, refused := security.CompileForAddon("greedy", manifest.Manifest{
-			Capabilities: []manifest.Capability{{Kind: kind, Target: "*", Reason: "gimme"}},
-		})
-		if err := caps.CanReadConnector("factura_com"); err == nil {
-			t.Fatalf("%s \"*\" must not grant every connector — that is ops#870", kind)
-		}
-		if len(refused) != 1 {
-			t.Fatalf("the wildcard must be reported as refused, got %v", refused)
-		}
+	if len(access.Refused) != 1 {
+		t.Fatalf("the refusal must be surfaced: %v", access.Refused)
 	}
 }
 
-// Non-connector capabilities must pass through untouched.
+// Non-connector capabilities must pass through untouched, including the
+// self-schema grants Compile adds.
 func TestCompileForAddon_PassesThroughOtherKinds(t *testing.T) {
-	caps, _, _ := security.CompileForAddon("billing", manifest.Manifest{
+	caps, _ := security.CompileForAddon("billing", manifest.Manifest{
 		Capabilities: []manifest.Capability{
 			{Kind: "db:read", Target: "orders"},
 			{Kind: "event:emit", Target: "billing.*"},
@@ -151,7 +90,6 @@ func TestCompileForAddon_PassesThroughOtherKinds(t *testing.T) {
 	if err := caps.CanEmit("billing.invoiced"); err != nil {
 		t.Fatalf("event:emit must survive: %v", err)
 	}
-	// And the self-schema grant Compile adds is still there.
 	if err := caps.CanWriteModel("addon_billing.invoices"); err != nil {
 		t.Fatalf("self-schema grant must survive: %v", err)
 	}
