@@ -12,6 +12,11 @@
 // for that user.  For org-wide broadcast, callers query their own DB for user
 // IDs and call SendToUsers.  Notification persistence is delegated to the
 // optional OnNotification hook so the hub stays ORM-free.
+//
+// The hub is generic over the user-ID key (HubOf[K comparable]) so hosts
+// with legacy numeric or string IDs can adopt it without migrating to UUIDs
+// (upstream-first: contributed while onboarding doctores.lat). `Hub` and
+// `Client` remain aliases of the uuid.UUID instantiation for back-compat.
 package ws
 
 import (
@@ -37,60 +42,71 @@ type Message struct {
 	Payload any         `json:"payload"`
 }
 
-// Hub maintains connected clients and routes messages.
-type Hub struct {
-	clients    map[uuid.UUID]map[*Client]bool
-	register   chan *Client
-	unregister chan *Client
-	broadcast  chan *broadcastMsg
-	batchCast  chan *batchMsg
-	conditional chan *conditionalMsg
-	mu         sync.RWMutex
+// HubOf maintains connected clients and routes messages, keyed by the
+// host's user-ID type (uuid.UUID, int64, string, ...).
+type HubOf[K comparable] struct {
+	clients     map[K]map[*ClientOf[K]]bool
+	register    chan *ClientOf[K]
+	unregister  chan *ClientOf[K]
+	broadcast   chan *broadcastMsg[K]
+	batchCast   chan *batchMsg[K]
+	conditional chan *conditionalMsg[K]
+	mu          sync.RWMutex
 
 	// OnNotification is called when a NOTIFICATION message is sent to a user.
 	// Apps use this to persist notifications to DB. Optional.
-	OnNotification func(userID uuid.UUID, msg Message)
+	OnNotification func(userID K, msg Message)
 }
 
-type broadcastMsg struct {
-	UserID  uuid.UUID
+// Hub is the historical uuid-keyed hub. Kept as an alias so existing hosts
+// (link, ops) compile unchanged.
+type Hub = HubOf[uuid.UUID]
+
+type broadcastMsg[K comparable] struct {
+	UserID  K
 	Message Message
 }
 
-type batchMsg struct {
-	UserIDs []uuid.UUID
+type batchMsg[K comparable] struct {
+	UserIDs []K
 	Message Message
 }
 
 // conditionalMsg routes different messages to a user based on a per-client predicate.
 // This is the generic equivalent of a "smart broadcast" (conversation-aware routing).
-type conditionalMsg struct {
-	UserID    uuid.UUID
+type conditionalMsg[K comparable] struct {
+	UserID    K
 	Predicate func(clientCtx any) bool // called with Client.Context; true → primary
 	Primary   Message                  // sent when predicate returns true
 	Fallback  Message                  // sent otherwise
 }
 
-// NewHub creates a Hub. Call Run() in a goroutine before accepting connections.
-func NewHub() *Hub {
-	return &Hub{
-		clients:     make(map[uuid.UUID]map[*Client]bool),
-		register:    make(chan *Client),
-		unregister:  make(chan *Client),
-		broadcast:   make(chan *broadcastMsg, 256),
-		batchCast:   make(chan *batchMsg, 64),
-		conditional: make(chan *conditionalMsg, 64),
+// NewHubOf creates a hub keyed by K. Call Run() in a goroutine before
+// accepting connections.
+func NewHubOf[K comparable]() *HubOf[K] {
+	return &HubOf[K]{
+		clients:     make(map[K]map[*ClientOf[K]]bool),
+		register:    make(chan *ClientOf[K]),
+		unregister:  make(chan *ClientOf[K]),
+		broadcast:   make(chan *broadcastMsg[K], 256),
+		batchCast:   make(chan *batchMsg[K], 64),
+		conditional: make(chan *conditionalMsg[K], 64),
 	}
 }
 
+// NewHub creates the historical uuid-keyed Hub.
+func NewHub() *Hub {
+	return NewHubOf[uuid.UUID]()
+}
+
 // Run starts the hub event loop. Blocks forever — run in a goroutine.
-func (h *Hub) Run() {
+func (h *HubOf[K]) Run() {
 	for {
 		select {
 		case client := <-h.register:
 			h.mu.Lock()
 			if _, ok := h.clients[client.UserID]; !ok {
-				h.clients[client.UserID] = make(map[*Client]bool)
+				h.clients[client.UserID] = make(map[*ClientOf[K]]bool)
 			}
 			h.clients[client.UserID][client] = true
 			h.mu.Unlock()
@@ -132,7 +148,7 @@ func (h *Hub) Run() {
 			h.mu.RLock()
 			clients, ok := h.clients[msg.UserID]
 			if ok {
-				targets := make([]*Client, 0, len(clients))
+				targets := make([]*ClientOf[K], 0, len(clients))
 				for c := range clients {
 					targets = append(targets, c)
 				}
@@ -152,13 +168,13 @@ func (h *Hub) Run() {
 }
 
 // SendToUser sends a message to every connection of a specific user.
-func (h *Hub) SendToUser(userID uuid.UUID, msg Message) {
-	h.broadcast <- &broadcastMsg{UserID: userID, Message: msg}
+func (h *HubOf[K]) SendToUser(userID K, msg Message) {
+	h.broadcast <- &broadcastMsg[K]{UserID: userID, Message: msg}
 }
 
 // SendToUsers sends a message to a list of users.
-func (h *Hub) SendToUsers(userIDs []uuid.UUID, msg Message) {
-	h.batchCast <- &batchMsg{UserIDs: userIDs, Message: msg}
+func (h *HubOf[K]) SendToUsers(userIDs []K, msg Message) {
+	h.batchCast <- &batchMsg[K]{UserIDs: userIDs, Message: msg}
 }
 
 // SendConditional delivers different messages to a user's connections based on
@@ -168,8 +184,8 @@ func (h *Hub) SendToUsers(userIDs []uuid.UUID, msg Message) {
 // Each active connection for userID has its Context examined; if predicate
 // returns true the primary message is sent, otherwise the fallback.
 // Context is set by the app via Client.SetContext before or after registration.
-func (h *Hub) SendConditional(userID uuid.UUID, predicate func(ctx any) bool, primary, fallback Message) {
-	h.conditional <- &conditionalMsg{
+func (h *HubOf[K]) SendConditional(userID K, predicate func(ctx any) bool, primary, fallback Message) {
+	h.conditional <- &conditionalMsg[K]{
 		UserID:    userID,
 		Predicate: predicate,
 		Primary:   primary,
@@ -178,17 +194,17 @@ func (h *Hub) SendConditional(userID uuid.UUID, predicate func(ctx any) bool, pr
 }
 
 // ConnectedUsers returns a snapshot of currently connected user IDs.
-func (h *Hub) ConnectedUsers() []uuid.UUID {
+func (h *HubOf[K]) ConnectedUsers() []K {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	out := make([]uuid.UUID, 0, len(h.clients))
+	out := make([]K, 0, len(h.clients))
 	for uid := range h.clients {
 		out = append(out, uid)
 	}
 	return out
 }
 
-func (h *Hub) sendToUser(userID uuid.UUID, msg Message) {
+func (h *HubOf[K]) sendToUser(userID K, msg Message) {
 	data, _ := json.Marshal(msg)
 	h.mu.RLock()
 	clients, ok := h.clients[userID]
@@ -196,7 +212,7 @@ func (h *Hub) sendToUser(userID uuid.UUID, msg Message) {
 		h.mu.RUnlock()
 		return
 	}
-	targets := make([]*Client, 0, len(clients))
+	targets := make([]*ClientOf[K], 0, len(clients))
 	for c := range clients {
 		targets = append(targets, c)
 	}
@@ -206,7 +222,7 @@ func (h *Hub) sendToUser(userID uuid.UUID, msg Message) {
 	}
 }
 
-func sendBytes(h *Hub, c *Client, data []byte) {
+func sendBytes[K comparable](h *HubOf[K], c *ClientOf[K], data []byte) {
 	select {
 	case c.send <- data:
 	default:
