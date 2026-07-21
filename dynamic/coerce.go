@@ -122,6 +122,21 @@ func coerceInputToStruct(input map[string]any, instance any) {
 			// strings (can't unmarshal "" into them) but keep populated values.
 			if ts == "" {
 				delete(input, key)
+				continue
+			}
+			// A `date` (or `datetime`) column maps to a time.Time field
+			// (see columnGoType). The SDK sends a date field as the bare
+			// calendar date "2006-01-02" — correct for the type — but
+			// time.Time.UnmarshalJSON accepts ONLY full RFC3339, so
+			// mapToStruct would fail the whole write with
+			// `parsing time "2026-07-21" as "2006-01-02T15:04:05Z07:00":
+			// cannot parse "" as "T"`. Normalize a date-only value to
+			// RFC3339 at midnight UTC so it unmarshals; a value already in
+			// RFC3339 form is left untouched.
+			if baseFt == timeType {
+				if d, err := time.Parse("2006-01-02", ts); err == nil {
+					input[key] = d.UTC().Format(time.RFC3339)
+				}
 			}
 		}
 	}
