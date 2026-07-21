@@ -2,6 +2,7 @@ package dynamic
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -80,5 +81,40 @@ func TestCoerceInputToStruct_NonStringValuesUntouched(t *testing.T) {
 	coerceInputToStruct(in, &coerceTarget{})
 	if in["active"] != true || in["qty"] != int64(5) || in["price"] != 3.14 {
 		t.Fatalf("non-string values must pass through untouched, got %#v", in)
+	}
+}
+
+type coerceDateTarget struct {
+	EffectiveDate time.Time  `json:"effective_date"` // `date` column
+	CreatedOn     *time.Time `json:"created_on"`     // nullable `datetime` column
+}
+
+// A `date` field is submitted by the SDK as the bare calendar date
+// "2006-01-02". The coercer must normalize it to RFC3339 so the subsequent
+// json.Unmarshal into a time.Time field (mapToStruct) succeeds instead of
+// failing the whole write with
+// `parsing time "2026-07-21" as "2006-01-02T15:04:05Z07:00"`.
+func TestCoerceInputToStruct_DateOnly(t *testing.T) {
+	in := map[string]any{
+		"effective_date": "2026-07-21",           // date-only → normalized
+		"created_on":     "2026-07-21T09:30:00Z", // already RFC3339 → untouched
+	}
+	coerceInputToStruct(in, &coerceDateTarget{})
+
+	if in["effective_date"] != "2026-07-21T00:00:00Z" {
+		t.Fatalf("date-only should normalize to RFC3339 midnight UTC, got %#v", in["effective_date"])
+	}
+	if in["created_on"] != "2026-07-21T09:30:00Z" {
+		t.Fatalf("RFC3339 datetime should be untouched, got %#v", in["created_on"])
+	}
+
+	// End-to-end: the coerced map must unmarshal cleanly, which is what
+	// mapToStruct does on the create path.
+	var out coerceDateTarget
+	if err := mapToStruct(in, &out); err != nil {
+		t.Fatalf("mapToStruct must succeed after coerce, got %v", err)
+	}
+	if !out.EffectiveDate.Equal(time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("effective_date unmarshalled wrong: %v", out.EffectiveDate)
 	}
 }
