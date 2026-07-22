@@ -486,7 +486,18 @@ func (h *Handler) ServeAddonFrontend(c fiber.Ctx) error {
 	}
 
 	c.Set(fiber.HeaderContentType, mimeForExt(filepath.Ext(filePath)))
-	c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
+	// Content-hashed chunks are safe to cache forever, but the federation
+	// ENTRY (remoteEntry.js) keeps a STABLE name across addon upgrades: its
+	// content changes with every publish while the URL does not. Serving it
+	// immutable made browsers pin a year-old entry after an addon upgrade and
+	// load a mixed bundle (stale entry -> replaced chunk hashes) — features
+	// silently vanished until a hard reload. Same lesson as the host shell's
+	// own /remoteEntry.js in nginx: stable name => never cache.
+	if filepath.Base(filePath) == "remoteEntry.js" {
+		c.Set(fiber.HeaderCacheControl, "no-cache, no-store, must-revalidate")
+	} else {
+		c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
+	}
 	return c.SendFile(filePath)
 }
 
