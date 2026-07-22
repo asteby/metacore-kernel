@@ -16,12 +16,13 @@ const (
 	maxMsgSize = 4096
 )
 
-// Client is a single WebSocket connection bound to a user.
-type Client struct {
-	Hub    *Hub
+// ClientOf is a single WebSocket connection bound to a user, keyed by the
+// host's user-ID type.
+type ClientOf[K comparable] struct {
+	Hub    *HubOf[K]
 	conn   *websocket.Conn
 	send   chan []byte
-	UserID uuid.UUID
+	UserID K
 
 	// Context holds arbitrary app-level state (e.g. active conversation ID).
 	// Apps set this via SetContext; the hub reads it inside SendConditional.
@@ -30,21 +31,24 @@ type Client struct {
 	mu      sync.RWMutex
 }
 
+// Client is the historical uuid-keyed client, kept as an alias for back-compat.
+type Client = ClientOf[uuid.UUID]
+
 // SetContext stores arbitrary per-connection state for use in SendConditional predicates.
-func (c *Client) SetContext(ctx any) {
+func (c *ClientOf[K]) SetContext(ctx any) {
 	c.mu.Lock()
 	c.Context = ctx
 	c.mu.Unlock()
 }
 
 // GetContext retrieves the stored per-connection context.
-func (c *Client) GetContext() any {
+func (c *ClientOf[K]) GetContext() any {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.Context
 }
 
-func (c *Client) readPump() {
+func (c *ClientOf[K]) readPump() {
 	defer func() {
 		c.Hub.unregister <- c
 		c.conn.Close()
@@ -67,7 +71,7 @@ func (c *Client) readPump() {
 	}
 }
 
-func (c *Client) writePump() {
+func (c *ClientOf[K]) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
