@@ -165,6 +165,9 @@ var (
 		"password":     {},
 		"slider":       {},
 		"rating":       {},
+		// "icon": lucide-name-or-image picker (runtime-react IconPickerField,
+		// SDK 28.2.0). Value is a lucide slug or an uploaded image path.
+		"icon":         {},
 	}
 	// defaultRe allows only safe DDL DEFAULT expressions:
 	//   numeric literal:   42 | 42.5 | -3
