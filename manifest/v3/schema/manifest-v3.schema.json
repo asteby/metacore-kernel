@@ -859,6 +859,34 @@
         "generated": {
           "type": "string",
           "description": "Declares a Postgres STORED generated column: a pure arithmetic expression over OTHER columns of the SAME row (e.g. 'quantity - reserved'), emitted as `GENERATED ALWAYS AS (<expr>) STORED`. The value is maintained by the database on every write (path-independent) and is SQL-native: it filters, sorts, aggregates and exports in the database with no compute hook or wasm handler, and is excluded from INSERT/UPDATE. Expression allowlist: +-*/, parentheses, numbers, and sibling column identifiers (no self-reference). INCOMPATIBLE with default and not_null (Postgres rejects both on a generated column)."
+        },
+        "visible_when": {
+          "$ref": "#/$defs/VisibleWhen"
+        }
+      }
+    },
+    "VisibleWhen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field"
+      ],
+      "description": "CONDITIONAL VISIBILITY for a form field in the native create/edit modal: the SDK renders the owning field only when a SIBLING field's current value matches this predicate. Pure UI metadata (maps to ColumnDef/FieldDef.visible_when) — the DDL and write planes ignore it, and a hidden field's value never gates submit. Declare EITHER 'equals' (exact string match) OR 'in' (any-of); when both are present 'in' wins.",
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "Sibling field key whose current value drives this field's visibility (e.g. 'rule_scope')."
+        },
+        "equals": {
+          "type": "string",
+          "description": "Show the owning field when the sibling value equals this string."
+        },
+        "in": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Show the owning field when the sibling value is one of these strings."
         }
       }
     },
@@ -1758,6 +1786,9 @@
         "lock_rows": {
           "type": "boolean",
           "description": "Set on a type:'array' line-items field: its rows are fixed — the SDK hides add-row and delete-row controls, so the user can only edit existing rows' cells (e.g. a receive form prefilled from the ordered lines). Ignored on non-array fields."
+        },
+        "visible_when": {
+          "$ref": "#/$defs/VisibleWhen"
         },
         "total": {
           "type": "boolean",

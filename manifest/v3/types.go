@@ -573,6 +573,17 @@ type Column struct {
 	// a generated column). Empty = ordinary column. Optional.
 	Generated string `json:"generated,omitempty"`
 
+	// VisibleWhen declares CONDITIONAL VISIBILITY for this column in the native
+	// create/edit modal: the SDK renders the field only when a SIBLING field's
+	// current value matches the predicate. It is pure UI-plane metadata (like
+	// Widget/Display) the host projects onto modelbase.ColumnDef/FieldDef.VisibleWhen
+	// — the DDL and write planes ignore it. A hidden field's value never gates
+	// submit (no required-check while hidden). Shape:
+	//   "visible_when": {"field": "rule_scope", "equals": "product"}
+	//   "visible_when": {"field": "rule_scope", "in": ["product", "category"]}
+	// Empty = always visible. Optional.
+	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`
+
 	// Readonly marks a SYSTEM-GENERATED column: a value the addon/host populates
 	// (e.g. an id or number a remote API returns after a write), NOT something a
 	// user types. It is pure UI-plane metadata that the host projects onto
@@ -583,6 +594,23 @@ type Column struct {
 	// server-side as usual. Use it for columns filled by an outbound sync, an
 	// external id, or any value the user must never hand-edit.
 	Readonly bool `json:"readonly,omitempty"`
+}
+
+// VisibleWhen is a single-sibling conditional-visibility predicate for a form
+// field in the native create/edit modal. Field names the OTHER field whose
+// current value drives visibility; the owning field is shown when that value
+// equals Equals (exact string match) OR is a member of In (any-of). When both
+// are set In wins. It is pure UI metadata — the kernel only carries it through
+// the v3 → host conversion onto modelbase.ColumnDef/FieldDef.VisibleWhen; the
+// SDK does the actual show/hide against the live form values. JSON tags match
+// the host contract so the block round-trips byte-for-byte.
+type VisibleWhen struct {
+	// Field is the sibling field key whose value drives visibility.
+	Field string `json:"field"`
+	// Equals shows the owning field when the sibling value == this string.
+	Equals string `json:"equals,omitempty"`
+	// In shows the owning field when the sibling value is one of these strings.
+	In []string `json:"in,omitempty"`
 }
 
 // Sequence declares one atomic counter the kernel maintains for the owning
@@ -994,6 +1022,13 @@ type ActionField struct {
 	// (json `depends_on`) so the SDK scopes + re-fetches the picker's options
 	// when the depended-on field changes. Empty = no cascade. Optional.
 	DependsOn string `json:"depends_on,omitempty"`
+
+	// VisibleWhen declares CONDITIONAL VISIBILITY for this action field: the SDK
+	// renders it only when a SIBLING field's current value matches the predicate
+	// (see VisibleWhen). The host projects it onto modelbase.FieldDef.VisibleWhen
+	// so the action-modal renderer shows/hides the field against the live form
+	// values. A hidden field's value never gates submit. Nil = always visible.
+	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`
 
 	// ItemFields declares the columns of a repeatable line-items group. It is
 	// set on a field with type "array" (the multi-row container — e.g. the

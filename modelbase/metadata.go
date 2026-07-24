@@ -111,12 +111,33 @@ type ColumnDef struct {
 	// declares EITHER a static enum OR a dynamic source, never both. Nil = no
 	// dynamic source. Pure UI/query metadata; the DDL plane ignores it.
 	OptionsConfig *FieldOptionsConfig `json:"optionsConfig,omitempty"`
+	// VisibleWhen declares CONDITIONAL VISIBILITY for the column when it is
+	// projected into the create/edit modal (form derivation copies it onto the
+	// served FieldDef). Nil = always visible. Pure UI metadata; the DDL plane
+	// ignores it. See VisibleWhen.
+	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`
 	// Validation declares server-side input constraints that the SDK can
 	// also pre-flight in the form layer. Strings prefixed with `$org.`
 	// (e.g. `$org.tax_id_validator`) are resolved at runtime against the
 	// current organization's config — keeping fiscal/regional rules out of
 	// the kernel and out of the SDK.
 	Validation *ValidationRule `json:"validation,omitempty"`
+}
+
+// VisibleWhen is a single-sibling conditional-visibility predicate the SDK
+// evaluates against the current create/edit form values. Field names the OTHER
+// form field whose value drives visibility; the owning field is shown when that
+// value satisfies Equals (exact string match) OR is a member of In (any-of).
+// Exactly one of Equals / In is meaningful — when both are set In wins. Empty
+// (no Field) is a no-op (always visible). It mirrors manifest/v3 VisibleWhen so
+// the block round-trips byte-for-byte through the host's served metadata.
+type VisibleWhen struct {
+	// Field is the sibling field key whose value drives this field's visibility.
+	Field string `json:"field"`
+	// Equals shows the owning field when the sibling value == this string.
+	Equals string `json:"equals,omitempty"`
+	// In shows the owning field when the sibling value is one of these strings.
+	In []string `json:"in,omitempty"`
 }
 
 // ValidationRule mirrors `manifest.ValidationRule` but lives on the metadata
@@ -255,6 +276,13 @@ type FieldDef struct {
 	LabelImage string `json:"label_image,omitempty"`
 	LabelIcon  string `json:"label_icon,omitempty"`
 	LabelColor string `json:"label_color,omitempty"`
+
+	// VisibleWhen declares CONDITIONAL VISIBILITY for this field in the
+	// create/edit modal: the SDK renders it only when the referenced sibling
+	// field's current value matches the condition (see VisibleWhen). Nil = the
+	// field is always visible (legacy behaviour). A hidden field's value never
+	// gates submit. Pure UI metadata; the DDL and write planes ignore it.
+	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`
 }
 
 // FieldBalanceRule is the host-facing mirror of manifest/v3 FieldBalanceRule.
