@@ -1,4 +1,4 @@
-package manifest_test
+package dyntest
 
 import (
 	"encoding/json"
