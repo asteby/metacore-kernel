@@ -326,6 +326,10 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// Generated rides through so the DDL builder emits the column as
 				// `GENERATED ALWAYS AS (<expr>) STORED` (Postgres-maintained).
 				Generated: c.Generated,
+				// VisibleWhen rides through so form derivation projects the
+				// conditional-visibility predicate onto the served FieldDef and the
+				// SDK shows/hides the field against the live form values. Pure UI.
+				VisibleWhen: mapVisibleWhen(c.VisibleWhen),
 			}
 			// Options is EITHER the STATIC-select list (array form) OR the
 			// DYNAMIC dependent-source object (DynamicOptions). The static list
@@ -751,6 +755,21 @@ func mapOptionCondition(w *v3.OptionCondition) *OptionCondition {
 	}
 }
 
+// mapVisibleWhen projects a v3 conditional-visibility predicate onto the legacy
+// carrier so the {field, equals, in} block survives the v3 → host conversion
+// and lands on the served modelbase FieldDef/ColumnDef.VisibleWhen. Nil stays
+// nil (retro-compatible: no `visible_when` block = always visible).
+func mapVisibleWhen(w *v3.VisibleWhen) *VisibleWhenDef {
+	if w == nil {
+		return nil
+	}
+	return &VisibleWhenDef{
+		Field:  w.Field,
+		Equals: w.Equals,
+		In:     w.In,
+	}
+}
+
 // FieldOptions copy across.
 //
 // The rich properties — widget, ref, placeholder, search_endpoint, total,
@@ -804,6 +823,9 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 			// key (e.g. "connector_repos") so the host materialises the field's
 			// choices from its registry at metadata-serve time.
 			OptionsSource: f.OptionsSource,
+			// VisibleWhen forwards the conditional-visibility predicate so the SDK
+			// shows/hides this action field against the live form values.
+			VisibleWhen: mapVisibleWhen(f.VisibleWhen),
 		}
 		// Options is EITHER the static value/label list (array form) OR the
 		// dynamic dependent-source object (DynamicOptions). The static list rides

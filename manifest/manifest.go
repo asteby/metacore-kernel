@@ -534,6 +534,11 @@ type FieldDef struct {
 	LabelImage string `json:"label_image,omitempty"`
 	LabelIcon  string `json:"label_icon,omitempty"`
 	LabelColor string `json:"label_color,omitempty"`
+
+	// VisibleWhen carries the v3 conditional-visibility predicate onto the served
+	// action FieldDef so the SDK's action-modal renderer shows/hides the field
+	// against the live form values. Nil = always visible. Pure UI metadata.
+	VisibleWhen *VisibleWhenDef `json:"visible_when,omitempty"`
 }
 
 // FieldBalanceRule mirrors manifest/v3 FieldBalanceRule with identical JSON
@@ -970,6 +975,23 @@ type ColumnDef struct {
 	// SDK and the OptionsConfigResolver. Pure UI/query metadata; never DDL.
 	DependsOn     string             `json:"depends_on,omitempty"`
 	OptionsConfig *DynamicOptionsDef `json:"optionsConfig,omitempty"`
+
+	// VisibleWhen carries the v3 Column.visible_when conditional-visibility
+	// predicate through the v3 → host conversion so form derivation
+	// (DeriveFormFields) projects it onto the served modelbase.FieldDef and the
+	// SDK shows/hides the field against the live form values. Pure UI metadata;
+	// the DDL plane ignores it. Nil = always visible.
+	VisibleWhen *VisibleWhenDef `json:"visible_when,omitempty"`
+}
+
+// VisibleWhenDef is the legacy carrier for the v3 VisibleWhen block. It rides
+// ColumnDef/FieldDef so the {field, equals, in} predicate survives the v3 →
+// host conversion and lands on the served modelbase.VisibleWhen the SDK reads.
+// JSON tags match the v3 + host contract so it round-trips byte-for-byte.
+type VisibleWhenDef struct {
+	Field  string   `json:"field"`
+	Equals string   `json:"equals,omitempty"`
+	In     []string `json:"in,omitempty"`
 }
 
 // ValidationRule expresses server-side input constraints. All fields are

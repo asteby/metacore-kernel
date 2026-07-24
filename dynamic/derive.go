@@ -80,6 +80,9 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			// the host's OptionsConfigResolver can build the runtime query.
 			DependsOn:     c.DependsOn,
 			OptionsConfig: toFieldOptionsConfig(c.OptionsConfig),
+			// VisibleWhen rides through onto the served column so a consumer that
+			// derives the modal from table metadata still sees the predicate.
+			VisibleWhen: toVisibleWhen(c.VisibleWhen),
 		}
 		// Stage machine: when this column is the model's stage_field and the
 		// model declares stages, derive a `status` display + the option list
@@ -262,6 +265,19 @@ func toFieldOptionsConfig(in *manifest.DynamicOptionsDef) *modelbase.FieldOption
 	}
 }
 
+// toVisibleWhen projects the legacy conditional-visibility carrier onto the
+// served modelbase.VisibleWhen the SDK reads. Nil stays nil (always visible).
+func toVisibleWhen(in *manifest.VisibleWhenDef) *modelbase.VisibleWhen {
+	if in == nil {
+		return nil
+	}
+	return &modelbase.VisibleWhen{
+		Field:  in.Field,
+		Equals: in.Equals,
+		In:     in.In,
+	}
+}
+
 // DeriveFormFields builds default create/edit form fields from a model
 // definition's physical column list, for addon models that ship no modal spec.
 // Managed columns (id/created_at/updated_at/organization_id/deleted_at) are
@@ -333,6 +349,10 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 			// create form and disables it in edit (the value is written
 			// server-side, e.g. by an addon's outbound sync).
 			Readonly: c.Readonly,
+			// VisibleWhen projects the conditional-visibility predicate onto the
+			// served form field so the SDK renders it only when the referenced
+			// sibling field's value matches. A hidden field never gates submit.
+			VisibleWhen: toVisibleWhen(c.VisibleWhen),
 		})
 	}
 	return out
