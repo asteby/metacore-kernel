@@ -252,6 +252,13 @@ type Model struct {
 	// `sequence_next` host import. Optional — models without folios omit it.
 	Sequences []Sequence `json:"sequences,omitempty"`
 
+	// FormLayout declares declarative grouping for the model's native create/edit
+	// form — collapsible sections on one scroll (mode "sections") or a step
+	// wizard (mode "steps"). Columns bind to a section/step via Column.Section.
+	// Pure UI metadata; the DDL and write planes ignore it. Nil = a flat form
+	// (the legacy behaviour). See FormLayout.
+	FormLayout *FormLayout `json:"form_layout,omitempty"`
+
 	// Locking selects the row-locking strategy the kernel applies on Update.
 	//   ""     — no extra locking (default; the legacy behaviour).
 	//   "row"  — the kernel wraps the whole Update in a transaction and loads
@@ -584,6 +591,15 @@ type Column struct {
 	// Empty = always visible. Optional.
 	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`
 
+	// Section assigns this column to a form_layout section/step by its key: the
+	// SDK places the field's input inside the matching Model.FormLayout.Sections
+	// entry (a collapsible block in mode "sections", a wizard step in mode
+	// "steps"). Columns without a Section fall into an implicit "General" block
+	// (or the first declared one). It is pure UI-plane metadata the host projects
+	// onto modelbase.ColumnDef/FieldDef.Section — the DDL and write planes ignore
+	// it. Empty = the implicit General block. Optional.
+	Section string `json:"section,omitempty"`
+
 	// Readonly marks a SYSTEM-GENERATED column: a value the addon/host populates
 	// (e.g. an id or number a remote API returns after a write), NOT something a
 	// user types. It is pure UI-plane metadata that the host projects onto
@@ -611,6 +627,43 @@ type VisibleWhen struct {
 	Equals string `json:"equals,omitempty"`
 	// In shows the owning field when the sibling value is one of these strings.
 	In []string `json:"in,omitempty"`
+}
+
+// FormLayout declares declarative GROUPING for the model's native create/edit
+// form. Mode "sections" renders the Sections as titled, collapsible blocks on a
+// single scroll; mode "steps" renders them as a step-by-step wizard (the SDK
+// validates step-by-step). A section and a step share the SAME FormSection
+// shape — the mode only changes how the SDK presents them. Columns assign
+// themselves to a section/step via Column.Section == FormSection.Key; unassigned
+// columns fall into an implicit "General" block. It is pure UI metadata — the
+// kernel only carries it through the v3 → host conversion onto the served
+// form_layout; the DDL and write planes ignore it. Nil = a flat form (legacy).
+type FormLayout struct {
+	// Mode selects the presentation: "sections" (collapsible blocks in one
+	// scroll, the default) or "steps" (a wizard, one section per step).
+	Mode string `json:"mode"`
+	// Sections is the ordered list of blocks (mode "sections") or steps
+	// (mode "steps").
+	Sections []FormSection `json:"sections"`
+}
+
+// FormSection is one block of the create/edit form, reused for both a
+// collapsible section (mode "sections") and a wizard step (mode "steps").
+// Columns bind to it via Column.Section == Key. Title/Description may be a
+// literal or an i18n key the host's localized transformer resolves at serve
+// time (the SAME mechanism as column/action labels). JSON tags match the host
+// contract so the block round-trips byte-for-byte.
+type FormSection struct {
+	// Key is the stable identifier of the section/step, unique within the
+	// model. Columns reference it via Column.Section.
+	Key string `json:"key"`
+	// Title is the human header (literal text or an i18n key).
+	Title string `json:"title,omitempty"`
+	// Description is optional secondary text under the title (literal or i18n key).
+	Description string `json:"description,omitempty"`
+	// Collapsed renders the block initially collapsed in mode "sections".
+	// Ignored in mode "steps".
+	Collapsed bool `json:"collapsed,omitempty"`
 }
 
 // Sequence declares one atomic counter the kernel maintains for the owning

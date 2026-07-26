@@ -585,6 +585,9 @@
             "$ref": "#/$defs/Sequence"
           }
         },
+        "form_layout": {
+          "$ref": "#/$defs/FormLayout"
+        },
         "stage_field": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
@@ -862,6 +865,64 @@
         },
         "visible_when": {
           "$ref": "#/$defs/VisibleWhen"
+        },
+        "section": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Assigns this column to a form_layout section/step by its key: the SDK places the field's input inside the matching form_layout.sections[] block (a collapsible section in mode 'sections', a wizard step in mode 'steps'). Columns without a section fall into an implicit 'General' block (or the first declared one). Pure UI metadata (maps to ColumnDef/FieldDef.section) — the DDL and write planes ignore it."
+        }
+      }
+    },
+    "FormSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key"
+      ],
+      "description": "One block of the model's create/edit form. In form_layout mode 'sections' it is a titled, collapsible block on a single scroll; in mode 'steps' it is one step of a wizard (the SDK validates step-by-step). Columns bind to it via column.section == this key. title/description may be a literal or an i18n key resolved by the host's localized transformer (same mechanism as column/action labels).",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Stable identifier of the section/step, unique within the model. Columns reference it via column.section."
+        },
+        "title": {
+          "type": "string",
+          "description": "Human header for the section/step. Literal text or an i18n key (e.g. 'models.invoice.sections.identity') the host localizes at serve time."
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional secondary text shown under the section/step title. Literal or i18n key."
+        },
+        "collapsed": {
+          "type": "boolean",
+          "description": "In mode 'sections', render the block initially collapsed. Ignored in mode 'steps'."
+        }
+      }
+    },
+    "FormLayout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "sections"
+      ],
+      "description": "Declarative grouping for the model's native create/edit form. Mode 'sections' renders the sections as titled, collapsible blocks on a single scroll; mode 'steps' renders them as a step-by-step wizard (validated per step by the SDK). A section and a step share the same FormSection shape. Columns assign themselves to a section/step via column.section == section.key; unassigned columns fall into an implicit 'General' block. Pure UI metadata (maps to the served form_layout) — the DDL and write planes ignore it.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "sections",
+            "steps"
+          ],
+          "description": "'sections' = collapsible blocks in one scroll (default). 'steps' = wizard, one section per step."
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FormSection"
+          },
+          "description": "Ordered list of sections (mode 'sections') or steps (mode 'steps')."
         }
       }
     },

@@ -330,6 +330,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// conditional-visibility predicate onto the served FieldDef and the
 				// SDK shows/hides the field against the live form values. Pure UI.
 				VisibleWhen: mapVisibleWhen(c.VisibleWhen),
+				// Section rides through so form derivation projects the field's
+				// form_layout section/step key onto the served FieldDef. Pure UI.
+				Section: c.Section,
 			}
 			// Options is EITHER the STATIC-select list (array form) OR the
 			// DYNAMIC dependent-source object (DynamicOptions). The static list
@@ -391,6 +394,10 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		def.OnTransition = mapModelTransitionHooks(m.OnTransition)
 		def.Locking = m.Locking
 		def.Sequences = mapModelSequences(m.Sequences)
+		// FormLayout rides through so the host projects the create/edit form
+		// grouping (collapsible sections or step wizard) onto the served metadata.
+		// Nil = a flat form (legacy). Pure UI.
+		def.FormLayout = mapFormLayout(m.FormLayout)
 		out = append(out, def)
 	}
 	return out
@@ -768,6 +775,26 @@ func mapVisibleWhen(w *v3.VisibleWhen) *VisibleWhenDef {
 		Equals: w.Equals,
 		In:     w.In,
 	}
+}
+
+// mapFormLayout projects a v3 model's create/edit form grouping onto the legacy
+// carrier so the {mode, sections} block survives the v3 → host conversion and
+// lands on the served form metadata. Nil stays nil (a flat form). Section
+// titles/descriptions copy across verbatim (literal or i18n key).
+func mapFormLayout(fl *v3.FormLayout) *FormLayoutDef {
+	if fl == nil {
+		return nil
+	}
+	out := &FormLayoutDef{Mode: fl.Mode}
+	for _, s := range fl.Sections {
+		out.Sections = append(out.Sections, FormSectionDef{
+			Key:         s.Key,
+			Title:       s.Title,
+			Description: s.Description,
+			Collapsed:   s.Collapsed,
+		})
+	}
+	return out
 }
 
 // FieldOptions copy across.
