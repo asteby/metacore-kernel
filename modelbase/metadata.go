@@ -29,6 +29,36 @@ type TableMetadata struct {
 	// models, so the field is omitted from their served payload. The JSON tag
 	// is load-bearing: it MUST match what the SDK's <DynamicRelations> reads.
 	Relations []RelationMeta `json:"relations,omitempty"`
+
+	// FormLayout declares declarative grouping for the model's create/edit form —
+	// collapsible sections on one scroll (mode "sections") or a step wizard (mode
+	// "steps"). Fields bind to a section/step via FieldDef.Section. Populated by
+	// the metadata service from the manifest-declared form_layout; nil for models
+	// that ship a flat form. Pure UI metadata; the DDL/write planes ignore it.
+	FormLayout *FormLayout `json:"form_layout,omitempty"`
+}
+
+// FormLayout is the served grouping spec for a model's create/edit form. Mode
+// "sections" renders Sections as titled, collapsible blocks on one scroll; mode
+// "steps" renders them as a wizard (the SDK validates step-by-step). A field
+// binds to a section/step via FieldDef.Section == FormSection.Key; unbound
+// fields fall into an implicit "General" block. It mirrors manifest/v3 FormLayout
+// so the block round-trips byte-for-byte through the host's served metadata.
+type FormLayout struct {
+	// Mode is "sections" (collapsible blocks, default) or "steps" (wizard).
+	Mode string `json:"mode"`
+	// Sections is the ordered list of blocks/steps.
+	Sections []FormSection `json:"sections"`
+}
+
+// FormSection is one block of the create/edit form, reused for both a
+// collapsible section and a wizard step. Title/Description may already be
+// localized by the host's transformer or carry an i18n key the SDK resolves.
+type FormSection struct {
+	Key         string `json:"key"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	Collapsed   bool   `json:"collapsed,omitempty"`
 }
 
 // RelationMeta is one inverse relation projected onto served TableMetadata so
@@ -116,6 +146,11 @@ type ColumnDef struct {
 	// served FieldDef). Nil = always visible. Pure UI metadata; the DDL plane
 	// ignores it. See VisibleWhen.
 	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`
+	// Section assigns the column, when projected into the create/edit modal, to a
+	// form_layout section/step by its key (form derivation copies it onto the
+	// served FieldDef). Empty = the implicit "General" block. Pure UI metadata;
+	// the DDL plane ignores it.
+	Section string `json:"section,omitempty"`
 	// Validation declares server-side input constraints that the SDK can
 	// also pre-flight in the form layer. Strings prefixed with `$org.`
 	// (e.g. `$org.tax_id_validator`) are resolved at runtime against the
@@ -283,6 +318,11 @@ type FieldDef struct {
 	// field is always visible (legacy behaviour). A hidden field's value never
 	// gates submit. Pure UI metadata; the DDL and write planes ignore it.
 	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`
+
+	// Section places this field inside a form_layout section/step by its key (the
+	// SDK groups fields by Section against the model's served FormLayout). Empty =
+	// the implicit "General" block. Pure UI metadata; the DDL/write planes ignore it.
+	Section string `json:"section,omitempty"`
 }
 
 // FieldBalanceRule is the host-facing mirror of manifest/v3 FieldBalanceRule.

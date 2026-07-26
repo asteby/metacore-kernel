@@ -83,6 +83,9 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			// VisibleWhen rides through onto the served column so a consumer that
 			// derives the modal from table metadata still sees the predicate.
 			VisibleWhen: toVisibleWhen(c.VisibleWhen),
+			// Section rides through onto the served column so a consumer that
+			// derives the modal from table metadata still sees the form grouping.
+			Section: c.Section,
 		}
 		// Stage machine: when this column is the model's stage_field and the
 		// model declares stages, derive a `status` display + the option list
@@ -353,6 +356,31 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 			// served form field so the SDK renders it only when the referenced
 			// sibling field's value matches. A hidden field never gates submit.
 			VisibleWhen: toVisibleWhen(c.VisibleWhen),
+			// Section places the field inside a form_layout section/step (the SDK
+			// groups fields by Section against the model's DeriveFormLayout). Empty
+			// = the implicit "General" block.
+			Section: c.Section,
+		})
+	}
+	return out
+}
+
+// DeriveFormLayout projects a model definition's create/edit form grouping onto
+// the served modelbase.FormLayout the SDK reads to render collapsible sections
+// (mode "sections") or a step wizard (mode "steps"). Nil stays nil (a flat
+// form). Fields bind to a section/step via FieldDef.Section == FormSection.Key.
+// Pure UI metadata; the DDL/write planes ignore it.
+func DeriveFormLayout(def manifest.ModelDefinition) *modelbase.FormLayout {
+	if def.FormLayout == nil {
+		return nil
+	}
+	out := &modelbase.FormLayout{Mode: def.FormLayout.Mode}
+	for _, s := range def.FormLayout.Sections {
+		out.Sections = append(out.Sections, modelbase.FormSection{
+			Key:         s.Key,
+			Title:       s.Title,
+			Description: s.Description,
+			Collapsed:   s.Collapsed,
 		})
 	}
 	return out

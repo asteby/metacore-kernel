@@ -666,6 +666,31 @@ type ModelDefinition struct {
 	// increment-then-check guard is race-free. Empty = no extra locking. See
 	// manifest/v3.Model and dynamic constraint evaluation.
 	Locking string `json:"locking,omitempty"`
+
+	// FormLayout carries the v3 Model.form_layout (create/edit form grouping —
+	// collapsible sections or a step wizard) through the v3 → host conversion so
+	// the host can project it onto the served form metadata. Columns bind to a
+	// section/step via ColumnDef.Section. Pure UI metadata; the DDL/write planes
+	// ignore it. Nil = a flat form (legacy). See manifest/v3.FormLayout.
+	FormLayout *FormLayoutDef `json:"form_layout,omitempty"`
+}
+
+// FormLayoutDef is the legacy carrier for the v3 FormLayout block. It rides the
+// ModelDefinition so the {mode, sections} grouping survives the v3 → host
+// conversion and lands on the served form metadata the SDK reads. JSON tags
+// match the v3 + host contract so it round-trips byte-for-byte.
+type FormLayoutDef struct {
+	Mode     string           `json:"mode"`
+	Sections []FormSectionDef `json:"sections"`
+}
+
+// FormSectionDef is the legacy carrier for one v3 FormSection (a collapsible
+// section or a wizard step). Title/Description may be a literal or an i18n key.
+type FormSectionDef struct {
+	Key         string `json:"key"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	Collapsed   bool   `json:"collapsed,omitempty"`
 }
 
 // StageDef is the host/runtime projection of a v3 Stage. See manifest/v3.Stage
@@ -982,6 +1007,13 @@ type ColumnDef struct {
 	// SDK shows/hides the field against the live form values. Pure UI metadata;
 	// the DDL plane ignores it. Nil = always visible.
 	VisibleWhen *VisibleWhenDef `json:"visible_when,omitempty"`
+
+	// Section carries the v3 Column.section through the v3 → host conversion so
+	// form derivation (DeriveFormFields) projects it onto the served
+	// modelbase.FieldDef.Section and the SDK places the field inside the matching
+	// form_layout section/step. Pure UI metadata; the DDL plane ignores it. Empty
+	// = the implicit "General" block.
+	Section string `json:"section,omitempty"`
 }
 
 // VisibleWhenDef is the legacy carrier for the v3 VisibleWhen block. It rides
