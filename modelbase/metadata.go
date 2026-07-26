@@ -59,6 +59,10 @@ type FormSection struct {
 	Title       string `json:"title,omitempty"`
 	Description string `json:"description,omitempty"`
 	Collapsed   bool   `json:"collapsed,omitempty"`
+	// VisibleWhen hides the whole section when the predicate is false against the
+	// live form values (same {field, equals?, in?} shape as a field's
+	// visible_when). Nil = always visible. The SDK does the show/hide.
+	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`
 }
 
 // RelationMeta is one inverse relation projected onto served TableMetadata so

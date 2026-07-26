@@ -792,6 +792,7 @@ func mapFormLayout(fl *v3.FormLayout) *FormLayoutDef {
 			Title:       s.Title,
 			Description: s.Description,
 			Collapsed:   s.Collapsed,
+			VisibleWhen: mapVisibleWhen(s.VisibleWhen),
 		})
 	}
 	return out

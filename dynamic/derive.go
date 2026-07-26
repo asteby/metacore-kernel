@@ -381,6 +381,7 @@ func DeriveFormLayout(def manifest.ModelDefinition) *modelbase.FormLayout {
 			Title:       s.Title,
 			Description: s.Description,
 			Collapsed:   s.Collapsed,
+			VisibleWhen: toVisibleWhen(s.VisibleWhen),
 		})
 	}
 	return out
