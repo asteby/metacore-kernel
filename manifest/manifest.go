@@ -687,10 +687,11 @@ type FormLayoutDef struct {
 // FormSectionDef is the legacy carrier for one v3 FormSection (a collapsible
 // section or a wizard step). Title/Description may be a literal or an i18n key.
 type FormSectionDef struct {
-	Key         string `json:"key"`
-	Title       string `json:"title,omitempty"`
-	Description string `json:"description,omitempty"`
-	Collapsed   bool   `json:"collapsed,omitempty"`
+	Key         string          `json:"key"`
+	Title       string          `json:"title,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Collapsed   bool            `json:"collapsed,omitempty"`
+	VisibleWhen *VisibleWhenDef `json:"visible_when,omitempty"`
 }
 
 // StageDef is the host/runtime projection of a v3 Stage. See manifest/v3.Stage

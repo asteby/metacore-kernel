@@ -664,6 +664,13 @@ type FormSection struct {
 	// Collapsed renders the block initially collapsed in mode "sections".
 	// Ignored in mode "steps".
 	Collapsed bool `json:"collapsed,omitempty"`
+	// VisibleWhen declares CONDITIONAL VISIBILITY for the whole section: the SDK
+	// hides the entire block (all its fields) when the predicate is false against
+	// the live form values, using the SAME {field, equals?, in?} shape as
+	// Column.VisibleWhen. Pure UI metadata — the kernel only carries it through
+	// the v3 → host conversion onto the served form_layout; the SDK does the
+	// actual show/hide. Nil = always visible.
+	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`
 }
 
 // Sequence declares one atomic counter the kernel maintains for the owning

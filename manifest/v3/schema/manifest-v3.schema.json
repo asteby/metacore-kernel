@@ -897,6 +897,10 @@
         "collapsed": {
           "type": "boolean",
           "description": "In mode 'sections', render the block initially collapsed. Ignored in mode 'steps'."
+        },
+        "visible_when": {
+          "$ref": "#/$defs/VisibleWhen",
+          "description": "CONDITIONAL VISIBILITY for the whole section: the SDK hides the entire block (all its fields) when the predicate is false against the live form values, using the same {field, equals?, in?} shape as a column's visible_when. Pure UI metadata."
         }
       }
     },
