@@ -86,6 +86,13 @@ var importableFieldTypes = map[string]bool{
 	"select":   true,
 }
 
+// DefaultSecretGenerator names the generator attached to derived password
+// columns. A password is REQUIRED by the model yet must never be dictated by a
+// spreadsheet author for every row, so the derived template offers the column
+// (an admin may set one deliberately) and fills a blank cell with an
+// unguessable value the user then resets through the normal recovery flow.
+const DefaultSecretGenerator = "random_secret"
+
 // DeriveImportSpec projects a default ImportSpec from a model's form metadata,
 // so a model that declares nothing still gets a template whose headers match
 // its own form labels. Non-importable field types (image, file, relation
@@ -93,7 +100,37 @@ var importableFieldTypes = map[string]bool{
 func DeriveImportSpec(modal ModalMetadata) ImportSpec {
 	cols := make([]ImportColumn, 0, len(modal.Fields))
 	for _, f := range modal.Fields {
+		// A hidden field is filled by the form itself (a role, a discriminator,
+		// a default), so it neither becomes a column nor blocks the import —
+		// the create pipeline supplies it exactly as it does for a manual save.
+		if f.Type == "hidden" {
+			continue
+		}
+		// A password is required but must not be dictated per row: it becomes a
+		// column with a generator, so a blank cell yields an unguessable value.
+		if f.Type == "password" {
+			header := f.Label
+			if header == "" {
+				header = f.Key
+			}
+			cols = append(cols, ImportColumn{
+				Key:       f.Key,
+				Header:    header,
+				Generator: DefaultSecretGenerator,
+				Hint:      f.Placeholder,
+			})
+			continue
+		}
 		if !importableFieldTypes[f.Type] {
+			// A REQUIRED field that cannot travel in a spreadsheet cell makes
+			// the whole derived template useless: every row would be missing a
+			// value the model demands (e.g. an appointment's doctor and patient
+			// pickers). Offering an import that cannot succeed is worse than
+			// offering none, so the model opts out of the derived path — it can
+			// still declare DefineImport with the dot-paths it wants.
+			if f.Required {
+				return ImportSpec{}
+			}
 			continue
 		}
 		header := f.Label
