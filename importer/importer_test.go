@@ -294,3 +294,48 @@ func TestDateCellsAreNormalisedAndAmbiguityRejected(t *testing.T) {
 		t.Errorf("ambiguous date must be rejected, got %+v", issues)
 	}
 }
+
+func TestReadCappedRejectsRatherThanTruncating(t *testing.T) {
+	// One byte over the limit. A truncating reader would return 16 MiB of
+	// perfectly parseable CSV and silently drop the rest.
+	oversized := bytes.Repeat([]byte("a"), int(MaxUploadBytes)+1)
+
+	_, err := readCapped(bytes.NewReader(oversized))
+
+	var tooLarge ErrUploadTooLarge
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("want ErrUploadTooLarge, got %v", err)
+	}
+
+	// Exactly at the limit is still accepted.
+	atLimit := bytes.Repeat([]byte("a"), int(MaxUploadBytes))
+	if _, err := readCapped(bytes.NewReader(atLimit)); err != nil {
+		t.Errorf("a payload exactly at the limit must be accepted: %v", err)
+	}
+}
+
+func TestRedactGeneratedKeepsSecretsOutOfThePreview(t *testing.T) {
+	spec := doctorsLikeSpec() // user.password carries the random_secret generator
+	prepared, err := Prepare(spec, []map[string]any{
+		{"Nombre completo": "Dr. Juan", "Email": "juan@correo.com"},
+	})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	preview := RedactGenerated(spec, prepared.Records)
+
+	user := preview[0]["user"].(map[string]any)
+	if user["password"] != "(generado)" {
+		t.Errorf("generated secret leaked into the preview: %#v", user["password"])
+	}
+	// What the user typed stays visible — that is what makes a preview useful.
+	if user["email"] != "juan@correo.com" {
+		t.Errorf("user-supplied value should survive redaction: %#v", user["email"])
+	}
+	// And redaction must not corrupt the record about to be created.
+	original := prepared.Records[0]["user"].(map[string]any)
+	if len(original["password"].(string)) != 32 {
+		t.Error("redaction mutated the record instead of copying it")
+	}
+}

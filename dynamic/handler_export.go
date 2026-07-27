@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/asteby/metacore-kernel/importer"
+	"github.com/asteby/metacore-kernel/modelbase"
 	"github.com/asteby/metacore-kernel/query"
 	"github.com/gofiber/fiber/v3"
 )
@@ -114,7 +115,7 @@ func (h *Handler) importValidate(c fiber.Ctx) error {
 	if h.user(c) == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
 	}
-	prepared, err := h.prepareImport(c)
+	prepared, spec, err := h.prepareImport(c)
 	if err != nil {
 		return err
 	}
@@ -123,7 +124,7 @@ func (h *Handler) importValidate(c fiber.Ctx) error {
 		"data": fiber.Map{
 			"rowCount": len(prepared.Records),
 			"skipped":  prepared.Skipped,
-			"sample":   firstN(prepared.Records, 5),
+			"sample":   firstN(importer.RedactGenerated(spec, prepared.Records), 5),
 			"errors":   prepared.Issues,
 		},
 	})
@@ -140,7 +141,7 @@ func (h *Handler) importData(c fiber.Ctx) error {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
 	}
 	model := c.Params("model")
-	prepared, err := h.prepareImport(c)
+	prepared, _, err := h.prepareImport(c)
 	if err != nil {
 		return err
 	}
@@ -189,27 +190,27 @@ func (h *Handler) importData(c fiber.Ctx) error {
 // one spec, one set of rules — all of it living in the reusable `importer`
 // engine so hosts that have not yet adopted dynamic.Service still run the
 // exact same code. The returned error is already an HTTP response.
-func (h *Handler) prepareImport(c fiber.Ctx) (*importer.Prepared, error) {
+func (h *Handler) prepareImport(c fiber.Ctx) (*importer.Prepared, modelbase.ImportSpec, error) {
 	model := c.Params("model")
 	spec, err := h.service.ImportSpec(c, model)
 	if err != nil {
-		return nil, h.handleError(c, err)
+		return nil, spec, h.handleError(c, err)
 	}
 	if len(spec.Columns) == 0 {
-		return nil, respondErr(c, fiber.StatusUnprocessableEntity, "model has no importable columns")
+		return nil, spec, respondErr(c, fiber.StatusUnprocessableEntity, "model has no importable columns")
 	}
 	rows, err := importer.ReadRows(c)
 	if err != nil {
-		return nil, respondErr(c, fiber.StatusBadRequest, err.Error())
+		return nil, spec, respondErr(c, fiber.StatusBadRequest, err.Error())
 	}
 	if len(rows) == 0 {
-		return nil, respondErr(c, fiber.StatusBadRequest, "the file contains no data rows")
+		return nil, spec, respondErr(c, fiber.StatusBadRequest, "the file contains no data rows")
 	}
 	prepared, err := importer.Prepare(spec, rows)
 	if err != nil {
-		return nil, respondErr(c, fiber.StatusUnprocessableEntity, err.Error())
+		return nil, spec, respondErr(c, fiber.StatusUnprocessableEntity, err.Error())
 	}
-	return prepared, nil
+	return prepared, spec, nil
 }
 
 // exportHeaders resolves the column list for a CSV export. `columns` query

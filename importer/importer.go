@@ -491,24 +491,23 @@ func ReadRows(c fiber.Ctx) ([]map[string]any, error) {
 			return nil, fmt.Errorf("open uploaded file: %w", err)
 		}
 		defer f.Close()
-		// fileHeader.Size is client-declared; cap the stream itself so a lying
-		// Content-Length cannot get past the check above.
-		capped := io.LimitReader(f, MaxUploadBytes+1)
+		// Read once, check once, then dispatch — every format goes through the
+		// SAME size gate. Handing a truncated stream to a parser instead is
+		// silent data loss: csv.Reader cannot tell it was cut short and simply
+		// returns the rows that fit, dropping the rest of the file with no
+		// error at all.
+		raw, err := readCapped(f)
+		if err != nil {
+			return nil, err
+		}
 		name := strings.ToLower(fileHeader.Filename)
 		switch {
 		case strings.HasSuffix(name, ".json"):
-			raw, err := io.ReadAll(capped)
-			if err != nil {
-				return nil, fmt.Errorf("read json body: %w", err)
-			}
-			if int64(len(raw)) > MaxUploadBytes {
-				return nil, ErrUploadTooLarge{Got: int64(len(raw)), Limit: MaxUploadBytes}
-			}
 			return ParseJSON(raw)
 		case strings.HasSuffix(name, ".xlsx"), strings.HasSuffix(name, ".xls"):
-			return ParseXLSX(capped)
+			return ParseXLSX(bytes.NewReader(raw))
 		default:
-			return ParseCSV(capped)
+			return ParseCSV(bytes.NewReader(raw))
 		}
 	}
 	body := c.Body()
@@ -520,6 +519,82 @@ func ReadRows(c fiber.Ctx) ([]map[string]any, error) {
 	}
 	// Fall back to CSV when the body looks like one.
 	return ParseCSV(bytes.NewReader(body))
+}
+
+// readCapped reads r fully but refuses anything over MaxUploadBytes, reading
+// one byte past the limit so "exactly at the limit" and "over it" are
+// distinguishable. Returning ErrUploadTooLarge — rather than a truncated
+// buffer — is the point: a partially read spreadsheet parses into a partially
+// imported dataset with nothing to signal the loss.
+func readCapped(r io.Reader) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(r, MaxUploadBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read upload: %w", err)
+	}
+	if int64(len(raw)) > MaxUploadBytes {
+		return nil, ErrUploadTooLarge{Got: int64(len(raw)), Limit: MaxUploadBytes}
+	}
+	return raw, nil
+}
+
+// RedactGenerated returns a copy of records with every generated column's value
+// replaced by a placeholder. Generator output is a SECRET by construction — the
+// bundled `random_secret` produces the account password — so it must never
+// travel back in a response, not even in a validation preview. Values the user
+// typed themselves are left alone: echoing those back is what makes the preview
+// useful.
+func RedactGenerated(spec modelbase.ImportSpec, records []map[string]any) []map[string]any {
+	generated := make([]string, 0, 2)
+	for _, col := range spec.Columns {
+		if col.Generator != "" {
+			generated = append(generated, col.Key)
+		}
+	}
+	if len(generated) == 0 {
+		return records
+	}
+	out := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		clone := cloneRecord(record)
+		for _, key := range generated {
+			redactPath(clone, key)
+		}
+		out = append(out, clone)
+	}
+	return out
+}
+
+// cloneRecord deep-copies the nested maps setPath builds, so redaction never
+// mutates the record that is about to be created.
+func cloneRecord(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		if nested, ok := v.(map[string]any); ok {
+			out[k] = cloneRecord(nested)
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// redactPath replaces the value at a dot-path when the key is present. Absent
+// keys are left absent: showing a placeholder for a column that was never
+// filled would misrepresent the file.
+func redactPath(record map[string]any, path string) {
+	parts := strings.Split(path, ".")
+	cursor := record
+	for _, part := range parts[:len(parts)-1] {
+		next, ok := cursor[part].(map[string]any)
+		if !ok {
+			return
+		}
+		cursor = next
+	}
+	last := parts[len(parts)-1]
+	if _, present := cursor[last]; present {
+		cursor[last] = "(generado)"
+	}
 }
 
 // Prepared is the outcome of parsing + validating an upload: the records ready
