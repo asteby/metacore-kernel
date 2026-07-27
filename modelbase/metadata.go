@@ -36,6 +36,13 @@ type TableMetadata struct {
 	// the metadata service from the manifest-declared form_layout; nil for models
 	// that ship a flat form. Pure UI metadata; the DDL/write planes ignore it.
 	FormLayout *FormLayout `json:"form_layout,omitempty"`
+
+	// Import declares the model's spreadsheet-import columns — the single
+	// source of truth for the generated template and for parsing the filled
+	// file back in. Nil on the served payload for models that neither declare
+	// a spec nor have importable form fields; the SDK hides the import action
+	// in that case. See import.go.
+	Import *ImportSpec `json:"import,omitempty"`
 }
 
 // FormLayout is the served grouping spec for a model's create/edit form. Mode

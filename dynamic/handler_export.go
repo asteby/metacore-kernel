@@ -1,14 +1,12 @@
 package dynamic
 
 import (
-	"bytes"
-	"encoding/csv"
-	"encoding/json"
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
 
+	"github.com/asteby/metacore-kernel/importer"
+	"github.com/asteby/metacore-kernel/modelbase"
 	"github.com/asteby/metacore-kernel/query"
 	"github.com/gofiber/fiber/v3"
 )
@@ -45,110 +43,174 @@ func (h *Handler) exportData(c fiber.Ctx) error {
 		return h.handleError(c, err)
 	}
 
-	var buf bytes.Buffer
-	w := csv.NewWriter(&buf)
-	if err := w.Write(headers); err != nil {
-		return respondErr(c, fiber.StatusInternalServerError, "csv encode: "+err.Error())
-	}
+	records := make([][]string, 0, len(items)+1)
+	records = append(records, headers)
 	for _, row := range items {
 		rec := make([]string, len(headers))
 		for i, key := range headers {
 			rec[i] = stringify(row[key])
 		}
-		if err := w.Write(rec); err != nil {
-			return respondErr(c, fiber.StatusInternalServerError, "csv encode: "+err.Error())
-		}
+		records = append(records, rec)
 	}
-	w.Flush()
-	if err := w.Error(); err != nil {
-		return respondErr(c, fiber.StatusInternalServerError, "csv flush: "+err.Error())
+	// BOM included so Excel opens the export as UTF-8 rather than the local
+	// ANSI codepage, which mangles accented values.
+	data, err := importer.WriteCSVWithBOM(records)
+	if err != nil {
+		return respondErr(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	c.Set(fiber.HeaderContentType, "text/csv; charset=utf-8")
 	c.Set(fiber.HeaderContentDisposition, "attachment; filename=\""+model+".csv\"")
-	return c.Send(buf.Bytes())
+	return c.Send(data)
 }
 
-// exportTemplate handles GET /dynamic/:model/export/template — same format
-// as exportData but with no rows, so users can fill it in and feed it back
-// through importData.
+// exportTemplate handles GET /dynamic/:model/export/template — the file users
+// fill in and feed back through importData. Format follows `?format=`: xlsx
+// (default) renders the model's ImportSpec with an example row, hints and an
+// instructions sheet; csv emits just the header row for tooling that wants a
+// flat file.
 func (h *Handler) exportTemplate(c fiber.Ctx) error {
 	model := c.Params("model")
-	headers, err := exportHeaders(c, h, model)
+	spec, err := h.service.ImportSpec(c, model)
 	if err != nil {
 		return h.handleError(c, err)
 	}
+	if len(spec.Columns) == 0 {
+		return respondErr(c, fiber.StatusUnprocessableEntity, "model has no importable columns")
+	}
 
-	var buf bytes.Buffer
-	w := csv.NewWriter(&buf)
-	_ = w.Write(headers)
-	w.Flush()
+	if strings.EqualFold(c.Query("format"), "csv") {
+		headers := make([]string, 0, len(spec.Columns))
+		for _, col := range spec.Columns {
+			headers = append(headers, col.TemplateHeader())
+		}
+		// BOM included so Excel opens the file as UTF-8; the parser strips it
+		// on the way back in (see importer.StripBOM).
+		data, err := importer.WriteCSVWithBOM([][]string{headers})
+		if err != nil {
+			return respondErr(c, fiber.StatusInternalServerError, err.Error())
+		}
+		c.Set(fiber.HeaderContentType, "text/csv; charset=utf-8")
+		c.Set(fiber.HeaderContentDisposition, "attachment; filename=\""+model+"-template.csv\"")
+		return c.Send(data)
+	}
 
-	c.Set(fiber.HeaderContentType, "text/csv; charset=utf-8")
-	c.Set(fiber.HeaderContentDisposition, "attachment; filename=\""+model+"-template.csv\"")
-	return c.Send(buf.Bytes())
+	title := model
+	if meta, err := h.service.TableMetadata(c, model); err == nil && meta.Title != "" {
+		title = meta.Title
+	}
+	data, err := importer.BuildTemplate(spec, title)
+	if err != nil {
+		return respondErr(c, fiber.StatusInternalServerError, err.Error())
+	}
+	c.Set(fiber.HeaderContentType, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Set(fiber.HeaderContentDisposition, "attachment; filename=\""+model+"-template.xlsx\"")
+	return c.Send(data)
 }
 
 // importValidate handles POST /dynamic/:model/import/validate — parses the
-// uploaded CSV/JSON and reports row-by-row issues without touching the DB.
+// uploaded file and reports row-by-row issues WITHOUT touching the DB, so the
+// user fixes a spreadsheet before any partial write happens.
 func (h *Handler) importValidate(c fiber.Ctx) error {
 	if h.user(c) == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
 	}
-	rows, err := readImportRows(c)
+	prepared, spec, err := h.prepareImport(c)
 	if err != nil {
-		return respondErr(c, fiber.StatusBadRequest, err.Error())
+		return err
 	}
 	return c.JSON(fiber.Map{
-		"success": true,
+		"success": len(prepared.Issues) == 0,
 		"data": fiber.Map{
-			"rowCount":     len(rows),
-			"sample":       firstN(rows, 5),
-			"errors":       []any{},
-			"validatedAt":  fiber.Map{"unix": int64(0)}, // populated by caller as needed
+			"rowCount": len(prepared.Records),
+			"skipped":  prepared.Skipped,
+			"sample":   firstN(importer.RedactGenerated(spec, prepared.Records), 5),
+			"errors":   prepared.Issues,
 		},
 	})
 }
 
-// importData handles POST /dynamic/:model/import — parses the uploaded
-// CSV/JSON and creates one record per row through the regular dynamic
-// Service.Create pipeline (so permissions, hooks, validation all run).
+// importData handles POST /dynamic/:model/import — validates the upload the
+// same way importValidate does, then creates one record per valid row through
+// the regular Service.Create pipeline (so permissions, hooks and validation
+// all run). Rows that failed validation are reported alongside rows the
+// database rejected; one bad row never blocks the rest.
 func (h *Handler) importData(c fiber.Ctx) error {
 	u := h.user(c)
 	if u == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
 	}
 	model := c.Params("model")
-	rows, err := readImportRows(c)
+	prepared, _, err := h.prepareImport(c)
 	if err != nil {
-		return respondErr(c, fiber.StatusBadRequest, err.Error())
+		return err
 	}
 
 	created := 0
-	failures := make([]map[string]any, 0)
-	for i, row := range rows {
-		if _, err := h.service.Create(c, model, u, row); err != nil {
+	failures := make([]map[string]any, 0, len(prepared.Issues))
+	for _, issue := range prepared.Issues {
+		failures = append(failures, map[string]any{
+			"row":    issue.Row,
+			"column": issue.Column,
+			"error":  issue.Message,
+		})
+	}
+	for i, record := range prepared.Records {
+		if _, err := h.service.Create(c, model, u, record); err != nil {
+			// The record is deliberately NOT echoed back: it carries generator
+			// output (for a spec using `random_secret`, the account's plaintext
+			// password) plus whatever PII the row held, and this response is
+			// rendered in a browser and often logged. The row number is what
+			// the user needs to find the offending line in their file.
 			failures = append(failures, map[string]any{
-				"row":   i + 1,
+				"row":   prepared.RowNumbers[i],
 				"error": err.Error(),
-				"input": row,
 			})
 			continue
 		}
 		created++
 	}
+
 	status := fiber.StatusOK
 	if len(failures) > 0 && created == 0 {
 		status = fiber.StatusUnprocessableEntity
 	}
 	return c.Status(status).JSON(fiber.Map{
-		"success":  len(failures) == 0,
+		"success": len(failures) == 0 && created > 0,
 		"data": fiber.Map{
 			"created":  created,
 			"failed":   len(failures),
+			"skipped":  prepared.Skipped,
 			"failures": failures,
 		},
 	})
+}
+
+// prepareImport is the shared front half of validate and import: one parse,
+// one spec, one set of rules — all of it living in the reusable `importer`
+// engine so hosts that have not yet adopted dynamic.Service still run the
+// exact same code. The returned error is already an HTTP response.
+func (h *Handler) prepareImport(c fiber.Ctx) (*importer.Prepared, modelbase.ImportSpec, error) {
+	model := c.Params("model")
+	spec, err := h.service.ImportSpec(c, model)
+	if err != nil {
+		return nil, spec, h.handleError(c, err)
+	}
+	if len(spec.Columns) == 0 {
+		return nil, spec, respondErr(c, fiber.StatusUnprocessableEntity, "model has no importable columns")
+	}
+	rows, err := importer.ReadRows(c)
+	if err != nil {
+		return nil, spec, respondErr(c, fiber.StatusBadRequest, err.Error())
+	}
+	if len(rows) == 0 {
+		return nil, spec, respondErr(c, fiber.StatusBadRequest, "the file contains no data rows")
+	}
+	prepared, err := importer.Prepare(spec, rows)
+	if err != nil {
+		return nil, spec, respondErr(c, fiber.StatusUnprocessableEntity, err.Error())
+	}
+	return prepared, spec, nil
 }
 
 // exportHeaders resolves the column list for a CSV export. `columns` query
@@ -181,85 +243,6 @@ func exportHeaders(c fiber.Ctx, h *Handler, model string) ([]string, error) {
 		headers = append(headers, col.Key)
 	}
 	return headers, nil
-}
-
-// readImportRows reads either a multipart-uploaded file or a JSON body and
-// returns parsed rows as `[]map[string]any`. CSV rows are decoded with the
-// first record treated as the header. JSON accepts either an array of
-// objects or a `{ data: [...] }` envelope.
-func readImportRows(c fiber.Ctx) ([]map[string]any, error) {
-	contentType := strings.ToLower(c.Get(fiber.HeaderContentType))
-	if strings.HasPrefix(contentType, "multipart/form-data") {
-		fileHeader, err := c.FormFile("file")
-		if err != nil {
-			return nil, fmt.Errorf("expected `file` in multipart form: %w", err)
-		}
-		f, err := fileHeader.Open()
-		if err != nil {
-			return nil, fmt.Errorf("open uploaded file: %w", err)
-		}
-		defer f.Close()
-		// Detect by extension; default to CSV.
-		name := strings.ToLower(fileHeader.Filename)
-		if strings.HasSuffix(name, ".json") {
-			return parseJSONReader(f)
-		}
-		return parseCSVReader(f)
-	}
-	if strings.HasPrefix(contentType, "application/json") {
-		return parseJSONReader(bytes.NewReader(c.Body()))
-	}
-	// Fall back to CSV when the body looks like one.
-	return parseCSVReader(bytes.NewReader(c.Body()))
-}
-
-func parseCSVReader(r io.Reader) ([]map[string]any, error) {
-	reader := csv.NewReader(r)
-	reader.FieldsPerRecord = -1 // tolerate ragged rows
-	records, err := reader.ReadAll()
-	if err != nil {
-		return nil, fmt.Errorf("csv decode: %w", err)
-	}
-	if len(records) == 0 {
-		return nil, nil
-	}
-	headers := records[0]
-	rows := make([]map[string]any, 0, len(records)-1)
-	for _, rec := range records[1:] {
-		row := make(map[string]any, len(headers))
-		for i, key := range headers {
-			if i < len(rec) {
-				row[key] = rec[i]
-			}
-		}
-		rows = append(rows, row)
-	}
-	return rows, nil
-}
-
-func parseJSONReader(r io.Reader) ([]map[string]any, error) {
-	body, err := io.ReadAll(r)
-	if err != nil {
-		return nil, fmt.Errorf("read json body: %w", err)
-	}
-	body = bytes.TrimSpace(body)
-	if len(body) == 0 {
-		return nil, nil
-	}
-	if body[0] == '[' {
-		var rows []map[string]any
-		if err := json.Unmarshal(body, &rows); err != nil {
-			return nil, err
-		}
-		return rows, nil
-	}
-	var envelope struct {
-		Data []map[string]any `json:"data"`
-	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, err
-	}
-	return envelope.Data, nil
 }
 
 func stringify(v any) string {

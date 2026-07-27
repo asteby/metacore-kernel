@@ -472,6 +472,37 @@ func (s *Service) TableMetadata(ctx context.Context, model string) (*modelbase.T
 	return s.meta.GetTable(ctx, model)
 }
 
+// ImportSpec resolves the model's spreadsheet-import declaration: the model's
+// own DefineImport when it implements modelbase.HasImportSpec, otherwise the
+// spec derived from its form metadata. Serving one resolved spec is what keeps
+// the generated template and the parser that reads it back in agreement.
+func (s *Service) ImportSpec(ctx context.Context, model string) (modelbase.ImportSpec, error) {
+	// Read the spec off the SERVED table metadata, which is the same value the
+	// SDK renders and which has already been through the host's transformer
+	// chain (i18n of headers and hints, org overlays). Resolving independently
+	// here would let the template and the parser drift from the contract the
+	// user was shown — the exact failure this whole design exists to prevent.
+	table, err := s.meta.GetTable(ctx, model)
+	if err != nil {
+		return modelbase.ImportSpec{}, err
+	}
+	if table.Import != nil && len(table.Import.Columns) > 0 {
+		return *table.Import, nil
+	}
+
+	// Fallback for a metadata service that does not project the spec (an older
+	// host, or a table transformer that cleared it): resolve from the model.
+	definer, ok := s.lookupModel(ctx, model)
+	if !ok {
+		return modelbase.ImportSpec{}, ErrModelNotFound
+	}
+	modal, err := s.meta.GetModal(ctx, model)
+	if err != nil {
+		return modelbase.ImportSpec{}, err
+	}
+	return modelbase.ResolveImportSpec(definer, *modal), nil
+}
+
 // Get returns a single record by ID.
 func (s *Service) Get(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID) (map[string]any, error) {
 	instance, _, err := s.resolveModel(ctx, model)

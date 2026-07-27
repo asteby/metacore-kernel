@@ -673,6 +673,38 @@ type ModelDefinition struct {
 	// section/step via ColumnDef.Section. Pure UI metadata; the DDL/write planes
 	// ignore it. Nil = a flat form (legacy). See manifest/v3.FormLayout.
 	FormLayout *FormLayoutDef `json:"form_layout,omitempty"`
+
+	// Import carries the v3 Model.import (spreadsheet-import template) through
+	// the v3 → host conversion, so an addon-owned model declares its import
+	// columns the same way a compiled Go model does via
+	// modelbase.HasImportSpec. Nil = the kernel derives the spec from the
+	// model's own columns. See manifest/v3.ImportSpec.
+	Import *ImportSpecDef `json:"import,omitempty"`
+}
+
+// ImportSpecDef is the legacy carrier for the v3 `import` block: the
+// spreadsheet-import template of an addon-owned model. It rides the
+// ModelDefinition so the declaration survives the v3 → host conversion and
+// lands on the served metadata as a modelbase.ImportSpec — the same shape a
+// compiled Go model produces via modelbase.HasImportSpec, so both kinds of
+// model feed one import engine. JSON tags match the served host contract.
+type ImportSpecDef struct {
+	Columns      []ImportColumnDef `json:"columns"`
+	MaxRows      int               `json:"maxRows,omitempty"`
+	SheetName    string            `json:"sheetName,omitempty"`
+	Instructions []string          `json:"instructions,omitempty"`
+}
+
+// ImportColumnDef is the legacy carrier for one v3 ImportColumn.
+type ImportColumnDef struct {
+	Key       string   `json:"key"`
+	Header    string   `json:"header"`
+	Aliases   []string `json:"aliases,omitempty"`
+	Required  bool     `json:"required,omitempty"`
+	Type      string   `json:"type,omitempty"`
+	Example   string   `json:"example,omitempty"`
+	Hint      string   `json:"hint,omitempty"`
+	Generator string   `json:"generator,omitempty"`
 }
 
 // FormLayoutDef is the legacy carrier for the v3 FormLayout block. It rides the

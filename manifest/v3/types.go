@@ -259,6 +259,14 @@ type Model struct {
 	// (the legacy behaviour). See FormLayout.
 	FormLayout *FormLayout `json:"form_layout,omitempty"`
 
+	// Import declares the model's spreadsheet-import template: the columns of
+	// the generated file and the headers accepted when reading it back. Nil
+	// falls back to the spec the kernel derives from the model's importable
+	// columns, so an addon only declares this to get friendlier headers,
+	// example values, header aliases or generated cells. Pure UI/ingest
+	// metadata; the DDL and write planes ignore it. See ImportSpec.
+	Import *ImportSpec `json:"import,omitempty"`
+
 	// Locking selects the row-locking strategy the kernel applies on Update.
 	//   ""     — no extra locking (default; the legacy behaviour).
 	//   "row"  — the kernel wraps the whole Update in a transaction and loads
@@ -1502,4 +1510,46 @@ type Signature struct {
 	KeyID     string `json:"key_id"`
 	Value     string `json:"value"`
 	SignedAt  string `json:"signed_at"`
+}
+
+// ImportSpec is a model's spreadsheet-import declaration in a v3 manifest —
+// the addon-authored twin of modelbase.ImportSpec. It is the single source of
+// truth for BOTH the template the user downloads and the parser that reads the
+// filled file back, so a column cannot be renamed in one half without the
+// other following. Omitting the block lets the kernel derive a spec from the
+// model's own columns.
+type ImportSpec struct {
+	// Columns is the ordered column list of the template.
+	Columns []ImportColumn `json:"columns"`
+	// MaxRows caps a single upload. Zero uses the kernel default.
+	MaxRows int `json:"max_rows,omitempty"`
+	// SheetName titles the data sheet of the generated workbook. Empty uses
+	// the model's label.
+	SheetName string `json:"sheet_name,omitempty"`
+	// Instructions are free-form lines rendered on a second sheet — the place
+	// to state what the import does NOT cover.
+	Instructions []string `json:"instructions,omitempty"`
+}
+
+// ImportColumn is one spreadsheet column of an ImportSpec.
+type ImportColumn struct {
+	// Key is the column (or dot-path) the cell value is written to.
+	Key string `json:"key"`
+	// Header is the human title written into the template, and the primary
+	// match when reading a file back.
+	Header string `json:"header"`
+	// Aliases are extra headers accepted on the way in. Matching ignores case
+	// and a trailing "*", so those variants need not be listed.
+	Aliases []string `json:"aliases,omitempty"`
+	// Required rejects the row when the cell is empty.
+	Required bool `json:"required,omitempty"`
+	// Type mirrors the column type and drives cell validation.
+	Type string `json:"type,omitempty"`
+	// Example fills the sample row of the template.
+	Example string `json:"example,omitempty"`
+	// Hint is the short description rendered under the example row.
+	Hint string `json:"hint,omitempty"`
+	// Generator names a host-registered value provider used when the cell is
+	// left blank (e.g. "random_secret"). Unknown names leave the value absent.
+	Generator string `json:"generator,omitempty"`
 }

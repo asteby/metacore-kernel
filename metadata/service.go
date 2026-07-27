@@ -194,6 +194,19 @@ func (s *Service) computeTable(ctx context.Context, modelKey string) (*modelbase
 	// short-circuit to a no-op.
 	deriveRefsFromDef(def, &table)
 
+	// Project the model's spreadsheet-import spec onto the served metadata so
+	// the SDK can show or hide the import action without a probe request. A
+	// model that declares nothing gets the spec derived from its own form
+	// fields; when that yields no importable column the field stays nil and
+	// the SDK hides the action. Runs before the transformer chain so hosts can
+	// localize headers/hints the same way they localize labels.
+	if table.Import == nil {
+		spec := modelbase.ResolveImportSpec(def, def.DefineModal())
+		if len(spec.Columns) > 0 {
+			table.Import = &spec
+		}
+	}
+
 	s.mu.RLock()
 	transformers := append([]TableTransformer(nil), s.tableTransformers...)
 	s.mu.RUnlock()
