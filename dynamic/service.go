@@ -472,6 +472,22 @@ func (s *Service) TableMetadata(ctx context.Context, model string) (*modelbase.T
 	return s.meta.GetTable(ctx, model)
 }
 
+// ImportSpec resolves the model's spreadsheet-import declaration: the model's
+// own DefineImport when it implements modelbase.HasImportSpec, otherwise the
+// spec derived from its form metadata. Serving one resolved spec is what keeps
+// the generated template and the parser that reads it back in agreement.
+func (s *Service) ImportSpec(ctx context.Context, model string) (modelbase.ImportSpec, error) {
+	definer, ok := s.lookupModel(ctx, model)
+	if !ok {
+		return modelbase.ImportSpec{}, ErrModelNotFound
+	}
+	modal, err := s.meta.GetModal(ctx, model)
+	if err != nil {
+		return modelbase.ImportSpec{}, err
+	}
+	return modelbase.ResolveImportSpec(definer, *modal), nil
+}
+
 // Get returns a single record by ID.
 func (s *Service) Get(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID) (map[string]any, error) {
 	instance, _, err := s.resolveModel(ctx, model)
