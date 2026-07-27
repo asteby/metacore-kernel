@@ -1,8 +1,6 @@
 package dynamic
 
 import (
-	"bytes"
-	"encoding/csv"
 	"fmt"
 	"strconv"
 	"strings"
@@ -44,28 +42,25 @@ func (h *Handler) exportData(c fiber.Ctx) error {
 		return h.handleError(c, err)
 	}
 
-	var buf bytes.Buffer
-	w := csv.NewWriter(&buf)
-	if err := w.Write(headers); err != nil {
-		return respondErr(c, fiber.StatusInternalServerError, "csv encode: "+err.Error())
-	}
+	records := make([][]string, 0, len(items)+1)
+	records = append(records, headers)
 	for _, row := range items {
 		rec := make([]string, len(headers))
 		for i, key := range headers {
 			rec[i] = stringify(row[key])
 		}
-		if err := w.Write(rec); err != nil {
-			return respondErr(c, fiber.StatusInternalServerError, "csv encode: "+err.Error())
-		}
+		records = append(records, rec)
 	}
-	w.Flush()
-	if err := w.Error(); err != nil {
-		return respondErr(c, fiber.StatusInternalServerError, "csv flush: "+err.Error())
+	// BOM included so Excel opens the export as UTF-8 rather than the local
+	// ANSI codepage, which mangles accented values.
+	data, err := importer.WriteCSVWithBOM(records)
+	if err != nil {
+		return respondErr(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	c.Set(fiber.HeaderContentType, "text/csv; charset=utf-8")
 	c.Set(fiber.HeaderContentDisposition, "attachment; filename=\""+model+".csv\"")
-	return c.Send(buf.Bytes())
+	return c.Send(data)
 }
 
 // exportTemplate handles GET /dynamic/:model/export/template — the file users
@@ -88,13 +83,15 @@ func (h *Handler) exportTemplate(c fiber.Ctx) error {
 		for _, col := range spec.Columns {
 			headers = append(headers, col.TemplateHeader())
 		}
-		var buf bytes.Buffer
-		w := csv.NewWriter(&buf)
-		_ = w.Write(headers)
-		w.Flush()
+		// BOM included so Excel opens the file as UTF-8; the parser strips it
+		// on the way back in (see importer.StripBOM).
+		data, err := importer.WriteCSVWithBOM([][]string{headers})
+		if err != nil {
+			return respondErr(c, fiber.StatusInternalServerError, err.Error())
+		}
 		c.Set(fiber.HeaderContentType, "text/csv; charset=utf-8")
 		c.Set(fiber.HeaderContentDisposition, "attachment; filename=\""+model+"-template.csv\"")
-		return c.Send(buf.Bytes())
+		return c.Send(data)
 	}
 
 	title := model
@@ -159,10 +156,14 @@ func (h *Handler) importData(c fiber.Ctx) error {
 	}
 	for i, record := range prepared.Records {
 		if _, err := h.service.Create(c, model, u, record); err != nil {
+			// The record is deliberately NOT echoed back: it carries generator
+			// output (for a spec using `random_secret`, the account's plaintext
+			// password) plus whatever PII the row held, and this response is
+			// rendered in a browser and often logged. The row number is what
+			// the user needs to find the offending line in their file.
 			failures = append(failures, map[string]any{
 				"row":   prepared.RowNumbers[i],
 				"error": err.Error(),
-				"input": record,
 			})
 			continue
 		}

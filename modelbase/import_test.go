@@ -113,3 +113,42 @@ func TestStaticImportSpecCoversTheManifestPath(t *testing.T) {
 		t.Errorf("Limit: got %d want 20", spec.Limit())
 	}
 }
+
+func TestValidateCatchesCollidingHeaders(t *testing.T) {
+	spec := ImportSpec{Columns: []ImportColumn{
+		{Key: "user.email", Header: "Email"},
+		{Key: "billing_email", Header: "EMAIL "}, // same header after normalising
+	}}
+
+	errs := spec.Validate()
+
+	if len(errs) != 1 {
+		t.Fatalf("want the collision reported, got %v", errs)
+	}
+	// First declaration wins, deterministically — not whichever the map iterated last.
+	if got := spec.HeaderIndex()[normalizeHeader("Email")]; got.Key != "user.email" {
+		t.Errorf("first declaration must win, got %q", got.Key)
+	}
+}
+
+func TestValidateCatchesAnAliasShadowingAnotherColumn(t *testing.T) {
+	spec := ImportSpec{Columns: []ImportColumn{
+		{Key: "name", Header: "Nombre"},
+		{Key: "nickname", Header: "Apodo", Aliases: []string{"Nombre"}},
+	}}
+
+	if errs := spec.Validate(); len(errs) != 1 {
+		t.Fatalf("an alias shadowing another column's header must be reported, got %v", errs)
+	}
+}
+
+func TestValidateAcceptsACleanSpec(t *testing.T) {
+	spec := ImportSpec{Columns: []ImportColumn{
+		{Key: "user.email", Header: "Email", Aliases: []string{"Correo"}},
+		{Key: "name", Header: "Nombre"},
+	}}
+
+	if errs := spec.Validate(); len(errs) != 0 {
+		t.Errorf("clean spec reported errors: %v", errs)
+	}
+}

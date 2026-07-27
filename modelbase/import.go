@@ -1,6 +1,9 @@
 package modelbase
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // This file holds the spreadsheet-import contract. It is the single source of
 // truth for BOTH ends of the flow: the generated template (headers, example
@@ -166,14 +169,64 @@ func normalizeHeader(h string) string {
 
 // HeaderIndex maps every accepted spelling of every column to that column, so
 // a parser can resolve an arbitrary uploaded header row in one pass.
+//
+// FIRST declaration wins on a collision. Two columns whose headers normalise to
+// the same string (or an alias shadowing another column's header) is an authoring
+// mistake that would otherwise route a user's data into the wrong field, so the
+// order is defined rather than left to map iteration. Validate reports the
+// collision so it is caught before the spec ships.
 func (s ImportSpec) HeaderIndex() map[string]ImportColumn {
 	idx := make(map[string]ImportColumn, len(s.Columns)*2)
+	put := func(key string, col ImportColumn) {
+		if key == "" {
+			return
+		}
+		if _, taken := idx[key]; taken {
+			return
+		}
+		idx[key] = col
+	}
 	for _, col := range s.Columns {
-		idx[normalizeHeader(col.Header)] = col
-		idx[normalizeHeader(col.Key)] = col
+		put(normalizeHeader(col.Header), col)
+		put(normalizeHeader(col.Key), col)
 		for _, alias := range col.Aliases {
-			idx[normalizeHeader(alias)] = col
+			put(normalizeHeader(alias), col)
 		}
 	}
 	return idx
+}
+
+// Validate reports authoring mistakes in a spec: a column with no key, and two
+// spellings that collide after normalisation. It is not called on the hot path
+// — hosts run it when registering models, and the manifest validator runs it on
+// an addon's declared block, so a broken spec surfaces at install time instead
+// of as data landing in the wrong column.
+func (s ImportSpec) Validate() []error {
+	var errs []error
+	owner := map[string]string{} // normalized spelling → column key that claimed it
+	claim := func(spelling, kind string, col ImportColumn) {
+		key := normalizeHeader(spelling)
+		if key == "" {
+			return
+		}
+		if prev, taken := owner[key]; taken && prev != col.Key {
+			errs = append(errs, fmt.Errorf(
+				"import spec: %s %q of column %q collides with column %q; a file using it would be routed to the first declaration",
+				kind, spelling, col.Key, prev))
+			return
+		}
+		owner[key] = col.Key
+	}
+	for _, col := range s.Columns {
+		if col.Key == "" {
+			errs = append(errs, fmt.Errorf("import spec: column %q has no key", col.Header))
+			continue
+		}
+		claim(col.Header, "header", col)
+		claim(col.Key, "key", col)
+		for _, alias := range col.Aliases {
+			claim(alias, "alias", col)
+		}
+	}
+	return errs
 }

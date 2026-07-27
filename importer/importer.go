@@ -99,17 +99,19 @@ func BuildRecord(spec modelbase.ImportSpec, raw map[string]any) (map[string]any,
 		value, present := byKey[col.Key]
 		if !present {
 			if col.Generator != "" {
-				gen, ok := lookupGenerator(col.Generator)
-				if !ok {
-					continue // unknown generator: leave the value absent
-				}
-				generated, err := gen()
-				if err != nil {
-					issues = append(issues, RowIssue{Column: col.Header, Message: fmt.Sprintf("no se pudo generar el valor: %v", err)})
+				if gen, ok := lookupGenerator(col.Generator); ok {
+					generated, err := gen()
+					if err != nil {
+						issues = append(issues, RowIssue{Column: col.Header, Message: fmt.Sprintf("no se pudo generar el valor: %v", err)})
+						continue
+					}
+					setPath(record, col.Key, generated)
 					continue
 				}
-				setPath(record, col.Key, generated)
-				continue
+				// Unknown generator: fall through to the Required check rather
+				// than accepting the row. Swallowing it here would let a
+				// required column through empty on a typo'd generator name and
+				// surface as an opaque database error much later.
 			}
 			if col.Required {
 				issues = append(issues, RowIssue{Column: col.Header, Message: fmt.Sprintf("falta '%s'", col.Header)})
@@ -148,12 +150,16 @@ func coerceCell(col modelbase.ImportColumn, value string) (any, error) {
 		}
 		return nil, fmt.Errorf("'%s' debe ser sí o no (recibido: %q)", col.Header, value)
 	case "date":
-		for _, layout := range []string{time.RFC3339, "2006-01-02", "02/01/2006", "01/02/2006"} {
-			if _, err := time.Parse(layout, value); err == nil {
-				return value, nil
+		// Only unambiguous layouts are accepted, and the value is normalised to
+		// ISO before it reaches Create. Supporting both D/M/Y and M/D/Y would
+		// silently reinterpret "03/04/2026" depending on layout order, turning
+		// April 3rd into March 4th with nothing to warn the user.
+		for _, layout := range []string{time.RFC3339, "2006-01-02"} {
+			if parsed, err := time.Parse(layout, value); err == nil {
+				return parsed.Format("2006-01-02"), nil
 			}
 		}
-		return nil, fmt.Errorf("'%s' debe ser una fecha (AAAA-MM-DD) (recibido: %q)", col.Header, value)
+		return nil, fmt.Errorf("'%s' debe ser una fecha con formato AAAA-MM-DD (recibido: %q)", col.Header, value)
 	case "email":
 		at := strings.Index(value, "@")
 		if at <= 0 || at == len(value)-1 || strings.Contains(value, " ") {
@@ -186,34 +192,28 @@ func setPath(record map[string]any, path string, value any) {
 	cursor[parts[len(parts)-1]] = value
 }
 
-// IsTemplateSampleRow reports whether a row is one of the two guide rows the
-// generated template ships (the example values and the hints). Users routinely
-// upload the template without deleting them; treating them as data produces
-// noisy errors that look like the import is broken.
+// TemplateMarkerHeader is the column the generated template adds to tag its own
+// guide rows. It carries no data — it exists so the parser can recognise the
+// example and hint rows WITHOUT comparing cell values against the spec.
+// Matching by content was the earlier approach and it silently dropped real
+// data: a user whose row happened to equal the example (a common case for a
+// short enum or a placeholder name) had their record discarded with no error.
+// A user who deletes this column simply gets their guide rows imported as
+// data, which fails loudly instead of vanishing.
+const TemplateMarkerHeader = "__metacore_template_row"
+
+// IsTemplateSampleRow reports whether a row is one of the guide rows the
+// generated template ships. Users routinely upload the template without
+// deleting them; treating them as data produces noisy errors that look like
+// the import is broken.
 func IsTemplateSampleRow(spec modelbase.ImportSpec, raw map[string]any) bool {
-	index := spec.HeaderIndex()
-	matchedExample, matchedHint, filled := 0, 0, 0
 	for header, value := range raw {
-		s := strings.TrimSpace(stringify(value))
-		if s == "" {
+		if normalizeHeader(header) != TemplateMarkerHeader {
 			continue
 		}
-		filled++
-		col, ok := index[normalizeHeader(header)]
-		if !ok {
-			continue
-		}
-		if col.Example != "" && s == col.Example {
-			matchedExample++
-		}
-		if col.Hint != "" && s == col.Hint {
-			matchedHint++
-		}
+		return strings.TrimSpace(stringify(value)) != ""
 	}
-	if filled == 0 {
-		return false
-	}
-	return matchedExample == filled || matchedHint == filled
+	return false
 }
 
 func normalizeHeader(h string) string {
@@ -274,6 +274,20 @@ func BuildTemplate(spec modelbase.ImportSpec, title string) ([]byte, error) {
 		colName, _ := excelize.ColumnNumberToName(i + 1)
 		_ = f.SetColWidth(sheet, colName, colName, 32)
 	}
+	// Marker column: tags the two guide rows so the parser can drop them by
+	// declaration instead of guessing from their content. Hidden so it does not
+	// distract from the columns the user has to fill.
+	markerCol := len(spec.Columns) + 1
+	markerCell, _ := excelize.CoordinatesToCellName(markerCol, 1)
+	_ = f.SetCellValue(sheet, markerCell, TemplateMarkerHeader)
+	exampleMarker, _ := excelize.CoordinatesToCellName(markerCol, 2)
+	_ = f.SetCellValue(sheet, exampleMarker, "example")
+	hintMarker, _ := excelize.CoordinatesToCellName(markerCol, 3)
+	_ = f.SetCellValue(sheet, hintMarker, "hint")
+	if markerName, err := excelize.ColumnNumberToName(markerCol); err == nil {
+		_ = f.SetColVisible(sheet, markerName, false)
+	}
+
 	_ = f.SetRowHeight(sheet, 1, 24)
 
 	if len(spec.Instructions) > 0 {
@@ -338,6 +352,9 @@ func ParseXLSX(r io.Reader) ([]map[string]any, error) {
 		return nil, nil
 	}
 	headers := rows[0]
+	if len(headers) > 0 {
+		headers[0] = StripBOM(headers[0])
+	}
 	out := make([]map[string]any, 0, len(rows)-1)
 	for _, rec := range rows[1:] {
 		row := make(map[string]any, len(headers))
@@ -379,6 +396,38 @@ func ParseJSON(body []byte) ([]map[string]any, error) {
 	return envelope.Data, nil
 }
 
+// utf8BOM is what Excel writes at the head of a CSV it saves, and what it
+// expects in order to open one as UTF-8 instead of the local ANSI codepage.
+// Both halves of the round-trip must handle it: we emit it (see
+// WriteCSVWithBOM) and we strip it here. Without this, a template downloaded,
+// edited in Excel and re-uploaded loses its accented headers — "Años" arrives
+// mangled, stops matching its column, and every required column reports as
+// missing.
+const utf8BOM = "\ufeff"
+
+// StripBOM removes a leading UTF-8 byte-order mark, if present.
+func StripBOM(s string) string {
+	return strings.TrimPrefix(s, utf8BOM)
+}
+
+// WriteCSVWithBOM encodes rows as a CSV prefixed with the UTF-8 BOM so Excel
+// opens it in the right codepage.
+func WriteCSVWithBOM(records [][]string) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteString(utf8BOM)
+	w := csv.NewWriter(&buf)
+	for _, rec := range records {
+		if err := w.Write(rec); err != nil {
+			return nil, fmt.Errorf("csv encode: %w", err)
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		return nil, fmt.Errorf("csv flush: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 func ParseCSV(r io.Reader) ([]map[string]any, error) {
 	reader := csv.NewReader(r)
 	reader.FieldsPerRecord = -1 // tolerate ragged rows
@@ -390,6 +439,9 @@ func ParseCSV(r io.Reader) ([]map[string]any, error) {
 		return nil, nil
 	}
 	headers := records[0]
+	if len(headers) > 0 {
+		headers[0] = StripBOM(headers[0])
+	}
 	rows := make([]map[string]any, 0, len(records)-1)
 	for _, rec := range records[1:] {
 		row := make(map[string]any, len(headers))
@@ -407,6 +459,23 @@ func ParseCSV(r io.Reader) ([]map[string]any, error) {
 // rows keyed by the file's own headers. Accepts a multipart `file` field
 // (XLSX / CSV / JSON, detected by extension) or a raw JSON / CSV body, so a
 // browser upload and a scripted POST hit the same path.
+// MaxUploadBytes caps the payload ReadRows will parse. The row cap in Prepare
+// only applies AFTER parsing, which is too late: a spreadsheet parser expands
+// its input many times over in memory, so an oversized upload can exhaust the
+// process before any row count is known. 16 MiB comfortably holds the
+// thousand-row imports this path is designed for.
+const MaxUploadBytes int64 = 16 << 20
+
+// ErrUploadTooLarge is returned when the payload exceeds MaxUploadBytes.
+type ErrUploadTooLarge struct {
+	Got   int64
+	Limit int64
+}
+
+func (e ErrUploadTooLarge) Error() string {
+	return fmt.Sprintf("file too large (%d bytes); maximum allowed: %d", e.Got, e.Limit)
+}
+
 func ReadRows(c fiber.Ctx) ([]map[string]any, error) {
 	contentType := strings.ToLower(c.Get(fiber.HeaderContentType))
 	if strings.HasPrefix(contentType, "multipart/form-data") {
@@ -414,30 +483,43 @@ func ReadRows(c fiber.Ctx) ([]map[string]any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("expected `file` in multipart form: %w", err)
 		}
+		if fileHeader.Size > MaxUploadBytes {
+			return nil, ErrUploadTooLarge{Got: fileHeader.Size, Limit: MaxUploadBytes}
+		}
 		f, err := fileHeader.Open()
 		if err != nil {
 			return nil, fmt.Errorf("open uploaded file: %w", err)
 		}
 		defer f.Close()
+		// fileHeader.Size is client-declared; cap the stream itself so a lying
+		// Content-Length cannot get past the check above.
+		capped := io.LimitReader(f, MaxUploadBytes+1)
 		name := strings.ToLower(fileHeader.Filename)
 		switch {
 		case strings.HasSuffix(name, ".json"):
-			body, err := io.ReadAll(f)
+			raw, err := io.ReadAll(capped)
 			if err != nil {
 				return nil, fmt.Errorf("read json body: %w", err)
 			}
-			return ParseJSON(body)
+			if int64(len(raw)) > MaxUploadBytes {
+				return nil, ErrUploadTooLarge{Got: int64(len(raw)), Limit: MaxUploadBytes}
+			}
+			return ParseJSON(raw)
 		case strings.HasSuffix(name, ".xlsx"), strings.HasSuffix(name, ".xls"):
-			return ParseXLSX(f)
+			return ParseXLSX(capped)
 		default:
-			return ParseCSV(f)
+			return ParseCSV(capped)
 		}
 	}
+	body := c.Body()
+	if int64(len(body)) > MaxUploadBytes {
+		return nil, ErrUploadTooLarge{Got: int64(len(body)), Limit: MaxUploadBytes}
+	}
 	if strings.HasPrefix(contentType, "application/json") {
-		return ParseJSON(c.Body())
+		return ParseJSON(body)
 	}
 	// Fall back to CSV when the body looks like one.
-	return ParseCSV(bytes.NewReader(c.Body()))
+	return ParseCSV(bytes.NewReader(body))
 }
 
 // Prepared is the outcome of parsing + validating an upload: the records ready

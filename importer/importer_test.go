@@ -88,20 +88,27 @@ func TestBuildImportRecordReportsMissingRequiredAndBadTypes(t *testing.T) {
 	}
 }
 
-func TestIsTemplateSampleRowSkipsTheGuideRows(t *testing.T) {
+func TestIsTemplateSampleRowUsesTheMarkerNotTheContent(t *testing.T) {
 	spec := doctorsLikeSpec()
 
-	example := map[string]any{"Nombre completo": "Dra. Ana Pérez", "Email": "ana@correo.com"}
-	if !IsTemplateSampleRow(spec, example) {
-		t.Error("the example row shipped in the template must be skipped")
+	marked := map[string]any{"Nombre completo": "Dra. Ana Pérez", TemplateMarkerHeader: "example"}
+	if !IsTemplateSampleRow(spec, marked) {
+		t.Error("a row carrying the template marker must be skipped")
 	}
-	hints := map[string]any{"Nombre completo": "Nombre y apellidos"}
-	if !IsTemplateSampleRow(spec, hints) {
-		t.Error("the hints row must be skipped")
+
+	// The critical case: a user whose real data happens to equal the example
+	// must NOT be dropped. Matching on content used to discard it silently.
+	lookalike := map[string]any{"Nombre completo": "Dra. Ana Pérez", "Email": "ana@correo.com"}
+	if IsTemplateSampleRow(spec, lookalike) {
+		t.Error("real data equal to the example must be imported, not discarded")
 	}
-	real := map[string]any{"Nombre completo": "Dr. Juan", "Email": "juan@correo.com"}
-	if IsTemplateSampleRow(spec, real) {
-		t.Error("real data must NOT be skipped")
+
+	if IsTemplateSampleRow(spec, map[string]any{"Nombre completo": "Dr. Juan"}) {
+		t.Error("an ordinary row must not be skipped")
+	}
+	// An emptied marker cell means the user reused the row for real data.
+	if IsTemplateSampleRow(spec, map[string]any{"Nombre completo": "Dr. Juan", TemplateMarkerHeader: ""}) {
+		t.Error("an empty marker must not skip the row")
 	}
 }
 
@@ -126,16 +133,20 @@ func TestTemplateRoundTripsThroughTheParser(t *testing.T) {
 			t.Errorf("guide row %d not recognised: %+v", i, row)
 		}
 	}
-	// And every generated header must resolve back to its column.
+	// And every generated header must resolve back to its column — except the
+	// marker, which is bookkeeping rather than a data column.
 	idx := spec.HeaderIndex()
 	for header := range rows[0] {
+		if normalizeHeader(header) == TemplateMarkerHeader {
+			continue
+		}
 		if _, ok := idx[normalizeHeader(header)]; !ok {
 			t.Errorf("template header %q does not resolve back to a column", header)
 		}
 	}
 }
 
-func TestParseCSVAndXLSXAgreeOnTheSameData(t *testing.T) {
+func TestParseCSVReadsHeadersAndRows(t *testing.T) {
 	csvRows, err := ParseCSV(strings.NewReader("Nombre completo,Email\nDr. Juan,juan@correo.com\n"))
 	if err != nil {
 		t.Fatalf("ParseCSV: %v", err)
@@ -163,7 +174,7 @@ func TestParseJSONBytesAcceptsArrayAndEnvelope(t *testing.T) {
 func TestPrepareSeparatesValidRowsFromIssues(t *testing.T) {
 	spec := doctorsLikeSpec()
 	rows := []map[string]any{
-		{"Nombre completo": "Dra. Ana Pérez", "Email": "ana@correo.com"}, // template example
+		{"Nombre completo": "Dra. Ana Pérez", "Email": "ana@correo.com", TemplateMarkerHeader: "example"},
 		{"Nombre completo": "Dr. Juan", "Email": "juan@correo.com"},
 		{"Nombre completo": "Dra. Eva"}, // missing required email
 	}
@@ -202,5 +213,84 @@ func TestPrepareRejectsUploadsOverTheRowCap(t *testing.T) {
 	}
 	if tooMany.Limit != 10 || tooMany.Got != 11 {
 		t.Errorf("unexpected bounds: %+v", tooMany)
+	}
+}
+
+func TestRequiredIsEnforcedWhenTheGeneratorIsUnknown(t *testing.T) {
+	spec := modelbase.ImportSpec{Columns: []modelbase.ImportColumn{
+		{Key: "token", Header: "Token", Required: true, Generator: "typo_generator"},
+	}}
+
+	_, issues := BuildRecord(spec, map[string]any{})
+
+	// A misspelled generator must not smuggle an empty required column past
+	// validation and into an opaque database error later.
+	if len(issues) != 1 {
+		t.Fatalf("want the required column reported, got %+v", issues)
+	}
+}
+
+func TestCSVRoundTripSurvivesExcelsBOM(t *testing.T) {
+	spec := doctorsLikeSpec()
+
+	// What Excel writes when it saves the downloaded template as CSV.
+	csv := "\ufeffNombre completo *,Email *\nDr. Juan,juan@correo.com\n"
+	rows, err := ParseCSV(strings.NewReader(csv))
+	if err != nil {
+		t.Fatalf("ParseCSV: %v", err)
+	}
+
+	prepared, err := Prepare(spec, rows)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if len(prepared.Issues) != 0 {
+		t.Fatalf("BOM broke header matching: %+v", prepared.Issues)
+	}
+	if len(prepared.Records) != 1 {
+		t.Fatalf("want 1 record, got %d", len(prepared.Records))
+	}
+}
+
+func TestWriteCSVWithBOMEmitsTheMarkExcelExpects(t *testing.T) {
+	data, err := WriteCSVWithBOM([][]string{{"Años", "Contraseña"}})
+	if err != nil {
+		t.Fatalf("WriteCSVWithBOM: %v", err)
+	}
+	if !strings.HasPrefix(string(data), "\ufeff") {
+		t.Error("CSV must start with the UTF-8 BOM or Excel mangles accents")
+	}
+
+	// And what we write must feed straight back into the parser.
+	rows, err := ParseCSV(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("ParseCSV: %v", err)
+	}
+	_ = rows
+	headerRow, err := ParseCSV(strings.NewReader(string(data) + "12,secreto\n"))
+	if err != nil {
+		t.Fatalf("ParseCSV with data: %v", err)
+	}
+	if _, ok := headerRow[0]["Años"]; !ok {
+		t.Errorf("accented header lost through the round-trip: %+v", headerRow[0])
+	}
+}
+
+func TestDateCellsAreNormalisedAndAmbiguityRejected(t *testing.T) {
+	spec := modelbase.ImportSpec{Columns: []modelbase.ImportColumn{
+		{Key: "born_on", Header: "Fecha", Type: "date"},
+	}}
+
+	record, issues := BuildRecord(spec, map[string]any{"Fecha": "2026-04-03"})
+	if len(issues) != 0 {
+		t.Fatalf("ISO date rejected: %+v", issues)
+	}
+	if record["born_on"] != "2026-04-03" {
+		t.Errorf("date should reach Create normalised, got %#v", record["born_on"])
+	}
+
+	// D/M/Y vs M/D/Y cannot be told apart, so it is refused rather than guessed.
+	if _, issues := BuildRecord(spec, map[string]any{"Fecha": "03/04/2026"}); len(issues) != 1 {
+		t.Errorf("ambiguous date must be rejected, got %+v", issues)
 	}
 }
