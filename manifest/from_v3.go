@@ -777,6 +777,34 @@ func mapVisibleWhen(w *v3.VisibleWhen) *VisibleWhenDef {
 	}
 }
 
+// mapImportSpec projects a v3 model's `import` block onto the legacy carrier
+// the host converts into a modelbase.ImportSpec. Nil in, nil out: a model that
+// declares nothing keeps the derived-spec behaviour.
+func mapImportSpec(in *v3.ImportSpec) *ImportSpecDef {
+	if in == nil {
+		return nil
+	}
+	out := &ImportSpecDef{
+		MaxRows:      in.MaxRows,
+		SheetName:    in.SheetName,
+		Instructions: append([]string(nil), in.Instructions...),
+		Columns:      make([]ImportColumnDef, 0, len(in.Columns)),
+	}
+	for _, col := range in.Columns {
+		out.Columns = append(out.Columns, ImportColumnDef{
+			Key:       col.Key,
+			Header:    col.Header,
+			Aliases:   append([]string(nil), col.Aliases...),
+			Required:  col.Required,
+			Type:      col.Type,
+			Example:   col.Example,
+			Hint:      col.Hint,
+			Generator: col.Generator,
+		})
+	}
+	return out
+}
+
 // mapFormLayout projects a v3 model's create/edit form grouping onto the legacy
 // carrier so the {mode, sections} block survives the v3 → host conversion and
 // lands on the served form metadata. Nil stays nil (a flat form). Section

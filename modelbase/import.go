@@ -115,6 +115,19 @@ func DeriveImportSpec(modal ModalMetadata) ImportSpec {
 	return ImportSpec{Columns: cols}
 }
 
+// StaticImportSpec makes a fixed spec satisfy HasImportSpec by embedding. It
+// exists for the ADDON path: a host that synthesises a ModelDefiner from a
+// manifest has no Go method to hang DefineImport on, so it embeds this with
+// the spec decoded from the manifest's `import` block. Both kinds of model —
+// compiled struct and manifest-declared — then resolve identically through
+// ResolveImportSpec, which is what keeps one import engine serving both.
+type StaticImportSpec struct {
+	Spec ImportSpec
+}
+
+// DefineImport implements HasImportSpec.
+func (s StaticImportSpec) DefineImport() ImportSpec { return s.Spec }
+
 // ResolveImportSpec returns the model's own spec when it declares one, and the
 // spec derived from its form otherwise. Callers should use this rather than
 // type-asserting HasImportSpec themselves.

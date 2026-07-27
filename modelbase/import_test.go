@@ -89,3 +89,27 @@ func TestHeaderIndexIgnoresCaseAndRequiredMarker(t *testing.T) {
 		t.Errorf("TemplateHeader: got %q want %q", got, "Email *")
 	}
 }
+
+// addonLikeModel stands in for a ModelDefiner a host synthesises from a
+// manifest: no hand-written DefineImport, just the decoded spec embedded.
+type addonLikeModel struct {
+	StaticImportSpec
+}
+
+func TestStaticImportSpecCoversTheManifestPath(t *testing.T) {
+	model := addonLikeModel{StaticImportSpec{Spec: ImportSpec{
+		Columns: []ImportColumn{{Key: "sku", Header: "SKU", Required: true}},
+		MaxRows: 20,
+	}}}
+
+	// The modal passed here is the derived fallback; the declared spec must win,
+	// exactly as it does for a compiled Go model.
+	spec := ResolveImportSpec(model, ModalMetadata{Fields: []FieldDef{{Key: "other", Label: "Otro"}}})
+
+	if len(spec.Columns) != 1 || spec.Columns[0].Key != "sku" {
+		t.Fatalf("manifest-declared spec must win: %+v", spec.Columns)
+	}
+	if spec.Limit() != 20 {
+		t.Errorf("Limit: got %d want 20", spec.Limit())
+	}
+}
