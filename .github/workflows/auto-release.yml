@@ -1,0 +1,96 @@
+name: Auto Release
+
+# Releases del kernel SIN taggear a mano. En cada push a main:
+#   1. Deriva el próximo semver de los Conventional Commits desde el último tag
+#      (feat -> minor, fix/perf/refactor -> patch, BREAKING/! -> major; sólo
+#      chore/docs/test -> NO hay release).
+#   2. Corre los tests ANTES de crear el tag (nunca queda un tag sin release).
+#   3. Empuja el tag vX.Y.Z y publica la GitHub Release con goreleaser
+#      (mismos pasos que release.yml, hechos inline para no depender de que un
+#      tag empujado por GITHUB_TOKEN dispare otro workflow — GitHub no re-dispara
+#      workflows por eventos del propio GITHUB_TOKEN).
+#
+# release.yml (trigger por tag `v*`) se mantiene como fallback para tags
+# empujados a mano; con este workflow eso ya no hace falta.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Forzar bump (patch/minor/major). Vacío = derivar de los commits."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Historia + tags completos para que el cálculo del semver vea el
+          # último tag y goreleaser genere el changelog.
+          fetch-depth: 0
+
+      # 1. Calcula el próximo tag SIN crearlo todavía (dry-run), para poder
+      #    correr los tests antes de taggear. Sin commits releasables
+      #    (default_bump=false y sólo chore/docs) new_tag sale vacío -> se
+      #    saltan todos los pasos siguientes y no hay release.
+      - name: Compute next version
+        id: bump
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          release_branches: main
+          dry_run: true
+          default_bump: ${{ github.event.inputs.bump || 'false' }}
+
+      - name: Setup Go
+        if: steps.bump.outputs.new_tag != ''
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Test
+        if: steps.bump.outputs.new_tag != ''
+        run: go test -race ./...
+
+      # 2. Tests verdes -> creamos y empujamos el tag calculado. Lo empuja el
+      #    GITHUB_TOKEN (no re-dispara release.yml, y no hace falta: publicamos
+      #    inline abajo).
+      - name: Create and push tag
+        if: steps.bump.outputs.new_tag != ''
+        env:
+          NEW_TAG: ${{ steps.bump.outputs.new_tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$NEW_TAG" -m "$NEW_TAG"
+          git push origin "$NEW_TAG"
+
+      - name: Notify Go proxy
+        if: steps.bump.outputs.new_tag != ''
+        run: |
+          MODULE="github.com/asteby/metacore-kernel"
+          curl -s "https://proxy.golang.org/${MODULE}/@v/${{ steps.bump.outputs.new_tag }}.info" || true
+
+      # 3. GitHub Release + changelog (mismo goreleaser que release.yml).
+      - name: GoReleaser
+        if: steps.bump.outputs.new_tag != ''
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ steps.bump.outputs.new_tag }}
