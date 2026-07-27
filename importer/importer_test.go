@@ -339,3 +339,43 @@ func TestRedactGeneratedKeepsSecretsOutOfThePreview(t *testing.T) {
 		t.Error("redaction mutated the record instead of copying it")
 	}
 }
+
+func TestFlattenProducesDotPathKeys(t *testing.T) {
+	flat := Flatten(map[string]any{
+		"membership_level": "basic",
+		"user":             map[string]any{"name": "Ana", "email": "ana@correo.com"},
+	})
+
+	if flat["user.name"] != "Ana" || flat["user.email"] != "ana@correo.com" {
+		t.Fatalf("nested keys were not flattened: %+v", flat)
+	}
+	if flat["membership_level"] != "basic" {
+		t.Errorf("top-level key lost: %+v", flat)
+	}
+	if _, still := flat["user"]; still {
+		t.Error("the nested map must not survive alongside its flattened keys")
+	}
+}
+
+func TestDefaultsReachEveryRecordButNeverOverrideACell(t *testing.T) {
+	spec := modelbase.ImportSpec{
+		Columns:  []modelbase.ImportColumn{{Key: "user.name", Header: "Nombre", Required: true}},
+		Defaults: map[string]any{"user.role": "patient"},
+	}
+
+	record, issues := BuildRecord(spec, map[string]any{"Nombre": "Ana"})
+	if len(issues) != 0 {
+		t.Fatalf("unexpected issues: %+v", issues)
+	}
+	user := record["user"].(map[string]any)
+	if user["role"] != "patient" {
+		t.Errorf("hidden default did not reach the record: %+v", user)
+	}
+
+	// A default must never win over a value the file actually carries.
+	spec.Columns = append(spec.Columns, modelbase.ImportColumn{Key: "user.role", Header: "Rol"})
+	record, _ = BuildRecord(spec, map[string]any{"Nombre": "Ana", "Rol": "admin"})
+	if got := record["user"].(map[string]any)["role"]; got != "admin" {
+		t.Errorf("explicit cell must win over the default, got %#v", got)
+	}
+}

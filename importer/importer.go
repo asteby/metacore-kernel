@@ -93,7 +93,11 @@ func BuildRecord(spec modelbase.ImportSpec, raw map[string]any) (map[string]any,
 		}
 	}
 
-	record := make(map[string]any, len(spec.Columns))
+	record := make(map[string]any, len(spec.Columns)+len(spec.Defaults))
+	// Defaults first, so an explicit cell always wins over them.
+	for key, value := range spec.Defaults {
+		setPath(record, key, value)
+	}
 	issues := make([]RowIssue, 0)
 	for _, col := range spec.Columns {
 		value, present := byKey[col.Key]
@@ -535,6 +539,40 @@ func readCapped(r io.Reader) ([]byte, error) {
 		return nil, ErrUploadTooLarge{Got: int64(len(raw)), Limit: MaxUploadBytes}
 	}
 	return raw, nil
+}
+
+// Flatten converts a nested record back into flat dot-path keys
+// ("user.name" instead of {"user":{"name":…}}). Both shapes address the same
+// thing; which one a create pipeline accepts is a property of the HOST, so the
+// engine builds the nested form and hosts that speak dot-paths flatten on the
+// way in. Values are not copied deeply — the caller owns the result.
+func Flatten(record map[string]any) map[string]any {
+	out := make(map[string]any, len(record))
+	var walk func(prefix string, in map[string]any)
+	walk = func(prefix string, in map[string]any) {
+		for k, v := range in {
+			key := k
+			if prefix != "" {
+				key = prefix + "." + k
+			}
+			if nested, ok := v.(map[string]any); ok {
+				walk(key, nested)
+				continue
+			}
+			out[key] = v
+		}
+	}
+	walk("", record)
+	return out
+}
+
+// FlattenAll applies Flatten to every record.
+func FlattenAll(records []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(records))
+	for _, r := range records {
+		out = append(out, Flatten(r))
+	}
+	return out
 }
 
 // RedactGenerated returns a copy of records with every generated column's value

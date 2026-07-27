@@ -115,8 +115,12 @@ func (h *Handler) importValidate(c fiber.Ctx) error {
 	if h.user(c) == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
 	}
+	// Check `prepared`, NOT the error: prepareImport writes its own HTTP
+	// response and returns whatever c.JSON() returned, which is nil on a
+	// successful write. Branching on the error would sail past a rejected
+	// upload and dereference a nil Prepared.
 	prepared, spec, err := h.prepareImport(c)
-	if err != nil {
+	if prepared == nil {
 		return err
 	}
 	return c.JSON(fiber.Map{
@@ -142,7 +146,7 @@ func (h *Handler) importData(c fiber.Ctx) error {
 	}
 	model := c.Params("model")
 	prepared, _, err := h.prepareImport(c)
-	if err != nil {
+	if prepared == nil {
 		return err
 	}
 
