@@ -152,3 +152,28 @@ func TestValidateAcceptsACleanSpec(t *testing.T) {
 		t.Errorf("clean spec reported errors: %v", errs)
 	}
 }
+
+func TestDeriveImportSpecOptsOutWhenARequiredFieldCannotBeImported(t *testing.T) {
+	// An appointment: date/status are typeable, but the doctor and patient are
+	// required relation pickers. A template without them produces rows the
+	// model always rejects.
+	spec := DeriveImportSpec(ModalMetadata{Fields: []FieldDef{
+		{Key: "date_time", Label: "Fecha y Hora", Type: "text", Required: true},
+		{Key: "doctor_id", Label: "Doctor", Type: "search", Required: true},
+	}})
+
+	if len(spec.Columns) != 0 {
+		t.Fatalf("no import should be offered, got %+v", spec.Columns)
+	}
+}
+
+func TestDeriveImportSpecKeepsGoingWhenTheUnimportableFieldIsOptional(t *testing.T) {
+	spec := DeriveImportSpec(ModalMetadata{Fields: []FieldDef{
+		{Key: "name", Label: "Nombre", Required: true},
+		{Key: "avatar", Label: "Foto", Type: "image"}, // optional — just skipped
+	}})
+
+	if len(spec.Columns) != 1 {
+		t.Fatalf("an optional unimportable field must not disable the import: %+v", spec.Columns)
+	}
+}
