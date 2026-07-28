@@ -159,9 +159,11 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 	// scoping and leaking other orgs' rows into the picker. hasOrgColumn
 	// matches both compiled (OrganizationID, json:"organization_id") and
 	// reflect-built models.
-	if user != nil && hasOrgColumn(sourceInstance) {
-		db = s.scope.ScopeQuery(db, user)
+	scoped, err := s.scopeOrDeny(db, sourceInstance, user)
+	if err != nil {
+		return nil, err
 	}
+	db = scoped
 
 	// FilterBy: optional predicate driven by ?filter_value=.
 	if fieldCfg.FilterBy != "" && q.FilterValue != "" && safeColumn.MatchString(fieldCfg.FilterBy) {

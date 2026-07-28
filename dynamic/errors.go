@@ -17,6 +17,20 @@ var (
 	ErrSourceModelNotFound  = errors.New("dynamic options source model not found")
 	ErrFieldRequired        = errors.New("field is required")
 
+	// ErrTenantScopeUnavailable is returned when Config.RequireTenantScope is
+	// set and a read could not be constrained to one organization — no user on
+	// the request, or a model that declares no organization_id. It wraps
+	// ErrForbidden so it answers 403 rather than leaking a cross-tenant result
+	// set.
+	ErrTenantScopeUnavailable = fmt.Errorf("%w: tenant scope could not be applied to this query", ErrForbidden)
+
+	// ErrPermissionServiceMissing is returned when the host set
+	// Config.RequirePermissions but wired no permission service. It wraps
+	// ErrForbidden so existing error handling maps it to 403 unchanged: from
+	// the caller's side the request is simply not allowed, and the operator
+	// sees the cause in the warning New() logs at construction.
+	ErrPermissionServiceMissing = fmt.Errorf("%w: no permission service wired and RequirePermissions is set", ErrForbidden)
+
 	// ErrActionNotFound is returned when the requested action key is not
 	// declared on the model's manifest.
 	ErrActionNotFound = errors.New("action not found")

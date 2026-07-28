@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"reflect"
 
 	"github.com/google/uuid"
@@ -19,11 +20,35 @@ import (
 
 // Config wires the dynamic CRUD service.
 type Config struct {
-	DB          *gorm.DB
-	Metadata    *metadata.Service
-	Permissions *permission.Service // optional — nil skips authz
-	Hooks       *HookRegistry       // optional
-	Scoper      TenantScoper        // optional — default OrganizationScoper
+	DB       *gorm.DB
+	Metadata *metadata.Service
+	// Permissions is the authorization service every dynamic read/write is
+	// checked against. It is optional ONLY for hosts that authorize in their
+	// own handler layer; leaving it nil means the dynamic runtime itself
+	// performs NO authorization. New logs a warning when that happens, and
+	// RequirePermissions turns it into a hard denial — see below.
+	Permissions *permission.Service
+
+	// RequireTenantScope makes the options/search readers REFUSE to answer when
+	// they could not apply tenant scoping, instead of quietly returning rows
+	// across every organization. Two cases stop being silent:
+	//
+	//   - no user on the request, for a model that IS org-scoped;
+	//   - a model with no organization_id column at all, which for a
+	//     multi-tenant host usually means a manifest forgot to declare it.
+	//
+	// Hosts with genuinely global catalogues (countries, currencies) leave it
+	// false, or keep those models out of the org-scoped surface.
+	RequireTenantScope bool
+
+	// RequirePermissions makes a missing Permissions service DENY every
+	// request instead of allowing it. Without this, `perms == nil` fails OPEN:
+	// the safest default a host can pick is to fail closed, so a wiring
+	// mistake surfaces as "forbidden" rather than as silent full access.
+	// Hosts that deliberately authorize elsewhere leave it false.
+	RequirePermissions bool
+	Hooks              *HookRegistry // optional
+	Scoper             TenantScoper  // optional — default OrganizationScoper
 
 	// OptionsConfigResolver returns the OptionsConfig for a model. Apps
 	// typically check (a) a compiled HasMetadata interface on the model and
@@ -247,6 +272,8 @@ type Service struct {
 	matchClause       SearchMatchClause
 	listSearchClause  SearchMatchClause // explicit-only; threaded into List's builder search
 	modelResolver     ModelResolver
+	requirePerms      bool
+	requireTenant     bool
 	tableNameResolver TableNameResolver
 	bus               Publisher
 	addonKeyForModel  func(ctx context.Context, model string) string
@@ -282,6 +309,19 @@ func New(cfg Config) *Service {
 	if cfg.SearchMatchClause == nil {
 		cfg.SearchMatchClause = defaultSearchMatchClause
 	}
+	// Authorization wiring is easy to forget and impossible to notice once
+	// forgotten: without a permission service every dynamic endpoint answers
+	// as if the caller were allowed. Say so loudly, once, at construction —
+	// not per request, which would drown in the log.
+	if cfg.Perms() == nil {
+		if cfg.RequirePermissions {
+			log.Printf("dynamic: no permission service wired; RequirePermissions is set, so every dynamic request will be DENIED")
+		} else {
+			log.Printf("dynamic: WARNING — authorization DISABLED for the dynamic runtime: no permission service wired. " +
+				"Every dynamic read/write will be allowed. Pass Config.Permissions, or set Config.RequirePermissions to fail closed.")
+		}
+	}
+
 	dispatchers := make(map[string]ActionDispatcher, len(cfg.ActionDispatchers)+1)
 	for k, d := range cfg.ActionDispatchers {
 		if d != nil {
@@ -295,6 +335,8 @@ func New(cfg Config) *Service {
 		db:                cfg.DB,
 		meta:              cfg.Metadata,
 		perms:             cfg.Perms(),
+		requirePerms:      cfg.RequirePermissions,
+		requireTenant:     cfg.RequireTenantScope,
 		hooks:             cfg.Hooks,
 		scope:             cfg.Scoper,
 		optsResolver:      cfg.OptionsConfigResolver,
@@ -894,8 +936,48 @@ func (s *Service) resolveModel(ctx context.Context, model string) (any, *modelba
 	return definer, meta, nil
 }
 
+// scopeOrDeny applies tenant scoping to db, or reports why it could not.
+//
+// The previous shape of this check — `if user != nil && hasOrgColumn(x)` —
+// had two negative branches that neither scoped NOR failed, so the query ran
+// globally and nothing said so. Since the Postgres RLS is inert, this Go-side
+// scope is the only isolation boundary there is; when it cannot be applied the
+// safe answer is to refuse, which is what RequireTenantScope selects.
+func (s *Service) scopeOrDeny(db *gorm.DB, instance any, user modelbase.AuthUser) (*gorm.DB, error) {
+	orgScoped := hasOrgColumn(instance)
+	switch {
+	case user != nil && orgScoped:
+		return s.scope.ScopeQuery(db, user), nil
+	case !orgScoped:
+		// Nothing to isolate: the model is global by construction. Under
+		// RequireTenantScope that is treated as a declaration mistake.
+		if s.requireTenant {
+			return nil, ErrTenantScopeUnavailable
+		}
+		return db, nil
+	default:
+		// Org-scoped model, no user: this is the leak. Reading without auth is
+		// allowed by default (public endpoints rely on it) but never silently
+		// once the host asked for scoping.
+		if s.requireTenant {
+			return nil, ErrTenantScopeUnavailable
+		}
+		return db, nil
+	}
+}
+
+// checkPerm gates one model+action for one user.
+//
+// With no permission service wired the outcome is decided by the host's
+// RequirePermissions choice: DENY when it opted into failing closed, ALLOW
+// otherwise (the historical behaviour, kept so existing hosts that authorize
+// in their handler layer do not break). New() warns loudly about the second
+// case at construction.
 func (s *Service) checkPerm(ctx context.Context, user modelbase.AuthUser, model, action string) error {
 	if s.perms == nil {
+		if s.requirePerms {
+			return ErrPermissionServiceMissing
+		}
 		return nil
 	}
 	return s.perms.Check(ctx, user, permission.Cap(model, action))

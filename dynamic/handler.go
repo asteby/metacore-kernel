@@ -447,6 +447,12 @@ func (h *Handler) handleError(c fiber.Ctx, err error) error {
 	if errors.Is(err, ErrConstraintViolation) {
 		return respondErr(c, fiber.StatusUnprocessableEntity, err.Error())
 	}
+	// errors.Is BEFORE the identity switch: a wrapped ErrForbidden (e.g.
+	// ErrPermissionServiceMissing) must still answer 403, not 500. A denial
+	// reported as a server error reads as "our bug" instead of "not allowed".
+	if errors.Is(err, ErrForbidden) {
+		return respondErr(c, fiber.StatusForbidden, err.Error())
+	}
 	switch err {
 	case ErrModelNotFound, ErrRecordNotFound, ErrSourceModelNotFound, ErrOptionsFieldNotFound, ErrActionNotFound:
 		return respondErr(c, fiber.StatusNotFound, err.Error())
