@@ -100,6 +100,22 @@ type Installation struct {
 
 func (Installation) TableName() string { return "metacore_installations" }
 
+// IsInstalled reports whether the org has a live installation row for the addon
+// in the installer's authoritative table (metacore_installations). This is the
+// single source of truth for "is this addon installed?" — the marketplace
+// bookkeeping table (marketplace_installations) is only a projection that is
+// populated on the marketplace install path, so it can be missing for addons
+// installed by other flows (e.g. bundle-sync).
+func (i *Installer) IsInstalled(orgID uuid.UUID, addonKey string) (bool, error) {
+	var count int64
+	if err := i.DB.Model(&Installation{}).
+		Where("organization_id = ? AND addon_key = ?", orgID, addonKey).
+		Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // installationOrgAddonIndex is the table-specific name of the composite unique
 // index. It MUST stay in sync with the struct tag above. It is deliberately not
 // the bare "idx_org_addon": that name is commonly used by host-owned tables
