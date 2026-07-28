@@ -644,16 +644,63 @@ func (h *Handler) runUninstall(c fiber.Ctx, orgID uuid.UUID, addonKey, policy st
 		Where("organization_id = ? AND addon_key = ?", orgID, addonKey).
 		Order("requested_at DESC").
 		Take(&row).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if err != gorm.ErrRecordNotFound {
+			return Installation{}, err
+		}
+		// No marketplace bookkeeping row. That table is only a projection of
+		// the marketplace install path — addons installed by other flows
+		// (bundle-sync) never get a row here even though they ARE installed.
+		// The installer's metacore_installations table is the source of truth,
+		// so consult it before refusing a destructive operation the user is
+		// entitled to run. Only a genuinely-absent installation is a 404.
+		if h.installer == nil {
 			return Installation{}, errUninstallNotFound
 		}
-		return Installation{}, err
+		installed, ierr := h.installer.IsInstalled(orgID, addonKey)
+		if ierr != nil {
+			return Installation{}, ierr
+		}
+		if !installed {
+			return Installation{}, errUninstallNotFound
+		}
+		// Synthesize the bookkeeping row so the teardown + final-state
+		// persistence share EXACTLY the same code path as an existing row.
+		// A deterministic id (uuidv5 over org+addon) keeps this idempotent:
+		// a concurrent duplicate collides on the primary key instead of
+		// inserting a second marketplace_installations row.
+		row = Installation{
+			ID:             synthInstallationID(orgID, addonKey),
+			OrganizationID: orgID,
+			AddonKey:       addonKey,
+			Status:         "uninstalling",
+			RequestedAt:    time.Now(),
+			DataPolicy:     policy,
+		}
 	}
 
+	return h.finishUninstall(c, orgID, addonKey, policy, &row)
+}
+
+// synthInstallationNamespace is the uuidv5 namespace used to derive a stable
+// primary key for a bookkeeping row synthesized during a tolerant uninstall
+// (see runUninstall). Deriving the id from (org, addon_key) makes the create
+// idempotent under retries and concurrent requests.
+var synthInstallationNamespace = uuid.MustParse("b0b8f1a2-3c4d-5e6f-8a9b-0c1d2e3f4a5b")
+
+func synthInstallationID(orgID uuid.UUID, addonKey string) uuid.UUID {
+	return uuid.NewSHA1(synthInstallationNamespace, []byte(orgID.String()+"\x00"+addonKey))
+}
+
+// finishUninstall runs the shared destructive teardown for a single addon and
+// persists the row's final state. It is the ONLY place that marks a row
+// uninstalling, drives the installer lifecycle, and stamps the uninstalled
+// state + PurgeAt window — both the existing-row path and the synthesized-row
+// (tolerant) path funnel through it so their behavior stays identical.
+func (h *Handler) finishUninstall(c fiber.Ctx, orgID uuid.UUID, addonKey, policy string, row *Installation) (Installation, error) {
 	// Mark uninstalling BEFORE we touch the installer so a concurrent
 	// request sees the in-flight state instead of racing two destructive
 	// flows against each other.
-	h.markStatus(&row, "uninstalling", "")
+	h.markStatus(row, "uninstalling", "")
 	row.DataPolicy = policy
 
 	// Drive the installer lifecycle hooks + (when drop_now) schema
@@ -663,8 +710,8 @@ func (h *Handler) runUninstall(c fiber.Ctx, orgID uuid.UUID, addonKey, policy st
 		dropNow := policy == DataPolicyDropNow
 		if err := h.installer.Uninstall(orgID, addonKey, dropNow); err != nil {
 			wrapped := fmt.Errorf("uninstall: %w", err)
-			h.markFailed(&row, wrapped)
-			return row, wrapped
+			h.markFailed(row, wrapped)
+			return *row, wrapped
 		}
 	}
 
@@ -683,10 +730,10 @@ func (h *Handler) runUninstall(c fiber.Ctx, orgID uuid.UUID, addonKey, policy st
 		// Schema already dropped by installer.Uninstall(dropNow=true).
 		row.PurgeAt = nil
 	}
-	if err := h.db.Save(&row).Error; err != nil {
-		return row, fmt.Errorf("persist uninstall: %w", err)
+	if err := h.db.Save(row).Error; err != nil {
+		return *row, fmt.Errorf("persist uninstall: %w", err)
 	}
-	return row, nil
+	return *row, nil
 }
 
 // findDependents returns the OTHER active installations in the same org whose

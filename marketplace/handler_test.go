@@ -1172,3 +1172,145 @@ func TestInstall_FullMode_WithInstallerNoBundleURL(t *testing.T) {
 		t.Fatalf("expected 201, got %d", resp.StatusCode)
 	}
 }
+
+// newTestAppWithInstaller mounts the handler with the kernel installer wired so
+// runUninstall can consult metacore_installations as the source of truth. It
+// also migrates the installer's authoritative table onto the same sqlite DB.
+func newTestAppWithInstaller(t *testing.T, db *gorm.DB) *fiber.App {
+	t.Helper()
+	// Hand-create metacore_installations (the installer's source of truth).
+	// AutoMigrate emits a Postgres `gen_random_uuid()` default that sqlite
+	// rejects, so mirror setupDB's raw-DDL approach.
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS metacore_installations (
+		id TEXT PRIMARY KEY,
+		organization_id TEXT NOT NULL,
+		addon_key TEXT NOT NULL,
+		version TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'enabled',
+		source TEXT NOT NULL,
+		secret_hash TEXT,
+		secret_enc TEXT,
+		settings TEXT,
+		manifest_hash TEXT,
+		installed_at DATETIME,
+		enabled_at DATETIME,
+		disabled_at DATETIME
+	)`).Error; err != nil {
+		t.Fatalf("create metacore_installations: %v", err)
+	}
+	origAllow := os.Getenv("ALLOW_UNSIGNED_BUNDLES")
+	os.Setenv("ALLOW_UNSIGNED_BUNDLES", "true")
+	inst := installer.New(db, "test")
+	os.Setenv("ALLOW_UNSIGNED_BUNDLES", origAllow)
+
+	app := fiber.New()
+	h, err := marketplace.NewHandler(db, marketplace.WithInstaller(inst))
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	authMw := func(c fiber.Ctx) error {
+		c.Locals(auth.LocalOrganizationID, testOrgID)
+		c.Locals(auth.LocalUserID, testUserID)
+		return c.Next()
+	}
+	h.Mount(app, authMw)
+	return app
+}
+
+// seedInstallerRow inserts a live row into metacore_installations (the
+// installer's source of truth) WITHOUT any matching marketplace_installations
+// bookkeeping row — mimicking an addon installed by bundle-sync.
+func seedInstallerRow(t *testing.T, db *gorm.DB, addonKey string) {
+	t.Helper()
+	if err := db.Create(&installer.Installation{
+		ID:             uuid.New(),
+		OrganizationID: testOrgID,
+		AddonKey:       addonKey,
+		Version:        "1.0.0",
+		Status:         "enabled",
+		Source:         "bundle",
+	}).Error; err != nil {
+		t.Fatalf("seed installer row: %v", err)
+	}
+}
+
+// TestUninstall_InstallerSourceOfTruth_NoBookkeepingRow covers the bundle-sync
+// case: the addon is live in metacore_installations but has NO
+// marketplace_installations row. Uninstall must NOT 404 — it runs the teardown
+// and synthesizes the bookkeeping row as uninstalled. It must also be
+// idempotent (a second call does not error or duplicate rows).
+func TestUninstall_InstallerSourceOfTruth_NoBookkeepingRow(t *testing.T) {
+	db := setupDB(t)
+	app := newTestAppWithInstaller(t, db)
+	seedInstallerRow(t, db, "link_inbox")
+
+	// Sanity: no bookkeeping row exists yet.
+	var before int64
+	db.Table("marketplace_installations").Where("addon_key = ?", "link_inbox").Count(&before)
+	if before != 0 {
+		t.Fatalf("expected 0 bookkeeping rows before uninstall, got %d", before)
+	}
+
+	req := makeJSONReq(t, "POST", "/marketplace/uninstall", map[string]any{
+		"addonKey": "link_inbox",
+	})
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("test request: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200 (installer is source of truth), got %d", resp.StatusCode)
+	}
+	data := readBody(t, resp)["data"].(map[string]any)
+	if data["status"] != "uninstalled" {
+		t.Fatalf("expected status uninstalled, got %v", data["status"])
+	}
+
+	// Teardown removed the authoritative row.
+	var live int64
+	db.Model(&installer.Installation{}).Where("addon_key = ?", "link_inbox").Count(&live)
+	if live != 0 {
+		t.Fatalf("expected metacore_installations row deleted, got %d", live)
+	}
+
+	// A bookkeeping row was synthesized as uninstalled.
+	var after int64
+	db.Table("marketplace_installations").Where("addon_key = ? AND status = ?", "link_inbox", "uninstalled").Count(&after)
+	if after != 1 {
+		t.Fatalf("expected 1 synthesized uninstalled bookkeeping row, got %d", after)
+	}
+
+	// Idempotent: second call finds the (now uninstalled) bookkeeping row and
+	// re-runs the normal path without erroring or duplicating.
+	resp2, err := app.Test(makeJSONReq(t, "POST", "/marketplace/uninstall", map[string]any{
+		"addonKey": "link_inbox",
+	}))
+	if err != nil {
+		t.Fatalf("second test request: %v", err)
+	}
+	if resp2.StatusCode != 200 {
+		t.Fatalf("expected idempotent 200 on second uninstall, got %d", resp2.StatusCode)
+	}
+	var total int64
+	db.Table("marketplace_installations").Where("addon_key = ?", "link_inbox").Count(&total)
+	if total != 1 {
+		t.Fatalf("expected exactly 1 bookkeeping row after idempotent re-run, got %d", total)
+	}
+}
+
+// TestUninstall_NotInThirdTable_Returns404 confirms an addon absent from BOTH
+// tables still yields a legitimate 404 even when the installer is wired.
+func TestUninstall_NotInThirdTable_Returns404(t *testing.T) {
+	db := setupDB(t)
+	app := newTestAppWithInstaller(t, db)
+
+	resp, err := app.Test(makeJSONReq(t, "POST", "/marketplace/uninstall", map[string]any{
+		"addonKey": "com.example.ghost",
+	}))
+	if err != nil {
+		t.Fatalf("test request: %v", err)
+	}
+	if resp.StatusCode != 404 {
+		t.Fatalf("expected 404 for addon absent from all tables, got %d", resp.StatusCode)
+	}
+}
