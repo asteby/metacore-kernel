@@ -62,9 +62,11 @@ func (s *Service) Search(ctx context.Context, user modelbase.AuthUser, q SearchQ
 	// Column-based detection (see hasOrgColumn) so reflect-built addon models —
 	// whose org field is "OrganizationId", not "OrganizationID" — are scoped
 	// instead of silently leaking other tenants' rows.
-	if user != nil && hasOrgColumn(instance) {
-		db = s.scope.ScopeQuery(db, user)
+	scoped, err := s.scopeOrDeny(db, instance, user)
+	if err != nil {
+		return nil, err
 	}
+	db = scoped
 
 	for _, rel := range cfg.Preload {
 		db = db.Preload(rel)
