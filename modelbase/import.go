@@ -58,6 +58,12 @@ type ImportSpec struct {
 	// template. Use them to state what the import does NOT cover (relations
 	// assigned later, credential handling, error-retry flow).
 	Instructions []string `json:"instructions,omitempty"`
+	// Defaults are values written into EVERY imported record without appearing
+	// as a column. They carry what the create form supplies invisibly — a role,
+	// a discriminator, a status — which the model still requires. Without them
+	// an imported row is subtly different from one created through the form
+	// (e.g. a patient with an empty role), and nothing in the file hints at it.
+	Defaults map[string]any `json:"defaults,omitempty"`
 }
 
 // DefaultImportMaxRows caps a single upload when the spec does not say. It is
@@ -99,11 +105,16 @@ const DefaultSecretGenerator = "random_secret"
 // pickers) are skipped.
 func DeriveImportSpec(modal ModalMetadata) ImportSpec {
 	cols := make([]ImportColumn, 0, len(modal.Fields))
+	defaults := map[string]any{}
 	for _, f := range modal.Fields {
-		// A hidden field is filled by the form itself (a role, a discriminator,
-		// a default), so it neither becomes a column nor blocks the import —
-		// the create pipeline supplies it exactly as it does for a manual save.
+		// A hidden field is filled by the form itself (a role, a discriminator).
+		// It is not a column — the user has nothing to type — but its default
+		// MUST still reach the record, or an imported row differs from one
+		// created through the form in a way nobody can see in the file.
 		if f.Type == "hidden" {
+			if f.DefaultValue != nil {
+				defaults[f.Key] = f.DefaultValue
+			}
 			continue
 		}
 		// A password is required but must not be dictated per row: it becomes a
@@ -152,7 +163,11 @@ func DeriveImportSpec(modal ModalMetadata) ImportSpec {
 		}
 		cols = append(cols, col)
 	}
-	return ImportSpec{Columns: cols}
+	spec := ImportSpec{Columns: cols}
+	if len(defaults) > 0 {
+		spec.Defaults = defaults
+	}
+	return spec
 }
 
 // StaticImportSpec makes a fixed spec satisfy HasImportSpec by embedding. It
