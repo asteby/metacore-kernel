@@ -2368,7 +2368,8 @@
             "boolean",
             "secret",
             "json",
-            "select"
+            "select",
+            "dynamic_select"
           ]
         },
         "label": {
@@ -2382,6 +2383,14 @@
         "required": {
           "type": "boolean",
           "default": false
+        },
+        "options_source": {
+          "type": "string",
+          "description": "When type=dynamic_select: names a WASM export the host invokes to fetch options at config time. For a connector credential it runs with the org's connector context (connector_get resolves the same connector), returning {success,data:{options:[{value,label}]}}."
+        },
+        "section": {
+          "type": "string",
+          "description": "Binds this setting to a form_layout section (by key), like a column's section — groups a connector's credentials into its wizard steps/sections."
         },
         "options": {
           "type": "array",
@@ -2439,6 +2448,14 @@
           "items": {
             "$ref": "#/$defs/Setting"
           }
+        },
+        "form_layout": {
+          "$ref": "#/$defs/FormLayout",
+          "description": "Groups the credentials into sections or a multi-step wizard for the config UI (same shape models use)."
+        },
+        "test_export": {
+          "type": "string",
+          "description": "Names a WASM export the host invokes to validate the credentials (a cheap read-only call to the third-party API). Powers the config UI's 'test connection' button; returns {success,data:{ok,message}}."
         }
       }
     },

@@ -9,6 +9,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **manifest v3: dynamic connector credentials (`dynamic_select` + `options_source`,
+  `form_layout`/`section`, `test_export`).** A connector credential (`Setting`)
+  can now declare `type: "dynamic_select"` with an `options_source` naming a WASM
+  export the host invokes at config time to fetch its options live (running with
+  the org's connector context, so `connector_get` resolves the same connector —
+  e.g. list factura.com's series from `/v4/series`). A `Connector` can group its
+  credentials into `form_layout` sections/wizard steps (credentials bind via the
+  new `Setting.section`, mirroring `Column.section`) and declare a `test_export`
+  for a config-UI "test connection" health-check. The generic WASM invoker
+  (`runtime/wasm` `Host.InvokeFor`) already dispatches any whitelisted export
+  org-scoped with connectors bound, so NO runtime change is needed — this release
+  is the manifest CONTRACT (v3 types + embedded JSON schema + host projection
+  `ConnectorDef`/`CredentialDef`) that lets a host render the `dynamic_select`,
+  know which export feeds it, and which export validates the connection. The host
+  (ops) performs the invocation. Additive + `additionalProperties`-safe.
+
 - **licensing: instance-licensing primitive (`licensing.Service`, § docs/licensing.md).**
   A new embedder-agnostic package that moves the whole enforcement half of
   metacore's instance licensing to the base of the kernel, so every product —

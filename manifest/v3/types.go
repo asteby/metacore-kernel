@@ -85,6 +85,16 @@ type Connector struct {
 	// repo, webhook_secret …). Reuses the Setting shape (key/type/default/
 	// required/validation); "secret"-typed fields are stored encrypted.
 	Credentials []Setting `json:"credentials,omitempty"`
+	// FormLayout groups the credentials into declarative sections or a multi-step
+	// WIZARD for the config UI (same shape models use). A token connector can put
+	// api_key/secret in step 1 and dynamic_select fields (fed by OptionsSource)
+	// that need a live connection in a later step gated by visible_when.
+	FormLayout *FormLayout `json:"form_layout,omitempty"`
+	// TestExport names a WASM export the host invokes to VALIDATE the credentials
+	// (a cheap read-only call to the third-party API). It runs with the org's
+	// connector context and returns {success,data:{ok,message}}. Powers the
+	// config UI's "test connection" button. Empty = no health-check offered.
+	TestExport string `json:"test_export,omitempty"`
 }
 
 // Schedule is one declarative cron job. The kernel scheduler parses Every as a
@@ -1439,6 +1449,18 @@ type Setting struct {
 	Default     interface{}     `json:"default,omitempty"`
 	Required    bool            `json:"required,omitempty"`
 	Options     []SettingOption `json:"options,omitempty"`
+	// OptionsSource names a WASM export the host invokes to fetch this setting's
+	// options at config time (type "dynamic_select"). For a CONNECTOR credential
+	// the export runs with the org's connector context (connector_get resolves
+	// the same connector), so options can be pulled live from the third-party API
+	// (e.g. factura.com /v4/series). The export returns
+	// {success,data:{options:[{value,label}]}}. Empty = static Options only.
+	OptionsSource string `json:"options_source,omitempty"`
+	// Section binds this setting to a FormLayout section (by its key), exactly
+	// like a Column.Section — lets a connector's credentials group into the
+	// connector's form_layout sections / wizard steps. Empty = the implicit
+	// first/General section.
+	Section string `json:"section,omitempty"`
 	// Validation is an optional constraint hint (e.g. a regex or a named rule)
 	// the host applies when collecting the value. Used by connector credentials.
 	Validation string `json:"validation,omitempty"`
