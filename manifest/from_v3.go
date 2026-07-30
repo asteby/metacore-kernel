@@ -1099,6 +1099,19 @@ func deriveBackend(m *v3.Manifest) *BackendSpec {
 		}
 	}
 
+	// Connector lookups/health-checks: a credential's options_source (populates
+	// a dynamic_select at config time) and a connector's test_export ("test
+	// connection") are wasm exports the host invokes, so they must be in the
+	// whitelist the runtime dispatches against (runtime/wasm invokeImpl).
+	for _, c := range m.Connectors {
+		add(c.TestExport)
+		for _, cr := range c.Credentials {
+			if cr.Type == "dynamic_select" {
+				add(cr.OptionsSource)
+			}
+		}
+	}
+
 	// Lifecycle hooks declared with wasm function names also contribute
 	// to the export list so the wasm host can resolve them at dispatch time.
 	if m.Lifecycle != nil {

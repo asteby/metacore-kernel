@@ -24,6 +24,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `ConnectorDef`/`CredentialDef`) that lets a host render the `dynamic_select`,
   know which export feeds it, and which export validates the connection. The host
   (ops) performs the invocation. Additive + `additionalProperties`-safe.
+  `deriveBackend` collects a connector's `test_export` and each `dynamic_select`
+  credential's `options_source` into `Backend.Exports` so the wasm runtime
+  whitelists them at dispatch (v0.86.1).
 
 - **licensing: instance-licensing primitive (`licensing.Service`, § docs/licensing.md).**
   A new embedder-agnostic package that moves the whole enforcement half of
