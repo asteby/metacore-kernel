@@ -1,5 +1,7 @@
 package manifest
 
+import v3 "github.com/asteby/metacore-kernel/manifest/v3"
+
 // APIVersion is the kernel contract version this package implements.
 // Addons declare `kernel: ">=X.Y <Z"` to opt into a compatibility window.
 //
@@ -154,6 +156,12 @@ type ConnectorDef struct {
 	Label       string          `json:"label,omitempty"`
 	Auth        string          `json:"auth,omitempty"`
 	Credentials []CredentialDef `json:"credentials,omitempty"`
+	// FormLayout groups the credentials into sections/a wizard for the config UI
+	// (projected verbatim from the v3 Connector; nil = flat form).
+	FormLayout *v3.FormLayout `json:"form_layout,omitempty"`
+	// TestExport names the WASM export the host invokes to validate the
+	// credentials (config UI "test connection"); "" = no health-check.
+	TestExport string `json:"test_export,omitempty"`
 }
 
 // CredentialDef is one field of a ConnectorDef the org supplies. Secret==true
@@ -166,6 +174,12 @@ type CredentialDef struct {
 	Required   bool        `json:"required,omitempty"`
 	Validation string      `json:"validation,omitempty"`
 	Secret     bool        `json:"secret,omitempty"`
+	// OptionsSource names the WASM export the host invokes to fetch this
+	// credential's options at config time (type "dynamic_select"); "" = a plain
+	// input or a static "select".
+	OptionsSource string `json:"options_source,omitempty"`
+	// Section binds the credential to a ConnectorDef.FormLayout section/step.
+	Section string `json:"section,omitempty"`
 }
 
 // ScheduleDef is the host/runtime projection of a v3 Schedule: a cron job the

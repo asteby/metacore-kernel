@@ -144,6 +144,8 @@ func mapConnectors(in []v3.Connector) []ConnectorDef {
 			Label:       c.Label,
 			Auth:        c.Auth,
 			Credentials: mapCredentials(c.Credentials),
+			FormLayout:  c.FormLayout,
+			TestExport:  c.TestExport,
 		})
 	}
 	return out
@@ -159,12 +161,14 @@ func mapCredentials(in []v3.Setting) []CredentialDef {
 	out := make([]CredentialDef, 0, len(in))
 	for _, s := range in {
 		out = append(out, CredentialDef{
-			Key:        s.Key,
-			Type:       s.Type,
-			Default:    s.Default,
-			Required:   s.Required,
-			Validation: s.Validation,
-			Secret:     s.Type == "secret",
+			Key:           s.Key,
+			Type:          s.Type,
+			Default:       s.Default,
+			Required:      s.Required,
+			Validation:    s.Validation,
+			Secret:        s.Type == "secret",
+			OptionsSource: s.OptionsSource,
+			Section:       s.Section,
 		})
 	}
 	return out
