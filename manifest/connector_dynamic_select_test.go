@@ -82,4 +82,24 @@ func TestConnectorDynamicSelect_ParseAndProject(t *testing.T) {
 	if pcred == nil || pcred.Type != "dynamic_select" || pcred.OptionsSource != "handle_connector_lookup_series" {
 		t.Fatalf("projected serie credential = %+v", pcred)
 	}
+
+	// The lookup + test exports MUST land in the backend whitelist, or the wasm
+	// runtime rejects them as un-declared exports.
+	if out.Backend == nil {
+		t.Fatal("expected a wasm Backend derived from the connector exports")
+	}
+	hasExport := func(name string) bool {
+		for _, e := range out.Backend.Exports {
+			if e == name {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasExport("handle_connector_test") {
+		t.Errorf("Backend.Exports %v missing test_export handle_connector_test", out.Backend.Exports)
+	}
+	if !hasExport("handle_connector_lookup_series") {
+		t.Errorf("Backend.Exports %v missing options_source handle_connector_lookup_series", out.Backend.Exports)
+	}
 }
