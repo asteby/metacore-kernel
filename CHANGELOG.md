@@ -9,6 +9,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **modelbase: `ActionDef.Trigger`** — la forma servida de la acción ahora conserva
+  el `trigger` (incl. `type:connector` + `connector`/`export`) en el round-trip
+  manifest→host, para que el dispatch cross-addon de connector llegue al registro de
+  acciones del host. Completa el primitivo `handler.type=connector`.
 - **manifest v3: action `handler.type: "connector"`** — una acción de un addon puede
   invocar el `export` de un connector de OTRO addon (`handler:{type:connector,
   connector,export}`) sin duplicar su cliente. El export corre en el addon dueño del
