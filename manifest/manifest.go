@@ -477,9 +477,14 @@ type IdempotencyDef struct {
 // prompted the action. This is what unlocks "stamp this invoice and write
 // the linked log entry atomically" without leaking partially-applied state.
 type ActionTrigger struct {
-	Type    string `json:"type"`             // "wasm" | "webhook" | "noop"
-	Export  string `json:"export,omitempty"` // wasm export name; required when Type=wasm
+	Type    string `json:"type"`             // "wasm" | "webhook" | "noop" | "connector"
+	Export  string `json:"export,omitempty"` // wasm export name; required when Type=wasm or connector
 	RunInTx bool   `json:"run_in_tx,omitempty"`
+	// Connector names the connector (declared by any installed addon) whose
+	// Export the host invokes when Type=="connector" — a cross-addon dispatch:
+	// the export runs in the connector-owning addon, org-scoped, so an action can
+	// drive a connector it does not own without duplicating its client.
+	Connector string `json:"connector,omitempty"`
 }
 
 // FieldDef is an input field used by action forms and model definitions.

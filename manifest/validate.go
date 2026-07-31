@@ -71,9 +71,10 @@ var (
 	// "wasm" (and ship the implementation as an exported function) rather
 	// than minting a new type.
 	validTriggerTypes = map[string]struct{}{
-		"wasm":    {},
-		"webhook": {},
-		"noop":    {},
+		"wasm":      {},
+		"webhook":   {},
+		"noop":      {},
+		"connector": {},
 	}
 	// validLifecycleHookEvents enumerates the manifest.LifecycleHooks map
 	// keys the kernel knows how to fire. "install"/"uninstall"/"enable"/
@@ -594,6 +595,20 @@ func validateActionTrigger(t *ActionTrigger, exports map[string]struct{}) error 
 			if _, ok := exports[t.Export]; !ok {
 				return fmt.Errorf("trigger.export: %q not declared in backend.exports", t.Export)
 			}
+		}
+	case "connector":
+		// Cross-addon connector dispatch: the export lives in the
+		// connector-owning addon, NOT this addon, so it is deliberately NOT
+		// cross-checked against this manifest's exports. Both the connector key
+		// and the export symbol are required and must be well-formed.
+		if strings.TrimSpace(t.Connector) == "" {
+			return fmt.Errorf("trigger.connector: required when type=connector")
+		}
+		if strings.TrimSpace(t.Export) == "" {
+			return fmt.Errorf("trigger.export: required when type=connector")
+		}
+		if !triggerExportRe.MatchString(t.Export) {
+			return fmt.Errorf("trigger.export: invalid symbol %q", t.Export)
 		}
 	case "webhook":
 		// Webhook triggers cannot honour RunInTx — the network hop escapes
