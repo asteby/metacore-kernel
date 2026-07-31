@@ -370,6 +370,24 @@ type ActionDef struct {
 	Steps         []ActionStepDef `json:"steps,omitempty"`
 	RequiresState []string        `json:"requiresState,omitempty"`
 	IsCollection  bool            `json:"isCollection,omitempty"`
+	// Trigger declares how the action dispatches (the served twin of
+	// manifest.ActionTrigger). JSON key `trigger` matches manifest.ActionDef.Trigger
+	// so the manifest→host JSON round-trip (KernelManifestToRecord) preserves it —
+	// without this field the host drops the trigger and a `connector`-typed action
+	// (cross-addon connector dispatch) can never reach the host's action registry.
+	Trigger *ActionTrigger `json:"trigger,omitempty"`
+}
+
+// ActionTrigger is the served twin of manifest.ActionTrigger: it tells the host
+// how an action dispatches. JSON tags MUST match manifest.ActionTrigger so the
+// manifest→host round-trip preserves every field. Type "connector" targets the
+// export of ANOTHER addon's connector (Connector + Export) — a cross-addon
+// dispatch the host performs via the connector-owning addon.
+type ActionTrigger struct {
+	Type      string `json:"type"`
+	Export    string `json:"export,omitempty"`
+	RunInTx   bool   `json:"run_in_tx,omitempty"`
+	Connector string `json:"connector,omitempty"`
 }
 
 // ActionStepDef is one wizard page of a multi-step action form — the served
