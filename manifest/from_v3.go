@@ -723,6 +723,9 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 			def.Trigger = &ActionTrigger{Type: "wasm", Export: a.Handler.Function}
 		case "webhook":
 			def.Trigger = &ActionTrigger{Type: "webhook"}
+		case "connector":
+			// Cross-addon dispatch: the export runs in the connector-owning addon.
+			def.Trigger = &ActionTrigger{Type: "connector", Connector: a.Handler.Connector, Export: a.Handler.Export}
 		}
 		if a.Idempotency != nil {
 			def.Idempotency = &IdempotencyDef{KeyField: a.Idempotency.KeyField}

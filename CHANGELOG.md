@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **manifest v3: action `handler.type: "connector"`** — una acción de un addon puede
+  invocar el `export` de un connector de OTRO addon (`handler:{type:connector,
+  connector,export}`) sin duplicar su cliente. El export corre en el addon dueño del
+  connector, org-scoped, con el payload de los campos de la acción. Schema + from_v3 +
+  validación (no cross-checkea el export contra los `backend.exports` del consumidor).
+  El dispatch en el host es la slice siguiente.
 - **manifest v3: dynamic connector credentials (`dynamic_select` + `options_source`,
   `form_layout`/`section`, `test_export`).** A connector credential (`Setting`)
   can now declare `type: "dynamic_select"` with an `options_source` naming a WASM

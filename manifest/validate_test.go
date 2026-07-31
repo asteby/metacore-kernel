@@ -522,6 +522,46 @@ func TestValidate_ActionTrigger_WasmRequiresExport(t *testing.T) {
 	}
 }
 
+func TestValidate_ActionTrigger_ConnectorOK(t *testing.T) {
+	// A connector trigger targets ANOTHER addon's connector export, so it is
+	// NOT cross-checked against this manifest's backend exports.
+	m := withActions(manifest.ActionDef{
+		Key:     "send_whatsapp",
+		Name:    "Send WhatsApp",
+		Label:   "Send WhatsApp",
+		Trigger: &manifest.ActionTrigger{Type: "connector", Connector: "link", Export: "link_send_message"},
+	})
+	if err := m.Validate("2.0.0"); err != nil {
+		t.Fatalf("valid connector trigger should pass, got %v", err)
+	}
+}
+
+func TestValidate_ActionTrigger_ConnectorRequiresConnector(t *testing.T) {
+	m := withActions(manifest.ActionDef{
+		Key:     "send_whatsapp",
+		Name:    "Send WhatsApp",
+		Label:   "Send WhatsApp",
+		Trigger: &manifest.ActionTrigger{Type: "connector", Export: "link_send_message"},
+	})
+	err := m.Validate("2.0.0")
+	if err == nil || !strings.Contains(err.Error(), "connector") {
+		t.Fatalf("expected connector-required error, got %v", err)
+	}
+}
+
+func TestValidate_ActionTrigger_ConnectorRequiresExport(t *testing.T) {
+	m := withActions(manifest.ActionDef{
+		Key:     "send_whatsapp",
+		Name:    "Send WhatsApp",
+		Label:   "Send WhatsApp",
+		Trigger: &manifest.ActionTrigger{Type: "connector", Connector: "link"},
+	})
+	err := m.Validate("2.0.0")
+	if err == nil || !strings.Contains(err.Error(), "export") {
+		t.Fatalf("expected export-required error, got %v", err)
+	}
+}
+
 func TestValidate_ActionTrigger_WasmExportNotInBackend(t *testing.T) {
 	// The export must appear in Backend.Exports so the wasm host can
 	// resolve it at dispatch — same contract enforced for hooks.

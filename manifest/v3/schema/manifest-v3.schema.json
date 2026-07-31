@@ -1673,7 +1673,8 @@
               "enum": [
                 "wasm",
                 "webhook",
-                "compiled"
+                "compiled",
+                "connector"
               ]
             },
             "function": {
@@ -1681,6 +1682,14 @@
             },
             "url": {
               "type": "string"
+            },
+            "connector": {
+              "type": "string",
+              "description": "When type=connector: the connector key (declared by any installed addon) whose export to invoke, e.g. 'link'. The host resolves the owning addon and dispatches the export org-scoped."
+            },
+            "export": {
+              "type": "string",
+              "description": "When type=connector: the WASM export of the connector-owning addon to invoke with the action's field payload, e.g. 'link_send_message'."
             }
           }
         },
@@ -2048,7 +2057,8 @@
               "enum": [
                 "wasm",
                 "webhook",
-                "compiled"
+                "compiled",
+                "connector"
               ]
             },
             "function": {
@@ -2056,6 +2066,14 @@
             },
             "url": {
               "type": "string"
+            },
+            "connector": {
+              "type": "string",
+              "description": "When type=connector: the connector key (declared by any installed addon) whose export to invoke, e.g. 'link'. The host resolves the owning addon and dispatches the export org-scoped."
+            },
+            "export": {
+              "type": "string",
+              "description": "When type=connector: the WASM export of the connector-owning addon to invoke with the action's field payload, e.g. 'link_send_message'."
             }
           }
         }
@@ -2085,7 +2103,8 @@
               "enum": [
                 "wasm",
                 "webhook",
-                "compiled"
+                "compiled",
+                "connector"
               ]
             },
             "function": {
@@ -2093,6 +2112,14 @@
             },
             "url": {
               "type": "string"
+            },
+            "connector": {
+              "type": "string",
+              "description": "When type=connector: the connector key (declared by any installed addon) whose export to invoke, e.g. 'link'. The host resolves the owning addon and dispatches the export org-scoped."
+            },
+            "export": {
+              "type": "string",
+              "description": "When type=connector: the WASM export of the connector-owning addon to invoke with the action's field payload, e.g. 'link_send_message'."
             }
           }
         },
