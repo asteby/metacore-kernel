@@ -11,7 +11,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/mattn/go-sqlite3 v1.14.49
 	github.com/pganalyze/pg_query_go/v6 v6.2.2
-	github.com/pgvector/pgvector-go v0.4.0
+	github.com/pgvector/pgvector-go v0.4.1
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/prometheus/client_golang v1.24.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
