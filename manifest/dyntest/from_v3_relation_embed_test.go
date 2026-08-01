@@ -1,62 +1,35 @@
 package dyntest
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/asteby/metacore-kernel/manifest"
 	v3 "github.com/asteby/metacore-kernel/manifest/v3"
+	"github.com/asteby/metacore-kernel/modelbase"
 )
 
-// embedManifestJSON declares an Order with TWO one_to_many relations: `items`
-// is a COMPOSITION (the document's lines, embedded in the record modal) and
-// `movements` points at a large, independently-managed ledger that must NOT be
-// dragged into the modal.
-const embedManifestJSON = `{
+// relationEmbedManifestJSON declares an Order with two one_to_many relations:
+// `items` is a COMPOSITION (the document's lines, embedded in the record modal)
+// while `shipments` is a plain association that must NOT be dragged into the
+// modal.
+const relationEmbedManifestJSON = `{
   "apiVersion": "asteby.com/v3",
   "kind": "Addon",
-  "metadata": { "key": "sales", "name": "Sales", "version": "1.0.0" },
+  "metadata": { "key": "sales", "name": "Sales", "version": "0.1.0" },
   "compatibility": { "requires": [ { "key": "kernel", "version": ">=0.1.0" } ] },
   "models": [
     {
       "key": "Order",
-      "table": "orders",
+      "table": "sales_orders",
       "label": "Orders",
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
-        { "name": "code", "type": "text" }
+        { "name": "folio", "type": "text", "not_null": true }
       ],
       "relations": [
-        {
-          "name": "items",
-          "kind": "one_to_many",
-          "through": "OrderItem",
-          "foreign_key": "order_id",
-          "embed": true
-        },
-        {
-          "name": "movements",
-          "kind": "one_to_many",
-          "through": "StockMovement",
-          "foreign_key": "order_id"
-        }
-      ]
-    },
-    {
-      "key": "OrderItem",
-      "table": "order_items",
-      "label": "Order items",
-      "columns": [
-        { "name": "id", "type": "uuid", "primary_key": true },
-        { "name": "order_id", "type": "uuid" }
-      ]
-    },
-    {
-      "key": "StockMovement",
-      "table": "stock_movements",
-      "label": "Stock movements",
-      "columns": [
-        { "name": "id", "type": "uuid", "primary_key": true },
-        { "name": "order_id", "type": "uuid" }
+        { "name": "items", "kind": "one_to_many", "through": "OrderItem", "foreign_key": "order_id", "embed": true },
+        { "name": "shipments", "kind": "one_to_many", "through": "Shipment", "foreign_key": "order_id" }
       ]
     }
   ]
@@ -64,11 +37,11 @@ const embedManifestJSON = `{
 
 // TestRelationEmbedParseAndProject walks the relation `embed` flag through the
 // kernel-side chain: v3.Parse (strict jsonschema + typed decode) → FromV3
-// (legacy carrier) → legacy Validate → the served RelationMeta the SDK reads to
-// decide which sub-tables the record modal embeds.
+// (legacy carrier) → legacy Validate → the served RelationMeta JSON shape the
+// SDK consumes. A relation that omits the flag must stay false, since embedding
+// is opt-in.
 func TestRelationEmbedParseAndProject(t *testing.T) {
-	// (a) strict schema + typed decode accepts and carries embed.
-	m, err := v3.Parse([]byte(embedManifestJSON))
+	m, err := v3.Parse([]byte(relationEmbedManifestJSON))
 	if err != nil {
 		t.Fatalf("v3.Parse rejected manifest with relation embed: %v", err)
 	}
@@ -79,11 +52,10 @@ func TestRelationEmbedParseAndProject(t *testing.T) {
 	if !v3rels["items"].Embed {
 		t.Errorf("v3 items.Embed = false, want true")
 	}
-	if v3rels["movements"].Embed {
-		t.Errorf("v3 movements.Embed = true, want false (embed is opt-in)")
+	if v3rels["shipments"].Embed {
+		t.Errorf("v3 shipments.Embed = true, want false (embedding is opt-in)")
 	}
 
-	// (b) FromV3 carries it onto the legacy RelationDef; (c) legacy Validate agrees.
 	host := manifest.FromV3(m)
 	var def manifest.ModelDefinition
 	for _, d := range host.ModelDefinitions {
@@ -98,13 +70,23 @@ func TestRelationEmbedParseAndProject(t *testing.T) {
 	if !legacy["items"].Embed {
 		t.Errorf("legacy items.Embed = false, want true")
 	}
-	if legacy["movements"].Embed {
-		t.Errorf("legacy movements.Embed = true, want false")
+	if legacy["shipments"].Embed {
+		t.Errorf("legacy shipments.Embed = true, want false")
 	}
 	if err := host.Validate("2.0.0"); err != nil {
 		t.Fatalf("legacy Validate rejected converted manifest: %v", err)
 	}
 
-	// (d) the served RelationMeta projection is covered in
-	// metadata.TestService_ProjectsRelationEmbedOntoTableMetadata.
+	// The served TableMetadata.Relations shape must keep the flag.
+	raw, err := json.Marshal(legacy["items"])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var meta modelbase.RelationMeta
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		t.Fatalf("unmarshal into RelationMeta: %v", err)
+	}
+	if !meta.Embed {
+		t.Errorf("RelationDef → RelationMeta round-trip dropped embed: %+v", meta)
+	}
 }

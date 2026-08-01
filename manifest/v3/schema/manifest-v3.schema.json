@@ -734,7 +734,7 @@
         },
         "embed": {
           "type": "boolean",
-          "description": "When true, this relation is a COMPOSITION (a document's LINES) and the record modal renders its children inline as a sub-table. Opt-in: the modal embeds ONLY relations declaring it, so a parent with a large independently-managed child collection (stock movements, transfers) stays cheap to open — those relations stay reachable from their own model page. Pure UI metadata; defaults false. Only meaningful for one_to_many."
+          "description": "When true, this relation is a COMPOSITION of the owner (an order and its lines) and renders as an inline subtable inside the record modal. Relations that omit it are NOT embedded in the modal — a warehouse must not drag its whole stock ledger into an edit dialog — and stay reachable from the child model's own page. Pure UI metadata; opt-in, defaults false. Only meaningful for one_to_many."
         },
         "rollups": {
           "type": "array",

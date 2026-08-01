@@ -93,11 +93,12 @@ type RelationMeta struct {
 	// of child rows (e.g. an append-only ledger like an inventory kardex).
 	// Projected from manifest/v3 ModelRelation.readonly. Pure UI.
 	Readonly bool `json:"readonly,omitempty"`
-	// Embed declares a COMPOSITION relation (a document's lines): the SDK's
-	// record modal renders its children inline as a sub-table. Opt-in — a modal
-	// embeds ONLY relations carrying this flag, so a parent with a large
-	// independently-managed child collection stays cheap to open. Projected
-	// from manifest/v3 ModelRelation.embed. Pure UI.
+
+	// Embed declares that this relation is a COMPOSITION of the owner (an order
+	// and its lines) and must render as an inline subtable inside the record
+	// modal. Relations that omit it stay out of the modal — a warehouse must
+	// not drag its whole stock ledger into an edit dialog. Projected from
+	// manifest/v3 ModelRelation.embed. Pure UI; defaults false (opt-in).
 	Embed bool `json:"embed,omitempty"`
 }
 
