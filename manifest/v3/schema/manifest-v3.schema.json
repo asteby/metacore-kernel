@@ -732,6 +732,10 @@
           "type": "boolean",
           "description": "When true, the related-records panel must not allow creating/editing/deleting child rows. Used for relations pointing at an append-only ledger (e.g. an inventory kardex). Pure UI metadata; defaults false."
         },
+        "embed": {
+          "type": "boolean",
+          "description": "When true, this relation is a COMPOSITION of the owner (an order and its lines) and renders as an inline subtable inside the record modal. Relations that omit it are NOT embedded in the modal — a warehouse must not drag its whole stock ledger into an edit dialog — and stay reachable from the child model's own page. Pure UI metadata; opt-in, defaults false. Only meaningful for one_to_many."
+        },
         "rollups": {
           "type": "array",
           "description": "Tier-1 parent-aggregate specs over this relation's child rows. Only meaningful for one_to_many.",

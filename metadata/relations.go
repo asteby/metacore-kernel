@@ -80,6 +80,7 @@ func deriveRefsFromDef(def modelbase.ModelDefiner, meta *modelbase.TableMetadata
 				Scope:      r.Scope,
 				Label:      r.Label,
 				Readonly:   r.Readonly,
+				Embed:      r.Embed,
 			})
 		}
 	}

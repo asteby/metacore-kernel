@@ -44,6 +44,12 @@ type RelationDef struct {
 	// Mirrors manifest.RelationDef.Readonly so the value survives the
 	// manifest → host hop. Pure UI metadata; defaults false.
 	Readonly bool `json:"readonly,omitempty"`
+
+	// Embed declares that this relation is a COMPOSITION of the owner (an order
+	// and its lines) and must render as an inline subtable inside the record
+	// modal. Mirrors manifest.RelationDef.Embed so the value survives the
+	// manifest → host hop. Pure UI metadata; defaults false (opt-in).
+	Embed bool `json:"embed,omitempty"`
 }
 
 // HasRelations is implemented by compiled models that declare model-to-model

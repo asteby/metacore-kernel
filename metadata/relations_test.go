@@ -266,3 +266,28 @@ func (m *orgRefModalModel) DefineModal() modelbase.ModalMetadata {
 		},
 	}
 }
+
+// TestService_ProjectsRelationEmbedFlag pins the opt-in embed flag onto the
+// served RelationMeta: only relations that declare it may be rendered as an
+// inline subtable inside the record modal.
+func TestService_ProjectsRelationEmbedFlag(t *testing.T) {
+	svc := New(Config{CacheTTL: time.Minute})
+	key := registerRelated(t, "Orders", []modelbase.RelationDef{
+		{Name: "items", Kind: "one_to_many", Through: "order_items", ForeignKey: "order_id", Embed: true},
+		{Name: "shipments", Kind: "one_to_many", Through: "shipments", ForeignKey: "order_id"},
+	})
+	meta, err := svc.GetTable(context.Background(), key)
+	if err != nil {
+		t.Fatalf("GetTable: %v", err)
+	}
+	got := map[string]bool{}
+	for _, r := range meta.Relations {
+		got[r.Name] = r.Embed
+	}
+	if !got["items"] {
+		t.Errorf("items.Embed = false, want true")
+	}
+	if got["shipments"] {
+		t.Errorf("shipments.Embed = true, want false (embedding is opt-in)")
+	}
+}

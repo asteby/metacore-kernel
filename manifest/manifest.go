@@ -919,6 +919,12 @@ type RelationDef struct {
 	// append-only ledger (e.g. an inventory kardex). Optional; defaults false.
 	Readonly bool `json:"readonly,omitempty"`
 
+	// Embed declares that this relation is a COMPOSITION of the owner (an order
+	// and its lines) and must therefore render as an inline subtable inside the
+	// record modal. Carries the v3 ModelRelation.embed flag through the v3 →
+	// host conversion. Optional; defaults false (opt-in).
+	Embed bool `json:"embed,omitempty"`
+
 	// Rollups declare PARENT columns the kernel maintains as aggregates over
 	// this relation's child rows (Tier-1 of the declarative compute engine).
 	// On every child create/update/delete the dynamic engine recomputes each
