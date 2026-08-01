@@ -266,3 +266,30 @@ func (m *orgRefModalModel) DefineModal() modelbase.ModalMetadata {
 		},
 	}
 }
+
+// TestService_ProjectsRelationEmbedOntoTableMetadata locks the composition flag
+// onto the served payload: the SDK's record modal embeds ONLY the relations
+// declaring embed, so losing the flag silently un-embeds a document's lines.
+func TestService_ProjectsRelationEmbedOntoTableMetadata(t *testing.T) {
+	svc := New(Config{CacheTTL: time.Minute})
+	key := registerRelated(t, "Orders", []modelbase.RelationDef{
+		// Composition: the document's lines belong inside the modal.
+		{Name: "items", Kind: "one_to_many", Through: "OrderItem", ForeignKey: "order_id", Embed: true},
+		// Large independently-managed collection: must stay out of the modal.
+		{Name: "movements", Kind: "one_to_many", Through: "StockMovement", ForeignKey: "order_id"},
+	})
+	meta, err := svc.GetTable(context.Background(), key)
+	if err != nil {
+		t.Fatalf("GetTable: %v", err)
+	}
+	byName := map[string]modelbase.RelationMeta{}
+	for _, r := range meta.Relations {
+		byName[r.Name] = r
+	}
+	if !byName["items"].Embed {
+		t.Errorf("items.Embed = false, want true (composition must embed)")
+	}
+	if byName["movements"].Embed {
+		t.Errorf("movements.Embed = true, want false (embed is opt-in)")
+	}
+}

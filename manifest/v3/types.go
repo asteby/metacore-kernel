@@ -441,6 +441,16 @@ type ModelRelation struct {
 	// append-only ledger (e.g. an inventory kardex). Optional; defaults false.
 	Readonly bool `json:"readonly,omitempty"`
 
+	// Embed declares that this relation is a COMPOSITION: its child rows are
+	// part of the parent record (a document's LINES), so the record modal
+	// renders them inline as a sub-table. Opt-in: the modal embeds ONLY the
+	// relations that declare it. Relations pointing at large, independently
+	// managed collections (stock movements, transfers, a kardex) must leave it
+	// false so opening the parent never drags thousands of rows into the form;
+	// they remain reachable from the model's own page / the detail view.
+	// Optional; defaults false. Only meaningful for one_to_many.
+	Embed bool `json:"embed,omitempty"`
+
 	// Rollups declare PARENT columns whose value is an aggregate over this
 	// relation's child rows (Tier-1 of the declarative compute engine, akin to
 	// a Salesforce Roll-Up Summary or an Odoo stored computed field). On every

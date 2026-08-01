@@ -428,6 +428,7 @@ func mapModelRelations(in []v3.ModelRelation) []RelationDef {
 			Scope:      r.Scope,
 			Label:      r.Label,
 			Readonly:   r.Readonly,
+			Embed:      r.Embed,
 			Rollups:    mapRollups(r.Rollups),
 		})
 	}
