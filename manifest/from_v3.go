@@ -318,6 +318,10 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// dependent picker (cascade filter_value). Rides the legacy
 				// ColumnDef so the SDK re-fetches on change.
 				DependsOn: c.DependsOn,
+				// Scan opts the column's form input into camera barcode scanning;
+				// rides ColumnDef.Scan so DeriveFormFields carries it onto the
+				// served FieldDef and the SDK shows a scan-to-fill button.
+				Scan: c.Scan,
 				// Readonly rides through so DeriveFormFields excludes the
 				// system-generated column from create and marks it read-only in edit.
 				Readonly: c.Readonly,
@@ -864,6 +868,9 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 			Placeholder:    f.Placeholder,
 			SearchEndpoint: f.SearchEndpoint,
 			Total:          f.Total,
+			// Scan opts the field into camera barcode scan-to-fill (text/number
+			// input or dynamic_select reference). Forwarded to modelbase.FieldDef.
+			Scan: f.Scan,
 			// Upload-field properties (type:"upload") — forwarded so the host's
 			// upload widget gets the accept allow-list, byte cap and storage prefix.
 			Accept:      f.Accept,

@@ -527,6 +527,9 @@ type FieldDef struct {
 	// modelbase.FieldDef so they survive the host round-trip. Nil/empty = none.
 	DependsOn     string             `json:"depends_on,omitempty"`
 	OptionsConfig *DynamicOptionsDef `json:"optionsConfig,omitempty"`
+	// Scan opts this field/column into camera barcode scan-to-fill (see
+	// modelbase.FieldDef.Scan). Forwarded through the host round-trip.
+	Scan bool `json:"scan,omitempty"`
 
 	// OptionsSource forwards the v3 ActionField.options_source (a host-registered
 	// dynamic options provider key, e.g. "connector_repos"). It rides the matching
@@ -919,10 +922,12 @@ type RelationDef struct {
 	// append-only ledger (e.g. an inventory kardex). Optional; defaults false.
 	Readonly bool `json:"readonly,omitempty"`
 
-	// Embed declares that this relation is a COMPOSITION of the owner (an order
-	// and its lines) and must therefore render as an inline subtable inside the
-	// record modal. Carries the v3 ModelRelation.embed flag through the v3 →
-	// host conversion. Optional; defaults false (opt-in).
+	// Embed declares that this relation is a COMPOSITION (a document's LINES),
+	// so the record modal renders its children inline as a sub-table. Opt-in:
+	// the modal embeds ONLY relations that declare it, which keeps opening a
+	// parent from dragging an entire independently-managed collection (stock
+	// movements, transfers) into the form. Mirrors v3 ModelRelation.embed.
+	// Optional; defaults false. Pure UI metadata.
 	Embed bool `json:"embed,omitempty"`
 
 	// Rollups declare PARENT columns the kernel maintains as aggregates over
@@ -1058,6 +1063,9 @@ type ColumnDef struct {
 	// SDK and the OptionsConfigResolver. Pure UI/query metadata; never DDL.
 	DependsOn     string             `json:"depends_on,omitempty"`
 	OptionsConfig *DynamicOptionsDef `json:"optionsConfig,omitempty"`
+	// Scan opts this field/column into camera barcode scan-to-fill (see
+	// modelbase.FieldDef.Scan). Forwarded through the host round-trip.
+	Scan bool `json:"scan,omitempty"`
 
 	// VisibleWhen carries the v3 Column.visible_when conditional-visibility
 	// predicate through the v3 → host conversion so form derivation

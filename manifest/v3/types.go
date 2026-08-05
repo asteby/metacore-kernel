@@ -441,13 +441,14 @@ type ModelRelation struct {
 	// append-only ledger (e.g. an inventory kardex). Optional; defaults false.
 	Readonly bool `json:"readonly,omitempty"`
 
-	// Embed declares that this relation is a COMPOSITION of the owner — the
-	// child rows are part of the parent record (an order and its lines), not a
-	// merely-associated collection (a warehouse and its thousands of stock
-	// rows). Only embedded relations are rendered as an inline subtable inside
-	// the record MODAL; everything else stays reachable from the child model's
-	// own page. Optional; defaults false, so a relation must OPT IN to be
-	// embedded. Only meaningful for one_to_many.
+	// Embed declares that this relation is a COMPOSITION: its child rows are
+	// part of the parent record (a document's LINES), so the record modal
+	// renders them inline as a sub-table. Opt-in: the modal embeds ONLY the
+	// relations that declare it. Relations pointing at large, independently
+	// managed collections (stock movements, transfers, a kardex) must leave it
+	// false so opening the parent never drags thousands of rows into the form;
+	// they remain reachable from the model's own page / the detail view.
+	// Optional; defaults false. Only meaningful for one_to_many.
 	Embed bool `json:"embed,omitempty"`
 
 	// Rollups declare PARENT columns whose value is an aggregate over this
@@ -556,6 +557,12 @@ type Column struct {
 	// related model. The array form (static enum) and object form (dynamic
 	// source) are mutually exclusive on one column.
 	Options FieldOptions `json:"options,omitempty"`
+	// Scan opts the column's create/edit form field into CAMERA BARCODE SCANNING:
+	// the SDK shows a camera button that scans a barcode to FILL the input fast
+	// (e.g. a product SKU) when the browser supports it. The host projects it
+	// onto modelbase.ColumnDef.Scan → FieldDef.Scan. Country/business-agnostic UI
+	// metadata; the DDL/install plane ignores it. Optional.
+	Scan bool `json:"scan,omitempty"`
 	// DependsOn names a SIBLING column whose current value supplies the cascade
 	// `filter_value` for this column's dependent picker (used with the
 	// Options object form). The host projects it onto modelbase.ColumnDef.DependsOn
@@ -1109,6 +1116,13 @@ type ActionField struct {
 	// (json `depends_on`) so the SDK scopes + re-fetches the picker's options
 	// when the depended-on field changes. Empty = no cascade. Optional.
 	DependsOn string `json:"depends_on,omitempty"`
+
+	// Scan opts this action field into CAMERA BARCODE SCANNING: the SDK shows a
+	// camera button that scans a barcode to FILL the field fast — a text/number
+	// input (e.g. a SKU) or a dynamic_select reference (scan feeds the picker's
+	// search so you pick without typing the UUID). The host projects it onto
+	// modelbase.FieldDef.Scan. Country/business-agnostic UI metadata. Optional.
+	Scan bool `json:"scan,omitempty"`
 
 	// VisibleWhen declares CONDITIONAL VISIBILITY for this action field: the SDK
 	// renders it only when a SIBLING field's current value matches the predicate

@@ -80,6 +80,9 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			// the host's OptionsConfigResolver can build the runtime query.
 			DependsOn:     c.DependsOn,
 			OptionsConfig: toFieldOptionsConfig(c.OptionsConfig),
+			// Scan carries the camera scan-to-fill opt-in onto the served column so
+			// a consumer deriving the modal from table metadata still sees it.
+			Scan: c.Scan,
 			// VisibleWhen rides through onto the served column so a consumer that
 			// derives the modal from table metadata still sees the predicate.
 			VisibleWhen: toVisibleWhen(c.VisibleWhen),
@@ -348,6 +351,9 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 			// so the SDK scopes + re-fetches and the host resolves the options.
 			DependsOn:     c.DependsOn,
 			OptionsConfig: toFieldOptionsConfig(c.OptionsConfig),
+			// Scan carries the camera scan-to-fill opt-in onto the served form
+			// field (e.g. a product SKU input gets a barcode scan button).
+			Scan: c.Scan,
 			// Readonly marks a system-generated field: the SDK hides it from the
 			// create form and disables it in edit (the value is written
 			// server-side, e.g. by an addon's outbound sync).

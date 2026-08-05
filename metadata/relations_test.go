@@ -267,27 +267,29 @@ func (m *orgRefModalModel) DefineModal() modelbase.ModalMetadata {
 	}
 }
 
-// TestService_ProjectsRelationEmbedFlag pins the opt-in embed flag onto the
-// served RelationMeta: only relations that declare it may be rendered as an
-// inline subtable inside the record modal.
-func TestService_ProjectsRelationEmbedFlag(t *testing.T) {
+// TestService_ProjectsRelationEmbedOntoTableMetadata locks the composition flag
+// onto the served payload: the SDK's record modal embeds ONLY the relations
+// declaring embed, so losing the flag silently un-embeds a document's lines.
+func TestService_ProjectsRelationEmbedOntoTableMetadata(t *testing.T) {
 	svc := New(Config{CacheTTL: time.Minute})
 	key := registerRelated(t, "Orders", []modelbase.RelationDef{
-		{Name: "items", Kind: "one_to_many", Through: "order_items", ForeignKey: "order_id", Embed: true},
-		{Name: "shipments", Kind: "one_to_many", Through: "shipments", ForeignKey: "order_id"},
+		// Composition: the document's lines belong inside the modal.
+		{Name: "items", Kind: "one_to_many", Through: "OrderItem", ForeignKey: "order_id", Embed: true},
+		// Large independently-managed collection: must stay out of the modal.
+		{Name: "movements", Kind: "one_to_many", Through: "StockMovement", ForeignKey: "order_id"},
 	})
 	meta, err := svc.GetTable(context.Background(), key)
 	if err != nil {
 		t.Fatalf("GetTable: %v", err)
 	}
-	got := map[string]bool{}
+	byName := map[string]modelbase.RelationMeta{}
 	for _, r := range meta.Relations {
-		got[r.Name] = r.Embed
+		byName[r.Name] = r
 	}
-	if !got["items"] {
-		t.Errorf("items.Embed = false, want true")
+	if !byName["items"].Embed {
+		t.Errorf("items.Embed = false, want true (composition must embed)")
 	}
-	if got["shipments"] {
-		t.Errorf("shipments.Embed = true, want false (embedding is opt-in)")
+	if byName["movements"].Embed {
+		t.Errorf("movements.Embed = true, want false (embed is opt-in)")
 	}
 }
