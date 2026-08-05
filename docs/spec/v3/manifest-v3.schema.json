@@ -1548,6 +1548,10 @@
           "type": "string",
           "description": "Endpoint backing an async-search widget."
         },
+        "scan": {
+          "type": "boolean",
+          "description": "Opts this action field into CAMERA BARCODE SCANNING (text/number input or dynamic_select reference). Projected onto FieldDef.scan. Defaults false."
+        },
         "options_source": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",

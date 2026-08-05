@@ -9,13 +9,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- **manifest v3: relación `embed`** — una relación `one_to_many` puede declararse
-  `embed: true` para marcarse como COMPOSICIÓN del dueño (una orden y sus líneas).
-  El flag viaja v3 → `manifest.RelationDef` → `modelbase.RelationMeta` (igual que
-  `readonly`) y llega a la metadata servida, para que el SDK embeba como subtabla
-  inline en el modal de registro SÓLO las relaciones que optaron por ello. Sin el
-  flag no se embebe: un almacén deja de arrastrar su kardex entero a un diálogo de
-  edición. Metadata pura de UI; no toca DDL ni el plano de escritura.
 - **modelbase: `ActionDef.Trigger`** — la forma servida de la acción ahora conserva
   el `trigger` (incl. `type:connector` + `connector`/`export`) en el round-trip
   manifest→host, para que el dispatch cross-addon de connector llegue al registro de

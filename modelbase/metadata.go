@@ -93,12 +93,11 @@ type RelationMeta struct {
 	// of child rows (e.g. an append-only ledger like an inventory kardex).
 	// Projected from manifest/v3 ModelRelation.readonly. Pure UI.
 	Readonly bool `json:"readonly,omitempty"`
-
-	// Embed declares that this relation is a COMPOSITION of the owner (an order
-	// and its lines) and must render as an inline subtable inside the record
-	// modal. Relations that omit it stay out of the modal — a warehouse must
-	// not drag its whole stock ledger into an edit dialog. Projected from
-	// manifest/v3 ModelRelation.embed. Pure UI; defaults false (opt-in).
+	// Embed declares a COMPOSITION relation (a document's lines): the SDK's
+	// record modal renders its children inline as a sub-table. Opt-in — a modal
+	// embeds ONLY relations carrying this flag, so a parent with a large
+	// independently-managed child collection stays cheap to open. Projected
+	// from manifest/v3 ModelRelation.embed. Pure UI.
 	Embed bool `json:"embed,omitempty"`
 }
 
@@ -150,6 +149,11 @@ type ColumnDef struct {
 	// dynamic_select options when the depended-on field changes. Empty = no
 	// cascade (lists everything). Pure UI metadata; the DDL plane ignores it.
 	DependsOn string `json:"depends_on,omitempty"`
+	// Scan opts the column's form field into CAMERA BARCODE SCANNING (see
+	// FieldDef.Scan). Carried through DeriveFormFields onto the served FieldDef so
+	// an auto-CRUD create/edit input (e.g. a product SKU) gets a scan button.
+	// Pure UI metadata; the DDL plane ignores it. Empty = no scan affordance.
+	Scan bool `json:"scan,omitempty"`
 	// OptionsConfig carries the DYNAMIC options DECLARATION (source / filter_by /
 	// value / label_ref / description) for a dependent picker — the object form
 	// of the v3 `options` block. The host reads it off the served metadata to
@@ -278,6 +282,14 @@ type FieldDef struct {
 	// Widget overrides the renderer inferred from Type (e.g. "textarea",
 	// "dynamic_select"). Optional — empty lets the SDK infer from Type.
 	Widget string `json:"widget,omitempty"`
+
+	// Scan opts this field into CAMERA BARCODE SCANNING: when true and the
+	// browser supports it, the SDK shows a camera button that scans a barcode to
+	// FILL the field fast (a text/number input like a product SKU, or a
+	// dynamic_select reference — scan feeds the picker's search). Country/
+	// business-agnostic UI metadata; ignored by the DDL plane and by hosts/SDKs
+	// that don't implement it. Empty = no scan affordance.
+	Scan bool `json:"scan,omitempty"`
 
 	// Readonly marks a SYSTEM-GENERATED field the user must never hand-edit — a
 	// value the addon/host populates server-side (e.g. an external id/number a
