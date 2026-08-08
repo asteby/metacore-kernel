@@ -80,6 +80,25 @@ type HasImportSpec interface {
 	DefineImport() ImportSpec
 }
 
+// ImportRecordNormalizer is the host/custom hook for row reshaping after the
+// engine has coerced cells (and run transforms) but BEFORE create. Use it for
+// domain composition that is not a single-cell transform — e.g. joining
+// prefix+given+last into `user.name`, or building a birth date from D/M/Y
+// columns. Any MetaCore host or addon model can implement this; the kernel
+// never hard-codes domain rules here.
+type ImportRecordNormalizer interface {
+	NormalizeImportRecord(record map[string]any) error
+}
+
+// ImportRelationsAttacher is the host/custom hook run AFTER a successful
+// create. Use it for M2M links, gallery rows, or anything that needs the new
+// primary key. Keep the kernel free of per-product relation graphs.
+type ImportRelationsAttacher interface {
+	// DB is intentionally `any` so modelbase stays free of a GORM dependency;
+	// hosts pass *gorm.DB (or their own unit-of-work) and cast inside.
+	AttachImportRelations(db any, record map[string]any, createdID uint) error
+}
+
 // importableFieldTypes lists the form field types that survive a round-trip
 // through a spreadsheet cell. Binary and composite widgets are dropped from a
 // derived spec: a user cannot paste an image into a CSV, and silently

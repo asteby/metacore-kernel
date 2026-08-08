@@ -85,8 +85,18 @@ prepared, err := importer.PrepareWithDeps(spec, rows, deps)
 Without `Store`, those transforms fail the row with a clear message (validate
 and import stay in sync).
 
-## Host hooks (optional)
+## Custom mode (per product) — not niche wiring
 
-Hosts may normalize composed columns (prefix + first + last name → `user.name`)
-or attach M2M relations after create. Keep that in the host — the kernel stays
-model-agnostic.
+The scalable path is **one engine, many specs**:
+
+| Layer | Lives in | Example |
+|---|---|---|
+| Engine | `importer` | parse, coerce, generators, transforms, row issues |
+| Spec | `DefineImport()` or manifest `import` | column headers, aliases, which transform |
+| Cell I/O | `RegisterTransform` + `TransformDeps.Store` | `media_url` → your disk/S3 |
+| Row reshape | `modelbase.ImportRecordNormalizer` | compose name from 4 columns |
+| After create | `modelbase.ImportRelationsAttacher` | M2M specialties, gallery rows |
+
+Doctores.lat is just one host that implements those hooks for `Doctor`.
+Ops / addons do the same with a v3 `import` block + optional Go hooks — no
+fork of the importer.
