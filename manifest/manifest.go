@@ -727,6 +727,7 @@ type ImportColumnDef struct {
 	Example   string   `json:"example,omitempty"`
 	Hint      string   `json:"hint,omitempty"`
 	Generator string   `json:"generator,omitempty"`
+	Transform string   `json:"transform,omitempty"`
 }
 
 // FormLayoutDef is the legacy carrier for the v3 FormLayout block. It rides the

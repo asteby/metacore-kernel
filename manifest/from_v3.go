@@ -812,6 +812,7 @@ func mapImportSpec(in *v3.ImportSpec) *ImportSpecDef {
 			Example:   col.Example,
 			Hint:      col.Hint,
 			Generator: col.Generator,
+			Transform: col.Transform,
 		})
 	}
 	return out

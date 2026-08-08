@@ -27,6 +27,7 @@ func TestImportSpecCarrierMatchesTheServedContract(t *testing.T) {
 			Example:   "ana@correo.com",
 			Hint:      "Se usa para iniciar sesión",
 			Generator: "random_secret",
+			Transform: "media_url",
 		}},
 	}
 
@@ -55,10 +56,12 @@ func TestImportSpecCarrierMatchesTheServedContract(t *testing.T) {
 		Example:   "ana@correo.com",
 		Hint:      "Se usa para iniciar sesión",
 		Generator: "random_secret",
+		Transform: "media_url",
 	}
 	if got.Key != want.Key || got.Header != want.Header || got.Required != want.Required ||
 		got.Type != want.Type || got.Example != want.Example || got.Hint != want.Hint ||
-		got.Generator != want.Generator || len(got.Aliases) != 1 || got.Aliases[0] != "Correo" {
+		got.Generator != want.Generator || got.Transform != want.Transform ||
+		len(got.Aliases) != 1 || got.Aliases[0] != "Correo" {
 		t.Errorf("column changed in transit:\n got %+v\nwant %+v", got, want)
 	}
 }
@@ -68,7 +71,7 @@ func TestMapImportSpecProjectsTheV3Block(t *testing.T) {
 		MaxRows:   10,
 		SheetName: "Datos",
 		Columns: []v3.ImportColumn{
-			{Key: "name", Header: "Nombre", Required: true, Aliases: []string{"Nombre completo"}},
+			{Key: "name", Header: "Nombre", Required: true, Aliases: []string{"Nombre completo"}, Transform: "media_url"},
 		},
 	})
 
@@ -78,6 +81,10 @@ func TestMapImportSpecProjectsTheV3Block(t *testing.T) {
 	if got.MaxRows != 10 || got.SheetName != "Datos" || len(got.Columns) != 1 {
 		t.Fatalf("projection lost fields: %+v", got)
 	}
+	if got.Columns[0].Transform != "media_url" {
+		t.Fatalf("transform not projected: %+v", got.Columns[0])
+	}
+}
 	if got.Columns[0].Header != "Nombre" || !got.Columns[0].Required ||
 		len(got.Columns[0].Aliases) != 1 {
 		t.Errorf("column projection: %+v", got.Columns[0])

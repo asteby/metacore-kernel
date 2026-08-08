@@ -44,6 +44,10 @@ type ImportColumn struct {
 	// "random_password"). Generators are registered by the host; an unknown
 	// name leaves the value absent rather than failing the row.
 	Generator string `json:"generator,omitempty"`
+	// Transform names a cell post-processor run after coercion (e.g.
+	// "media_url" fetches a remote image into host storage). Transforms are
+	// registered on the importer package; an unknown name fails the row.
+	Transform string `json:"transform,omitempty"`
 }
 
 // ImportSpec is a model's full spreadsheet-import declaration.
