@@ -84,7 +84,6 @@ func TestMapImportSpecProjectsTheV3Block(t *testing.T) {
 	if got.Columns[0].Transform != "media_url" {
 		t.Fatalf("transform not projected: %+v", got.Columns[0])
 	}
-}
 	if got.Columns[0].Header != "Nombre" || !got.Columns[0].Required ||
 		len(got.Columns[0].Aliases) != 1 {
 		t.Errorf("column projection: %+v", got.Columns[0])
