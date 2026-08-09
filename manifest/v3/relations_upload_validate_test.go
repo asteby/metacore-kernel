@@ -14,6 +14,7 @@ func modelWith(relations []interface{}) map[string]interface{} {
 		"table": "customers",
 		"columns": []interface{}{
 			map[string]interface{}{"name": "id", "type": "uuid", "primary_key": true},
+			map[string]interface{}{"name": "organization_id", "type": "uuid", "not_null": true},
 			map[string]interface{}{"name": "name", "type": "text", "not_null": true},
 		},
 	}

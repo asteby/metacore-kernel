@@ -22,6 +22,7 @@ const scanManifestJSON = `{
       "label": "Products",
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "name", "type": "text", "not_null": true },
         { "name": "sku", "type": "text", "scan": true }
       ]

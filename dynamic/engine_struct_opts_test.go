@@ -82,11 +82,12 @@ func TestBuildStructTypeWithOptions_IncludeCreatedBy(t *testing.T) {
 }
 
 func TestOpsCompatStructOptions(t *testing.T) {
-	want := StructOptions{SoftDeleteGorm: true, IncludeCreatedBy: true}
+	want := StructOptions{SoftDeleteGorm: true, IncludeCreatedBy: true, AlwaysOrgField: true}
 	if OpsCompatStructOptions() != want {
 		t.Fatalf("OpsCompatStructOptions() = %+v, want %+v", OpsCompatStructOptions(), want)
 	}
 	def := sampleDef()
+	def.OrgScoped = false // intentional: ops DDL still has organization_id
 	got, err := NewSchemaEngine().ToReflectTypeWithOptions(def, OpsCompatStructOptions())
 	if err != nil {
 		t.Fatalf("ToReflectTypeWithOptions: %v", err)
@@ -97,6 +98,29 @@ func TestOpsCompatStructOptions(t *testing.T) {
 	}
 	if _, ok := fieldByName(got, "CreatedByID"); !ok {
 		t.Fatal("expected CreatedByID with ops-compat options")
+	}
+	of, ok := fieldByName(got, "OrganizationID")
+	if !ok {
+		t.Fatal("expected OrganizationID with ops-compat AlwaysOrgField (OrgScoped=false must not drop tenant field)")
+	}
+	if j := of.Tag.Get("json"); j != "organization_id" {
+		t.Fatalf("OrganizationID json tag = %q, want organization_id", j)
+	}
+}
+
+// TestBuildStructType_OrgScopedFalseOmitsOrgField documents the trap AlwaysOrgField
+// closes: zero-value opts + OrgScoped=false → no organization_id on the struct,
+// while SingleSchemaDDLOptions still emits the column. Hosts that key tenant
+// filters off the struct field then list unscoped.
+func TestBuildStructType_OrgScopedFalseOmitsOrgField(t *testing.T) {
+	def := sampleDef()
+	def.OrgScoped = false
+	got, err := BuildStructType(def)
+	if err != nil {
+		t.Fatalf("BuildStructType: %v", err)
+	}
+	if _, ok := fieldByName(got, "OrganizationID"); ok {
+		t.Fatal("zero-value BuildStructType must omit OrganizationID when OrgScoped=false")
 	}
 }
 

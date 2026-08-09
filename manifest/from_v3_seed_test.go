@@ -22,6 +22,7 @@ const seedManifestJSON = `{
       "table": "payment_methods",
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "name", "type": "text", "not_null": true },
         { "name": "code", "type": "text", "not_null": true },
         { "name": "is_active", "type": "boolean" },
@@ -102,7 +103,8 @@ func TestFromV3_NoSeedIsNil(t *testing.T) {
     {
       "key": "PaymentMethod",
       "table": "payment_methods",
-      "columns": [ { "name": "id", "type": "uuid", "primary_key": true } ]
+      "columns": [ { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true } ]
     }
   ]
 }`

@@ -54,16 +54,26 @@ type StructOptions struct {
 	// input["created_by_id"] by reflection) populates it instead of silently
 	// dropping the value.
 	IncludeCreatedBy bool
+
+	// AlwaysOrgField forces an OrganizationID field (json:"organization_id")
+	// regardless of def.OrgScoped — matching SingleSchemaDDLOptions.AlwaysOrgColumn,
+	// which always emits the physical column. Without this, a v3 manifest that
+	// omits organization_id derives OrgScoped=false, the reflect struct lacks the
+	// field, and hosts that gate tenant filters on modelHasField(organization_id)
+	// silently list every org's rows (cross-tenant leak).
+	AlwaysOrgField bool
 }
 
 // OpsCompatStructOptions returns the StructOptions preset that aligns with
 // SingleSchemaDDLOptions (the ops-compatibility DDL profile): real GORM
-// soft-delete plus the created_by_id column. It lets a host delegate BOTH its
-// struct projection and its DDL to the kernel with matching semantics.
+// soft-delete, created_by_id, and an unconditional organization_id field so the
+// runtime struct matches the managed DDL column. It lets a host delegate BOTH
+// its struct projection and its DDL to the kernel with matching semantics.
 func OpsCompatStructOptions() StructOptions {
 	return StructOptions{
 		SoftDeleteGorm:   true,
 		IncludeCreatedBy: true,
+		AlwaysOrgField:   true,
 	}
 }
 
@@ -86,7 +96,7 @@ func BuildStructTypeWithOptions(def manifest.ModelDefinition, opts StructOptions
 			Tag:  `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`,
 		},
 	}
-	if def.OrgScoped {
+	if def.OrgScoped || opts.AlwaysOrgField {
 		fields = append(fields, reflect.StructField{
 			Name: "OrganizationID",
 			Type: reflect.TypeOf(uuid.UUID{}),

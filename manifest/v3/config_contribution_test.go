@@ -11,7 +11,8 @@ const configManifestTpl = `{
   "metadata": {"key": "demo", "name": "Demo", "version": "0.1.0"},
   "compatibility": {"requires": [{"key": "metacore-kernel", "version": ">=3.0.0 <4.0.0"}]},
   "models": [{"key": "Thing", "table": "things", "label": "t.thing", "columns": [
-    {"name": "id", "type": "uuid", "primary_key": true, "label": "t.id"}
+    {"name": "id", "type": "uuid", "primary_key": true, "label": "t.id"},
+        { "name": "organization_id", "type": "uuid", "not_null": true }
   ]}],
   "contributions": {"config": %s}
 }`
