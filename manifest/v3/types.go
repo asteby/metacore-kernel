@@ -1031,12 +1031,12 @@ type Action struct {
 	// ConfirmMessage is the body shown in that confirmation step.
 	ConfirmMessage string `json:"confirm_message,omitempty"`
 
-	// RequiresState gates the action on the target record's `status` column:
-	// the action is only valid (and the host only surfaces it) when the
-	// record's status is one of these values. The kernel ENFORCES this at
-	// dispatch — an action invoked against a record in a disallowed state is
-	// rejected. Empty/omitted means no state gate (the action is always valid),
-	// so existing actions are unaffected.
+	// RequiresState gates the action on the target record's lifecycle column
+	// (`status`, or `state` when status is empty): the action is only valid
+	// (and the host only surfaces it) when that value is one of these. The
+	// kernel ENFORCES this at dispatch — an action invoked against a record in
+	// a disallowed state is rejected. Empty/omitted means no state gate (the
+	// action is always valid), so existing actions are unaffected.
 	RequiresState []string `json:"requires_state,omitempty"`
 
 	// ModalWidth lets an addon size the action's modal explicitly: a CSS length
