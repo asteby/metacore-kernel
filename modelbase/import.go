@@ -44,6 +44,10 @@ type ImportColumn struct {
 	// "random_password"). Generators are registered by the host; an unknown
 	// name leaves the value absent rather than failing the row.
 	Generator string `json:"generator,omitempty"`
+	// Transform names a cell post-processor run after coercion (e.g.
+	// "media_url" fetches a remote image into host storage). Transforms are
+	// registered on the importer package; an unknown name fails the row.
+	Transform string `json:"transform,omitempty"`
 }
 
 // ImportSpec is a model's full spreadsheet-import declaration.
@@ -74,6 +78,25 @@ const DefaultImportMaxRows = 1000
 // HasImportSpec is implemented by models that override the derived spec.
 type HasImportSpec interface {
 	DefineImport() ImportSpec
+}
+
+// ImportRecordNormalizer is the host/custom hook for row reshaping after the
+// engine has coerced cells (and run transforms) but BEFORE create. Use it for
+// domain composition that is not a single-cell transform — e.g. joining
+// prefix+given+last into `user.name`, or building a birth date from D/M/Y
+// columns. Any MetaCore host or addon model can implement this; the kernel
+// never hard-codes domain rules here.
+type ImportRecordNormalizer interface {
+	NormalizeImportRecord(record map[string]any) error
+}
+
+// ImportRelationsAttacher is the host/custom hook run AFTER a successful
+// create. Use it for M2M links, gallery rows, or anything that needs the new
+// primary key. Keep the kernel free of per-product relation graphs.
+type ImportRelationsAttacher interface {
+	// DB is intentionally `any` so modelbase stays free of a GORM dependency;
+	// hosts pass *gorm.DB (or their own unit-of-work) and cast inside.
+	AttachImportRelations(db any, record map[string]any, createdID uint) error
 }
 
 // importableFieldTypes lists the form field types that survive a round-trip

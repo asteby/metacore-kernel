@@ -1604,4 +1604,7 @@ type ImportColumn struct {
 	// Generator names a host-registered value provider used when the cell is
 	// left blank (e.g. "random_secret"). Unknown names leave the value absent.
 	Generator string `json:"generator,omitempty"`
+	// Transform names a cell post-processor (e.g. "media_url") run after
+	// coercion. Unknown names fail the row at import time.
+	Transform string `json:"transform,omitempty"`
 }

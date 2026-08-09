@@ -79,6 +79,13 @@ type RowIssue struct {
 // onto the record passed to Service.Create, resolving aliases, applying
 // generators and validating cell values against the spec.
 func BuildRecord(spec modelbase.ImportSpec, raw map[string]any) (map[string]any, []RowIssue) {
+	return BuildRecordWithDeps(spec, raw, nil, 0)
+}
+
+// BuildRecordWithDeps is BuildRecord plus optional TransformDeps for columns
+// that declare a Transform (e.g. media_url). rowIndex is forwarded to the
+// transform context for diagnostics.
+func BuildRecordWithDeps(spec modelbase.ImportSpec, raw map[string]any, deps *TransformDeps, rowIndex int) (map[string]any, []RowIssue) {
 	index := spec.HeaderIndex()
 	// Collapse the raw row onto column keys first, so a value found under an
 	// alias is indistinguishable from one found under the canonical header.
@@ -126,6 +133,31 @@ func BuildRecord(spec modelbase.ImportSpec, raw map[string]any) (map[string]any,
 		if err != nil {
 			issues = append(issues, RowIssue{Column: col.Header, Message: err.Error()})
 			continue
+		}
+		if col.Transform != "" {
+			fn, ok := lookupTransform(col.Transform)
+			if !ok {
+				issues = append(issues, RowIssue{
+					Column:  col.Header,
+					Message: fmt.Sprintf("transform '%s' no registrado", col.Transform),
+				})
+				continue
+			}
+			rawForXF := stringify(coerced)
+			transformed, xfErr := fn(TransformContext{
+				Column:   col.Key,
+				Header:   col.Header,
+				RowIndex: rowIndex,
+				Deps:     deps,
+			}, rawForXF)
+			if xfErr != nil {
+				issues = append(issues, RowIssue{
+					Column:  col.Header,
+					Message: fmt.Sprintf("transform '%s': %v", col.Transform, xfErr),
+				})
+				continue
+			}
+			coerced = transformed
 		}
 		setPath(record, col.Key, coerced)
 	}
@@ -662,6 +694,12 @@ func (e ErrTooManyRows) Error() string {
 // which is what lets the validate endpoint and the import endpoint share one
 // implementation and therefore agree on what is valid.
 func Prepare(spec modelbase.ImportSpec, rows []map[string]any) (*Prepared, error) {
+	return PrepareWithDeps(spec, rows, nil)
+}
+
+// PrepareWithDeps is Prepare with request-scoped TransformDeps so columns that
+// declare Transform (media_url, …) can fetch/store during validation/import.
+func PrepareWithDeps(spec modelbase.ImportSpec, rows []map[string]any, deps *TransformDeps) (*Prepared, error) {
 	if limit := spec.Limit(); len(rows) > limit {
 		return nil, ErrTooManyRows{Got: len(rows), Limit: limit}
 	}
@@ -670,6 +708,7 @@ func Prepare(spec modelbase.ImportSpec, rows []map[string]any) (*Prepared, error
 		RowNumbers: make([]int, 0, len(rows)),
 		Issues:     make([]RowIssue, 0),
 	}
+	dataIdx := 0
 	for i, raw := range rows {
 		// Row 1 is the header; data rows start at 2 in the user's spreadsheet.
 		rowNumber := i + 2
@@ -677,7 +716,8 @@ func Prepare(spec modelbase.ImportSpec, rows []map[string]any) (*Prepared, error
 			out.Skipped++
 			continue
 		}
-		record, issues := BuildRecord(spec, raw)
+		record, issues := BuildRecordWithDeps(spec, raw, deps, dataIdx)
+		dataIdx++
 		if len(issues) > 0 {
 			for _, issue := range issues {
 				issue.Row = rowNumber
