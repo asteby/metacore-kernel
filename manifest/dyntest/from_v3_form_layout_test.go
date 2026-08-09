@@ -30,6 +30,7 @@ const formLayoutSectionsManifestJSON = `{
       },
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "number", "type": "text", "not_null": true, "section": "identity" },
         { "name": "customer_id", "type": "uuid", "ref": "Customer", "section": "identity" },
         { "name": "total", "type": "numeric", "section": "totals" },
@@ -59,6 +60,7 @@ const formLayoutStepsManifestJSON = `{
       },
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "number", "type": "text", "not_null": true, "section": "identity" },
         { "name": "total", "type": "numeric", "section": "totals" }
       ]
@@ -200,6 +202,7 @@ const formLayoutSectionVisibleWhenManifestJSON = `{
       },
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "kind", "type": "text", "section": "identity" },
         { "name": "total", "type": "numeric", "section": "totals" }
       ]
@@ -264,7 +267,8 @@ func TestFormLayoutRejectsUnknownMode(t *testing.T) {
         {
           "key": "Invoice", "table": "invoices", "label": "Invoices",
           "form_layout": { "mode": "tabs", "sections": [ { "key": "identity" } ] },
-          "columns": [ { "name": "id", "type": "uuid", "primary_key": true } ]
+          "columns": [ { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true } ]
         }
       ]
     }`

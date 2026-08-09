@@ -27,6 +27,7 @@ const actionFieldOptionsSourceManifestJSON = `{
       "label": "Issues",
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "title", "type": "text" }
       ]
     }

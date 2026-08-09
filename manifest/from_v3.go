@@ -90,6 +90,18 @@ func FromV3(m *v3.Manifest) Manifest {
 
 	out.Capabilities = mapCapabilities(m.Capabilities)
 	out.ModelDefinitions = mapModels(m.Models)
+	// Shared tenancy (default): every model is org-scoped at the host layer even
+	// when the author omitted organization_id from columns[]. Ops DDL always
+	// materializes the managed column; OrgScoped=false historically built a
+	// reflect struct WITHOUT OrganizationID, and /api/data skipped the tenant
+	// filter → cross-org list leak (e.g. POSSalePayment). Force the flag so
+	// BuildStructType / IndexMe stay fail-closed. Authoring still SHOULD declare
+	// the column (v3.Validate enforces it); this is the runtime backstop.
+	if isSharedTenancy(m) {
+		for i := range out.ModelDefinitions {
+			out.ModelDefinitions[i].OrgScoped = true
+		}
+	}
 	out.Navigation = mapNavigation(m)
 	out.Settings = mapSettings(m.Settings)
 	out.Actions = mapActions(m)
@@ -105,6 +117,16 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.Documents = mapDocuments(m)
 
 	return out
+}
+
+// isSharedTenancy reports whether the addon uses the default shared-schema
+// isolation (single table set, rows distinguished by organization_id). nil
+// tenancy and empty isolation both mean shared — matching ParseIsolation.
+func isSharedTenancy(m *v3.Manifest) bool {
+	if m == nil || m.Tenancy == nil || m.Tenancy.Isolation == "" {
+		return true
+	}
+	return m.Tenancy.Isolation == "shared"
 }
 
 // mapDocuments folds v3 contributions.documents[] onto the host Manifest so the

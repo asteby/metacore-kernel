@@ -18,6 +18,7 @@ const salesV3JSON = `{
       "table": "sales_orders",
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "total", "type": "numeric" },
         { "name": "line_count", "type": "integer" }
       ],
@@ -39,6 +40,7 @@ const salesV3JSON = `{
       "table": "sales_order_items",
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "sales_order_id", "type": "uuid" },
         { "name": "quantity", "type": "integer" },
         { "name": "unit_price", "type": "numeric" },

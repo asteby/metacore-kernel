@@ -23,6 +23,7 @@ const embedManifestJSON = `{
       "label": "Orders",
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "code", "type": "text" }
       ],
       "relations": [
@@ -47,6 +48,7 @@ const embedManifestJSON = `{
       "label": "Order items",
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "order_id", "type": "uuid" }
       ]
     },
@@ -56,6 +58,7 @@ const embedManifestJSON = `{
       "label": "Stock movements",
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "order_id", "type": "uuid" }
       ]
     }

@@ -15,6 +15,7 @@ func withDocuments(docs []interface{}) map[string]interface{} {
 			"table": "orders",
 			"columns": []interface{}{
 				map[string]interface{}{"name": "id", "type": "uuid"},
+				map[string]interface{}{"name": "organization_id", "type": "uuid", "not_null": true},
 				map[string]interface{}{"name": "folio", "type": "text"},
 			},
 		},
@@ -55,6 +56,7 @@ func TestDocuments_ValidForExtendedModel(t *testing.T) {
 			"table": "orders",
 			"columns": []interface{}{
 				map[string]interface{}{"name": "id", "type": "uuid"},
+				map[string]interface{}{"name": "organization_id", "type": "uuid", "not_null": true},
 			},
 			"extensions": []interface{}{
 				map[string]interface{}{

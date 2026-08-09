@@ -706,6 +706,32 @@ func Validate(raw []byte) error {
 		colsByModel[mod.Key] = set
 	}
 
+	// Shared tenancy (default): every owned model MUST declare the RLS column
+	// (default organization_id). The schema already documents this; enforcing it
+	// at Validate blocks hub publish of addons that would otherwise install with
+	// OrgScoped=false and unscoped /api/data lists (cross-org leak).
+	if m.Kind == KindAddon {
+		iso := "shared"
+		rls := "organization_id"
+		if m.Tenancy != nil {
+			if m.Tenancy.Isolation != "" {
+				iso = m.Tenancy.Isolation
+			}
+			if m.Tenancy.RLSColumn != "" {
+				rls = m.Tenancy.RLSColumn
+			}
+		}
+		if iso == "shared" {
+			for mi, mod := range m.Models {
+				if _, ok := colsByModel[mod.Key][rls]; !ok {
+					errs = append(errs, fmt.Sprintf(
+						"models[%d] (%s): tenancy.isolation=shared requires column %q on every model (host scopes list/read/write by it; omitting it unscopes /api/data across organizations)",
+						mi, mod.Key, rls))
+				}
+			}
+		}
+	}
+
 	for mi, mod := range m.Models {
 		ownCols := colsByModel[mod.Key]
 		// Formulas: target must be a column on THIS model. Tier-2 (default)

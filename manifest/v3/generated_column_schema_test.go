@@ -18,6 +18,7 @@ func TestParse_GeneratedColumnAccepted(t *testing.T) {
 			"table": "stock",
 			"columns": []interface{}{
 				map[string]interface{}{"name": "id", "type": "uuid", "primary_key": true},
+				map[string]interface{}{"name": "organization_id", "type": "uuid", "not_null": true},
 				map[string]interface{}{"name": "quantity", "type": "numeric", "not_null": true},
 				map[string]interface{}{"name": "reserved", "type": "numeric", "not_null": true},
 				map[string]interface{}{"name": "available", "type": "numeric", "generated": "quantity - reserved"},

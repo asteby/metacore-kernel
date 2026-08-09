@@ -458,6 +458,7 @@ func modelWithSeed(key string, rows []interface{}) map[string]interface{} {
 		"table": "payment_methods",
 		"columns": []interface{}{
 			map[string]interface{}{"name": "id", "type": "uuid", "primary_key": true},
+			map[string]interface{}{"name": "organization_id", "type": "uuid", "not_null": true},
 			map[string]interface{}{"name": "name", "type": "text", "not_null": true},
 			map[string]interface{}{"name": "code", "type": "text", "not_null": true},
 			map[string]interface{}{"name": "is_active", "type": "boolean"},
@@ -483,6 +484,30 @@ func seedRows() []interface{} {
 func TestValidate_Seed_Valid(t *testing.T) {
 	if err := Validate(mustJSON(t, modelWithSeed("code", seedRows()))); err != nil {
 		t.Fatalf("expected valid seed, got error: %v", err)
+	}
+}
+
+// TestValidate_SharedRequiresOrganizationID is the publish-time gate that
+// stops a shared-isolation addon from shipping a model without the RLS column
+// (the POSSalePayment class of bug: OrgScoped=false → unscoped /api/data).
+func TestValidate_SharedRequiresOrganizationID(t *testing.T) {
+	m := baseValid()
+	m["models"] = []interface{}{
+		map[string]interface{}{
+			"key":   "SalePayment",
+			"table": "sale_payments",
+			"columns": []interface{}{
+				map[string]interface{}{"name": "id", "type": "uuid", "primary_key": true},
+				map[string]interface{}{"name": "amount", "type": "numeric"},
+			},
+		},
+	}
+	err := Validate(mustJSON(t, m))
+	if err == nil {
+		t.Fatal("expected error when shared model omits organization_id")
+	}
+	if !strings.Contains(err.Error(), "organization_id") {
+		t.Fatalf("expected organization_id in error, got: %v", err)
 	}
 }
 

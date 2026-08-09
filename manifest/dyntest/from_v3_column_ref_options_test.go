@@ -24,6 +24,7 @@ const columnRefOptionsManifestJSON = `{
       "label": "Orders",
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "code", "type": "text" },
         { "name": "customer_id", "type": "uuid", "ref": "Customer" },
         {

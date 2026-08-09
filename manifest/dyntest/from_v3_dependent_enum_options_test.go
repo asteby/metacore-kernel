@@ -29,6 +29,7 @@ const dependentEnumManifestJSON = `{
       "label": "Devices",
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         {
           "name": "type",
           "type": "text",
@@ -203,6 +204,7 @@ func TestFromV3_DependentEnumOptionsRetrocompat(t *testing.T) {
           "key": "Thing", "table": "addon_plain_things", "label": "Things",
           "columns": [
             { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
             { "name": "status", "type": "text",
               "options": [ { "value": "open", "label": "Open" }, { "value": "done", "label": "Done" } ] }
           ]
@@ -249,6 +251,7 @@ func TestDependentEnumOptions_ValidateRejects(t *testing.T) {
               "compatibility": { "requires": [ { "key": "kernel", "version": ">=3.0.0 <4.0.0" } ] },
               "models": [ { "key": "Dev", "table": "addon_bad_d", "label": "D", "columns": [
                 { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
                 { "name": "provider", "type": "text", "depends_on": "type",
                   "options": [ { "value": "qr", "label": "QR", "when": { "field": "type" } } ] }
               ] } ]
@@ -263,6 +266,7 @@ func TestDependentEnumOptions_ValidateRejects(t *testing.T) {
               "compatibility": { "requires": [ { "key": "kernel", "version": ">=3.0.0 <4.0.0" } ] },
               "models": [ { "key": "Dev", "table": "addon_bad2_d", "label": "D", "columns": [
                 { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
                 { "name": "provider", "type": "text",
                   "options": [ { "value": "qr", "label": "QR", "when": { "in": ["whatsapp"] } } ] }
               ] } ]

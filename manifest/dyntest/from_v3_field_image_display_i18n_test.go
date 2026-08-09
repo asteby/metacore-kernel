@@ -30,6 +30,7 @@ const s5s6ManifestJSON = `{
       "label": "Products",
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "sku", "type": "text", "label": "models.store.product.sku" },
         { "name": "name", "type": "text" },
         { "name": "image_url", "type": "text", "display": "image", "widget": "image" }

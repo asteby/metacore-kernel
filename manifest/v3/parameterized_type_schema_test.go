@@ -20,6 +20,7 @@ func TestParse_ParameterizedColumnTypesAccepted(t *testing.T) {
 				"table": "items",
 				"columns": []interface{}{
 					map[string]interface{}{"name": "id", "type": "uuid", "primary_key": true},
+					map[string]interface{}{"name": "organization_id", "type": "uuid", "not_null": true},
 					map[string]interface{}{"name": "val", "type": ty},
 				},
 			},
@@ -40,6 +41,7 @@ func TestParse_UnknownColumnTypeRejected(t *testing.T) {
 			"table": "items",
 			"columns": []interface{}{
 				map[string]interface{}{"name": "id", "type": "uuid", "primary_key": true},
+				map[string]interface{}{"name": "organization_id", "type": "uuid", "not_null": true},
 				map[string]interface{}{"name": "val", "type": "frobnicate"},
 			},
 		},

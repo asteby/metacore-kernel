@@ -29,6 +29,7 @@ const dependentOptionsManifestJSON = `{
       "label": "Transfer Lines",
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "warehouse_id", "type": "uuid" },
         {
           "name": "product_id",

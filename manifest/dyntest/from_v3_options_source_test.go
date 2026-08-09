@@ -25,6 +25,7 @@ const optionsSourceManifestJSON = `{
       "label": "Rules",
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "name", "type": "text" },
         { "name": "target_model", "type": "text", "options_source": "registered_models" },
         {

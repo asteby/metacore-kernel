@@ -23,6 +23,7 @@ const pipelineManifestJSON = `{
       "table": "github_issues",
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true, "default": "gen_random_uuid()" },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "title", "type": "text", "not_null": true },
         { "name": "stage", "type": "text", "not_null": true }
       ],

@@ -26,6 +26,7 @@ const fkColumnRefManifestJSON = `{
       "label": "Stock",
       "columns": [
         { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
         { "name": "product_id", "type": "uuid" },
         { "name": "warehouse_id", "type": "uuid" },
         { "name": "supplier_id", "type": "uuid", "ref": "ExplicitSupplier" },

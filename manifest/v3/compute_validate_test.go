@@ -14,6 +14,7 @@ func salesModels() []interface{} {
 			"key":   "SalesOrder",
 			"table": "sales_orders",
 			"columns": []interface{}{
+				map[string]interface{}{"name": "organization_id", "type": "uuid", "not_null": true},
 				map[string]interface{}{"name": "total", "type": "numeric"},
 				map[string]interface{}{"name": "line_count", "type": "integer"},
 			},
@@ -34,6 +35,7 @@ func salesModels() []interface{} {
 			"key":   "SalesOrderItem",
 			"table": "sales_order_items",
 			"columns": []interface{}{
+				map[string]interface{}{"name": "organization_id", "type": "uuid", "not_null": true},
 				map[string]interface{}{"name": "sales_order_id", "type": "uuid"},
 				map[string]interface{}{"name": "quantity", "type": "integer"},
 				map[string]interface{}{"name": "unit_price", "type": "numeric"},
