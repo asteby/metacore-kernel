@@ -304,17 +304,28 @@ func buildResult(resp ActionResponse, kernelMeta map[string]any) ActionResult {
 }
 
 // checkRequiresState enforces an action's RequiresState gate against the loaded
-// record. It reads the record's `status` column and returns ErrInvalidState
-// (wrapped with the offending/allowed values) when the status is not one of the
-// allowed states. allowed is guaranteed non-empty by the caller.
+// record. It reads the record's lifecycle column — prefer `status` (workshop,
+// vehicles, …), fall back to `state` (purchases, transfers, …) — and returns
+// ErrInvalidState when that value is not one of the allowed states. allowed is
+// guaranteed non-empty by the caller.
 func checkRequiresState(row map[string]any, allowed []string) error {
-	status := stringifyStatus(row["status"])
+	status := rowLifecycleState(row)
 	for _, s := range allowed {
 		if s == status {
 			return nil
 		}
 	}
 	return fmt.Errorf("%w: status %q not in %v", ErrInvalidState, status, allowed)
+}
+
+// rowLifecycleState returns the record's lifecycle value for RequiresState.
+// Empty `status` is treated as missing so a blank status does not hide a
+// populated `state` column.
+func rowLifecycleState(row map[string]any) string {
+	if s := stringifyStatus(row["status"]); s != "" {
+		return s
+	}
+	return stringifyStatus(row["state"])
 }
 
 // stringifyStatus normalises a record's status column value to a string for

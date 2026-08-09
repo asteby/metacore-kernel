@@ -182,6 +182,57 @@ func TestExecAction_RequiresState(t *testing.T) {
 	}
 }
 
+func TestCheckRequiresState_StateColumnFallback(t *testing.T) {
+	cases := []struct {
+		name    string
+		row     map[string]any
+		allowed []string
+		wantErr bool
+	}{
+		{
+			name:    "state draft rejects receive",
+			row:     map[string]any{"state": "draft"},
+			allowed: []string{"confirmed", "partial"},
+			wantErr: true,
+		},
+		{
+			name:    "state confirmed allows receive",
+			row:     map[string]any{"state": "confirmed"},
+			allowed: []string{"confirmed", "partial"},
+		},
+		{
+			name:    "empty status falls back to state",
+			row:     map[string]any{"status": "", "state": "partial"},
+			allowed: []string{"confirmed", "partial"},
+		},
+		{
+			name:    "status wins over state",
+			row:     map[string]any{"status": "reception", "state": "draft"},
+			allowed: []string{"reception"},
+		},
+		{
+			name:    "status wins when disallowed even if state allowed",
+			row:     map[string]any{"status": "shipped", "state": "confirmed"},
+			allowed: []string{"confirmed"},
+			wantErr: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkRequiresState(tc.row, tc.allowed)
+			if tc.wantErr {
+				if !errors.Is(err, ErrInvalidState) {
+					t.Fatalf("err = %v, want ErrInvalidState", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+		})
+	}
+}
+
 // TestExecAction_RequiresState_HTTP409 confirms the gate maps to HTTP 409 through
 // the handler error path (not the 422 a guest-declined dispatch produces).
 func TestExecAction_RequiresState_HTTP409(t *testing.T) {
