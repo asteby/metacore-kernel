@@ -115,6 +115,7 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.Connectors = mapConnectors(m.Connectors)
 	out.Schedules = mapSchedules(m.Schedules)
 	out.Webhooks = mapWebhooks(m.Webhooks)
+	out.EdgeDevices = mapEdgeDevices(m.EdgeDevices)
 	out.Documents = mapDocuments(m)
 
 	return out
@@ -221,6 +222,57 @@ func mapWebhooks(in []v3.InboundWebhook) []InboundWebhookDef {
 			SecretRef: w.SecretRef,
 			Do:        w.Do,
 		})
+	}
+	return out
+}
+
+// mapEdgeDevices folds v3 edge_devices[] onto the host Manifest so the (host-
+// side, out of this repo) edge gateway can read the device contract off the
+// installed manifest: which event types dispatch to which wasm export, which
+// commands the addon may send to a paired device. PairingCredentials reuse
+// mapCredentials (same Setting shape connector credentials use) so a "secret"
+// field (a pairing PIN) is flagged for encrypted storage identically. Near-1:1
+// field copy; an empty input maps to nil (no edge hardware, the back-compat
+// default).
+func mapEdgeDevices(in []v3.EdgeDevice) []EdgeDeviceDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]EdgeDeviceDef, 0, len(in))
+	for _, d := range in {
+		out = append(out, EdgeDeviceDef{
+			Key:                      d.Key,
+			Label:                    d.Label,
+			Kind:                     d.Kind,
+			Transport:                d.Transport,
+			PairingCredentials:       mapCredentials(d.PairingCredentials),
+			FormLayout:               d.FormLayout,
+			Events:                   mapEdgeDeviceEvents(d.Events),
+			Commands:                 mapEdgeDeviceCommands(d.Commands),
+			HeartbeatIntervalSeconds: d.HeartbeatIntervalSeconds,
+		})
+	}
+	return out
+}
+
+func mapEdgeDeviceEvents(in []v3.EdgeDeviceEvent) []EdgeDeviceEventDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]EdgeDeviceEventDef, 0, len(in))
+	for _, e := range in {
+		out = append(out, EdgeDeviceEventDef{Type: e.Type, Do: e.Do, Idempotent: e.Idempotent})
+	}
+	return out
+}
+
+func mapEdgeDeviceCommands(in []v3.EdgeDeviceCommand) []EdgeDeviceCommandDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]EdgeDeviceCommandDef, 0, len(in))
+	for _, c := range in {
+		out = append(out, EdgeDeviceCommandDef{Type: c.Type, TimeoutSeconds: c.TimeoutSeconds})
 	}
 	return out
 }
@@ -1180,6 +1232,21 @@ func deriveBackend(m *v3.Manifest) *BackendSpec {
 		for _, cr := range c.Credentials {
 			if cr.Type == "dynamic_select" {
 				add(cr.OptionsSource)
+			}
+		}
+	}
+
+	// Edge device events: an EdgeDeviceEvent.Do carrying the "wasm:" prefix is
+	// a wasm export the host's edge gateway invokes once it has validated an
+	// inbound device frame, so it must be in the whitelist the runtime
+	// dispatches against — same reasoning as a Connector's test_export/
+	// options_source above. Commands carry no handler of their own (the
+	// addon issues them from its own action handlers, already covered by the
+	// contributions.actions loop), so there is nothing to add for those.
+	for _, d := range m.EdgeDevices {
+		for _, ev := range d.Events {
+			if prefix, fn, found := strings.Cut(ev.Do, ":"); found && prefix == "wasm" {
+				add(fn)
 			}
 		}
 	}
