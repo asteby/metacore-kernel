@@ -46,10 +46,7 @@ func TestParse_RequiresCapabilities_Accepted(t *testing.T) {
 		t.Fatalf("first cap = %q", it.RequiresCapabilities[0])
 	}
 
-	legacy, err := manifest.FromV3(m)
-	if err != nil {
-		t.Fatalf("FromV3: %v", err)
-	}
+	legacy := manifest.FromV3(m)
 	got := legacy.Navigation[0].Items[0].RequiresCapabilities
 	if len(got) != 2 || got[0] != "product.index" {
 		t.Fatalf("legacy RequiresCapabilities = %#v", got)

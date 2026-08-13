@@ -974,14 +974,28 @@ type NavItem struct {
 	// TableMetadata so the SDK picks the renderer with zero per-app wiring.
 	GroupBy string `json:"group_by,omitempty"`
 
+	// Requires declares the screen's public data surface as model + actions
+	// (same vocabulary as dynamic tables / /api/data/<Model>). The host projects
+	// each entry to ModelKey capability strings (Product + index → product.index)
+	// and expands Acceder (`screen.<slug>.access`) with them. Prefer this over
+	// RequiresCapabilities for new manifests.
+	Requires []NavRequire `json:"requires,omitempty"`
+
 	// RequiresCapabilities lists host RBAC capability strings this screen needs
 	// when its Acceder grant (`screen.<slug>.access`) is given — typically
 	// ModelKey CRUD / custom actions the federated UI calls via `/api/data/*`
-	// (e.g. "product.index", "salesreturn.confirm_return"). The host expands
-	// screen grants with these at sync/session time without unlocking sidebar
-	// modules gated on other capability keys (e.g. products.index). Empty means
-	// Acceder alone is enough.
+	// (e.g. "product.index", "salesreturn.confirm_return"). Prefer Requires
+	// (structured); this flat list is kept as an escape hatch / projected form.
+	// Empty means Acceder alone is enough (unless Requires is set).
 	RequiresCapabilities []string `json:"requires_capabilities,omitempty"`
+}
+
+// NavRequire binds a screen to one model's actions the federated UI needs at
+// runtime. Model is the manifest model key (e.g. "Product", "SalesOrder");
+// Actions are capability suffixes (index/create/update/delete or custom keys).
+type NavRequire struct {
+	Model   string   `json:"model"`
+	Actions []string `json:"actions"`
 }
 
 // SlotContribution renders into a slot_kind published by another addon.
