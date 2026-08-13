@@ -243,6 +243,10 @@ type NavItem struct {
 	// default DynamicTable). Empty ViewType = table. See manifest/v3.NavItem.
 	ViewType string `json:"viewType,omitempty"`
 	GroupBy  string `json:"groupBy,omitempty"`
+
+	// RequiresCapabilities is the host projection of v3 NavItem.requires_capabilities:
+	// API capabilities implied by granting Acceder to this screen. See v3.NavItem.
+	RequiresCapabilities []string `json:"requires_capabilities,omitempty"`
 }
 
 // FrontendSpec describes the federated module the host loads at runtime.

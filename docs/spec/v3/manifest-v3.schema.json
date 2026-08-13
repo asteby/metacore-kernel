@@ -1279,6 +1279,42 @@
         "group_by": {
           "type": "string",
           "description": "Column the kanban board groups its columns by (typically the model's stage_field). Required when view_type is 'kanban'; ignored otherwise."
+        },
+        "requires": {
+          "type": "array",
+          "description": "Screen public data surface: model + actions the federated UI needs when Acceder is granted. Host projects each entry to ModelKey capability strings (Product+index → product.index), same vocabulary as dynamic tables /api/data/<Model>. Prefer this over requires_capabilities.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "model",
+              "actions"
+            ],
+            "properties": {
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Manifest model key (e.g. Product, SalesOrder). Optional addon prefix (customers.SalesOrder) is stripped to the key."
+              },
+              "actions": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "description": "Capability suffixes: index/create/update/delete or custom action keys."
+              }
+            }
+          }
+        },
+        "requires_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Flat host RBAC capability strings (escape hatch / table-path aliases). Prefer requires[{model,actions}]; the host unions both into the Acceder expand set."
         }
       }
     },

@@ -677,6 +677,9 @@ func mapNavItems(in []v3.NavItem, modelTable map[string]string) []NavItem {
 			// the served TableMetadata and the SDK picks the board renderer.
 			ViewType: it.ViewType,
 			GroupBy:  it.GroupBy,
+			// Screen → API caps: structured requires projected to ModelKey strings,
+			// unioned with any flat requires_capabilities (table-path aliases).
+			RequiresCapabilities: v3.ProjectNavRequires(it.Requires, it.RequiresCapabilities),
 		})
 	}
 	return out
