@@ -777,6 +777,11 @@ type Contributions struct {
 	Tools         []Tool             `json:"tools,omitempty"`
 	Subscriptions []Subscription     `json:"subscriptions,omitempty"`
 
+	// Notifications declares in-app bell notifications the host should emit
+	// when matching canonical CRUD events fire (addon.Model.action). The host
+	// (ops) evaluates these rules — no wasm required. Optional.
+	Notifications []NotificationRule `json:"notifications,omitempty"`
+
 	// Dashboard contributes one or more widgets to the host's modular
 	// dashboard. Two flavours coexist in the same grid: DECLARATIVE widgets
 	// (every kind except "custom") carry a Query the host computes with the
@@ -1407,6 +1412,39 @@ type Subscription struct {
 	Handler Handler `json:"handler"`
 	Filter  string  `json:"filter,omitempty"`
 	Comment string  `json:"comment,omitempty"` // author note; ignored by the runtime
+}
+
+// NotificationRule is one declarative in-app notification
+// (contributions.notifications[]). The host matches `On` against canonical
+// CRUD event names (addon.Model.action), renders Title/Body/Link with a tiny
+// Mustache subset, and fans out to the audience described by To.
+type NotificationRule struct {
+	Key          string               `json:"key"`
+	On           string               `json:"on"`
+	Title        string               `json:"title"`
+	Body         string               `json:"body,omitempty"`
+	Severity     string               `json:"severity,omitempty"` // info|success|warning|error
+	Icon         string               `json:"icon,omitempty"`
+	Link         string               `json:"link,omitempty"`
+	To           NotificationAudience `json:"to,omitempty"`
+	ExcludeActor bool                 `json:"exclude_actor,omitempty"`
+	When         map[string]any       `json:"when,omitempty"`
+	Entered      *NotificationEntered `json:"entered,omitempty"`
+	Comment      string               `json:"comment,omitempty"`
+}
+
+// NotificationAudience selects recipients for a NotificationRule.
+// Type: "org" (default) | "roles" | "actor" | "field".
+type NotificationAudience struct {
+	Type  string   `json:"type,omitempty"`
+	Roles []string `json:"roles,omitempty"`
+	Path  string   `json:"path,omitempty"`
+}
+
+// NotificationEntered gates a rule on a before→after field transition.
+type NotificationEntered struct {
+	Field  string   `json:"field"`
+	Values []string `json:"values"`
 }
 
 // Handler is the polymorphic invocation target for actions/tools/subscriptions.
