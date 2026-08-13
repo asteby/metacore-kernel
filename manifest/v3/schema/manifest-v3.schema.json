@@ -1487,6 +1487,14 @@
         "group_by": {
           "type": "string",
           "description": "Column the kanban board groups its columns by (typically the model's stage_field). Required when view_type is 'kanban'; ignored otherwise."
+        },
+        "requires_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Host RBAC capability strings this screen needs when Acceder (screen.<slug>.access) is granted — typically ModelKey CRUD/custom actions the federated UI calls via /api/data/* (e.g. product.index). The host expands screen grants with these without unlocking sidebar modules gated on other keys. Omit when Acceder alone is enough."
         }
       }
     },

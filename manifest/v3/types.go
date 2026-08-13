@@ -973,6 +973,15 @@ type NavItem struct {
 	// otherwise. The host projects ViewType + GroupBy onto the served
 	// TableMetadata so the SDK picks the renderer with zero per-app wiring.
 	GroupBy string `json:"group_by,omitempty"`
+
+	// RequiresCapabilities lists host RBAC capability strings this screen needs
+	// when its Acceder grant (`screen.<slug>.access`) is given — typically
+	// ModelKey CRUD / custom actions the federated UI calls via `/api/data/*`
+	// (e.g. "product.index", "salesreturn.confirm_return"). The host expands
+	// screen grants with these at sync/session time without unlocking sidebar
+	// modules gated on other capability keys (e.g. products.index). Empty means
+	// Acceder alone is enough.
+	RequiresCapabilities []string `json:"requires_capabilities,omitempty"`
 }
 
 // SlotContribution renders into a slot_kind published by another addon.

@@ -677,6 +677,8 @@ func mapNavItems(in []v3.NavItem, modelTable map[string]string) []NavItem {
 			// the served TableMetadata and the SDK picks the board renderer.
 			ViewType: it.ViewType,
 			GroupBy:  it.GroupBy,
+			// Screen → API cap deps for host RBAC expand (Terminal Acceder, etc.).
+			RequiresCapabilities: it.RequiresCapabilities,
 		})
 	}
 	return out

@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **manifest v3: `NavItem.requires_capabilities`** — a screen nav entry may declare
+  the host RBAC capability strings its federated UI needs when Acceder
+  (`screen.<slug>.access`) is granted (e.g. `product.index`). Hosts expand those
+  grants at sync/session time without unlocking sidebar modules gated on other
+  keys. Schema + v3 types + FromV3 projection; additive / `additionalProperties`-safe.
+
 - **modelbase: `ActionDef.Trigger`** — la forma servida de la acción ahora conserva
   el `trigger` (incl. `type:connector` + `connector`/`export`) en el round-trip
   manifest→host, para que el dispatch cross-addon de connector llegue al registro de
