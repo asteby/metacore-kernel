@@ -138,3 +138,89 @@ func TestBuildCarriesViewType(t *testing.T) {
 		t.Errorf("table item must omit group_by, got %s", string(bi))
 	}
 }
+
+// TestBuildForDropsUnsatisfiedConditions verifies the server-side gate: a group
+// or item conditioned on an addon the org has not installed never reaches the
+// serialized tree, while the addon's unconditional entries stay.
+func TestBuildForDropsUnsatisfiedConditions(t *testing.T) {
+	contribs := []Contribution{
+		{
+			AddonKey: "pos",
+			Groups: []manifest.NavGroup{
+				{
+					Title: "pos.nav.group",
+					Items: []manifest.NavItem{
+						{Title: "pos.nav.sales", Model: "Sale"},
+						{
+							Title:     "pos.nav.workshop_intake",
+							Model:     "Sale",
+							Condition: &manifest.ConditionDef{AddonInstalled: "workshop"},
+						},
+						{
+							Title: "pos.nav.parent",
+							Items: []manifest.NavItem{
+								{Title: "pos.nav.child", Condition: &manifest.ConditionDef{AddonInstalled: "workshop"}},
+							},
+						},
+					},
+				},
+				{
+					Title:     "pos.nav.workshop_group",
+					Condition: &manifest.ConditionDef{AddonInstalled: "workshop"},
+					Items:     []manifest.NavItem{{Title: "pos.nav.bays"}},
+				},
+			},
+		},
+	}
+
+	titles := func(groups []Group) []string {
+		var out []string
+		var walk func(items []Item)
+		walk = func(items []Item) {
+			for _, it := range items {
+				out = append(out, it.Title)
+				walk(it.Items)
+			}
+		}
+		for _, g := range groups {
+			out = append(out, g.Title)
+			walk(g.Items)
+		}
+		return out
+	}
+	has := func(list []string, want string) bool {
+		for _, s := range list {
+			if s == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Org without workshop: only the unconditional entries survive.
+	got := titles(BuildFor(nil, contribs, func(string) bool { return false }))
+	for _, gone := range []string{"pos.nav.workshop_group", "pos.nav.workshop_intake", "pos.nav.child"} {
+		if has(got, gone) {
+			t.Errorf("%q leaked to an org without workshop: %v", gone, got)
+		}
+	}
+	for _, kept := range []string{"pos.nav.group", "pos.nav.sales", "pos.nav.parent"} {
+		if !has(got, kept) {
+			t.Errorf("%q missing for an org without workshop: %v", kept, got)
+		}
+	}
+
+	// Org with workshop: everything is served.
+	got = titles(BuildFor(nil, contribs, func(key string) bool { return key == "workshop" }))
+	for _, kept := range []string{"pos.nav.workshop_group", "pos.nav.workshop_intake", "pos.nav.child"} {
+		if !has(got, kept) {
+			t.Errorf("%q missing for an org with workshop: %v", kept, got)
+		}
+	}
+
+	// No resolver (legacy Build): conditions are ignored, nothing disappears.
+	got = titles(Build(nil, contribs))
+	if !has(got, "pos.nav.workshop_group") || !has(got, "pos.nav.workshop_intake") {
+		t.Errorf("Build without a resolver dropped conditional entries: %v", got)
+	}
+}

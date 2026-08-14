@@ -877,6 +877,7 @@ func Validate(raw []byte) error {
 		errs = append(errs, validateDashboard(&m)...)
 		errs = append(errs, validateNavViewTypes(&m)...)
 		errs = append(errs, validateDocuments(&m, colsByModel)...)
+		errs = append(errs, validateConditions(&m)...)
 		// contributions.config: exactly one target (model XOR url); a model
 		// target must reference one of the addon's own models.
 		if cfg := m.Contributions.Config; cfg != nil {
@@ -974,4 +975,57 @@ func Parse(raw []byte) (*Manifest, error) {
 		return nil, fmt.Errorf("v3: decode: %w", err)
 	}
 	return &m, nil
+}
+
+// addonKeyRe is the shape an addon key must have to be referenced by a
+// contribution condition — the same lowercase snake/kebab vocabulary the hub
+// enforces on publish.
+var addonKeyRe = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+
+// validateConditions checks every contribution-level `condition` block: a
+// declared condition must carry a predicate (an empty object is an authoring
+// mistake, not a no-op) and its addon_installed key must look like an addon
+// key. A condition may reference an addon this manifest does NOT declare in
+// compatibility.requires — that is the whole point: it is a SOFT dependency
+// resolved per organization at serve time.
+func validateConditions(m *Manifest) []string {
+	var errs []string
+	check := func(where string, c *Condition) {
+		if c == nil {
+			return
+		}
+		key := strings.TrimSpace(c.AddonInstalled)
+		if key == "" {
+			errs = append(errs, fmt.Sprintf("%s.condition declares no predicate (set addon_installed)", where))
+			return
+		}
+		if !addonKeyRe.MatchString(key) {
+			errs = append(errs, fmt.Sprintf("%s.condition.addon_installed %q is not a valid addon key", where, key))
+		}
+	}
+	var walkNav func(items []NavItem, where string)
+	walkNav = func(items []NavItem, where string) {
+		for i, it := range items {
+			w := fmt.Sprintf("%s[%d]", where, i)
+			check(w, it.Condition)
+			if len(it.Items) > 0 {
+				walkNav(it.Items, w+".items")
+			}
+		}
+	}
+	for gi, g := range m.Contributions.Navigation {
+		w := fmt.Sprintf("contributions.navigation[%d]", gi)
+		check(w, g.Condition)
+		walkNav(g.Items, w+".items")
+	}
+	for i, a := range m.Contributions.Actions {
+		check(fmt.Sprintf("contributions.actions[%d]", i), a.Condition)
+	}
+	for i, s := range m.Contributions.Slots {
+		check(fmt.Sprintf("contributions.slots[%d]", i), s.Condition)
+	}
+	for i, w := range m.Contributions.Dashboard {
+		check(fmt.Sprintf("contributions.dashboard[%d]", i), w.Condition)
+	}
+	return errs
 }

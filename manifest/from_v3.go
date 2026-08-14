@@ -646,8 +646,9 @@ func mapNavigation(m *v3.Manifest) []NavGroup {
 		out = append(out, NavGroup{
 			Title:  g.Title,
 			Icon:   g.Icon,
-			Target: g.Target,
-			Items:  mapNavItems(g.Items, modelTable),
+			Target:    g.Target,
+			Items:     mapNavItems(g.Items, modelTable),
+			Condition: mapCondition(g.Condition),
 		})
 	}
 	return out
@@ -680,6 +681,9 @@ func mapNavItems(in []v3.NavItem, modelTable map[string]string) []NavItem {
 			// Screen → API caps: structured requires projected to ModelKey strings,
 			// unioned with any flat requires_capabilities (table-path aliases).
 			RequiresCapabilities: v3.ProjectNavRequires(it.Requires, it.RequiresCapabilities),
+			// Cross-addon soft gate: the host drops the entry for orgs where the
+			// referenced addon is not installed.
+			Condition: mapCondition(it.Condition),
 		})
 	}
 	return out
@@ -747,6 +751,7 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 			RequiresState:  a.RequiresState,
 			Fields:         mapActionFields(a.Fields),
 			Steps:          mapActionSteps(a.Steps),
+			Condition:      mapCondition(a.Condition),
 		}
 		switch a.Handler.Type {
 		case "wasm":
@@ -763,6 +768,16 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 		out[a.TargetModel] = append(out[a.TargetModel], def)
 	}
 	return out
+}
+
+// mapCondition projects a v3 contribution Condition onto its host carrier so
+// the server-side gate survives the v3 → host conversion. Nil stays nil (the
+// contribution is unconditional).
+func mapCondition(c *v3.Condition) *ConditionDef {
+	if c == nil {
+		return nil
+	}
+	return &ConditionDef{AddonInstalled: c.AddonInstalled}
 }
 
 // mapActionSteps folds a v3 action's wizard pages onto ActionStepDefs, each

@@ -116,6 +116,29 @@ func (i *Installer) IsInstalled(orgID uuid.UUID, addonKey string) (bool, error) 
 	return count > 0, nil
 }
 
+// InstalledSet loads every addon key installed for the org in one query and
+// returns a predicate over it. It is the resolver for declarative contribution
+// conditions (manifest.ConditionDef / v3 `condition.addon_installed`): building
+// a sidebar or filtering actions asks about many keys, and one query beats one
+// round-trip per question. The snapshot is taken at call time — callers rebuild
+// it per request, not per process.
+func (i *Installer) InstalledSet(orgID uuid.UUID) (func(addonKey string) bool, error) {
+	var keys []string
+	if err := i.DB.Model(&Installation{}).
+		Where("organization_id = ?", orgID).
+		Pluck("addon_key", &keys).Error; err != nil {
+		return nil, err
+	}
+	set := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		set[k] = struct{}{}
+	}
+	return func(addonKey string) bool {
+		_, ok := set[addonKey]
+		return ok
+	}, nil
+}
+
 // installationOrgAddonIndex is the table-specific name of the composite unique
 // index. It MUST stay in sync with the struct tag above. It is deliberately not
 // the bare "idx_org_addon": that name is commonly used by host-owned tables

@@ -1333,6 +1333,10 @@
         "expose": {
           "type": "string",
           "description": "Federated module name from the addon's frontend bundle (kind:'custom')."
+        },
+        "condition": {
+          "$ref": "#/$defs/Condition",
+          "description": "Optional server-side gate: only serve this contribution to organizations satisfying the predicate."
         }
       }
     },
@@ -1444,6 +1448,10 @@
           "items": {
             "$ref": "#/$defs/NavItem"
           }
+        },
+        "condition": {
+          "$ref": "#/$defs/Condition",
+          "description": "Optional server-side gate: only serve this contribution to organizations satisfying the predicate."
         }
       }
     },
@@ -1530,6 +1538,10 @@
             "minLength": 1
           },
           "description": "Flat host RBAC capability strings (escape hatch / table-path aliases). Prefer requires[{model,actions}]; the host unions both into the Acceder expand set."
+        },
+        "condition": {
+          "$ref": "#/$defs/Condition",
+          "description": "Optional server-side gate: only serve this contribution to organizations satisfying the predicate."
         }
       }
     },
@@ -1648,6 +1660,10 @@
         },
         "permission": {
           "type": "string"
+        },
+        "condition": {
+          "$ref": "#/$defs/Condition",
+          "description": "Optional server-side gate: only serve this contribution to organizations satisfying the predicate."
         }
       }
     },
@@ -1810,6 +1826,10 @@
               "description": "Field in the action payload whose value is the idempotency key (e.g. a client-generated request UUID)."
             }
           }
+        },
+        "condition": {
+          "$ref": "#/$defs/Condition",
+          "description": "Optional server-side gate: only serve this contribution to organizations satisfying the predicate."
         }
       }
     },
@@ -3015,6 +3035,22 @@
             "type": "string"
           },
           "description": "After values that trigger the rule (before must differ)."
+        }
+      }
+    },
+    "Condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Server-side visibility predicate for a contribution. The host only serves the contribution to organizations where the predicate holds. An empty object is invalid: declare a predicate or omit the block.",
+      "minProperties": 1,
+      "properties": {
+        "addon_installed": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$",
+          "description": "Addon key that must be installed in the organization for this contribution to be served (soft dependency, evaluated per org at serve time).",
+          "examples": [
+            "workshop"
+          ]
         }
       }
     }

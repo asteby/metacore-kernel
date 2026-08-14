@@ -1,6 +1,10 @@
 package manifest
 
-import v3 "github.com/asteby/metacore-kernel/manifest/v3"
+import (
+	"strings"
+
+	v3 "github.com/asteby/metacore-kernel/manifest/v3"
+)
 
 // APIVersion is the kernel contract version this package implements.
 // Addons declare `kernel: ">=X.Y <Z"` to opt into a compatibility window.
@@ -223,6 +227,9 @@ type NavGroup struct {
 	Icon   string    `json:"icon"`
 	Target string    `json:"target,omitempty"`
 	Items  []NavItem `json:"items"`
+	// Condition is the host projection of the v3 contribution condition: the
+	// group is only served to orgs satisfying it. See ConditionDef.
+	Condition *ConditionDef `json:"condition,omitempty"`
 }
 
 // NavItem is a single sidebar entry. Model, if set, binds to a dynamic CRUD page.
@@ -247,6 +254,10 @@ type NavItem struct {
 	// RequiresCapabilities is the host projection of v3 NavItem.requires_capabilities:
 	// API capabilities implied by granting Acceder to this screen. See v3.NavItem.
 	RequiresCapabilities []string `json:"requires_capabilities,omitempty"`
+
+	// Condition is the host projection of the v3 contribution condition: the
+	// entry is only served to orgs satisfying it. See ConditionDef.
+	Condition *ConditionDef `json:"condition,omitempty"`
 }
 
 // FrontendSpec describes the federated module the host loads at runtime.
@@ -436,6 +447,10 @@ type ActionDef struct {
 	// skipping the dispatch. Nil = the action is not replay-guarded. See
 	// manifest/v3.ActionIdempotency and dynamic.Service.ExecAction.
 	Idempotency *IdempotencyDef `json:"idempotency,omitempty"`
+
+	// Condition is the host projection of the v3 contribution condition: the
+	// action is only served to orgs satisfying it. See ConditionDef.
+	Condition *ConditionDef `json:"condition,omitempty"`
 }
 
 // ActionStepDef is the host/runtime projection of a v3 ActionStep: one wizard
@@ -1095,6 +1110,30 @@ type VisibleWhenDef struct {
 	Field  string   `json:"field"`
 	Equals string   `json:"equals,omitempty"`
 	In     []string `json:"in,omitempty"`
+}
+
+// ConditionDef is the host projection of a v3 contribution Condition: a
+// SERVER-SIDE gate the host evaluates per organization before serving a
+// contribution (nav entry, action, slot, widget). It is how an addon declares a
+// SOFT dependency — "surface this only where addon X is installed" — without
+// requiring X at install time. Nil (or an empty AddonInstalled) means always.
+type ConditionDef struct {
+	// AddonInstalled is the addon key that must be installed for the org.
+	AddonInstalled string `json:"addon_installed,omitempty"`
+}
+
+// Satisfied reports whether the condition holds. installed answers "is this
+// addon key installed for the org at hand?"; nil means the caller cannot
+// resolve installation state, in which case the condition is treated as met so
+// an unaware host never silently hides contributions.
+func (c *ConditionDef) Satisfied(installed func(addonKey string) bool) bool {
+	if c == nil || strings.TrimSpace(c.AddonInstalled) == "" {
+		return true
+	}
+	if installed == nil {
+		return true
+	}
+	return installed(strings.TrimSpace(c.AddonInstalled))
 }
 
 // ValidationRule expresses server-side input constraints. All fields are

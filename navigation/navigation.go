@@ -53,11 +53,26 @@ type Contribution struct {
 	Groups   []manifest.NavGroup
 }
 
+// InstalledFn answers "is this addon key installed for the organization whose
+// navigation we are building?". It is what resolves a contribution's
+// server-side `condition` (see manifest.ConditionDef) — in the kernel it is
+// backed by installer.Installer.IsInstalled.
+type InstalledFn func(addonKey string) bool
+
 // Build merges core groups with addon contributions. Core groups may expose a
 // Target id; addon groups with the same Target have their items appended in.
 // Orphan addon groups (no matching target) surface under a synthetic "Addons"
 // bucket so nothing disappears silently.
 func Build(coreGroups []Group, contributions []Contribution) []Group {
+	return BuildFor(coreGroups, contributions, nil)
+}
+
+// BuildFor is Build with the org's installation state in hand: groups and items
+// carrying a `condition` the org does not satisfy (e.g. addon_installed points
+// at an addon that org never installed) are dropped before merging, so a
+// cross-addon nav entry never reaches a tenant that has no use for it. A nil
+// installed keeps every conditional entry — an unaware caller loses nothing.
+func BuildFor(coreGroups []Group, contributions []Contribution, installed InstalledFn) []Group {
 	result := append([]Group{}, coreGroups...)
 	byTarget := map[string]int{}
 	for i, g := range result {
@@ -72,7 +87,10 @@ func Build(coreGroups []Group, contributions []Contribution) []Group {
 	})
 	for _, c := range contributions {
 		for _, ng := range c.Groups {
-			items := toItems(ng.Items, c.AddonKey)
+			if !ng.Condition.Satisfied(installed) {
+				continue
+			}
+			items := toItems(filterByCondition(ng.Items, installed), c.AddonKey)
 			if ng.Target != "" {
 				if idx, ok := byTarget[ng.Target]; ok {
 					result[idx].Items = append(result[idx].Items, items...)
@@ -94,6 +112,24 @@ func Build(coreGroups []Group, contributions []Contribution) []Group {
 		result = append(result, Group{Title: "sidebar.addons", Icon: "Puzzle", Items: orphans})
 	}
 	return result
+}
+
+// filterByCondition drops the nav items whose condition the org does not
+// satisfy, recursing into children so a conditional sub-entry disappears
+// without taking its parent with it.
+func filterByCondition(src []manifest.NavItem, installed InstalledFn) []manifest.NavItem {
+	if installed == nil || len(src) == 0 {
+		return src
+	}
+	out := make([]manifest.NavItem, 0, len(src))
+	for _, it := range src {
+		if !it.Condition.Satisfied(installed) {
+			continue
+		}
+		it.Items = filterByCondition(it.Items, installed)
+		out = append(out, it)
+	}
+	return out
 }
 
 func toItems(src []manifest.NavItem, addonKey string) []Item {
