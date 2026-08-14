@@ -34,6 +34,14 @@ const (
 	MsgNotification MessageType = "NOTIFICATION"
 	MsgStatusUpdate MessageType = "STATUS_UPDATE"
 	MsgCustom       MessageType = "CUSTOM"
+
+	// WebRTC / realtime call signaling (hosts relay these over the hub).
+	// Scalable mesh or SFU clients share this contract; the hub stays
+	// transport-only and does not interpret SDP/ICE payloads.
+	MsgCallInvite MessageType = "CALL_INVITE"
+	MsgCallJoin   MessageType = "CALL_JOIN"
+	MsgCallSignal MessageType = "CALL_SIGNAL"
+	MsgCallEnd    MessageType = "CALL_END"
 )
 
 // Message is the envelope sent over the wire.
