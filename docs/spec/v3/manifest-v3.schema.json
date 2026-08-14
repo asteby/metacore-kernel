@@ -964,6 +964,13 @@
             "$ref": "#/$defs/Subscription"
           }
         },
+        "notifications": {
+          "type": "array",
+          "description": "Declarative in-app bell notifications. The host matches `on` against canonical CRUD events (addon.Model.action), renders title/body/link, and fans out to `to` — no wasm required.",
+          "items": {
+            "$ref": "#/$defs/NotificationRule"
+          }
+        },
         "dashboard": {
           "type": "array",
           "description": "Widgets this addon contributes to the host's modular dashboard. Declarative kinds carry a query the host aggregates; kind 'custom' references a federated expose.",
@@ -2349,6 +2356,134 @@
           "examples": [
             "2026-05-21T15:04:05Z"
           ]
+        }
+      }
+    },
+    "NotificationRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "on",
+        "title"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Unique within the addon.",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "on": {
+          "type": "string",
+          "description": "Canonical CRUD event name, e.g. 'inventory.InventoryMovement.created'."
+        },
+        "title": {
+          "type": "string",
+          "description": "Notification title; may use {{id}} / {{after.<col>}} Mustache-lite tokens."
+        },
+        "body": {
+          "type": "string",
+          "description": "Optional body; same token subset as title."
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "success",
+            "warning",
+            "error"
+          ],
+          "description": "Visual severity. Default info."
+        },
+        "icon": {
+          "type": "string",
+          "description": "Optional lucide-style icon key."
+        },
+        "link": {
+          "type": "string",
+          "description": "Optional deep link; may contain tokens."
+        },
+        "to": {
+          "$ref": "#/$defs/NotificationAudience"
+        },
+        "exclude_actor": {
+          "type": "boolean",
+          "description": "When true, the user who triggered the event is omitted from the audience."
+        },
+        "when": {
+          "type": "object",
+          "description": "Optional equality filters over the event payload (e.g. {'after.state': ['done']}). Keys are dotted paths; values are a string or list of strings.",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              }
+            ]
+          }
+        },
+        "entered": {
+          "$ref": "#/$defs/NotificationEntered"
+        },
+        "comment": {
+          "type": "string",
+          "description": "Author note; ignored by the runtime."
+        }
+      }
+    },
+    "NotificationAudience": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Recipient selector. type: org (default) | roles | actor | field.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "org",
+            "roles",
+            "actor",
+            "field"
+          ]
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "When type=roles: role keys that receive the notification."
+        },
+        "path": {
+          "type": "string",
+          "description": "When type=field: dotted path to a user id on the event payload."
+        }
+      }
+    },
+    "NotificationEntered": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "values"
+      ],
+      "description": "Gate the rule on a before→after field transition into one of values.",
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "Record field name (e.g. 'state')."
+        },
+        "values": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          },
+          "description": "After values that trigger the rule (before must differ)."
         }
       }
     }
