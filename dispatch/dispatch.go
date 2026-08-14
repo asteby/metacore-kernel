@@ -98,6 +98,17 @@ type Subscription struct {
 	// Settings is the installation's stored settings, threaded to the wasm
 	// invocation (env_get). Optional.
 	Settings map[string]string
+
+	// When is the v3 subscription's attribute predicate: the delivery only
+	// happens when every key equals the corresponding field of the event's
+	// record (`after`, or `before` for deletes). Empty = deliver on every
+	// occurrence of the event, the back-compat default.
+	//
+	// It narrows a fan-out; it does not elect a winner. Two subscriptions with
+	// disjoint predicates split one event between two addons (the storable
+	// sale line goes to inventory, the service line to workshop) without either
+	// addon knowing the other exists. See manifest/v3.Subscription.When.
+	When map[string]string
 }
 
 // SubscriptionProvider yields the subscriptions to evaluate for a given org.

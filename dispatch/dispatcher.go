@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,12 +43,63 @@ type Dispatcher struct {
 // delivery key + the JSON it forwards to handlers; it re-marshals the original
 // payload so guests receive the full canonical event.
 type canonicalEvent struct {
-	ID            string `json:"id"`
-	Model         string `json:"model"`
-	Action        string `json:"action"`
-	AddonKey      string `json:"addon_key"`
-	ActorID       string `json:"actor_id"`
-	CorrelationID string `json:"correlation_id"`
+	ID            string         `json:"id"`
+	Model         string         `json:"model"`
+	Action        string         `json:"action"`
+	AddonKey      string         `json:"addon_key"`
+	ActorID       string         `json:"actor_id"`
+	CorrelationID string         `json:"correlation_id"`
+	Before        map[string]any `json:"before"`
+	After         map[string]any `json:"after"`
+}
+
+// record is the row a subscription predicate is evaluated against: the state
+// the event LEFT BEHIND. That is `after` for creates and updates, and `before`
+// for deletes — where after is empty and the only description of what was
+// removed is its former state.
+func (ce canonicalEvent) record() map[string]any {
+	if len(ce.After) > 0 {
+		return ce.After
+	}
+	return ce.Before
+}
+
+// matchesWhen reports whether the event's record satisfies a subscription
+// predicate. An empty predicate always matches (subscribe to everything). A
+// field the record does not carry never matches: the predicate is a claim about
+// the record's shape, and a non-canonical payload (a domain event with no
+// record at all) simply does not satisfy it.
+//
+// Values compare as strings against the JSON scalar, so a numeric or boolean
+// field matches its literal rendering ("3", "true") — the predicate is meant
+// for enums and flags.
+func matchesWhen(when map[string]string, rec map[string]any) bool {
+	for k, want := range when {
+		v, ok := rec[k]
+		if !ok || v == nil {
+			return false
+		}
+		if scalarString(v) != want {
+			return false
+		}
+	}
+	return true
+}
+
+// scalarString renders a JSON scalar the way a predicate value is written.
+// json.Unmarshal into map[string]any yields float64 for every number, so an
+// integral value must not come back as "3.000000".
+func scalarString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case bool:
+		return strconv.FormatBool(t)
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	default:
+		return fmt.Sprint(t)
+	}
 }
 
 // handle is the events.RoutingHandler the dispatcher registers under "*". It
@@ -110,6 +162,9 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 	for i := range subs {
 		sub := subs[i]
 		if !eventMatches(sub.Event, eventName) {
+			continue
+		}
+		if !matchesWhen(sub.When, ce.record()) {
 			continue
 		}
 		if d.enqueue(ctx, orgID, eventName, occurrenceID, ce, raw, sub) {

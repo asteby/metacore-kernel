@@ -1437,6 +1437,31 @@ type Subscription struct {
 	Handler Handler `json:"handler"`
 	Filter  string  `json:"filter,omitempty"`
 	Comment string  `json:"comment,omitempty"` // author note; ignored by the runtime
+
+	// When narrows the subscription to the events whose RECORD matches this
+	// attribute predicate: every key must equal the corresponding field of the
+	// canonical event's `after` (falling back to `before` for deletes). An
+	// empty/omitted When subscribes to every occurrence of the event — the
+	// back-compat default.
+	//
+	// It is what lets sibling addons split one event by shape instead of each
+	// one waking up and deciding to do nothing: inventory takes the storable
+	// sale lines, workshop takes the service ones. Delivery stays FAN-OUT —
+	// every subscription whose event and predicate match is delivered; When
+	// does not elect a single winner.
+	//
+	//	"when": { "product_type": "service" }
+	//
+	// Values are compared as strings against the field's JSON scalar, so it
+	// suits enums and flags, not ranges. Fields absent from the record never
+	// match (a predicate over a field the model does not carry silently
+	// disables the subscription — check the field name).
+	When map[string]string `json:"when,omitempty"`
+
+	// Condition gates this contribution server-side: when set, the host only
+	// serves it to organizations where the predicate holds (e.g. another addon
+	// is installed). Nil = always served. See Condition.
+	Condition *Condition `json:"condition,omitempty"`
 }
 
 // NotificationRule is one declarative in-app notification

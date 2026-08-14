@@ -2205,6 +2205,22 @@
         "comment": {
           "type": "string",
           "description": "Author note; ignored by the runtime."
+        },
+        "when": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Attribute predicate narrowing the subscription to events whose record matches: every key must equal the corresponding field of the canonical event's `after` (`before` for deletes). Omitted = every occurrence. Delivery stays fan-out.",
+          "examples": [
+            {
+              "product_type": "service"
+            }
+          ]
+        },
+        "condition": {
+          "$ref": "#/$defs/Condition",
+          "description": "Optional server-side gate: only serve this subscription to organizations satisfying the predicate."
         }
       }
     },

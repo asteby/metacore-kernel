@@ -878,6 +878,7 @@ func Validate(raw []byte) error {
 		errs = append(errs, validateNavViewTypes(&m)...)
 		errs = append(errs, validateDocuments(&m, colsByModel)...)
 		errs = append(errs, validateConditions(&m)...)
+		errs = append(errs, validateSubscriptionWhen(&m)...)
 		// contributions.config: exactly one target (model XOR url); a model
 		// target must reference one of the addon's own models.
 		if cfg := m.Contributions.Config; cfg != nil {
@@ -1026,6 +1027,30 @@ func validateConditions(m *Manifest) []string {
 	}
 	for i, w := range m.Contributions.Dashboard {
 		check(fmt.Sprintf("contributions.dashboard[%d]", i), w.Condition)
+	}
+	return errs
+}
+
+// validateSubscriptionWhen checks the subscription attribute predicates: an
+// empty attribute name is meaningless, and a `when` declared on a WILDCARD
+// event pattern is almost always an authoring mistake — the predicate would be
+// evaluated against records of every model the pattern spans, where the field
+// usually does not exist, silently disabling the subscription.
+func validateSubscriptionWhen(m *Manifest) []string {
+	var errs []string
+	for i, s := range m.Contributions.Subscriptions {
+		if len(s.When) == 0 {
+			continue
+		}
+		where := fmt.Sprintf("contributions.subscriptions[%d]", i)
+		for k := range s.When {
+			if strings.TrimSpace(k) == "" {
+				errs = append(errs, where+".when has an empty attribute name")
+			}
+		}
+		if strings.Contains(s.Event, "*") {
+			errs = append(errs, fmt.Sprintf("%s declares a `when` predicate on the wildcard event %q — the predicate would be evaluated against records of every matching model; subscribe to an exact event instead", where, s.Event))
+		}
 	}
 	return errs
 }
