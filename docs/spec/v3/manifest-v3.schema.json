@@ -984,6 +984,13 @@
           "items": {
             "$ref": "#/$defs/DocumentDef"
           }
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Route"
+          },
+          "description": "Entries this addon contributes to the host's declarative routing tables (e.g. which handler fulfils an order line). Resolved per organization over the routes of every installed addon."
         }
       }
     },
@@ -2520,6 +2527,50 @@
           "examples": [
             "workshop"
           ]
+        }
+      }
+    },
+    "Route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "handler"
+      ],
+      "description": "One entry of a declarative routing table: for this decision domain, when the record matches, this named handler wins. Domain and handler are opaque vocabulary owned by the addons that agree on them.",
+      "properties": {
+        "domain": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Decision table this route belongs to.",
+          "examples": [
+            "fulfillment"
+          ]
+        },
+        "match": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Attribute predicate; every key must equal the record's attribute. Empty/omitted is the domain catch-all (the default handler)."
+        },
+        "handler": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Opaque handler name the winning route resolves to.",
+          "examples": [
+            "stock_direct",
+            "stock_allocate",
+            "service_workorder"
+          ]
+        },
+        "priority": {
+          "type": "integer",
+          "description": "Highest priority wins. A more specific match should outrank the catch-all it overrides. Default 0."
+        },
+        "condition": {
+          "$ref": "#/$defs/Condition",
+          "description": "Optional server-side gate: only serve this route to organizations satisfying the predicate."
         }
       }
     }

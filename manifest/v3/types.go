@@ -783,6 +783,14 @@ type Contributions struct {
 	// (ops) evaluates these rules — no wasm required. Optional.
 	Notifications []NotificationRule `json:"notifications,omitempty"`
 
+	// Routes contributes entries to the host's declarative ROUTING TABLES: for
+	// a given decision domain, which named handler wins for a record with these
+	// attributes. It is how a family of addons agrees on "who fulfils this
+	// order line" without any of them importing the others — each addon
+	// declares the routes it can serve, gated by its own installation, and the
+	// host resolves the winner per org. Optional. See Route.
+	Routes []Route `json:"routes,omitempty"`
+
 	// Dashboard contributes one or more widgets to the host's modular
 	// dashboard. Two flavours coexist in the same grid: DECLARATIVE widgets
 	// (every kind except "custom") carry a Query the host computes with the
@@ -1728,4 +1736,46 @@ func (c *Condition) Satisfied(installed func(addonKey string) bool) bool {
 		return true
 	}
 	return installed(strings.TrimSpace(c.AddonInstalled))
+}
+
+// Route is one entry of a declarative routing table
+// (contributions.routes[]). It answers a single question — "for this decision
+// DOMAIN, when the record looks like MATCH, which named HANDLER wins?" — and
+// the host resolves it per organization over the routes of every INSTALLED
+// addon.
+//
+// The kernel is deliberately agnostic about what any of these strings mean.
+// Domain and Handler are opaque vocabulary owned by the addons that agree on
+// them; the kernel only matches attributes, applies precedence and honours the
+// installation gate. That is what keeps a cross-addon decision (which addon
+// fulfils an order line: move stock directly, allocate across warehouses, open
+// a work order) out of the framework as domain knowledge while still being
+// resolvable by it.
+//
+//	{ "domain": "fulfillment",
+//	  "match": { "product_type": "service" },
+//	  "handler": "service_workorder",
+//	  "priority": 100,
+//	  "condition": { "addon_installed": "workshop" } }
+type Route struct {
+	// Domain is the decision table this route belongs to (e.g. "fulfillment").
+	// Required, snake_case.
+	Domain string `json:"domain"`
+	// Match is the attribute predicate: every key must equal the corresponding
+	// attribute of the record being routed. An EMPTY match is the domain's
+	// CATCH-ALL (it matches anything) — that is how an addon declares the
+	// default handler. Values are compared as strings, exactly.
+	Match map[string]string `json:"match,omitempty"`
+	// Handler is the opaque name the winning route resolves to. Required.
+	Handler string `json:"handler"`
+	// Priority breaks ties: the highest priority wins. Default 0. Routes with
+	// a more specific Match should carry a higher priority than the catch-all
+	// they override. Equal priorities are broken deterministically — see
+	// routing.Table.Resolve.
+	Priority int `json:"priority,omitempty"`
+
+	// Condition gates this contribution server-side: when set, the host only
+	// serves it to organizations where the predicate holds (e.g. another addon
+	// is installed). Nil = always served. See Condition.
+	Condition *Condition `json:"condition,omitempty"`
 }
