@@ -11,6 +11,7 @@ package v3
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // APIVersion is the only accepted value for the top-level apiVersion field
@@ -901,6 +902,11 @@ type DashboardWidget struct {
 	// (e.g. "./StockHeatmap") rendered for a kind:"custom" widget. Required for
 	// "custom"; the addon must also declare a frontend block. Ignored otherwise.
 	Expose string `json:"expose,omitempty"`
+
+	// Condition gates this contribution server-side: when set, the host only
+	// serves it to organizations where the predicate holds (e.g. another addon
+	// is installed). Nil = always served. See Condition.
+	Condition *Condition `json:"condition,omitempty"`
 }
 
 // WidgetQuery is the aggregation spec a declarative DashboardWidget carries.
@@ -949,6 +955,11 @@ type NavGroup struct {
 	Icon   string    `json:"icon,omitempty"`
 	Target string    `json:"target,omitempty"`
 	Items  []NavItem `json:"items"`
+
+	// Condition gates this contribution server-side: when set, the host only
+	// serves it to organizations where the predicate holds (e.g. another addon
+	// is installed). Nil = always served. See Condition.
+	Condition *Condition `json:"condition,omitempty"`
 }
 
 // NavItem is a single sidebar entry.
@@ -993,6 +1004,11 @@ type NavItem struct {
 	// (structured); this flat list is kept as an escape hatch / projected form.
 	// Empty means Acceder alone is enough (unless Requires is set).
 	RequiresCapabilities []string `json:"requires_capabilities,omitempty"`
+
+	// Condition gates this contribution server-side: when set, the host only
+	// serves it to organizations where the predicate holds (e.g. another addon
+	// is installed). Nil = always served. See Condition.
+	Condition *Condition `json:"condition,omitempty"`
 }
 
 // NavRequire binds a screen to one model's actions the federated UI needs at
@@ -1009,6 +1025,11 @@ type SlotContribution struct {
 	Entry      string `json:"entry"`
 	Order      int    `json:"order,omitempty"`
 	Permission string `json:"permission,omitempty"`
+
+	// Condition gates this contribution server-side: when set, the host only
+	// serves it to organizations where the predicate holds (e.g. another addon
+	// is installed). Nil = always served. See Condition.
+	Condition *Condition `json:"condition,omitempty"`
 }
 
 // Action is a UI-triggered operation. Beyond the thin {key,label,handler,
@@ -1080,6 +1101,11 @@ type Action struct {
 	// a payment capture or a fiscal stamp be retried over a flaky network without
 	// double-charging / double-stamping. Optional — omit for ordinary actions.
 	Idempotency *ActionIdempotency `json:"idempotency,omitempty"`
+
+	// Condition gates this contribution server-side: when set, the host only
+	// serves it to organizations where the predicate holds (e.g. another addon
+	// is installed). Nil = always served. See Condition.
+	Condition *Condition `json:"condition,omitempty"`
 }
 
 // ActionIdempotency declares the payload field that carries an action's
@@ -1093,7 +1119,6 @@ type ActionIdempotency struct {
 	// with no replay guarantee.
 	KeyField string `json:"key_field"`
 }
-
 
 // ActionStep is one page of a multi-step declarative action wizard (see
 // Action.Steps): a title, an optional description, and the fields the SDK
@@ -1668,4 +1693,39 @@ type ImportColumn struct {
 	// Transform names a cell post-processor (e.g. "media_url") run after
 	// coercion. Unknown names fail the row at import time.
 	Transform string `json:"transform,omitempty"`
+}
+
+// Condition is a declarative predicate the HOST evaluates server-side before it
+// serves a contribution to an organization. It is the cross-addon visibility
+// primitive: an addon can contribute a nav entry, an action or a widget that
+// only materialises when some OTHER addon is present in that org.
+//
+//	"condition": { "addon_installed": "workshop" }
+//
+// A nil Condition means "always". An empty Condition (no predicate set) is also
+// "always" — forward-compatible with hosts that don't know a newer predicate.
+// Unlike VisibleWhen (a client-side, single-sibling form predicate the SDK
+// evaluates against the record being edited), Condition is resolved on the
+// server against org-level installation state, so a contribution filtered out
+// by it never reaches the browser.
+type Condition struct {
+	// AddonInstalled is the addon key that must be installed in the current
+	// organization for the contribution to be served (e.g. "workshop"). The
+	// host answers it with its authoritative installation table — in the
+	// kernel that is installer.Installer.IsInstalled. Empty = no constraint.
+	AddonInstalled string `json:"addon_installed,omitempty"`
+}
+
+// Satisfied reports whether the condition holds. installed answers "is this
+// addon key installed for the org at hand?"; passing nil means the host cannot
+// resolve installation state, in which case the condition is treated as met so
+// an unaware host never silently hides contributions.
+func (c *Condition) Satisfied(installed func(addonKey string) bool) bool {
+	if c == nil || strings.TrimSpace(c.AddonInstalled) == "" {
+		return true
+	}
+	if installed == nil {
+		return true
+	}
+	return installed(strings.TrimSpace(c.AddonInstalled))
 }
