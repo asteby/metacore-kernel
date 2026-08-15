@@ -557,7 +557,7 @@ host:
 | Concern                                     | Where to put it                                                  |
 | ------------------------------------------- | ---------------------------------------------------------------- |
 | Custom validation (cross-field, async)      | `dynamic.Hooks.BeforeCreate` / `BeforeUpdate` — see [`dynamic/hooks.go`](../dynamic/hooks.go) |
-| Joins, computed columns, denormalisation    | Either a SQL view exposed as a separate model, or a custom Fiber handler |
+| Ad-hoc joins, denormalisation               | Either a SQL view exposed as a separate model, or a custom Fiber handler |
 | Custom row actions ("escalate", "mark paid")| Addon-defined endpoint + `manifest.Actions[]` for the UI button  |
 | Authorization beyond `<resource>.<action>`  | Wrap the service or implement a custom `PermissionStore`         |
 | Cross-replica WebSocket broadcast           | Host responsibility — fan out via `Hub.SendToUsers` per replica  |
@@ -568,6 +568,15 @@ host:
 Everything that **is** auto fits in one principle: it can be derived from
 the manifest without running addon code. Anything that needs a decision the
 manifest cannot encode goes in addon code, where you keep full control.
+
+Two things that used to require addon code are now also auto, declared on
+the model rather than run as a Fiber handler: computed columns via a
+`formulas[]` / `rollup` block on the model (recomputed on write, no addon
+code), and row-status automation via `stage_field` / `stages[]` /
+`transitions[]` / `on_transition[]` (see [`dynamic/stage_machine.go`](../dynamic/stage_machine.go)).
+Both are manifest v3-only — the full field reference lives in the SDK's
+addon-authoring docs (`metacore-sdk/docs/manifest-spec.md`), not duplicated
+here.
 
 ## See also
 

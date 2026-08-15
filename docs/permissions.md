@@ -230,6 +230,7 @@ Supported `kind` values are exhaustive — the enforcer rejects any other:
 | `http:fetch`       | Host with at least one dot, optional `*.` | Outbound HTTP from inside the WASM sandbox    |
 | `event:emit`       | Event name or `prefix.*`                  | `events.Bus.Publish`                          |
 | `event:subscribe`  | Event name or `prefix.*`                  | `events.Bus.Subscribe`                        |
+| `connector:read`   | Connector key (`github`) or `*`           | `connector_get` host import (cross-addon connector dispatch) |
 
 The contract is in [`manifest/manifest.go`](../manifest/manifest.go) (type
 `Capability`) and the enforcement in
@@ -343,6 +344,20 @@ If the addon had instead tried `db:write addon_other.*`:
 - **Use addon caps for transport security.** A `http:fetch` declaration is
   not a UX hint, it is the only thing standing between a malicious bundle
   and your customers' data. Treat marketplace approval as a security gate.
+
+## Manifest v3 `rbac{}` block (schema-only, not yet enforced)
+
+Manifest v3 (`manifest/v3/types.go`, type `RBAC`) lets an addon declare a
+`rbac.roles[]` / `rbac.permissions[]` catalog — named roles bundling
+permission keys, plus permission-key labels/descriptions for a future admin
+UI. As of this kernel version **no Go code reads `Manifest.RBAC`** outside
+of `types.go` itself: it round-trips through parsing but is not compiled
+into `permission.Service`'s store, not enforced by any gate, and not
+surfaced anywhere in ops. Treat it as a forward-declared shape, not a live
+permission system — the two systems documented above (`permission.Service`
+for users, `security.Capabilities` for addons) are what actually gate
+requests today. Don't build addon authoring guidance around `rbac{}` until
+a real consumer lands.
 
 ## See also
 
