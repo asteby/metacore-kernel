@@ -142,6 +142,46 @@ func TestFromV3_ActionFieldsAndModal(t *testing.T) {
 	}
 }
 
+// TestFromV3_ConfirmMessageImpliesConfirm covers addons that declare only
+// confirm_message (no confirm:true). The host marks wasm actions executable and
+// the React dispatcher used to return null when confirm was false — so a
+// message-only action looked like a dead click. FromV3 must set Confirm=true.
+func TestFromV3_ConfirmMessageImpliesConfirm(t *testing.T) {
+	const raw = `{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": { "key": "wh", "name": "WH", "version": "1.0.0" },
+  "compatibility": { "requires": [{ "key": "kernel", "version": ">=3.0.0 <4.0.0" }] },
+  "contributions": {
+    "actions": [
+      {
+        "key": "dispatch",
+        "label": "Despachar",
+        "target_model": "WarehouseOrder",
+        "handler": { "type": "wasm", "function": "handle_dispatch" },
+        "confirm_message": "¿Confirmar entrega?"
+      }
+    ]
+  }
+}`
+	m, err := v3.Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("v3.Parse: %v", err)
+	}
+	out := manifest.FromV3(m)
+	actions := out.Actions["WarehouseOrder"]
+	if len(actions) != 1 {
+		t.Fatalf("actions len = %d, want 1", len(actions))
+	}
+	a := actions[0]
+	if !a.Confirm {
+		t.Error("Confirm = false, want true (derived from confirm_message)")
+	}
+	if a.ConfirmMessage != "¿Confirmar entrega?" {
+		t.Errorf("ConfirmMessage = %q", a.ConfirmMessage)
+	}
+}
+
 func TestFromV3_Frontend(t *testing.T) {
 	m, err := v3.Parse([]byte(richManifestJSON))
 	if err != nil {

@@ -791,12 +791,18 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 	}
 	out := map[string][]ActionDef{}
 	for _, a := range m.Contributions.Actions {
+		// confirm_message alone is a confirmation intent. v3 authors often set
+		// the body without the boolean (warehouse, POS); the React dispatcher
+		// historically gated only on `confirm`, so a message-only action opened
+		// as executable and then rendered null. Derive Confirm when a message
+		// is present so host metadata and the SDK stay aligned.
+		confirm := a.Confirm || a.ConfirmMessage != ""
 		def := ActionDef{
 			Key:            a.Key,
 			Name:           a.Key,
 			Label:          a.Label,
 			Icon:           a.Icon,
-			Confirm:        a.Confirm,
+			Confirm:        confirm,
 			ConfirmMessage: a.ConfirmMessage,
 			Modal:          a.Modal,
 			Placement:      a.Placement,
