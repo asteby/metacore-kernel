@@ -103,6 +103,7 @@ func FromV3(m *v3.Manifest) Manifest {
 		}
 	}
 	out.Navigation = mapNavigation(m)
+	out.Routes = mapRoutes(m)
 	out.Settings = mapSettings(m.Settings)
 	out.Actions = mapActions(m)
 	out.Tools = mapTools(m)
@@ -644,8 +645,8 @@ func mapNavigation(m *v3.Manifest) []NavGroup {
 	out := make([]NavGroup, 0, len(m.Contributions.Navigation))
 	for _, g := range m.Contributions.Navigation {
 		out = append(out, NavGroup{
-			Title:  g.Title,
-			Icon:   g.Icon,
+			Title:     g.Title,
+			Icon:      g.Icon,
 			Target:    g.Target,
 			Items:     mapNavItems(g.Items, modelTable),
 			Condition: mapCondition(g.Condition),
@@ -766,6 +767,25 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 			def.Idempotency = &IdempotencyDef{KeyField: a.Idempotency.KeyField}
 		}
 		out[a.TargetModel] = append(out[a.TargetModel], def)
+	}
+	return out
+}
+
+// mapRoutes copies contributions.routes[] onto the host carrier so the
+// declarative routing table survives the v3 → host conversion.
+func mapRoutes(m *v3.Manifest) []RouteDef {
+	if m.Contributions == nil || len(m.Contributions.Routes) == 0 {
+		return nil
+	}
+	out := make([]RouteDef, 0, len(m.Contributions.Routes))
+	for _, r := range m.Contributions.Routes {
+		out = append(out, RouteDef{
+			Domain:    r.Domain,
+			Match:     r.Match,
+			Handler:   r.Handler,
+			Priority:  r.Priority,
+			Condition: mapCondition(r.Condition),
+		})
 	}
 	return out
 }

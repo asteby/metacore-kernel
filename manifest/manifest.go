@@ -62,6 +62,10 @@ type Manifest struct {
 	// user message. Unlike Actions (UI-triggered record operations) Tools
 	// are semantic and carry extraction hints for parameter inference.
 	Tools            []ToolDef         `json:"tools,omitempty"`
+	// Routes are the addon's entries in the host's declarative routing tables
+	// (which named handler wins for a record, per decision domain). See
+	// RouteDef and the routing package.
+	Routes           []RouteDef        `json:"routes,omitempty"`
 	ModelDefinitions []ModelDefinition `json:"model_definitions,omitempty"`
 	// Events lists the event names the addon may emit. It predates the
 	// capability-based gate (`{kind:"event:emit", target:"<name>"}`) and is
@@ -1134,6 +1138,17 @@ func (c *ConditionDef) Satisfied(installed func(addonKey string) bool) bool {
 		return true
 	}
 	return installed(strings.TrimSpace(c.AddonInstalled))
+}
+
+// RouteDef is the host projection of a v3 contribution Route: one entry of a
+// declarative routing table. Domain and Handler are opaque to the kernel — see
+// manifest/v3.Route for the contract and the routing package for resolution.
+type RouteDef struct {
+	Domain    string            `json:"domain"`
+	Match     map[string]string `json:"match,omitempty"`
+	Handler   string            `json:"handler"`
+	Priority  int               `json:"priority,omitempty"`
+	Condition *ConditionDef     `json:"condition,omitempty"`
 }
 
 // ValidationRule expresses server-side input constraints. All fields are

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -878,6 +879,7 @@ func Validate(raw []byte) error {
 		errs = append(errs, validateNavViewTypes(&m)...)
 		errs = append(errs, validateDocuments(&m, colsByModel)...)
 		errs = append(errs, validateConditions(&m)...)
+		errs = append(errs, validateRoutes(&m)...)
 		// contributions.config: exactly one target (model XOR url); a model
 		// target must reference one of the addon's own models.
 		if cfg := m.Contributions.Config; cfg != nil {
@@ -1026,6 +1028,41 @@ func validateConditions(m *Manifest) []string {
 	}
 	for i, w := range m.Contributions.Dashboard {
 		check(fmt.Sprintf("contributions.dashboard[%d]", i), w.Condition)
+	}
+	return errs
+}
+
+// validateRoutes enforces the invariants of contributions.routes[] the JSON
+// schema cannot express: domain and handler are present, and no two routes of
+// the SAME domain declare the same match at the same priority — that pair would
+// make the winner depend on declaration order within one manifest, which is
+// exactly the ambiguity the priority field exists to remove.
+func validateRoutes(m *Manifest) []string {
+	var errs []string
+	seen := make(map[string]int, len(m.Contributions.Routes))
+	for i, r := range m.Contributions.Routes {
+		where := fmt.Sprintf("contributions.routes[%d]", i)
+		if strings.TrimSpace(r.Domain) == "" {
+			errs = append(errs, where+".domain is empty")
+		}
+		if strings.TrimSpace(r.Handler) == "" {
+			errs = append(errs, where+".handler is empty")
+		}
+		keys := make([]string, 0, len(r.Match))
+		for k, v := range r.Match {
+			if strings.TrimSpace(k) == "" {
+				errs = append(errs, where+".match has an empty attribute name")
+				continue
+			}
+			keys = append(keys, k+"="+v)
+		}
+		sort.Strings(keys)
+		sig := fmt.Sprintf("%s|%d|%s", r.Domain, r.Priority, strings.Join(keys, ","))
+		if prev, dup := seen[sig]; dup {
+			errs = append(errs, fmt.Sprintf("%s duplicates the match of contributions.routes[%d] at the same priority (%d) — give one of them a higher priority", where, prev, r.Priority))
+			continue
+		}
+		seen[sig] = i
 	}
 	return errs
 }
