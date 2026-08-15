@@ -115,6 +115,13 @@
         "$ref": "#/$defs/InboundWebhook"
       }
     },
+    "edge_devices": {
+      "type": "array",
+      "description": "Local-network hardware (a cash recycler, a card terminal) this addon integrates with through a persistent channel a store-local agent maintains. The host's edge gateway terminates the channel, validates events against the declared list and dispatches them to a wasm export, and relays commands the addon issues to the paired device.",
+      "items": {
+        "$ref": "#/$defs/EdgeDevice"
+      }
+    },
     "signature": {
       "$ref": "#/$defs/Signature"
     }
@@ -2629,6 +2636,117 @@
           "type": "string",
           "pattern": "^(wasm|webhook|compiled):.+$",
           "description": "Handler reference the verified body is routed to: 'wasm:<export>' | 'webhook:<key>' | 'compiled:<fn>'."
+        }
+      }
+    },
+    "EdgeDevice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "kind",
+        "transport"
+      ],
+      "description": "One class of local hardware (a cash recycler, a card terminal, a scale, a fiscal printer) the addon can drive through a persistent channel a store-local agent maintains outside the addon's own wasm code.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Device class identifier within the addon (e.g. 'cashdro', 'mp_point'). Sessions and pairing reference '<addon_key>.<device_key>'."
+        },
+        "label": {
+          "type": "string",
+          "description": "Human/i18n name shown in the device pairing UI."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cash_recycler",
+            "card_terminal",
+            "scale",
+            "fiscal_printer"
+          ],
+          "description": "Hardware category. Drives the pairing wizard's copy/icon and category-specific host health checks."
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "ws"
+          ],
+          "description": "How the local agent reaches the host. 'ws' (WebSocket, agent-initiated, outbound-only) is the only transport in v1."
+        },
+        "pairing_credentials": {
+          "type": "array",
+          "description": "Fields an operator supplies to bind a physical device/agent instance to an org+branch (serial number, branch_id, pairing PIN). Reuses the Setting shape exactly like Connector.credentials.",
+          "items": {
+            "$ref": "#/$defs/Setting"
+          }
+        },
+        "form_layout": {
+          "$ref": "#/$defs/FormLayout",
+          "description": "Groups pairing_credentials into sections or a multi-step wizard for the pairing UI (same shape Connector.form_layout uses)."
+        },
+        "events": {
+          "type": "array",
+          "description": "Inbound event types this device kind can push. The host validates a frame's type against this list before dispatching to 'do'.",
+          "items": {
+            "$ref": "#/$defs/EdgeDeviceEvent"
+          }
+        },
+        "commands": {
+          "type": "array",
+          "description": "Outbound operations the addon can request against a paired device.",
+          "items": {
+            "$ref": "#/$defs/EdgeDeviceCommand"
+          }
+        },
+        "heartbeat_interval_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Max gap the host tolerates between agent heartbeats before marking the device session offline. 0 = host default (a kernel-side floor, not addon-tunable below it)."
+        }
+      }
+    },
+    "EdgeDeviceEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "do"
+      ],
+      "description": "One inbound event type a paired EdgeDevice can push (e.g. 'cash.deposited', 'payment.approved', 'device.error').",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Event name, namespaced by convention '<noun>.<verb_past>'."
+        },
+        "do": {
+          "type": "string",
+          "pattern": "^(wasm|webhook|compiled):.+$",
+          "description": "Handler reference invoked with the validated event payload: 'wasm:<export>' | 'webhook:<key>' | 'compiled:<fn>'."
+        },
+        "idempotent": {
+          "type": "boolean",
+          "description": "True when this event is safe to redeliver (the addon dedupes by an id in the payload). Financial events SHOULD set this true."
+        }
+      }
+    },
+    "EdgeDeviceCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "description": "One outbound operation the addon can request against a paired EdgeDevice (e.g. 'open_session', 'dispense_change'). The host acks receipt within timeout_seconds; the physical result arrives later as a correlated Event.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Command name."
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Max time the host waits for the agent to ack receipt (not for the physical operation to finish). 0 = host default."
         }
       }
     },

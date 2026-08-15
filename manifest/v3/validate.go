@@ -438,14 +438,17 @@ func validateDoRef(do string) string {
 }
 
 // validatePipelineRuntime enforces the cross-field invariants of the addon-level
-// pipeline-runtime primitives (connectors / schedules / webhooks) that the JSON
-// schema cannot express: connector keys are unique; a schedule's `every` parses
-// as a Go duration and its `do` carries a known prefix; a webhook's `do` carries
-// a known prefix and, when it declares a `verify`, it supplies a `secret_ref`
-// that resolves to a declared connector credential. Empty blocks are a no-op
-// (the addon has no runtime primitives — the back-compat default).
+// pipeline-runtime primitives (connectors / schedules / webhooks / edge
+// devices) that the JSON schema cannot express: connector keys are unique; a
+// schedule's `every` parses as a Go duration and its `do` carries a known
+// prefix; a webhook's `do` carries a known prefix and, when it declares a
+// `verify`, it supplies a `secret_ref` that resolves to a declared connector
+// credential; an edge device's `kind`/`transport` come from the closed v1
+// sets and its events/commands carry non-empty, unique types (an event's `do`
+// is validated exactly like a webhook's). Empty blocks are a no-op (the addon
+// has no runtime primitives — the back-compat default).
 func validatePipelineRuntime(m *Manifest) []string {
-	if len(m.Connectors) == 0 && len(m.Schedules) == 0 && len(m.Webhooks) == 0 {
+	if len(m.Connectors) == 0 && len(m.Schedules) == 0 && len(m.Webhooks) == 0 && len(m.EdgeDevices) == 0 {
 		return nil
 	}
 	var errs []string
@@ -524,6 +527,53 @@ func validatePipelineRuntime(m *Manifest) []string {
 				} else if _, ok := creds[cred]; !ok {
 					errs = append(errs, fmt.Sprintf("webhooks[%d].secret_ref %q references undeclared credential %q on connector %q", wi, w.SecretRef, cred, conn))
 				}
+			}
+		}
+	}
+
+	// EdgeDevices: unique keys; kind and transport from the closed v1 sets;
+	// events/commands need a non-empty type, events need a valid `do` ref.
+	seenDevice := make(map[string]struct{}, len(m.EdgeDevices))
+	for di, d := range m.EdgeDevices {
+		if d.Key == "" {
+			errs = append(errs, fmt.Sprintf("edge_devices[%d].key is empty", di))
+		} else {
+			if _, dup := seenDevice[d.Key]; dup {
+				errs = append(errs, fmt.Sprintf("edge_devices[%d].key %q is duplicated", di, d.Key))
+			}
+			seenDevice[d.Key] = struct{}{}
+		}
+		if _, ok := edgeDeviceKinds[d.Kind]; !ok {
+			errs = append(errs, fmt.Sprintf("edge_devices[%d].kind %q is not one of cash_recycler|card_terminal|scale|fiscal_printer", di, d.Kind))
+		}
+		if _, ok := edgeDeviceTransports[d.Transport]; !ok {
+			errs = append(errs, fmt.Sprintf("edge_devices[%d].transport %q is not one of: ws", di, d.Transport))
+		}
+		seenEvent := make(map[string]struct{}, len(d.Events))
+		for ei, ev := range d.Events {
+			if ev.Type == "" {
+				errs = append(errs, fmt.Sprintf("edge_devices[%d].events[%d].type is empty", di, ei))
+			} else {
+				if _, dup := seenEvent[ev.Type]; dup {
+					errs = append(errs, fmt.Sprintf("edge_devices[%d].events[%d].type %q is duplicated", di, ei, ev.Type))
+				}
+				seenEvent[ev.Type] = struct{}{}
+			}
+			if ev.Do == "" {
+				errs = append(errs, fmt.Sprintf("edge_devices[%d].events[%d].do is empty", di, ei))
+			} else if msg := validateDoRef(ev.Do); msg != "" {
+				errs = append(errs, fmt.Sprintf("edge_devices[%d].events[%d].do %s", di, ei, msg))
+			}
+		}
+		seenCommand := make(map[string]struct{}, len(d.Commands))
+		for ci, cmd := range d.Commands {
+			if cmd.Type == "" {
+				errs = append(errs, fmt.Sprintf("edge_devices[%d].commands[%d].type is empty", di, ci))
+			} else {
+				if _, dup := seenCommand[cmd.Type]; dup {
+					errs = append(errs, fmt.Sprintf("edge_devices[%d].commands[%d].type %q is duplicated", di, ci, cmd.Type))
+				}
+				seenCommand[cmd.Type] = struct{}{}
 			}
 		}
 	}

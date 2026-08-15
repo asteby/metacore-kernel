@@ -929,11 +929,14 @@ func (m *Manifest) validateDocuments() error {
 // v3.validatePipelineRuntime: connector keys unique; a schedule's `every` parses
 // as a positive Go duration and its `do` carries a known prefix; a webhook's
 // `do` carries a known prefix and, when it declares a `verify`, its `secret_ref`
-// resolves to a declared connector credential. Empty blocks pass unchanged so
-// addons without runtime primitives are unaffected. Mirrors the v3 validator so
-// a manifest fails identically on both surfaces ("dual validation").
+// resolves to a declared connector credential; an edge device's `kind`/
+// `transport` come from the closed v1 sets and its events/commands carry
+// non-empty, unique types (an event's `do` is validated like a webhook's).
+// Empty blocks pass unchanged so addons without runtime primitives are
+// unaffected. Mirrors the v3 validator so a manifest fails identically on both
+// surfaces ("dual validation").
 func (m *Manifest) validatePipelineRuntime() error {
-	if len(m.Connectors) == 0 && len(m.Schedules) == 0 && len(m.Webhooks) == 0 {
+	if len(m.Connectors) == 0 && len(m.Schedules) == 0 && len(m.Webhooks) == 0 && len(m.EdgeDevices) == 0 {
 		return nil
 	}
 	connectorCreds := make(map[string]map[string]struct{}, len(m.Connectors))
@@ -1005,7 +1008,61 @@ func (m *Manifest) validatePipelineRuntime() error {
 			}
 		}
 	}
+	seenDevice := make(map[string]struct{}, len(m.EdgeDevices))
+	for di, d := range m.EdgeDevices {
+		if d.Key == "" {
+			return fmt.Errorf("edge_devices[%d].key required", di)
+		}
+		if _, dup := seenDevice[d.Key]; dup {
+			return fmt.Errorf("edge_devices[%d].key %q duplicated", di, d.Key)
+		}
+		seenDevice[d.Key] = struct{}{}
+		if _, ok := edgeDeviceKinds[d.Kind]; !ok {
+			return fmt.Errorf("edge_devices[%d].kind %q is not one of cash_recycler|card_terminal|scale|fiscal_printer", di, d.Kind)
+		}
+		if _, ok := edgeDeviceTransports[d.Transport]; !ok {
+			return fmt.Errorf("edge_devices[%d].transport %q is not one of: ws", di, d.Transport)
+		}
+		seenEvent := make(map[string]struct{}, len(d.Events))
+		for ei, ev := range d.Events {
+			if ev.Type == "" {
+				return fmt.Errorf("edge_devices[%d].events[%d].type required", di, ei)
+			}
+			if _, dup := seenEvent[ev.Type]; dup {
+				return fmt.Errorf("edge_devices[%d].events[%d].type %q duplicated", di, ei, ev.Type)
+			}
+			seenEvent[ev.Type] = struct{}{}
+			if err := validateDoRef(ev.Do); err != nil {
+				return fmt.Errorf("edge_devices[%d].events[%d].do %w", di, ei, err)
+			}
+		}
+		seenCommand := make(map[string]struct{}, len(d.Commands))
+		for ci, cmd := range d.Commands {
+			if cmd.Type == "" {
+				return fmt.Errorf("edge_devices[%d].commands[%d].type required", di, ci)
+			}
+			if _, dup := seenCommand[cmd.Type]; dup {
+				return fmt.Errorf("edge_devices[%d].commands[%d].type %q duplicated", di, ci, cmd.Type)
+			}
+			seenCommand[cmd.Type] = struct{}{}
+		}
+	}
 	return nil
+}
+
+// edgeDeviceKinds / edgeDeviceTransports mirror the v3 closed sets
+// (manifest/v3.edgeDeviceKinds / edgeDeviceTransports) on the legacy/
+// install surface so a manifest fails identically on both (the "dual
+// validation" invariant this file's other checks already follow).
+var edgeDeviceKinds = map[string]struct{}{
+	"cash_recycler":  {},
+	"card_terminal":  {},
+	"scale":          {},
+	"fiscal_printer": {},
+}
+
+var edgeDeviceTransports = map[string]struct{}{
+	"ws": {},
 }
 
 // validateComputeFormulas mirrors the v3 Tier-2 check on the legacy/install

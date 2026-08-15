@@ -66,6 +66,16 @@ type Manifest struct {
 	// resolved from SecretRef (a connector credential). Empty = no webhooks.
 	Webhooks []InboundWebhook `json:"webhooks,omitempty"`
 
+	// EdgeDevices declares local-network hardware this addon integrates with
+	// through a persistent channel (a store-local agent, not the addon's own
+	// WASM code, holds the physical connection — a cash recycler, a card
+	// terminal). Unlike Connector (request/response credentials to a remote
+	// API), an EdgeDevice pushes Events and accepts Commands over a
+	// long-lived session the host's edge gateway terminates; the addon only
+	// ever sees normalized events routed to a wasm export and issues
+	// Commands through its own action handlers. Empty = no edge devices.
+	EdgeDevices []EdgeDevice `json:"edge_devices,omitempty"`
+
 	Signature *Signature `json:"signature,omitempty"`
 }
 
@@ -128,6 +138,97 @@ type InboundWebhook struct {
 	SecretRef string `json:"secret_ref,omitempty"`
 	// Do is the handler reference the verified body is routed to.
 	Do string `json:"do"`
+}
+
+// edgeDeviceKinds is the closed set of hardware categories an EdgeDevice may
+// declare in v1. Drives the pairing wizard's copy/icon and lets the host
+// apply category-specific health checks.
+var edgeDeviceKinds = map[string]struct{}{
+	"cash_recycler":  {},
+	"card_terminal":  {},
+	"scale":          {},
+	"fiscal_printer": {},
+}
+
+// edgeDeviceTransports is the closed set of channels a store-local agent may
+// use to reach the host in v1. "ws" (WebSocket, agent-initiated, outbound
+// only) is the only transport in scope — it works behind NAT/no public IP
+// without opening an inbound port on store hardware. Reserved for future:
+// "mqtt".
+var edgeDeviceTransports = map[string]struct{}{
+	"ws": {},
+}
+
+// EdgeDevice describes one class of local hardware (a cash recycler, a card
+// terminal, a scale, a fiscal printer) the addon can drive through a
+// persistent channel a store-local agent maintains. The agent itself is not
+// part of the addon (it is not WASM — it needs USB/serial/vendor-SDK access
+// and a socket open 24/7); the addon only declares the contract the host's
+// edge gateway enforces: which events it can receive and which commands it
+// can send to a paired device.
+type EdgeDevice struct {
+	// Key identifies the device class within the addon (e.g. "cashdro",
+	// "mp_point"). Sessions and pairing reference "<addon_key>.<device_key>".
+	Key string `json:"key"`
+	// Label is the human/i18n name shown in the device pairing UI.
+	Label string `json:"label,omitempty"`
+	// Kind is the hardware category: "cash_recycler" | "card_terminal" |
+	// "scale" | "fiscal_printer".
+	Kind string `json:"kind"`
+	// Transport is how the local agent reaches the host. "ws" is the only
+	// value accepted in v1.
+	Transport string `json:"transport"`
+	// PairingCredentials enumerates the fields an operator supplies to bind a
+	// physical device/agent instance to an org+branch (a serial number, a
+	// branch_id, a pairing PIN shown on the agent's local UI). Reuses the
+	// Setting shape exactly like Connector.Credentials — same dynamic_select/
+	// FormLayout machinery, no new form primitive.
+	PairingCredentials []Setting `json:"pairing_credentials,omitempty"`
+	// FormLayout groups PairingCredentials into sections or a wizard for the
+	// pairing UI (same shape Connector.FormLayout uses).
+	FormLayout *FormLayout `json:"form_layout,omitempty"`
+	// Events lists the event types this device kind can push. The host
+	// validates an inbound frame's type against this list before dispatching
+	// to Do; unknown types are dropped and logged, never routed.
+	Events []EdgeDeviceEvent `json:"events,omitempty"`
+	// Commands lists the operations the addon can send to a paired device.
+	Commands []EdgeDeviceCommand `json:"commands,omitempty"`
+	// HeartbeatIntervalSeconds is the max gap the host tolerates between
+	// agent heartbeats before marking the device session "offline". 0 = host
+	// default (a kernel-side floor, not addon-tunable below it — prevents an
+	// addon from disabling liveness checks).
+	HeartbeatIntervalSeconds int `json:"heartbeat_interval_seconds,omitempty"`
+}
+
+// EdgeDeviceEvent is one inbound event type a paired device can push.
+type EdgeDeviceEvent struct {
+	// Type is the event name (e.g. "cash.deposited", "payment.approved",
+	// "device.error"). Namespaced by convention "<noun>.<verb_past>".
+	Type string `json:"type"`
+	// Do is the dispatchable handler reference invoked with the event
+	// payload once validated: "wasm:<export>" | "webhook:<key>" |
+	// "compiled:<fn>" — same grammar and prefix set as InboundWebhook.Do.
+	Do string `json:"do"`
+	// Idempotent, when true, tells the host this event is safe to redeliver
+	// (the addon dedupes by an id in the payload). Financial events (cash
+	// deposited, payment approved) SHOULD declare an idempotency key field
+	// in their payload schema and set this true.
+	Idempotent bool `json:"idempotent,omitempty"`
+}
+
+// EdgeDeviceCommand is one outbound operation the addon can request against a
+// paired device. The addon issues it from its own action handler (already
+// covered by the normal wasm export whitelist); the host acks receipt by the
+// agent within TimeoutSeconds and the physical result arrives later as a
+// correlated Event, so Command carries no handler reference of its own.
+type EdgeDeviceCommand struct {
+	// Type is the command name (e.g. "open_session", "dispense_change",
+	// "cancel_session").
+	Type string `json:"type"`
+	// TimeoutSeconds bounds how long the host waits for the agent to ack
+	// (not for the physical operation to finish — that arrives later as an
+	// Event). 0 = host default.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 }
 
 // Frontend describes the federated UI bundle the host loads at runtime for

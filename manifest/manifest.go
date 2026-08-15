@@ -136,6 +136,15 @@ type Manifest struct {
 	Schedules  []ScheduleDef       `json:"schedules,omitempty"`
 	Webhooks   []InboundWebhookDef `json:"webhooks,omitempty"`
 
+	// EdgeDevices is the host projection of v3 edge_devices[]: local-network
+	// hardware (a cash recycler, a card terminal) the addon integrates with
+	// through a persistent channel a store-local agent maintains. The host's
+	// edge gateway (outside this package) owns pairing, the session table and
+	// the actual WebSocket transport; this projection only carries the
+	// contract — which events dispatch to which wasm export, which commands
+	// the addon may send. Empty = the addon drives no edge hardware.
+	EdgeDevices []EdgeDeviceDef `json:"edge_devices,omitempty"`
+
 	// Documents is the host projection of v3 contributions.documents[]: the
 	// printable-document templates the addon binds to its models. The host
 	// render engine reads these off the installed manifest to serve per-record
@@ -208,6 +217,38 @@ type InboundWebhookDef struct {
 	Verify    string `json:"verify,omitempty"`
 	SecretRef string `json:"secret_ref,omitempty"`
 	Do        string `json:"do"`
+}
+
+// EdgeDeviceDef is the host/runtime projection of a v3 EdgeDevice: one class
+// of local hardware the addon drives through a persistent channel a
+// store-local agent maintains outside the addon's own wasm code.
+type EdgeDeviceDef struct {
+	Key                      string                 `json:"key"`
+	Label                    string                 `json:"label,omitempty"`
+	Kind                     string                 `json:"kind"`
+	Transport                string                 `json:"transport"`
+	PairingCredentials       []CredentialDef        `json:"pairing_credentials,omitempty"`
+	FormLayout               *v3.FormLayout         `json:"form_layout,omitempty"`
+	Events                   []EdgeDeviceEventDef   `json:"events,omitempty"`
+	Commands                 []EdgeDeviceCommandDef `json:"commands,omitempty"`
+	HeartbeatIntervalSeconds int                    `json:"heartbeat_interval_seconds,omitempty"`
+}
+
+// EdgeDeviceEventDef is one inbound event type an EdgeDeviceDef's paired
+// device can push. Do is the dispatchable handler reference ("wasm:"/
+// "webhook:"/"compiled:") the host routes the validated payload to.
+type EdgeDeviceEventDef struct {
+	Type       string `json:"type"`
+	Do         string `json:"do"`
+	Idempotent bool   `json:"idempotent,omitempty"`
+}
+
+// EdgeDeviceCommandDef is one outbound operation the addon can request
+// against a paired device. TimeoutSeconds bounds the agent ack, not the
+// physical operation — its result arrives later as a correlated event.
+type EdgeDeviceCommandDef struct {
+	Type           string `json:"type"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 }
 
 // MetadataLocale is one locale's catalog copy (name/description/features).
@@ -430,13 +471,13 @@ type ActionDef struct {
 	RequiresState  []string   `json:"requiresState,omitempty"`
 	Confirm        bool       `json:"confirm,omitempty"`
 	ConfirmMessage string     `json:"confirmMessage,omitempty"`
-	Modal          string     `json:"modal,omitempty"`      // slot name for a custom modal
+	Modal          string     `json:"modal,omitempty"` // slot name for a custom modal
 	// Steps is the host/runtime projection of a v3 Action.steps wizard: one
 	// page per step, per-step validation, single submit with the union of all
 	// steps' values. Mutually exclusive with Fields. See manifest/v3.ActionStep.
-	Steps []ActionStepDef `json:"steps,omitempty"`
-	Placement      string     `json:"placement,omitempty"`  // "row" (default), "table", or "create" — see v3.Action.Placement
-	ModalWidth     string     `json:"modalWidth,omitempty"` // explicit modal width (CSS length / px); SDK reads action.modalWidth
+	Steps      []ActionStepDef `json:"steps,omitempty"`
+	Placement  string          `json:"placement,omitempty"`  // "row" (default), "table", or "create" — see v3.Action.Placement
+	ModalWidth string          `json:"modalWidth,omitempty"` // explicit modal width (CSS length / px); SDK reads action.modalWidth
 
 	// Trigger declares how the action dispatches when invoked. Optional —
 	// when nil the legacy behaviour applies (the host resolves the action via
