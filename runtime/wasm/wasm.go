@@ -56,6 +56,7 @@ type Host struct {
 	tableResolver func(table string) string
 	execSchema    func(addonKey string) string
 	sequenceNext  func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)
+	routingTable  RoutingTableFn
 	mutationGuard func(ctx context.Context, logicalTable string, row map[string]any) error
 	connectors    *connectors.Resolver
 	logger        *log.Logger
@@ -147,6 +148,16 @@ func (h *Host) WithTableResolver(r func(table string) string) *Host {
 // `sequence_unavailable` envelope. See docs/wasm-abi.md § 17.
 func (h *Host) WithSequenceNext(f func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)) *Host {
 	h.sequenceNext = f
+	return h
+}
+
+// WithRoutingTable injects the embedder's org routing-table builder for the
+// `metacore_host.routing_resolve` import. The function returns the Table built
+// from contributions.routes[] of every INSTALLED addon for that org (typically
+// via routing.Build + installer.InstalledSet). When unset the import returns a
+// `routing_unavailable` envelope. See docs/wasm-abi.md § 18.
+func (h *Host) WithRoutingTable(f RoutingTableFn) *Host {
+	h.routingTable = f
 	return h
 }
 
@@ -333,6 +344,7 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		resolveTable:  h.tableResolver,
 		execSchema:    h.execSchema,
 		sequenceNext:  h.sequenceNext,
+		routingTable:  h.routingTable,
 		mutationGuard: h.mutationGuard,
 		connectors:    h.connectors,
 		logger:        h.logger,

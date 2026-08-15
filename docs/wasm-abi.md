@@ -1845,3 +1845,57 @@ folios outside a plain create (e.g. a document produced by an action handler).
 Hosts wire the backend with `Host.WithSequenceNext(...)`, normally pointing at
 `dynamic.Service.NextSequence`. Implementation: `runtime/wasm/sequencenext.go`,
 `dynamic/sequence.go`; tests: `dynamic/sequence_test.go`.
+
+## 18. `routing_resolve` — declarative routing tables (v1.9)
+
+Answers "which handler wins this decision domain for this org, given these
+attributes?" against the table the embedder builds from
+`contributions.routes[]` of every INSTALLED addon. Guests that would otherwise
+act unconditionally ask first and stand down when another addon won.
+
+### 18.1 Signature
+
+```
+routing_resolve(reqPtr: u32, reqLen: u32) -> u64   // ptr|len envelope
+```
+
+### 18.2 Request contract
+
+```json
+{ "domain": "order_fulfillment", "attrs": { "product_type": "storable" } }
+```
+
+`organization_id` is deliberately absent — the table is always the one of the
+invocation's org. `domain` is required; `attrs` may be empty / omitted.
+
+### 18.3 Response envelope
+
+```json
+{ "success": true,
+  "data": {
+    "resolved": true,
+    "handler": "stock_allocate",
+    "addon_key": "warehouse",
+    "is_self": false,
+    "handlers": ["stock_allocate", "stock_direct"]
+  },
+  "meta": { "addon": "inventory", "orgId": "…", "durationMs": 0, "envelopeVersion": 1 } }
+```
+
+When no route matches: `resolved: false`, `is_self: false`, no `handler` /
+`addon_key`. The guest decides what that means; the kernel does not invent a
+default it does not own.
+
+Failure codes: `invalid_request`, `routing_unavailable` (host has no table
+backend), `routing_error` (table builder failed).
+
+### 18.4 Semantics & wiring
+
+Read-only: no transaction, no writes — safe from a subscriber as much as from
+an action handler. Hosts wire `Host.WithRoutingTable(...)` to
+`routing.Build` over the routes of every installed addon for the org
+(typically via `installer.Installer.InstalledSet` + lifecycle manifests).
+Embedders SHOULD cache the table per org alongside their manifest projection
+and invalidate on install/uninstall/upgrade.
+
+Implementation: `runtime/wasm/routingresolve.go`; package: `routing/`.

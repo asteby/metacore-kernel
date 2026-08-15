@@ -64,6 +64,9 @@ type invocation struct {
 	// sequenceNext is the embedder-injected folio-sequence backend the
 	// sequence_next import calls (Host.WithSequenceNext). nil = unavailable.
 	sequenceNext func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)
+	// routingTable is the embedder-injected org routing-table builder the
+	// routing_resolve import calls (Host.WithRoutingTable). nil = unavailable.
+	routingTable RoutingTableFn
 	// mutationGuard is the embedder-injected declarative-constraints check
 	// (Host.WithMutationGuard) run after every data_mutate/data_batch create
 	// or update, inside the transaction, against the post-mutation row keyed
@@ -467,6 +470,24 @@ func registerHostModule(ctx context.Context, h *Host) error {
 			return writeToGuest(ctx, mod, env)
 		}).
 		Export("sequence_next")
+
+	// routing_resolve(reqPtr, reqLen) -> i64 (ptr|len envelope)
+	// Answers which handler wins a decision domain for this org given attrs,
+	// against the table the embedder builds from contributions.routes[] of
+	// every INSTALLED addon (Host.WithRoutingTable). Read-only. See
+	// docs/wasm-abi.md § 18.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			reqPtr, reqLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			req := readBytes(mod, reqPtr, reqLen)
+			env := executeRoutingResolve(ctx, inv, req)
+			return writeToGuest(ctx, mod, env)
+		}).
+		Export("routing_resolve")
 
 	if _, err := b.Instantiate(ctx); err != nil {
 		return fmt.Errorf("instantiate metacore_host: %w", err)
