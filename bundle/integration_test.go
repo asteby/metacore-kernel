@@ -49,6 +49,9 @@ func TestWriteReadRoundTrip(t *testing.T) {
 			"frontend/remoteEntry.js": []byte("console.log('hi');"),
 			"frontend/assets/a.css":   []byte("body{}"),
 		},
+		Templates: map[string][]byte{
+			"templates/cash-cut-80mm.html": []byte("<h1>corte</h1>"),
+		},
 		Readme: "# Demo\n",
 	}
 
@@ -92,6 +95,9 @@ func TestWriteReadRoundTrip(t *testing.T) {
 	}
 	if string(got.Frontend["frontend/remoteEntry.js"]) != "console.log('hi');" {
 		t.Fatalf("frontend payload corrupted: %q", got.Frontend["frontend/remoteEntry.js"])
+	}
+	if string(got.Templates["templates/cash-cut-80mm.html"]) != "<h1>corte</h1>" {
+		t.Fatalf("template payload dropped: %q", got.Templates["templates/cash-cut-80mm.html"])
 	}
 	if got.Readme != "# Demo\n" {
 		t.Fatalf("readme mismatch: %q", got.Readme)

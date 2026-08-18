@@ -7,6 +7,7 @@
 //   migrations/0002_*.sql
 //   frontend/remoteEntry.js    (optional — federated UI)
 //   frontend/assets/*          (optional — static assets)
+//   templates/*.html           (optional — printable documents)
 //   README.md                  (optional)
 //
 // Bundles are self-describing and may be hosted by any marketplace, or even
@@ -85,6 +86,10 @@ type Bundle struct {
 	// `/v1/addons/{key}/i18n/{lang}.json` can serve them to host frontends
 	// without re-reading the archive on every request.
 	Locales map[string][]byte
+	// Templates holds printable HTML files keyed by bundle-relative path
+	// (e.g. "templates/cash-cut-80mm.html"). Hosts persist these next to
+	// the manifest so org-level Plantillas overlays have a default to read.
+	Templates map[string][]byte
 	// Readme is the raw README.md content, if any.
 	Readme string
 	// RawSize is the total decompressed byte count (useful for quotas).
@@ -128,6 +133,7 @@ func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
 		Frontend:     map[string][]byte{},
 		Backend:      map[string][]byte{},
 		Locales:      map[string][]byte{},
+		Templates:    map[string][]byte{},
 		EntryDigests: map[string]string{},
 	}
 	var total int64
@@ -195,6 +201,10 @@ func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
 			// archive. Non-JSON files under locales/ are ignored on purpose
 			// (e.g. README, .gitkeep) so an extra doc never crashes Read.
 			b.Locales[h.Name] = data
+		case strings.HasPrefix(h.Name, "templates/") && strings.HasSuffix(h.Name, ".html"):
+			// Printable document defaults (POS tickets, cash cuts, POs). Copy
+			// because `data` aliases a reused read buffer.
+			b.Templates[h.Name] = append([]byte(nil), data...)
 		case h.Name == "README.md":
 			b.Readme = string(data)
 		}
@@ -312,8 +322,9 @@ var epoch = time.Unix(0, 0).UTC()
 // Write serializes a Bundle into a deterministic tar.gz stream.
 //
 // Entries are emitted in a stable order: manifest.json, migrations/* (sorted
-// by Version), frontend/* (sorted by key), README.md. All entries use a
-// fixed mtime (unix 0) so identical inputs produce byte-identical outputs.
+// by Version), frontend/*, backend/*, locales/*, templates/*, README.md.
+// All entries use a fixed mtime (unix 0) so identical inputs produce
+// byte-identical outputs.
 func Write(w io.Writer, b *Bundle) error {
 	if b == nil {
 		return fmt.Errorf("bundle: nil")
@@ -412,7 +423,23 @@ func Write(w io.Writer, b *Bundle) error {
 		}
 	}
 
-	// 6. README.md
+	// 6. templates — printable HTML, sorted by path.
+	tkeys := make([]string, 0, len(b.Templates))
+	for k := range b.Templates {
+		tkeys = append(tkeys, k)
+	}
+	sort.Strings(tkeys)
+	for _, k := range tkeys {
+		name := k
+		if !strings.HasPrefix(name, "templates/") {
+			name = path.Join("templates", k)
+		}
+		if err := write(name, b.Templates[k]); err != nil {
+			return err
+		}
+	}
+
+	// 7. README.md
 	if b.Readme != "" {
 		if err := write("README.md", []byte(b.Readme)); err != nil {
 			return err

@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **bundle: retain `templates/*.html`** — `Read` hashed printable HTML (POS
+  tickets, cash cuts, POs) into `EntryDigests` then dropped the bytes. Hosts
+  that persist only typed fields (`manifest` + `backend` + `locales`) 500 on
+  Plantillas. `Templates` now round-trips through Read/Write like `Locales`.
+
 ### Added
 
 - **manifest v3: `NavItem.requires` + `requires_capabilities`** — screens declare
