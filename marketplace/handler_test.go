@@ -659,6 +659,51 @@ func TestUninstall_DepBlock_ReturnsConflictWithDependents(t *testing.T) {
 	}
 }
 
+func TestUninstall_DuplicateInstallRows_DedupedDependents(t *testing.T) {
+	db := setupDB(t)
+	seedInstalled(t, db, "caja", "0.2.0")
+	seedInstalledWithRequires(t, db, "pos", "", []string{"customers", "caja"})
+	seedInstalledWithRequires(t, db, "pos", "Punto de venta", []string{"customers", "caja"})
+	app := newTestApp(t, db)
+
+	req := makeJSONReq(t, "POST", "/marketplace/uninstall", map[string]any{
+		"addonKey": "caja",
+	})
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("test request: %v", err)
+	}
+	if resp.StatusCode != 409 {
+		t.Fatalf("expected 409, got %d (body=%s)", resp.StatusCode, dumpBody(resp))
+	}
+	deps := readBody(t, resp)["data"].(map[string]any)["dependents"].([]any)
+	if len(deps) != 1 {
+		t.Fatalf("expected 1 unique dependent, got %v", deps)
+	}
+	if deps[0].(map[string]any)["key"] != "pos" {
+		t.Fatalf("expected pos, got %v", deps[0])
+	}
+}
+
+func TestUninstall_OptionalPeerNotInRequires_Passes(t *testing.T) {
+	db := setupDB(t)
+	seedInstalled(t, db, "caja", "0.2.0")
+	// Hard POS deps only — caja is optional:true in the manifest so extractRequires omits it.
+	seedInstalledWithRequires(t, db, "pos", "Punto de venta", []string{"customers", "inventory", "products"})
+	app := newTestApp(t, db)
+
+	req := makeJSONReq(t, "POST", "/marketplace/uninstall", map[string]any{
+		"addonKey": "caja",
+	})
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("test request: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200 uninstalling optional peer, got %d (body=%s)", resp.StatusCode, dumpBody(resp))
+	}
+}
+
 func TestUninstall_NoDependents_Passes(t *testing.T) {
 	db := setupDB(t)
 	// Only one addon installed → no reverse deps possible.
