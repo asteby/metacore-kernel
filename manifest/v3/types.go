@@ -953,6 +953,9 @@ type DocumentDef struct {
 	// It may contain {{record.<col>}} tokens the host expands. When empty the
 	// host falls back to "<key>-<id>".
 	Filename string `json:"filename,omitempty"`
+	// Label is an optional human title for the host Plantillas catalog
+	// ("Ticket de venta"). When empty the host falls back to the key.
+	Label string `json:"label,omitempty"`
 }
 
 // DashboardWidget is one tile an addon contributes to the host's modular
