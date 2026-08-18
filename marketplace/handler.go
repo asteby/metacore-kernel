@@ -101,11 +101,10 @@ type Installation struct {
 	DataPolicy string `gorm:"size:20;column:data_policy" json:"data_policy,omitempty"`
 
 	// Requires is the list of OTHER addon keys this installation declares
-	// under `compatibility.requires[]` (excluding the reserved "kernel" key).
-	// It is captured at install time from the bundle manifest so the uninstall
-	// path can answer "who depends on X?" with a single indexed query instead
-	// of walking every other installation's manifest blob. Empty for lite-mode
-	// installs (no bundle parsed) and for legacy rows that predate the field.
+	// as HARD `compatibility.requires[]` (excluding reserved "kernel" and
+	// `optional: true` peers). Captured at install/upgrade from the bundle
+	// so uninstall can answer "who depends on X?" without re-reading
+	// manifests. Optional recommendations (POS → caja) must not appear here.
 	Requires AddonKeyList `gorm:"serializer:json;type:jsonb;column:requires" json:"requires,omitempty"`
 }
 
@@ -357,11 +356,13 @@ func (h *Handler) install(c fiber.Ctx) error {
 }
 
 // extractRequires reads the bundle's preserved v3 RawManifest and returns the
-// addon-level deps declared under compatibility.requires[] (the reserved
-// "kernel" key is filtered — it is a runtime range, not a dep). Returns nil
-// for legacy v2 bundles or v3 manifests that declare no requires. The bundle
-// is read defensively: any parse error degrades to nil so a malformed manifest
-// that nonetheless installed (the security gate is upstream) cannot crash the
+// HARD addon-level deps declared under compatibility.requires[] (the reserved
+// "kernel" key is filtered — it is a runtime range, not a dep). Optional
+// peers (optional: true) are recommendations, not uninstall blockers: POS
+// can sell without caja, accounting_lite, etc. Returns nil for legacy v2
+// bundles or v3 manifests that declare no hard requires. The bundle is read
+// defensively: any parse error degrades to nil so a malformed manifest that
+// nonetheless installed (the security gate is upstream) cannot crash the
 // dep-graph capture.
 func extractRequires(b *bundle.Bundle) AddonKeyList {
 	if b == nil || len(b.RawManifest) == 0 {
@@ -377,7 +378,7 @@ func extractRequires(b *bundle.Bundle) AddonKeyList {
 	out := make(AddonKeyList, 0, len(m.Compatibility.Requires))
 	for _, r := range m.Compatibility.Requires {
 		key := strings.TrimSpace(r.Key)
-		if key == "" || key == "kernel" {
+		if key == "" || key == "kernel" || r.Optional {
 			continue
 		}
 		out = append(out, key)
@@ -752,17 +753,23 @@ func (h *Handler) findDependents(c fiber.Ctx, orgID uuid.UUID, addonKey string) 
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
+	seen := make(map[string]struct{})
 	out := make([]dependent, 0)
 	for _, r := range rows {
 		for _, dep := range r.Requires {
-			if dep == addonKey {
-				name := r.Name
-				if name == "" {
-					name = r.AddonKey
-				}
-				out = append(out, dependent{Key: r.AddonKey, Name: name})
+			if dep != addonKey {
+				continue
+			}
+			if _, dup := seen[r.AddonKey]; dup {
 				break
 			}
+			seen[r.AddonKey] = struct{}{}
+			name := r.Name
+			if name == "" {
+				name = r.AddonKey
+			}
+			out = append(out, dependent{Key: r.AddonKey, Name: name})
+			break
 		}
 	}
 	return out, nil
@@ -982,6 +989,10 @@ func (h *Handler) upgrade(c fiber.Ctx) error {
 	row.CompletedAt = &now
 	row.Status = "installed"
 	row.ErrorMessage = ""
+	// Refresh the reverse-dep snapshot so optional peers dropped (or added
+	// as hard requires) in the new manifest stop blocking uninstall of
+	// siblings the addon can run without.
+	row.Requires = extractRequires(b)
 	if err := h.db.Save(&row).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,

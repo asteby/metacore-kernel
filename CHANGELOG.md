@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **marketplace uninstall: optional `requires` are not blockers** — `extractRequires`
+  skipped only `kernel`; POS's `caja` (`optional: true`) was snapshotted as a hard
+  reverse-dep, so uninstalling Caja demanded removing POS. Optional peers are
+  omitted, upgrades refresh the snapshot, and duplicate install rows are
+  de-duplicated in the 409 dependents list.
+
 - **bundle: retain `templates/*.html`** — `Read` hashed printable HTML (POS
   tickets, cash cuts, POs) into `EntryDigests` then dropped the bytes. Hosts
   that persist only typed fields (`manifest` + `backend` + `locales`) 500 on
