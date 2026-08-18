@@ -1245,6 +1245,10 @@
         "filename": {
           "type": "string",
           "description": "Optional download filename (without .pdf), may contain {{record.<col>}} tokens."
+        },
+        "label": {
+          "type": "string",
+          "description": "Optional human title for the host Plantillas catalog (e.g. 'Ticket de venta'). When empty the host falls back to the key."
         }
       }
     },

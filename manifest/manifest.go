@@ -163,6 +163,7 @@ type DocumentDef struct {
 	Template string `json:"template"`
 	Paper    string `json:"paper"`
 	Filename string `json:"filename,omitempty"`
+	Label    string `json:"label,omitempty"`
 }
 
 // ConnectorDef is the host/runtime projection of a v3 Connector: a third-party

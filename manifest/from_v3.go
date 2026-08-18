@@ -147,6 +147,7 @@ func mapDocuments(m *v3.Manifest) []DocumentDef {
 			Template: d.Template,
 			Paper:    d.Paper,
 			Filename: d.Filename,
+			Label:    d.Label,
 		})
 	}
 	return out

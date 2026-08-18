@@ -29,7 +29,7 @@ const documentsManifestJSON = `{
   ],
   "contributions": {
     "documents": [
-      { "key": "remision", "model": "Order", "template": "templates/remision.html", "paper": "A4", "filename": "remision-{{record.folio}}" },
+      { "key": "remision", "model": "Order", "template": "templates/remision.html", "paper": "A4", "filename": "remision-{{record.folio}}", "label": "Remisión" },
       { "key": "ticket", "model": "Order", "template": "templates/ticket.html", "paper": "ticket80" }
     ]
   }
@@ -60,7 +60,7 @@ func TestFromV3_ProjectsDocumentsToHostManifest(t *testing.T) {
 	remision := host.Documents[0]
 	if remision.Key != "remision" || remision.Model != "Order" ||
 		remision.Template != "templates/remision.html" || remision.Paper != "A4" ||
-		remision.Filename != "remision-{{record.folio}}" {
+		remision.Filename != "remision-{{record.folio}}" || remision.Label != "Remisión" {
 		t.Fatalf("remision projection wrong: %+v", remision)
 	}
 	if host.Documents[1].Paper != "ticket80" {
