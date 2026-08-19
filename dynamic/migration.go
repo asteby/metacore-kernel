@@ -16,7 +16,12 @@ import (
 type Migration struct {
 	ID        uint64    `gorm:"primaryKey"`
 	AddonKey  string    `gorm:"size:100;not null;uniqueIndex:idx_addon_ver"`
-	Version   string    `gorm:"size:40;not null;uniqueIndex:idx_addon_ver"`
+	// Was size:40 — tight enough that a normal descriptive filename
+	// ("<n>_<what>_<why>.up", e.g. pos@017_sale_payment_organization_id_tenant_schema)
+	// blew past it and aborted the upgrade with SQLSTATE 22001 before running
+	// any SQL (see asteby-hq/addons#930). AutoMigrate widens the column on
+	// existing installs; no manual ALTER needed.
+	Version   string    `gorm:"size:100;not null;uniqueIndex:idx_addon_ver"`
 	Checksum  string    `gorm:"size:64;not null"`
 	AppliedAt time.Time `gorm:"autoCreateTime"`
 }
