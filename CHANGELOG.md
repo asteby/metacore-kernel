@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **dynamic: `metacore_addon_migrations.version` widened to `varchar(100)`** —
+  was `varchar(40)`, tight enough that a normal descriptive migration filename
+  (`pos@017_sale_payment_organization_id_tenant_schema`, 49 chars) blew past
+  it and aborted the whole addon upgrade with `SQLSTATE 22001` before running
+  any SQL. `AutoMigrate` widens the column on existing installs, no manual
+  step needed.
+
 - **marketplace uninstall: optional `requires` are not blockers** — `extractRequires`
   skipped only `kernel`; POS's `caja` (`optional: true`) was snapshotted as a hard
   reverse-dep, so uninstalling Caja demanded removing POS. Optional peers are
