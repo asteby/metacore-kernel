@@ -1916,7 +1916,9 @@
           "type": "string",
           "description": "Name of ANOTHER field in the same action form (a header field or a sibling item-field) whose current value supplies this picker's cascade filter_value (used with the 'options' object form). The host projects it onto FieldDef.depends_on so the SDK scopes + re-fetches the dynamic_select options when the depended-on field changes. Empty = no cascade."
         },
-        "default": {},
+        "default": {
+          "description": "Initial value for this field. Free-form for the common case (a literal default). When the object carries the $prefillFromRecord key, it is instead the PrefillFromRecord directive (see $defs) — the 'if' below enforces that shape once opted in, without constraining every other field's default."
+        },
         "placeholder": {
           "type": "string"
         },
@@ -1989,6 +1991,26 @@
           "type": "string",
           "description": "Name of a column on the REMOTE model whose value (a CSS colour) the SDK uses to accent each option. Optional; ignored on non-reference fields."
         }
+      },
+      "if": {
+        "properties": {
+          "default": {
+            "type": "object",
+            "required": [
+              "$prefillFromRecord"
+            ]
+          }
+        },
+        "required": [
+          "default"
+        ]
+      },
+      "then": {
+        "properties": {
+          "default": {
+            "$ref": "#/$defs/PrefillFromRecord"
+          }
+        }
       }
     },
     "FieldBalanceRule": {
@@ -2015,6 +2037,57 @@
         "require_nonzero": {
           "type": "boolean",
           "description": "When true the field is only considered balanced if the totals match AND are greater than zero (an all-zero entry is rejected). Defaults to true."
+        }
+      }
+    },
+    "PrefillFromRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "$prefillFromRecord"
+      ],
+      "description": "Set as the 'default' of a type:'array' line-items field to seed its rows from a relation/array already present on the record the action modal opened against, instead of starting empty — e.g. a receive action prefilling one row per ordered line. SDK-interpreted convention (action-modal-dispatcher.tsx), not a host-side effect: the host never evaluates this, it only round-trips it through 'default' to the served FieldDef.",
+      "properties": {
+        "$prefillFromRecord": {
+          "type": "string",
+          "description": "Name of the relation/array field on the parent record whose rows seed this line-items field, e.g. 'items'."
+        },
+        "map": {
+          "type": "object",
+          "description": "Column key (in this item_fields field) -> source field key (on each row of the referenced relation). Omitted columns are left unset by the prefill.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "remaining": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "target",
+            "of"
+          ],
+          "description": "Derives one column's initial value per row as a subtraction of two OTHER columns already resolved on that row (typically one from 'map' and an accumulated-so-far counter) — e.g. the pending quantity still to receive. Numeric; missing operands read as 0. Rows whose result is <= 0 are dropped (already fully satisfied).",
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "Item field key to write the computed value into."
+            },
+            "of": {
+              "type": "string",
+              "description": "Item field key of the minuend (the total/expected amount)."
+            },
+            "minus": {
+              "type": "string",
+              "description": "Item field key of the subtrahend (the amount already accounted for). Optional — omitted reads as 0, i.e. the row's remaining value is simply 'of'."
+            }
+          }
+        },
+        "lock": {
+          "type": "array",
+          "description": "Item field keys that come pre-filled and read-only in every row this prefill generates (e.g. the product and the ordered/received-so-far context columns) — the user can only edit the remaining unlocked columns.",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },

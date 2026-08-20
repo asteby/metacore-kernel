@@ -640,3 +640,146 @@ func TestParse_ActionSteps_RoundTrip(t *testing.T) {
 		t.Fatalf("steps not parsed: %+v", steps)
 	}
 }
+
+// actionWithPrefill builds a receive-style action whose "lines" item-items
+// field carries the given value as "default" — the SDK-interpreted
+// $prefillFromRecord convention (action-modal-dispatcher.tsx), now typed as
+// $defs/PrefillFromRecord once the object opts in via the $prefillFromRecord
+// key. nil omits "default" entirely.
+func actionWithPrefill(t *testing.T, def interface{}) map[string]interface{} {
+	t.Helper()
+	field := map[string]interface{}{
+		"key":  "lines",
+		"type": "array",
+		"item_fields": []interface{}{
+			map[string]interface{}{"key": "product_id", "type": "select", "ref": "product"},
+			map[string]interface{}{"key": "ordered", "type": "number"},
+			map[string]interface{}{"key": "received_so_far", "type": "number"},
+			map[string]interface{}{"key": "qty_received", "type": "number", "required": true},
+		},
+	}
+	if def != nil {
+		field["default"] = def
+	}
+	m := baseValid()
+	m["contributions"] = map[string]interface{}{
+		"actions": []interface{}{
+			map[string]interface{}{
+				"key":          "receive_goods",
+				"target_model": "PurchaseOrder",
+				"handler":      map[string]interface{}{"type": "wasm", "function": "ReceiveGoods"},
+				"fields":       []interface{}{field},
+			},
+		},
+	}
+	return m
+}
+
+func TestValidate_PrefillFromRecord_Valid(t *testing.T) {
+	m := actionWithPrefill(t, map[string]interface{}{
+		"$prefillFromRecord": "items",
+		"map": map[string]interface{}{
+			"product_id":      "product_id",
+			"ordered":         "quantity",
+			"received_so_far": "received",
+		},
+		"remaining": map[string]interface{}{
+			"target": "qty_received",
+			"of":     "quantity",
+			"minus":  "received",
+		},
+		"lock": []interface{}{"product_id", "ordered", "received_so_far"},
+	})
+	if err := Validate(mustJSON(t, m)); err != nil {
+		t.Fatalf("expected valid $prefillFromRecord default, got error: %v", err)
+	}
+}
+
+func TestValidate_PrefillFromRecord_MinimalValid(t *testing.T) {
+	// Only the required $prefillFromRecord key — map/remaining/lock are all
+	// optional per $defs/PrefillFromRecord.
+	m := actionWithPrefill(t, map[string]interface{}{
+		"$prefillFromRecord": "items",
+	})
+	if err := Validate(mustJSON(t, m)); err != nil {
+		t.Fatalf("expected valid minimal $prefillFromRecord default, got error: %v", err)
+	}
+}
+
+func TestValidate_PrefillFromRecord_RemainingMissingMinusIsValid(t *testing.T) {
+	// buildPrefillRows (action-modal-dispatcher.tsx) treats remaining.minus as
+	// OPTIONAL — a missing minus reads as 0, i.e. remaining = "of" verbatim.
+	// The schema must not reject this real, supported shape.
+	m := actionWithPrefill(t, map[string]interface{}{
+		"$prefillFromRecord": "items",
+		"remaining": map[string]interface{}{
+			"target": "qty_received",
+			"of":     "quantity",
+			// "minus" omitted on purpose — valid.
+		},
+	})
+	if err := Validate(mustJSON(t, m)); err != nil {
+		t.Fatalf("expected remaining without minus to be valid, got error: %v", err)
+	}
+}
+
+func TestValidate_PrefillFromRecord_RemainingMissingOf(t *testing.T) {
+	// "of" (the minuend) IS required — remaining is meaningless without it.
+	m := actionWithPrefill(t, map[string]interface{}{
+		"$prefillFromRecord": "items",
+		"remaining": map[string]interface{}{
+			"target": "qty_received",
+			"minus":  "received",
+			// "of" omitted on purpose.
+		},
+	})
+	err := Validate(mustJSON(t, m))
+	if err == nil || !strings.Contains(err.Error(), "of") {
+		t.Fatalf("expected an 'of' validation error, got: %v", err)
+	}
+}
+
+func TestValidate_PrefillFromRecord_UnknownKeyRejected(t *testing.T) {
+	// additionalProperties:false on $defs/PrefillFromRecord — a typo'd key
+	// (e.g. "maps" instead of "map") must fail loudly, not be silently
+	// ignored, once the object opts in via $prefillFromRecord.
+	m := actionWithPrefill(t, map[string]interface{}{
+		"$prefillFromRecord": "items",
+		"maps":               map[string]interface{}{"ordered": "quantity"},
+	})
+	if err := Validate(mustJSON(t, m)); err == nil {
+		t.Fatalf("expected an error for the unknown 'maps' key, got nil")
+	}
+}
+
+func TestValidate_ActionFieldDefault_PlainLiteralStillAllowed(t *testing.T) {
+	// A default that is NOT a $prefillFromRecord object (a plain literal, the
+	// pre-existing common case) stays unconstrained by the new "if/then".
+	m := actionWithPrefill(t, "walk-in")
+	if err := Validate(mustJSON(t, m)); err != nil {
+		t.Fatalf("expected a plain literal default to remain valid, got error: %v", err)
+	}
+}
+
+func TestParse_PrefillFromRecord_RoundTrip(t *testing.T) {
+	def := map[string]interface{}{
+		"$prefillFromRecord": "items",
+		"remaining": map[string]interface{}{
+			"target": "qty_received",
+			"of":     "quantity",
+			"minus":  "received",
+		},
+	}
+	m := actionWithPrefill(t, def)
+	parsed, err := Parse(mustJSON(t, m))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got, ok := parsed.Contributions.Actions[0].Fields[0].Default.(map[string]interface{})
+	if !ok {
+		t.Fatalf("Default did not round-trip as an object: %+v", parsed.Contributions.Actions[0].Fields[0].Default)
+	}
+	if got["$prefillFromRecord"] != "items" {
+		t.Fatalf("Default[$prefillFromRecord] = %v, want %q", got["$prefillFromRecord"], "items")
+	}
+}
