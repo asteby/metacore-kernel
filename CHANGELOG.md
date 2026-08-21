@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`brand` — product identity HTTP contract.** Every metacore host exposes
+  a stable public surface at `GET /api/brand` (JSON: spec, key, name, color,
+  assets) plus `/api/brand/icon`, `/logo`, `/og`. This is PRODUCT identity
+  (Link / Ops / Pitsline / Hub), not tenant white-label (`/api/platform/branding`).
+  Handler is `net/http` so Fiber and chi mount the same bytes; SVG is served
+  under a sandboxed CSP so consumers can `<img src>` it. Hub cards and
+  OG/Google must use this URL instead of copying artwork.
+
 - **Laravel-style field validator (`validate` package + write/action path).**
   Manifest `Column.validation` / `ActionField.validation` (`regex`, `min`,
   `max`, `custom`) are now *executed* before create/update and before action
