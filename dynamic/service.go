@@ -16,6 +16,7 @@ import (
 	"github.com/asteby/metacore-kernel/modelbase"
 	"github.com/asteby/metacore-kernel/permission"
 	"github.com/asteby/metacore-kernel/query"
+	"github.com/asteby/metacore-kernel/validate"
 )
 
 // Config wires the dynamic CRUD service.
@@ -183,6 +184,14 @@ type Config struct {
 	// dropped by coerce and any surviving violation surfaces from Postgres).
 	ValidationSchemaResolver ValidationSchemaResolver
 
+	// CustomValidatorResolver looks up a named write-time check (manifest
+	// ValidationRule.Custom / FieldDef.Validation.custom, e.g. "rfc.tax_id").
+	// Returning nil skips the slug (unresolved $org refs never crash a write).
+	// Builtins (email, uuid, url, numeric, integer) live in package validate
+	// and apply even when this resolver is nil. Hosts typically wrap
+	// validate.Register + org-config here.
+	CustomValidatorResolver validate.Resolver
+
 	// SequenceResolver returns the folio-sequence config for a model name —
 	// host-wired from the addon registry, like the resolvers above. When set,
 	// Service.Create auto-stamps every sequence-bound column left empty with the
@@ -283,6 +292,7 @@ type Service struct {
 	stageMachines     StageMachineResolver
 	constraints       ConstraintResolver
 	validationSchema  ValidationSchemaResolver
+	customValidators  validate.Resolver
 	sequences         SequenceResolver
 	authExtractor     adapters.AuthUserExtractor
 	selfOptions       bool
@@ -353,6 +363,7 @@ func New(cfg Config) *Service {
 		stageMachines:     cfg.StageMachineResolver,
 		constraints:       cfg.ConstraintResolver,
 		validationSchema:  cfg.ValidationSchemaResolver,
+		customValidators:  cfg.CustomValidatorResolver,
 		sequences:         cfg.SequenceResolver,
 		authExtractor:     cfg.AuthUserExtractor,
 		selfOptions:       cfg.EnableSelfOptions,

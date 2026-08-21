@@ -885,6 +885,10 @@
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
           "description": "Assigns this column to a form_layout section/step by its key: the SDK places the field's input inside the matching form_layout.sections[] block (a collapsible section in mode 'sections', a wizard step in mode 'steps'). Columns without a section fall into an implicit 'General' block (or the first declared one). Pure UI metadata (maps to ColumnDef/FieldDef.section) — the DDL and write planes ignore it."
+        },
+        "validation": {
+          "$ref": "#/$defs/FieldValidation",
+          "description": "Write-time constraint the kernel enforces on create/update (regex / min / max / custom) and the SDK pre-flights. Codes are locale-agnostic; the SDK localizes them to the operator's language. Same shape as ActionField.validation. Optional."
         }
       }
     },
@@ -2178,7 +2182,7 @@
     "FieldValidation": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Client-side validation hints the SDK reads off the manifest-served action metadata.",
+      "description": "Write-time + client-side validation. The kernel enforces these on create/update and action payloads (locale-agnostic codes); the SDK localizes them to the operator's language with the field label.",
       "properties": {
         "regex": {
           "type": "string"
@@ -2190,7 +2194,8 @@
           "type": "number"
         },
         "custom": {
-          "type": "string"
+          "type": "string",
+          "description": "Named validator slug (e.g. 'email', 'rfc.tax_id') or a $org.<key> reference the host resolves at serve time."
         }
       }
     },

@@ -89,6 +89,9 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			// Section rides through onto the served column so a consumer that
 			// derives the modal from table metadata still sees the form grouping.
 			Section: c.Section,
+			// Validation rides through so a consumer that derives the modal from
+			// table metadata still pre-flights regex/min/max/custom.
+			Validation: toModelbaseValidation(c.Validation),
 		}
 		// Stage machine: when this column is the model's stage_field and the
 		// model declares stages, derive a `status` display + the option list
@@ -284,6 +287,16 @@ func toVisibleWhen(in *manifest.VisibleWhenDef) *modelbase.VisibleWhen {
 	}
 }
 
+func toModelbaseValidation(in *manifest.ValidationRule) *modelbase.ValidationRule {
+	if in == nil {
+		return nil
+	}
+	if in.Regex == "" && in.Min == nil && in.Max == nil && in.Custom == "" {
+		return nil
+	}
+	return &modelbase.ValidationRule{Regex: in.Regex, Min: in.Min, Max: in.Max, Custom: in.Custom}
+}
+
 // DeriveFormFields builds default create/edit form fields from a model
 // definition's physical column list, for addon models that ship no modal spec.
 // Managed columns (id/created_at/updated_at/organization_id/deleted_at) are
@@ -366,6 +379,9 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 			// groups fields by Section against the model's DeriveFormLayout). Empty
 			// = the implicit "General" block.
 			Section: c.Section,
+			// Validation projects the write-time constraint so the SDK pre-flights
+			// the same regex/min/max/custom codes the kernel enforces on create.
+			Validation: toModelbaseValidation(c.Validation),
 		})
 	}
 	return out

@@ -10,6 +10,7 @@ import (
 
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/modelbase"
+	"github.com/asteby/metacore-kernel/validate"
 )
 
 // ValidationSchemaResolver returns the declarative column definitions the
@@ -186,8 +187,13 @@ func (s *Service) validateWrite(ctx context.Context, model, tableName string, us
 			}
 			if dup {
 				ve.add(name, codeDuplicate, nil)
-				continue
 			}
+		}
+
+		// Declarative ValidationRule (regex / min / max / custom) — Laravel-style
+		// additive checks the kernel used to author-validate but never execute.
+		for _, iss := range s.checkSpec(raw, specFromColumn(col)) {
+			ve.add(name, iss.Code, iss.Params)
 		}
 	}
 
@@ -195,6 +201,115 @@ func (s *Service) validateWrite(ctx context.Context, model, tableName string, us
 		return nil
 	}
 	return ve
+}
+
+func specFromColumn(col manifest.ColumnDef) validate.Spec {
+	spec := validate.Spec{Type: col.Type}
+	if col.Validation == nil {
+		return spec
+	}
+	spec.Regex = col.Validation.Regex
+	spec.Min = col.Validation.Min
+	spec.Max = col.Validation.Max
+	spec.Custom = col.Validation.Custom
+	return spec
+}
+
+func specFromField(f manifest.FieldDef) validate.Spec {
+	spec := validate.Spec{Required: f.Required, Type: f.Type}
+	if f.Validation != nil {
+		spec.Regex = f.Validation.Regex
+		spec.Min = f.Validation.Min
+		spec.Max = f.Validation.Max
+		spec.Custom = f.Validation.Custom
+	}
+	if len(f.Options) > 0 {
+		for _, o := range f.Options {
+			spec.Options = append(spec.Options, o.Value)
+		}
+	}
+	return spec
+}
+
+func (s *Service) checkSpec(raw any, spec validate.Spec) []validate.Issue {
+	if s.customValidators != nil {
+		return validate.CheckWithResolver(raw, spec, s.customValidators)
+	}
+	return validate.Check(raw, spec)
+}
+
+// validateActionPayload runs the same structured validator against an action
+// form payload BEFORE the trigger dispatches, so a missing/invalid field is a
+// 422 {errors:{field:[{code,params}]}} instead of a generic guest error.
+// Walks Fields and every wizard step; line-items use dotted keys `items.0.qty`.
+func (s *Service) validateActionPayload(def *manifest.ActionDef, payload map[string]any) error {
+	if def == nil {
+		return nil
+	}
+	fields := append([]manifest.FieldDef{}, def.Fields...)
+	for _, st := range def.Steps {
+		fields = append(fields, st.Fields...)
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	ve := &ValidationError{}
+	validateFieldList(s, ve, fields, payload, "")
+	if ve.Empty() {
+		return nil
+	}
+	return ve
+}
+
+func validateFieldList(s *Service, ve *ValidationError, fields []manifest.FieldDef, payload map[string]any, prefix string) {
+	for _, f := range fields {
+		key := f.Key
+		if key == "" {
+			key = f.Name
+		}
+		if key == "" {
+			continue
+		}
+		path := key
+		if prefix != "" {
+			path = prefix + "." + key
+		}
+		raw := payload[key]
+		if len(f.ItemFields) > 0 {
+			rows := asRowSlice(raw)
+			if f.Required && len(rows) == 0 {
+				ve.add(path, validate.CodeLineItemsRequired, nil)
+				continue
+			}
+			for i, row := range rows {
+				validateFieldList(s, ve, f.ItemFields, row, fmt.Sprintf("%s.%d", path, i))
+			}
+			continue
+		}
+		for _, iss := range s.checkSpec(raw, specFromField(f)) {
+			ve.add(path, iss.Code, iss.Params)
+		}
+	}
+}
+
+func asRowSlice(raw any) []map[string]any {
+	switch v := raw.(type) {
+	case []map[string]any:
+		return v
+	case []any:
+		out := make([]map[string]any, 0, len(v))
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // optionAllows reports whether raw matches one of the static options and, when

@@ -225,11 +225,13 @@ type ModalMetadata struct {
 
 // FieldDef describes a single form field inside a ModalMetadata.
 //
-// Validation accepts either a legacy literal pattern (e.g. "email") or a
-// `$org.<key>` reference resolved at runtime against the org config — same
-// contract as ColumnDef.Validation.Custom. Ref points at a foreign-key target
-// model so the SDK can resolve the field's option list against the canonical
-// `/api/options/:ref?field=id` endpoint.
+// Validation is the structured rule the kernel enforces and the SDK
+// pre-flights. JSON accepts either `{regex,min,max,custom}` or a Laravel /
+// go-playground / custom-slug string (see ValidationRule.UnmarshalJSON).
+// `$org.<key>` tokens in Custom are resolved at serve time against the org
+// config — same contract as ColumnDef.Validation.Custom. Ref points at a
+// foreign-key target model so the SDK can resolve the field's option list
+// against the canonical `/api/options/:ref?field=id` endpoint.
 type FieldDef struct {
 	Key      string `json:"key"`
 	Label    string `json:"label"`
@@ -248,13 +250,13 @@ type FieldDef struct {
 	// the payload retro-compatible (a NOT NULL / required field simply omits it).
 	Nullable bool `json:"nullable,omitempty"`
 
-	Validation     string      `json:"validation,omitempty"`
-	Options        []OptionDef `json:"options,omitempty"`
-	DefaultValue   interface{} `json:"defaultValue,omitempty"`
-	HideInView     bool        `json:"hideInView,omitempty"`
-	SearchEndpoint string      `json:"searchEndpoint,omitempty"`
-	Placeholder    string      `json:"placeholder,omitempty"`
-	Ref            string      `json:"ref,omitempty"`
+	Validation     *ValidationRule `json:"validation,omitempty"`
+	Options        []OptionDef     `json:"options,omitempty"`
+	DefaultValue   interface{}     `json:"defaultValue,omitempty"`
+	HideInView     bool            `json:"hideInView,omitempty"`
+	SearchEndpoint string          `json:"searchEndpoint,omitempty"`
+	Placeholder    string          `json:"placeholder,omitempty"`
+	Ref            string          `json:"ref,omitempty"`
 
 	// OptionsSource names a DYNAMIC options provider the HOST resolves when
 	// serving this metadata, materialising the localized value/label list onto

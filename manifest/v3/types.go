@@ -746,6 +746,12 @@ type Column struct {
 	// server-side as usual. Use it for columns filled by an outbound sync, an
 	// external id, or any value the user must never hand-edit.
 	Readonly bool `json:"readonly,omitempty"`
+
+	// Validation is the write-time constraint the kernel enforces on create/
+	// update (regex / min / max / custom) and the SDK pre-flights in the form.
+	// Same shape as ActionField.validation. Nil = no extra rules (not_null
+	// still applies as `required`). Optional.
+	Validation *FieldValidation `json:"validation,omitempty"`
 }
 
 // VisibleWhen is a single-sibling conditional-visibility predicate for a form
@@ -1526,8 +1532,9 @@ type OptionCondition struct {
 	NotIn []string `json:"not_in,omitempty"`
 }
 
-// FieldValidation carries client-side validation hints for an action field.
-// The SDK reads these directly from the manifest-served action metadata.
+// FieldValidation carries write-time + client-side validation for a column or
+// action field. The kernel enforces these on create/update / action payload
+// (locale-agnostic codes); the SDK localizes them to the operator's language.
 type FieldValidation struct {
 	Regex  string   `json:"regex,omitempty"`
 	Min    *float64 `json:"min,omitempty"`

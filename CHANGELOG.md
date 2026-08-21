@@ -7,6 +7,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Laravel-style field validator (`validate` package + write/action path).**
+  Manifest `Column.validation` / `ActionField.validation` (`regex`, `min`,
+  `max`, `custom`) are now *executed* before create/update and before action
+  dispatch — not just author-checked. Failures collect into one
+  `*ValidationError` (HTTP 422 `{ message: "validation.failed", errors: {
+  field: [{code, params}] } }`). Codes stay locale-agnostic (`required`,
+  `min`, `max`, `regex`, `email`, `uuid`, `url`, …); the SDK localizes them
+  to the operator's language with the field label. `validate.ParseRuleString`
+  also accepts Laravel pipes (`required|min:2|email`) and go-playground
+  strings (`required,min=2`). Hosts register named checks via
+  `validate.Register` / `Config.CustomValidatorResolver`. Line-items use
+  dotted keys (`items.0.qty`). `DeriveTableColumns` / `DeriveFormFields`
+  project the rule onto served metadata so the SDK pre-flights the same
+  codes.   Additive: columns/actions without `validation` behave as before.
+
+### Changed
+
+- **`modelbase.FieldDef.Validation` is `*ValidationRule`, not a string.**
+  JSON still accepts Laravel / go-playground strings (`"required,min=2"`) via
+  `UnmarshalJSON`. Go literals that assigned a string must switch to
+  `&ValidationRule{Min, Max, Regex, Custom}`. Wire format for served metadata
+  is now the object the SDK already expected.
+
 ### Fixed
 
 - **dynamic: `metacore_addon_migrations.version` widened to `varchar(100)`** —

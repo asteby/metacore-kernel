@@ -417,6 +417,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// Section rides through so form derivation projects the field's
 				// form_layout section/step key onto the served FieldDef. Pure UI.
 				Section: c.Section,
+				// Validation is the write-time constraint (regex/min/max/custom)
+				// the kernel executes on create/update and the SDK pre-flights.
+				Validation: mapFieldValidation(c.Validation),
 			}
 			// Options is EITHER the STATIC-select list (array form) OR the
 			// DYNAMIC dependent-source object (DynamicOptions). The static list
@@ -908,6 +911,16 @@ func mapVisibleWhen(w *v3.VisibleWhen) *VisibleWhenDef {
 	}
 }
 
+func mapFieldValidation(v *v3.FieldValidation) *ValidationRule {
+	if v == nil {
+		return nil
+	}
+	if v.Regex == "" && v.Min == nil && v.Max == nil && v.Custom == "" {
+		return nil
+	}
+	return &ValidationRule{Regex: v.Regex, Min: v.Min, Max: v.Max, Custom: v.Custom}
+}
+
 // mapImportSpec projects a v3 model's `import` block onto the legacy carrier
 // the host converts into a modelbase.ImportSpec. Nil in, nil out: a model that
 // declares nothing keeps the derived-spec behaviour.
@@ -1017,6 +1030,9 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 			// VisibleWhen forwards the conditional-visibility predicate so the SDK
 			// shows/hides this action field against the live form values.
 			VisibleWhen: mapVisibleWhen(f.VisibleWhen),
+			// Validation rides through so the kernel enforces regex/min/max/custom
+			// on the action payload and the SDK pre-flights the same codes.
+			Validation: mapFieldValidation(f.Validation),
 		}
 		// Options is EITHER the static value/label list (array form) OR the
 		// dynamic dependent-source object (DynamicOptions). The static list rides

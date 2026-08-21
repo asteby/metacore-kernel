@@ -626,6 +626,12 @@ type FieldDef struct {
 	// action FieldDef so the SDK's action-modal renderer shows/hides the field
 	// against the live form values. Nil = always visible. Pure UI metadata.
 	VisibleWhen *VisibleWhenDef `json:"visible_when,omitempty"`
+
+	// Validation is the structured write-time constraint the kernel enforces
+	// on action payloads (and the SDK pre-flights). JSON tag matches the v3
+	// ActionField / served modelbase field so regex/min/max/custom survive the
+	// host round-trip. Nil = no extra rules (required still applies).
+	Validation *ValidationRule `json:"validation,omitempty"`
 }
 
 // FieldBalanceRule mirrors manifest/v3 FieldBalanceRule with identical JSON
