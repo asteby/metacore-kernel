@@ -1703,7 +1703,7 @@
     "FieldValidation": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Client-side validation hints the SDK reads off the manifest-served action metadata.",
+      "description": "Write-time + client-side validation. The kernel enforces these on create/update and action payloads (locale-agnostic codes); the SDK localizes them to the operator's language with the field label.",
       "properties": {
         "regex": {
           "type": "string"

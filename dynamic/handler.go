@@ -431,7 +431,7 @@ func (h *Handler) handleError(c fiber.Ctx, err error) error {
 	if errors.As(err, &ve) {
 		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
 			"success": false,
-			"message": "validation failed",
+			"message": "validation.failed",
 			"errors":  ve.Fields,
 		})
 	}

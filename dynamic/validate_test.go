@@ -233,3 +233,75 @@ func TestValidate_UpdateExcludesSelfFromUnique(t *testing.T) {
 		t.Fatalf("self-update should pass, got %v", err)
 	}
 }
+
+func TestValidate_RegexAndMin(t *testing.T) {
+	min := 3.0
+	db := setupValidationDB(t)
+	modelbase.Register("val_items", func() modelbase.ModelDefiner { return &ValItem{} })
+	modelbase.Register("val_categories", func() modelbase.ModelDefiner { return &ValCategory{} })
+	svc := New(Config{
+		DB:       db,
+		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
+		ValidationSchemaResolver: func(_ context.Context, model string) ([]manifest.ColumnDef, bool) {
+			if model != "val_items" {
+				return nil, false
+			}
+			return []manifest.ColumnDef{
+				{Name: "name", Type: "string", Required: true},
+				{Name: "sku", Type: "string", Validation: &manifest.ValidationRule{
+					Min:   &min,
+					Regex: `^[A-Z]+$`,
+				}},
+			}, true
+		},
+	})
+	user := newUser(uuid.New())
+	_, err := svc.Create(context.Background(), "val_items", user, map[string]any{
+		"name": "Widget", "sku": "ab",
+	})
+	codes := fieldCodes(t, err, "sku")
+	if !hasCode(codes, "min") || !hasCode(codes, "regex") {
+		t.Fatalf("want min+regex on sku, got %v (%v)", codes, err)
+	}
+}
+
+func TestValidateActionPayload_MissingRequired(t *testing.T) {
+	svc := validationService(t, setupValidationDB(t))
+	def := &manifest.ActionDef{
+		Key: "ship",
+		Fields: []manifest.FieldDef{
+			{Key: "carrier", Type: "string", Required: true},
+			{Key: "tracking", Type: "string", Validation: &manifest.ValidationRule{Custom: "email"}},
+		},
+	}
+	err := svc.validateActionPayload(def, map[string]any{"tracking": "not-an-email"})
+	if !hasCode(fieldCodes(t, err, "carrier"), codeRequired) {
+		t.Fatalf("want required on carrier, got %v", err)
+	}
+	if !hasCode(fieldCodes(t, err, "tracking"), "email") {
+		t.Fatalf("want email on tracking, got %v", err)
+	}
+}
+
+func TestValidateActionPayload_LineItemsDottedKeys(t *testing.T) {
+	svc := validationService(t, setupValidationDB(t))
+	def := &manifest.ActionDef{
+		Key: "receive",
+		Fields: []manifest.FieldDef{
+			{
+				Key:      "items",
+				Type:     "array",
+				Required: true,
+				ItemFields: []manifest.FieldDef{
+					{Key: "qty", Type: "number", Required: true},
+				},
+			},
+		},
+	}
+	err := svc.validateActionPayload(def, map[string]any{
+		"items": []any{map[string]any{"qty": ""}},
+	})
+	if !hasCode(fieldCodes(t, err, "items.0.qty"), codeRequired) {
+		t.Fatalf("want required on items.0.qty, got %v", err)
+	}
+}

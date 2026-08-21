@@ -86,7 +86,10 @@ func (s *Service) modalOrgValidatorTransformer() ModalTransformer {
 			return nil
 		}
 		for i := range meta.Fields {
-			meta.Fields[i].Validation = resolveOrgRef(ctx, meta.Fields[i].Validation, resolver)
+			if meta.Fields[i].Validation == nil {
+				continue
+			}
+			meta.Fields[i].Validation.Custom = resolveOrgRef(ctx, meta.Fields[i].Validation.Custom, resolver)
 		}
 		return nil
 	}

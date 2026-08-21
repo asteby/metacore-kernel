@@ -235,8 +235,8 @@ func TestService_OrgConfigResolver_ResolvesFieldDefValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetModal: %v", err)
 	}
-	if got := modal.Fields[0].Validation; got != "rfc.tax_id" {
-		t.Fatalf("expected resolved validator, got %q", got)
+	if got := modal.Fields[0].Validation; got == nil || got.Custom != "rfc.tax_id" {
+		t.Fatalf("expected resolved validator, got %#v", got)
 	}
 }
 
@@ -262,7 +262,7 @@ func (m *orgRefModalModel) DefineTable() modelbase.TableMetadata { return modelb
 func (m *orgRefModalModel) DefineModal() modelbase.ModalMetadata {
 	return modelbase.ModalMetadata{
 		Fields: []modelbase.FieldDef{
-			{Key: "tax_id", Type: "text", Validation: "$org.tax_id_validator"},
+			{Key: "tax_id", Type: "text", Validation: &modelbase.ValidationRule{Custom: "$org.tax_id_validator"}},
 		},
 	}
 }

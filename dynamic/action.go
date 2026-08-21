@@ -150,6 +150,10 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 		}
 	}
 
+	if err := s.validateActionPayload(def, payload); err != nil {
+		return ActionResult{}, err
+	}
+
 	dispatcher, ok := s.actionDispatchers[trig.Type]
 	if !ok {
 		return ActionResult{}, fmt.Errorf("%w: %q", ErrUnsupportedTriggerType, trig.Type)
