@@ -131,9 +131,9 @@ func (f SubscriptionProviderFunc) SubscriptionsForOrg(ctx context.Context, orgID
 // (addonKey, installation), invokes `function` with payload, and returns the
 // guest's result bytes. A non-nil error means the invocation itself failed
 // (module missing, trap, timeout) and the delivery should be retried. A wasm
-// guest that returns a `{success:false}` envelope is NOT an invocation error —
-// the dispatcher treats a clean return as delivered (the guest owns its own
-// error semantics, same as action handlers).
+// guest that returns `{success:false}` is also an invocation error: the
+// dispatcher retries and records last_error. Intentional no-ops must return
+// `{success:true}` (optionally with data.skipped).
 type WasmInvoker interface {
 	InvokeFor(ctx context.Context, orgID, installation uuid.UUID, addonKey, function string, payload []byte, settings map[string]string) ([]byte, error)
 }

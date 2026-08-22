@@ -71,6 +71,39 @@ func deliveryID(eventName, eventRowID string, sub Subscription) string {
 // Safe to call repeatedly (GORM AutoMigrate is additive). Wire calls this
 // automatically; a host that owns migration timing can call it explicitly and
 // pass the already-migrated table to Wire.
+// ForgetDeliveries deletes every ledger row for one addon+event so the next
+// publish of the same occurrence is not a no-op. Use after a guest was
+// wrongly marked delivered (`success:false` treated as ok).
+func ForgetDeliveries(db *gorm.DB, tableName, addonKey, eventName string) (int64, error) {
+	if db == nil || addonKey == "" || eventName == "" {
+		return 0, nil
+	}
+	if tableName == "" {
+		tableName = DefaultTableName
+	}
+	res := db.Table(tableName).Where("addon_key = ? AND event = ?", addonKey, eventName).Delete(&Delivery{})
+	return res.RowsAffected, res.Error
+}
+
+// ForgetOccurrences deletes only the ledger rows whose DeliveryID matches
+// hash(event, occurrence, subscription) for the given subscriptions.
+func ForgetOccurrences(db *gorm.DB, tableName, eventName string, occurrenceIDs []string, subs []Subscription) (int64, error) {
+	if db == nil || eventName == "" || len(occurrenceIDs) == 0 || len(subs) == 0 {
+		return 0, nil
+	}
+	if tableName == "" {
+		tableName = DefaultTableName
+	}
+	ids := make([]string, 0, len(occurrenceIDs)*len(subs))
+	for _, occ := range occurrenceIDs {
+		for _, sub := range subs {
+			ids = append(ids, deliveryID(eventName, occ, sub))
+		}
+	}
+	res := db.Table(tableName).Where("delivery_id IN ?", ids).Delete(&Delivery{})
+	return res.RowsAffected, res.Error
+}
+
 func Migrate(db *gorm.DB, tableName string) error {
 	if tableName == "" {
 		tableName = DefaultTableName

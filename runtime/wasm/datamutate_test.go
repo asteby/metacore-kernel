@@ -573,3 +573,29 @@ func TestExecuteDataMutate_ValidateRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestLiftGuestCreateIDMovesDataIDToRequest(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	req := &dataMutateRequest{
+		Op:    "create",
+		Table: "work_orders",
+		Model: "WorkOrder",
+		Data: map[string]json.RawMessage{
+			"id":    json.RawMessage(`"` + id + `"`),
+			"notes": json.RawMessage(`"Sale SO-1"`),
+		},
+	}
+	liftGuestCreateID(req)
+	if req.ID != id {
+		t.Fatalf("id = %q, want %q", req.ID, id)
+	}
+	if _, ok := req.Data["id"]; ok {
+		t.Fatal("data.id must be removed so validateDataMutateCol does not reject it")
+	}
+	if string(req.Data["notes"]) != `"Sale SO-1"` {
+		t.Fatalf("notes = %s", req.Data["notes"])
+	}
+	if err := validateDataMutateRequest(req); err != nil {
+		t.Fatalf("lifted create must validate: %v", err)
+	}
+}

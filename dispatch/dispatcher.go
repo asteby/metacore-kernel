@@ -305,17 +305,29 @@ func (d *Dispatcher) notify(id, eventName string, sub Subscription, status strin
 	})
 }
 
-// invoke routes one attempt to the correct tier. Returns an error only when the
-// invocation itself failed (retryable); a clean return — even of a guest-level
-// error envelope — counts as delivered.
+// invoke routes one attempt to the correct tier. Returns an error when the
+// invocation itself failed (retryable) OR when a wasm guest returns a
+// `{success:false}` envelope. A skipped-but-handled guest must return
+// `{success:true, data:{skipped:...}}` — treating success:false as delivered
+// hid production create failures (empty last_error, no work order).
 func (d *Dispatcher) invoke(ctx context.Context, orgID uuid.UUID, payload []byte, sub Subscription) error {
 	switch strings.ToLower(sub.HandlerType) {
 	case handlerTypeWasm:
 		if d.invoker == nil {
 			return errors.New("wasm subscription but no WasmInvoker wired")
 		}
-		_, err := d.invoker.InvokeFor(ctx, orgID, sub.Installation, sub.AddonKey, sub.Function, payload, sub.Settings)
-		return err
+		out, err := d.invoker.InvokeFor(ctx, orgID, sub.Installation, sub.AddonKey, sub.Function, payload, sub.Settings)
+		if err != nil {
+			return err
+		}
+		if msg := guestEnvelopeError(out); msg != "" {
+			d.logger.Warn("dispatch.guest_error",
+				slog.String("addon", sub.AddonKey),
+				slog.String("function", sub.Function),
+				slog.String("err", msg))
+			return fmt.Errorf("guest: %s", msg)
+		}
+		return nil
 	case handlerTypeCompiled:
 		if d.opts.compiled == nil {
 			return ErrNoCompiledRegistry
@@ -370,6 +382,37 @@ func (d *Dispatcher) markDead(id, errMsg string) {
 // NOT prevent new deliveries from being enqueued; call it after the bus has
 // stopped publishing.
 func (d *Dispatcher) WaitIdle() { d.wg.Wait() }
+
+// guestEnvelopeError returns a non-empty message when the wasm guest returned
+// a `{success:false}` envelope. Missing/malformed JSON is not a guest error
+// (older compiled fixtures return raw bytes).
+func guestEnvelopeError(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var e struct {
+		Success *bool `json:"success"`
+		Error   *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &e); err != nil || e.Success == nil || *e.Success {
+		return ""
+	}
+	if e.Error != nil {
+		if e.Error.Code != "" && e.Error.Message != "" {
+			return e.Error.Code + ": " + e.Error.Message
+		}
+		if e.Error.Message != "" {
+			return e.Error.Message
+		}
+		if e.Error.Code != "" {
+			return e.Error.Code
+		}
+	}
+	return "success=false"
+}
 
 // eventMatches reuses the exact bus wildcard rule (exact, "*", trailing ".*")
 // so subscription authors learn one matching semantics across the platform.
