@@ -106,6 +106,11 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 	if err := json.Unmarshal(reqJSON, &req); err != nil {
 		return fail("invalid_request", "malformed request JSON: "+err.Error())
 	}
+	// Guests used to put the deterministic row id in data.id. The contract
+	// stamps id on the request field (and rejects it in data). Lift it so a
+	// create does not die as invalid_request after a marketplace upgrade —
+	// that failure used to be marked delivered and left no work order in prod.
+	liftGuestCreateID(&req)
 	if err := validateDataMutateRequest(&req); err != nil {
 		return fail("invalid_request", err.Error())
 	}
@@ -502,6 +507,27 @@ func validateDataMutateRequest(req *dataMutateRequest) error {
 		}
 	}
 	return nil
+}
+
+// liftGuestCreateID moves data.id onto the top-level request id on create.
+// The host still stamps the column; the guest may only propose the uuid.
+func liftGuestCreateID(req *dataMutateRequest) {
+	if req == nil || req.Op != "create" || req.Data == nil {
+		return
+	}
+	raw, ok := req.Data["id"]
+	if !ok {
+		return
+	}
+	delete(req.Data, "id")
+	if strings.TrimSpace(req.ID) != "" {
+		return
+	}
+	var id string
+	if err := json.Unmarshal(raw, &id); err != nil {
+		return
+	}
+	req.ID = strings.TrimSpace(id)
 }
 
 func validateDataMutateCol(col string) error {

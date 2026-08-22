@@ -7,6 +7,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`data_mutate` create: lift `data.id` onto the request `id`.** Guests that
+  propose a deterministic uuid in `data` (sale → work order) used to get
+  `invalid_request: column "id" is host-stamped`. The host still stamps the
+  column; the guest may only propose the uuid.
+- **Dispatcher treats `{success:false}` as a failed delivery.** A guest error
+  envelope is retried and stored in `event_deliveries.last_error` instead of
+  being marked delivered with an empty error. Intentional skips stay
+  `{success:true, data.skipped}`.
+- **`dispatch.ForgetDeliveries` / `ForgetOccurrences`.** Hosts can drop a
+  wrongly-delivered ledger pair so the next PATCH of the same sale is not a
+  no-op.
+
 ### Added
 
 - **`brand` — product identity HTTP contract.** Every metacore host exposes
