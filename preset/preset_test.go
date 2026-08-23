@@ -286,6 +286,60 @@ func TestInstallPreset_OptionalFailureDoesNotAbort(t *testing.T) {
 	}
 }
 
+// TestInstallPreset_RetryRecoversTransientFailure: a required addon that
+// fails once (transient hub timeout) but succeeds on retry must land as
+// Installed, not Failed.
+func TestInstallPreset_RetryRecoversTransientFailure(t *testing.T) {
+	r, _ := Resolve(loadPitsline(t))
+
+	attempts := 0
+	install := func(a Addon) (bool, error) {
+		if a.Key == "tires_inventory" {
+			attempts++
+			if attempts == 1 {
+				return false, errors.New("hub: request timeout")
+			}
+		}
+		return true, nil
+	}
+
+	sum, err := InstallPreset(r, install, Options{RetryAttempts: 1})
+	if err != nil {
+		t.Fatalf("InstallPreset with retry: unexpected err %v", err)
+	}
+	if got := sum.Failed(); len(got) != 0 {
+		t.Errorf("failed = %v, want none (retry should have recovered)", got)
+	}
+	if attempts != 2 {
+		t.Errorf("attempts = %d, want 2 (initial + 1 retry)", attempts)
+	}
+}
+
+// TestInstallPreset_RetryExhaustedStillFails: an addon that keeps failing
+// past RetryAttempts is still recorded as Failed, and FailedReasons keeps
+// the underlying error message.
+func TestInstallPreset_RetryExhaustedStillFails(t *testing.T) {
+	r, _ := Resolve(loadPitsline(t))
+
+	install := func(a Addon) (bool, error) {
+		if a.Key == "tires_inventory" {
+			return false, errors.New("hub: request timeout")
+		}
+		return true, nil
+	}
+
+	sum, err := InstallPreset(r, install, Options{RetryAttempts: 2, ContinueOnRequiredError: true})
+	if err != nil {
+		t.Fatalf("InstallPreset with continue: unexpected err %v", err)
+	}
+	if got := sum.Failed(); len(got) != 1 || got[0] != "tires_inventory" {
+		t.Errorf("failed = %v, want [tires_inventory]", got)
+	}
+	if got := sum.FailedReasons()["tires_inventory"]; got != "hub: request timeout" {
+		t.Errorf("FailedReasons()[tires_inventory] = %q, want %q", got, "hub: request timeout")
+	}
+}
+
 func TestInstallPreset_NilFunc(t *testing.T) {
 	r, _ := Resolve(loadPitsline(t))
 	if _, err := InstallPreset(r, nil, Options{}); err == nil {
