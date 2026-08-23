@@ -25,6 +25,7 @@ package preset
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	v3 "github.com/asteby/metacore-kernel/manifest/v3"
 )
@@ -201,6 +202,21 @@ func (s Summary) Skipped() []string { return s.filter(func(a AddonStatus) bool {
 // Failed returns the keys of addons whose install failed.
 func (s Summary) Failed() []string { return s.filter(func(a AddonStatus) bool { return a.Failed }) }
 
+// FailedReasons returns the failure Reason for every failed addon, keyed by
+// addon key. Failed() alone (a []string of keys) loses WHY each one failed —
+// callers that only log Failed() end up with an unactionable "these 5 broke"
+// with no way to tell a stale entitlement from a transient hub timeout apart.
+// Use this whenever a failure is worth logging or surfacing.
+func (s Summary) FailedReasons() map[string]string {
+	out := make(map[string]string)
+	for _, st := range s.Statuses {
+		if st.Failed {
+			out[st.Key] = st.Reason
+		}
+	}
+	return out
+}
+
 func (s Summary) filter(pred func(AddonStatus) bool) []string {
 	out := make([]string, 0, len(s.Statuses))
 	for _, st := range s.Statuses {
@@ -240,6 +256,19 @@ type Options struct {
 	// exactly how far it got. Optional-addon failures NEVER abort regardless
 	// of this flag.
 	ContinueOnRequiredError bool
+
+	// RetryAttempts is how many extra times a failed addon install is retried
+	// before it's recorded as Failed. 0 (default) means no retry — one call,
+	// same as before this field existed. A whole-preset install is a long
+	// sequential run (20+ addons, each a real bundle fetch + schema
+	// migration); a single addon occasionally failing on a transient hub
+	// hiccup (rate limit, brief timeout) shouldn't sink the vertical when a
+	// second attempt moments later would have worked.
+	RetryAttempts int
+
+	// RetryDelay is the pause between retry attempts. Ignored when
+	// RetryAttempts is 0. Zero delay retries immediately.
+	RetryDelay time.Duration
 }
 
 // IncludeOptionalSet is a small helper to build Options.IncludeOptional from a
@@ -376,6 +405,12 @@ func InstallPreset(r Resolved, install InstallAddonFunc, opts Options) (Summary,
 		}
 
 		installed, err := install(a)
+		for attempt := 0; err != nil && attempt < opts.RetryAttempts; attempt++ {
+			if opts.RetryDelay > 0 {
+				time.Sleep(opts.RetryDelay)
+			}
+			installed, err = install(a)
+		}
 		switch {
 		case err != nil:
 			sum.Statuses = append(sum.Statuses, AddonStatus{
