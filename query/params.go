@@ -156,7 +156,8 @@ func ParseFromMap(values map[string][]string) (Params, error) {
 		}
 	}
 
-	if v, ok := firstNonEmpty(values, "search"); ok {
+	// `q` is a common alias (POS / options-style clients); prefer `search`.
+	if v, ok := firstNonEmpty(values, "search", "q"); ok {
 		s := strings.TrimSpace(v)
 		if len(s) > MaxSearchTermLength {
 			s = s[:MaxSearchTermLength]
@@ -357,18 +358,21 @@ func splitTopLevelCommas(raw string) []string {
 	return out
 }
 
-// firstNonEmpty returns the first non-empty value for key in values, or
-// the empty string and false if the key is absent or every slot is
-// empty. Callers use the second return to distinguish "unset" from
-// "set to empty string".
-func firstNonEmpty(values map[string][]string, key string) (string, bool) {
-	vs, ok := values[key]
-	if !ok {
-		return "", false
-	}
-	for _, v := range vs {
-		if v != "" {
-			return v, true
+// firstNonEmpty returns the first non-empty value for any of the given
+// keys (in order), or the empty string and false if every key is absent
+// or every slot is empty. Callers use the second return to distinguish
+// "unset" from "set to empty string". Multiple keys let aliases share a
+// parse path (e.g. `search` then `q`).
+func firstNonEmpty(values map[string][]string, keys ...string) (string, bool) {
+	for _, key := range keys {
+		vs, ok := values[key]
+		if !ok {
+			continue
+		}
+		for _, v := range vs {
+			if v != "" {
+				return v, true
+			}
 		}
 	}
 	return "", false

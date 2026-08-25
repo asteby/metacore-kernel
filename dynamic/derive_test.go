@@ -88,7 +88,7 @@ func TestInferCellStyle(t *testing.T) {
 		{"start_date", "date", "date"},
 		// Images.
 		{"image", "text", "image"},
-		{"logo", "text", "image"},
+		{"logo", "text", "image_stack"},
 		{"banner_image", "text", "image"},
 		{"user_avatar", "text", "image"},
 		// Booleans.

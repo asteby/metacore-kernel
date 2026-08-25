@@ -172,8 +172,12 @@ func inferCellStyle(name, storageType string) string {
 		return "status"
 	case "color":
 		return "color"
-	case "image", "photo", "logo":
+	case "image", "photo":
 		return "image"
+	case "logo":
+		// Brand marks and wordmarks are almost always landscape — stack
+		// image above label so wide logos stay readable in table + modal.
+		return "image_stack"
 	}
 	if strings.HasSuffix(n, "_url") || strings.HasSuffix(n, "_link") {
 		return "url"
@@ -181,6 +185,9 @@ func inferCellStyle(name, storageType string) string {
 	if strings.HasSuffix(n, "_image") || strings.HasSuffix(n, "_photo") ||
 		strings.HasSuffix(n, "avatar") {
 		return "image"
+	}
+	if strings.HasSuffix(n, "_logo") {
+		return "image_stack"
 	}
 	// Creator/owner audit columns → render the actor (avatar + name).
 	switch n {
