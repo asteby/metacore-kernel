@@ -203,6 +203,24 @@ func TestParseFilterValue_RangeOneSide(t *testing.T) {
 	}
 }
 
+
+func TestParseFromMap_SearchQAlias(t *testing.T) {
+	p, err := ParseFromMap(map[string][]string{"q": {"pirelli"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.Search != "pirelli" {
+		t.Errorf("Search = %q, want pirelli (via q alias)", p.Search)
+	}
+	p2, err := ParseFromMap(map[string][]string{"search": {"a"}, "q": {"b"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p2.Search != "a" {
+		t.Errorf("Search = %q, want a (search preferred)", p2.Search)
+	}
+}
+
 func TestParseFromMap_ErrSentinel(t *testing.T) {
 	// ErrInvalidParam is exported; we can't easily trigger it via
 	// ParseFromMap today because page <1 falls back. Verify it still

@@ -274,7 +274,8 @@ func parseWithDialect(values map[string][]string, decode ParseFilterValue) (Para
 			p.Order = o
 		}
 	}
-	if v, ok := firstNonEmpty(values, "search"); ok {
+	// `q` is a common alias (POS / options-style clients); prefer `search`.
+	if v, ok := firstNonEmpty(values, "search", "q"); ok {
 		s := strings.TrimSpace(v)
 		if len(s) > MaxSearchTermLength {
 			s = s[:MaxSearchTermLength]
