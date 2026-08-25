@@ -203,14 +203,16 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 	}
 
 	// Post-commit canonical event — the bus sees only committed state.
-	// Producer is "kernel" (trusted host bookkeeping): the event name is
-	// host-constructed under the CALLER's addon namespace, the guest cannot
-	// spoof another addon's prefix, and the mutation itself was already
-	// gated by db:write — requiring a separate event:emit declaration would
-	// silently break the import's whole purpose. Publish errors are logged
-	// and swallowed: the data is committed, side-effects must not undo it
-	// (same policy as dynamic.Service.publishCanonical).
-	event := fmt.Sprintf("%s.%s.%s", addonKey, req.Model, action)
+	// Producer is "kernel" (trusted host bookkeeping). Namespace prefers the
+	// MODEL OWNER (Host.WithModelOwner) so cross-addon writes — e.g. warehouse
+	// updating customers.SalesReturn — still fire `<owner>.Model.action`
+	// subscribers, matching dynamic.Service.publishCanonical. Falls back to
+	// the CALLER addon when no owner is resolved. The write was already gated
+	// by db:write; requiring a separate event:emit would break the import.
+	// Publish errors are logged and swallowed: the data is committed,
+	// side-effects must not undo it.
+	eventAddon := canonicalEventAddon(inv, req.Model, addonKey)
+	event := fmt.Sprintf("%s.%s.%s", eventAddon, req.Model, action)
 	payload := &dynamic.CanonicalEvent{
 		ID:     rowID,
 		Model:  req.Model,
@@ -220,14 +222,14 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		// chain, so the audit trail never shows an anonymous system actor for
 		// a user-driven side effect.
 		ActorID:       dynamic.ActorIDFromContext(ctx),
-		AddonKey:      addonKey,
+		AddonKey:      eventAddon,
 		CorrelationID: dynamic.CorrelationIDFromContext(ctx),
 		Before:        before,
 		After:         after,
 	}
 	if err := inv.bus.Publish(ctx, "kernel", event, orgID, payload); err != nil && inv.logger != nil {
 		inv.logger.Printf("metacore.wasm data_mutate publish_error addon=%s event=%s err=%v",
-			addonKey, event, err)
+			eventAddon, event, err)
 	}
 
 	dataOut := map[string]any{
@@ -249,6 +251,18 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		return fail("db_error", "response exceeds size cap")
 	}
 	return env
+}
+
+// canonicalEventAddon picks the addon namespace for a data_mutate/data_batch
+// post-commit event. Prefers Host.WithModelOwner(model) when set so cross-addon
+// writes fire the owning addon's lifecycle subscribers; otherwise the caller.
+func canonicalEventAddon(inv *invocation, model, callerAddon string) string {
+	if inv != nil && inv.modelOwner != nil && model != "" {
+		if owner := inv.modelOwner(model); owner != "" {
+			return owner
+		}
+	}
+	return callerAddon
 }
 
 // mutationResult is the committed-state snapshot applyMutation hands back so
