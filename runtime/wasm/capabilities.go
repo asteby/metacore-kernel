@@ -61,6 +61,10 @@ type invocation struct {
 	// resolveTable is the embedder-injected logical→physical table mapping
 	// the data_mutate import uses (Host.WithTableResolver). nil = identity.
 	resolveTable func(table string) string
+	// modelOwner is the embedder-injected ModelKey→owning-addon resolver
+	// (Host.WithModelOwner) used to namespace data_mutate / data_batch
+	// canonical events. nil = publish under the caller addon.
+	modelOwner func(model string) string
 	// sequenceNext is the embedder-injected folio-sequence backend the
 	// sequence_next import calls (Host.WithSequenceNext). nil = unavailable.
 	sequenceNext func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)

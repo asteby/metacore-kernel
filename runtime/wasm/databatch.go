@@ -189,26 +189,27 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 	}
 
 	// Post-commit canonical events — the bus sees only committed state. One
-	// event per row, under the CALLER's addon namespace, mirroring data_mutate.
+	// event per row; namespace prefers model owner (see data_mutate).
 	// Publish errors are logged and swallowed: the data is committed, its
 	// side-effects must not undo it.
 	rows := make([]dataBatchRow, len(results))
 	for i, res := range results {
 		m := prepared[i].req
-		event := fmt.Sprintf("%s.%s.%s", addonKey, m.Model, res.action)
+		eventAddon := canonicalEventAddon(inv, m.Model, addonKey)
+		event := fmt.Sprintf("%s.%s.%s", eventAddon, m.Model, res.action)
 		payload := &dynamic.CanonicalEvent{
 			ID:            res.rowID,
 			Model:         m.Model,
 			Action:        res.action,
 			ActorID:       dynamic.ActorIDFromContext(ctx),
-			AddonKey:      addonKey,
+			AddonKey:      eventAddon,
 			CorrelationID: dynamic.CorrelationIDFromContext(ctx),
 			Before:        res.before,
 			After:         res.after,
 		}
 		if err := inv.bus.Publish(ctx, "kernel", event, orgID, payload); err != nil && inv.logger != nil {
 			inv.logger.Printf("metacore.wasm data_batch publish_error addon=%s event=%s err=%v",
-				addonKey, event, err)
+				eventAddon, event, err)
 		}
 		row := dataBatchRow{ID: res.rowID, Model: m.Model, Action: res.action, Before: res.before, After: res.after}
 		if m.Returning != nil && !*m.Returning {

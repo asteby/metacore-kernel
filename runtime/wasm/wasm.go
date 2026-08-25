@@ -54,6 +54,10 @@ type Host struct {
 	db            *gorm.DB
 	enforcer      *security.Enforcer
 	tableResolver func(table string) string
+	// modelOwner resolves the addon that OWNS a ModelKey for canonical-event
+	// namespacing on data_mutate / data_batch (mirrors dynamic.Service's
+	// AddonKeyForModel). When unset, events stay under the CALLER addon.
+	modelOwner    func(model string) string
 	execSchema    func(addonKey string) string
 	sequenceNext  func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)
 	routingTable  RoutingTableFn
@@ -138,6 +142,22 @@ func (h *Host) WithEnforcer(e *security.Enforcer) *Host {
 // resolution is the identity function.
 func (h *Host) WithTableResolver(r func(table string) string) *Host {
 	h.tableResolver = r
+	return h
+}
+
+// WithModelOwner injects the embedder's ModelKey→owning-addon resolver used
+// when data_mutate / data_batch publish post-commit canonical events.
+//
+// Why: guests often write cross-addon rows they have db:write on (warehouse
+// updates customers.SalesReturn on WRR approve). The lifecycle subscribers
+// (inventory.on_return_received, fiscal_mexico, …) register on
+// `<owner>.<Model>.<action>` — the same namespace dynamic.Service.publishCanonical
+// uses for HTTP CRUD. Publishing under the CALLER addon (warehouse.SalesReturn.updated)
+// silently starves those handlers. With ModelOwner set, the host attributes
+// the event to the model owner; the write is still capability-gated on the
+// caller. When unset, behaviour is unchanged (caller namespace).
+func (h *Host) WithModelOwner(r func(model string) string) *Host {
+	h.modelOwner = r
 	return h
 }
 
@@ -342,6 +362,7 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		tx:            tx,
 		enforcer:      h.enforcer,
 		resolveTable:  h.tableResolver,
+		modelOwner:    h.modelOwner,
 		execSchema:    h.execSchema,
 		sequenceNext:  h.sequenceNext,
 		routingTable:  h.routingTable,

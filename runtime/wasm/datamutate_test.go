@@ -599,3 +599,61 @@ func TestLiftGuestCreateIDMovesDataIDToRequest(t *testing.T) {
 		t.Fatalf("lifted create must validate: %v", err)
 	}
 }
+
+func TestExecuteDataMutate_EventUsesModelOwner(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+
+	orgID := uuid.New()
+	rowID := uuid.NewString()
+	// Caller is warehouse, but SalesReturn is owned by customers — event must
+	// land on customers.SalesReturn.updated so inventory/fiscal subscribers fire.
+	bus, getEvents, _ := captureBus(t, "customers.SalesReturn.updated")
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "sales_returns" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
+	mock.ExpectQuery(`SELECT \* FROM "sales_returns" WHERE id = \$1 AND organization_id = \$2`).
+		WithArgs(rowID, orgID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "state"}).AddRow(rowID, "authorized"))
+	mock.ExpectQuery(`UPDATE "sales_returns" SET "state" = \$1, "updated_at" = \$2 WHERE id = \$3 AND organization_id = \$4 RETURNING \*`).
+		WithArgs("received", sqlmock.AnyArg(), rowID, orgID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "state"}).AddRow(rowID, "received"))
+	mock.ExpectCommit()
+
+	inv := testInvocation(gdb, bus, orgID, func() *security.Enforcer {
+		e := security.NewEnforcer(func(k string) *security.Capabilities {
+			return security.Compile(k, []manifest.Capability{
+				{Kind: "db:write", Target: "sales_returns"},
+			})
+		})
+		e.SetMode(security.ModeEnforce)
+		return e
+	}(), nil)
+	inv.addonKey = "warehouse"
+	inv.modelOwner = func(model string) string {
+		if model == "SalesReturn" {
+			return "customers"
+		}
+		return ""
+	}
+	out := executeDataMutate(context.Background(), inv, []byte(`{
+		"op": "update", "table": "sales_returns", "model": "SalesReturn",
+		"id": "`+rowID+`",
+		"data": {"state": "received"}
+	}`))
+
+	env := unmarshalMutate(t, out)
+	if !env.Success {
+		t.Fatalf("expected success, got %s", out)
+	}
+	evs := getEvents()
+	if len(evs) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(evs))
+	}
+	if evs[0].AddonKey != "customers" || evs[0].Model != "SalesReturn" || evs[0].Action != "updated" {
+		t.Fatalf("unexpected event %#v", evs[0])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations not met: %v", err)
+	}
+}
