@@ -13,6 +13,55 @@ import (
 	"github.com/google/uuid"
 )
 
+// TestHost_ReinstantiatesAfterModuleClosed covers the poison-cache bug: a
+// timed-out/cancelled Invoke closes the wazero instance, but the Host used to
+// keep serving it — every later call failed with "module closed…" until
+// process restart. After the fix, a closed instance is dropped and the next
+// Invoke gets a fresh reactor.
+func TestHost_ReinstantiatesAfterModuleClosed(t *testing.T) {
+	ctx := context.Background()
+	caps := security.Compile("testaddon", nil)
+	h, err := NewHost(ctx, caps, nil)
+	if err != nil {
+		t.Fatalf("NewHost: %v", err)
+	}
+	defer h.Close(ctx)
+
+	spec := &manifest.BackendSpec{
+		Runtime:       "wasm",
+		Entry:         "backend.wasm",
+		Exports:       []string{"echo"},
+		MemoryLimitMB: 4,
+		TimeoutMs:     2000,
+	}
+	if err := h.Load(ctx, "testaddon", echoWasm(), spec); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	installation := uuid.New()
+	payload := []byte("before close")
+	if _, err := h.Invoke(ctx, installation, "testaddon", "echo", payload, nil); err != nil {
+		t.Fatalf("Invoke (warm): %v", err)
+	}
+
+	key := "testaddon|" + installation.String()
+	v, ok := h.modules.Load(key)
+	if !ok {
+		t.Fatal("expected cached module after warm Invoke")
+	}
+	mod := v.(*Module)
+	if err := mod.inst.Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	out, err := h.Invoke(ctx, installation, "testaddon", "echo", []byte("after close"), nil)
+	if err != nil {
+		t.Fatalf("Invoke after closed module: %v", err)
+	}
+	if string(out) != "after close" {
+		t.Fatalf("echo mismatch: got %q", out)
+	}
+}
+
 // TestHost_InvokeEcho exercises the full path: compile -> instantiate ->
 // invoke. The guest is a hand-built module that exports alloc + echo; echo
 // simply returns the ptr/len it received, packed per our ABI convention.
