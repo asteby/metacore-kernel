@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **WASM host: reinstantiate after a closed module.** A timed-out or cancelled
+  Invoke closes the wazero instance but used to leave the dead `Module` in the
+  per-installation cache. The next call (e.g. warehouse `dispatch` after a
+  background event delivery timed out) failed instantly with
+  `wasm: alloc(…): module closed with context deadline exceeded` until process
+  restart. Closed instances are now dropped and rebuilt on the next Invoke.
+
 - **`data_mutate` create: lift `data.id` onto the request `id`.** Guests that
   propose a deterministic uuid in `data` (sale → work order) used to get
   `invalid_request: column "id" is host-stamped`. The host still stamps the

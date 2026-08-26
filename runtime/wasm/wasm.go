@@ -20,8 +20,10 @@ package wasm
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +35,7 @@ import (
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"github.com/tetratelabs/wazero/sys"
 	"gorm.io/gorm"
 )
 
@@ -338,6 +341,27 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		return nil, fmt.Errorf("wasm: function %q not in backend.exports", funcName)
 	}
 
+	// One retry: a prior timeout/cancel closes the wazero instance (see
+	// sys.ExitError) but used to leave the dead Module in h.modules. The next
+	// UI action then failed instantly with "module closed with context
+	// deadline exceeded" until process restart. Evict + reinstantiate once.
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		out, err := h.invokeOnce(ctx, tx, orgID, installation, addonKey, funcName, payload, settings, entry)
+		if err == nil {
+			return out, nil
+		}
+		lastErr = err
+		if attempt == 0 && isClosedModuleErr(err) {
+			h.dropModule(addonKey, installation)
+			continue
+		}
+		return nil, err
+	}
+	return nil, lastErr
+}
+
+func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string, entry *compiledEntry) ([]byte, error) {
 	mod, err := h.getOrInstantiate(ctx, addonKey, installation, entry)
 	if err != nil {
 		return nil, err
@@ -374,6 +398,10 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 	mod.mu.Lock()
 	defer mod.mu.Unlock()
 
+	if mod.inst.IsClosed() {
+		return nil, fmt.Errorf("wasm: module closed")
+	}
+
 	fn := mod.inst.ExportedFunction(funcName)
 	if fn == nil {
 		return nil, fmt.Errorf("wasm: export %q missing from module", funcName)
@@ -399,10 +427,45 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 	return cp, nil
 }
 
+// isClosedModuleErr reports whether err means the cached wazero instance was
+// closed (timeout/cancel/exit) and is safe to drop + retry on a fresh module.
+func isClosedModuleErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var exitErr *sys.ExitError
+	if errors.As(err, &exitErr) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "module closed")
+}
+
+// dropModule removes a poisoned instance from the cache so the next
+// getOrInstantiate builds a fresh reactor. Safe if the key is already gone.
+func (h *Host) dropModule(addonKey string, installation uuid.UUID) {
+	key := addonKey + "|" + installation.String()
+	if v, ok := h.modules.LoadAndDelete(key); ok {
+		if m, _ := v.(*Module); m != nil && m.inst != nil {
+			_ = m.inst.Close(context.Background())
+		}
+	}
+}
+
 func (h *Host) getOrInstantiate(ctx context.Context, addonKey string, installation uuid.UUID, entry *compiledEntry) (*Module, error) {
 	key := addonKey + "|" + installation.String()
 	if v, ok := h.modules.Load(key); ok {
-		return v.(*Module), nil
+		mod := v.(*Module)
+		// A prior Invoke whose callCtx timed out / was cancelled closes the
+		// wazero Module in place. Serving it again yields instant
+		// "module closed with context deadline exceeded" on alloc.
+		if mod.inst != nil && !mod.inst.IsClosed() {
+			return mod, nil
+		}
+		h.modules.Delete(key)
+		if mod.inst != nil {
+			_ = mod.inst.Close(ctx)
+		}
 	}
 	// Module-level memory cap is enforced by the runtime's WithMemoryLimitPages
 	// ceiling plus the guest's own memory declaration; wazero's ModuleConfig
