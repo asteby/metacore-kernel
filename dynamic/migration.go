@@ -50,13 +50,17 @@ func Apply(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, files [
 	if err := db.AutoMigrate(&Migration{}); err != nil {
 		return fmt.Errorf("migrate metacore_addon_migrations: %w", err)
 	}
-	// Ledger always lives in public — never follow an addon search_path.
-	ledger := db.Table("public.metacore_addon_migrations")
 	schema := SchemaName(addonKey, orgID, iso)
 	for _, f := range files {
 		got := Checksum(f.SQL)
 		var existing Migration
-		err := ledger.Where("addon_key = ? AND version = ?", addonKey, f.Version).First(&existing).Error
+		// Fresh statement each iteration — gorm chains Where() on a reused *DB,
+		// so a loop-local ledger handle made every lookup AND all prior versions
+		// together, never matched a row, and re-ran the whole migration history
+		// on every upgrade (breaking on legacy SQL like customers@004).
+		err := db.Table("public.metacore_addon_migrations").
+			Where("addon_key = ? AND version = ?", addonKey, f.Version).
+			First(&existing).Error
 		if err == nil {
 			if existing.Checksum != got {
 				return fmt.Errorf(
@@ -83,7 +87,7 @@ func Apply(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, files [
 			// Objects already exist from a partial prior run — roll back and
 			// record the ledger row in a fresh transaction (always public).
 			tx.Rollback()
-			if err := recordMigration(ledger, addonKey, f.Version, got); err != nil {
+			if err := recordMigration(db, addonKey, f.Version, got); err != nil {
 				return err
 			}
 			continue
@@ -110,8 +114,9 @@ func Apply(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, files [
 	return nil
 }
 
-func recordMigration(ledger *gorm.DB, addonKey, version, checksum string) error {
-	err := ledger.Create(&Migration{AddonKey: addonKey, Version: version, Checksum: checksum}).Error
+func recordMigration(db *gorm.DB, addonKey, version, checksum string) error {
+	err := db.Table("public.metacore_addon_migrations").
+		Create(&Migration{AddonKey: addonKey, Version: version, Checksum: checksum}).Error
 	if err != nil && isBenignDDLConflict(err) {
 		return nil
 	}
@@ -119,7 +124,7 @@ func recordMigration(ledger *gorm.DB, addonKey, version, checksum string) error 
 }
 
 func isNotFound(err error) bool {
-	return err != nil && err.Error() == "record not found"
+	return errors.Is(err, gorm.ErrRecordNotFound)
 }
 
 // isBenignDDLConflict reports Postgres "already exists" errors during addon
