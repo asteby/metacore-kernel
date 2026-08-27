@@ -2024,6 +2024,14 @@
         "description": {
           "type": "string"
         },
+        "icon": {
+          "type": "string",
+          "description": "Optional Lucide PascalCase name (e.g. \"Wrench\") the host materializes onto the org Role row for Equipo / Permisos chips."
+        },
+        "color": {
+          "type": "string",
+          "description": "Optional hex accent (#rrggbb). Hosts may ignore and pick a default palette entry when empty."
+        },
         "permissions": {
           "type": "array",
           "items": {
