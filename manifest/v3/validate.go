@@ -302,6 +302,9 @@ func validateDocuments(m *Manifest, colsByModel map[string]map[string]struct{}) 
 		} else if _, ok := docPapers[d.Paper]; !ok {
 			errs = append(errs, fmt.Sprintf("%s.paper %q is not one of A4|letter|ticket80", where, d.Paper))
 		}
+		if d.Condition != nil && strings.TrimSpace(d.Condition.Field) == "" {
+			errs = append(errs, fmt.Sprintf("%s.condition.field is required", where))
+		}
 	}
 	return errs
 }
@@ -1047,11 +1050,12 @@ func validateConditions(m *Manifest) []string {
 			return
 		}
 		key := strings.TrimSpace(c.AddonInstalled)
-		if key == "" {
-			errs = append(errs, fmt.Sprintf("%s.condition declares no predicate (set addon_installed)", where))
+		field := strings.TrimSpace(c.Field)
+		if key == "" && field == "" {
+			errs = append(errs, fmt.Sprintf("%s.condition declares no predicate (set addon_installed or field)", where))
 			return
 		}
-		if !addonKeyRe.MatchString(key) {
+		if key != "" && !addonKeyRe.MatchString(key) {
 			errs = append(errs, fmt.Sprintf("%s.condition.addon_installed %q is not a valid addon key", where, key))
 		}
 	}

@@ -1262,6 +1262,61 @@
         "label": {
           "type": "string",
           "description": "Optional human title for the host Plantillas catalog (e.g. 'Ticket de venta'). When empty the host falls back to the key."
+        },
+        "requires_state": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Gates the print action on the target record's lifecycle column (`status`, or `state` when status is empty). Empty/omitted means always available."
+        },
+        "condition": {
+          "$ref": "#/$defs/RecordFieldCondition",
+          "description": "Optional field gate on the target record (e.g. fiscal_uuid must be set before printing a CFDI)."
+        },
+        "comment": {
+          "type": "string",
+          "description": "Optional author note for the Plantillas catalog."
+        }
+      }
+    },
+    "RecordFieldCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field"
+      ],
+      "description": "Gates a row action or printable document on a field value from the target record.",
+      "properties": {
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Dot-path to a column on the target record (e.g. fiscal_uuid)."
+        },
+        "operator": {
+          "type": "string",
+          "description": "Comparison operator. Defaults to eq when omitted.",
+          "enum": [
+            "eq",
+            "equals",
+            "==",
+            "neq",
+            "notequals",
+            "not_equals",
+            "!=",
+            "in",
+            "not_in",
+            "notin",
+            "truthy",
+            "present",
+            "set",
+            "falsy",
+            "blank",
+            "empty"
+          ]
+        },
+        "value": {
+          "description": "Right-hand value for eq/neq/in. Omitted for truthy/falsy operators."
         }
       }
     },
@@ -3275,6 +3330,36 @@
           "examples": [
             "workshop"
           ]
+        },
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "description": "When set, row actions may also gate on this field of the target record (same semantics as RecordFieldCondition.field)."
+        },
+        "operator": {
+          "type": "string",
+          "description": "Comparison operator when field is set. Defaults to eq.",
+          "enum": [
+            "eq",
+            "equals",
+            "==",
+            "neq",
+            "notequals",
+            "not_equals",
+            "!=",
+            "in",
+            "not_in",
+            "notin",
+            "truthy",
+            "present",
+            "set",
+            "falsy",
+            "blank",
+            "empty"
+          ]
+        },
+        "value": {
+          "description": "Right-hand value for eq/neq/in when field is set."
         }
       }
     },
