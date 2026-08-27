@@ -68,6 +68,9 @@ func FromV3(m *v3.Manifest) Manifest {
 			break
 		}
 	}
+	if len(m.Compatibility.Provides) > 0 {
+		out.Provides = append([]string(nil), m.Compatibility.Provides...)
+	}
 
 	// Tenancy → TenantIsolation. nil tenancy maps to "" which the kernel and
 	// dynamic.ParseIsolation both treat as the "shared" default.

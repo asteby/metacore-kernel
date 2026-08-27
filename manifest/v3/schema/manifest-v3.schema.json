@@ -356,6 +356,15 @@
           "items": {
             "$ref": "#/$defs/Requirement"
           }
+        },
+        "provides": {
+          "type": "array",
+          "description": "Other addon keys this package satisfies. When this addon is installed, the host treats those keys as already covered (skip marketplace install of conflicting twins).",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
         }
       },
       "examples": [

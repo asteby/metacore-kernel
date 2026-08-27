@@ -345,19 +345,25 @@ If the addon had instead tried `db:write addon_other.*`:
   not a UX hint, it is the only thing standing between a malicious bundle
   and your customers' data. Treat marketplace approval as a security gate.
 
-## Manifest v3 `rbac{}` block (schema-only, not yet enforced)
+## Manifest v3 `rbac{}` block
 
 Manifest v3 (`manifest/v3/types.go`, type `RBAC`) lets an addon declare a
 `rbac.roles[]` / `rbac.permissions[]` catalog — named roles bundling
-permission keys, plus permission-key labels/descriptions for a future admin
-UI. As of this kernel version **no Go code reads `Manifest.RBAC`** outside
-of `types.go` itself: it round-trips through parsing but is not compiled
-into `permission.Service`'s store, not enforced by any gate, and not
-surfaced anywhere in ops. Treat it as a forward-declared shape, not a live
-permission system — the two systems documented above (`permission.Service`
-for users, `security.Capabilities` for addons) are what actually gate
-requests today. Don't build addon authoring guidance around `rbac{}` until
-a real consumer lands.
+permission keys, plus permission-key labels/descriptions for admin UI.
+
+**Host consumption (ops):** on install / upgrade / resync / boot, the host
+lifts `rbac` from the verbatim v3 bytes into `addon_manifests`, then:
+
+- `SyncPermissionCatalog` upserts `rbac.permissions[]` (+ model CRUD caps)
+  into the global `permissions` table;
+- `SyncAddonRolesForOrg` / `SyncAddonRolesForAllOrgs` creates org-scoped
+  `roles` rows (stable slug = `role.key`, label resolved via addon i18n +
+  org language) and **additively** grants `role.permissions[]`.
+
+The kernel's `permission.Service` still gates requests via the host store;
+`rbac{}` is the **authoring contract** for default operational roles
+(cajero, vendedor, mecanico, …). Preset defaults should only add
+vertical-specific shells (e.g. fleet_manager), not duplicate addon roles.
 
 ## See also
 
