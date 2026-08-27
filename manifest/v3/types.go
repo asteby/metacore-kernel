@@ -297,6 +297,11 @@ type Icon struct {
 // Compatibility holds versioned dependency declarations.
 type Compatibility struct {
 	Requires []Requirement `json:"requires"`
+	// Provides lists other addon keys this package satisfies for install /
+	// marketplace purposes. Hosts that already have this addon installed
+	// treat those keys as covered (e.g. full "hr" provides "hr_lite") so the
+	// catalog does not offer a conflicting twin under the same display name.
+	Provides []string `json:"provides,omitempty"`
 }
 
 // Requirement is a single peer dependency. Key "kernel" is reserved.
@@ -1665,6 +1670,12 @@ type Role struct {
 	Key         string   `json:"key"`
 	Label       string   `json:"label"`
 	Description string   `json:"description,omitempty"`
+	// Icon is an optional Lucide PascalCase name (e.g. "Wrench") the host
+	// materializes onto the org Role row for Equipo / Permisos chips.
+	Icon string `json:"icon,omitempty"`
+	// Color is an optional hex accent (#rrggbb). Hosts may ignore and pick a
+	// default palette entry when empty.
+	Color       string   `json:"color,omitempty"`
 	Permissions []string `json:"permissions,omitempty"`
 }
 

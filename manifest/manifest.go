@@ -39,6 +39,9 @@ type Manifest struct {
 	Kernel   string   `json:"kernel,omitempty"`
 	Requires []Module `json:"requires,omitempty"`
 	Models   []Module `json:"models,omitempty"`
+	// Provides lists other addon keys this package satisfies for install /
+	// marketplace coverage (e.g. full "hr" provides "hr_lite"). Empty = none.
+	Provides []string `json:"provides,omitempty"`
 
 	// TenantIsolation declares how the addon's data is isolated across orgs.
 	//

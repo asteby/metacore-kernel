@@ -359,7 +359,7 @@
       "required": [
         "requires"
       ],
-      "description": "Versioned dependency declarations. 'requires' replaces the v2 trio (kernel, requires, implicit host match) with a uniform list.",
+      "description": "Versioned dependency declarations. 'requires' replaces the v2 trio (kernel, requires, implicit host match) with a uniform list. Optional 'provides' lists other addon keys this package satisfies when installed.",
       "properties": {
         "requires": {
           "type": "array",
@@ -367,6 +367,15 @@
           "items": {
             "$ref": "#/$defs/Requirement"
           }
+        },
+        "provides": {
+          "type": "array",
+          "description": "Other addon keys this package satisfies. When this addon is installed, the host treats those keys as already covered.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
         }
       },
       "examples": [
