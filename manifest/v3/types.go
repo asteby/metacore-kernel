@@ -938,6 +938,14 @@ type ConfigEntry struct {
 	Title string `json:"title,omitempty"`
 }
 
+// RecordFieldCondition gates a row action or printable document on a field
+// value read from the target record (status/state gates use requires_state).
+type RecordFieldCondition struct {
+	Field    string `json:"field"`
+	Operator string `json:"operator,omitempty"` // eq|neq|in|not_in|truthy|falsy (default eq)
+	Value    any    `json:"value,omitempty"`
+}
+
 // DocumentDef is one printable document an addon contributes
 // (contributions.documents[]). It binds a bundle-relative HTML template to a
 // model so the host can render a per-record PDF (delivery notes, tickets,
@@ -967,6 +975,19 @@ type DocumentDef struct {
 	// Label is an optional human title for the host Plantillas catalog
 	// ("Ticket de venta"). When empty the host falls back to the key.
 	Label string `json:"label,omitempty"`
+	// RequiresState gates the print action on the target record's lifecycle
+	// column (`status`, or `state` when status is empty): the host only
+	// surfaces the document (and Render rejects deep links) when that value
+	// is one of these. Empty/omitted means always available.
+	RequiresState []string `json:"requires_state,omitempty"`
+	// Condition is an optional field gate on the target record (e.g.
+	// fiscal_uuid must be set before printing a CFDI). Evaluated by the host
+	// against the row being printed; distinct from org-level Condition on
+	// actions/routes.
+	Condition *RecordFieldCondition `json:"condition,omitempty"`
+	// Comment is an optional author note for the Plantillas catalog; not
+	// shown to end users unless the host chooses to surface it.
+	Comment string `json:"comment,omitempty"`
 }
 
 // DashboardWidget is one tile an addon contributes to the host's modular
@@ -1844,6 +1865,10 @@ type Condition struct {
 	// host answers it with its authoritative installation table — in the
 	// kernel that is installer.Installer.IsInstalled. Empty = no constraint.
 	AddonInstalled string `json:"addon_installed,omitempty"`
+	// Field/Operator/Value optionally gate a row action on the target record.
+	Field    string `json:"field,omitempty"`
+	Operator string `json:"operator,omitempty"`
+	Value    any    `json:"value,omitempty"`
 }
 
 // Satisfied reports whether the condition holds. installed answers "is this
