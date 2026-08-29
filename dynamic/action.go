@@ -199,6 +199,14 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 		"trigger_type": trig.Type,
 	}
 
+	// The event-subscription dispatcher already re-attaches this (see
+	// dispatch/dispatcher.go's WithActorID before invoking a subscriber), but
+	// an action invocation never went through that path — its ctx reached the
+	// WASM data_mutate host import with no actor, so anything an action
+	// handler creates/updates (e.g. customers' collect_payment) stamped
+	// created_by_id as empty and the UI fell back to "Sistema".
+	ctx = WithActorID(ctx, user.GetID().String())
+
 	if !runInTx {
 		req := ActionRequest{
 			Model:     model,
