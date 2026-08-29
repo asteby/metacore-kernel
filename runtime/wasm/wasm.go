@@ -69,6 +69,13 @@ type Host struct {
 	logger        *log.Logger
 	compiled      sync.Map // addonKey -> *compiledEntry
 	modules       sync.Map // instanceKey(addonKey, installation) -> *Module
+	// instMu single-flights getOrInstantiate per instance key. Two concurrent
+	// deliveries that both miss the module cache used to race
+	// InstantiateModule with the SAME wazero module name — wazero rejects the
+	// loser with "has already been instantiated", and since a Go guest's init
+	// takes seconds, all the fast retries collided with the still-in-flight
+	// winner too: the delivery died and only the healer recovered it.
+	instMu sync.Map // instanceKey -> *sync.Mutex
 }
 
 type compiledEntry struct {
@@ -454,6 +461,13 @@ func (h *Host) dropModule(addonKey string, installation uuid.UUID) {
 
 func (h *Host) getOrInstantiate(ctx context.Context, addonKey string, installation uuid.UUID, entry *compiledEntry) (*Module, error) {
 	key := addonKey + "|" + installation.String()
+	// Single-flight per instance key: only one goroutine instantiates; the
+	// rest wait and hit the cache. See instMu on Host for the failure mode
+	// this prevents (wazero name collision → dead deliveries).
+	muAny, _ := h.instMu.LoadOrStore(key, &sync.Mutex{})
+	mu := muAny.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
 	if v, ok := h.modules.Load(key); ok {
 		mod := v.(*Module)
 		// A prior Invoke whose callCtx timed out / was cancelled closes the
