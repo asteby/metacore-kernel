@@ -2,7 +2,11 @@ package dynamic
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/asteby/metacore-kernel/modelbase"
 )
@@ -123,5 +127,30 @@ func (s *Service) publishCanonical(ctx context.Context, model, action string, us
 		After:         after,
 	}
 	event := fmt.Sprintf("%s.%s.%s", addonKey, modelKey, action)
-	_ = s.bus.Publish(ctx, addonKey, event, user.GetOrganizationID(), payload)
+
+	// Transactional-outbox durability (see outbox.go): persist the intent
+	// BEFORE fan-out so a crash or bus failure between the committed data
+	// write and the publish can no longer lose the event — the relay
+	// re-publishes anything that never got stamped published_at.
+	var outboxID uuid.UUID
+	if s.outboxEnabled {
+		if raw, merr := json.Marshal(payload); merr == nil {
+			row := &EventOutbox{
+				ID:             uuid.New(),
+				OrganizationID: user.GetOrganizationID(),
+				AddonKey:       addonKey,
+				EventName:      event,
+				Payload:        string(raw),
+				CreatedAt:      time.Now().UTC(),
+			}
+			if s.persistOutbox(ctx, row) {
+				outboxID = row.ID
+			}
+		}
+	}
+
+	perr := s.bus.Publish(ctx, addonKey, event, user.GetOrganizationID(), payload)
+	if perr == nil && outboxID != uuid.Nil {
+		s.markOutboxPublished(ctx, outboxID)
+	}
 }

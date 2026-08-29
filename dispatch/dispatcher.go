@@ -251,6 +251,30 @@ func (d *Dispatcher) deliver(ctx context.Context, orgID uuid.UUID, eventName, id
 		slog.String("function", sub.Function),
 		slog.String("err", msg))
 	d.notify(id, eventName, sub, StatusDead, d.opts.maxAttempts, msg)
+	d.emitDeadLetter(orgID, id, eventName, sub, msg)
+}
+
+// DeadLetterEvent is published on the bus whenever a delivery exhausts its
+// retries and lands in the dead-letter state. Hosts can subscribe (or declare
+// a notification rule over it) so a dead delivery pages a human instead of
+// waiting to be discovered in the ledger. The payload is a flat map:
+// {delivery_id, addon_key, event, function, error}.
+const DeadLetterEvent = "kernel.dispatch.delivery_dead"
+
+// emitDeadLetter publishes DeadLetterEvent, guarding against recursion: a
+// dead delivery OF the dead-letter event itself must not emit another one,
+// or two chronically-failing subscribers could ping-pong forever.
+func (d *Dispatcher) emitDeadLetter(orgID uuid.UUID, id, eventName string, sub Subscription, errMsg string) {
+	if d.bus == nil || eventName == DeadLetterEvent {
+		return
+	}
+	_ = d.bus.Publish(context.Background(), "kernel", DeadLetterEvent, orgID, map[string]any{
+		"delivery_id": id,
+		"addon_key":   sub.AddonKey,
+		"event":       eventName,
+		"function":    sub.Function,
+		"error":       errMsg,
+	})
 }
 
 // backoffFor returns the wait before `attempt` (which is always >= 2):
