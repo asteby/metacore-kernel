@@ -83,6 +83,17 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 	if err != nil {
 		return 0, nil
 	}
+	// Stamp the event NAME into the delivered JSON when the payload object
+	// doesn't carry one. A guest-emitted domain event (event_emit) forwards
+	// only the emitter's payload — the subscriber had NO WAY to know which
+	// event woke it up unless the emitter remembered to duplicate the name
+	// inside the payload. In prod this made workshop's on_stock_picked
+	// silently no-op ("handled:false, event:\"\"") on every real
+	// warehouse.stock_picked delivery, leaving the 2-minute healer as the
+	// only thing opening work orders. Canonical events are untouched (they
+	// self-describe via model/action, and this only adds the key when the
+	// object lacks it).
+	raw = stampEventName(raw, eventName)
 	var ce canonicalEvent
 	_ = json.Unmarshal(raw, &ce) // best-effort; a non-canonical payload leaves it zero
 	// Chain the actor through multi-hop event flows: a DOMAIN event emitted by
@@ -471,4 +482,31 @@ func truncErr(s string) string {
 		return s[:max]
 	}
 	return s
+}
+
+// stampEventName injects {"event": name} into a JSON OBJECT payload that does
+// not already carry an "event" key, so subscribers can always identify the
+// delivery. Non-object payloads (arrays, scalars) and objects that already
+// name their event pass through untouched.
+func stampEventName(raw []byte, eventName string) []byte {
+	if eventName == "" {
+		return raw
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+		return raw
+	}
+	if _, has := obj["event"]; has {
+		return raw
+	}
+	nameJSON, err := json.Marshal(eventName)
+	if err != nil {
+		return raw
+	}
+	obj["event"] = nameJSON
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return raw
+	}
+	return out
 }
