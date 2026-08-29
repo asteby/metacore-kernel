@@ -118,6 +118,15 @@ type Config struct {
 	// would close an import cycle.
 	Bus Publisher
 
+	// DisableEventOutbox opts OUT of the transactional-outbox durability
+	// layer (outbox.go). When a Bus is wired, New migrates
+	// kernel_event_outbox and starts the recovery relay automatically —
+	// canonical events are persisted before fan-out so a crash between the
+	// data commit and the publish can no longer lose them. Set true only
+	// for hosts that cannot tolerate the extra table/write (e.g. read-only
+	// replicas in tests).
+	DisableEventOutbox bool
+
 	// AddonKeyForModel resolves the addon owner of a model name. The result
 	// is used both as the producer addonKey passed to Bus.Publish and as
 	// the leading segment of the canonical event name. nil (or returning
@@ -298,6 +307,11 @@ type Service struct {
 	selfOptions       bool
 	fileDeleter       FileDeleter
 	relations         RelationResolver
+
+	// Transactional-outbox state (outbox.go). outboxEnabled arms after the
+	// table migrates at New; outboxStop terminates the background relay.
+	outboxEnabled bool
+	outboxStop    chan struct{}
 }
 
 // New constructs a dynamic Service.
@@ -341,7 +355,7 @@ func New(cfg Config) *Service {
 	if _, ok := dispatchers["noop"]; !ok {
 		dispatchers["noop"] = NoopDispatcher{}
 	}
-	return &Service{
+	svc := &Service{
 		db:                cfg.DB,
 		meta:              cfg.Metadata,
 		perms:             cfg.Perms(),
@@ -370,6 +384,19 @@ func New(cfg Config) *Service {
 		fileDeleter:       cfg.FileDeleter,
 		relations:         cfg.RelationResolver,
 	}
+
+	// Arm the transactional outbox (outbox.go) when events can actually fan
+	// out. Migration failure degrades loudly to direct publish — never block
+	// construction over the durability nicety.
+	if svc.bus != nil && !cfg.DisableEventOutbox {
+		if err := MigrateEventOutbox(cfg.DB); err != nil {
+			log.Printf("dynamic: event outbox DISABLED (migrate failed: %v) — canonical events fan out without crash durability", err)
+		} else {
+			svc.outboxEnabled = true
+			svc.StartOutboxRelay()
+		}
+	}
+	return svc
 }
 
 // AuthExtractor returns the configured AuthUserExtractor (or nil).
