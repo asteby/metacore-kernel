@@ -85,6 +85,15 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 	}
 	var ce canonicalEvent
 	_ = json.Unmarshal(raw, &ce) // best-effort; a non-canonical payload leaves it zero
+	// Chain the actor through multi-hop event flows: a DOMAIN event emitted by
+	// a guest via event_emit (e.g. warehouse.stock_picked) carries no actor_id
+	// in its payload, but the emitting delivery's ctx does — Publish forwards
+	// it here. Without this fallback the NEXT hop's subscriber (workshop
+	// opening a WorkOrder off the pick) ran actorless and its rows audited as
+	// "Sistema"/N/A even though a real user started the chain.
+	if ce.ActorID == "" {
+		ce.ActorID = dynamic.ActorIDFromContext(ctx)
+	}
 
 	// occurrenceID is the idempotency discriminator for this publication. A
 	// canonical event has a natural one (the mutated row id), which is what
