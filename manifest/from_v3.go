@@ -120,6 +120,9 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.Webhooks = mapWebhooks(m.Webhooks)
 	out.EdgeDevices = mapEdgeDevices(m.EdgeDevices)
 	out.Documents = mapDocuments(m)
+	if m.Contributions != nil {
+		out.AgentCapabilities = m.Contributions.AgentCapabilities
+	}
 
 	return out
 }

@@ -64,7 +64,7 @@ type Manifest struct {
 	// their agent-tool registry on install so an AI can trigger them from a
 	// user message. Unlike Actions (UI-triggered record operations) Tools
 	// are semantic and carry extraction hints for parameter inference.
-	Tools            []ToolDef         `json:"tools,omitempty"`
+	Tools []ToolDef `json:"tools,omitempty"`
 	// Routes are the addon's entries in the host's declarative routing tables
 	// (which named handler wins for a record, per decision domain). See
 	// RouteDef and the routing package.
@@ -153,6 +153,14 @@ type Manifest struct {
 	// render engine reads these off the installed manifest to serve per-record
 	// PDFs. Empty = the addon prints nothing (back-compat default).
 	Documents []DocumentDef `json:"documents,omitempty"`
+
+	// AgentCapabilities is the host projection of v3
+	// contributions.agent_capabilities[]: the discoverable AI capabilities
+	// (guided walkthroughs, actions) the host copilot surfaces to users. Pure
+	// declarative UI metadata consumed verbatim by the frontend guidance
+	// engine, so the v3 type passes through unchanged rather than being
+	// re-projected. Empty = the addon exposes nothing to the copilot.
+	AgentCapabilities []v3.AgentCapability `json:"agent_capabilities,omitempty"`
 }
 
 // DocumentDef is the host/runtime projection of a v3 DocumentDef: a printable
