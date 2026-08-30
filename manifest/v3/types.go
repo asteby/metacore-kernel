@@ -884,11 +884,18 @@ type ModelExtension struct {
 
 // Contributions is what this addon contributes to other modules' extension points.
 type Contributions struct {
-	Navigation    []NavGroup         `json:"navigation,omitempty"`
-	Slots         []SlotContribution `json:"slots,omitempty"`
-	Actions       []Action           `json:"actions,omitempty"`
-	Tools         []Tool             `json:"tools,omitempty"`
-	Subscriptions []Subscription     `json:"subscriptions,omitempty"`
+	Navigation []NavGroup         `json:"navigation,omitempty"`
+	Slots      []SlotContribution `json:"slots,omitempty"`
+	Actions    []Action           `json:"actions,omitempty"`
+	Tools      []Tool             `json:"tools,omitempty"`
+
+	// AgentCapabilities declares discoverable AI capabilities exposed to the
+	// host copilot (Aby). Guides may navigate and highlight federated UI
+	// targets; mutating capabilities declare risk and confirmation policy.
+	// Optional. See AgentCapability.
+	AgentCapabilities []AgentCapability `json:"agent_capabilities,omitempty"`
+
+	Subscriptions []Subscription `json:"subscriptions,omitempty"`
 
 	// Notifications declares in-app bell notifications the host should emit
 	// when matching canonical CRUD events fire (addon.Model.action). The host
@@ -1576,6 +1583,55 @@ type Tool struct {
 	Handler     Handler                `json:"handler,omitempty"`
 }
 
+// AgentCapability declares one discoverable AI capability (contributions.
+// agent_capabilities[]) the host copilot (Aby) can surface to a user: an
+// answer, a guided walkthrough, an action, or a transaction, each carrying
+// its own risk/confirmation policy so the copilot host can gate execution
+// consistently across addons.
+type AgentCapability struct {
+	ID                   string                 `json:"id"`
+	Title                string                 `json:"title"`
+	Description          string                 `json:"description"`
+	Kind                 string                 `json:"kind"` // answer|guide|act|transact
+	Risk                 string                 `json:"risk"` // none|low|medium|high|critical
+	Permission           string                 `json:"permission,omitempty"`
+	Route                string                 `json:"route,omitempty"`
+	InputSchema          map[string]interface{} `json:"input_schema,omitempty"`
+	RequiresConfirmation bool                   `json:"requires_confirmation,omitempty"`
+	Reversible           bool                   `json:"reversible,omitempty"`
+	Tags                 []string               `json:"tags,omitempty"`
+	Guide                *AgentGuide            `json:"guide,omitempty"`
+}
+
+// AgentGuide is the step-by-step walkthrough body of an AgentCapability of
+// kind "guide": the copilot host drives the user through Steps, matching
+// natural-language Intents to trigger the guide.
+type AgentGuide struct {
+	ID          string           `json:"id"`
+	Title       string           `json:"title,omitempty"`
+	Description string           `json:"description,omitempty"`
+	Intents     []string         `json:"intents,omitempty"`
+	Steps       []AgentGuideStep `json:"steps"`
+}
+
+// AgentGuideStep is one highlighted stop of an AgentGuide: Target names the
+// federated UI element the host highlights (e.g. a data-testid-like anchor),
+// optionally scoped to Route. AdvanceOn, when set, lets the SDK auto-advance
+// on a DOM event instead of waiting for an explicit "next" from the user.
+type AgentGuideStep struct {
+	ID          string             `json:"id"`
+	Route       string             `json:"route,omitempty"`
+	Target      string             `json:"target"`
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	AdvanceOn   *AgentGuideAdvance `json:"advanceOn,omitempty"`
+}
+
+// AgentGuideAdvance declares the DOM event that auto-advances a guide step.
+type AgentGuideAdvance struct {
+	Event string `json:"event"` // click|change|input
+}
+
 // Subscription is an event handler. Must be backed by an event:subscribe capability.
 type Subscription struct {
 	Event   string  `json:"event"`
@@ -1688,9 +1744,9 @@ type RBAC struct {
 
 // Role is a named bundle of permission keys.
 type Role struct {
-	Key         string   `json:"key"`
-	Label       string   `json:"label"`
-	Description string   `json:"description,omitempty"`
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
 	// Icon is an optional Lucide PascalCase name (e.g. "Wrench") the host
 	// materializes onto the org Role row for Equipo / Permisos chips.
 	Icon string `json:"icon,omitempty"`
