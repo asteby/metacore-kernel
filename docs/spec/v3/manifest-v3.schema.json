@@ -966,6 +966,13 @@
             "$ref": "#/$defs/Tool"
           }
         },
+        "agent_capabilities": {
+          "type": "array",
+          "description": "Discoverable AI capabilities exposed to the host copilot. Guides may navigate and highlight federated UI targets; mutating capabilities declare risk and confirmation policy.",
+          "items": {
+            "$ref": "#/$defs/AgentCapability"
+          }
+        },
         "subscriptions": {
           "type": "array",
           "description": "Event handlers. Each subscription must be backed by an 'event:subscribe' capability.",
@@ -1000,6 +1007,55 @@
             "$ref": "#/$defs/Route"
           },
           "description": "Entries this addon contributes to the host's declarative routing tables (e.g. which handler fulfils an order line). Resolved per organization over the routes of every installed addon."
+        }
+      }
+    },
+    "AgentCapability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "description", "kind", "risk"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$" },
+        "title": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "enum": ["answer", "guide", "act", "transact"] },
+        "risk": { "type": "string", "enum": ["none", "low", "medium", "high", "critical"] },
+        "permission": { "type": "string" },
+        "route": { "type": "string" },
+        "input_schema": { "type": "object" },
+        "requires_confirmation": { "type": "boolean" },
+        "reversible": { "type": "boolean" },
+        "tags": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "guide": { "$ref": "#/$defs/AgentGuide" }
+      }
+    },
+    "AgentGuide": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "steps"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "intents": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "steps": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/AgentGuideStep" } }
+      }
+    },
+    "AgentGuideStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "target", "title", "description"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "route": { "type": "string" },
+        "target": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "advanceOn": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["event"],
+          "properties": { "event": { "type": "string", "enum": ["click", "change", "input"] } }
         }
       }
     },
