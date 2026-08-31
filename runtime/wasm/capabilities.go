@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/asteby/metacore-kernel/connectors"
+	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
@@ -76,6 +77,10 @@ type invocation struct {
 	// or update, inside the transaction, against the post-mutation row keyed
 	// by LOGICAL table. non-nil error → rollback + constraint_violation.
 	mutationGuard func(ctx context.Context, logicalTable string, row map[string]any) error
+	// approvalRequester is the embedder-injected dynamic.Service.RequestApproval
+	// (Host.WithApprovals) the `approval_request` import calls. nil = the
+	// import answers `approvals_unavailable`.
+	approvalRequester func(ctx context.Context, in dynamic.ApprovalInput) (*dynamic.ApprovalRequest, error)
 	// execSchema overrides the schema db_exec scopes bare names to via
 	// search_path (Host.WithExecSchema). nil = AddonSchema(addonKey). The
 	// capability gate still authorises against AddonSchema regardless.
@@ -456,6 +461,26 @@ func registerHostModule(ctx context.Context, h *Host) error {
 			return writeToGuest(ctx, mod, env)
 		}).
 		Export("data_query")
+
+	// approval_request(reqPtr, reqLen) -> i64 (ptr|len envelope)
+	// A wasm handler's own explicit decision to park a mutation for human
+	// approval rather than apply it. Tenant scope (orgID) and the requesting
+	// addon come from the invocation context — never from the guest, exactly
+	// like data_mutate. No capability gate: any addon backend may request an
+	// approval, the same way any handler may already fail its own action.
+	// See docs/wasm-abi.md § 19.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			reqPtr, reqLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			req := readBytes(mod, reqPtr, reqLen)
+			env := executeApprovalRequest(ctx, inv, req)
+			return writeToGuest(ctx, mod, env)
+		}).
+		Export("approval_request")
 
 	// sequence_next(reqPtr, reqLen) -> i64 (ptr|len envelope)
 	// Issues the next formatted folio value for a model's declared sequence,

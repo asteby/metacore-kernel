@@ -1899,3 +1899,94 @@ Embedders SHOULD cache the table per org alongside their manifest projection
 and invalidate on install/uninstall/upgrade.
 
 Implementation: `runtime/wasm/routingresolve.go`; package: `routing/`.
+
+## 19. `approval_request` — explicit human-approval parking (v1.10)
+
+Sibling of `data_mutate` for the case a wasm handler decides, on its own
+business logic (not a declarative `Column.constraints` guard — those are
+handled automatically by the declarative approvals primitive on the
+`Service.Create`/`Update` path, and via `Host.WithMutationGuard` +
+`dynamic.EvalRowConstraints` on the wasm write path, § 14.9), that a mutation
+it is about to make needs a human approver before it runs. The import never
+performs a mutation itself: it parks a pending `dynamic.ApprovalRequest` of
+kind `explicit` and hands the guest back its id + status. The guest's own
+`payload.op` is the replay discriminator an embedder-registered
+`dynamic.ApprovalApplier` re-executes once an approver decides
+(`Service.RegisterApprovalApplier("wasm_callback", ...)`); the kernel does not
+ship a default applier for guest-defined ops — an embedder wiring
+`approval_request` MUST also register the applier(s) its addons' `op` values
+name, or approving the request will fail with no registered applier.
+
+### 19.1 Signature
+
+```
+approval_request(reqPtr i32, reqLen i32) -> i64   // ptr<<32 | len (envelope)
+```
+
+### 19.2 Request contract
+
+```json
+{
+  "model": "PriceOverride",
+  "record_id": "sku-123",
+  "label": "Below floor price",
+  "roles": ["sales_manager"],
+  "reason_required": true,
+  "expires_hours": 24,
+  "payload": {"op": "wasm_callback", "sku": "sku-123", "price": 9.99},
+  "snapshot": {"price": 12.50},
+  "violation": {"floor": 10.00, "requested": 9.99}
+}
+```
+
+`roles` (non-empty) and `payload.op` (non-empty) are required; every other
+field is optional. `organization_id` and the requesting addon are deliberately
+absent — tenant scope (orgID) and `addon_key` ALWAYS come from the invocation
+context, never from the guest, exactly like `data_mutate`. There is no
+capability gate: any addon backend may request an approval, the same way any
+handler may already fail its own action outright.
+
+### 19.3 Response envelope
+
+Success:
+
+```json
+{"success": true, "data": {"id": "<uuid>", "status": "pending"}, "meta": {...}}
+```
+
+Failure:
+
+```json
+{"success": false, "error": {"code": "invalid_request", "message": "..."}, "meta": {...}}
+```
+
+### 19.4 Limits
+
+- Request: 32 KiB. Response: 32 KiB. Deadline: 5s.
+
+### 19.5 Error codes
+
+- `invalid_request` — malformed JSON, empty `roles`, or missing `payload.op`.
+- `approvals_unavailable` — the host has no `Host.WithApprovals(...)` injected.
+- `db_error` — the underlying `RequestApproval` call failed (e.g. DB error).
+
+### 19.6 Wiring
+
+```go
+host.WithApprovals(func(ctx context.Context, in dynamic.ApprovalInput) (*dynamic.ApprovalRequest, error) {
+    return dynamicService.RequestApproval(ctx, in)
+})
+```
+
+Embedders that expose `approval_request` to their addons SHOULD also register
+an `ApprovalApplier` for every `op` those addons' handlers pass in `payload`,
+e.g.:
+
+```go
+dynamicService.RegisterApprovalApplier("wasm_callback", func(ctx context.Context, svc *dynamic.Service, req *dynamic.ApprovalRequest, actor modelbase.AuthUser) (any, error) {
+    // re-invoke the originating wasm handler / action with req.Payload,
+    // skipping only the check that raised the approval.
+})
+```
+
+Implementation: `runtime/wasm/approvalrequest.go`; package: `dynamic/approvals.go`.
