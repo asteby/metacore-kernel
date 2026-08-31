@@ -65,10 +65,24 @@ func EvalRowConstraints(mc *ModelConstraints, row map[string]any) error {
 
 // evalConstraints evaluates every guard predicate against the row's numeric
 // environment (missing / non-numeric identifiers resolve to 0, matching the
-// Tier-2 formula engine). The FIRST false predicate aborts with a
-// *ConstraintError carrying its ErrorKey; a malformed predicate is a *400*-class
+// Tier-2 formula engine). A false predicate aborts with a *ConstraintError
+// carrying its ErrorKey + declaration; a malformed predicate is a *400*-class
 // input error (invalid manifest reaching runtime) surfaced as a plain error.
+//
+// Precedence: every guard is evaluated. A failed REJECTING guard always wins
+// (the write is refused outright); only when every failure is of the
+// `request_approval` kind does the first such failure come back — the caller
+// then parks the mutation for a supervisor instead of refusing it. This keeps
+// "stock cannot go negative" from being bypassed by "price below minimum
+// needs a manager".
 func evalConstraints(mc *ModelConstraints, row map[string]any) error {
+	return evalConstraintsSkipping(mc, row, "")
+}
+
+// evalConstraintsSkipping is evalConstraints with ONE guard exempted by its
+// ErrorKey — the replay of an approved request skips exactly the guard the
+// supervisor approved and nothing else. skipKey == "" exempts nothing.
+func evalConstraintsSkipping(mc *ModelConstraints, row map[string]any, skipKey string) error {
 	if !mc.active() {
 		return nil
 	}
@@ -76,16 +90,41 @@ func evalConstraints(mc *ModelConstraints, row map[string]any) error {
 	for k, v := range row {
 		env[k] = computeexpr.ToFloat(v)
 	}
+	var pending *ConstraintError
 	for _, c := range mc.Constraints {
+		if skipKey != "" && c.ErrorKey == skipKey && c.RequestsApproval() {
+			continue
+		}
 		ok, err := evalConstraintExpr(c.Expr, env)
 		if err != nil {
 			return fmt.Errorf("%w: constraint %q: %v", ErrInvalidInput, c.Expr, err)
 		}
-		if !ok {
-			return &ConstraintError{ErrorKey: c.ErrorKey, Expr: c.Expr}
+		if ok {
+			continue
+		}
+		ce := &ConstraintError{ErrorKey: c.ErrorKey, Expr: c.Expr, Def: c, Values: exprValues(c.Expr, env)}
+		if !c.RequestsApproval() {
+			return ce
+		}
+		if pending == nil {
+			pending = ce
 		}
 	}
+	if pending != nil {
+		return pending
+	}
 	return nil
+}
+
+// evalConstraintsCtx is the Create/Update entry point: it honours an approval
+// replay marker on ctx (skipping the approved guard for the replayed model)
+// and otherwise behaves like evalConstraints.
+func evalConstraintsCtx(ctx context.Context, model string, mc *ModelConstraints, row map[string]any) error {
+	skip := ""
+	if r, ok := ApprovalReplayFromContext(ctx); ok && r.Kind == ApprovalKindConstraint && r.matchesModel(model) {
+		skip = r.ConstraintKey
+	}
+	return evalConstraintsSkipping(mc, row, skip)
 }
 
 // comparison operators, longest-match first so ">=" is not mis-split as ">".

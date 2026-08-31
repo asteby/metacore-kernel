@@ -142,6 +142,56 @@ type ApprovalRequest struct {
 // TableName pins the physical table (host schema).
 func (ApprovalRequest) TableName() string { return "approval_requests" }
 
+// DefineTable makes ApprovalRequest a modelbase.ModelDefiner so hosts can
+// project the approvals inbox into their declarative table UI (the same way
+// ops projects the activity log): read-only, newest-first, badge-friendly
+// status column. Hosts register it under "approval_requests" themselves — the
+// kernel deliberately does NOT self-register, so plain CRUD writes can never
+// reach the table (decisions go through Approve/RejectRequest only).
+func (ApprovalRequest) DefineTable() modelbase.TableMetadata {
+	return modelbase.TableMetadata{
+		Title:             "Aprobaciones",
+		EnableCRUDActions: false,
+		DefaultPerPage:    25,
+		PerPageOptions:    []int{25, 50, 100},
+		SearchColumns:     []string{"model_key", "label", "constraint_key", "action_key", "status"},
+		Columns: []modelbase.ColumnDef{
+			{Key: "requested_at", Label: "Fecha", Type: "datetime", Sortable: true},
+			{Key: "label", Label: "Solicitud", Type: "text", Sortable: true},
+			{
+				Key: "status", Label: "Estado", Type: "select", Sortable: true,
+				Options: []modelbase.OptionDef{
+					{Value: ApprovalStatusPending, Label: "Pendiente", Color: "yellow"},
+					{Value: ApprovalStatusApproved, Label: "Aprobada", Color: "blue"},
+					{Value: ApprovalStatusApplied, Label: "Aplicada", Color: "green"},
+					{Value: ApprovalStatusRejected, Label: "Rechazada", Color: "red"},
+					{Value: ApprovalStatusExpired, Label: "Expirada", Color: "gray"},
+					{Value: ApprovalStatusFailed, Label: "Fallida", Color: "red"},
+				},
+			},
+			{Key: "model_key", Label: "Módulo", Type: "text", Sortable: true},
+			{Key: "kind", Label: "Tipo", Type: "text", Sortable: true},
+			{Key: "requested_by", Label: "Solicitante", Type: "text"},
+			{Key: "expires_at", Label: "Expira", Type: "datetime", Sortable: true},
+		},
+	}
+}
+
+// DefineModal completes the modelbase.ModelDefiner contract (fallback detail
+// view; hosts typically render their own diff panel).
+func (ApprovalRequest) DefineModal() modelbase.ModalMetadata {
+	return modelbase.ModalMetadata{
+		Title: "Solicitud de aprobación",
+		Fields: []modelbase.FieldDef{
+			{Key: "label", Label: "Solicitud", Type: "text"},
+			{Key: "status", Label: "Estado", Type: "text"},
+			{Key: "model_key", Label: "Módulo", Type: "text"},
+			{Key: "requested_at", Label: "Fecha", Type: "date"},
+			{Key: "reason", Label: "Motivo", Type: "textarea"},
+		},
+	}
+}
+
 // RoleList parses the stored approver roles.
 func (r *ApprovalRequest) RoleList() []string {
 	var out []string
@@ -267,6 +317,11 @@ var (
 	// ErrApprovalApplierMissing means no applier is registered for the stored
 	// payload op (a host wiring gap). The request is marked failed.
 	ErrApprovalApplierMissing = errors.New("no approval applier registered for this mutation kind")
+
+	// errApprovalPending is the internal sentinel Update's transaction body
+	// returns when a guard asked for approval: it rolls the business mutation
+	// back; the caller then persists the request OUTSIDE the transaction.
+	errApprovalPending = errors.New("dynamic: mutation parked for approval")
 )
 
 // ApprovalRequiredError is the typed error Create / Update / ExecAction return
@@ -369,13 +424,6 @@ func (r ApprovalReplay) skipsConstraint(model, errorKey string) bool {
 // skipsActionApproval reports whether the replay approved this exact action.
 func (r ApprovalReplay) skipsActionApproval(model, actionKey string) bool {
 	return r.Kind == ApprovalKindAction && r.ActionKey == actionKey && r.matchesModel(model)
-}
-
-// approvalReplayActive reports whether ctx carries a replay marker (used to
-// bypass checkPerm on the re-applied mutation).
-func approvalReplayActive(ctx context.Context) bool {
-	_, ok := ApprovalReplayFromContext(ctx)
-	return ok
 }
 
 // ---------------------------------------------------------------------------
@@ -599,18 +647,17 @@ func (s *Service) RequestApproval(ctx context.Context, in ApprovalInput) (*Appro
 		Roles:           mustJSON(roles),
 		ReasonRequired:  in.ReasonRequired,
 		Payload:         mustJSON(in.Payload),
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		// jsonb columns must never receive "" (Postgres rejects it as invalid
+		// JSON); absent blocks are stored as the JSON literal null.
+		Snapshot:  mustJSON(in.Snapshot),
+		Violation: mustJSON(in.Violation),
+		Result:    mustJSON(nil),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	if in.ExpiresHours > 0 {
 		exp := now.Add(time.Duration(in.ExpiresHours) * time.Hour)
 		req.ExpiresAt = &exp
-	}
-	if in.Snapshot != nil {
-		req.Snapshot = mustJSON(in.Snapshot)
-	}
-	if in.Violation != nil {
-		req.Violation = mustJSON(in.Violation)
 	}
 	if err := s.db.WithContext(ctx).Create(req).Error; err != nil {
 		return nil, fmt.Errorf("dynamic: approval request: %w", err)
@@ -1200,13 +1247,16 @@ func rolesIntersect(actor, required []string) bool {
 	return false
 }
 
+// mustJSON serializes v for a jsonb column. nil / unmarshalable values become
+// the JSON literal `null` — never "" (Postgres rejects an empty string as
+// invalid JSON input).
 func mustJSON(v any) string {
 	if v == nil {
-		return ""
+		return "null"
 	}
 	b, err := json.Marshal(v)
 	if err != nil {
-		return ""
+		return "null"
 	}
 	return string(b)
 }
