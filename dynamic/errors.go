@@ -3,6 +3,8 @@ package dynamic
 import (
 	"errors"
 	"fmt"
+
+	"github.com/asteby/metacore-kernel/manifest"
 )
 
 var (
@@ -114,6 +116,14 @@ func (e *ValidationError) add(field, code string, params map[string]any) {
 type ConstraintError struct {
 	ErrorKey string
 	Expr     string
+	// Def is the full guard declaration that failed — Create/Update read its
+	// OnViolation / Approval policy to decide between rejecting the write and
+	// parking it as an ApprovalRequest (see approvals.go).
+	Def manifest.ConstraintDef
+	// Values are the identifiers referenced by Expr with the values they had
+	// when the predicate failed ({unit_price: 80, min_price: 100}) — stored on
+	// the ApprovalRequest so the approver sees WHY without re-evaluating.
+	Values map[string]any
 }
 
 func (e *ConstraintError) Error() string {
@@ -126,3 +136,22 @@ func (e *ConstraintError) Error() string {
 // Unwrap ties the typed error to the ErrConstraintViolation sentinel for
 // errors.Is-based HTTP mapping.
 func (e *ConstraintError) Unwrap() error { return ErrConstraintViolation }
+
+// RequestsApproval reports whether the failed guard asks for a supervisor
+// (on_violation: request_approval) instead of rejecting the write.
+func (e *ConstraintError) RequestsApproval() bool {
+	return e != nil && e.Def.RequestsApproval()
+}
+
+// ViolationMap is the {expr, error_key, values} block persisted on an
+// ApprovalRequest raised by this guard.
+func (e *ConstraintError) ViolationMap() map[string]any {
+	if e == nil {
+		return nil
+	}
+	m := map[string]any{"expr": e.Expr, "error_key": e.ErrorKey}
+	if len(e.Values) > 0 {
+		m["values"] = e.Values
+	}
+	return m
+}

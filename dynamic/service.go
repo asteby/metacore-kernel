@@ -3,9 +3,12 @@ package dynamic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"reflect"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -247,7 +250,35 @@ type Config struct {
 	// safety guards. nil disables file cleanup entirely (the prior behaviour).
 	// See the FileDeleter type doc for the best-effort, non-fatal contract.
 	FileDeleter FileDeleter
+
+	// ActorRolesResolver returns the org role keys the acting user holds — the
+	// set an approval policy's `roles` is matched against when deciding who may
+	// approve / reject a pending ApprovalRequest (see approvals.go). Hosts with
+	// many-to-many roles (ops: users.role ∪ user_roles) wire it here; when nil
+	// the single modelbase.AuthUser.GetRole() is used.
+	ActorRolesResolver ActorRolesResolver
+
+	// ApprovalRequesterResolver loads the ORIGINAL requester of an approved
+	// request so the replayed mutation runs as that principal (created_by /
+	// actor attribution stays truthful). Optional: when nil (or it returns
+	// nil) the kernel synthesizes a minimal principal from the stored
+	// requested_by / organization_id / requested_by_role.
+	ApprovalRequesterResolver ApprovalRequesterResolver
+
+	// ApprovalExpiryInterval starts the background expirer that flips pending
+	// requests past their `expires_hours` to `expired` (see
+	// Service.StartApprovalExpirer). 0 disables the goroutine — reads and
+	// decisions still expire lazily, so correctness never depends on it.
+	ApprovalExpiryInterval time.Duration
 }
+
+// ActorRolesResolver returns the org role keys a user holds (lower-cased or
+// not — matching is case-insensitive). See Config.ActorRolesResolver.
+type ActorRolesResolver func(ctx context.Context, user modelbase.AuthUser) []string
+
+// ApprovalRequesterResolver loads the principal a replayed approval runs as.
+// See Config.ApprovalRequesterResolver.
+type ApprovalRequesterResolver func(ctx context.Context, orgID, userID uuid.UUID) modelbase.AuthUser
 
 // Publisher is the minimal subset of events.Bus that dynamic.Service depends
 // on. *events.Bus satisfies it natively; tests can plug a stub.
@@ -312,6 +343,14 @@ type Service struct {
 	// table migrates at New; outboxStop terminates the background relay.
 	outboxEnabled bool
 	outboxStop    chan struct{}
+
+	// Approvals primitive state (approvals.go): who may decide, who a replay
+	// runs as, the per-op replay backends and the background expirer.
+	actorRolesResolver        ActorRolesResolver
+	approvalRequesterResolver ApprovalRequesterResolver
+	approvalMu                sync.Mutex
+	approvalAppliers          map[string]ApprovalApplier
+	approvalExpireStop        chan struct{}
 }
 
 // New constructs a dynamic Service.
@@ -383,6 +422,9 @@ func New(cfg Config) *Service {
 		selfOptions:       cfg.EnableSelfOptions,
 		fileDeleter:       cfg.FileDeleter,
 		relations:         cfg.RelationResolver,
+
+		actorRolesResolver:        cfg.ActorRolesResolver,
+		approvalRequesterResolver: cfg.ApprovalRequesterResolver,
 	}
 
 	// Arm the transactional outbox (outbox.go) when events can actually fan
@@ -395,6 +437,13 @@ func New(cfg Config) *Service {
 			svc.outboxEnabled = true
 			svc.StartOutboxRelay()
 		}
+	}
+
+	// Approvals primitive (approvals.go): the kernel-native replay backends
+	// are always available; the background expirer is opt-in.
+	svc.registerBuiltinApprovalAppliers()
+	if cfg.ApprovalExpiryInterval > 0 {
+		svc.StartApprovalExpirer(cfg.ApprovalExpiryInterval)
 	}
 	return svc
 }
@@ -624,6 +673,11 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 		return nil, err
 	}
 
+	// Keep the caller's ORIGINAL input: when a guard parks this create for
+	// approval, the replay must issue the exact same call (scope injection,
+	// coercion, hooks and formulas all run again on approve).
+	orig := cloneMap(input)
+
 	s.scope.InjectOnCreate(input, user)
 	input["created_by_id"] = user.GetID()
 
@@ -649,9 +703,16 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	// Declarative guards: evaluate the model's column Constraints against the
 	// (formula-computed) input BEFORE the write. A false predicate aborts with a
 	// 422 + ErrorKey and nothing is inserted. No locking is needed on create —
-	// there is no prior row to serialize against.
+	// there is no prior row to serialize against. A guard declared with
+	// on_violation: request_approval parks the create as a pending
+	// ApprovalRequest instead (nothing is inserted either) and answers
+	// *ApprovalRequiredError; the replay skips exactly that guard.
 	if mc := s.resolveConstraints(ctx, model); mc != nil {
-		if err := evalConstraints(mc, input); err != nil {
+		if err := evalConstraintsCtx(ctx, model, mc, input); err != nil {
+			var ce *ConstraintError
+			if errors.As(err, &ce) && ce.RequestsApproval() {
+				return nil, s.openConstraintApproval(ctx, model, user, ApprovalOpCreate, "", orig, nil, ce)
+			}
 			return nil, err
 		}
 	}
@@ -722,6 +783,14 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 
 	sm := s.resolveStageMachine(ctx, model)
 	var before, after map[string]any
+
+	// Approval parking (approvals.go): the caller's original input is what a
+	// replay re-issues; pendingCE/pendingBefore carry the guard that asked for
+	// a supervisor out of the (rolled-back) transaction so the request row is
+	// written on the standalone handle AFTER the business mutation is undone.
+	orig := cloneMap(input)
+	var pendingCE *ConstraintError
+	var pendingBefore map[string]any
 
 	// core runs the load/evaluate/save against execDB. inTx reports whether it
 	// runs inside a caller-owned transaction (the row-locking path) — the save +
@@ -806,7 +875,12 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 			for k, v := range input {
 				merged[k] = v
 			}
-			if err := evalConstraints(mc, merged); err != nil {
+			if err := evalConstraintsCtx(ctx, model, mc, merged); err != nil {
+				var ce *ConstraintError
+				if errors.As(err, &ce) && ce.RequestsApproval() {
+					pendingCE, pendingBefore = ce, before
+					return errApprovalPending
+				}
 				return err
 			}
 		}
@@ -848,16 +922,22 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		return nil
 	}
 
+	var coreErr error
 	if lockRows {
-		if txErr := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		coreErr = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			return core(tx, true)
-		}); txErr != nil {
-			return nil, txErr
-		}
+		})
 	} else {
-		if err := core(s.db, false); err != nil {
-			return nil, err
+		coreErr = core(s.db, false)
+	}
+	if coreErr != nil {
+		if errors.Is(coreErr, errApprovalPending) && pendingCE != nil {
+			// The business mutation was rolled back (or never written); persist
+			// the pending request on the standalone handle and hand the caller
+			// the typed approval_required error.
+			return nil, s.openConstraintApproval(ctx, model, user, ApprovalOpUpdate, id.String(), orig, pendingBefore, pendingCE)
 		}
+		return nil, coreErr
 	}
 
 	// Orphaned-file cleanup: any file/image column whose value changed leaves

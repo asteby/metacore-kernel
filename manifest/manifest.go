@@ -513,6 +513,14 @@ type ActionDef struct {
 	// manifest/v3.ActionIdempotency and dynamic.Service.ExecAction.
 	Idempotency *IdempotencyDef `json:"idempotency,omitempty"`
 
+	// Approval is the host/runtime projection of a v3 Action.approval block: a
+	// SUPERVISED action. When non-nil (and When is empty or evaluates true), the
+	// kernel's ExecAction parks the invocation as a pending ApprovalRequest and
+	// answers `approval_required` instead of dispatching; an approver holding
+	// one of Roles later triggers the real dispatch. Nil = ordinary action. See
+	// manifest/v3.ApprovalPolicy and dynamic approvals.
+	Approval *ApprovalDef `json:"approval,omitempty"`
+
 	// Condition is the host projection of the v3 contribution condition: the
 	// action is only served to orgs satisfying it. See ConditionDef.
 	Condition *ConditionDef `json:"condition,omitempty"`
@@ -905,6 +913,33 @@ type SequenceDef struct {
 type ConstraintDef struct {
 	Expr     string `json:"expr"`
 	ErrorKey string `json:"errorKey"`
+	// OnViolation is the host/runtime projection of v3 Constraint.on_violation:
+	// ""/"reject" aborts the write (422 + ErrorKey); "request_approval" parks
+	// the mutation as a pending ApprovalRequest instead (see dynamic approvals).
+	OnViolation string `json:"onViolation,omitempty"`
+	// Approval carries the v3 Constraint.approval policy (who may approve, reason
+	// / expiry / label). Only meaningful with OnViolation == "request_approval".
+	Approval *ApprovalDef `json:"approval,omitempty"`
+}
+
+// RequestsApproval reports whether a false predicate must open an approval
+// request (on_violation: request_approval with an approval policy) instead of
+// rejecting the write outright.
+func (c ConstraintDef) RequestsApproval() bool {
+	return c.OnViolation == "request_approval" && c.Approval != nil
+}
+
+// ApprovalDef is the host/runtime projection of a v3 ApprovalPolicy: the org
+// roles that may approve a pending mutation, whether a reason is mandatory, an
+// optional expiry and an inbox label. When is the action-only conditional
+// predicate (approval required only when it evaluates true). See
+// manifest/v3.ApprovalPolicy for the full contract.
+type ApprovalDef struct {
+	Roles          []string `json:"roles"`
+	ReasonRequired bool     `json:"reasonRequired,omitempty"`
+	ExpiresHours   int      `json:"expiresHours,omitempty"`
+	Label          string   `json:"label,omitempty"`
+	When           string   `json:"when,omitempty"`
 }
 
 // Rollup declares a PARENT column the kernel maintains as an aggregate

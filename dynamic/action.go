@@ -154,6 +154,22 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 		return ActionResult{}, err
 	}
 
+	// Supervised action (approvals.go): when the manifest declares an approval
+	// policy — and `when` (if any) holds against the merged record ∪ payload —
+	// the invocation is NOT dispatched: it is stored as a pending
+	// ApprovalRequest and the caller gets *ApprovalRequiredError
+	// (error.code "approval_required" + meta.approval_request_id). The gate
+	// runs BEFORE the idempotency reservation so a parked action never burns
+	// its key; the approved replay carries a marker that skips exactly this
+	// gate and dispatches for real.
+	if actionNeedsApproval(ctx, model, key, def, row, payload) {
+		req, aerr := s.openActionApproval(ctx, model, user, id, key, def, row, payload)
+		if aerr != nil {
+			return ActionResult{}, aerr
+		}
+		return ActionResult{}, &ApprovalRequiredError{Request: req}
+	}
+
 	dispatcher, ok := s.actionDispatchers[trig.Type]
 	if !ok {
 		return ActionResult{}, fmt.Errorf("%w: %q", ErrUnsupportedTriggerType, trig.Type)

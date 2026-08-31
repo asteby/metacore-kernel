@@ -852,6 +852,55 @@ type Constraint struct {
 	// ErrorKey is the i18n key / stable code surfaced to the client (422) when
 	// the predicate is false, e.g. "stock.negative".
 	ErrorKey string `json:"error_key"`
+
+	// OnViolation selects what the kernel does when the predicate is false:
+	//   ""/"reject"          — abort the write with 422 + ErrorKey (the default).
+	//   "request_approval"   — do NOT write. The kernel rolls the business
+	//                          mutation back, stores the full pending mutation
+	//                          as an ApprovalRequest (status pending), emits
+	//                          `approval.requested` and answers the caller with
+	//                          `success:false`, `error.code = "approval_required"`
+	//                          and `meta.approval_request_id`. A user holding one
+	//                          of Approval.Roles later approves it and the kernel
+	//                          re-applies the SAME mutation skipping ONLY this
+	//                          constraint (every other guard still runs). This is
+	//                          the declarative "sell below the minimum price needs
+	//                          a supervisor" primitive. Requires Approval.
+	OnViolation string `json:"on_violation,omitempty"`
+
+	// Approval configures WHO may approve a violation of this constraint and
+	// how. Required when OnViolation is "request_approval"; ignored otherwise.
+	Approval *ApprovalPolicy `json:"approval,omitempty"`
+}
+
+// ApprovalPolicy declares who may approve a pending mutation and the shape of
+// the decision. It is shared by Constraint.Approval (a guard that requests
+// approval instead of rejecting) and Action.Approval (an action that always —
+// or conditionally — needs a supervisor). The kernel stores the pending
+// mutation in its own `approval_requests` model, notifies the host (canonical
+// `approval.requested` event) and re-applies the mutation when approved.
+type ApprovalPolicy struct {
+	// Roles are the org role keys allowed to approve (e.g. ["manager","owner"]).
+	// The host resolves the acting user's roles (dynamic.Config.ActorRolesResolver);
+	// an approver holding none of them is refused (403). Required, non-empty.
+	Roles []string `json:"roles"`
+	// ReasonRequired forces the approver to supply a non-empty reason on
+	// approve AND reject. Optional; defaults false.
+	ReasonRequired bool `json:"reason_required,omitempty"`
+	// ExpiresHours auto-expires a pending request after this many hours
+	// (status "expired"; it can no longer be approved). 0 = never expires.
+	ExpiresHours int `json:"expires_hours,omitempty"`
+	// Label is the human/i18n title shown on the approval inbox card (e.g.
+	// "approvals.below_min_price"). Optional; the host falls back to the
+	// constraint ErrorKey / action label.
+	Label string `json:"label,omitempty"`
+	// When is an OPTIONAL predicate — ONLY meaningful on Action.Approval — that
+	// gates the approval on the invocation: the action needs approval only when
+	// the predicate is TRUE against the merged (record ∪ payload) numeric
+	// environment, e.g. "discount_pct > 10". Empty = the action always needs
+	// approval. Same strict `<arith> <op> <arith>` grammar as Constraint.Expr.
+	// Rejected by validation when set on a column constraint.
+	When string `json:"when,omitempty"`
 }
 
 // Index is a single index declaration.
@@ -1327,6 +1376,17 @@ type Action struct {
 	// a payment capture or a fiscal stamp be retried over a flaky network without
 	// double-charging / double-stamping. Optional — omit for ordinary actions.
 	Idempotency *ActionIdempotency `json:"idempotency,omitempty"`
+
+	// Approval makes the action SUPERVISED: instead of dispatching, the kernel
+	// stores the invocation (record id + payload) as a pending ApprovalRequest,
+	// emits `approval.requested` and answers `success:false` with
+	// `error.code = "approval_required"` + `meta.approval_request_id`. When a
+	// user holding one of Approval.Roles approves it, the kernel dispatches the
+	// SAME invocation (same payload, on behalf of the original requester).
+	// Approval.When makes it conditional (approval only when the predicate is
+	// true, e.g. "discount_pct > 10"); empty When = always. Nil = an ordinary,
+	// immediately-dispatched action. See ApprovalPolicy.
+	Approval *ApprovalPolicy `json:"approval,omitempty"`
 
 	// Condition gates this contribution server-side: when set, the host only
 	// serves it to organizations where the predicate holds (e.g. another addon

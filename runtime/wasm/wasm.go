@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/asteby/metacore-kernel/connectors"
+	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/security"
@@ -65,10 +66,14 @@ type Host struct {
 	sequenceNext  func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)
 	routingTable  RoutingTableFn
 	mutationGuard func(ctx context.Context, logicalTable string, row map[string]any) error
-	connectors    *connectors.Resolver
-	logger        *log.Logger
-	compiled      sync.Map // addonKey -> *compiledEntry
-	modules       sync.Map // instanceKey(addonKey, installation) -> *Module
+	// approvalRequester is the embedder-injected dynamic.Service.RequestApproval
+	// the `approval_request` import calls (Host.WithApprovals). nil = import
+	// answers `approvals_unavailable`.
+	approvalRequester func(ctx context.Context, in dynamic.ApprovalInput) (*dynamic.ApprovalRequest, error)
+	connectors        *connectors.Resolver
+	logger            *log.Logger
+	compiled          sync.Map // addonKey -> *compiledEntry
+	modules           sync.Map // instanceKey(addonKey, installation) -> *Module
 	// instMu single-flights getOrInstantiate per instance key. Two concurrent
 	// deliveries that both miss the module cache used to race
 	// InstantiateModule with the SAME wazero module name — wazero rejects the
@@ -204,6 +209,20 @@ func (h *Host) WithRoutingTable(f RoutingTableFn) *Host {
 // pre-guards behaviour).
 func (h *Host) WithMutationGuard(g func(ctx context.Context, logicalTable string, row map[string]any) error) *Host {
 	h.mutationGuard = g
+	return h
+}
+
+// WithApprovals injects the embedder's dynamic.Service.RequestApproval for the
+// `metacore_host.approval_request` import (docs/wasm-abi.md § 19). A wasm
+// handler that decides, on its own logic, that a mutation needs a human
+// approver before it runs calls this import instead of mutating directly; the
+// kernel parks a pending ApprovalRequest of kind `explicit` and answers the
+// guest with its id + status. The import never performs a mutation itself —
+// the guest's own `payload.op` is what an ApprovalApplier (registered via
+// Service.RegisterApprovalApplier) replays once approved. When unset, the
+// import answers `approvals_unavailable`.
+func (h *Host) WithApprovals(f func(ctx context.Context, in dynamic.ApprovalInput) (*dynamic.ApprovalRequest, error)) *Host {
+	h.approvalRequester = f
 	return h
 }
 
@@ -383,23 +402,24 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 	// Stash settings + caller id on the ctx so the host module imports
 	// (env_get, http_fetch, log) can read them without global state.
 	callCtx = withInvocation(callCtx, &invocation{
-		addonKey:      addonKey,
-		installation:  installation,
-		settings:      settings,
-		caps:          h.capsFor(addonKey),
-		bus:           h.bus,
-		orgID:         orgID,
-		db:            h.db,
-		tx:            tx,
-		enforcer:      h.enforcer,
-		resolveTable:  h.tableResolver,
-		modelOwner:    h.modelOwner,
-		execSchema:    h.execSchema,
-		sequenceNext:  h.sequenceNext,
-		routingTable:  h.routingTable,
-		mutationGuard: h.mutationGuard,
-		connectors:    h.connectors,
-		logger:        h.logger,
+		addonKey:          addonKey,
+		installation:      installation,
+		settings:          settings,
+		caps:              h.capsFor(addonKey),
+		bus:               h.bus,
+		orgID:             orgID,
+		db:                h.db,
+		tx:                tx,
+		enforcer:          h.enforcer,
+		resolveTable:      h.tableResolver,
+		modelOwner:        h.modelOwner,
+		execSchema:        h.execSchema,
+		sequenceNext:      h.sequenceNext,
+		routingTable:      h.routingTable,
+		mutationGuard:     h.mutationGuard,
+		approvalRequester: h.approvalRequester,
+		connectors:        h.connectors,
+		logger:            h.logger,
 	})
 
 	mod.mu.Lock()

@@ -1317,6 +1317,22 @@ func validateConstraints(md ModelDefinition, ownCols map[string]struct{}) error 
 			if err := validateConstraintExprStrict(con.Expr, ownCols); err != nil {
 				return fmt.Errorf("%s: expr %q: %w", where, con.Expr, err)
 			}
+			// Approval contract (mirrors v3 validateConstraintApproval).
+			switch con.OnViolation {
+			case "", "reject":
+				if con.Approval != nil {
+					return fmt.Errorf("%s: approval is set but onViolation is not \"request_approval\"", where)
+				}
+			case "request_approval":
+				if con.Approval == nil || len(con.Approval.Roles) == 0 {
+					return fmt.Errorf("%s: onViolation=request_approval requires approval.roles", where)
+				}
+			default:
+				return fmt.Errorf(`%s: onViolation %q is not one of "reject"|"request_approval"`, where, con.OnViolation)
+			}
+			if con.Approval != nil && strings.TrimSpace(con.Approval.When) != "" {
+				return fmt.Errorf("%s: approval.when is only valid on actions", where)
+			}
 		}
 	}
 	return nil
