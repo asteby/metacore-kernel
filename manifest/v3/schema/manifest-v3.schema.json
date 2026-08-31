@@ -1216,6 +1216,13 @@
             "$ref": "#/$defs/DocumentDef"
           }
         },
+        "public_routes": {
+          "type": "array",
+          "description": "Org-scoped, token-addressed PUBLIC views of a record served by the host without a login (shareable quote, order tracking, customer statement, waiting-room screen). Each entry binds a model + its token column to a rendering kind: a printable document (PDF), an allowlisted JSON projection, or a minimal branded HTML page. Served at GET /p/<orgRef>/<addon>/<key>/<token>[.pdf|.json].",
+          "items": {
+            "$ref": "#/$defs/PublicRoute"
+          }
+        },
         "config": {
           "$ref": "#/$defs/ConfigEntry",
           "description": "The addon's configuration surface. Hosts render a 'Configure' affordance (e.g. in the installed-addons view) linking to it; addons with nothing to configure simply omit it."
@@ -1333,6 +1340,77 @@
         "comment": {
           "type": "string",
           "description": "Optional author note for the Plantillas catalog."
+        }
+      }
+    },
+    "PublicRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "model",
+        "token_column",
+        "kind"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Unique within the addon. The '<key>' path segment of the public URL.",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "model": {
+          "type": "string",
+          "description": "The model key (own model or extended model) whose records the route exposes."
+        },
+        "token_column": {
+          "type": "string",
+          "description": "Text column of the model holding the per-record secret token. The host generates/rotates it (32 random bytes, base64url) and matches it in constant time, always scoped to the resolved organization.",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "kind": {
+          "type": "string",
+          "description": "Rendering: 'document' streams the PDF of `document`; 'json' returns only the `columns` allowlist (+ `relations`); 'html' serves a minimal branded page listing `columns` with an optional PDF download button.",
+          "enum": [
+            "document",
+            "json",
+            "html"
+          ]
+        },
+        "document": {
+          "type": "string",
+          "description": "contributions.documents[] key rendered as PDF. Required for kind 'document'; optional for 'html' (download button) and 'json' (document_url). Must bind the same model.",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "columns": {
+          "type": "array",
+          "description": "Allowlist of model columns the json/html renderings may expose. Nothing outside it is ever serialised; the token column is never allowed. Required for 'json'; for 'html' may be empty only when `document` is set.",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "uniqueItems": true
+        },
+        "relations": {
+          "type": "array",
+          "description": "Allowlist of relation names (models[].relations[].name) or ref column stems included in json/html renderings: refs resolve to {value,label}, one_to_many edges to their child rows.",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "uniqueItems": true
+        },
+        "expires_column": {
+          "type": "string",
+          "description": "Optional date/timestamp column of the model; once in the past the host answers 410 Gone.",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "label": {
+          "type": "string",
+          "description": "Optional i18n key (or literal) hosts show on the 'public link' affordance. Falls back to key."
+        },
+        "enabled_when": {
+          "type": "string",
+          "description": "Optional predicate over the record that must hold for the route to serve it, e.g. \"status != 'draft'\" or \"status in ('sent','accepted') && total > 0\". Comparisons `<column> <op> <literal>` (== != < <= > >= in not_in) joined by && / ||, parentheses allowed."
         }
       }
     },

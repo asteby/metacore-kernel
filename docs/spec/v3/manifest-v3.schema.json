@@ -115,6 +115,13 @@
         "$ref": "#/$defs/InboundWebhook"
       }
     },
+    "edge_devices": {
+      "type": "array",
+      "description": "Local-network hardware (a cash recycler, a card terminal) this addon integrates with through a persistent channel a store-local agent maintains. The host's edge gateway terminates the channel, validates events against the declared list and dispatches them to a wasm export, and relays commands the addon issues to the paired device.",
+      "items": {
+        "$ref": "#/$defs/EdgeDevice"
+      }
+    },
     "signature": {
       "$ref": "#/$defs/Signature"
     }
@@ -261,14 +268,15 @@
         "icon": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Triple (type, slug, color) used by the host to render the addon avatar.",
+          "description": "Triple (type, slug, color) used by the host to render the addon avatar. When type is \"svg\", slug is a relative path to an SVG asset bundled inside the addon (e.g. \"assets/link.svg\"), served by the hub under a sandboxed CSP and rendered by the frontend as an <img>.",
           "properties": {
             "type": {
               "type": "string",
               "enum": [
                 "brand",
                 "lucide",
-                "url"
+                "url",
+                "svg"
               ]
             },
             "slug": {
@@ -318,10 +326,10 @@
         },
         "i18n": {
           "type": "object",
+          "description": "Marketplace catalog localizations keyed by locale (es, en, ...).",
           "additionalProperties": {
             "$ref": "#/$defs/MetadataLocale"
-          },
-          "description": "Marketplace catalog localizations keyed by locale (es, en, ...)."
+          }
         }
       },
       "examples": [
@@ -334,32 +342,13 @@
         }
       ]
     },
-    "MetadataLocale": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "One locale's marketplace catalog copy. Every field is optional; missing fields fall back to the flat metadata.name/description/features.",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
-        "features": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      }
-    },
     "Compatibility": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "requires"
       ],
-      "description": "Versioned dependency declarations. 'requires' replaces the v2 trio (kernel, requires, implicit host match) with a uniform list. Optional 'provides' lists other addon keys this package satisfies when installed.",
+      "description": "Versioned dependency declarations. 'requires' replaces the v2 trio (kernel, requires, implicit host match) with a uniform list.",
       "properties": {
         "requires": {
           "type": "array",
@@ -370,7 +359,7 @@
         },
         "provides": {
           "type": "array",
-          "description": "Other addon keys this package satisfies. When this addon is installed, the host treats those keys as already covered.",
+          "description": "Other addon keys this package satisfies. When this addon is installed, the host treats those keys as already covered (skip marketplace install of conflicting twins).",
           "items": {
             "type": "string",
             "minLength": 1
@@ -477,6 +466,7 @@
             "db:read",
             "db:write",
             "http:fetch",
+            "connector:read",
             "event:emit",
             "event:subscribe",
             "fs:read",
@@ -487,7 +477,7 @@
             "file-storage:write",
             "time:wallclock"
           ],
-          "description": "Closed set of capability kinds the runtime enforces."
+          "description": "Closed set of capability kinds the runtime enforces. `connector:read <key>` grants connector_get for one connector key: an addon implicitly reads the connectors it declares in its own `connectors` block, so this kind is what an addon uses to read a connector DECLARED BY ANOTHER ADDON (e.g. waybill-cartaporte reading fiscal_mexico's `factura_com` so the org configures the PAC credentials once)."
         },
         "target": {
           "type": "string",
@@ -581,7 +571,7 @@
         },
         "relations": {
           "type": "array",
-          "description": "Inverse 1:N / N:M view edges the host projects into served TableMetadata so a detail page can list the model's child records (e.g. a Customer's vehicles, addresses, attachments).",
+          "description": "Inverse 1:N / N:M view edges the host projects into served TableMetadata so a detail page can list the model's child records (e.g. a Customer's vehicles, addresses, attachments). Unlike foreign_keys (physical constraints on the owning column) these are owner-rooted view hints.",
           "items": {
             "$ref": "#/$defs/ModelRelation"
           }
@@ -589,6 +579,30 @@
         "seed": {
           "$ref": "#/$defs/Seed",
           "description": "Default seed data the installer inserts on install, idempotent by a natural key column."
+        },
+        "formulas": {
+          "type": "array",
+          "description": "Tier-2 computed columns over the same row, evaluated before every create/update write.",
+          "items": {
+            "$ref": "#/$defs/Formula"
+          }
+        },
+        "locking": {
+          "type": "string",
+          "enum": [
+            "row"
+          ],
+          "description": "Row-locking strategy on Update. 'row' makes the kernel wrap Update in a transaction and load the target row with SELECT … FOR UPDATE before evaluating column constraints, so an increment-then-check guard is race-free. Omit for no extra locking."
+        },
+        "sequences": {
+          "type": "array",
+          "description": "Atomic folio counters the kernel maintains per org (or branch) for this model — invoice folios, remission numbers, tickets. A column binds to one via 'sequence' for auto-stamping on create; a wasm handler pulls one via the sequence_next host import.",
+          "items": {
+            "$ref": "#/$defs/Sequence"
+          }
+        },
+        "form_layout": {
+          "$ref": "#/$defs/FormLayout"
         },
         "stage_field": {
           "type": "string",
@@ -724,11 +738,26 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Static equality filter applied to the child query. Makes polymorphic children addressable (e.g. {\"owner_model\":\"Customer\"} on a shared attachments table)."
+          "description": "Static equality filter applied to the child query. Makes polymorphic children addressable: a shared attachments table carries an 'owner_model' discriminator, so a Customer's attachments relation declares {\"owner_model\":\"Customer\"} alongside foreign_key 'owner_id'."
         },
         "label": {
           "type": "string",
           "description": "Optional i18n key / human label for the related-records panel."
+        },
+        "readonly": {
+          "type": "boolean",
+          "description": "When true, the related-records panel must not allow creating/editing/deleting child rows. Used for relations pointing at an append-only ledger (e.g. an inventory kardex). Pure UI metadata; defaults false."
+        },
+        "embed": {
+          "type": "boolean",
+          "description": "When true, this relation is a COMPOSITION (a document's LINES) and the record modal renders its children inline as a sub-table. Opt-in: the modal embeds ONLY relations declaring it, so a parent with a large independently-managed child collection (stock movements, transfers) stays cheap to open — those relations stay reachable from their own model page. Pure UI metadata; defaults false. Only meaningful for one_to_many."
+        },
+        "rollups": {
+          "type": "array",
+          "description": "Tier-1 parent-aggregate specs over this relation's child rows. Only meaningful for one_to_many.",
+          "items": {
+            "$ref": "#/$defs/Rollup"
+          }
         }
       }
     },
@@ -746,20 +775,27 @@
         },
         "type": {
           "type": "string",
-          "description": "Logical type the kernel maps to a Postgres type. Closed set kept narrow to keep cross-driver portability.",
-          "enum": [
-            "uuid",
-            "text",
-            "integer",
-            "bigint",
-            "numeric",
-            "boolean",
-            "timestamp",
-            "timestamptz",
-            "date",
-            "json",
-            "jsonb",
-            "vector"
+          "description": "Logical type the kernel maps to a Postgres type. Closed set kept narrow to keep cross-driver portability. Parameterized Postgres-native forms numeric(p,s), varchar(n) and vector(n) are ALSO accepted — they are a subset of what the kernel DDL plane (dynamic.ValidateColumnType / pgColumnType) materializes, so the author contract can never accept a type the engine cannot emit.",
+          "anyOf": [
+            {
+              "enum": [
+                "uuid",
+                "text",
+                "integer",
+                "bigint",
+                "numeric",
+                "boolean",
+                "timestamp",
+                "timestamptz",
+                "date",
+                "json",
+                "jsonb",
+                "vector"
+              ]
+            },
+            {
+              "pattern": "^(numeric\\(\\d{1,4},\\d{1,4}\\)|varchar\\(\\d{1,4}\\)|vector\\(\\d{1,4}\\))$"
+            }
           ]
         },
         "primary_key": {
@@ -805,16 +841,195 @@
           "description": "Foreign-key target (model key or table) the column points at. The host projects it onto ColumnDef.ref / FieldDef.ref so the SDK renders a searchable dynamic_select relation picker in the native create/edit form (resolving options against /api/options/:ref) with no per-app action. Pure UI metadata; ignored by the DDL plane."
         },
         "options": {
-          "type": "array",
-          "description": "Static select choice list for the column (value/label, plus optional icon/color/image visuals). The host projects it onto ColumnDef.options / FieldDef.options so the SDK renders a plain select in the native create/edit form with no custom action. Use 'ref' for a relation picker and 'options' for a hardcoded enum. Pure UI metadata; ignored by the DDL plane.",
-          "items": {
-            "$ref": "#/$defs/FieldOption"
-          }
+          "description": "Select choice source for the column. EITHER the STATIC array form (value/label, plus optional icon/color/image visuals → plain select) OR the DYNAMIC object form (DynamicOptions: a dependent-picker source declaration → searchable dynamic_select scoped by depends_on). Mutually exclusive. Use 'ref' for a simple relation picker, the array for a hardcoded enum, the object for a scoped/relational picker. Pure UI metadata; ignored by the DDL plane.",
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/FieldOption"
+              }
+            },
+            {
+              "$ref": "#/$defs/DynamicOptions"
+            }
+          ]
+        },
+        "depends_on": {
+          "type": "string",
+          "description": "Name of a SIBLING column whose current value supplies the cascade filter_value for this column's dependent picker (used with the 'options' object form). The host projects it onto ColumnDef.depends_on so the SDK re-fetches the options when the depended-on field changes. Empty = no cascade. Pure UI metadata."
         },
         "options_source": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
           "description": "DYNAMIC options provider key (e.g. 'registered_models', 'installed_addons'). Instead of a hardcoded 'options' list, the column declares WHERE its choices come from: a provider the HOST registers and resolves at metadata-serve time, materialising the localized value/label list onto the served ColumnDef.options / FieldDef.options. Open enum: the kernel only passes the key through; unknown keys simply yield no options on hosts that don't register them. Use 'ref' for a row-level relation picker, 'options' for a hardcoded enum, and 'options_source' for host-computed lists. Pure UI metadata; ignored by the DDL plane."
+        },
+        "readonly": {
+          "type": "boolean",
+          "description": "Marks a SYSTEM-GENERATED column: a value the addon/host populates server-side (e.g. an external id or number a remote API returns after a create), never something a user types. The host projects it onto ColumnDef.readonly / FieldDef.readonly so form derivation EXCLUDES the column from the create form and marks it read-only in edit; the column still renders in tables/kanban/detail. Pure UI metadata; the DDL and write planes ignore it (an addon or compute rule writes the value as usual)."
+        },
+        "scan": {
+          "type": "boolean",
+          "description": "Opts the column's create/edit form input into CAMERA BARCODE SCANNING: when true and the browser supports it, the SDK shows a camera button that scans a barcode to FILL the field fast (e.g. a product SKU). The host projects it onto ColumnDef.scan / FieldDef.scan. Country/business-agnostic UI metadata; the DDL plane ignores it. Defaults false."
+        },
+        "constraints": {
+          "type": "array",
+          "description": "Declarative GUARD predicates the kernel evaluates inside the create/update transaction before writing. A false predicate aborts with 422 + the error_key. Combine with the owning model's locking:'row' for a race-free increment-then-check guard.",
+          "items": {
+            "$ref": "#/$defs/Constraint"
+          }
+        },
+        "sequence": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Binds this column to one of the owning model's sequences by key: on create, when the column is empty, the kernel stamps the next formatted folio value automatically (treated as system-generated for form derivation)."
+        },
+        "generated": {
+          "type": "string",
+          "description": "Declares a Postgres STORED generated column: a pure arithmetic expression over OTHER columns of the SAME row (e.g. 'quantity - reserved'), emitted as `GENERATED ALWAYS AS (<expr>) STORED`. The value is maintained by the database on every write (path-independent) and is SQL-native: it filters, sorts, aggregates and exports in the database with no compute hook or wasm handler, and is excluded from INSERT/UPDATE. Expression allowlist: +-*/, parentheses, numbers, and sibling column identifiers (no self-reference). INCOMPATIBLE with default and not_null (Postgres rejects both on a generated column)."
+        },
+        "visible_when": {
+          "$ref": "#/$defs/VisibleWhen"
+        },
+        "section": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Assigns this column to a form_layout section/step by its key: the SDK places the field's input inside the matching form_layout.sections[] block (a collapsible section in mode 'sections', a wizard step in mode 'steps'). Columns without a section fall into an implicit 'General' block (or the first declared one). Pure UI metadata (maps to ColumnDef/FieldDef.section) — the DDL and write planes ignore it."
+        },
+        "validation": {
+          "$ref": "#/$defs/FieldValidation",
+          "description": "Write-time constraint the kernel enforces on create/update (regex / min / max / custom) and the SDK pre-flights. Codes are locale-agnostic; the SDK localizes them to the operator's language. Same shape as ActionField.validation. Optional."
+        }
+      }
+    },
+    "FormSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key"
+      ],
+      "description": "One block of the model's create/edit form. In form_layout mode 'sections' it is a titled, collapsible block on a single scroll; in mode 'steps' it is one step of a wizard (the SDK validates step-by-step). Columns bind to it via column.section == this key. title/description may be a literal or an i18n key resolved by the host's localized transformer (same mechanism as column/action labels).",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Stable identifier of the section/step, unique within the model. Columns reference it via column.section."
+        },
+        "title": {
+          "type": "string",
+          "description": "Human header for the section/step. Literal text or an i18n key (e.g. 'models.invoice.sections.identity') the host localizes at serve time."
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional secondary text shown under the section/step title. Literal or i18n key."
+        },
+        "collapsed": {
+          "type": "boolean",
+          "description": "In mode 'sections', render the block initially collapsed. Ignored in mode 'steps'."
+        },
+        "visible_when": {
+          "$ref": "#/$defs/VisibleWhen",
+          "description": "CONDITIONAL VISIBILITY for the whole section: the SDK hides the entire block (all its fields) when the predicate is false against the live form values, using the same {field, equals?, in?} shape as a column's visible_when. Pure UI metadata."
+        }
+      }
+    },
+    "FormLayout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "sections"
+      ],
+      "description": "Declarative grouping for the model's native create/edit form. Mode 'sections' renders the sections as titled, collapsible blocks on a single scroll; mode 'steps' renders them as a step-by-step wizard (validated per step by the SDK). A section and a step share the same FormSection shape. Columns assign themselves to a section/step via column.section == section.key; unassigned columns fall into an implicit 'General' block. Pure UI metadata (maps to the served form_layout) — the DDL and write planes ignore it.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "sections",
+            "steps"
+          ],
+          "description": "'sections' = collapsible blocks in one scroll (default). 'steps' = wizard, one section per step."
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FormSection"
+          },
+          "description": "Ordered list of sections (mode 'sections') or steps (mode 'steps')."
+        }
+      }
+    },
+    "VisibleWhen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field"
+      ],
+      "description": "CONDITIONAL VISIBILITY for a form field in the native create/edit modal: the SDK renders the owning field only when a SIBLING field's current value matches this predicate. Pure UI metadata (maps to ColumnDef/FieldDef.visible_when) — the DDL and write planes ignore it, and a hidden field's value never gates submit. Declare EITHER 'equals' (exact string match) OR 'in' (any-of); when both are present 'in' wins.",
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "Sibling field key whose current value drives this field's visibility (e.g. 'rule_scope')."
+        },
+        "equals": {
+          "type": "string",
+          "description": "Show the owning field when the sibling value equals this string."
+        },
+        "in": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Show the owning field when the sibling value is one of these strings."
+        }
+      }
+    },
+    "Sequence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "format"
+      ],
+      "description": "One atomic folio counter the kernel maintains for the owning model, formatted through a template. Increments atomically (UPDATE … RETURNING) so concurrent creates never collide.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Sequence identifier, unique within the model (e.g. 'invoice')."
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "org",
+            "branch"
+          ],
+          "description": "Counter partitioning: 'org' (one series per organization, the default) or 'branch' (one series per branch). Omit for org."
+        },
+        "format": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Template rendered around the numeric value; MUST contain exactly one {seq} or zero-padded {seq:0N} placeholder, e.g. 'A-{seq:06}' → 'A-000042'."
+        }
+      }
+    },
+    "Constraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expr",
+        "error_key"
+      ],
+      "description": "One declarative guard predicate on a column: a boolean comparison '<arith> <op> <arith>' (op is >= <= > < == !=) over the same row's columns, evaluated before every create/update write. Each side uses the strict arithmetic allowlist, so it can never inject SQL.",
+      "properties": {
+        "expr": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Guard predicate, e.g. 'quantity >= 0' or 'price >= cost'."
+        },
+        "error_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "i18n key / stable code surfaced to the client (422) when the predicate is false, e.g. 'stock.negative'."
         }
       }
     },
@@ -1001,6 +1216,17 @@
             "$ref": "#/$defs/DocumentDef"
           }
         },
+        "public_routes": {
+          "type": "array",
+          "description": "Org-scoped, token-addressed PUBLIC views of a record served by the host without a login (shareable quote, order tracking, customer statement, waiting-room screen). Each entry binds a model + its token column to a rendering kind: a printable document (PDF), an allowlisted JSON projection, or a minimal branded HTML page. Served at GET /p/<orgRef>/<addon>/<key>/<token>[.pdf|.json].",
+          "items": {
+            "$ref": "#/$defs/PublicRoute"
+          }
+        },
+        "config": {
+          "$ref": "#/$defs/ConfigEntry",
+          "description": "The addon's configuration surface. Hosts render a 'Configure' affordance (e.g. in the installed-addons view) linking to it; addons with nothing to configure simply omit it."
+        },
         "routes": {
           "type": "array",
           "items": {
@@ -1099,6 +1325,132 @@
         "label": {
           "type": "string",
           "description": "Optional human title for the host Plantillas catalog (e.g. 'Ticket de venta'). When empty the host falls back to the key."
+        },
+        "requires_state": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Gates the print action on the target record's lifecycle column (`status`, or `state` when status is empty). Empty/omitted means always available."
+        },
+        "condition": {
+          "$ref": "#/$defs/RecordFieldCondition",
+          "description": "Optional field gate on the target record (e.g. fiscal_uuid must be set before printing a CFDI)."
+        },
+        "comment": {
+          "type": "string",
+          "description": "Optional author note for the Plantillas catalog."
+        }
+      }
+    },
+    "PublicRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "model",
+        "token_column",
+        "kind"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Unique within the addon. The '<key>' path segment of the public URL.",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "model": {
+          "type": "string",
+          "description": "The model key (own model or extended model) whose records the route exposes."
+        },
+        "token_column": {
+          "type": "string",
+          "description": "Text column of the model holding the per-record secret token. The host generates/rotates it (32 random bytes, base64url) and matches it in constant time, always scoped to the resolved organization.",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "kind": {
+          "type": "string",
+          "description": "Rendering: 'document' streams the PDF of `document`; 'json' returns only the `columns` allowlist (+ `relations`); 'html' serves a minimal branded page listing `columns` with an optional PDF download button.",
+          "enum": [
+            "document",
+            "json",
+            "html"
+          ]
+        },
+        "document": {
+          "type": "string",
+          "description": "contributions.documents[] key rendered as PDF. Required for kind 'document'; optional for 'html' (download button) and 'json' (document_url). Must bind the same model.",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "columns": {
+          "type": "array",
+          "description": "Allowlist of model columns the json/html renderings may expose. Nothing outside it is ever serialised; the token column is never allowed. Required for 'json'; for 'html' may be empty only when `document` is set.",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "uniqueItems": true
+        },
+        "relations": {
+          "type": "array",
+          "description": "Allowlist of relation names (models[].relations[].name) or ref column stems included in json/html renderings: refs resolve to {value,label}, one_to_many edges to their child rows.",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "uniqueItems": true
+        },
+        "expires_column": {
+          "type": "string",
+          "description": "Optional date/timestamp column of the model; once in the past the host answers 410 Gone.",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "label": {
+          "type": "string",
+          "description": "Optional i18n key (or literal) hosts show on the 'public link' affordance. Falls back to key."
+        },
+        "enabled_when": {
+          "type": "string",
+          "description": "Optional predicate over the record that must hold for the route to serve it, e.g. \"status != 'draft'\" or \"status in ('sent','accepted') && total > 0\". Comparisons `<column> <op> <literal>` (== != < <= > >= in not_in) joined by && / ||, parentheses allowed."
+        }
+      }
+    },
+    "RecordFieldCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field"
+      ],
+      "description": "Gates a row action or printable document on a field value from the target record.",
+      "properties": {
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Dot-path to a column on the target record (e.g. fiscal_uuid)."
+        },
+        "operator": {
+          "type": "string",
+          "description": "Comparison operator. Defaults to eq when omitted.",
+          "enum": [
+            "eq",
+            "equals",
+            "==",
+            "neq",
+            "notequals",
+            "not_equals",
+            "!=",
+            "in",
+            "not_in",
+            "notin",
+            "truthy",
+            "present",
+            "set",
+            "falsy",
+            "blank",
+            "empty"
+          ]
+        },
+        "value": {
+          "description": "Right-hand value for eq/neq/in. Omitted for truthy/falsy operators."
         }
       }
     },
@@ -1466,10 +1818,21 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "to",
-        "do"
+        "to"
       ],
-      "description": "A declarative side effect the kernel fires when a record transitions between stages. from/to select the matching moves ('*' matches any stage); 'do' references the handler to dispatch as wasm:<export> | webhook:<key> | compiled:<fn>.",
+      "anyOf": [
+        {
+          "required": [
+            "set"
+          ]
+        },
+        {
+          "required": [
+            "do"
+          ]
+        }
+      ],
+      "description": "A declarative side effect the kernel fires when a record transitions between stages. from/to select the matching moves ('*' matches any stage). A hook carries 'set' (assign fields on the transitioning row itself, applied before persist), 'do' (a handler dispatched as wasm:<export> | webhook:<key> | compiled:<fn>), or both.",
       "properties": {
         "from": {
           "type": "string",
@@ -1478,6 +1841,11 @@
         "to": {
           "type": "string",
           "description": "Destination stage key, or '*' to match any destination."
+        },
+        "set": {
+          "type": "object",
+          "description": "Fields to assign on the transitioning row itself, applied before persist so they ride the same Save and appear in the canonical event. Scalar value = direct assignment; on a json/array column a '+tag' string appends idempotently and a '-tag' string removes. Keys must name declared columns of the model.",
+          "additionalProperties": true
         },
         "do": {
           "type": "string",
@@ -1592,7 +1960,8 @@
               "enum": [
                 "wasm",
                 "webhook",
-                "compiled"
+                "compiled",
+                "connector"
               ]
             },
             "function": {
@@ -1600,17 +1969,41 @@
             },
             "url": {
               "type": "string"
+            },
+            "connector": {
+              "type": "string",
+              "description": "When type=connector: the connector key (declared by any installed addon) whose export to invoke, e.g. 'link'. The host resolves the owning addon and dispatches the export org-scoped."
+            },
+            "export": {
+              "type": "string",
+              "description": "When type=connector: the WASM export of the connector-owning addon to invoke with the action's field payload, e.g. 'link_send_message'."
             }
           }
         },
         "target_model": {
           "type": "string"
         },
+        "placement": {
+          "type": "string",
+          "enum": [
+            "row",
+            "table",
+            "create"
+          ],
+          "description": "Where the host surfaces the trigger: 'row' (per-row table action, default), 'table' (page toolbar button), or 'create' (toolbar button that replaces the generic create button for a custom create experience)."
+        },
         "fields": {
           "type": "array",
           "description": "Declarative form rendered in the action modal before dispatch.",
           "items": {
             "$ref": "#/$defs/ActionField"
+          }
+        },
+        "steps": {
+          "type": "array",
+          "description": "Multi-step declarative wizard: one page per step (title + fields) with per-step validation; submits the union of all steps' values on finish. Mutually exclusive with fields.",
+          "items": {
+            "$ref": "#/$defs/ActionStep"
           }
         },
         "modal": {
@@ -1639,9 +2032,50 @@
           ],
           "description": "Explicit modal width (CSS length or px number)."
         },
+        "idempotency": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key_field"
+          ],
+          "description": "Makes the action replay-safe: the kernel keys a stored response by (org, model, action, payload[key_field]) and replays it on repeats without re-dispatching the handler.",
+          "properties": {
+            "key_field": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Field in the action payload whose value is the idempotency key (e.g. a client-generated request UUID)."
+            }
+          }
+        },
         "condition": {
           "$ref": "#/$defs/Condition",
           "description": "Optional server-side gate: only serve this contribution to organizations satisfying the predicate."
+        }
+      }
+    },
+    "ActionStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "fields"
+      ],
+      "description": "One page of a multi-step declarative action wizard: a title, optional description, and the fields rendered/validated on that page (same contract as Action.fields).",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Step heading (or an i18n key resolving to it)."
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional helper text rendered under the title."
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/ActionField"
+          }
         }
       }
     },
@@ -1667,12 +2101,26 @@
           "type": "boolean"
         },
         "options": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/FieldOption"
-          }
+          "description": "Select choice source for the field. EITHER the STATIC array form (value/label choices → plain select) OR the DYNAMIC object form (DynamicOptions: a dependent-picker source declaration → searchable dynamic_select scoped by depends_on). Mutually exclusive.",
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/FieldOption"
+              }
+            },
+            {
+              "$ref": "#/$defs/DynamicOptions"
+            }
+          ]
         },
-        "default": {},
+        "depends_on": {
+          "type": "string",
+          "description": "Name of ANOTHER field in the same action form (a header field or a sibling item-field) whose current value supplies this picker's cascade filter_value (used with the 'options' object form). The host projects it onto FieldDef.depends_on so the SDK scopes + re-fetches the dynamic_select options when the depended-on field changes. Empty = no cascade."
+        },
+        "default": {
+          "description": "Initial value for this field. Free-form for the common case (a literal default). When the object carries the $prefillFromRecord key, it is instead the PrefillFromRecord directive (see $defs) — the 'if' below enforces that shape once opted in, without constraining every other field's default."
+        },
         "placeholder": {
           "type": "string"
         },
@@ -1689,7 +2137,7 @@
         },
         "scan": {
           "type": "boolean",
-          "description": "Opts this action field into CAMERA BARCODE SCANNING (text/number input or dynamic_select reference). Projected onto FieldDef.scan. Defaults false."
+          "description": "Opts this action field into CAMERA BARCODE SCANNING: the SDK shows a camera button that scans a barcode to FILL the field fast — a text/number input (e.g. a SKU) or a dynamic_select reference (scan feeds the picker's search). The host projects it onto FieldDef.scan. Country/business-agnostic UI metadata; defaults false."
         },
         "options_source": {
           "type": "string",
@@ -1709,6 +2157,16 @@
         "lock_rows": {
           "type": "boolean",
           "description": "Set on a type:'array' line-items field: its rows are fixed — the SDK hides add-row and delete-row controls, so the user can only edit existing rows' cells (e.g. a receive form prefilled from the ordered lines). Ignored on non-array fields."
+        },
+        "visible_when": {
+          "$ref": "#/$defs/VisibleWhen"
+        },
+        "total": {
+          "type": "boolean",
+          "description": "Set on an item_fields column to sum it in the line-items footer. The SDK renders a per-column total row for every numeric column flagged with total."
+        },
+        "balance": {
+          "$ref": "#/$defs/FieldBalanceRule"
         },
         "accept": {
           "type": "string",
@@ -1734,6 +2192,104 @@
         "label_color": {
           "type": "string",
           "description": "Name of a column on the REMOTE model whose value (a CSS colour) the SDK uses to accent each option. Optional; ignored on non-reference fields."
+        }
+      },
+      "if": {
+        "properties": {
+          "default": {
+            "type": "object",
+            "required": [
+              "$prefillFromRecord"
+            ]
+          }
+        },
+        "required": [
+          "default"
+        ]
+      },
+      "then": {
+        "properties": {
+          "default": {
+            "$ref": "#/$defs/PrefillFromRecord"
+          }
+        }
+      }
+    },
+    "FieldBalanceRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "debit_column",
+        "credit_column"
+      ],
+      "description": "Optional balance constraint on a line-items (type \"array\") field. Declares that the sum of debit_column must equal the sum of credit_column across all rows; the SDK shows a balanced/out-of-balance indicator and blocks submit until they match. Generic — debit/credit are just the two column keys to reconcile (e.g. a journal entry's debit vs credit).",
+      "properties": {
+        "debit_column": {
+          "type": "string",
+          "description": "Item field key whose row values sum to the left side of the balance."
+        },
+        "credit_column": {
+          "type": "string",
+          "description": "Item field key whose row values sum to the right side of the balance."
+        },
+        "message": {
+          "type": "string",
+          "description": "Optional override for the out-of-balance message shown to the user."
+        },
+        "require_nonzero": {
+          "type": "boolean",
+          "description": "When true the field is only considered balanced if the totals match AND are greater than zero (an all-zero entry is rejected). Defaults to true."
+        }
+      }
+    },
+    "PrefillFromRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "$prefillFromRecord"
+      ],
+      "description": "Set as the 'default' of a type:'array' line-items field to seed its rows from a relation/array already present on the record the action modal opened against, instead of starting empty — e.g. a receive action prefilling one row per ordered line. SDK-interpreted convention (action-modal-dispatcher.tsx), not a host-side effect: the host never evaluates this, it only round-trips it through 'default' to the served FieldDef.",
+      "properties": {
+        "$prefillFromRecord": {
+          "type": "string",
+          "description": "Name of the relation/array field on the parent record whose rows seed this line-items field, e.g. 'items'."
+        },
+        "map": {
+          "type": "object",
+          "description": "Column key (in this item_fields field) -> source field key (on each row of the referenced relation). Omitted columns are left unset by the prefill.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "remaining": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "target",
+            "of"
+          ],
+          "description": "Derives one column's initial value per row as a subtraction of two OTHER columns already resolved on that row (typically one from 'map' and an accumulated-so-far counter) — e.g. the pending quantity still to receive. Numeric; missing operands read as 0. Rows whose result is <= 0 are dropped (already fully satisfied).",
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "Item field key to write the computed value into."
+            },
+            "of": {
+              "type": "string",
+              "description": "Item field key of the minuend (the total/expected amount)."
+            },
+            "minus": {
+              "type": "string",
+              "description": "Item field key of the subtrahend (the amount already accounted for). Optional — omitted reads as 0, i.e. the row's remaining value is simply 'of'."
+            }
+          }
+        },
+        "lock": {
+          "type": "array",
+          "description": "Item field keys that come pre-filled and read-only in every row this prefill generates (e.g. the product and the ordered/received-so-far context columns) — the user can only edit the remaining unlocked columns.",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -1762,6 +2318,62 @@
         "image": {
           "type": "string",
           "description": "Optional URL or bundle-relative path to a small image / avatar / logo the SDK renders beside the option label. Pure presentation; ignored by the runtime."
+        },
+        "when": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "OPTIONAL static cascade guard: gates THIS option by the current value of a sibling enum field. The SDK offers the option only while the sibling's value satisfies the condition and hides the select entirely when no option applies. Only valid on the static array form of 'options'. Omitted = the option always applies (retro-compatible).",
+          "properties": {
+            "field": {
+              "type": "string",
+              "description": "Sibling field whose current value is evaluated. Optional: when empty, falls back to the container column/field's depends_on."
+            },
+            "in": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The option applies when the sibling's value is one of these (string compare)."
+            },
+            "not_in": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The option applies when the sibling's value is NOT one of these (string compare)."
+            }
+          }
+        }
+      }
+    },
+    "DynamicOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "OBJECT form of a field/column 'options' block: a dependent-picker source declaration. Maps onto modelbase.FieldOptionsConfig so a dynamic_select scopes its candidates by a sibling field (depends_on) and resolves its label from a related model. Mutually exclusive with the static array form. Generic — the addon names its own tables; no domain model is baked into the kernel.",
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Real table the candidate rows come from (scope + computed columns). The host's OptionsConfigResolver queries it for /api/options."
+        },
+        "filter_by": {
+          "type": "string",
+          "description": "Column on 'source' compared to the cascade filter_value (the value of the depends_on field). Scopes the candidate list."
+        },
+        "value": {
+          "type": "string",
+          "description": "Column on 'source' that becomes each option's value."
+        },
+        "label": {
+          "type": "string",
+          "description": "Column ON 'source' used as each option's display text (and the column the 'q' typeahead + ordering match against). When empty the projection defaults to 'name'. Use it for a same-source picker labelled by a column on 'source' itself (e.g. a product picker labelled by 'name'); 'label_ref' is the cross-model twin for when the label lives on another model keyed by 'value'."
+        },
+        "label_ref": {
+          "type": "string",
+          "description": "Related model (key or table) whose row, looked up by the option's value (a foreign id), supplies the human-readable label. Optional: when empty the label is the value itself. The kernel batch-resolves the label in a single query (no N+1)."
+        },
+        "description": {
+          "type": "string",
+          "description": "Column on 'source' projected onto option.description (e.g. available quantity)."
         }
       }
     },
@@ -1780,7 +2392,8 @@
           "type": "number"
         },
         "custom": {
-          "type": "string"
+          "type": "string",
+          "description": "Named validator slug (e.g. 'email', 'rfc.tax_id') or a $org.<key> reference the host resolves at serve time."
         }
       }
     },
@@ -1813,7 +2426,8 @@
               "enum": [
                 "wasm",
                 "webhook",
-                "compiled"
+                "compiled",
+                "connector"
               ]
             },
             "function": {
@@ -1821,6 +2435,14 @@
             },
             "url": {
               "type": "string"
+            },
+            "connector": {
+              "type": "string",
+              "description": "When type=connector: the connector key (declared by any installed addon) whose export to invoke, e.g. 'link'. The host resolves the owning addon and dispatches the export org-scoped."
+            },
+            "export": {
+              "type": "string",
+              "description": "When type=connector: the WASM export of the connector-owning addon to invoke with the action's field payload, e.g. 'link_send_message'."
             }
           }
         }
@@ -1850,7 +2472,8 @@
               "enum": [
                 "wasm",
                 "webhook",
-                "compiled"
+                "compiled",
+                "connector"
               ]
             },
             "function": {
@@ -1858,6 +2481,14 @@
             },
             "url": {
               "type": "string"
+            },
+            "connector": {
+              "type": "string",
+              "description": "When type=connector: the connector key (declared by any installed addon) whose export to invoke, e.g. 'link'. The host resolves the owning addon and dispatches the export org-scoped."
+            },
+            "export": {
+              "type": "string",
+              "description": "When type=connector: the WASM export of the connector-owning addon to invoke with the action's field payload, e.g. 'link_send_message'."
             }
           }
         },
@@ -2141,7 +2772,8 @@
             "boolean",
             "secret",
             "json",
-            "select"
+            "select",
+            "dynamic_select"
           ]
         },
         "label": {
@@ -2155,6 +2787,14 @@
         "required": {
           "type": "boolean",
           "default": false
+        },
+        "options_source": {
+          "type": "string",
+          "description": "When type=dynamic_select: names a WASM export the host invokes to fetch options at config time. For a connector credential it runs with the org's connector context (connector_get resolves the same connector), returning {success,data:{options:[{value,label}]}}."
+        },
+        "section": {
+          "type": "string",
+          "description": "Binds this setting to a form_layout section (by key), like a column's section — groups a connector's credentials into its wizard steps/sections."
         },
         "options": {
           "type": "array",
@@ -2212,6 +2852,14 @@
           "items": {
             "$ref": "#/$defs/Setting"
           }
+        },
+        "form_layout": {
+          "$ref": "#/$defs/FormLayout",
+          "description": "Groups the credentials into sections or a multi-step wizard for the config UI (same shape models use)."
+        },
+        "test_export": {
+          "type": "string",
+          "description": "Names a WASM export the host invokes to validate the credentials (a cheap read-only call to the third-party API). Powers the config UI's 'test connection' button; returns {success,data:{ok,message}}."
         }
       }
     },
@@ -2276,6 +2924,117 @@
           "type": "string",
           "pattern": "^(wasm|webhook|compiled):.+$",
           "description": "Handler reference the verified body is routed to: 'wasm:<export>' | 'webhook:<key>' | 'compiled:<fn>'."
+        }
+      }
+    },
+    "EdgeDevice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "kind",
+        "transport"
+      ],
+      "description": "One class of local hardware (a cash recycler, a card terminal, a scale, a fiscal printer) the addon can drive through a persistent channel a store-local agent maintains outside the addon's own wasm code.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Device class identifier within the addon (e.g. 'cashdro', 'mp_point'). Sessions and pairing reference '<addon_key>.<device_key>'."
+        },
+        "label": {
+          "type": "string",
+          "description": "Human/i18n name shown in the device pairing UI."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cash_recycler",
+            "card_terminal",
+            "scale",
+            "fiscal_printer"
+          ],
+          "description": "Hardware category. Drives the pairing wizard's copy/icon and category-specific host health checks."
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "ws"
+          ],
+          "description": "How the local agent reaches the host. 'ws' (WebSocket, agent-initiated, outbound-only) is the only transport in v1."
+        },
+        "pairing_credentials": {
+          "type": "array",
+          "description": "Fields an operator supplies to bind a physical device/agent instance to an org+branch (serial number, branch_id, pairing PIN). Reuses the Setting shape exactly like Connector.credentials.",
+          "items": {
+            "$ref": "#/$defs/Setting"
+          }
+        },
+        "form_layout": {
+          "$ref": "#/$defs/FormLayout",
+          "description": "Groups pairing_credentials into sections or a multi-step wizard for the pairing UI (same shape Connector.form_layout uses)."
+        },
+        "events": {
+          "type": "array",
+          "description": "Inbound event types this device kind can push. The host validates a frame's type against this list before dispatching to 'do'.",
+          "items": {
+            "$ref": "#/$defs/EdgeDeviceEvent"
+          }
+        },
+        "commands": {
+          "type": "array",
+          "description": "Outbound operations the addon can request against a paired device.",
+          "items": {
+            "$ref": "#/$defs/EdgeDeviceCommand"
+          }
+        },
+        "heartbeat_interval_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Max gap the host tolerates between agent heartbeats before marking the device session offline. 0 = host default (a kernel-side floor, not addon-tunable below it)."
+        }
+      }
+    },
+    "EdgeDeviceEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "do"
+      ],
+      "description": "One inbound event type a paired EdgeDevice can push (e.g. 'cash.deposited', 'payment.approved', 'device.error').",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Event name, namespaced by convention '<noun>.<verb_past>'."
+        },
+        "do": {
+          "type": "string",
+          "pattern": "^(wasm|webhook|compiled):.+$",
+          "description": "Handler reference invoked with the validated event payload: 'wasm:<export>' | 'webhook:<key>' | 'compiled:<fn>'."
+        },
+        "idempotent": {
+          "type": "boolean",
+          "description": "True when this event is safe to redeliver (the addon dedupes by an id in the payload). Financial events SHOULD set this true."
+        }
+      }
+    },
+    "EdgeDeviceCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "description": "One outbound operation the addon can request against a paired EdgeDevice (e.g. 'open_session', 'dispense_change'). The host acks receipt within timeout_seconds; the physical result arrives later as a correlated Event.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Command name."
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Max time the host waits for the agent to ack receipt (not for the physical operation to finish). 0 = host default."
         }
       }
     },
@@ -2357,8 +3116,8 @@
                 "items": {
                   "type": "string"
                 },
-                "uniqueItems": true,
-                "description": "Keys of other addons in this preset that must install before this one. The preset resolver topologically sorts on this field."
+                "description": "Keys of other addons in this preset that must install before this one. The preset resolver topologically sorts on this field.",
+                "uniqueItems": true
               }
             }
           }
@@ -2460,6 +3219,107 @@
           "examples": [
             "2026-05-21T15:04:05Z"
           ]
+        }
+      }
+    },
+    "MetadataLocale": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "Rollup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target"
+      ],
+      "description": "Tier-1 parent-aggregate spec. Either from (a single child column) or expr (a child arithmetic expression) supplies the aggregated value; fn=count ignores both.",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "PARENT column the aggregate is written to. Must be a declared column on the model owning the relation."
+        },
+        "fn": {
+          "type": "string",
+          "enum": [
+            "sum",
+            "count",
+            "avg",
+            "min",
+            "max"
+          ],
+          "description": "Aggregate function. Defaults to sum. count ignores from/expr."
+        },
+        "from": {
+          "type": "string",
+          "description": "A single child column to aggregate. Mutually exclusive with expr."
+        },
+        "expr": {
+          "type": "string",
+          "description": "A child arithmetic expression to aggregate. Mutually exclusive with from. Strict arithmetic allowlist only."
+        }
+      }
+    },
+    "Formula": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target"
+      ],
+      "description": "Computed column: Tier-2 (default) computes a pure arithmetic expression over the SAME row before every create/update write; Tier-3 delegates the computation to a wasm handler.",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Column this formula writes. Must be a declared column on the owning model."
+        },
+        "expr": {
+          "type": "string",
+          "description": "Arithmetic expression (Tier-2). Strict arithmetic allowlist: identifiers resolving to columns, decimal numbers, + - * / and parentheses only. Required unless tier is 3; must be omitted when tier is 3."
+        },
+        "tier": {
+          "type": "integer",
+          "enum": [
+            2,
+            3
+          ],
+          "description": "Compute engine: 2 (default) = arithmetic expression; 3 = wasm handler. Omit for 2."
+        },
+        "handler": {
+          "type": "string",
+          "pattern": "^wasm:[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Tier-3 backend, 'wasm:<export>' — an export of the addon's wasm module invoked with the merged row as payload; its returned value is written into target. Required (and only allowed) when tier is 3."
+        }
+      }
+    },
+    "ConfigEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Where an addon's configuration lives: a declarative model (host renders its CRUD page) or an addon-owned URL. Exactly one of model/url should be set; title is an optional i18n key for the affordance label.",
+      "properties": {
+        "model": {
+          "type": "string",
+          "description": "Declarative model key whose CRUD page is the config surface (host route /m/<model> or equivalent)."
+        },
+        "url": {
+          "type": "string",
+          "description": "Host-relative or addon:// URL of a custom config screen."
+        },
+        "title": {
+          "type": "string",
+          "description": "Optional i18n key for the affordance label; hosts default to a generic 'Configure'."
         }
       }
     },
@@ -2604,6 +3464,36 @@
           "examples": [
             "workshop"
           ]
+        },
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "description": "When set, row actions may also gate on this field of the target record (same semantics as RecordFieldCondition.field)."
+        },
+        "operator": {
+          "type": "string",
+          "description": "Comparison operator when field is set. Defaults to eq.",
+          "enum": [
+            "eq",
+            "equals",
+            "==",
+            "neq",
+            "notequals",
+            "not_equals",
+            "!=",
+            "in",
+            "not_in",
+            "notin",
+            "truthy",
+            "present",
+            "set",
+            "falsy",
+            "blank",
+            "empty"
+          ]
+        },
+        "value": {
+          "description": "Right-hand value for eq/neq/in when field is set."
         }
       }
     },

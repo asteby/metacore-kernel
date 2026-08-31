@@ -68,6 +68,7 @@
         { "name": "name", "type": "text", "not_null": true },
         { "name": "unit_price", "type": "numeric" },
         { "name": "metadata", "type": "jsonb" },
+        { "name": "public_token", "type": "text", "comment": "Per-record secret for the public product sheet (contributions.public_routes[])." },
         { "name": "created_at", "type": "timestamptz", "not_null": true, "default": "now()" }
       ],
       "indices": [
@@ -153,6 +154,27 @@
         "event": "sales.order_paid",
         "handler": { "type": "wasm", "function": "OnOrderPaid" },
         "filter": "payload.line_items.size() > 0"
+      }
+    ],
+    "documents": [
+      {
+        "key": "product_sheet",
+        "model": "Product",
+        "template": "templates/product_sheet.html",
+        "paper": "A4",
+        "label": "inventory.document.product_sheet"
+      }
+    ],
+    "public_routes": [
+      {
+        "key": "product_public",
+        "model": "Product",
+        "token_column": "public_token",
+        "kind": "html",
+        "document": "product_sheet",
+        "columns": ["sku", "name", "unit_price"],
+        "enabled_when": "unit_price > 0",
+        "label": "inventory.public.product_sheet"
       }
     ]
   },
