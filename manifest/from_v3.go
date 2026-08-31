@@ -573,9 +573,31 @@ func mapColumnConstraints(in []v3.Constraint) []ConstraintDef {
 	}
 	out := make([]ConstraintDef, 0, len(in))
 	for _, c := range in {
-		out = append(out, ConstraintDef{Expr: c.Expr, ErrorKey: c.ErrorKey})
+		out = append(out, ConstraintDef{
+			Expr:        c.Expr,
+			ErrorKey:    c.ErrorKey,
+			OnViolation: c.OnViolation,
+			Approval:    mapApprovalPolicy(c.Approval),
+		})
 	}
 	return out
+}
+
+// mapApprovalPolicy folds a v3 ApprovalPolicy (constraint or action approval
+// block) onto the legacy ApprovalDef carrier so the dynamic engine reads who may
+// approve, the reason/expiry knobs and the action-only `when` predicate. Nil
+// maps to nil (the common, unsupervised case).
+func mapApprovalPolicy(in *v3.ApprovalPolicy) *ApprovalDef {
+	if in == nil {
+		return nil
+	}
+	return &ApprovalDef{
+		Roles:          append([]string(nil), in.Roles...),
+		ReasonRequired: in.ReasonRequired,
+		ExpiresHours:   in.ExpiresHours,
+		Label:          in.Label,
+		When:           in.When,
+	}
 }
 
 // mapModelSequences folds a v3 model's folio counters onto the legacy
@@ -834,6 +856,9 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 		if a.Idempotency != nil {
 			def.Idempotency = &IdempotencyDef{KeyField: a.Idempotency.KeyField}
 		}
+		// Supervised action: the approval policy rides across so ExecAction can
+		// park the invocation as a pending ApprovalRequest instead of dispatching.
+		def.Approval = mapApprovalPolicy(a.Approval)
 		out[a.TargetModel] = append(out[a.TargetModel], def)
 	}
 	return out

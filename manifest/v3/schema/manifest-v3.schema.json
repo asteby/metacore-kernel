@@ -1030,6 +1030,55 @@
           "type": "string",
           "minLength": 1,
           "description": "i18n key / stable code surfaced to the client (422) when the predicate is false, e.g. 'stock.negative'."
+        },
+        "on_violation": {
+          "type": "string",
+          "enum": [
+            "reject",
+            "request_approval"
+          ],
+          "description": "What the kernel does when the predicate is false. 'reject' (default) aborts the write with 422 + error_key. 'request_approval' does NOT write: the pending mutation is stored as a kernel ApprovalRequest (status pending), `approval.requested` is emitted and the caller gets success:false with error.code 'approval_required' + meta.approval_request_id; a user holding one of approval.roles later approves it and the kernel re-applies the SAME mutation skipping only this constraint. Requires `approval`."
+        },
+        "approval": {
+          "$ref": "#/$defs/ApprovalPolicy",
+          "description": "Who may approve a violation of this constraint and how. Required when on_violation is 'request_approval'. `when` is not allowed here (it only applies to Action.approval)."
+        }
+      }
+    },
+    "ApprovalPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "roles"
+      ],
+      "description": "Who may approve a pending mutation and the shape of the decision. Shared by Constraint.approval (a guard that requests approval instead of rejecting) and Action.approval (a supervised action). The kernel stores the pending mutation in its own approval_requests model, emits `approval.requested` and re-applies the mutation when approved.",
+      "properties": {
+        "roles": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Org role keys allowed to approve (e.g. ['manager','owner']). The host resolves the acting user's roles; an approver holding none of them is refused (403)."
+        },
+        "reason_required": {
+          "type": "boolean",
+          "description": "Force the approver to supply a non-empty reason on approve and reject. Defaults false."
+        },
+        "expires_hours": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Auto-expire a pending request after this many hours (status 'expired'; it can no longer be approved). 0/omitted = never expires."
+        },
+        "label": {
+          "type": "string",
+          "description": "Human/i18n title shown on the approval inbox card. Optional; the host falls back to the constraint error_key / action label."
+        },
+        "when": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ONLY on Action.approval: approval is required only when this predicate is TRUE against the merged (record ∪ payload) numeric environment, e.g. 'discount_pct > 10'. Same strict '<arith> <op> <arith>' grammar as Constraint.expr. Omitted = the action always needs approval. Rejected on a column constraint."
         }
       }
     },
@@ -1968,6 +2017,10 @@
               "description": "Field in the action payload whose value is the idempotency key (e.g. a client-generated request UUID)."
             }
           }
+        },
+        "approval": {
+          "$ref": "#/$defs/ApprovalPolicy",
+          "description": "Makes the action SUPERVISED: instead of dispatching, the kernel stores the invocation (record id + payload) as a pending ApprovalRequest, emits `approval.requested` and answers success:false with error.code 'approval_required' + meta.approval_request_id. When a user holding one of approval.roles approves it, the kernel dispatches the SAME invocation on behalf of the original requester. `when` makes it conditional; omitted = always."
         },
         "condition": {
           "$ref": "#/$defs/Condition",

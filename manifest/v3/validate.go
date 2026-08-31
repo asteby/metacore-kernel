@@ -88,6 +88,55 @@ func validateConstraintExpr(expr string, cols map[string]struct{}) error {
 	return nil
 }
 
+// validateConstraintApproval enforces the approval contract of one column
+// guard: on_violation is ""|"reject"|"request_approval"; request_approval
+// REQUIRES an approval block (the kernel must know who may approve); an
+// approval block without request_approval is an authoring mistake (it would
+// silently be ignored); and `when` is an action-only knob.
+func validateConstraintApproval(where string, con Constraint) []string {
+	var errs []string
+	switch con.OnViolation {
+	case "", "reject":
+		if con.Approval != nil {
+			errs = append(errs, fmt.Sprintf("%s.approval is set but on_violation is not \"request_approval\"", where))
+		}
+	case "request_approval":
+		if con.Approval == nil {
+			errs = append(errs, fmt.Sprintf("%s.on_violation=request_approval requires an approval block (roles)", where))
+		}
+	default:
+		errs = append(errs, fmt.Sprintf("%s.on_violation %q is not one of \"reject\"|\"request_approval\"", where, con.OnViolation))
+	}
+	if con.Approval != nil {
+		errs = append(errs, validateApprovalPolicy(where+".approval", con.Approval)...)
+		if strings.TrimSpace(con.Approval.When) != "" {
+			errs = append(errs, fmt.Sprintf("%s.approval.when is only valid on contributions.actions[].approval", where))
+		}
+	}
+	return errs
+}
+
+// validateApprovalPolicy checks the role list (non-empty, no blank entries)
+// and the expiry of an approval block. Shared by column guards and actions.
+func validateApprovalPolicy(where string, p *ApprovalPolicy) []string {
+	var errs []string
+	if p == nil {
+		return nil
+	}
+	if len(p.Roles) == 0 {
+		errs = append(errs, fmt.Sprintf("%s.roles is empty (declare at least one approver role)", where))
+	}
+	for i, r := range p.Roles {
+		if strings.TrimSpace(r) == "" {
+			errs = append(errs, fmt.Sprintf("%s.roles[%d] is empty", where, i))
+		}
+	}
+	if p.ExpiresHours < 0 {
+		errs = append(errs, fmt.Sprintf("%s.expires_hours must be >= 0", where))
+	}
+	return errs
+}
+
 // validateRollupSpec checks one Tier-1 rollup: target on the PARENT (ownCols),
 // fn in the enum, from on the CHILD (childCols), exactly one of from/expr
 // (count may omit both), expr under the arithmetic allowlist against childCols.
@@ -890,6 +939,7 @@ func Validate(raw []byte) error {
 				if strings.TrimSpace(con.ErrorKey) == "" {
 					errs = append(errs, fmt.Sprintf("%s.error_key is empty", cw))
 				}
+				errs = append(errs, validateConstraintApproval(cw, con)...)
 			}
 			if c.Options.Len() == 0 {
 				continue
@@ -956,6 +1006,37 @@ func Validate(raw []byte) error {
 		for ai, a := range m.Contributions.Actions {
 			if a.Idempotency != nil && strings.TrimSpace(a.Idempotency.KeyField) == "" {
 				errs = append(errs, fmt.Sprintf("contributions.actions[%d].idempotency requires a non-empty key_field", ai))
+			}
+			// Supervised actions: roles non-empty; `when` (optional) is a guard
+			// predicate over the target model's columns ∪ the action's own
+			// field keys (the merged record ∪ payload environment it is
+			// evaluated against at dispatch).
+			if a.Approval != nil {
+				aw := fmt.Sprintf("contributions.actions[%d].approval", ai)
+				errs = append(errs, validateApprovalPolicy(aw, a.Approval)...)
+				if strings.TrimSpace(a.Approval.When) != "" {
+					env := map[string]struct{}{}
+					for k := range colsByModel[a.TargetModel] {
+						env[k] = struct{}{}
+					}
+					for _, f := range a.Fields {
+						env[f.Key] = struct{}{}
+					}
+					for _, st := range a.Steps {
+						for _, f := range st.Fields {
+							env[f.Key] = struct{}{}
+						}
+					}
+					// A target model this manifest does not own (an extension or a
+					// cross-addon action) has no column index here: fall back to a
+					// syntax-only check so a legitimate foreign column is not refused.
+					if _, own := colsByModel[a.TargetModel]; !own {
+						env = nil
+					}
+					if err := validateConstraintExpr(a.Approval.When, env); err != nil {
+						errs = append(errs, fmt.Sprintf("%s.when %q: %v", aw, a.Approval.When, err))
+					}
+				}
 			}
 			// Wizard steps: a step needs a title and at least one field, and a
 			// wizard replaces the flat form (steps ⊕ fields is ambiguous).
