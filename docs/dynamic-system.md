@@ -578,6 +578,14 @@ Both are manifest v3-only — the full field reference lives in the SDK's
 addon-authoring docs (`metacore-sdk/docs/manifest-spec.md`), not duplicated
 here.
 
+Rollups and formulas recompute on every hook-mediated write, but a row
+written straight into the table (a raw/ETL import, a migration bundle) never
+fires those hooks — its computed columns are left at their default. For that
+case use `dynamic.Backfill(ctx, db, reg, manifest, dynamic.BackfillOptions{...})`
+(see [`dynamic/backfill.go`](../dynamic/backfill.go)): a batched, org-scoped
+recompute over one or every model that reuses the same rollup/formula logic
+and writes only rows whose value actually changed.
+
 ## See also
 
 - [`dynamic-api.md`](dynamic-api.md) — full HTTP API reference with curl examples.
