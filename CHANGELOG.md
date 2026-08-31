@@ -7,6 +7,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`dynamic.Backfill`: batched recompute of the declarative compute
+  engine.** Rows written straight into the tables — a raw/ETL import, a
+  migration ledger — bypass the CRUD hooks `RegisterComputeHooks` wires, so
+  their Tier-1 rollup and Tier-2 formula columns are left at their default
+  (typically 0) forever. `dynamic.Backfill(ctx, db, reg, manifest,
+  BackfillOptions{OrgID, ModelKey, Fields, BatchSize, DryRun})` walks one or
+  every model, org-scoped, in keyset-paginated batches (default 500 rows),
+  recomputing Tier-2 formulas before Tier-1 rollups (same ordering guarantee
+  as the incremental hooks) and reusing the exact aggregate/formula logic
+  `compute.go` already has — it does not duplicate it. A row is written only
+  when its recomputed value actually differs from what is stored, so a
+  fully-consistent org backfills to zero writes; `DryRun` reports what would
+  change without writing. Returns one `BackfillModelReport{Model, Tier,
+  RowsScanned, RowsUpdated, Duration, Errors}` per (model, tier) unit. See
+  `dynamic/backfill.go` and `dynamic/backfill_test.go`.
+
 ### Fixed
 
 - **WASM host: reinstantiate after a closed module.** A timed-out or cancelled
