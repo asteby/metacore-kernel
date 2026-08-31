@@ -213,6 +213,7 @@ release added:
 | v0.18.0 | wasm action triggers validate without a `backend` block (their handlers are the export surface). |
 | v0.19.0 | `metadata.i18n` — marketplace catalog localizations keyed by locale (`{ "es": { name, description, features }, … }`). Distinct from the top-level `i18n` block (app string-bundle pointers); the flat `metadata.name`/`description`/`features` are the per-field fallback. |
 | v0.20.0 | `metadata.countries[]` — ISO 3166-1 alpha-2 codes the addon targets (empty = global). The hub filters the catalog by the user's country. |
+| v0.111.0 | `contributions.public_routes[]` — org-scoped, token-addressed public views of a record served by the host without a login (see [Public routes](#public-routes)). New `PublicRoute` type; `enabled_when` record predicates parsed by `v3.ParseRecordExpr`. |
 
 `metadata.i18n` and `metadata.countries` slot into the `metadata` block:
 
@@ -226,6 +227,66 @@ release added:
   }
 }
 ```
+
+## Public routes
+
+`contributions.public_routes[]` lets an addon publish a **login-less, org-scoped
+view of a single record** addressed by a per-record secret token: a shareable
+quote, an order-tracking page, a customer statement, a waiting-room screen. The
+host serves every entry at
+
+```
+GET /p/<orgRef>/<addon>/<key>/<token>[.pdf|.json]
+```
+
+(`<orgRef>` is omitted when the request arrives on the org's own custom domain.)
+The lookup is always scoped to the resolved organization — a token never
+resolves across tenants — and the host answers `404` for an unknown token,
+`410` once `expires_column` is in the past and `404` when `enabled_when` does
+not hold for the record.
+
+```jsonc
+"contributions": {
+  "documents": [
+    { "key": "quote", "model": "Quote", "template": "templates/quote.html", "paper": "A4" }
+  ],
+  "public_routes": [
+    {
+      "key": "quote_public",              // <key> path segment, unique in the addon
+      "model": "Quote",                   // own model (or one this addon extends)
+      "token_column": "public_token",     // text column holding the per-record secret
+      "kind": "document",                 // document | json | html
+      "document": "quote",                // documents[] key (required for kind document)
+      "expires_column": "valid_until",    // optional date/timestamp → 410 once past
+      "enabled_when": "status != 'draft'",// optional record predicate
+      "label": "quotes.public.link"       // i18n key (or literal) for the UI affordance
+    },
+    {
+      "key": "order_tracking",
+      "model": "Order",
+      "token_column": "tracking_token",
+      "kind": "json",
+      "columns": ["folio", "status", "eta"],   // allowlist — nothing else is serialised
+      "relations": ["customer"]                // refs → {value,label}; children → rows
+    }
+  ]
+}
+```
+
+| Field            | Rule                                                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------ |
+| `key`            | Required, snake_case, unique within the addon.                                                        |
+| `model`          | Required. A model the addon owns, or one it extends (`models[].extensions[].target_model`).          |
+| `token_column`   | Required. A `text` / `varchar(n)` column of `model`. The host generates and rotates it (32 random bytes, base64url) and compares it in constant time. |
+| `kind`           | Required. `document` streams the PDF of `document`; `json` returns only `columns` (+ `relations`); `html` serves a minimal branded page with an optional PDF button. |
+| `document`       | A `contributions.documents[]` key bound to the same model. Required for `document`; optional for `html` / `json`. |
+| `columns`        | Allowlist for `json` / `html`. Required for `json`; for `html` may be empty only when `document` is set. The token column is never allowed. |
+| `relations`      | Allowlist of `models[].relations[].name` or ref column stems (`customer` for `customer_id`).          |
+| `expires_column` | Optional `date` / `timestamp` / `timestamptz` column; once in the past the host answers `410 Gone`.    |
+| `enabled_when`   | Optional predicate: comparisons `<column> <op> <literal>` (`== != < <= > >= in not_in`) joined by `&&` / `\|\|`, parentheses allowed. Parsed at validation time by `v3.ParseRecordExpr`; evaluated by the host on every request. |
+
+Column-level checks run for models the addon owns; for extended models they are
+deferred to the host at serve time (their columns live in another manifest).
 
 ## Validating a manifest
 

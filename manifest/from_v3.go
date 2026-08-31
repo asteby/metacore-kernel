@@ -122,6 +122,7 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.Documents = mapDocuments(m)
 	if m.Contributions != nil {
 		out.AgentCapabilities = m.Contributions.AgentCapabilities
+		out.PublicRoutes = m.Contributions.PublicRoutes
 	}
 
 	return out

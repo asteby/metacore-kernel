@@ -161,6 +161,14 @@ type Manifest struct {
 	// engine, so the v3 type passes through unchanged rather than being
 	// re-projected. Empty = the addon exposes nothing to the copilot.
 	AgentCapabilities []v3.AgentCapability `json:"agent_capabilities,omitempty"`
+
+	// PublicRoutes is the host projection of v3 contributions.public_routes[]:
+	// the org-scoped, token-addressed public views (shareable quote, order
+	// tracking, statement) the host serves without a login. Pure declarative
+	// metadata the host runtime consumes verbatim (route resolution, allowlist
+	// projection, expiry/enabled_when gates), so the v3 type passes through
+	// unchanged. Empty = the addon exposes nothing publicly.
+	PublicRoutes []v3.PublicRoute `json:"public_routes,omitempty"`
 }
 
 // DocumentDef is the host/runtime projection of a v3 DocumentDef: a printable

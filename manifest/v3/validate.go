@@ -309,6 +309,192 @@ func validateDocuments(m *Manifest, colsByModel map[string]map[string]struct{}) 
 	return errs
 }
 
+// publicRouteKinds is the rendering enum for public routes, shared with the
+// JSON schema (dual validation).
+var publicRouteKinds = map[string]struct{}{"document": {}, "json": {}, "html": {}}
+
+// isTextColumnType reports whether a v3 column type can hold a public-route
+// token (text or a bounded varchar).
+func isTextColumnType(t string) bool {
+	t = strings.ToLower(strings.TrimSpace(t))
+	return t == "text" || strings.HasPrefix(t, "varchar(")
+}
+
+// isTemporalColumnType reports whether a v3 column type can carry a
+// public-route expiry (date / timestamp / timestamptz).
+func isTemporalColumnType(t string) bool {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case "date", "timestamp", "timestamptz":
+		return true
+	}
+	return false
+}
+
+// validatePublicRoutes enforces the cross-field rules of the public-route
+// contract (contributions.public_routes[]) the JSON schema cannot express:
+// unique keys; a model the addon owns or extends; a token column that exists
+// on an OWN model and is text-typed; a kind in the enum; a document that
+// exists in contributions.documents[] and binds the same model (required for
+// kind document); columns/relations/expires_column/enabled_when fields that
+// resolve on the model; the token column never listed in columns. Column-level
+// checks are skipped for EXTENDED models (their columns live in another
+// addon's manifest) — the host re-checks at serve time. Returns a slice
+// (possibly empty) so the caller can append.
+func validatePublicRoutes(m *Manifest) []string {
+	if m.Contributions == nil || len(m.Contributions.PublicRoutes) == 0 {
+		return nil
+	}
+	own := make(map[string]map[string]string, len(m.Models)) // model → column → type
+	rels := make(map[string]map[string]struct{}, len(m.Models))
+	extended := map[string]struct{}{}
+	for _, mod := range m.Models {
+		cols := make(map[string]string, len(mod.Columns))
+		for _, c := range mod.Columns {
+			cols[c.Name] = c.Type
+		}
+		own[mod.Key] = cols
+		rs := make(map[string]struct{}, len(mod.Relations))
+		for _, r := range mod.Relations {
+			rs[r.Name] = struct{}{}
+		}
+		rels[mod.Key] = rs
+		for _, ext := range mod.Extensions {
+			if ext.TargetModel != "" {
+				extended[ext.TargetModel] = struct{}{}
+			}
+		}
+	}
+	docs := make(map[string]string, len(m.Contributions.Documents)) // key → model
+	for _, d := range m.Contributions.Documents {
+		docs[d.Key] = d.Model
+	}
+
+	var errs []string
+	seen := make(map[string]struct{}, len(m.Contributions.PublicRoutes))
+	for i, r := range m.Contributions.PublicRoutes {
+		id := r.Key
+		if id == "" {
+			id = fmt.Sprintf("#%d", i)
+		}
+		where := fmt.Sprintf("contributions.public_routes[%s]", id)
+
+		if r.Key == "" {
+			errs = append(errs, fmt.Sprintf("%s.key is required", where))
+		} else if _, dup := seen[r.Key]; dup {
+			errs = append(errs, fmt.Sprintf("%s.key %q is duplicated within the addon", where, r.Key))
+		} else {
+			seen[r.Key] = struct{}{}
+		}
+
+		cols, isOwn := own[r.Model]
+		_, isExt := extended[r.Model]
+		switch {
+		case r.Model == "":
+			errs = append(errs, fmt.Sprintf("%s.model is required", where))
+		case !isOwn && !isExt:
+			errs = append(errs, fmt.Sprintf("%s.model %q is not a model of this addon (nor a model it extends)", where, r.Model))
+		}
+
+		if r.TokenColumn == "" {
+			errs = append(errs, fmt.Sprintf("%s.token_column is required", where))
+		} else if isOwn {
+			if typ, ok := cols[r.TokenColumn]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.token_column %q is not a column of model %q", where, r.TokenColumn, r.Model))
+			} else if !isTextColumnType(typ) {
+				errs = append(errs, fmt.Sprintf("%s.token_column %q must be a text column (got %q)", where, r.TokenColumn, typ))
+			}
+		}
+
+		if r.Kind == "" {
+			errs = append(errs, fmt.Sprintf("%s.kind is required", where))
+		} else if _, ok := publicRouteKinds[r.Kind]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.kind %q is not one of document|json|html", where, r.Kind))
+		}
+
+		if r.Document == "" {
+			if r.Kind == "document" {
+				errs = append(errs, fmt.Sprintf("%s.document is required when kind is document", where))
+			}
+		} else if docModel, ok := docs[r.Document]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.document %q is not a contributions.documents[] key of this addon", where, r.Document))
+		} else if docModel != r.Model {
+			errs = append(errs, fmt.Sprintf("%s.document %q binds model %q, not %q", where, r.Document, docModel, r.Model))
+		}
+
+		switch r.Kind {
+		case "json":
+			if len(r.Columns) == 0 {
+				errs = append(errs, fmt.Sprintf("%s.columns must list at least one column for kind json", where))
+			}
+		case "html":
+			if len(r.Columns) == 0 && r.Document == "" {
+				errs = append(errs, fmt.Sprintf("%s.columns must list at least one column for kind html (or set document)", where))
+			}
+		}
+		seenCols := make(map[string]struct{}, len(r.Columns))
+		for _, c := range r.Columns {
+			if c == "" {
+				errs = append(errs, fmt.Sprintf("%s.columns contains an empty name", where))
+				continue
+			}
+			if _, dup := seenCols[c]; dup {
+				errs = append(errs, fmt.Sprintf("%s.columns lists %q twice", where, c))
+				continue
+			}
+			seenCols[c] = struct{}{}
+			if r.TokenColumn != "" && c == r.TokenColumn {
+				errs = append(errs, fmt.Sprintf("%s.columns must not expose the token column %q", where, c))
+				continue
+			}
+			if isOwn {
+				if _, ok := cols[c]; !ok {
+					errs = append(errs, fmt.Sprintf("%s.columns[%s] is not a column of model %q", where, c, r.Model))
+				}
+			}
+		}
+		if isOwn {
+			for _, rel := range r.Relations {
+				if rel == "" {
+					errs = append(errs, fmt.Sprintf("%s.relations contains an empty name", where))
+					continue
+				}
+				if _, ok := rels[r.Model][rel]; ok {
+					continue
+				}
+				// A ref column (customer_id) resolves to a sibling named after
+				// its stem (customer); accept either spelling.
+				if _, ok := cols[rel]; ok {
+					continue
+				}
+				if _, ok := cols[rel+"_id"]; ok {
+					continue
+				}
+				errs = append(errs, fmt.Sprintf("%s.relations[%s] is neither a relation nor a ref column of model %q", where, rel, r.Model))
+			}
+		}
+		if r.ExpiresColumn != "" && isOwn {
+			if typ, ok := cols[r.ExpiresColumn]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.expires_column %q is not a column of model %q", where, r.ExpiresColumn, r.Model))
+			} else if !isTemporalColumnType(typ) {
+				errs = append(errs, fmt.Sprintf("%s.expires_column %q must be a date/timestamp column (got %q)", where, r.ExpiresColumn, typ))
+			}
+		}
+		if strings.TrimSpace(r.EnabledWhen) != "" {
+			expr, err := ParseRecordExpr(r.EnabledWhen)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("%s.enabled_when: %v", where, err))
+			} else if isOwn {
+				for _, f := range expr.Fields() {
+					if _, ok := cols[f]; !ok {
+						errs = append(errs, fmt.Sprintf("%s.enabled_when references %q, not a column of model %q", where, f, r.Model))
+					}
+				}
+			}
+		}
+	}
+	return errs
+}
+
 // validHookPrefixes is the allowlist of TransitionHook.Do dispatch targets,
 // shared with the JSON schema pattern so the struct-level checks and the schema
 // agree (the "dual validation" contract).
@@ -931,6 +1117,7 @@ func Validate(raw []byte) error {
 		errs = append(errs, validateDashboard(&m)...)
 		errs = append(errs, validateNavViewTypes(&m)...)
 		errs = append(errs, validateDocuments(&m, colsByModel)...)
+		errs = append(errs, validatePublicRoutes(&m)...)
 		errs = append(errs, validateConditions(&m)...)
 		errs = append(errs, validateRoutes(&m)...)
 		// contributions.config: exactly one target (model XOR url); a model

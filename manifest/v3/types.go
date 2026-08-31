@@ -928,10 +928,85 @@ type Contributions struct {
 	// print omit it. See DocumentDef for the full contract.
 	Documents []DocumentDef `json:"documents,omitempty"`
 
+	// PublicRoutes contributes org-scoped, token-addressed PUBLIC views of a
+	// record — a shareable quote, an order-tracking page, a customer
+	// statement, a waiting-room screen — served by the host WITHOUT a login.
+	// Each entry binds a model + the column holding the per-record secret
+	// token to a rendering kind (a printable document, an allowlisted JSON
+	// projection, or a minimal branded HTML page). Optional — addons that
+	// expose nothing publicly omit it. See PublicRoute for the full contract.
+	PublicRoutes []PublicRoute `json:"public_routes,omitempty"`
+
 	// Config declares the addon's configuration surface so hosts can render a
 	// "Configure" affordance (e.g. in the installed-addons view). Optional —
 	// an addon with nothing to configure omits it and hosts show nothing.
 	Config *ConfigEntry `json:"config,omitempty"`
+}
+
+// PublicRoute is one public, login-less view of a record an addon contributes
+// (contributions.public_routes[]). The host serves it at
+//
+//	GET /p/<orgRef>/<addon>/<key>/<token>[.pdf|.json]
+//
+// where <orgRef> identifies the organization (or is omitted when the request
+// arrives on the org's own custom domain) and <token> is the value stored in
+// TokenColumn on exactly one record of Model. The lookup is ALWAYS scoped to
+// the resolved organization — a token never resolves across tenants — and the
+// host answers 404 for an unknown token, 410 once ExpiresColumn is in the past
+// and 404 when EnabledWhen evaluates false for the record.
+//
+// Kind selects the rendering:
+//   - "document": the host renders the printable document named by Document
+//     (a contributions.documents[] key bound to the same model) and streams
+//     the PDF inline. Columns/Relations are ignored.
+//   - "json": the host returns ONLY the columns listed in Columns (plus the
+//     relations listed in Relations, resolved to {value,label} / child rows).
+//     Nothing outside the allowlist is ever serialised — not even the token.
+//   - "html": a minimal server-rendered page carrying the org branding
+//     (logo, colours, name) that lists Columns (and Relations) and, when
+//     Document is also set, offers a "download PDF" button.
+type PublicRoute struct {
+	// Key is the route's stable id, unique within the addon. It is the
+	// "<key>" path segment of the public URL. Required, snake_case.
+	Key string `json:"key"`
+	// Model is the model key (own model or a model this addon extends) whose
+	// records the route exposes. Required.
+	Model string `json:"model"`
+	// TokenColumn is the text column of Model that holds the per-record
+	// secret. The host generates/rotates it (32 random bytes, base64url) on
+	// demand and matches it in constant time. Required; must be a text-typed
+	// column (text | varchar(n)).
+	TokenColumn string `json:"token_column"`
+	// Kind is the rendering: document | json | html. Required.
+	Kind string `json:"kind"`
+	// Document is the contributions.documents[] key rendered as PDF. Required
+	// when Kind is "document"; optional for "html" (adds a download button)
+	// and "json" (adds a document_url to the payload). Must bind to Model.
+	Document string `json:"document,omitempty"`
+	// Columns is the allowlist of Model columns the json/html renderings may
+	// expose. Anything not listed here is never serialised. Required for
+	// "json"; for "html" it may be empty only when Document is set. Ignored
+	// for "document". The token column itself is never allowed.
+	Columns []string `json:"columns,omitempty"`
+	// Relations is the allowlist of Model relation names (models[].relations[]
+	// .name, or a ref column's resolved sibling) included in json/html
+	// renderings: FK refs resolve to {value,label}, one_to_many edges to their
+	// child rows. Optional.
+	Relations []string `json:"relations,omitempty"`
+	// ExpiresColumn optionally names a date/timestamp column of Model; once
+	// its value is in the past the host answers 410 Gone. Empty = never
+	// expires.
+	ExpiresColumn string `json:"expires_column,omitempty"`
+	// Label is an optional i18n key (or literal) hosts show on the "public
+	// link" affordance. Falls back to Key.
+	Label string `json:"label,omitempty"`
+	// EnabledWhen is an optional predicate over the record that must hold for
+	// the route to serve it, e.g. `status != 'draft'` or
+	// `status in ('sent','accepted') && total > 0`. Grammar: comparisons
+	// `<column> <op> <literal>` with ops == != < <= > >= in not_in, literals
+	// 'string' | number | true | false | null | ('a','b'), joined by && and ||
+	// (&& binds tighter). See ParseRecordExpr. Empty = always enabled.
+	EnabledWhen string `json:"enabled_when,omitempty"`
 }
 
 // ConfigEntry points at where an addon's configuration lives: a declarative

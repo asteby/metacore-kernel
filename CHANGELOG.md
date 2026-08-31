@@ -30,6 +30,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`contributions.public_routes[]` — public, token-addressed views of a
+  record.** An addon can now declare login-less, org-scoped URLs the host
+  serves at `GET /p/<orgRef>/<addon>/<key>/<token>[.pdf|.json]` (shareable
+  quote, order tracking, customer statement, waiting-room screen). Each entry
+  binds `{key, model, token_column, kind: document|json|html, document?,
+  columns?, relations?, expires_column?, label?, enabled_when?}`. New
+  `v3.PublicRoute` type; schema + struct-level dual validation (model owned or
+  extended, text token column, document bound to the same model, allowlist
+  never exposes the token, `enabled_when` parses); host projection
+  `manifest.Manifest.PublicRoutes` via `FromV3` with a mirrored legacy
+  validator. New `v3.ParseRecordExpr` / `RecordExpr.Eval` — a tiny record
+  predicate grammar (`status in ('sent','accepted') && total > 0`) hosts
+  evaluate per request.
+
 - **`brand` — product identity HTTP contract.** Every metacore host exposes
   a stable public surface at `GET /api/brand` (JSON: spec, key, name, color,
   assets) plus `/api/brand/icon`, `/logo`, `/og`. This is PRODUCT identity

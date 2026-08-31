@@ -8,6 +8,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/asteby/metacore-kernel/manifest/computeexpr"
+	v3 "github.com/asteby/metacore-kernel/manifest/v3"
 )
 
 var (
@@ -346,6 +347,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 		return err
 	}
 	if err := m.validateDocuments(); err != nil {
+		return err
+	}
+	if err := m.validatePublicRoutes(); err != nil {
 		return err
 	}
 	for i, c := range m.Capabilities {
@@ -920,6 +924,109 @@ func (m *Manifest) validateDocuments() error {
 			return fmt.Errorf("documents[%d].paper required", i)
 		default:
 			return fmt.Errorf("documents[%d].paper %q is not one of A4|letter|ticket80", i, d.Paper)
+		}
+	}
+	return nil
+}
+
+// validatePublicRoutes is the legacy/install-surface twin of
+// v3.validatePublicRoutes: route keys unique, each binds a model the addon
+// owns (ModelDefinitions) or extends (Extensions), token_column present and
+// text-typed on an own model, kind in the enum, document (required for kind
+// document) resolves to a Documents[] entry bound to the same model, columns
+// never include the token, enabled_when parses. Empty PublicRoutes passes
+// unchanged. Mirrors the v3 validator so a manifest fails identically on both
+// surfaces ("dual validation").
+func (m *Manifest) validatePublicRoutes() error {
+	if len(m.PublicRoutes) == 0 {
+		return nil
+	}
+	own := make(map[string]map[string]string, len(m.ModelDefinitions))
+	for _, md := range m.ModelDefinitions {
+		cols := make(map[string]string, len(md.Columns))
+		for _, c := range md.Columns {
+			cols[c.Name] = c.Type
+		}
+		own[md.ModelKey] = cols
+	}
+	extended := make(map[string]struct{}, len(m.Extensions))
+	for _, ext := range m.Extensions {
+		if ext.Model != "" {
+			extended[ext.Model] = struct{}{}
+		}
+	}
+	docs := make(map[string]string, len(m.Documents))
+	for _, d := range m.Documents {
+		docs[d.Key] = d.Model
+	}
+	seen := make(map[string]struct{}, len(m.PublicRoutes))
+	for i, r := range m.PublicRoutes {
+		if r.Key == "" {
+			return fmt.Errorf("public_routes[%d].key required", i)
+		}
+		if _, dup := seen[r.Key]; dup {
+			return fmt.Errorf("public_routes[%d].key %q duplicated", i, r.Key)
+		}
+		seen[r.Key] = struct{}{}
+		if r.Model == "" {
+			return fmt.Errorf("public_routes[%d].model required", i)
+		}
+		cols, isOwn := own[r.Model]
+		if _, isExt := extended[r.Model]; !isOwn && !isExt {
+			return fmt.Errorf("public_routes[%d].model %q is not a model of this addon (nor a model it extends)", i, r.Model)
+		}
+		if r.TokenColumn == "" {
+			return fmt.Errorf("public_routes[%d].token_column required", i)
+		}
+		if isOwn {
+			typ, ok := cols[r.TokenColumn]
+			if !ok {
+				return fmt.Errorf("public_routes[%d].token_column %q is not a column of model %q", i, r.TokenColumn, r.Model)
+			}
+			switch strings.ToLower(typ) {
+			case "text", "string":
+			default:
+				if !strings.HasPrefix(strings.ToLower(typ), "varchar(") {
+					return fmt.Errorf("public_routes[%d].token_column %q must be a text column (got %q)", i, r.TokenColumn, typ)
+				}
+			}
+		}
+		switch r.Kind {
+		case "document", "json", "html":
+		case "":
+			return fmt.Errorf("public_routes[%d].kind required", i)
+		default:
+			return fmt.Errorf("public_routes[%d].kind %q is not one of document|json|html", i, r.Kind)
+		}
+		if r.Document == "" {
+			if r.Kind == "document" {
+				return fmt.Errorf("public_routes[%d].document required when kind is document", i)
+			}
+		} else if docModel, ok := docs[r.Document]; !ok {
+			return fmt.Errorf("public_routes[%d].document %q is not a documents[] key of this addon", i, r.Document)
+		} else if docModel != r.Model {
+			return fmt.Errorf("public_routes[%d].document %q binds model %q, not %q", i, r.Document, docModel, r.Model)
+		}
+		if r.Kind == "json" && len(r.Columns) == 0 {
+			return fmt.Errorf("public_routes[%d].columns must list at least one column for kind json", i)
+		}
+		if r.Kind == "html" && len(r.Columns) == 0 && r.Document == "" {
+			return fmt.Errorf("public_routes[%d].columns must list at least one column for kind html (or set document)", i)
+		}
+		for _, c := range r.Columns {
+			if c == r.TokenColumn {
+				return fmt.Errorf("public_routes[%d].columns must not expose the token column %q", i, c)
+			}
+			if isOwn {
+				if _, ok := cols[c]; !ok {
+					return fmt.Errorf("public_routes[%d].columns[%s] is not a column of model %q", i, c, r.Model)
+				}
+			}
+		}
+		if strings.TrimSpace(r.EnabledWhen) != "" {
+			if _, err := v3.ParseRecordExpr(r.EnabledWhen); err != nil {
+				return fmt.Errorf("public_routes[%d].enabled_when: %w", i, err)
+			}
 		}
 	}
 	return nil
