@@ -990,6 +990,53 @@ type Contributions struct {
 	// "Configure" affordance (e.g. in the installed-addons view). Optional —
 	// an addon with nothing to configure omits it and hosts show nothing.
 	Config *ConfigEntry `json:"config,omitempty"`
+
+	// Rules contributes declarative anomaly/business rules evaluated by the
+	// host against canonical CRUD events (contributions.rules[]). Each rule
+	// pairs an arithmetic `when` predicate over the record with an outcome
+	// (flag a row for review, or notify roles) — no wasm, no hardcoded
+	// business logic in the kernel. Optional. See RuleDef.
+	Rules []RuleDef `json:"rules,omitempty"`
+}
+
+// RuleDef is one declarative rule (contributions.rules[]) the host evaluates
+// against a canonical CRUD event's AFTER snapshot. `When` is an arithmetic
+// comparison ("amount_paid + amount_due != total", "qty_on_hand < reorder_point")
+// parsed and evaluated by manifest/rulesexpr — the same computeexpr engine
+// that backs rollup/formula columns, so it can only reference numeric columns
+// with + - * / and one comparison operator; it can never run arbitrary SQL or
+// call out. When the predicate holds, the host applies Then: "flag" records a
+// rule_flags row (surfaced in a review queue); "notify" pushes an in-app
+// notification to NotifyRoles (reusing the same audience mechanism as
+// contributions.notifications[]).
+type RuleDef struct {
+	// Key is the rule's stable id, unique within the addon.
+	Key string `json:"key"`
+	// Model is the model key (own model or one this addon extends) the rule
+	// evaluates against.
+	Model string `json:"model"`
+	// When is the arithmetic predicate. Required.
+	When string `json:"when"`
+	// EventTypes restricts which canonical actions trigger evaluation:
+	// created | updated | transitioned. Empty means all three.
+	EventTypes []string `json:"event_types,omitempty"`
+	// Then is the rule's outcome. Required.
+	Then RuleThen `json:"then"`
+}
+
+// RuleThen is the outcome of a RuleDef whose When predicate holds.
+type RuleThen struct {
+	// Kind is "flag" (record a rule_flags row) or "notify" (in-app
+	// notification). Required.
+	Kind string `json:"kind"`
+	// Severity is info | warning | error. Defaults to "warning".
+	Severity string `json:"severity,omitempty"`
+	// Message is an i18n key (or literal) shown on the flag / notification.
+	// Required.
+	Message string `json:"message"`
+	// NotifyRoles lists the roles to notify when Kind is "notify". Required
+	// (non-empty) for "notify"; ignored for "flag".
+	NotifyRoles []string `json:"notify_roles,omitempty"`
 }
 
 // PublicRoute is one public, login-less view of a record an addon contributes

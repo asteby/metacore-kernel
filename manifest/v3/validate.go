@@ -13,6 +13,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/asteby/metacore-kernel/manifest/computeexpr"
+	"github.com/asteby/metacore-kernel/manifest/rulesexpr"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -377,6 +378,93 @@ func isTemporalColumnType(t string) bool {
 		return true
 	}
 	return false
+}
+
+var ruleThenKinds = map[string]struct{}{"flag": {}, "notify": {}}
+var ruleSeverities = map[string]struct{}{"info": {}, "warning": {}, "error": {}}
+var ruleEventTypes = map[string]struct{}{"created": {}, "updated": {}, "transitioned": {}}
+
+// validateRules enforces contributions.rules[]: unique keys; a model this
+// addon owns or extends; a `when` that parses under rulesexpr AND whose
+// identifiers all resolve to columns of Model (column checks skipped for
+// EXTENDED models, same reasoning as validatePublicRoutes — the owning
+// addon's manifest is not in scope here); then.kind in the enum; a message;
+// notify_roles required (non-empty) when kind is notify; event_types values
+// in the enum. Returns a slice (possibly empty) so the caller can append.
+func validateRules(m *Manifest, colsByModel map[string]map[string]struct{}) []string {
+	if m.Contributions == nil || len(m.Contributions.Rules) == 0 {
+		return nil
+	}
+	extended := map[string]struct{}{}
+	for _, mod := range m.Models {
+		for _, ext := range mod.Extensions {
+			if ext.TargetModel != "" {
+				extended[ext.TargetModel] = struct{}{}
+			}
+		}
+	}
+
+	var errs []string
+	seen := make(map[string]struct{}, len(m.Contributions.Rules))
+	for i, r := range m.Contributions.Rules {
+		id := r.Key
+		if id == "" {
+			id = fmt.Sprintf("#%d", i)
+		}
+		where := fmt.Sprintf("contributions.rules[%s]", id)
+
+		if r.Key == "" {
+			errs = append(errs, fmt.Sprintf("%s.key is required", where))
+		} else if _, dup := seen[r.Key]; dup {
+			errs = append(errs, fmt.Sprintf("%s.key %q is duplicated within the addon", where, r.Key))
+		} else {
+			seen[r.Key] = struct{}{}
+		}
+
+		cols, isOwn := colsByModel[r.Model]
+		_, isExt := extended[r.Model]
+		switch {
+		case r.Model == "":
+			errs = append(errs, fmt.Sprintf("%s.model is required", where))
+		case !isOwn && !isExt:
+			errs = append(errs, fmt.Sprintf("%s.model %q is not a model of this addon (nor a model it extends)", where, r.Model))
+		}
+
+		if r.When == "" {
+			errs = append(errs, fmt.Sprintf("%s.when is required", where))
+		} else if parsed, err := rulesexpr.Parse(r.When); err != nil {
+			errs = append(errs, fmt.Sprintf("%s.when %q: %v", where, r.When, err))
+		} else if isOwn {
+			for _, f := range parsed.Fields() {
+				if _, ok := cols[f]; !ok {
+					errs = append(errs, fmt.Sprintf("%s.when references unknown column %q of model %q", where, f, r.Model))
+				}
+			}
+		}
+
+		for _, et := range r.EventTypes {
+			if _, ok := ruleEventTypes[et]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.event_types contains %q, want one of created|updated|transitioned", where, et))
+			}
+		}
+
+		if r.Then.Kind == "" {
+			errs = append(errs, fmt.Sprintf("%s.then.kind is required", where))
+		} else if _, ok := ruleThenKinds[r.Then.Kind]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.then.kind %q is not one of flag|notify", where, r.Then.Kind))
+		} else if r.Then.Kind == "notify" && len(r.Then.NotifyRoles) == 0 {
+			errs = append(errs, fmt.Sprintf("%s.then.notify_roles is required when then.kind is notify", where))
+		}
+		if r.Then.Severity != "" {
+			if _, ok := ruleSeverities[r.Then.Severity]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.then.severity %q is not one of info|warning|error", where, r.Then.Severity))
+			}
+		}
+		if strings.TrimSpace(r.Then.Message) == "" {
+			errs = append(errs, fmt.Sprintf("%s.then.message is required", where))
+		}
+	}
+	return errs
 }
 
 // validatePublicRoutes enforces the cross-field rules of the public-route
@@ -1170,6 +1258,7 @@ func Validate(raw []byte) error {
 		errs = append(errs, validatePublicRoutes(&m)...)
 		errs = append(errs, validateConditions(&m)...)
 		errs = append(errs, validateRoutes(&m)...)
+		errs = append(errs, validateRules(&m, colsByModel)...)
 		// contributions.config: exactly one target (model XOR url); a model
 		// target must reference one of the addon's own models.
 		if cfg := m.Contributions.Config; cfg != nil {

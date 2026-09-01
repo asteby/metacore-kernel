@@ -592,11 +592,11 @@
           "enum": [
             "row"
           ],
-          "description": "Row-locking strategy on Update. 'row' makes the kernel wrap Update in a transaction and load the target row with SELECT … FOR UPDATE before evaluating column constraints, so an increment-then-check guard is race-free. Omit for no extra locking."
+          "description": "Row-locking strategy on Update. 'row' makes the kernel wrap Update in a transaction and load the target row with SELECT \u2026 FOR UPDATE before evaluating column constraints, so an increment-then-check guard is race-free. Omit for no extra locking."
         },
         "sequences": {
           "type": "array",
-          "description": "Atomic folio counters the kernel maintains per org (or branch) for this model — invoice folios, remission numbers, tickets. A column binds to one via 'sequence' for auto-stamping on create; a wasm handler pulls one via the sequence_next host import.",
+          "description": "Atomic folio counters the kernel maintains per org (or branch) for this model \u2014 invoice folios, remission numbers, tickets. A column binds to one via 'sequence' for auto-stamping on create; a wasm handler pulls one via the sequence_next host import.",
           "items": {
             "$ref": "#/$defs/Sequence"
           }
@@ -675,7 +675,7 @@
       "properties": {
         "key": {
           "type": "string",
-          "description": "The column used for idempotency — must name a declared column on the owning model."
+          "description": "The column used for idempotency \u2014 must name a declared column on the owning model."
         },
         "rows": {
           "type": "array",
@@ -750,7 +750,7 @@
         },
         "embed": {
           "type": "boolean",
-          "description": "When true, this relation is a COMPOSITION (a document's LINES) and the record modal renders its children inline as a sub-table. Opt-in: the modal embeds ONLY relations declaring it, so a parent with a large independently-managed child collection (stock movements, transfers) stays cheap to open — those relations stay reachable from their own model page. Pure UI metadata; defaults false. Only meaningful for one_to_many."
+          "description": "When true, this relation is a COMPOSITION (a document's LINES) and the record modal renders its children inline as a sub-table. Opt-in: the modal embeds ONLY relations declaring it, so a parent with a large independently-managed child collection (stock movements, transfers) stays cheap to open \u2014 those relations stay reachable from their own model page. Pure UI metadata; defaults false. Only meaningful for one_to_many."
         },
         "rollups": {
           "type": "array",
@@ -775,7 +775,7 @@
         },
         "type": {
           "type": "string",
-          "description": "Logical type the kernel maps to a Postgres type. Closed set kept narrow to keep cross-driver portability. Parameterized Postgres-native forms numeric(p,s), varchar(n) and vector(n) are ALSO accepted — they are a subset of what the kernel DDL plane (dynamic.ValidateColumnType / pgColumnType) materializes, so the author contract can never accept a type the engine cannot emit.",
+          "description": "Logical type the kernel maps to a Postgres type. Closed set kept narrow to keep cross-driver portability. Parameterized Postgres-native forms numeric(p,s), varchar(n) and vector(n) are ALSO accepted \u2014 they are a subset of what the kernel DDL plane (dynamic.ValidateColumnType / pgColumnType) materializes, so the author contract can never accept a type the engine cannot emit.",
           "anyOf": [
             {
               "enum": [
@@ -841,7 +841,7 @@
           "description": "Foreign-key target (model key or table) the column points at. The host projects it onto ColumnDef.ref / FieldDef.ref so the SDK renders a searchable dynamic_select relation picker in the native create/edit form (resolving options against /api/options/:ref) with no per-app action. Pure UI metadata; ignored by the DDL plane."
         },
         "options": {
-          "description": "Select choice source for the column. EITHER the STATIC array form (value/label, plus optional icon/color/image visuals → plain select) OR the DYNAMIC object form (DynamicOptions: a dependent-picker source declaration → searchable dynamic_select scoped by depends_on). Mutually exclusive. Use 'ref' for a simple relation picker, the array for a hardcoded enum, the object for a scoped/relational picker. Pure UI metadata; ignored by the DDL plane.",
+          "description": "Select choice source for the column. EITHER the STATIC array form (value/label, plus optional icon/color/image visuals \u2192 plain select) OR the DYNAMIC object form (DynamicOptions: a dependent-picker source declaration \u2192 searchable dynamic_select scoped by depends_on). Mutually exclusive. Use 'ref' for a simple relation picker, the array for a hardcoded enum, the object for a scoped/relational picker. Pure UI metadata; ignored by the DDL plane.",
           "oneOf": [
             {
               "type": "array",
@@ -893,7 +893,7 @@
         "section": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
-          "description": "Assigns this column to a form_layout section/step by its key: the SDK places the field's input inside the matching form_layout.sections[] block (a collapsible section in mode 'sections', a wizard step in mode 'steps'). Columns without a section fall into an implicit 'General' block (or the first declared one). Pure UI metadata (maps to ColumnDef/FieldDef.section) — the DDL and write planes ignore it."
+          "description": "Assigns this column to a form_layout section/step by its key: the SDK places the field's input inside the matching form_layout.sections[] block (a collapsible section in mode 'sections', a wizard step in mode 'steps'). Columns without a section fall into an implicit 'General' block (or the first declared one). Pure UI metadata (maps to ColumnDef/FieldDef.section) \u2014 the DDL and write planes ignore it."
         },
         "validation": {
           "$ref": "#/$defs/FieldValidation",
@@ -939,7 +939,7 @@
         "mode",
         "sections"
       ],
-      "description": "Declarative grouping for the model's native create/edit form. Mode 'sections' renders the sections as titled, collapsible blocks on a single scroll; mode 'steps' renders them as a step-by-step wizard (validated per step by the SDK). A section and a step share the same FormSection shape. Columns assign themselves to a section/step via column.section == section.key; unassigned columns fall into an implicit 'General' block. Pure UI metadata (maps to the served form_layout) — the DDL and write planes ignore it.",
+      "description": "Declarative grouping for the model's native create/edit form. Mode 'sections' renders the sections as titled, collapsible blocks on a single scroll; mode 'steps' renders them as a step-by-step wizard (validated per step by the SDK). A section and a step share the same FormSection shape. Columns assign themselves to a section/step via column.section == section.key; unassigned columns fall into an implicit 'General' block. Pure UI metadata (maps to the served form_layout) \u2014 the DDL and write planes ignore it.",
       "properties": {
         "mode": {
           "type": "string",
@@ -964,7 +964,7 @@
       "required": [
         "field"
       ],
-      "description": "CONDITIONAL VISIBILITY for a form field in the native create/edit modal: the SDK renders the owning field only when a SIBLING field's current value matches this predicate. Pure UI metadata (maps to ColumnDef/FieldDef.visible_when) — the DDL and write planes ignore it, and a hidden field's value never gates submit. Declare EITHER 'equals' (exact string match) OR 'in' (any-of); when both are present 'in' wins.",
+      "description": "CONDITIONAL VISIBILITY for a form field in the native create/edit modal: the SDK renders the owning field only when a SIBLING field's current value matches this predicate. Pure UI metadata (maps to ColumnDef/FieldDef.visible_when) \u2014 the DDL and write planes ignore it, and a hidden field's value never gates submit. Declare EITHER 'equals' (exact string match) OR 'in' (any-of); when both are present 'in' wins.",
       "properties": {
         "field": {
           "type": "string",
@@ -990,7 +990,7 @@
         "key",
         "format"
       ],
-      "description": "One atomic folio counter the kernel maintains for the owning model, formatted through a template. Increments atomically (UPDATE … RETURNING) so concurrent creates never collide.",
+      "description": "One atomic folio counter the kernel maintains for the owning model, formatted through a template. Increments atomically (UPDATE \u2026 RETURNING) so concurrent creates never collide.",
       "properties": {
         "key": {
           "type": "string",
@@ -1008,7 +1008,7 @@
         "format": {
           "type": "string",
           "minLength": 1,
-          "description": "Template rendered around the numeric value; MUST contain exactly one {seq} or zero-padded {seq:0N} placeholder, e.g. 'A-{seq:06}' → 'A-000042'."
+          "description": "Template rendered around the numeric value; MUST contain exactly one {seq} or zero-padded {seq:0N} placeholder, e.g. 'A-{seq:06}' \u2192 'A-000042'."
         }
       }
     },
@@ -1197,7 +1197,7 @@
         },
         "notifications": {
           "type": "array",
-          "description": "Declarative in-app bell notifications. The host matches `on` against canonical CRUD events (addon.Model.action), renders title/body/link, and fans out to `to` — no wasm required.",
+          "description": "Declarative in-app bell notifications. The host matches `on` against canonical CRUD events (addon.Model.action), renders title/body/link, and fans out to `to` \u2014 no wasm required.",
           "items": {
             "$ref": "#/$defs/NotificationRule"
           }
@@ -1233,55 +1233,165 @@
             "$ref": "#/$defs/Route"
           },
           "description": "Entries this addon contributes to the host's declarative routing tables (e.g. which handler fulfils an order line). Resolved per organization over the routes of every installed addon."
+        },
+        "rules": {
+          "type": "array",
+          "description": "Declarative anomaly/business rules evaluated by the host against canonical CRUD events. Each rule pairs an arithmetic `when` predicate over the record (e.g. amount_paid + amount_due != total) with an outcome: flag the row for review, or notify roles. No wasm, no hardcoded business logic in the kernel.",
+          "items": {
+            "$ref": "#/$defs/RuleDef"
+          }
         }
       }
     },
     "AgentCapability": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "title", "description", "kind", "risk"],
+      "required": [
+        "id",
+        "title",
+        "description",
+        "kind",
+        "risk"
+      ],
       "properties": {
-        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$" },
-        "title": { "type": "string", "minLength": 1 },
-        "description": { "type": "string", "minLength": 1 },
-        "kind": { "type": "string", "enum": ["answer", "guide", "act", "transact"] },
-        "risk": { "type": "string", "enum": ["none", "low", "medium", "high", "critical"] },
-        "permission": { "type": "string" },
-        "route": { "type": "string" },
-        "input_schema": { "type": "object" },
-        "requires_confirmation": { "type": "boolean" },
-        "reversible": { "type": "boolean" },
-        "tags": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-        "guide": { "$ref": "#/$defs/AgentGuide" }
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "answer",
+            "guide",
+            "act",
+            "transact"
+          ]
+        },
+        "risk": {
+          "type": "string",
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "permission": {
+          "type": "string"
+        },
+        "route": {
+          "type": "string"
+        },
+        "input_schema": {
+          "type": "object"
+        },
+        "requires_confirmation": {
+          "type": "boolean"
+        },
+        "reversible": {
+          "type": "boolean"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "guide": {
+          "$ref": "#/$defs/AgentGuide"
+        }
       }
     },
     "AgentGuide": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "steps"],
+      "required": [
+        "id",
+        "steps"
+      ],
       "properties": {
-        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$" },
-        "title": { "type": "string" },
-        "description": { "type": "string" },
-        "intents": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
-        "steps": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/AgentGuideStep" } }
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "intents": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/AgentGuideStep"
+          }
+        }
       }
     },
     "AgentGuideStep": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "target", "title", "description"],
+      "required": [
+        "id",
+        "target",
+        "title",
+        "description"
+      ],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "route": { "type": "string" },
-        "target": { "type": "string", "minLength": 1 },
-        "title": { "type": "string", "minLength": 1 },
-        "description": { "type": "string", "minLength": 1 },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "route": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
         "advanceOn": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["event"],
-          "properties": { "event": { "type": "string", "enum": ["click", "change", "input"] } }
+          "required": [
+            "event"
+          ],
+          "properties": {
+            "event": {
+              "type": "string",
+              "enum": [
+                "click",
+                "change",
+                "input"
+              ]
+            }
+          }
         }
       }
     },
@@ -1709,7 +1819,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Static column→value filter the host applies when rendering this entry's list view (e.g. {\"status\":\"reception\"}), so an addon can publish one nav entry per status."
+          "description": "Static column\u2192value filter the host applies when rendering this entry's list view (e.g. {\"status\":\"reception\"}), so an addon can publish one nav entry per status."
         },
         "view_type": {
           "type": "string",
@@ -1725,7 +1835,7 @@
         },
         "requires": {
           "type": "array",
-          "description": "Screen public data surface: model + actions the federated UI needs when Acceder is granted. Host projects each entry to ModelKey capability strings (Product+index → product.index), same vocabulary as dynamic tables /api/data/<Model>. Prefer this over requires_capabilities.",
+          "description": "Screen public data surface: model + actions the federated UI needs when Acceder is granted. Host projects each entry to ModelKey capability strings (Product+index \u2192 product.index), same vocabulary as dynamic tables /api/data/<Model>. Prefer this over requires_capabilities.",
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -2101,7 +2211,7 @@
           "type": "boolean"
         },
         "options": {
-          "description": "Select choice source for the field. EITHER the STATIC array form (value/label choices → plain select) OR the DYNAMIC object form (DynamicOptions: a dependent-picker source declaration → searchable dynamic_select scoped by depends_on). Mutually exclusive.",
+          "description": "Select choice source for the field. EITHER the STATIC array form (value/label choices \u2192 plain select) OR the DYNAMIC object form (DynamicOptions: a dependent-picker source declaration \u2192 searchable dynamic_select scoped by depends_on). Mutually exclusive.",
           "oneOf": [
             {
               "type": "array",
@@ -2119,7 +2229,7 @@
           "description": "Name of ANOTHER field in the same action form (a header field or a sibling item-field) whose current value supplies this picker's cascade filter_value (used with the 'options' object form). The host projects it onto FieldDef.depends_on so the SDK scopes + re-fetches the dynamic_select options when the depended-on field changes. Empty = no cascade."
         },
         "default": {
-          "description": "Initial value for this field. Free-form for the common case (a literal default). When the object carries the $prefillFromRecord key, it is instead the PrefillFromRecord directive (see $defs) — the 'if' below enforces that shape once opted in, without constraining every other field's default."
+          "description": "Initial value for this field. Free-form for the common case (a literal default). When the object carries the $prefillFromRecord key, it is instead the PrefillFromRecord directive (see $defs) \u2014 the 'if' below enforces that shape once opted in, without constraining every other field's default."
         },
         "placeholder": {
           "type": "string"
@@ -2137,7 +2247,7 @@
         },
         "scan": {
           "type": "boolean",
-          "description": "Opts this action field into CAMERA BARCODE SCANNING: the SDK shows a camera button that scans a barcode to FILL the field fast — a text/number input (e.g. a SKU) or a dynamic_select reference (scan feeds the picker's search). The host projects it onto FieldDef.scan. Country/business-agnostic UI metadata; defaults false."
+          "description": "Opts this action field into CAMERA BARCODE SCANNING: the SDK shows a camera button that scans a barcode to FILL the field fast \u2014 a text/number input (e.g. a SKU) or a dynamic_select reference (scan feeds the picker's search). The host projects it onto FieldDef.scan. Country/business-agnostic UI metadata; defaults false."
         },
         "options_source": {
           "type": "string",
@@ -2156,7 +2266,7 @@
         },
         "lock_rows": {
           "type": "boolean",
-          "description": "Set on a type:'array' line-items field: its rows are fixed — the SDK hides add-row and delete-row controls, so the user can only edit existing rows' cells (e.g. a receive form prefilled from the ordered lines). Ignored on non-array fields."
+          "description": "Set on a type:'array' line-items field: its rows are fixed \u2014 the SDK hides add-row and delete-row controls, so the user can only edit existing rows' cells (e.g. a receive form prefilled from the ordered lines). Ignored on non-array fields."
         },
         "visible_when": {
           "$ref": "#/$defs/VisibleWhen"
@@ -2183,7 +2293,7 @@
         },
         "label_image": {
           "type": "string",
-          "description": "Name of a column on the REMOTE model a dynamic_select (ref / search_endpoint) resolves against whose value (an image URL) the SDK renders as a thumbnail beside each option's label — e.g. a product photo or contact avatar. Optional; ignored on non-reference fields."
+          "description": "Name of a column on the REMOTE model a dynamic_select (ref / search_endpoint) resolves against whose value (an image URL) the SDK renders as a thumbnail beside each option's label \u2014 e.g. a product photo or contact avatar. Optional; ignored on non-reference fields."
         },
         "label_icon": {
           "type": "string",
@@ -2222,7 +2332,7 @@
         "debit_column",
         "credit_column"
       ],
-      "description": "Optional balance constraint on a line-items (type \"array\") field. Declares that the sum of debit_column must equal the sum of credit_column across all rows; the SDK shows a balanced/out-of-balance indicator and blocks submit until they match. Generic — debit/credit are just the two column keys to reconcile (e.g. a journal entry's debit vs credit).",
+      "description": "Optional balance constraint on a line-items (type \"array\") field. Declares that the sum of debit_column must equal the sum of credit_column across all rows; the SDK shows a balanced/out-of-balance indicator and blocks submit until they match. Generic \u2014 debit/credit are just the two column keys to reconcile (e.g. a journal entry's debit vs credit).",
       "properties": {
         "debit_column": {
           "type": "string",
@@ -2248,7 +2358,7 @@
       "required": [
         "$prefillFromRecord"
       ],
-      "description": "Set as the 'default' of a type:'array' line-items field to seed its rows from a relation/array already present on the record the action modal opened against, instead of starting empty — e.g. a receive action prefilling one row per ordered line. SDK-interpreted convention (action-modal-dispatcher.tsx), not a host-side effect: the host never evaluates this, it only round-trips it through 'default' to the served FieldDef.",
+      "description": "Set as the 'default' of a type:'array' line-items field to seed its rows from a relation/array already present on the record the action modal opened against, instead of starting empty \u2014 e.g. a receive action prefilling one row per ordered line. SDK-interpreted convention (action-modal-dispatcher.tsx), not a host-side effect: the host never evaluates this, it only round-trips it through 'default' to the served FieldDef.",
       "properties": {
         "$prefillFromRecord": {
           "type": "string",
@@ -2268,7 +2378,7 @@
             "target",
             "of"
           ],
-          "description": "Derives one column's initial value per row as a subtraction of two OTHER columns already resolved on that row (typically one from 'map' and an accumulated-so-far counter) — e.g. the pending quantity still to receive. Numeric; missing operands read as 0. Rows whose result is <= 0 are dropped (already fully satisfied).",
+          "description": "Derives one column's initial value per row as a subtraction of two OTHER columns already resolved on that row (typically one from 'map' and an accumulated-so-far counter) \u2014 e.g. the pending quantity still to receive. Numeric; missing operands read as 0. Rows whose result is <= 0 are dropped (already fully satisfied).",
           "properties": {
             "target": {
               "type": "string",
@@ -2280,13 +2390,13 @@
             },
             "minus": {
               "type": "string",
-              "description": "Item field key of the subtrahend (the amount already accounted for). Optional — omitted reads as 0, i.e. the row's remaining value is simply 'of'."
+              "description": "Item field key of the subtrahend (the amount already accounted for). Optional \u2014 omitted reads as 0, i.e. the row's remaining value is simply 'of'."
             }
           }
         },
         "lock": {
           "type": "array",
-          "description": "Item field keys that come pre-filled and read-only in every row this prefill generates (e.g. the product and the ordered/received-so-far context columns) — the user can only edit the remaining unlocked columns.",
+          "description": "Item field keys that come pre-filled and read-only in every row this prefill generates (e.g. the product and the ordered/received-so-far context columns) \u2014 the user can only edit the remaining unlocked columns.",
           "items": {
             "type": "string"
           }
@@ -2349,7 +2459,7 @@
     "DynamicOptions": {
       "type": "object",
       "additionalProperties": false,
-      "description": "OBJECT form of a field/column 'options' block: a dependent-picker source declaration. Maps onto modelbase.FieldOptionsConfig so a dynamic_select scopes its candidates by a sibling field (depends_on) and resolves its label from a related model. Mutually exclusive with the static array form. Generic — the addon names its own tables; no domain model is baked into the kernel.",
+      "description": "OBJECT form of a field/column 'options' block: a dependent-picker source declaration. Maps onto modelbase.FieldOptionsConfig so a dynamic_select scopes its candidates by a sibling field (depends_on) and resolves its label from a related model. Mutually exclusive with the static array form. Generic \u2014 the addon names its own tables; no domain model is baked into the kernel.",
       "properties": {
         "source": {
           "type": "string",
@@ -2794,7 +2904,7 @@
         },
         "section": {
           "type": "string",
-          "description": "Binds this setting to a form_layout section (by key), like a column's section — groups a connector's credentials into its wizard steps/sections."
+          "description": "Binds this setting to a form_layout section (by key), like a column's section \u2014 groups a connector's credentials into its wizard steps/sections."
         },
         "options": {
           "type": "array",
@@ -2880,7 +2990,7 @@
         },
         "every": {
           "type": "string",
-          "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)([0-9]+(ns|us|µs|ms|s|m|h))*$",
+          "pattern": "^[0-9]+(ns|us|\u00b5s|ms|s|m|h)([0-9]+(ns|us|\u00b5s|ms|s|m|h))*$",
           "description": "Go duration between fires (e.g. '30s', '5m', '1h')."
         },
         "do": {
@@ -3300,7 +3410,7 @@
         "handler": {
           "type": "string",
           "pattern": "^wasm:[A-Za-z_][A-Za-z0-9_]*$",
-          "description": "Tier-3 backend, 'wasm:<export>' — an export of the addon's wasm module invoked with the merged row as payload; its returned value is written into target. Required (and only allowed) when tier is 3."
+          "description": "Tier-3 backend, 'wasm:<export>' \u2014 an export of the addon's wasm module invoked with the merged row as payload; its returned value is written into target. Required (and only allowed) when tier is 3."
         }
       }
     },
@@ -3435,7 +3545,7 @@
         "field",
         "values"
       ],
-      "description": "Gate the rule on a before→after field transition into one of values.",
+      "description": "Gate the rule on a before\u2192after field transition into one of values.",
       "properties": {
         "field": {
           "type": "string",
@@ -3538,6 +3648,85 @@
         "condition": {
           "$ref": "#/$defs/Condition",
           "description": "Optional server-side gate: only serve this route to organizations satisfying the predicate."
+        }
+      }
+    },
+    "RuleDef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "model",
+        "when",
+        "then"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Unique within the addon.",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "model": {
+          "type": "string",
+          "description": "The model key (own model or extended model) the rule evaluates against."
+        },
+        "when": {
+          "type": "string",
+          "description": "Arithmetic comparison predicate, e.g. 'amount_paid + amount_due != total' or 'qty_on_hand < reorder_point'. Parsed by the same strict computeexpr engine that backs rollup/formula columns: numbers, identifiers, + - * / and ONE comparison operator (== != < <= > >=). No function calls, no strings, no SQL."
+        },
+        "event_types": {
+          "type": "array",
+          "description": "Canonical actions that trigger evaluation. Empty means all three.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "created",
+              "updated",
+              "transitioned"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "then": {
+          "$ref": "#/$defs/RuleThen"
+        }
+      }
+    },
+    "RuleThen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "message"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "'flag' records a rule_flags row for a review queue; 'notify' pushes an in-app notification to notify_roles.",
+          "enum": [
+            "flag",
+            "notify"
+          ]
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "i18n key (or literal) shown on the flag / notification.",
+          "minLength": 1
+        },
+        "notify_roles": {
+          "type": "array",
+          "description": "Roles to notify. Required (non-empty) when kind is notify; ignored for flag.",
+          "items": {
+            "type": "string"
+          }
         }
       }
     }
