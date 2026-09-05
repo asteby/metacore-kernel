@@ -18,7 +18,7 @@ require (
 	github.com/tetratelabs/wazero v1.12.0
 	github.com/valyala/fasthttp v1.73.0
 	github.com/xuri/excelize/v2 v2.11.0
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/sync v0.22.0
 	gorm.io/driver/postgres v1.6.2
 	gorm.io/driver/sqlite v1.6.0
