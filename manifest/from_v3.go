@@ -764,6 +764,11 @@ func mapNavItems(in []v3.NavItem, modelTable map[string]string) []NavItem {
 			// the served TableMetadata and the SDK picks the board renderer.
 			ViewType: it.ViewType,
 			GroupBy:  it.GroupBy,
+			// Column/action allowlists ride across verbatim so two nav entries
+			// filtering the same model can render distinct screens — see
+			// v3.NavItem.Columns/Actions.
+			Columns: it.Columns,
+			Actions: it.Actions,
 			// Screen → API caps: structured requires projected to ModelKey strings,
 			// unioned with any flat requires_capabilities (table-path aliases).
 			RequiresCapabilities: v3.ProjectNavRequires(it.Requires, it.RequiresCapabilities),

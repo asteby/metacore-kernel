@@ -320,6 +320,13 @@ type NavItem struct {
 	// API capabilities implied by granting Acceder to this screen. See v3.NavItem.
 	RequiresCapabilities []string `json:"requires_capabilities,omitempty"`
 
+	// Columns / Actions are the host projection of v3 NavItem.columns/actions:
+	// an allowlist restricting which columns/actions the SDK renders for THIS
+	// entry's model, instead of the model's full set. Omitted = unchanged
+	// (every column, every action). See v3.NavItem.
+	Columns []string `json:"columns,omitempty"`
+	Actions []string `json:"actions,omitempty"`
+
 	// Condition is the host projection of the v3 contribution condition: the
 	// entry is only served to orgs satisfying it. See ConditionDef.
 	Condition *ConditionDef `json:"condition,omitempty"`

@@ -1869,6 +1869,22 @@
           },
           "description": "Flat host RBAC capability strings (escape hatch / table-path aliases). Prefer requires[{model,actions}]; the host unions both into the Acceder expand set."
         },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Exact allowlist (and order) of column keys the SDK renders for THIS nav entry, instead of the model's full column set. Lets two nav entries filtering the same model (e.g. a generic list and a purpose-built approval queue) show different columns. Omitted = the model's default columns, unchanged."
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Allowlist of action keys visible for THIS nav entry, instead of every action the model declares. Omitted = every action, unchanged."
+        },
         "condition": {
           "$ref": "#/$defs/Condition",
           "description": "Optional server-side gate: only serve this contribution to organizations satisfying the predicate."

@@ -33,6 +33,12 @@ type Item struct {
 	// to match the host's NavItem reader (`view_type` / `group_by`).
 	ViewType string `json:"view_type,omitempty"`
 	GroupBy  string `json:"group_by,omitempty"`
+	// Columns / Actions restrict the SDK's rendering of this entry's model to
+	// an explicit allowlist, carried verbatim from the manifest NavItem — see
+	// manifest.NavItem.Columns/Actions. Omitted means the model's defaults
+	// (every column, every action), unchanged from pre-existing behaviour.
+	Columns []string `json:"columns,omitempty"`
+	Actions []string `json:"actions,omitempty"`
 	// Owner identifies where this item came from: "core" or "addon:<key>".
 	Owner string `json:"owner,omitempty"`
 	Items []Item `json:"items,omitempty"`
@@ -144,6 +150,8 @@ func toItems(src []manifest.NavItem, addonKey string) []Item {
 			Filter:     it.Filter,
 			ViewType:   it.ViewType,
 			GroupBy:    it.GroupBy,
+			Columns:    it.Columns,
+			Actions:    it.Actions,
 			Owner:      "addon:" + addonKey,
 			Items:      toItems(it.Items, addonKey),
 		})

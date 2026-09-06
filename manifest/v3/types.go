@@ -1319,6 +1319,29 @@ type NavItem struct {
 	// RequiresCapabilities for new manifests.
 	Requires []NavRequire `json:"requires,omitempty"`
 
+	// Columns, when set, is the exact allowlist (and order) of column keys the
+	// SDK's DynamicTable renders for THIS nav entry — not the model's full
+	// column set. Two nav entries filtering the SAME model (e.g. "Pedidos de
+	// venta" and a credit-approval addon's "Solicitudes pendientes", both on
+	// SalesOrder) otherwise render identically: same generic columns, same
+	// title, every action the model declares, regardless of what the entry is
+	// actually FOR. Empty/omitted means the model's default column set (the
+	// existing behaviour, unchanged). Column keys not present on the model are
+	// silently ignored by the SDK rather than erroring, so a stale override
+	// after a model rename degrades instead of breaking the screen.
+	Columns []string `json:"columns,omitempty"`
+
+	// Actions, when set, is the allowlist of action keys visible for THIS nav
+	// entry (row/table actions the model declares elsewhere in the manifest).
+	// Empty/omitted means every action the model declares (the existing
+	// behaviour, unchanged) — so a generic "Pedidos de venta" list keeps
+	// showing "Generar factura", "Cancelar", etc., while a purpose-built
+	// "Solicitudes de crédito" entry can restrict itself to just
+	// authorize_credit/reject_credit without hiding those actions from the
+	// generic view. Action keys not declared by the model are silently
+	// ignored, same reasoning as Columns.
+	Actions []string `json:"actions,omitempty"`
+
 	// RequiresCapabilities lists host RBAC capability strings this screen needs
 	// when its Acceder grant (`screen.<slug>.access`) is given — typically
 	// ModelKey CRUD / custom actions the federated UI calls via `/api/data/*`
