@@ -373,3 +373,99 @@ func TestApplyFormulas_Tier3WasmHandler(t *testing.T) {
 		t.Error("invoker error must propagate")
 	}
 }
+
+// TestRecomputeRollupsForChild_UpdateAndDelete is the ops#1403 regression: a
+// host write path that never reaches Service (the wasm data_mutate tier) must
+// still be able to maintain the parent aggregate — on UPDATE, not just on the
+// insert — by calling the exported recompute with the transaction it wrote in.
+func TestRecomputeRollupsForChild_UpdateAndDelete(t *testing.T) {
+	db := setupComputeDB(t)
+	ctx := context.Background()
+	org := uuid.New()
+	parentID := uuid.New().String()
+	db.Exec(`INSERT INTO sales_orders (id, organization_id, total, line_count) VALUES (?, ?, 0, 0)`,
+		parentID, org.String())
+
+	reg := NewHookRegistry()
+	RegisterComputeHooks(reg, salesManifest())
+
+	if !reg.HasRollupsForChild("SalesOrderItem") {
+		t.Fatal("HasRollupsForChild(SalesOrderItem) = false, want true")
+	}
+	if reg.HasRollupsForChild("SalesOrder") {
+		t.Fatal("HasRollupsForChild(SalesOrder) = true; no rollup is declared over the parent")
+	}
+
+	child := uuid.New().String()
+	row := map[string]any{"id": child, "sales_order_id": parentID, "subtotal": 25.0}
+
+	// Create.
+	db.Exec(`INSERT INTO sales_order_items (id, sales_order_id, subtotal) VALUES (?, ?, 25)`, child, parentID)
+	if err := reg.RecomputeRollupsForChild(ctx, db, org, "SalesOrderItem", row); err != nil {
+		t.Fatalf("recompute after create: %v", err)
+	}
+	if total, count := readOrder(t, db, parentID); total != 25 || count != 1 {
+		t.Fatalf("after create: total=%v count=%v, want 25/1", total, count)
+	}
+
+	// UPDATE — the case that regressed: a payment lowering the child's amount
+	// must lower the parent aggregate too.
+	db.Exec(`UPDATE sales_order_items SET subtotal = 12 WHERE id = ?`, child)
+	row["subtotal"] = 12.0
+	if err := reg.RecomputeRollupsForChild(ctx, db, org, "SalesOrderItem", row); err != nil {
+		t.Fatalf("recompute after update: %v", err)
+	}
+	if total, count := readOrder(t, db, parentID); total != 12 || count != 1 {
+		t.Fatalf("after update: total=%v count=%v, want 12/1", total, count)
+	}
+
+	// DELETE — called with the pre-delete row AFTER the row is gone, so the
+	// aggregate excludes it without an explicit exclusion id.
+	db.Exec(`DELETE FROM sales_order_items WHERE id = ?`, child)
+	if err := reg.RecomputeRollupsForChild(ctx, db, org, "SalesOrderItem", row); err != nil {
+		t.Fatalf("recompute after delete: %v", err)
+	}
+	if total, count := readOrder(t, db, parentID); total != 0 || count != 0 {
+		t.Fatalf("after delete: total=%v count=%v, want 0/0", total, count)
+	}
+}
+
+// TestRecomputeRollupsForChild_Guards covers the no-op edges: an unknown child
+// model, a row with no FK value, a nil registry and a nil db must all be
+// silent no-ops rather than errors — the compute pass is additive and must
+// never break a host write.
+func TestRecomputeRollupsForChild_Guards(t *testing.T) {
+	db := setupComputeDB(t)
+	ctx := context.Background()
+	org := uuid.New()
+	parentID := uuid.New().String()
+	db.Exec(`INSERT INTO sales_orders (id, organization_id, total, line_count) VALUES (?, ?, 7, 3)`,
+		parentID, org.String())
+
+	reg := NewHookRegistry()
+	RegisterComputeHooks(reg, salesManifest())
+
+	cases := []struct {
+		name  string
+		reg   *HookRegistry
+		db    *gorm.DB
+		model string
+		row   map[string]any
+	}{
+		{"unknown child model", reg, db, "Unrelated", map[string]any{"sales_order_id": parentID}},
+		{"row without the fk", reg, db, "SalesOrderItem", map[string]any{"subtotal": 1}},
+		{"empty row", reg, db, "SalesOrderItem", nil},
+		{"nil registry", nil, db, "SalesOrderItem", map[string]any{"sales_order_id": parentID}},
+		{"nil db", reg, nil, "SalesOrderItem", map[string]any{"sales_order_id": parentID}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.reg.RecomputeRollupsForChild(ctx, tc.db, org, tc.model, tc.row); err != nil {
+				t.Fatalf("want no-op, got error: %v", err)
+			}
+		})
+	}
+	if total, count := readOrder(t, db, parentID); total != 7 || count != 3 {
+		t.Fatalf("a no-op case mutated the parent: total=%v count=%v, want 7/3", total, count)
+	}
+}

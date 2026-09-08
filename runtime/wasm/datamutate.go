@@ -198,6 +198,23 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		}
 	}
 
+	// Declarative compute (Host.WithMutationCompute): maintain the aggregates
+	// the manifest declares over this table — same pass dynamic.Service runs on
+	// its CRUD — inside the transaction, so the parent rollup commits with the
+	// child write instead of drifting (ops#1403). Deletes DO run it, with the
+	// pre-delete row: the row is already gone from `work`, so the recomputed
+	// aggregate excludes it and a removed child correctly lowers the parent.
+	if inv.mutationCompute != nil {
+		computeRow := after
+		if action == "deleted" {
+			computeRow = before
+		}
+		if cErr := inv.mutationCompute(execCtx, work, orgID, req.Table, action, computeRow); cErr != nil {
+			rollback()
+			return fail("db_error", cErr.Error())
+		}
+	}
+
 	if err := work.Commit().Error; err != nil {
 		return fail("db_error", err.Error())
 	}

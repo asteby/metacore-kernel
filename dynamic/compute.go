@@ -311,6 +311,11 @@ func RegisterComputeHooks(reg *HookRegistry, m manifest.Manifest) {
 	}
 	b := BuildComputeBindings(m)
 
+	// Publish the bindings on the registry so host write paths that bypass
+	// dynamic.Service (the wasm data_mutate/data_batch tier, a legacy host CRUD
+	// path) can recompute the very same rollups via RecomputeRollupsForChild.
+	reg.indexRollupBindings(b.rollupsByChild)
+
 	// --- Tier-1: rollups, fired on the child model ---
 	for child, bindings := range b.rollupsByChild {
 		bindings := bindings // capture
@@ -458,4 +463,66 @@ func loadRowValues(ctx context.Context, db *gorm.DB, table, id string) map[strin
 // generator's %s from interpolating an unquoted token.
 func quoteIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+// indexRollupBindings merges one manifest's rollup bindings into the registry's
+// child-keyed index. Called from RegisterComputeHooks, which the host already
+// de-dupes per addon; re-registering the same addon would duplicate entries the
+// same way it duplicates the CRUD hooks themselves.
+func (r *HookRegistry) indexRollupBindings(byChild map[string][]rollupBinding) {
+	if len(byChild) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.rollupsByChild == nil {
+		r.rollupsByChild = make(map[string][]rollupBinding, len(byChild))
+	}
+	for child, bindings := range byChild {
+		r.rollupsByChild[child] = append(r.rollupsByChild[child], bindings...)
+	}
+}
+
+// HasRollupsForChild reports whether any Tier-1 rollup is declared over
+// `childModel`. Hosts use it to skip the map lookup + row projection on the hot
+// path of a model that feeds no aggregate.
+func (r *HookRegistry) HasRollupsForChild(childModel string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.rollupsByChild[childModel]) > 0
+}
+
+// RecomputeRollupsForChild recomputes every Tier-1 rollup declared over
+// `childModel` for the parent row(s) referenced by `row`, using `db` (pass the
+// open transaction so the recompute sees — and commits with — the child write
+// that triggered it).
+//
+// It is the SAME work the AfterCreate/AfterUpdate hooks do, exposed for host
+// write paths that never reach dynamic.Service: the wasm data_mutate /
+// data_batch tier and any legacy host CRUD path. Without it those routes commit
+// a child change while the parent aggregate silently keeps its old value.
+//
+// `row` is the post-write child row for a create/update and the pre-delete row
+// for a delete (it is only read to resolve the parent FK). For a delete, call
+// it AFTER the row is gone from `db` so the aggregate excludes it. A row that
+// carries no value for a binding's FK skips that binding. Reparenting (an
+// update that CHANGES the FK) recomputes only the new parent, matching the
+// AfterUpdate hook.
+func (r *HookRegistry) RecomputeRollupsForChild(ctx context.Context, db *gorm.DB, orgID uuid.UUID, childModel string, row map[string]any) error {
+	if r == nil || db == nil || len(row) == 0 {
+		return nil
+	}
+	r.mu.RLock()
+	bindings := r.rollupsByChild[childModel]
+	r.mu.RUnlock()
+	for _, bd := range bindings {
+		parentID := stringField(row, bd.fk)
+		if parentID == "" {
+			continue
+		}
+		if err := recomputeRollups(ctx, db, orgID, bd, parentID, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }

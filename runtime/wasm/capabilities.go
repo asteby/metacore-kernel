@@ -77,6 +77,11 @@ type invocation struct {
 	// or update, inside the transaction, against the post-mutation row keyed
 	// by LOGICAL table. non-nil error → rollback + constraint_violation.
 	mutationGuard func(ctx context.Context, logicalTable string, row map[string]any) error
+	// mutationCompute is the embedder-injected declarative COMPUTE pass
+	// (Host.WithMutationCompute): after every data_mutate/data_batch create,
+	// update AND delete it maintains the manifest-declared aggregates over the
+	// mutated table inside the same transaction. nil = no compute on this tier.
+	mutationCompute MutationComputeFn
 	// approvalRequester is the embedder-injected dynamic.Service.RequestApproval
 	// (Host.WithApprovals) the `approval_request` import calls. nil = the
 	// import answers `approvals_unavailable`.
