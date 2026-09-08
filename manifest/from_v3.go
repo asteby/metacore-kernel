@@ -120,6 +120,7 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.Webhooks = mapWebhooks(m.Webhooks)
 	out.EdgeDevices = mapEdgeDevices(m.EdgeDevices)
 	out.Backfills = mapBackfills(m.Backfills)
+	out.ProvidesOptions = mapProvidesOptions(m.ProvidesOptions, m.Models)
 	out.Documents = mapDocuments(m)
 	if m.Contributions != nil {
 		out.AgentCapabilities = m.Contributions.AgentCapabilities
@@ -235,6 +236,35 @@ func mapBackfills(in []v3.Backfill) []BackfillDef {
 			Do:   b.Do,
 			Arg:  b.Arg,
 			With: b.With,
+		})
+	}
+	return out
+}
+
+// mapProvidesOptions folds the v3 published option catalogs into their host
+// projection, resolving each declaration's model key to the physical table
+// from models[]. A catalog naming a model the manifest does not declare
+// cannot reach here (validation rejects it); should it ever do so, Table stays
+// empty and the host skips the catalog rather than guessing a table name.
+func mapProvidesOptions(in []v3.OptionCatalog, models []v3.Model) []OptionCatalogDef {
+	if len(in) == 0 {
+		return nil
+	}
+	tables := make(map[string]string, len(models))
+	for _, m := range models {
+		tables[m.Key] = m.Table
+	}
+	out := make([]OptionCatalogDef, 0, len(in))
+	for _, c := range in {
+		out = append(out, OptionCatalogDef{
+			Key:     c.Key,
+			Model:   c.Model,
+			Table:   tables[c.Model],
+			Value:   c.Value,
+			Label:   c.Label,
+			Where:   c.Where,
+			OrderBy: c.OrderBy,
+			Extras:  append([]string(nil), c.Extras...),
 		})
 	}
 	return out

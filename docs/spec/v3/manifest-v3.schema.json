@@ -129,6 +129,13 @@
         "$ref": "#/$defs/EdgeDevice"
       }
     },
+    "provides_options": {
+      "type": "array",
+      "description": "Publishes models of this addon as reusable option CATALOGS. Any other addon feeds a select from one by naming its 'key' in a column's or action field's options_source, with no host code and no hardcoded options list. The host scopes every catalog to the invoking org and serves it only while the owning addon is installed and enabled there.",
+      "items": {
+        "$ref": "#/$defs/OptionCatalog"
+      }
+    },
     "signature": {
       "$ref": "#/$defs/Signature"
     }
@@ -868,7 +875,7 @@
         "options_source": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
-          "description": "DYNAMIC options provider key (e.g. 'registered_models', 'installed_addons'). Instead of a hardcoded 'options' list, the column declares WHERE its choices come from: a provider the HOST registers and resolves at metadata-serve time, materialising the localized value/label list onto the served ColumnDef.options / FieldDef.options. Open enum: the kernel only passes the key through; unknown keys simply yield no options on hosts that don't register them. Use 'ref' for a row-level relation picker, 'options' for a hardcoded enum, and 'options_source' for host-computed lists. Pure UI metadata; ignored by the DDL plane."
+          "description": "DYNAMIC options provider key (e.g. 'registered_models', 'installed_addons'). Instead of a hardcoded 'options' list, the column declares WHERE its choices come from: a provider the HOST registers and resolves at metadata-serve time, materialising the localized value/label list onto the served ColumnDef.options / FieldDef.options. Open enum: the kernel only passes the key through; unknown keys simply yield no options on hosts that don't register them. Use 'ref' for a row-level relation picker, 'options' for a hardcoded enum, and 'options_source' for host-computed lists. Pure UI metadata; ignored by the DDL plane. A host may also resolve the key against a CATALOG another installed addon published through its top-level provides_options[], so a consumer can feed this select from a producer addon's model without either side writing host code."
         },
         "readonly": {
           "type": "boolean",
@@ -2275,7 +2282,7 @@
         "options_source": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
-          "description": "DYNAMIC options provider key for this action field (e.g. 'connector_repos', 'installed_addons'). Instead of a hardcoded 'options' list, the field declares WHERE its choices come from: a provider the HOST registers and resolves at metadata-serve time, materialising the localized value/label list onto the served FieldDef.options. Open enum: the kernel only passes the key through; unknown keys simply yield no options on hosts that don't register them. Use 'ref' for a relation picker, 'options' for a hardcoded enum, and 'options_source' for host-computed lists. Pure UI metadata."
+          "description": "DYNAMIC options provider key for this action field (e.g. 'connector_repos', 'installed_addons'). Instead of a hardcoded 'options' list, the field declares WHERE its choices come from: a provider the HOST registers and resolves at metadata-serve time, materialising the localized value/label list onto the served FieldDef.options. Open enum: the kernel only passes the key through; unknown keys simply yield no options on hosts that don't register them. Use 'ref' for a relation picker, 'options' for a hardcoded enum, and 'options_source' for host-computed lists. Pure UI metadata. A host may also resolve the key against a CATALOG another installed addon published through its top-level provides_options[], so a consumer can feed this select from a producer addon's model without either side writing host code."
         },
         "validation": {
           "$ref": "#/$defs/FieldValidation"
@@ -2993,6 +3000,56 @@
         "test_export": {
           "type": "string",
           "description": "Names a WASM export the host invokes to validate the credentials (a cheap read-only call to the third-party API). Powers the config UI's 'test connection' button; returns {success,data:{ok,message}}."
+        }
+      }
+    },
+    "OptionCatalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "model",
+        "value",
+        "label"
+      ],
+      "description": "One published option catalog: a model of this addon exposed as a named {value,label} list any other addon may consume through options_source. Expressive power is deliberately capped at the guest's own data_query contract (equality-only 'where', one order column, a host row cap).",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Public catalog name a consumer puts in options_source (e.g. 'payment_methods'). GLOBAL across the installed set, not namespaced by addon. Cross-addon collisions are resolved by the host: a host-compiled provider wins over any declared catalog, and among declared catalogs the alphabetically first owning addon key wins."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Key of one of this manifest's models[] the options are read from (e.g. 'POSPaymentMethod')."
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Column supplying each option's 'value' — the string the consumer persists. Prefer a stable business code over a uuid."
+        },
+        "label": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Column supplying each option's human 'label'."
+        },
+        "where": {
+          "type": "object",
+          "description": "Optional equality-only predicates narrowing the published rows (e.g. {\"is_active\": true}). Values are bound by the host; column names must exist on the model."
+        },
+        "order_by": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Column the options are sorted by, ascending; the host appends 'value' as a tiebreaker. Omitted = ordered by label."
+        },
+        "extras": {
+          "type": "array",
+          "description": "Additional columns that travel with each option under a nested 'extras' object, so a consumer can act on the catalog without querying a table it does not own. Nested rather than flattened so a column named 'value' or 'label' cannot shadow the required fields.",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          }
         }
       }
     },

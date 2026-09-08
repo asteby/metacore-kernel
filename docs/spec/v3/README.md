@@ -260,6 +260,7 @@ release added:
 | v0.19.0 | `metadata.i18n` — marketplace catalog localizations keyed by locale (`{ "es": { name, description, features }, … }`). Distinct from the top-level `i18n` block (app string-bundle pointers); the flat `metadata.name`/`description`/`features` are the per-field fallback. |
 | v0.20.0 | `metadata.countries[]` — ISO 3166-1 alpha-2 codes the addon targets (empty = global). The hub filters the catalog by the user's country. |
 | v0.111.0 | `contributions.public_routes[]` — org-scoped, token-addressed public views of a record served by the host without a login (see [Public routes](#public-routes)). New `PublicRoute` type; `enabled_when` record predicates parsed by `v3.ParseRecordExpr`. |
+| v0.117.0 | Top-level `provides_options[]` — publish a model as a reusable option **catalog** any other addon consumes through `options_source` (see [Published option catalogs](#published-option-catalogs)). New `OptionCatalog` type. |
 
 `metadata.i18n` and `metadata.countries` slot into the `metadata` block:
 
@@ -333,6 +334,78 @@ not hold for the record.
 
 Column-level checks run for models the addon owns; for extended models they are
 deferred to the host at serve time (their columns live in another manifest).
+
+
+## Published option catalogs
+
+`provides_options[]` is the **producer** half of the `options_source`
+contract. The consumer half already existed: a column or an action field names
+a provider key and the host materialises the localized `{value,label}` list at
+metadata-serve time.
+
+```jsonc
+"columns": [
+  { "name": "payment_method", "type": "text", "options_source": "payment_methods" }
+]
+```
+
+What was missing was a way to *publish* such a list without a pull request
+against the host: every provider was a Go function compiled into it. An addon
+now declares one of its own models as a catalog:
+
+```jsonc
+"provides_options": [
+  {
+    "key":      "payment_methods",
+    "model":    "POSPaymentMethod",
+    "value":    "code",
+    "label":    "name",
+    "where":    { "is_active": true },
+    "order_by": "sort_order",
+    "extras":   ["is_cash", "sat_payment_form"]
+  }
+]
+```
+
+and any other installed addon consumes it by key. Neither side knows about the
+other: the consumer never queries the producer's table and never learns its
+schema.
+
+**What the host guarantees.** The query is always scoped to the invoking org;
+soft-deleted rows are skipped; the catalog is served only while the owning
+addon is installed and **enabled** for that org, so a consumer's select is
+empty — never wrong — when the producer is absent. The row count is capped and
+the ordering is total (`order_by`, then `value`), so the list is deterministic.
+
+**Expressive power is capped on purpose.** `where` is equality-only and there
+is a single ascending order column — the same contract as the guest's own
+`data_query` import (see [`docs/wasm-abi.md`](../../wasm-abi.md) §15.2). An
+addon must not be able to publish a catalog it could not have read itself.
+
+**`extras`.** Additional columns travel with each option under a nested
+`extras` object:
+
+```jsonc
+{ "value": "cash", "label": "Efectivo",
+  "extras": { "is_cash": true, "sat_payment_form": "01" } }
+```
+
+This is what lets a consumer act on the catalog without a second round-trip
+into a table it does not own — a fiscal addon reads the SAT configuration of
+the selected payment method straight off the option it was handed. `extras` is
+nested rather than flattened so a column named `value` or `label` can never
+shadow the two fields the SDK requires.
+
+**Key collisions.** `key` is global across the installed set — that is the
+point, a fiscal addon consumes `payment_methods` without naming the POS — so
+two addons may declare the same one. Validation cannot catch it: it only ever
+sees one manifest. The tie-break therefore lives in the host and is fixed:
+
+1. a provider **compiled into the host** always wins over a declared catalog;
+2. among declared catalogs, the **alphabetically first owning addon key** wins.
+
+Deterministic and independent of install order. The host logs the shadowed
+catalog so the conflict is discoverable rather than silent.
 
 ## Validating a manifest
 
