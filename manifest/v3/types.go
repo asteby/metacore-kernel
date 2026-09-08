@@ -76,6 +76,23 @@ type Manifest struct {
 	// Commands through its own action handlers. Empty = no edge devices.
 	EdgeDevices []EdgeDevice `json:"edge_devices,omitempty"`
 
+	// Backfills declares one-shot materialization sweeps the host runs after
+	// install and after every version upgrade, so an addon whose data is
+	// maintained incrementally (an event subscription that refreshes a
+	// projection when a row changes) also covers the rows that already
+	// existed before it was installed.
+	//
+	// The host — not the guest — enumerates the work: ONE org-scoped
+	// `SELECT DISTINCT <source.distinct> FROM <source.table>` produces the
+	// key set, and `do` is dispatched once per key with its own fresh
+	// invocation and its own deadline. That inversion is the whole point.
+	// A guest cannot enumerate its own backlog: the data_query import is
+	// capped at 200 rows with equality-only filters and no offset or cursor
+	// (docs/wasm-abi.md §15.2), so a "regenerate everything" export can
+	// neither see past the first page nor finish inside one wasm deadline.
+	// Empty = no backfill (the pre-primitive default).
+	Backfills []Backfill `json:"backfills,omitempty"`
+
 	Signature *Signature `json:"signature,omitempty"`
 }
 
@@ -119,6 +136,59 @@ type Schedule struct {
 	Every string `json:"every"`
 	// Do is the handler reference dispatched on each tick.
 	Do string `json:"do"`
+}
+
+// BackfillOn enumerates the lifecycle moments a Backfill may be triggered at.
+// An empty Backfill.On means both — an addon declaring a backfill wants its
+// projection complete after an install AND after every upgrade, which is the
+// only combination that keeps a long-installed org from staying stale forever.
+const (
+	BackfillOnInstall = "install"
+	BackfillOnUpgrade = "upgrade"
+)
+
+// Backfill is one declarative materialization sweep. The host enumerates
+// Source, then dispatches Do once per distinct value with the payload
+//
+//	{"backfill": "<key>", "<arg>": <value>, ...with}
+//
+// Each dispatch is an independent invocation, so per-key work stays inside the
+// normal handler deadline and a failure isolates to that key. The sweep is
+// expected to be idempotent: the host makes no ordering promise, may re-run a
+// sweep that was interrupted, and dispatches at-least-once.
+type Backfill struct {
+	// Key identifies the backfill within the addon (e.g. "customer_statements").
+	Key string `json:"key"`
+	// On selects the triggering transitions: "install" and/or "upgrade".
+	// Empty means both.
+	On []string `json:"on,omitempty"`
+	// Source is the row set the key list is drawn from.
+	Source BackfillSource `json:"source"`
+	// Do is the handler reference dispatched per key, same reference grammar
+	// as Schedule.Do ("wasm:<export>" | "webhook:<key>" | "compiled:<fn>").
+	Do string `json:"do"`
+	// Arg names the payload field each distinct value is passed as. Defaults
+	// to "id" when empty.
+	Arg string `json:"arg,omitempty"`
+	// With carries constant fields merged into every dispatched payload — how
+	// one export serves several sweeps (e.g. {"party_type": "customer"} and
+	// {"party_type": "supplier"} against the same handler). Keys colliding
+	// with Arg or "backfill" are rejected at validation.
+	With map[string]any `json:"with,omitempty"`
+}
+
+// BackfillSource names the rows a Backfill enumerates. The host always scopes
+// the query to the invoking org and skips soft-deleted rows; Where adds
+// equality-only predicates on top, mirroring the data_query contract so a
+// declaration cannot express a filter the guest could not have expressed
+// itself.
+type BackfillSource struct {
+	// Table is the logical, unqualified table the keys are read from.
+	Table string `json:"table"`
+	// Distinct is the column whose distinct non-null values form the key set.
+	Distinct string `json:"distinct"`
+	// Where narrows the source with equality-only predicates. Optional.
+	Where map[string]any `json:"where,omitempty"`
 }
 
 // InboundWebhook declares a webhook route the host mounts under the addon+org

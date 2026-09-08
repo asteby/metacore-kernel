@@ -115,6 +115,13 @@
         "$ref": "#/$defs/InboundWebhook"
       }
     },
+    "backfills": {
+      "type": "array",
+      "description": "One-shot materialization sweeps the host runs after install and after every upgrade, so an incrementally-maintained projection also covers rows that predate the install. The host enumerates the distinct source keys with one org-scoped query and dispatches 'do' once per key, each with its own deadline.",
+      "items": {
+        "$ref": "#/$defs/Backfill"
+      }
+    },
     "edge_devices": {
       "type": "array",
       "description": "Local-network hardware (a cash recycler, a card terminal) this addon integrates with through a persistent channel a store-local agent maintains. The host's edge gateway terminates the channel, validates events against the declared list and dispatches them to a wasm export, and relays commands the addon issues to the paired device.",
@@ -2986,6 +2993,76 @@
         "test_export": {
           "type": "string",
           "description": "Names a WASM export the host invokes to validate the credentials (a cheap read-only call to the third-party API). Powers the config UI's 'test connection' button; returns {success,data:{ok,message}}."
+        }
+      }
+    },
+    "Backfill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "source",
+        "do"
+      ],
+      "description": "One declarative materialization sweep. The host reads the distinct values of source.distinct and dispatches 'do' once per value, passing it as the 'arg' field alongside the constants in 'with'. Dispatch is at-least-once and unordered, so the handler must be idempotent.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Backfill identifier within the addon (e.g. 'customer_statements')."
+        },
+        "on": {
+          "type": "array",
+          "description": "Transitions that trigger the sweep. Omitted means both.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "install",
+              "upgrade"
+            ]
+          }
+        },
+        "source": {
+          "$ref": "#/$defs/BackfillSource"
+        },
+        "do": {
+          "type": "string",
+          "pattern": "^(wasm|webhook|compiled):.+$",
+          "description": "Handler reference dispatched once per enumerated key: 'wasm:<export>' | 'webhook:<key>' | 'compiled:<fn>'."
+        },
+        "arg": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Payload field the enumerated value is passed as. Defaults to 'id'."
+        },
+        "with": {
+          "type": "object",
+          "description": "Constant fields merged into every dispatched payload, so one handler can serve several sweeps. May not set 'arg' or the reserved 'backfill' key."
+        }
+      }
+    },
+    "BackfillSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "table",
+        "distinct"
+      ],
+      "description": "The rows a backfill enumerates. The host always scopes to the invoking org and skips soft-deleted rows; 'where' adds equality-only predicates on top, mirroring the data_query contract.",
+      "properties": {
+        "table": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Logical, unqualified table the keys are read from."
+        },
+        "distinct": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Column whose distinct non-null values form the key set."
+        },
+        "where": {
+          "type": "object",
+          "description": "Optional equality-only predicates narrowing the source."
         }
       }
     },
