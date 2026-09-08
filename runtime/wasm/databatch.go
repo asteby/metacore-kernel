@@ -181,6 +181,20 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 				return fail("constraint_violation", fmt.Sprintf("mutations[%d]: %s", i, gErr.Error()))
 			}
 		}
+		// Declarative compute (Host.WithMutationCompute): maintain the
+		// manifest-declared aggregates over the mutated table in the shared
+		// transaction. Runs for deletes too, with the pre-delete row (see
+		// data_mutate). A failure rolls the ENTIRE batch back.
+		if inv.mutationCompute != nil {
+			computeRow := res.after
+			if res.action == "deleted" {
+				computeRow = res.before
+			}
+			if cErr := inv.mutationCompute(execCtx, work, p.req.Table, res.action, computeRow); cErr != nil {
+				_ = work.Rollback()
+				return fail("db_error", fmt.Sprintf("mutations[%d]: %s", i, cErr.Error()))
+			}
+		}
 		results[i] = res
 	}
 

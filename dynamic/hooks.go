@@ -54,6 +54,13 @@ type HookRegistry struct {
 	// formulaInvoker is the host-wired backend for Tier-3 (wasm) formulas.
 	// nil = Tier-3 formulas are skipped (declarative-only deployments).
 	formulaInvoker FormulaInvoker
+	// rollupsByChild indexes the Tier-1 rollup bindings registered through
+	// RegisterComputeHooks, keyed by CHILD model. The CRUD hooks close over
+	// their own copy; this index exists so a host write path that does NOT go
+	// through dynamic.Service (the wasm data_mutate/data_batch tier, a legacy
+	// host CRUD path) can still recompute the same rollups by calling
+	// RecomputeRollupsForChild. nil until the first RegisterComputeHooks call.
+	rollupsByChild map[string][]rollupBinding
 }
 
 // SetFormulaInvoker wires the Tier-3 formula backend (normally a thin adapter

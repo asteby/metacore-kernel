@@ -66,6 +66,7 @@ type Host struct {
 	sequenceNext  func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)
 	routingTable  RoutingTableFn
 	mutationGuard func(ctx context.Context, logicalTable string, row map[string]any) error
+	mutationCompute MutationComputeFn
 	// approvalRequester is the embedder-injected dynamic.Service.RequestApproval
 	// the `approval_request` import calls (Host.WithApprovals). nil = import
 	// answers `approvals_unavailable`.
@@ -209,6 +210,33 @@ func (h *Host) WithRoutingTable(f RoutingTableFn) *Host {
 // pre-guards behaviour).
 func (h *Host) WithMutationGuard(g func(ctx context.Context, logicalTable string, row map[string]any) error) *Host {
 	h.mutationGuard = g
+	return h
+}
+
+// MutationComputeFn is the embedder's declarative-compute pass for the wasm
+// write tier. It receives the OPEN TRANSACTION, the LOGICAL table and the row
+// the mutation settled on, and is expected to maintain whatever the manifest
+// declares over that table — in practice dynamic.HookRegistry's
+// RecomputeRollupsForChild. Returning an error rolls the mutation back.
+type MutationComputeFn func(ctx context.Context, tx *gorm.DB, logicalTable, action string, row map[string]any) error
+
+// WithMutationCompute injects the declarative COMPUTE pass for the
+// `metacore_host.data_mutate` / `data_batch` imports — the wasm-tier twin of
+// the compute hooks dynamic.Service fires on its own CRUD.
+//
+// Without it a guest write is a blind spot for the compute engine: the child
+// row commits and every Tier-1 rollup declared over it keeps a stale value
+// (asteby-hq/ops#1403 — a customer's balance_due never dropped when a payment
+// lowered the invoice's amount_due, so paying never freed credit). It runs
+// after the mutation is applied and after the guard, still INSIDE the
+// transaction, so the recompute reads the new child state and commits with it.
+//
+// Unlike the guard it also runs for DELETES, with the pre-delete row: an
+// aggregate must fall when a child disappears, and the row is passed only so
+// the parent FK can be resolved (the row is already gone from `tx`, so the
+// aggregate excludes it naturally). When unset, no compute runs.
+func (h *Host) WithMutationCompute(f MutationComputeFn) *Host {
+	h.mutationCompute = f
 	return h
 }
 
@@ -417,6 +445,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		sequenceNext:      h.sequenceNext,
 		routingTable:      h.routingTable,
 		mutationGuard:     h.mutationGuard,
+		mutationCompute:   h.mutationCompute,
 		approvalRequester: h.approvalRequester,
 		connectors:        h.connectors,
 		logger:            h.logger,
