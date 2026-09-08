@@ -1334,6 +1334,19 @@ func deriveBackend(m *v3.Manifest) *BackendSpec {
 		}
 	}
 
+	// Backfill handlers: a Backfill.Do carrying the "wasm:" prefix is invoked
+	// once per enumerated key by the host's backfill runner, so it must be in
+	// the whitelist the runtime dispatches against — same reasoning as an edge
+	// device event's Do above. In the common case the target is an export the
+	// contributions loop already added (the addon points its sweep at the very
+	// subscription handler that keeps the projection current), and `add` is
+	// idempotent, so this only matters for a dedicated backfill-only export.
+	for _, b := range m.Backfills {
+		if prefix, fn, found := strings.Cut(b.Do, ":"); found && prefix == "wasm" {
+			add(fn)
+		}
+	}
+
 	// Lifecycle hooks declared with wasm function names also contribute
 	// to the export list so the wasm host can resolve them at dispatch time.
 	if m.Lifecycle != nil {
