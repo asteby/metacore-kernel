@@ -93,6 +93,26 @@ type Manifest struct {
 	// Empty = no backfill (the pre-primitive default).
 	Backfills []Backfill `json:"backfills,omitempty"`
 
+	// ProvidesOptions PUBLISHES one of this addon's models as a reusable
+	// CATALOG: any other addon can then feed a select from it by naming the
+	// catalog's Key in a column's or action field's `options_source`, with no
+	// code in the host and no hardcoded `options` list in the consumer.
+	//
+	// It is the PRODUCER half of the options_source contract. Until now the
+	// consumer half existed (Column.OptionsSource / ActionField.OptionsSource
+	// name a provider key the host resolves) but every provider was a Go
+	// function compiled into the host, so publishing a new catalog — payment
+	// methods, warehouses, cost centres, fiscal series — meant a pull request
+	// against the host. This block moves that declaration into the manifest:
+	// the host implements ONE generic provider that resolves any declaration,
+	// and no future catalog touches host code again.
+	//
+	// The host always scopes the query to the invoking org and serves a
+	// catalog only while its owning addon is installed and enabled for that
+	// org, so a consumer's select is empty — never wrong — when the producer
+	// is absent. Empty = the addon publishes no catalogs (the default).
+	ProvidesOptions []OptionCatalog `json:"provides_options,omitempty"`
+
 	Signature *Signature `json:"signature,omitempty"`
 }
 
@@ -189,6 +209,65 @@ type BackfillSource struct {
 	Distinct string `json:"distinct"`
 	// Where narrows the source with equality-only predicates. Optional.
 	Where map[string]any `json:"where,omitempty"`
+}
+
+// OptionCatalog publishes one of the addon's models as a named, reusable
+// option list. A consumer addon references it by Key from
+// Column.OptionsSource / ActionField.OptionsSource; the host materializes
+// the rows into the served `{value,label}` option shape at metadata time, so
+// the consumer never queries the producer's table and never learns its
+// schema.
+//
+// The declaration is deliberately the SAME expressive power as the guest's
+// own data_query import (docs/wasm-abi.md §15.2): equality-only Where, one
+// order column, a row cap. An addon must not be able to publish a catalog it
+// could not have read itself.
+//
+// Key collisions are unresolvable here — validation only ever sees ONE
+// manifest, and two addons may legitimately both declare "payment_methods".
+// The rule therefore lives in the host and is documented in
+// docs/manifest-v3.md: a provider compiled into the host always wins over a
+// declared catalog, and among declared catalogs the owning addon key that
+// sorts first alphabetically wins. Deterministic, install-order independent,
+// and logged by the host so the shadowed catalog is discoverable.
+type OptionCatalog struct {
+	// Key is the catalog's public name — the exact string a consuming addon
+	// puts in `options_source`. It is GLOBAL across the installed set, not
+	// namespaced by addon: that is the point (a fiscal addon consumes
+	// "payment_methods" without naming the POS). Same identifier grammar as
+	// every other manifest key: ^[a-z][a-z0-9_]*$.
+	Key string `json:"key"`
+	// Model is the Key of one of THIS manifest's models[] (e.g.
+	// "POSPaymentMethod"). Validation rejects a model the manifest does not
+	// declare, and the host projection resolves it to the physical table so
+	// the host never has to re-derive it.
+	Model string `json:"model"`
+	// Value names the column supplying each option's `value` — the string the
+	// consumer actually persists. Prefer a stable business code over a uuid:
+	// it is what a downstream mapping (a SAT payment-form table, a bank
+	// channel) will be keyed by.
+	Value string `json:"value"`
+	// Label names the column supplying each option's human `label`.
+	Label string `json:"label"`
+	// Where narrows the published rows with equality-only predicates (e.g.
+	// {"is_active": true}). Values are always bound by the host; column names
+	// are validated against the model. Optional.
+	Where map[string]any `json:"where,omitempty"`
+	// OrderBy names the column the options are sorted by, ascending. The host
+	// appends Value as a tiebreaker so the list is fully deterministic.
+	// Empty = ordered by Label. Optional.
+	OrderBy string `json:"order_by,omitempty"`
+	// Extras names additional columns that travel WITH each option, served
+	// under a nested "extras" object:
+	//
+	//	{"value":"cash","label":"Efectivo","extras":{"is_cash":true,"sat_code":"01"}}
+	//
+	// This is what lets a consumer act on the catalog without a second
+	// round-trip into a table it does not own — a fiscal addon reads the SAT
+	// configuration of the selected payment method straight off the option it
+	// was given. Nested rather than flattened so a column called "label" or
+	// "value" can never shadow the two fields the SDK requires. Optional.
+	Extras []string `json:"extras,omitempty"`
 }
 
 // InboundWebhook declares a webhook route the host mounts under the addon+org

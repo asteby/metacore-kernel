@@ -9,6 +9,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`provides_options[]`: catálogos de opciones declarativos.** Un addon
+  PUBLICA uno de sus modelos como catálogo reutilizable y cualquier otro
+  addon lo consume nombrando su `key` en el `options_source` de una columna o
+  de un campo de acción — sin código en el host y sin `options` hardcodeadas
+  en el consumidor. Era la mitad que faltaba del contrato: la mitad
+  consumidora ya existía, pero todos los providers eran funciones Go
+  compiladas en el host, así que publicar un catálogo nuevo (formas de pago,
+  almacenes, centros de costo, series fiscales) exigía un PR contra el host.
+  La declaración lleva `key` / `model` / `value` / `label`, un `where`
+  equality-only, un `order_by` y `extras[]` (columnas extra que viajan con
+  cada opción bajo un objeto anidado `extras`, para que el consumidor actúe
+  sobre el catálogo sin una segunda consulta a una tabla que no es suya). El
+  poder expresivo está topado a propósito al del import `data_query` del
+  propio guest: un addon no debe poder publicar un catálogo que no habría
+  podido leer él mismo. La validación exige que `model` sea un modelo del
+  manifest y que toda columna nombrada exista; las colisiones de `key` entre
+  addons no son resolubles aquí (la validación sólo ve un manifest) y se
+  desempatan en el host, regla documentada en `docs/spec/v3/README.md`.
+  Proyección legacy `manifest.OptionCatalogDef`, que además resuelve el
+  `model` a su tabla física.
+
 - **`dynamic.Backfill`: batched recompute of the declarative compute
   engine.** Rows written straight into the tables — a raw/ETL import, a
   migration ledger — bypass the CRUD hooks `RegisterComputeHooks` wires, so

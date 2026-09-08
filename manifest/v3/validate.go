@@ -763,6 +763,73 @@ func validateDoRef(do string) string {
 	return ""
 }
 
+// validateProvidesOptions enforces the invariants of the published option
+// catalogs the JSON schema cannot express: keys are unique WITHIN the manifest
+// (cross-addon collisions are the host's to resolve — see OptionCatalog.Key),
+// the referenced model belongs to this manifest, and every column the
+// declaration names (value / label / order_by / extras / the where keys)
+// actually exists on that model. A catalog whose columns are wrong would fail
+// at metadata-serving time with a SQL error on a request that has nothing to
+// do with the producer addon, so it is rejected at publish time instead.
+func validateProvidesOptions(m *Manifest, colsByModel map[string]map[string]struct{}) []string {
+	if len(m.ProvidesOptions) == 0 {
+		return nil
+	}
+	var errs []string
+	seen := make(map[string]struct{}, len(m.ProvidesOptions))
+	for i, pc := range m.ProvidesOptions {
+		w := fmt.Sprintf("provides_options[%d]", i)
+		if pc.Key == "" {
+			errs = append(errs, w+".key is empty")
+		} else {
+			if _, dup := seen[pc.Key]; dup {
+				errs = append(errs, fmt.Sprintf("%s.key %q is duplicated", w, pc.Key))
+			}
+			seen[pc.Key] = struct{}{}
+		}
+		cols, ok := colsByModel[pc.Model]
+		if !ok {
+			errs = append(errs, fmt.Sprintf("%s.model %q is not a model of this addon", w, pc.Model))
+			// Without the column set nothing below can be checked.
+			continue
+		}
+		requireCol := func(field, name string) {
+			if name == "" {
+				errs = append(errs, fmt.Sprintf("%s.%s is empty", w, field))
+				return
+			}
+			if _, ok := cols[name]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.%s %q is not a column of model %q", w, field, name, pc.Model))
+			}
+		}
+		requireCol("value", pc.Value)
+		requireCol("label", pc.Label)
+		if pc.OrderBy != "" {
+			if _, ok := cols[pc.OrderBy]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.order_by %q is not a column of model %q", w, pc.OrderBy, pc.Model))
+			}
+		}
+		for ei, ex := range pc.Extras {
+			if _, ok := cols[ex]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.extras[%d] %q is not a column of model %q", w, ei, ex, pc.Model))
+			}
+		}
+		// Sorted so a manifest with several bad where-columns reports them in
+		// a stable order (map iteration is random).
+		whereCols := make([]string, 0, len(pc.Where))
+		for col := range pc.Where {
+			whereCols = append(whereCols, col)
+		}
+		sort.Strings(whereCols)
+		for _, col := range whereCols {
+			if _, ok := cols[col]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.where names %q, which is not a column of model %q", w, col, pc.Model))
+			}
+		}
+	}
+	return errs
+}
+
 // validatePipelineRuntime enforces the cross-field invariants of the addon-level
 // pipeline-runtime primitives (connectors / schedules / webhooks / edge
 // devices) that the JSON schema cannot express: connector keys are unique; a
@@ -1318,6 +1385,9 @@ func Validate(raw []byte) error {
 
 	// Addon-level pipeline-runtime primitives (connectors / schedules / webhooks).
 	errs = append(errs, validatePipelineRuntime(&m)...)
+
+	// Published option catalogs (provides_options[]).
+	errs = append(errs, validateProvidesOptions(&m, colsByModel)...)
 
 	if m.Contributions != nil {
 		for ai, a := range m.Contributions.Actions {

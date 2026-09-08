@@ -148,6 +148,13 @@ type Manifest struct {
 	// the addon may send. Empty = the addon drives no edge hardware.
 	EdgeDevices []EdgeDeviceDef `json:"edge_devices,omitempty"`
 
+	// ProvidesOptions is the host projection of the v3 provides_options block:
+	// the models this addon publishes as reusable option catalogs. The host's
+	// generic dynamic-options provider reads these off every installed addon
+	// and resolves any consumer's options_source key against them, so a new
+	// catalog never requires host code. See OptionCatalogDef.
+	ProvidesOptions []OptionCatalogDef `json:"provides_options,omitempty"`
+
 	// Backfills is the host projection of the v3 Backfills block: one-shot
 	// materialization sweeps the host runs at install/upgrade, dispatching
 	// Do once per distinct source key. See v3.Backfill.
@@ -244,6 +251,28 @@ type BackfillDef struct {
 	Do     string            `json:"do"`
 	Arg    string            `json:"arg,omitempty"`
 	With   map[string]any    `json:"with,omitempty"`
+}
+
+// OptionCatalogDef is the host/runtime projection of a v3 OptionCatalog: one
+// model published as a named, reusable {value,label} option list. Unlike the
+// v3 shape it carries the resolved physical Table alongside the Model key —
+// the projection is the only place that still sees models[], so resolving it
+// here spares the host from re-deriving it on every metadata request.
+//
+// The host serves a catalog ONLY while its owning addon is installed and
+// enabled for the requesting org, always scopes the query to that org, skips
+// soft-deleted rows and caps the row count. Key collisions across addons are
+// broken by the host (compiled provider > declared catalog; then the
+// alphabetically first owning addon key).
+type OptionCatalogDef struct {
+	Key     string         `json:"key"`
+	Model   string         `json:"model"`
+	Table   string         `json:"table"`
+	Value   string         `json:"value"`
+	Label   string         `json:"label"`
+	Where   map[string]any `json:"where,omitempty"`
+	OrderBy string         `json:"order_by,omitempty"`
+	Extras  []string       `json:"extras,omitempty"`
 }
 
 // BackfillSourceDef is the host projection of v3.BackfillSource.
