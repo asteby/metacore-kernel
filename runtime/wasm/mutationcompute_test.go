@@ -38,7 +38,7 @@ func TestExecuteDataMutate_ComputeRunsOnUpdate(t *testing.T) {
 	var gotTable, gotAction string
 	var gotRow map[string]any
 	var gotTx *gorm.DB
-	inv.mutationCompute = func(_ context.Context, tx *gorm.DB, table, action string, row map[string]any) error {
+	inv.mutationCompute = func(_ context.Context, tx *gorm.DB, _ uuid.UUID, table, action string, row map[string]any) error {
 		gotTx, gotTable, gotAction, gotRow = tx, table, action, row
 		return nil
 	}
@@ -96,7 +96,7 @@ func TestExecuteDataMutate_ComputeRunsOnDeleteWithBeforeRow(t *testing.T) {
 	inv := testInvocation(gdb, bus, orgID, stockWriteEnforcer(), nil)
 	var gotAction string
 	var gotRow map[string]any
-	inv.mutationCompute = func(_ context.Context, _ *gorm.DB, _, action string, row map[string]any) error {
+	inv.mutationCompute = func(_ context.Context, _ *gorm.DB, _ uuid.UUID, _, action string, row map[string]any) error {
 		gotAction, gotRow = action, row
 		return nil
 	}
@@ -143,7 +143,7 @@ func TestExecuteDataMutate_ComputeFailureRollsBack(t *testing.T) {
 	mock.ExpectRollback()
 
 	inv := testInvocation(gdb, bus, orgID, stockWriteEnforcer(), nil)
-	inv.mutationCompute = func(_ context.Context, _ *gorm.DB, _, _ string, _ map[string]any) error {
+	inv.mutationCompute = func(_ context.Context, _ *gorm.DB, _ uuid.UUID, _, _ string, _ map[string]any) error {
 		return errors.New("rollup target column missing")
 	}
 

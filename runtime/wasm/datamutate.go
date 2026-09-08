@@ -209,7 +209,7 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		if action == "deleted" {
 			computeRow = before
 		}
-		if cErr := inv.mutationCompute(execCtx, work, req.Table, action, computeRow); cErr != nil {
+		if cErr := inv.mutationCompute(execCtx, work, orgID, req.Table, action, computeRow); cErr != nil {
 			rollback()
 			return fail("db_error", cErr.Error())
 		}

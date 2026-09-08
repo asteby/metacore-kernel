@@ -218,7 +218,7 @@ func (h *Host) WithMutationGuard(g func(ctx context.Context, logicalTable string
 // the mutation settled on, and is expected to maintain whatever the manifest
 // declares over that table — in practice dynamic.HookRegistry's
 // RecomputeRollupsForChild. Returning an error rolls the mutation back.
-type MutationComputeFn func(ctx context.Context, tx *gorm.DB, logicalTable, action string, row map[string]any) error
+type MutationComputeFn func(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, logicalTable, action string, row map[string]any) error
 
 // WithMutationCompute injects the declarative COMPUTE pass for the
 // `metacore_host.data_mutate` / `data_batch` imports — the wasm-tier twin of

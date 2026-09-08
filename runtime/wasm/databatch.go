@@ -190,7 +190,7 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 			if res.action == "deleted" {
 				computeRow = res.before
 			}
-			if cErr := inv.mutationCompute(execCtx, work, p.req.Table, res.action, computeRow); cErr != nil {
+			if cErr := inv.mutationCompute(execCtx, work, orgID, p.req.Table, res.action, computeRow); cErr != nil {
 				_ = work.Rollback()
 				return fail("db_error", fmt.Sprintf("mutations[%d]: %s", i, cErr.Error()))
 			}
