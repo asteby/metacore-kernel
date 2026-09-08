@@ -3657,7 +3657,7 @@
     "Condition": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Server-side visibility predicate for a contribution. The host only serves the contribution to organizations where the predicate holds. An empty object is invalid: declare a predicate or omit the block.",
+      "description": "Server-side visibility/usability predicate for a contribution, resolved per organization. addon_installed gates on a soft addon dependency; connector_connected gates on a third-party integration actually being connected. An empty object is invalid: declare a predicate or omit the block.",
       "minProperties": 1,
       "properties": {
         "addon_installed": {
@@ -3667,6 +3667,22 @@
           "examples": [
             "workshop"
           ]
+        },
+        "connector_connected": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$",
+          "description": "Key of a connector declared by THIS addon that must be connected for the organization (credentials supplied, integration healthy) for the contribution to be usable. Resolved per org at serve time.",
+          "examples": [
+            "factura_com"
+          ]
+        },
+        "unmet": {
+          "type": "string",
+          "enum": [
+            "hide",
+            "disable"
+          ],
+          "description": "What the host does when the org-level predicate fails: hide the contribution, or serve it disabled with a machine-readable reason the UI turns into a tooltip. Default: disable for connector_connected, hide otherwise."
         },
         "field": {
           "type": "string",

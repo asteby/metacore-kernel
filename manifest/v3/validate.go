@@ -1443,18 +1443,42 @@ var addonKeyRe = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 // resolved per organization at serve time.
 func validateConditions(m *Manifest) []string {
 	var errs []string
+	// A connector gate may only name a connector this manifest declares: the
+	// host resolves connection state from the addon's own integration rows, so
+	// a foreign key would gate on something that can never become connected.
+	declaredConnectors := make(map[string]struct{}, len(m.Connectors))
+	for _, c := range m.Connectors {
+		declaredConnectors[strings.TrimSpace(c.Key)] = struct{}{}
+	}
 	check := func(where string, c *Condition) {
 		if c == nil {
 			return
 		}
 		key := strings.TrimSpace(c.AddonInstalled)
+		conn := strings.TrimSpace(c.ConnectorConnected)
 		field := strings.TrimSpace(c.Field)
-		if key == "" && field == "" {
-			errs = append(errs, fmt.Sprintf("%s.condition declares no predicate (set addon_installed or field)", where))
+		if key == "" && conn == "" && field == "" {
+			errs = append(errs, fmt.Sprintf("%s.condition declares no predicate (set addon_installed, connector_connected or field)", where))
 			return
 		}
 		if key != "" && !addonKeyRe.MatchString(key) {
 			errs = append(errs, fmt.Sprintf("%s.condition.addon_installed %q is not a valid addon key", where, key))
+		}
+		if conn != "" {
+			if _, ok := declaredConnectors[conn]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.condition.connector_connected %q is not a connector declared by this addon", where, conn))
+			}
+		}
+		switch strings.TrimSpace(c.Unmet) {
+		case "", UnmetHide, UnmetDisable:
+		default:
+			errs = append(errs, fmt.Sprintf("%s.condition.unmet %q is not one of hide|disable", where, c.Unmet))
+		}
+		// "disable" is a UI affordance: the host still serves the contribution
+		// and the SDK renders it inert with a reason. A record-only condition
+		// has no org-level predicate to report a reason for.
+		if strings.TrimSpace(c.Unmet) == UnmetDisable && key == "" && conn == "" {
+			errs = append(errs, fmt.Sprintf("%s.condition.unmet %q needs an org-level predicate (addon_installed or connector_connected)", where, UnmetDisable))
 		}
 	}
 	var walkNav func(items []NavItem, where string)
@@ -1480,6 +1504,9 @@ func validateConditions(m *Manifest) []string {
 	}
 	for i, w := range m.Contributions.Dashboard {
 		check(fmt.Sprintf("contributions.dashboard[%d]", i), w.Condition)
+	}
+	for i, r := range m.Contributions.Routes {
+		check(fmt.Sprintf("contributions.routes[%d]", i), r.Condition)
 	}
 	return errs
 }

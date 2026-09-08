@@ -2180,9 +2180,11 @@ type ImportColumn struct {
 // Condition is a declarative predicate the HOST evaluates server-side before it
 // serves a contribution to an organization. It is the cross-addon visibility
 // primitive: an addon can contribute a nav entry, an action or a widget that
-// only materialises when some OTHER addon is present in that org.
+// only materialises when some OTHER addon is present in that org, or when a
+// third-party CONNECTOR the contribution depends on is actually connected.
 //
 //	"condition": { "addon_installed": "workshop" }
+//	"condition": { "connector_connected": "factura_com" }
 //
 // A nil Condition means "always". An empty Condition (no predicate set) is also
 // "always" — forward-compatible with hosts that don't know a newer predicate.
@@ -2196,24 +2198,91 @@ type Condition struct {
 	// host answers it with its authoritative installation table — in the
 	// kernel that is installer.Installer.IsInstalled. Empty = no constraint.
 	AddonInstalled string `json:"addon_installed,omitempty"`
+	// ConnectorConnected is the key of a connector — one of this manifest's own
+	// connectors[] — that must be CONNECTED for the organization (credentials
+	// supplied, integration healthy) for the contribution to be usable. It is
+	// the capability gate for everything that talks to a third party: stamping
+	// a CFDI through a PAC, sending a WhatsApp message, charging a card.
+	// Declaring it is what stops a button from looking operational on an org
+	// that never configured the integration. Empty = no constraint.
+	//
+	// Unlike AddonInstalled (a soft dependency the operator cannot act on from
+	// the screen where it bites), an unmet connector gate is REMEDIABLE — the
+	// operator can go connect it — which is why the default Unmet policy
+	// differs. See Unmet.
+	ConnectorConnected string `json:"connector_connected,omitempty"`
+	// Unmet selects what the host does when the org-level predicate does NOT
+	// hold:
+	//
+	//	"disable" — serve the contribution but mark it inert, carrying a
+	//	            machine-readable reason the SDK renders as a tooltip
+	//	            ("Conecta factura.com para timbrar"). Default for a
+	//	            ConnectorConnected gate: a button that silently vanishes
+	//	            teaches nothing, a disabled one names the fix.
+	//	"hide"    — do not serve the contribution at all. Default for an
+	//	            AddonInstalled gate: an addon the org has not installed is
+	//	            not a fix the operator can apply from this screen.
+	//
+	// Empty = the per-predicate default above (see UnmetPolicy). A host that
+	// does not understand a value falls back to "hide", never less safe than
+	// serving the contribution.
+	Unmet string `json:"unmet,omitempty"`
 	// Field/Operator/Value optionally gate a row action on the target record.
 	Field    string `json:"field,omitempty"`
 	Operator string `json:"operator,omitempty"`
 	Value    any    `json:"value,omitempty"`
 }
 
-// Satisfied reports whether the condition holds. installed answers "is this
-// addon key installed for the org at hand?"; passing nil means the host cannot
-// resolve installation state, in which case the condition is treated as met so
-// an unaware host never silently hides contributions.
+// Unmet policies for Condition.Unmet.
+const (
+	UnmetHide    = "hide"
+	UnmetDisable = "disable"
+)
+
+// UnmetPolicy resolves the effective Unmet policy: the declared value when the
+// author set one, else the per-predicate default — "disable" for a connector
+// gate the operator can go fix, "hide" otherwise. A nil condition reports "".
+func (c *Condition) UnmetPolicy() string {
+	if c == nil {
+		return ""
+	}
+	switch strings.TrimSpace(c.Unmet) {
+	case UnmetDisable:
+		return UnmetDisable
+	case UnmetHide:
+		return UnmetHide
+	}
+	if strings.TrimSpace(c.ConnectorConnected) != "" {
+		return UnmetDisable
+	}
+	return UnmetHide
+}
+
+// SatisfiedBy reports whether the ORG-LEVEL predicates hold. installed answers
+// "is this addon key installed for the org at hand?" and connected answers "is
+// this connector key connected for the org at hand?". A nil resolver means the
+// host cannot answer that predicate, in which case it is treated as met so an
+// unaware host never silently hides or disables contributions. Field/Operator/
+// Value are record-level and deliberately NOT evaluated here.
+func (c *Condition) SatisfiedBy(installed func(addonKey string) bool, connected func(connectorKey string) bool) bool {
+	if c == nil {
+		return true
+	}
+	if addon := strings.TrimSpace(c.AddonInstalled); addon != "" && installed != nil && !installed(addon) {
+		return false
+	}
+	if conn := strings.TrimSpace(c.ConnectorConnected); conn != "" && connected != nil && !connected(conn) {
+		return false
+	}
+	return true
+}
+
+// Satisfied reports whether the addon-installation predicate holds. It is
+// SatisfiedBy with no connector resolver — kept for hosts that only know the
+// addon_installed predicate; a connector gate they cannot resolve is treated as
+// met rather than silently hiding the contribution.
 func (c *Condition) Satisfied(installed func(addonKey string) bool) bool {
-	if c == nil || strings.TrimSpace(c.AddonInstalled) == "" {
-		return true
-	}
-	if installed == nil {
-		return true
-	}
-	return installed(strings.TrimSpace(c.AddonInstalled))
+	return c.SatisfiedBy(installed, nil)
 }
 
 // Route is one entry of a declarative routing table
