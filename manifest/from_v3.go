@@ -919,7 +919,11 @@ func mapCondition(c *v3.Condition) *ConditionDef {
 	if c == nil {
 		return nil
 	}
-	return &ConditionDef{AddonInstalled: c.AddonInstalled}
+	return &ConditionDef{
+		AddonInstalled:     c.AddonInstalled,
+		ConnectorConnected: c.ConnectorConnected,
+		Unmet:              c.Unmet,
+	}
 }
 
 // mapActionSteps folds a v3 action's wizard pages onto ActionStepDefs, each

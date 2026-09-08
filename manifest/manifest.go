@@ -1279,25 +1279,61 @@ type VisibleWhenDef struct {
 // ConditionDef is the host projection of a v3 contribution Condition: a
 // SERVER-SIDE gate the host evaluates per organization before serving a
 // contribution (nav entry, action, slot, widget). It is how an addon declares a
-// SOFT dependency — "surface this only where addon X is installed" — without
-// requiring X at install time. Nil (or an empty AddonInstalled) means always.
+// SOFT dependency — "surface this only where addon X is installed", or "only
+// where connector Y is actually connected" — without requiring either at
+// install time. Nil (or no org-level predicate) means always.
 type ConditionDef struct {
 	// AddonInstalled is the addon key that must be installed for the org.
 	AddonInstalled string `json:"addon_installed,omitempty"`
+	// ConnectorConnected is the connector key that must be CONNECTED for the
+	// org (credentials supplied, integration healthy). See v3.Condition.
+	ConnectorConnected string `json:"connector_connected,omitempty"`
+	// Unmet is the policy when the predicate fails: "hide" | "disable". Empty
+	// = the per-predicate default (see UnmetPolicy).
+	Unmet string `json:"unmet,omitempty"`
 }
 
-// Satisfied reports whether the condition holds. installed answers "is this
-// addon key installed for the org at hand?"; nil means the caller cannot
-// resolve installation state, in which case the condition is treated as met so
-// an unaware host never silently hides contributions.
+// UnmetPolicy resolves the effective unmet policy — the declared value, else
+// "disable" for a connector gate (remediable by the operator) and "hide"
+// otherwise. A nil condition reports "".
+func (c *ConditionDef) UnmetPolicy() string {
+	if c == nil {
+		return ""
+	}
+	switch strings.TrimSpace(c.Unmet) {
+	case v3.UnmetDisable:
+		return v3.UnmetDisable
+	case v3.UnmetHide:
+		return v3.UnmetHide
+	}
+	if strings.TrimSpace(c.ConnectorConnected) != "" {
+		return v3.UnmetDisable
+	}
+	return v3.UnmetHide
+}
+
+// SatisfiedBy reports whether the org-level predicates hold. installed answers
+// "is this addon key installed for the org at hand?" and connected answers "is
+// this connector key connected?". A nil resolver means the caller cannot answer
+// that predicate, in which case it is treated as met so an unaware host never
+// silently hides or disables contributions.
+func (c *ConditionDef) SatisfiedBy(installed func(addonKey string) bool, connected func(connectorKey string) bool) bool {
+	if c == nil {
+		return true
+	}
+	if addon := strings.TrimSpace(c.AddonInstalled); addon != "" && installed != nil && !installed(addon) {
+		return false
+	}
+	if conn := strings.TrimSpace(c.ConnectorConnected); conn != "" && connected != nil && !connected(conn) {
+		return false
+	}
+	return true
+}
+
+// Satisfied is SatisfiedBy with no connector resolver — kept for callers that
+// only know the addon_installed predicate.
 func (c *ConditionDef) Satisfied(installed func(addonKey string) bool) bool {
-	if c == nil || strings.TrimSpace(c.AddonInstalled) == "" {
-		return true
-	}
-	if installed == nil {
-		return true
-	}
-	return installed(strings.TrimSpace(c.AddonInstalled))
+	return c.SatisfiedBy(installed, nil)
 }
 
 // RouteDef is the host projection of a v3 contribution Route: one entry of a

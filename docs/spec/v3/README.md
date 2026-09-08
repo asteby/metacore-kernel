@@ -107,6 +107,52 @@ and `extension_points` (the publisher side):
 The host kernel rejects subscriptions to undeclared events, contributions to
 undeclared slot kinds and extensions of models that did not opt in.
 
+## Contribution conditions
+
+A contribution (`navigation` group/item, `actions[]`, `slots[]`,
+`dashboard[]`, `routes[]`) may carry a `condition` block: an **org-level**
+predicate the HOST resolves at serve time. It is not the same thing as
+`visible_when` (a client-side, single-sibling *form* predicate the SDK
+evaluates against the record being edited).
+
+```json
+"condition": { "addon_installed": "workshop" }
+"condition": { "connector_connected": "factura_com" }
+"condition": { "connector_connected": "factura_com", "field": "fiscal_uuid", "operator": "falsy" }
+```
+
+- `addon_installed` — a SOFT dependency on another addon: surface this only in
+  orgs that installed it, without requiring it at install time.
+- `connector_connected` — the contribution talks to a third party and is
+  inoperable until that integration is **connected** for the org (credentials
+  supplied, integration healthy). The key must name one of **this** manifest's
+  own `connectors[]`; a foreign key can never become connected, so the
+  validator rejects it. This is what stops a "Timbrar" / "Enviar por WhatsApp"
+  / "Cobrar con tarjeta" button from looking operational on an org that never
+  configured the PAC, the gateway or the device.
+- `field`/`operator`/`value` — the record-level gate, evaluated per row by the
+  client. It composes with the org-level predicates above.
+
+### `unmet`: hide or disable
+
+`unmet` selects what the host does when an org-level predicate fails:
+
+| value | behaviour |
+| --- | --- |
+| `hide` | the contribution is not served at all |
+| `disable` | the contribution is served but marked inert, carrying a machine-readable reason the SDK renders as a tooltip |
+
+The default is **per predicate**, and it encodes a UX rule rather than a
+technical one: an unmet `connector_connected` gate is *remediable* — the
+operator can go connect it — so it defaults to `disable`, because a button
+that silently vanishes teaches nothing while a disabled one names the fix. An
+unmet `addon_installed` gate is not something the operator can act on from
+that screen, so it defaults to `hide`.
+
+A host that cannot resolve a predicate (an older host that does not know
+`connector_connected`) treats it as **met**: an upgrade must never make every
+button vanish. See `v3.Condition.SatisfiedBy` and `UnmetPolicy`.
+
 ## Tenancy
 
 ```json
