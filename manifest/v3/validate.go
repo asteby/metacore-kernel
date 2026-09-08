@@ -774,7 +774,7 @@ func validateDoRef(do string) string {
 // is validated exactly like a webhook's). Empty blocks are a no-op (the addon
 // has no runtime primitives — the back-compat default).
 func validatePipelineRuntime(m *Manifest) []string {
-	if len(m.Connectors) == 0 && len(m.Schedules) == 0 && len(m.Webhooks) == 0 && len(m.EdgeDevices) == 0 {
+	if len(m.Connectors) == 0 && len(m.Schedules) == 0 && len(m.Webhooks) == 0 && len(m.EdgeDevices) == 0 && len(m.Backfills) == 0 {
 		return nil
 	}
 	var errs []string
@@ -814,6 +814,47 @@ func validatePipelineRuntime(m *Manifest) []string {
 		}
 		if msg := validateDoRef(s.Do); msg != "" {
 			errs = append(errs, fmt.Sprintf("schedules[%d].do %s", si, msg))
+		}
+	}
+
+	// Backfills: unique keys; source table/column present; `on` from the
+	// closed set; `do` prefix known; `with` cannot shadow the value field.
+	seenBF := make(map[string]struct{}, len(m.Backfills))
+	for bi, b := range m.Backfills {
+		if b.Key == "" {
+			errs = append(errs, fmt.Sprintf("backfills[%d].key is empty", bi))
+		} else {
+			if _, dup := seenBF[b.Key]; dup {
+				errs = append(errs, fmt.Sprintf("backfills[%d].key %q is duplicated", bi, b.Key))
+			}
+			seenBF[b.Key] = struct{}{}
+		}
+		if b.Source.Table == "" {
+			errs = append(errs, fmt.Sprintf("backfills[%d].source.table is empty", bi))
+		}
+		if b.Source.Distinct == "" {
+			errs = append(errs, fmt.Sprintf("backfills[%d].source.distinct is empty", bi))
+		}
+		for oi, on := range b.On {
+			if on != BackfillOnInstall && on != BackfillOnUpgrade {
+				errs = append(errs, fmt.Sprintf("backfills[%d].on[%d] %q is not install|upgrade", bi, oi, on))
+			}
+		}
+		if msg := validateDoRef(b.Do); msg != "" {
+			errs = append(errs, fmt.Sprintf("backfills[%d].do %s", bi, msg))
+		}
+		// A `with` constant that lands on the same key as the enumerated
+		// value (or on the reserved "backfill" marker) would silently win or
+		// lose depending on merge order — reject it instead of picking one.
+		arg := b.Arg
+		if arg == "" {
+			arg = "id"
+		}
+		if _, clash := b.With[arg]; clash {
+			errs = append(errs, fmt.Sprintf("backfills[%d].with sets %q, which is the arg the enumerated value is passed as", bi, arg))
+		}
+		if _, clash := b.With["backfill"]; clash {
+			errs = append(errs, fmt.Sprintf("backfills[%d].with sets \"backfill\", which is reserved for the sweep key", bi))
 		}
 	}
 

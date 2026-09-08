@@ -148,6 +148,11 @@ type Manifest struct {
 	// the addon may send. Empty = the addon drives no edge hardware.
 	EdgeDevices []EdgeDeviceDef `json:"edge_devices,omitempty"`
 
+	// Backfills is the host projection of the v3 Backfills block: one-shot
+	// materialization sweeps the host runs at install/upgrade, dispatching
+	// Do once per distinct source key. See v3.Backfill.
+	Backfills []BackfillDef `json:"backfills,omitempty"`
+
 	// Documents is the host projection of v3 contributions.documents[]: the
 	// printable-document templates the addon binds to its models. The host
 	// render engine reads these off the installed manifest to serve per-record
@@ -226,6 +231,52 @@ type ScheduleDef struct {
 	Key   string `json:"key"`
 	Every string `json:"every"`
 	Do    string `json:"do"`
+}
+
+// BackfillDef is the host/runtime projection of a v3 Backfill. The host
+// enumerates Source once per (org, addon) at install/upgrade and dispatches Do
+// per key — one invocation each, so no single call has to finish the whole
+// sweep. Handlers must be idempotent: dispatch is at-least-once.
+type BackfillDef struct {
+	Key    string            `json:"key"`
+	On     []string          `json:"on,omitempty"`
+	Source BackfillSourceDef `json:"source"`
+	Do     string            `json:"do"`
+	Arg    string            `json:"arg,omitempty"`
+	With   map[string]any    `json:"with,omitempty"`
+}
+
+// BackfillSourceDef is the host projection of v3.BackfillSource.
+type BackfillSourceDef struct {
+	Table    string         `json:"table"`
+	Distinct string         `json:"distinct"`
+	Where    map[string]any `json:"where,omitempty"`
+}
+
+// Triggers reports whether this backfill fires at the given transition
+// ("install" | "upgrade"). An empty On means both — an addon that declares a
+// sweep wants its projection complete after either transition, and defaulting
+// to "install only" would leave every already-installed org stale forever,
+// which is the exact failure the primitive exists to fix.
+func (b BackfillDef) Triggers(event string) bool {
+	if len(b.On) == 0 {
+		return true
+	}
+	for _, on := range b.On {
+		if on == event {
+			return true
+		}
+	}
+	return false
+}
+
+// ArgKey is the payload field the enumerated value is passed as, applying the
+// "id" default.
+func (b BackfillDef) ArgKey() string {
+	if b.Arg == "" {
+		return "id"
+	}
+	return b.Arg
 }
 
 // InboundWebhookDef is the host/runtime projection of a v3 InboundWebhook: a

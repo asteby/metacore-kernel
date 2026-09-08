@@ -217,7 +217,79 @@ transition fires exactly once.
 `async: true` on after-events: errors only ever surface in the host's
 structured logs (the calling goroutine has long since returned).
 
-## 8. Reserved / future work
+## 8. Backfills — the sweep a lifecycle hook cannot be
+
+A lifecycle hook is *one* dispatch. That is the right shape for a seed
+("create the three default statuses") and the wrong shape for a
+**backfill** — materializing a projection over rows that already existed
+when the addon was installed.
+
+Two hard limits make the single-dispatch shape unworkable for a sweep,
+and neither is fixable inside the guest:
+
+- **The guest cannot enumerate its own backlog.** `data_query` is capped
+  at 200 rows, filters by equality only, and has no offset or cursor
+  (`docs/wasm-abi.md` §15.2). A "regenerate everything" export cannot see
+  past the first page, no matter how it is written.
+- **The guest cannot finish inside one deadline.** Handlers run under
+  `backend.timeout_ms` (default 10s). A sweep over thousands of keys,
+  each doing several queries and a batch write, exhausts that long before
+  it is done — and a partial run leaves no record of where it stopped.
+
+`manifest.backfills` inverts the loop: the **host** enumerates, the guest
+handles one key at a time.
+
+```jsonc
+{
+  "backfills": [
+    {
+      "key": "customer_statements",
+      "on": ["install", "upgrade"],          // omitted = both
+      "source": { "table": "invoices", "distinct": "customer_id" },
+      "do": "wasm:backfill_party",
+      "arg": "party_id",
+      "with": { "party_type": "customer" }
+    }
+  ]
+}
+```
+
+At each declared transition the host runs ONE org-scoped
+`SELECT DISTINCT <source.distinct> FROM <source.table>` (skipping NULLs
+and soft-deleted rows, plus any `source.where` equality predicates) and
+dispatches `do` once per distinct value:
+
+```json
+{ "backfill": "customer_statements", "party_id": "…", "party_type": "customer" }
+```
+
+Each dispatch is an independent invocation with its own deadline, so
+per-key work stays inside the normal handler budget and one failing key
+isolates from the rest.
+
+| Field | Notes |
+|---|---|
+| `key` | Unique within the addon. Identifies the sweep in the payload and in host progress records. |
+| `on` | `install` and/or `upgrade`. **Omitted means both** — an install-only default would leave every already-installed org stale forever, which is the failure this primitive exists to fix. |
+| `source.table` / `source.distinct` | Logical unqualified table and the column whose distinct values form the key set. |
+| `source.where` | Optional equality-only predicates, mirroring `data_query` so a declaration cannot express a filter the guest could not. |
+| `do` | Same reference grammar as `Schedule.Do`: `wasm:<export>` \| `webhook:<key>` \| `compiled:<fn>`. |
+| `arg` | Payload field the value is passed as. Defaults to `id`. |
+| `with` | Constants merged into every payload, so one export serves several sweeps. May not set `arg` or the reserved `backfill` key — validation rejects the shadowing rather than picking a winner. |
+
+**The handler must be idempotent.** Dispatch is at-least-once and
+unordered: the host may re-run a sweep that was interrupted, and makes no
+promise about the order keys arrive in. In practice the natural target is
+the export an addon already subscribes to its own domain events with — the
+incremental path that is proven in production — which is idempotent by
+construction.
+
+Backfills are declared here and in `manifest.Manifest.Backfills` (the
+host projection); **running** them is the host's job, next to where it
+already runs install/upgrade. The kernel does not schedule them itself,
+the same division schedules use (kernel declares, host's runtime fires).
+
+## 9. Reserved / future work
 
 - `target.type = "prompt"`: declared and validated; runtime delegation
   awaits a kernel-bundled LLM dispatcher. Hosts can register a custom

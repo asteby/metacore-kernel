@@ -119,6 +119,7 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.Schedules = mapSchedules(m.Schedules)
 	out.Webhooks = mapWebhooks(m.Webhooks)
 	out.EdgeDevices = mapEdgeDevices(m.EdgeDevices)
+	out.Backfills = mapBackfills(m.Backfills)
 	out.Documents = mapDocuments(m)
 	if m.Contributions != nil {
 		out.AgentCapabilities = m.Contributions.AgentCapabilities
@@ -213,6 +214,28 @@ func mapSchedules(in []v3.Schedule) []ScheduleDef {
 	out := make([]ScheduleDef, 0, len(in))
 	for _, s := range in {
 		out = append(out, ScheduleDef{Key: s.Key, Every: s.Every, Do: s.Do})
+	}
+	return out
+}
+
+func mapBackfills(in []v3.Backfill) []BackfillDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]BackfillDef, 0, len(in))
+	for _, b := range in {
+		out = append(out, BackfillDef{
+			Key: b.Key,
+			On:  append([]string(nil), b.On...),
+			Source: BackfillSourceDef{
+				Table:    b.Source.Table,
+				Distinct: b.Source.Distinct,
+				Where:    b.Source.Where,
+			},
+			Do:   b.Do,
+			Arg:  b.Arg,
+			With: b.With,
+		})
 	}
 	return out
 }
