@@ -7,6 +7,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`null` / `not_null` en el `where` de una agregación.** Un widget puede por
+  fin contar las filas de una columna vacía —"productos sin categoría
+  asignada"—, que era justo lo que no se podía expresar: `{"col": {"null":
+  true}}`.
+
+  Los operadores ya existían en el builder (`OpNull` / `OpNotNull`); lo que
+  faltaba era exponerlos acá. Se usan **los mismos nombres**, no un vocabulario
+  nuevo: dos sintaxis para lo mismo dentro del mismo motor es cómo se empieza a
+  diferir.
+
+  Semántica estrecha y deliberada: opera sobre **la columna**. Sobre una columna
+  jsonb, `null` significa que LA COLUMNA es SQL NULL — que no es `'{}'`, ni
+  `'null'::jsonb`, ni que la clave no exista dentro de la bolsa. Preguntar por un
+  campo dentro de la bolsa tiene su propio operador (`OpJSONBEq`) y así debe
+  seguir.
+
+  El error de `{"col": null}` ahora **enseña la forma correcta** en vez de sólo
+  rechazarla: es la sintaxis que escribe quien cree estar usando la forma obvia.
+
 ### Changed
 
 - **`query.Aggregate` rechaza un `where` que no sabe aplicar, en vez de

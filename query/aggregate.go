@@ -198,6 +198,19 @@ func baseQuery(db *gorm.DB, spec AggregateSpec) *gorm.DB {
 	return applyWhereMap(q, spec.Where)
 }
 
+// LOS OPERADORES DE NULIDAD SON `null` / `not_null`, Y OPERAN SOBRE LA COLUMNA.
+//
+// Semántica estrecha y deliberada: `{"col": {"null": true}}` es `col IS NULL`,
+// nada más. Sobre una columna jsonb eso significa que LA COLUMNA es SQL NULL —
+// que no es lo mismo que `'{}'`, ni que `'null'::jsonb`, ni que la clave no
+// exista dentro de la bolsa. Son cuatro preguntas distintas y confundirlas es
+// cómo alguien termina contando lo que no cree estar contando.
+//
+// Preguntar por un campo DENTRO de la bolsa tiene su propio operador con su
+// propio nombre (OpJSONBEq, `jsonb_eq`), y así debe seguir: una sobrecarga
+// silenciosa de `null` para cubrir también ese caso sería exactamente cómo nace
+// el próximo default engañoso.
+//
 // supportedWhereOps son los operadores que un Where entiende. Es la fuente de
 // verdad para validateWhereMap y tiene que moverse junto con el switch de
 // whereFilter: un operador que exista en uno y no en el otro es justo el
@@ -205,6 +218,7 @@ func baseQuery(db *gorm.DB, spec AggregateSpec) *gorm.DB {
 var supportedWhereOps = map[string]bool{
 	"eq": true, "neq": true, "contains": true,
 	"gt": true, "gte": true, "lt": true, "lte": true,
+	"null": true, "not_null": true,
 }
 
 // ValidateWhereMap rechaza un Where que este motor no sabe aplicar, EN VEZ DE
@@ -233,10 +247,17 @@ func ValidateWhereMap(where map[string]any) error {
 		}
 		switch t := v.(type) {
 		case nil:
-			// `{"col": null}` parece "donde la columna es NULL" y no lo es: se
-			// resolvía como igualdad contra cadena vacía. Mientras no exista un
-			// operador de nulidad, decirlo es mejor que responder otra cosa.
-			return fmt.Errorf("query.Aggregate: where %q: un valor null no expresa una comparación con NULL", col)
+			// `{"col": null}` LEE como "donde la columna es NULL" y hacía lo
+			// contrario: se resolvía como igualdad contra cadena vacía.
+			//
+			// Por qué esta forma se rechaza en vez de interpretarse como
+			// OpNull, que es lo que quien la escribe quiere decir: un operador
+			// inventado lo escribe alguien que sabe que está probando algo;
+			// `null` lo escribe quien cree estar usando la forma obvia. Aceptarla
+			// en silencio dejaría dos sintaxis para lo mismo y una de ellas
+			// seguiría significando otra cosa en el resto del kernel, donde un
+			// valor vacío es "sin filtro". El mensaje nombra la forma correcta.
+			return fmt.Errorf("query.Aggregate: where %q: un valor null no expresa una comparación con NULL; usá {%q: {\"null\": true}}", col, col)
 		case map[string]any:
 			if len(t) != 1 {
 				return fmt.Errorf("query.Aggregate: where %q: se esperaba un solo {operador: valor}, llegaron %d", col, len(t))
@@ -305,6 +326,10 @@ func whereFilter(v any) Filter {
 				return Filter{Op: OpLt, Value: toFloat(val)}
 			case "lte":
 				return Filter{Op: OpNumLte, Value: toFloat(val)}
+			case "null":
+				return Filter{Op: OpNull}
+			case "not_null":
+				return Filter{Op: OpNotNull}
 			}
 		}
 	}

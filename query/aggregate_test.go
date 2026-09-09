@@ -387,3 +387,42 @@ func TestAggregateRejectsUnsafeWhereColumn(t *testing.T) {
 		t.Fatal("una columna que no pasa la regla de identificador tiene que fallar, no ignorarse")
 	}
 }
+
+// TestAggregateSupportsNullOperators cubre el operador que motivó toda la
+// protección: contar las filas de una columna vacía —"productos sin categoría
+// asignada"— sin poder expresarlo era la carencia original.
+//
+// Los nombres son los que el resto del kernel ya usa (OpNull / OpNotNull, wire
+// `null` / `not_null`), no un vocabulario nuevo: dos sintaxis para lo mismo en
+// el mismo motor es cómo se empieza a diferir.
+func TestAggregateSupportsNullOperators(t *testing.T) {
+	for _, op := range []string{"null", "not_null"} {
+		if err := ValidateWhereMap(map[string]any{"category_id": map[string]any{op: true}}); err != nil {
+			t.Errorf("el operador %q tiene que estar soportado: %v", op, err)
+		}
+		if !supportedWhereOps[op] {
+			t.Errorf("%q falta en supportedWhereOps: el validador rechazaría el operador que el switch sí aplica", op)
+		}
+	}
+
+	if got := whereFilter(map[string]any{"null": true}); got.Op != OpNull {
+		t.Errorf("null → OpNull, quedó %v", got.Op)
+	}
+	if got := whereFilter(map[string]any{"not_null": true}); got.Op != OpNotNull {
+		t.Errorf("not_null → OpNotNull, quedó %v", got.Op)
+	}
+}
+
+// TestAggregateNullValueErrorPointsAtTheRightForm: rechazar `{"col": null}` sin
+// decir cuál es la forma correcta deja a quien la escribió exactamente donde
+// estaba. Es la sintaxis que escribe quien cree estar usando la forma obvia, así
+// que el mensaje tiene que enseñar la buena.
+func TestAggregateNullValueErrorPointsAtTheRightForm(t *testing.T) {
+	err := ValidateWhereMap(map[string]any{"category_id": nil})
+	if err == nil {
+		t.Fatal("un null desnudo tiene que fallar")
+	}
+	if !strings.Contains(err.Error(), `"null": true`) {
+		t.Errorf("el mensaje tiene que mostrar la forma correcta: %v", err)
+	}
+}
