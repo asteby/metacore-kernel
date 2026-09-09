@@ -7,6 +7,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- **`dispatch.ForgetOccurrences`.** Se va porque su único patrón de uso quedó
+  inválido tras #322 y dejarla es una invitación a reintroducir el bug.
+
+  La función borraba filas del ledger reconstruyendo
+  `hash(evento, ocurrencia, subscripción)` a partir de una lista de ids. Pero
+  **el ledger no guarda el id de la fila en ninguna columna** (sólo org,
+  evento, addon_key, handler_type, export, status), así que la única manera de
+  expresar *"olvidá las entregas de esta fila"* era pasarle row ids y confiar
+  en que el hash se armara igual — exactamente la clave por fila que #322
+  eliminó. Su propio test nombraba las variables `saleA`/`saleB`: el uso
+  previsto siempre fue por row id.
+
+  Tras #322 el discriminador es el `occurrence_id` de la publicación, que hoy
+  sólo existe dentro del payload de `kernel_event_outbox`. Ningún host lo
+  consulta, y de hecho la función no tenía **ningún** caller en todo el
+  ecosistema. Lo que quedaba era API exportada que, alimentada con row ids,
+  borraba cero filas y devolvía `nil` — indistinguible del éxito, el mismo
+  fallo silencioso que #322 vino a arreglar.
+
+  `ForgetDeliveries` (por addon + evento) sigue existiendo y es lo que los
+  hosts usan de verdad; no depende del hash. **Si algún día hace falta un
+  forget por fila, el camino honesto es agregar una columna `row_id` al
+  ledger, no reconstruir hashes.**
+
+### Fixed
+
 ### Fixed
 
 - **`<Model>.updated` se entregaba UNA SOLA VEZ por fila, para siempre.** El
