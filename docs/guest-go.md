@@ -260,11 +260,23 @@ type HttpRequest struct {
 }
 
 type HttpResponse struct {
-    Status  int                  // HTTP status code
-    Headers map[string][]string  // reserved; nil today
-    Body    []byte               // capped at 8 MiB by host
+    Status       int                  // HTTP status code
+    Headers      map[string][]string  // reserved; nil today
+    Body         []byte               // upstream bytes verbatim; capped at 8 MiB by host
+    BodyIsBase64 bool                 // host used the base64 transport (non-UTF-8 body)
 }
 ```
+
+**Binary responses.** The host cannot carry a non-UTF-8 body in the
+envelope's `body` string — `encoding/json` rewrites every invalid byte
+as U+FFFD — so for a PDF / ZIP / image / XLSX it sends `body_base64`
+with `body_is_base64: true` (ABI 1.10, `docs/wasm-abi.md` § 3.1). The
+helper decodes that for you: `Body` always holds the upstream bytes
+verbatim, and `BodyIsBase64` just reports which transport was used
+(useful to decide whether to persist as a blob rather than as text).
+If the host flags base64 but writes something undecodable, `HttpFetch`
+returns a `decode` `*HttpFetchError` rather than a partial body —
+binary corruption must never be silent.
 
 `Headers` on both shapes is reserved — the host today only forwards
 the method, URL and body and hard-codes `Content-Type:
@@ -397,7 +409,7 @@ underlying violation without parsing the message.
 | `EmitEvent` v1 | v1              | Pre-PR#62 hosts that returned literal `0` on success are still supported — `decodeEmitEnvelope(nil)` produces a zero-value `EmitEventResult` with `err == nil`. |
 | `Log` v1       | n/a             | Fire-and-forget; no envelope.                                                                                  |
 | `EnvGet` v1    | raw bytes       | Host returns the value bytes verbatim; helper folds missing + empty into `found == false`.                     |
-| `HttpFetch` v1 | `{status, body}` | Host envelope is flat (no `{success, data, meta}`); helper probes for the `{error, message}` failure shape first. |
+| `HttpFetch` v1 | `{status, body}` (+ `{body_base64, body_is_base64}` for non-UTF-8 bodies, ABI 1.10) | Host envelope is flat (no `{success, data, meta}`); helper probes for the `{error, message}` failure shape first. |
 | `DbQuery` v1   | v1              | Decoder follows `{success, data, meta}` from § 9.4 verbatim.                                                   |
 | `DbExec` v1    | v1 (v0.11+)     | RETURNING projection lives under `data.rows` + `data.columns`; pre-v0.11 envelopes (no `rows`) decode cleanly with `Rows == nil`. |
 

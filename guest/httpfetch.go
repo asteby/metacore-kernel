@@ -1,6 +1,7 @@
 package guest
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 )
@@ -49,9 +50,18 @@ type HttpResponse struct {
 	// headers. Always nil today; helpers preserve the field so
 	// consumers can be written against a stable shape.
 	Headers map[string][]string
-	// Body is the response body bytes. The host caps reads at 8 MiB
-	// (capabilities.go:174). Larger responses are truncated silently.
+	// Body is the response body bytes, always the upstream bytes
+	// verbatim. When the host could not carry them as a JSON string
+	// (a non-UTF-8 body — PDF, ZIP, image, XLSX) it sends them
+	// base64-encoded and the helper decodes them here, so callers
+	// never see the difference. The host caps reads at 8 MiB
+	// (capabilities.go); larger responses are truncated silently.
 	Body []byte
+	// BodyIsBase64 reports that the host used the base64 transport
+	// for this response, i.e. the body is not valid UTF-8. Body is
+	// already decoded either way — this is informational, useful for
+	// deciding whether to persist as a blob rather than as text.
+	BodyIsBase64 bool
 }
 
 // HttpFetchError is the typed error HttpFetch returns when the host
@@ -107,10 +117,17 @@ func (e *HttpCapabilityDeniedError) Unwrap() error {
 }
 
 // httpWireOK mirrors the success shape the host writes
-// (capabilities.go:175-180): `{status, body}` — flat, no envelope.
+// (httpResponseEnvelope in capabilities.go): `{status, body}` — flat,
+// no envelope — plus, for a body that is not valid UTF-8,
+// `{body_base64, body_is_base64}` with `body` left empty. The host
+// cannot pass raw binary through `body`: encoding/json substitutes
+// U+FFFD for every invalid byte, which silently corrupted every
+// PDF/ZIP/image a guest fetched before the base64 transport existed.
 type httpWireOK struct {
-	Status int    `json:"status"`
-	Body   string `json:"body"`
+	Status       int    `json:"status"`
+	Body         string `json:"body"`
+	BodyBase64   string `json:"body_base64"`
+	BodyIsBase64 bool   `json:"body_is_base64"`
 }
 
 // httpWireErr mirrors the failure shape the host writes
@@ -156,6 +173,25 @@ func decodeHttpEnvelope(buf []byte) (HttpResponse, error) {
 			Code:    "decode",
 			Message: "guest: decode http_fetch envelope: " + err.Error(),
 		}
+	}
+	if ok.BodyIsBase64 {
+		raw, err := base64.StdEncoding.DecodeString(ok.BodyBase64)
+		if err != nil {
+			// The host flagged base64 but wrote something we cannot
+			// decode: a host bug. Surface it rather than handing the
+			// caller a partial or empty body it would take for the
+			// real thing — the whole point of #319 is that binary
+			// corruption must never be silent.
+			return HttpResponse{}, &HttpFetchError{
+				Code:    "decode",
+				Message: "guest: decode http_fetch body_base64: " + err.Error(),
+			}
+		}
+		return HttpResponse{
+			Status:       ok.Status,
+			Body:         raw,
+			BodyIsBase64: true,
+		}, nil
 	}
 	return HttpResponse{
 		Status: ok.Status,
