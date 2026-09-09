@@ -1153,6 +1153,15 @@ func Validate(raw []byte) error {
 		}
 	}
 
+	if m.Runtime != nil && m.Runtime.NativeService != nil {
+		if m.Kind != KindAddon {
+			errs = append(errs, "runtime.native_service is only valid for kind=Addon")
+		}
+		if err := m.Runtime.NativeService.Validate(); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+
 	switch m.Kind {
 	case KindAddon:
 		if m.Preset != nil {

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	v3 "github.com/asteby/metacore-kernel/manifest/v3"
+	"github.com/asteby/metacore-kernel/runtime/native"
 )
 
 // APIVersion is the kernel contract version this package implements.
@@ -98,6 +99,10 @@ type Manifest struct {
 	// the legacy "webhook" behaviour applies (Hooks map dispatches HTTP
 	// calls). Set Runtime to "wasm" to run a compiled module in-process.
 	Backend *BackendSpec `json:"backend,omitempty"`
+
+	// NativeService is independent of the request-scoped Backend. An addon may
+	// combine WASM handlers with one supervised long-lived sidecar.
+	NativeService *native.Spec `json:"native_service,omitempty"`
 
 	// Capabilities are the scoped permissions the addon requests. The host
 	// prompts the admin for approval and the runtime enforces them.

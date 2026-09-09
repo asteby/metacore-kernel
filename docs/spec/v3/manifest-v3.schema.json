@@ -60,6 +60,9 @@
     "frontend": {
       "$ref": "#/$defs/Frontend"
     },
+    "runtime": {
+      "$ref": "#/$defs/Runtime"
+    },
     "contributions": {
       "$ref": "#/$defs/Contributions"
     },
@@ -231,6 +234,66 @@
     }
   ],
   "$defs": {
+    "Runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "native_service": {
+          "$ref": "#/$defs/NativeService"
+        }
+      }
+    },
+    "NativeService": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entrypoint", "scope", "health", "resources", "network"],
+      "properties": {
+        "entrypoint": {"type": "string", "minLength": 1},
+        "args": {"type": "array", "items": {"type": "string"}},
+        "scope": {"type": "string", "enum": ["instance", "installation"]},
+        "health": {"$ref": "#/$defs/NativeHealth"},
+        "resources": {"$ref": "#/$defs/NativeResources"},
+        "network": {"$ref": "#/$defs/NativeNetwork"},
+        "secrets": {"type": "array", "items": {"$ref": "#/$defs/NativeSecret"}}
+      }
+    },
+    "NativeHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^/"},
+        "interval": {"type": "string"},
+        "timeout": {"type": "string"}
+      }
+    },
+    "NativeResources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["memory_mb", "cpu_quota_mcpu", "pids"],
+      "properties": {
+        "memory_mb": {"type": "integer", "minimum": 16, "maximum": 32768},
+        "cpu_quota_mcpu": {"type": "integer", "minimum": 10, "maximum": 16000},
+        "pids": {"type": "integer", "minimum": 1, "maximum": 4096}
+      }
+    },
+    "NativeNetwork": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "egress": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+      }
+    },
+    "NativeSecret": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handle", "mount"],
+      "properties": {
+        "handle": {"type": "string", "minLength": 1},
+        "mount": {"type": "string", "pattern": "^/run/secrets/"}
+      }
+    },
     "Metadata": {
       "type": "object",
       "additionalProperties": false,

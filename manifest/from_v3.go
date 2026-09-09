@@ -115,6 +115,10 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.I18n = mapI18n(m.I18n)
 	out.Signature = mapSignature(m.Signature)
 	out.Backend = deriveBackend(m)
+	if m.Runtime != nil && m.Runtime.NativeService != nil {
+		spec := *m.Runtime.NativeService
+		out.NativeService = &spec
+	}
 	out.Connectors = mapConnectors(m.Connectors)
 	out.Schedules = mapSchedules(m.Schedules)
 	out.Webhooks = mapWebhooks(m.Webhooks)
