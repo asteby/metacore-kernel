@@ -7,6 +7,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`query.Aggregate` rechaza un `where` que no sabe aplicar, en vez de
+  aplicarlo mal.** Un operador desconocido no se descartaba: `{"col":
+  {"is_null": true}}` caía por el camino de igualdad y terminaba comparando la
+  columna contra la cadena `"map[is_null:true]"` — cero filas, sin un solo
+  aviso. El comentario de `applyWhereMap` afirmaba que los operadores no
+  soportados "se descartan silenciosamente", y no era cierto.
+
+  Peor: el ejecutor espejo del host hacía lo **contrario**. Donde este motor
+  devolvía cero, aquél ignoraba la cláusula y contaba **todo**. El mismo widget,
+  dos números distintos, ninguno verdadero, y los dos con cara de dato — y como
+  una de las dos rutas alimenta el delta contra el período previo, la
+  discrepancia se mostraba junta en la misma tarjeta.
+
+  Un tablero existe para que alguien decida a partir de él: un número inventado
+  que nadie puede distinguir de uno bueno es peor que una tarjeta en error,
+  porque el error obliga a mirar y el número tranquiliza. Ahora `Aggregate`
+  falla con el nombre de la columna y del operador en el mensaje.
+
+  Se rechazan también tres formas que fallaban igual de calladas: `{"col":
+  null}`, que *lee* como "donde la columna es NULL" pero se resolvía como
+  igualdad contra cadena vacía; `{"col": {"gt": 1, "lt": 9}}`, que aplicaba uno
+  solo de los dos operadores sin orden garantizado y perdía el otro; y una
+  columna que no pasa la regla de identificador, que se saltaba dejando la
+  consulta sin filtrar.
+
+  Ningún widget declarado en el ecosistema usa hoy un operador fuera del
+  conjunto soportado (barridos los 26 widgets de los manifests del monorepo de
+  addons), así que el cambio no rompe nada existente: hace visible lo que
+  hubiera fallado en silencio.
+
 ### Removed
 
 - **`dispatch.ForgetOccurrences`.** Se va porque su único patrón de uso quedó

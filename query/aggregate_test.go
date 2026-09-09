@@ -2,6 +2,7 @@ package query
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -318,5 +319,71 @@ func TestResolveRange_PreviousPeriod(t *testing.T) {
 	// all → unbounded, no previous.
 	if _, _, ok := PreviousRange(RangeAll, now); ok {
 		t.Error("all should have no previous period")
+	}
+}
+
+// ---- Where: lo que el motor no entiende, no lo aplica mal ---------------------
+
+// TestAggregateRejectsUnknownWhereOperator es la guarda del defecto que motivó
+// validateWhereMap: `{"col": {"is_null": true}}` NO se descartaba —caía por el
+// camino de igualdad y comparaba la columna contra la cadena
+// "map[is_null:true]", devolviendo cero filas sin un aviso—, mientras el
+// ejecutor espejo del host ignoraba la cláusula y contaba todo.
+func TestAggregateRejectsUnknownWhereOperator(t *testing.T) {
+	err := ValidateWhereMap(map[string]any{"category_id": map[string]any{"is_null": true}})
+	if err == nil {
+		t.Fatal("un operador que el motor no sabe aplicar tiene que fallar, no aplicarse mal")
+	}
+	for _, want := range []string{"category_id", "is_null"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("el mensaje tiene que nombrar %q para que se pueda arreglar: %v", want, err)
+		}
+	}
+}
+
+// TestAggregateAcceptsEverySupportedOperator: la validación no puede volverse
+// más estricta que el motor. Si mañana whereFilter aprende un operador y esta
+// lista no, el filtro deja de funcionar sin que nadie toque el widget.
+func TestAggregateAcceptsEverySupportedOperator(t *testing.T) {
+	for op, value := range map[string]any{
+		"eq": "x", "neq": "x", "contains": "x",
+		"gt": 1.0, "gte": 1.0, "lt": 1.0, "lte": 1.0,
+	} {
+		if err := ValidateWhereMap(map[string]any{"total": map[string]any{op: value}}); err != nil {
+			t.Errorf("el operador soportado %q fue rechazado: %v", op, err)
+		}
+	}
+	// Escalares desnudos: la forma más común, igualdad implícita.
+	for _, v := range []any{"pagado", 3.0, true, false} {
+		if err := ValidateWhereMap(map[string]any{"estado": v}); err != nil {
+			t.Errorf("un escalar desnudo es igualdad y debe pasar (%v): %v", v, err)
+		}
+	}
+}
+
+// TestAggregateRejectsNullWhereValue: `{"col": null}` LEE como "donde la
+// columna es NULL" y no lo es — se resolvía como igualdad contra cadena vacía.
+// Mientras no exista un operador de nulidad, decirlo es mejor que responder otra
+// cosa.
+func TestAggregateRejectsNullWhereValue(t *testing.T) {
+	if err := ValidateWhereMap(map[string]any{"category_id": nil}); err == nil {
+		t.Fatal("un null en el where no expresa una comparación con NULL: tiene que fallar")
+	}
+}
+
+// TestAggregateRejectsMultiOperatorObject: `{"total": {"gt": 1, "lt": 9}}` sólo
+// aplicaba uno de los dos —el primero que saliera del mapa, sin orden
+// garantizado— y el otro se perdía en silencio.
+func TestAggregateRejectsMultiOperatorObject(t *testing.T) {
+	if err := ValidateWhereMap(map[string]any{"total": map[string]any{"gt": 1.0, "lt": 9.0}}); err == nil {
+		t.Fatal("dos operadores en un objeto aplicaban uno solo y perdían el otro: tiene que fallar")
+	}
+}
+
+// TestAggregateRejectsUnsafeWhereColumn: antes se saltaba la columna y la
+// consulta devolvía un total sin filtrar, que es el mismo modo de fallo.
+func TestAggregateRejectsUnsafeWhereColumn(t *testing.T) {
+	if err := ValidateWhereMap(map[string]any{"total; drop table x": "1"}); err == nil {
+		t.Fatal("una columna que no pasa la regla de identificador tiene que fallar, no ignorarse")
 	}
 }
