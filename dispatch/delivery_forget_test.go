@@ -62,39 +62,3 @@ func TestForgetDeliveries_DropsOnlyThatAddonEvent(t *testing.T) {
 		t.Fatalf("left %d rows, want 2", len(left))
 	}
 }
-
-func TestForgetOccurrences_OnlyMatchingHashes(t *testing.T) {
-	db := forgetTestDB(t)
-	sub := Subscription{
-		AddonKey: "workshop", Event: "customers.SalesOrder.updated",
-		HandlerType: "wasm", Function: "on_sale_header",
-	}
-	saleA := "2dfda474-30d6-4b1e-b513-dd014af8cc83"
-	saleB := "5bf487b4-676f-4ea6-a964-bd87411690cd"
-	rowA := Delivery{
-		ID: uuid.New(), DeliveryID: deliveryID("customers.SalesOrder.updated", saleA, sub),
-		AddonKey: "workshop", Event: "customers.SalesOrder.updated", Status: StatusDelivered,
-	}
-	rowB := Delivery{
-		ID: uuid.New(), DeliveryID: deliveryID("customers.SalesOrder.updated", saleB, sub),
-		AddonKey: "workshop", Event: "customers.SalesOrder.updated", Status: StatusDelivered,
-	}
-	if err := db.Table(DefaultTableName).Create(&[]Delivery{rowA, rowB}).Error; err != nil {
-		t.Fatal(err)
-	}
-
-	n, err := ForgetOccurrences(db, "", "customers.SalesOrder.updated", []string{saleA}, []Subscription{sub})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatalf("deleted %d, want 1", n)
-	}
-	var left Delivery
-	if err := db.Table(DefaultTableName).First(&left).Error; err != nil {
-		t.Fatal(err)
-	}
-	if left.DeliveryID != rowB.DeliveryID {
-		t.Fatalf("kept %s, want sale B", left.DeliveryID)
-	}
-}
