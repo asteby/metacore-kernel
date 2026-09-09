@@ -169,7 +169,7 @@ var (
 		"rating":       {},
 		// "icon": lucide-name-or-image picker (runtime-react IconPickerField,
 		// SDK 28.2.0). Value is a lucide slug or an uploaded image path.
-		"icon":         {},
+		"icon": {},
 	}
 	// defaultRe allows only safe DDL DEFAULT expressions:
 	//   numeric literal:   42 | 42.5 | -3
@@ -373,6 +373,11 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 	}
 	if err := m.validateBackend(); err != nil {
 		return err
+	}
+	if m.NativeService != nil {
+		if err := m.NativeService.Validate(); err != nil {
+			return fmt.Errorf("manifest.native_service: %w", err)
+		}
 	}
 	if err := m.validateActionTriggers(); err != nil {
 		return err

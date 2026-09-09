@@ -266,6 +266,11 @@ type Installer struct {
 	// over host.LoadWASMFromBundle via WithBackendRuntime. See
 	// backend_runtime.go for the contract.
 	BackendRuntime BackendRuntimeLoader
+
+	// NativeRuntime supervises manifest.runtime.native_service. Unlike the
+	// optional WASM loader, its default fails closed so an installation cannot
+	// claim enabled while its required sidecar is absent.
+	NativeRuntime NativeServiceRuntime
 }
 
 // ErrSignatureRequired is returned by Install when the host has not configured
@@ -321,7 +326,19 @@ func New(db *gorm.DB, kernelVersion string) *Installer {
 		AllowUnsigned:  envFlag("ALLOW_UNSIGNED_BUNDLES"),
 		Broadcaster:    NoopBroadcaster{},
 		BackendRuntime: NoopBackendRuntimeLoader{},
+		NativeRuntime:  UnsupportedNativeServiceRuntime{},
 	}
+}
+
+// WithNativeRuntime installs the host adapter for supervised native services.
+// Passing nil restores the fail-closed unsupported adapter.
+func (i *Installer) WithNativeRuntime(r NativeServiceRuntime) *Installer {
+	if r == nil {
+		i.NativeRuntime = UnsupportedNativeServiceRuntime{}
+		return i
+	}
+	i.NativeRuntime = r
+	return i
 }
 
 // WithBackendRuntime swaps the installer's backend runtime loader and
@@ -590,6 +607,22 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 		if err := loader.LoadFromBundle(context.Background(), b); err != nil {
 			return nil, nil, fmt.Errorf("LoadBackendRuntime: %w", err)
 		}
+	}
+	if b.Manifest.NativeService != nil {
+		var persisted Installation
+		if err := i.DB.Where("organization_id = ? AND addon_key = ?", orgID, b.Manifest.Key).
+			Take(&persisted).Error; err != nil {
+			return nil, nil, fmt.Errorf("LoadNativeService: installation lookup: %w", err)
+		}
+		runtime := i.NativeRuntime
+		if runtime == nil {
+			runtime = UnsupportedNativeServiceRuntime{}
+		}
+		if err := runtime.Ensure(context.Background(), b, persisted); err != nil {
+			i.DB.Model(&Installation{}).Where("id = ?", persisted.ID).Update("status", "failed")
+			return nil, nil, fmt.Errorf("LoadNativeService: %w", err)
+		}
+		*inst = persisted
 	}
 	// Broadcast the manifest-hash change (or first-install signal). Errors
 	// are logged but never fail the install — the WebSocket fan-out is a
@@ -1005,6 +1038,15 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 		}
 		if err := loader.LoadFromBundle(ctx, newBundle); err != nil {
 			return nil, fmt.Errorf("installer.Upgrade: LoadBackendRuntime: %w", err)
+		}
+	}
+	if newBundle.Manifest.NativeService != nil {
+		runtime := i.NativeRuntime
+		if runtime == nil {
+			runtime = UnsupportedNativeServiceRuntime{}
+		}
+		if err := runtime.Ensure(ctx, newBundle, existing); err != nil {
+			return nil, fmt.Errorf("installer.Upgrade: LoadNativeService: %w", err)
 		}
 	}
 
