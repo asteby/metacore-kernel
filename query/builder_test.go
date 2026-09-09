@@ -118,10 +118,10 @@ func TestNew_DropsUnsafeColumnNames(t *testing.T) {
 	meta := &modelbase.TableMetadata{
 		Columns: []modelbase.ColumnDef{
 			{Key: "ok_col"},
-			{Key: "bad col"},   // space
-			{Key: "1bad"},      // starts with digit
-			{Key: "drop--"},    // SQL comment
-			{Key: ""},          // empty
+			{Key: "bad col"}, // space
+			{Key: "1bad"},    // starts with digit
+			{Key: "drop--"},  // SQL comment
+			{Key: ""},        // empty
 		},
 	}
 	b := New(meta)

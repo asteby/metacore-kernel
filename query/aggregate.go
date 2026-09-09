@@ -165,6 +165,10 @@ func Aggregate(ctx context.Context, db *gorm.DB, spec AggregateSpec) (AggregateR
 		}
 	}
 
+	if err := ValidateWhereMap(spec.Where); err != nil {
+		return zero, err
+	}
+
 	switch {
 	case spec.DateField != "":
 		return aggregateSeries(ctx, db, spec, fn)
@@ -194,11 +198,63 @@ func baseQuery(db *gorm.DB, spec AggregateSpec) *gorm.DB {
 	return applyWhereMap(q, spec.Where)
 }
 
+// supportedWhereOps son los operadores que un Where entiende. Es la fuente de
+// verdad para validateWhereMap y tiene que moverse junto con el switch de
+// whereFilter: un operador que exista en uno y no en el otro es justo el
+// desacuerdo que este archivo dejó de tolerar.
+var supportedWhereOps = map[string]bool{
+	"eq": true, "neq": true, "contains": true,
+	"gt": true, "gte": true, "lt": true, "lte": true,
+}
+
+// ValidateWhereMap rechaza un Where que este motor no sabe aplicar, EN VEZ DE
+// APLICARLO MAL.
+//
+// Exportada a propósito: el host tiene su propio ejecutor espejo para la
+// ventana previa del delta, y si cada uno mantuviera su lista de operadores
+// volveríamos a tener dos motores que difieren en silencio — que es el defecto
+// que esto vino a cerrar. Una sola fuente de verdad, usada por los dos.
+//
+// POR QUÉ ES UN ERROR Y NO UNA DEGRADACIÓN. Un filtro que el motor no entiende
+// no se descartaba: `{"category_id": {"is_null": true}}` caía por el camino de
+// igualdad y terminaba comparando la columna contra la cadena
+// "map[is_null:true]" — cero filas, sin un solo aviso. Y el ejecutor espejo del
+// host hacía lo contrario: ignoraba la cláusula y contaba TODO. El mismo widget,
+// dos números distintos, ninguno verdadero, ambos con cara de dato.
+//
+// Un tablero existe para que alguien decida a partir de él. Un número inventado
+// que nadie puede distinguir de uno bueno es peor que una tarjeta en error: el
+// error obliga a mirar, el número tranquiliza. De ahí que esto falle fuerte y
+// temprano, con el nombre del operador y de la columna en el mensaje.
+func ValidateWhereMap(where map[string]any) error {
+	for col, v := range where {
+		if !isSafeIdent(col) {
+			return fmt.Errorf("query.Aggregate: invalid where column %q", col)
+		}
+		switch t := v.(type) {
+		case nil:
+			// `{"col": null}` parece "donde la columna es NULL" y no lo es: se
+			// resolvía como igualdad contra cadena vacía. Mientras no exista un
+			// operador de nulidad, decirlo es mejor que responder otra cosa.
+			return fmt.Errorf("query.Aggregate: where %q: un valor null no expresa una comparación con NULL", col)
+		case map[string]any:
+			if len(t) != 1 {
+				return fmt.Errorf("query.Aggregate: where %q: se esperaba un solo {operador: valor}, llegaron %d", col, len(t))
+			}
+			for op := range t {
+				if !supportedWhereOps[strings.ToLower(op)] {
+					return fmt.Errorf("query.Aggregate: where %q: operador %q no soportado", col, op)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // applyWhereMap layers the spec's Where map onto q, reusing applyOneFilter so
 // the operator semantics match the list builder exactly. A bare scalar value
-// means equality; a {op: value} object selects the operator. Unsafe column
-// names and unsupported operators are dropped silently (the kernel's "garbage
-// in → safe degrade" policy).
+// means equality; a {op: value} object selects the operator. El Where ya pasó
+// por validateWhereMap, así que acá no hay operadores desconocidos que tolerar.
 func applyWhereMap(q *gorm.DB, where map[string]any) *gorm.DB {
 	if len(where) == 0 {
 		return q

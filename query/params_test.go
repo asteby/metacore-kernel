@@ -203,7 +203,6 @@ func TestParseFilterValue_RangeOneSide(t *testing.T) {
 	}
 }
 
-
 func TestParseFromMap_SearchQAlias(t *testing.T) {
 	p, err := ParseFromMap(map[string][]string{"q": {"pirelli"}})
 	if err != nil {

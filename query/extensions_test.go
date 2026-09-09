@@ -166,11 +166,11 @@ func TestParseFromMap_AggregateUnknownFunc(t *testing.T) {
 
 func TestParseFromMap_AggregateMalformed(t *testing.T) {
 	cases := []string{
-		"sum total",      // no parens
-		"sum(",           // unclosed
-		"sum()",          // empty field
-		"sum(total",      // unclosed
-		")sum(total)",    // garbage prefix → open<=0
+		"sum total",   // no parens
+		"sum(",        // unclosed
+		"sum()",       // empty field
+		"sum(total",   // unclosed
+		")sum(total)", // garbage prefix → open<=0
 	}
 	for _, raw := range cases {
 		_, err := ParseFromMap(map[string][]string{"aggregate": {raw}})
