@@ -1,6 +1,7 @@
 # RFC 002 — Native service runtime for addon sidecars
 
-Status: foundation accepted in code; manifest wiring and host supervisor pending.
+Status: foundation accepted; Module Contract v3 wiring implemented; artifact,
+installer and host-supervisor integration pending.
 
 ## Problem
 
@@ -61,8 +62,8 @@ High-isolation deployments may choose `installation` scope.
 
 ## Delivery sequence
 
-1. This PR: portable spec, validation and supervisor port.
-2. Manifest v3: `runtime.native_service` schema and projection.
+1. Complete: portable spec, validation and supervisor port.
+2. Complete: Manifest v3 `runtime.native_service` schema and projection.
 3. Bundle: OS/arch artifact descriptors, digest and SBOM verification.
 4. Installer: journaled ensure/health/rollback integration.
 5. Ops: rootless supervisor adapter and local authenticated transport.

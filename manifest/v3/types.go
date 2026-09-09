@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/asteby/metacore-kernel/runtime/native"
 )
 
 // APIVersion is the only accepted value for the top-level apiVersion field
@@ -36,6 +38,7 @@ type Manifest struct {
 	Capabilities    []Capability     `json:"capabilities,omitempty"`
 	Models          []Model          `json:"models,omitempty"`
 	Frontend        *Frontend        `json:"frontend,omitempty"`
+	Runtime         *Runtime         `json:"runtime,omitempty"`
 	Contributions   *Contributions   `json:"contributions,omitempty"`
 	ExtensionPoints *ExtensionPoints `json:"extension_points,omitempty"`
 	Lifecycle       *Lifecycle       `json:"lifecycle,omitempty"`
@@ -114,6 +117,13 @@ type Manifest struct {
 	ProvidesOptions []OptionCatalog `json:"provides_options,omitempty"`
 
 	Signature *Signature `json:"signature,omitempty"`
+}
+
+// Runtime declares addon-owned executable services. The wrapper is
+// intentionally extensible: request-scoped WASM continues to be inferred from
+// handlers while long-lived services are explicit desired state.
+type Runtime struct {
+	NativeService *native.Spec `json:"native_service,omitempty"`
 }
 
 // Connector declares a third-party credential provider an addon depends on. The
