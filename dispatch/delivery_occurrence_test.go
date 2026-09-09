@@ -116,7 +116,8 @@ func TestUpdate_LegacyEnvelopeFallsBackToPayloadFingerprint(t *testing.T) {
 // dispatcher — y eso es lo que la hace frágil.
 //
 // ESTE CAMINO NO ES UN RINCÓN LEGACY: ES POR DONDE PASA HOY LA FACTURACIÓN.
-// Hay tres publicadores de CanonicalEvent y sólo UNO estampa occurrence_id:
+// Hay tres publicadores de CanonicalEvent y sólo UNO estampa occurrence_id
+// (diagnóstico completo y verificado en vivo: issue #325):
 //
 //  1. dynamic.Service.publishCanonical (kernel) — outbox sí, occurrence_id sí.
 //     Es el que arregló #322, y el único que NO depende de esta huella.
@@ -133,12 +134,19 @@ func TestUpdate_LegacyEnvelopeFallsBackToPayloadFingerprint(t *testing.T) {
 // viajan por acá. Medido en el sandbox: 66 filas de outbox sin occurrence_id
 // contra 4 con él, en 48 horas.
 //
-// Un publicador de los caminos 2 o 3 que arme el envelope sin un campo que
-// cambie —y ninguno está OBLIGADO a incluirlo— pierde la segunda entrega en
-// silencio: no falla, no loguea, simplemente no llega. Estampar occurrence_id
-// en esos dos publicadores vuelve la garantía incondicional y es el arreglo
-// correcto; aun así este test sigue haciendo falta después, porque las filas
-// de outbox ya escritas sin occurrence_id se siguen resolviendo por la huella.
+// NO HAY UN CASO OBSERVADO de esta colisión: lo de arriba es lectura del
+// código, no un incidente. Hoy los payloads de esos caminos traen updated_at
+// y difieren. Lo que se afirma es más estrecho y más duradero: que ahí la
+// corrección depende de que CADA publicador incluya un campo que cambie, y
+// ninguno está OBLIGADO a hacerlo. Un envelope armado a mano sin él pierde la
+// segunda entrega sin fallar ni loguear.
+//
+// Estampar occurrence_id en los caminos 2 y 3 vuelve la garantía incondicional
+// y es el arreglo correcto (en curso). AUN ASÍ ESTE TEST NO ES TRANSITORIO: el
+// fallback es contrato permanente. Las filas de outbox ya escritas sin
+// occurrence_id se siguen resolviendo por la huella cuando el relay las
+// levante, y cualquier host o guest futuro que arme el envelope por su cuenta
+// tampoco está obligado a estamparlo.
 //
 // Si mañana alguien cambia el fingerprint (un contador, un timestamp de
 // publicación, un uuid), ESTE TEST DEBE FALLAR: le está diciendo qué contrato
