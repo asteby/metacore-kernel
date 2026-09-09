@@ -9,6 +9,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`<Model>.updated` se entregaba UNA SOLA VEZ por fila, para siempre.** El
+  `delivery_id` del ledger de dispatch se calculaba con
+  `hash(nombre del evento, id de la FILA, subscripción)` — nada por ocurrencia.
+  Como el insert usa `ON CONFLICT(delivery_id) DO NOTHING`, la **primera**
+  actualización de una fila consumía la única entrega posible y **toda
+  actualización posterior se descartaba en silencio** como si fuera una
+  re-publicación. No había error, ni log, ni fila muerta: el handler
+  simplemente no corría nunca más para esa fila.
+
+  El daño medido en producción: una venta a crédito cuyo `PUT` a
+  `credit_pending` quemaba la entrega jamás alcanzaba `on_sales_order_settled`
+  al pasar a `delivered`, y la reserva de crédito quedaba colgada; y una
+  factura con tres cobros parciales dejaba el `AccountStatement` congelado en
+  el saldo posterior al **primer** cobro. Las ventas de contado se salvaban por
+  casualidad, porque su primer update ya es el definitivo.
+
+  `CanonicalEvent` gana ahora `occurrence_id`: un uuid por **publicación**,
+  estampado en `publishCanonical`. Dos actualizaciones distintas son dos
+  ocurrencias y por tanto dos entregas; una re-entrega de la misma publicación
+  conserva su id y sigue colapsando a una sola, que es justo para lo que existe
+  el `ON CONFLICT` — el relay del outbox re-publica los **bytes persistidos**,
+  así que el id viaja intacto en el replay. Un evento canónico sin
+  `occurrence_id` (fila de outbox sin publicar escrita por un kernel anterior,
+  o un host que arma el envelope a mano) cae a una huella sha256 del payload
+  serializado, que conserva las dos propiedades.
+
+  El cambio en el wire es **aditivo** — los guests que deserializan con su
+  propio struct ignoran la clave nueva — y **no requiere migración**: los
+  `delivery_id` nuevos no colisionan con los viejos, así que la próxima
+  actualización de cada fila vuelve a entregar por sí sola, sin backfill.
+
+  **Ojo para hosts:** `dispatch.ForgetOccurrences` espera ids de **ocurrencia**,
+  no ids de fila. Un caller que le pase ids de fila ya no borra nada.
+
 - **`http_fetch` / `http_request` corrompían silenciosamente toda respuesta
   binaria.** El host entregaba el body al guest metiéndolo como *string* en un
   JSON, y `encoding/json` sustituye cada byte UTF-8 inválido por U+FFFD al

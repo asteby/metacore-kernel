@@ -32,9 +32,15 @@ import (
 // The ID, Before, and After fields are preserved with the same names and types
 // for backward-compatibility with existing subscribers.
 type CanonicalEvent struct {
-	ID            string         `json:"id"`
+	ID string `json:"id"`
+	// OccurrenceID identifies this PUBLICATION, not the mutated row. Two
+	// updates of the same row are two occurrences; a re-publish of one
+	// occurrence (outbox relay) reuses the persisted payload bytes and
+	// therefore keeps its id, which is what lets the dispatch ledger dedup
+	// re-delivery without swallowing every update after the first.
+	OccurrenceID  string         `json:"occurrence_id,omitempty"`
 	Model         string         `json:"model"`
-	Action        string         `json:"action"`          // created|updated|deleted
+	Action        string         `json:"action"` // created|updated|deleted
 	AddonKey      string         `json:"addon_key"`
 	ActorID       string         `json:"actor_id,omitempty"`
 	CorrelationID string         `json:"correlation_id,omitempty"`
@@ -118,6 +124,7 @@ func (s *Service) publishCanonical(ctx context.Context, model, action string, us
 	}
 	payload := &CanonicalEvent{
 		ID:            id,
+		OccurrenceID:  uuid.NewString(),
 		Model:         modelKey,
 		Action:        action,
 		AddonKey:      addonKey,

@@ -2,6 +2,8 @@ package dispatch
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +45,7 @@ type Dispatcher struct {
 // payload so guests receive the full canonical event.
 type canonicalEvent struct {
 	ID            string `json:"id"`
+	OccurrenceID  string `json:"occurrence_id"`
 	Model         string `json:"model"`
 	Action        string `json:"action"`
 	AddonKey      string `json:"addon_key"`
@@ -106,14 +109,32 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 		ce.ActorID = dynamic.ActorIDFromContext(ctx)
 	}
 
-	// occurrenceID is the idempotency discriminator for this publication. A
-	// canonical event has a natural one (the mutated row id), which is what
-	// makes a re-publish collapse to a single delivery. A domain event has no
-	// such key, and reusing an empty string would make every subsequent
-	// emission of the same event name a permanent no-op — so each publication
-	// gets a fresh id and is delivered on its own merits.
-	occurrenceID := ce.ID
+	// occurrenceID is the idempotency discriminator for this PUBLICATION. It
+	// must distinguish two different updates of the same row while staying
+	// identical across a re-delivery of one update — that tension is the whole
+	// design, and it used to be resolved the wrong way: the discriminator was
+	// the mutated row id, so the FIRST update of a row consumed the only
+	// delivery that row would ever get and every later update was silently
+	// dropped as a "re-publish" (a credit sale never reached its settled
+	// handler, an account statement froze after the first payment).
+	//
+	// dynamic.publishCanonical now stamps a per-publication occurrence_id, and
+	// the outbox relay re-publishes the PERSISTED bytes, so a replayed event
+	// carries the same id and still collapses to one delivery.
+	occurrenceID := ce.OccurrenceID
+	if occurrenceID == "" && ce.ID != "" {
+		// Canonical event from before occurrence_id existed (an unpublished
+		// outbox row written by an older kernel, or a host building the
+		// envelope by hand): fingerprint the serialized payload. Byte-stable
+		// across a replay of the same publication, and different between two
+		// updates because `after` — updated_at included — differs.
+		sum := sha256.Sum256(raw)
+		occurrenceID = ce.ID + ":" + hex.EncodeToString(sum[:])
+	}
 	if occurrenceID == "" {
+		// A domain event (event_emit) has no natural key at all; reusing an
+		// empty string would make every later emission of the same name a
+		// permanent no-op, so each publication is delivered on its own merits.
 		occurrenceID = uuid.NewString()
 	}
 
