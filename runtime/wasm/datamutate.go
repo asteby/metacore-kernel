@@ -231,9 +231,18 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 	eventAddon := canonicalEventAddon(inv, req.Model, addonKey)
 	event := fmt.Sprintf("%s.%s.%s", eventAddon, req.Model, action)
 	payload := &dynamic.CanonicalEvent{
-		ID:     rowID,
-		Model:  req.Model,
-		Action: action,
+		ID: rowID,
+		// Un uuid por PUBLICACIÓN, igual que dynamic.publishCanonical (#322).
+		// Sin él, el despachador cae a su huella sha256 del payload, que
+		// distingue dos escrituras sólo porque `after` trae `updated_at`: una
+		// garantía por CONTENIDO, no por diseño. El guest no está obligado a
+		// que su `after` cambie, así que dos data_mutate convergentes podrían
+		// colapsar en una sola entrega — el bug de #321 otra vez, por este
+		// camino. Con el id explícito la idempotencia es incondicional.
+		// Esto NO da durabilidad: este camino sigue sin outbox (ver #325).
+		OccurrenceID: uuid.NewString(),
+		Model:        req.Model,
+		Action:       action,
 		// ActorID rides in from the delivery ctx (the dispatcher re-attaches
 		// the originating event's actor): the human whose action caused this
 		// chain, so the audit trail never shows an anonymous system actor for

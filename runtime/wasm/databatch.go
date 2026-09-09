@@ -212,7 +212,14 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 		eventAddon := canonicalEventAddon(inv, m.Model, addonKey)
 		event := fmt.Sprintf("%s.%s.%s", eventAddon, m.Model, res.action)
 		payload := &dynamic.CanonicalEvent{
-			ID:            res.rowID,
+			ID: res.rowID,
+			// Un uuid por publicación, mismo motivo que en datamutate.go: sin
+			// él el despachador cae a la huella del payload, y en un batch el
+			// riesgo es mayor porque dos entradas del MISMO lote pueden tocar
+			// filas distintas con contenido idéntico salvo el id — que sí
+			// entra en la huella, pero no es una garantía que este camino
+			// deba apoyar en el contenido. Ver #325.
+			OccurrenceID:  uuid.NewString(),
 			Model:         m.Model,
 			Action:        res.action,
 			ActorID:       dynamic.ActorIDFromContext(ctx),
