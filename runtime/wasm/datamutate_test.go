@@ -657,3 +657,71 @@ func TestExecuteDataMutate_EventUsesModelOwner(t *testing.T) {
 		t.Fatalf("expectations not met: %v", err)
 	}
 }
+
+// REGRESIÓN #325 — dos data_mutate CONVERGENTES sobre la misma fila deben
+// producir dos entregas, no una.
+//
+// El despachador deriva su clave de idempotencia del occurrence_id del evento;
+// sin él cae a una huella sha256 del payload (#322). Este camino no lo
+// estampaba, así que la única razón por la que dos escrituras se distinguían
+// era que `after` traía un `updated_at` distinto: una garantía por CONTENIDO,
+// no por diseño. El escenario de abajo es el que la rompe — un SET absoluto al
+// MISMO valor, que es como se escribe un handler convergente— y por eso el
+// test fija el id explícito en vez del `after`.
+//
+// Es idempotencia, NO durabilidad: este camino sigue publicando sin outbox.
+func TestExecuteDataMutate_StampsDistinctOccurrenceIDPerPublication(t *testing.T) {
+	orgID := uuid.New()
+	rowID := uuid.NewString()
+
+	// Una escritura convergente: el mismo SET absoluto, dos veces, con un
+	// `after` idéntico salvo por lo que estampe el host.
+	writeOnce := func(t *testing.T) *dynamic.CanonicalEvent {
+		t.Helper()
+		gdb, mock, cleanup := newMockGorm(t)
+		defer cleanup()
+		bus, getEvents, _ := captureBus(t, "inventory.Stock.updated")
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
+		mock.ExpectQuery(`SELECT \* FROM "stock" WHERE id = \$1 AND organization_id = \$2`).
+			WithArgs(rowID, orgID).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "note"}).AddRow(rowID, "same"))
+		mock.ExpectQuery(`UPDATE "stock" SET "note" = \$1, "updated_at" = \$2 WHERE id = \$3 AND organization_id = \$4 RETURNING \*`).
+			WithArgs("same", sqlmock.AnyArg(), rowID, orgID).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "note"}).AddRow(rowID, "same"))
+		mock.ExpectCommit()
+
+		inv := testInvocation(gdb, bus, orgID, stockWriteEnforcer(), nil)
+		out := executeDataMutate(context.Background(), inv, []byte(`{
+			"op": "update", "table": "stock", "model": "Stock",
+			"id": "`+rowID+`",
+			"data": {"note": "same"}
+		}`))
+		if env := unmarshalMutate(t, out); !env.Success {
+			t.Fatalf("expected success, got %s", out)
+		}
+		evs := getEvents()
+		if len(evs) != 1 {
+			t.Fatalf("expected 1 canonical event, got %d", len(evs))
+		}
+		return evs[0]
+	}
+
+	first := writeOnce(t)
+	second := writeOnce(t)
+
+	if first.OccurrenceID == "" || second.OccurrenceID == "" {
+		t.Fatalf("data_mutate must stamp an occurrence_id per publication; got %q and %q",
+			first.OccurrenceID, second.OccurrenceID)
+	}
+	if first.OccurrenceID == second.OccurrenceID {
+		t.Fatalf("two distinct publications share occurrence_id %q: the dispatcher "+
+			"would collapse them into ONE delivery (#321 again, by this path)",
+			first.OccurrenceID)
+	}
+	// La fila es la misma: lo que discrimina es la publicación, no el registro.
+	if first.ID != second.ID {
+		t.Fatalf("test is not exercising the same row: %q vs %q", first.ID, second.ID)
+	}
+}
