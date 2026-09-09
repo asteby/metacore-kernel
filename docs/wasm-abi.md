@@ -1,4 +1,4 @@
-# WASM ABI (v1.5 — proposal, kernel-side)
+# WASM ABI (v1.10 — proposal, kernel-side)
 
 The metacore kernel can run addon backends as sandboxed WebAssembly modules
 via [wazero](https://wazero.io). This document is the kernel-side contract
@@ -11,9 +11,10 @@ keep them in sync.
 > `github.com/asteby/metacore-kernel/guest` package wraps `event_emit`
 > (and, over time, the rest of the host surface) behind typed Go APIs.
 
-> ABI version: **1.6** (proposal — `http_request` + `connector_get` host
-> imports added on top of v1.5; guests built against 1.0 – 1.5 keep working —
-> purely additive, `http_fetch` is unchanged).
+> ABI version: **1.10** (proposal — the `http_fetch` / `http_request` response
+> envelope gains `body_base64` + `body_is_base64` for bodies that are not valid
+> UTF-8; guests built against 1.0 – 1.9 keep working, the envelope for a UTF-8
+> body is byte-identical to before).
 > Bundled via `manifest.backend.runtime = "wasm"`.
 > Implementation: `runtime/wasm/abi.go`, `runtime/wasm/capabilities.go`.
 
@@ -27,6 +28,7 @@ keep them in sync.
 | 1.3     | proposal | adds `event_emit` host import; guests publish a `<name>, <payload>` pair through the kernel's in-process `events.Bus`. Capability gated by `event:emit <name>` and tenant-scoped by the per-invocation `orgID` the host carries on the context bag. |
 | 1.4     | proposal | adds `data_mutate` host import; ONE org-scoped row mutation (`create` / `update` / `delete` with atomic `inc`) against a LOGICAL table resolved through the embedder-injected `TableResolver` (NOT the addon-schema `search_path`), followed by a post-commit `*dynamic.CanonicalEvent` on the host bus. Gated by `db:write <logical table>`. |
 | 1.5     | proposal | adds `data_query` host import; read-only sibling of `data_mutate`: ONE org-scoped, equality-filtered SELECT against a LOGICAL table resolved through the SAME `TableResolver` (NOT the addon-schema `search_path` of `db_query`, whose shadow schemas hold no live rows in embedding hosts). Soft-delete aware (`deleted_at IS NULL` auto-appended). Gated by `db:read <logical table>`. No events. |
+| 1.10    | proposal | `http_fetch` / `http_request` responses whose body is **not valid UTF-8** now travel as `body_base64` (standard base64) with `body_is_base64: true` and an EMPTY `body`; UTF-8 bodies are unchanged. Fixes silent corruption of every binary response (PDF / ZIP / image / XLSX): `encoding/json` rewrites each invalid byte as U+FFFD, so guests received corrupt bytes with a 200 status and no error. See § 3.1. |
 | 1.6     | proposal | adds `http_request` (outbound HTTP with caller-supplied request headers as a JSON object — enables `Authorization`/`Accept` for authenticated third-party calls; same `http:fetch` capability + SSRF guard + 30 s timeout + 8 MiB cap as `http_fetch`, which is left unchanged and now delegates to the shared path with empty headers) and `connector_get` (resolves one org's credentials for a declared connector — the v3 `connectors` block — returning a JSON object; gated by `connector:read <key>` and tenant-scoped by the invocation `orgID`). Guests built against 1.0 – 1.5 keep working. |
 
 ## 1. Declaration
@@ -88,6 +90,7 @@ env_get(keyPtr i32, keyLen i32) -> i64
 http_fetch(urlPtr, urlLen, methPtr, methLen, bodyPtr, bodyLen i32) -> i64
   -> packed (ptr, len) of the response body. Subject to the addon's
      `http:fetch` capabilities and the egress SSRF guard (see capabilities.md).
+     Response envelope: see § 3.1 — BINARY bodies arrive base64-encoded.
 
 db_query(sqlPtr i32, sqlLen i32, argsPtr i32, argsLen i32) -> i64   [v1.1]
   -> packed (ptr, len) of a JSON envelope with rows. Scoped to the addon's
@@ -142,6 +145,59 @@ data_query(reqPtr i32, reqLen i32) -> i64                           [v1.5]
 The host allocates response buffers inside guest memory via `alloc`, writes
 into them, and returns the packed pointer. The guest is responsible for
 reading before triggering another allocation.
+
+### 3.1 `http_fetch` / `http_request` response envelope
+
+Both outbound-HTTP imports write the same flat JSON object into guest memory
+on a completed request (failures use the `{error, message}` shape of § 7):
+
+```json
+{ "status": 200, "body": "<upstream body as text>" }
+```
+
+**Binary responses (ABI 1.10).** The `body` field is a JSON string, and Go's
+`encoding/json` replaces every byte that is not valid UTF-8 with U+FFFD when
+it serialises one. A PDF, ZIP, image or XLSX carried that way reaches the
+guest **corrupt**, with a `200` status and no error anywhere — the worst kind
+of failure, because the data looks fine until someone opens the file, possibly
+years later. (The case that surfaced it: the SAT-mandated CFDI copy an addon
+must retain for five years.)
+
+So the host inspects the CONTENT of the body — not the `Content-Type` header,
+which upstreams mislabel routinely — and, when it is **not** valid UTF-8,
+switches transport:
+
+```json
+{ "status": 200, "body": "", "body_base64": "JVBERi0xLjcK...", "body_is_base64": true }
+```
+
+| Field            | Type   | Present when                                       |
+|------------------|--------|----------------------------------------------------|
+| `status`         | number | always                                             |
+| `body`           | string | always — **empty** when `body_is_base64` is true   |
+| `body_base64`    | string | only when the body is not valid UTF-8 (std base64) |
+| `body_is_base64` | bool   | only when the body is not valid UTF-8 (always true)|
+
+Rules for guests:
+
+- **Read `body_is_base64` first.** When it is true, decode `body_base64` with
+  standard base64 (`encoding/base64.StdEncoding`) and ignore `body`.
+- The `guest` helper package does this for you: `HttpResponse.Body` always
+  holds the upstream bytes verbatim, and `HttpResponse.BodyIsBase64` reports
+  which transport was used. See [`docs/guest-go.md`](./guest-go.md).
+- A guest that predates 1.10 and keeps reading `body` now receives **zero
+  bytes** for a binary response instead of corrupt ones. That is deliberate:
+  an empty PDF fails immediately and visibly, corrupt bytes do not. No correct
+  guest can regress, since the bytes it used to receive on that branch were
+  already wrong.
+- An **empty** body is valid UTF-8 and stays on the plain `body` path, so a
+  `204` or a `HEAD` never looks binary.
+
+Sizes: the 8 MiB response cap applies to the RAW upstream bytes, before
+encoding. Base64 inflates what the guest must hold by ~33% (≈10.7 MiB worst
+case), well inside the 64 MiB default guest memory limit — the cap is
+deliberately not lowered, since that would penalise text responses this
+contract does not affect.
 
 ## 4. Minimal TinyGo example
 

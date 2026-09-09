@@ -7,6 +7,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`http_fetch` / `http_request` corrompían silenciosamente toda respuesta
+  binaria.** El host entregaba el body al guest metiéndolo como *string* en un
+  JSON, y `encoding/json` sustituye cada byte UTF-8 inválido por U+FFFD al
+  serializar. Cualquier PDF, ZIP, imagen o XLSX llegaba al guest **corrupto**,
+  con status 200 y sin error en ninguna parte: el peor tipo de fallo, porque
+  los datos parecen correctos hasta que alguien abre el archivo, quizá años
+  después. El caso que lo destapó fue la copia del CFDI que el SAT obliga a
+  conservar cinco años — guardar el PDF corrupto es peor que no guardarlo,
+  porque aparenta cumplimiento; por eso `fiscal_mexico` acabó persistiendo
+  sólo el XML.
+
+  Ahora el host mira el **contenido** del body (`utf8.Valid`, no el header
+  `Content-Type`, que los upstreams etiquetan mal de forma rutinaria) y, si no
+  es UTF-8 válido, lo manda en base64 estándar: el envelope suma
+  `body_base64` (string) y `body_is_base64` (bool) y deja `body` **vacío**.
+  El cambio es **aditivo**: para todo body UTF-8 el envelope es idéntico byte
+  a byte al anterior — las dos claves nuevas ni siquiera aparecen en el wire —
+  así que ningún guest existente cambia de comportamiento. Un guest antiguo
+  que siga leyendo `body` en una respuesta binaria recibe cero bytes, que
+  falla ruidosa e inmediatamente, en lugar de basura verosímil; los bytes que
+  recibía antes en esa rama ya eran incorrectos. El body vacío sigue siendo
+  UTF-8 válido y no cambia de vía (un 204 o un HEAD nunca parece binario).
+
+  El helper `guest.HttpFetch` decodifica la vía nueva de forma transparente:
+  `HttpResponse.Body` siempre trae los bytes del upstream tal cual, y el nuevo
+  `HttpResponse.BodyIsBase64` informa qué transporte se usó. ABI 1.10,
+  documentado en `docs/wasm-abi.md` § 3.1. Cierra #319.
+
 ### Added
 
 - **`provides_options[]`: catálogos de opciones declarativos.** Un addon

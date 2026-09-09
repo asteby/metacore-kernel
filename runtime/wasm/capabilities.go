@@ -3,6 +3,7 @@ package wasm
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -558,12 +559,51 @@ func doHTTP(ctx context.Context, mod api.Module, inv *invocation, url, method st
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20)) // 8 MiB safety cap
-	env := map[string]any{
-		"status": resp.StatusCode,
-		"body":   string(respBody),
+	return writeToGuest(ctx, mod, httpResponseEnvelope(resp.StatusCode, respBody))
+}
+
+// httpResponseEnvelope builds the {status, body} JSON the guest receives for a
+// completed outbound call, choosing the transport that preserves the bytes.
+//
+// The plain `body` string is only safe for valid UTF-8: `encoding/json`
+// replaces every invalid byte with U+FFFD when it serialises a Go string, so a
+// PDF / ZIP / image / XLSX handed back that way reaches the guest CORRUPTED,
+// with a 200 status and no error anywhere — the silent failure of #319.
+//
+// So we decide on the CONTENT, not on the response's Content-Type header:
+// upstreams mislabel bodies routinely (octet-stream for JSON, text/html for a
+// PDF error page), and a header check would both miss real binaries and
+// needlessly base64 text. utf8.Valid is a single linear scan with a fast path,
+// and json.Marshal already walks every byte anyway, so it costs nothing
+// measurable next to the network round-trip it follows.
+//
+// When the body is NOT valid UTF-8 the envelope carries it as standard base64
+// in `body_base64`, flags `body_is_base64: true`, and leaves `body` EMPTY.
+// Empty is deliberate: a guest that predates this change and keeps reading
+// `body` now gets zero bytes, which fails loudly and immediately (an empty PDF
+// will not open, an empty JSON will not parse) instead of persisting plausible
+// garbage that only surfaces years later. No correct guest can regress, since
+// the bytes it used to get in that branch were already wrong.
+//
+// Valid-UTF-8 bodies keep the exact pre-#319 shape — `body` populated, the two
+// new keys absent — so every existing guest is bit-for-bit unaffected.
+//
+// Note on size: the 8 MiB read cap is applied to the RAW bytes by the caller,
+// before this function; base64 inflates the envelope the guest must hold by
+// ~33% (≈10.7 MiB worst case), which fits comfortably under the 64 MiB default
+// guest memory limit. The cap is not lowered — doing so would shrink the
+// budget for text responses that are not affected by this bug.
+func httpResponseEnvelope(status int, respBody []byte) []byte {
+	env := map[string]any{"status": status}
+	if utf8.Valid(respBody) {
+		env["body"] = string(respBody)
+	} else {
+		env["body"] = ""
+		env["body_base64"] = base64.StdEncoding.EncodeToString(respBody)
+		env["body_is_base64"] = true
 	}
 	buf, _ := json.Marshal(env)
-	return writeToGuest(ctx, mod, buf)
+	return buf
 }
 
 func readString(mod api.Module, ptr, n uint32) string {
