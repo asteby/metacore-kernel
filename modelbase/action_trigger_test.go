@@ -45,3 +45,26 @@ func TestActionDef_ConnectorTriggerRoundTrips(t *testing.T) {
 		t.Fatalf("connector trigger lost across re-marshal: %s", out)
 	}
 }
+
+func TestActionTriggerPreservesNativeOperation(t *testing.T) {
+	raw := []byte(`{"key":"connect","name":"connect","label":"Connect","trigger":{"type":"native","operation":"connect_device"}}`)
+	var action ActionDef
+	if err := json.Unmarshal(raw, &action); err != nil {
+		t.Fatal(err)
+	}
+	if action.Trigger == nil || action.Trigger.Type != "native" || action.Trigger.Operation != "connect_device" {
+		t.Fatalf("native trigger projection lost operation: %#v", action.Trigger)
+	}
+	roundTrip, err := json.Marshal(action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var projected map[string]any
+	if err := json.Unmarshal(roundTrip, &projected); err != nil {
+		t.Fatal(err)
+	}
+	trigger := projected["trigger"].(map[string]any)
+	if trigger["operation"] != "connect_device" {
+		t.Fatalf("served action lost native operation: %s", roundTrip)
+	}
+}
