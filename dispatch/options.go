@@ -1,6 +1,7 @@
 package dispatch
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -40,6 +41,23 @@ type Options struct {
 	compiled        CompiledRegistry
 	logger          *slog.Logger
 	onDelivery      func(DeliveryResult)
+
+	modelKeyResolver   func(ctx context.Context, model string) string
+	onModelKeyMismatch func(ModelKeyMismatch)
+}
+
+// ModelKeyMismatch reports ONE publication whose model segment was not the
+// manifest ModelKey subscribers are registered under. It is the structured
+// form of the dispatch.model_key_mismatch warning, surfaced to an optional
+// WithOnModelKeyMismatch observer so hosts can meter it and tests can be
+// strict about it.
+type ModelKeyMismatch struct {
+	AddonKey    string // event's producer segment
+	RawModel    string // what the publisher actually wrote ("sales_orders")
+	ResolvedKey string // what subscribers are registered under ("SalesOrder")
+	Action      string // created | updated | deleted
+	RawEvent    string // the name as published
+	FixedEvent  string // the name routing actually used
 }
 
 // DeliveryResult is the terminal outcome of one delivery, surfaced to an
@@ -58,6 +76,24 @@ type DeliveryResult struct {
 
 // Option mutates Options. Applied left-to-right in Wire.
 type Option func(*Options)
+
+// WithModelKeyResolver wires the host's model registry so the dispatcher can
+// tell a manifest ModelKey ("SalesOrder") from any other spelling of the same
+// model ("sales_orders"). It must return the canonical ModelKey for whatever
+// spelling it is handed, and "" for a model it does not know.
+//
+// Without it the guard is INERT: the dispatcher has no way to know which of two
+// spellings subscribers are registered under, so it routes what it was given.
+func WithModelKeyResolver(fn func(ctx context.Context, model string) string) Option {
+	return func(o *Options) { o.modelKeyResolver = fn }
+}
+
+// WithOnModelKeyMismatch registers an observer fired once per publication that
+// tripped the model-key guard. Hosts use it for metrics; tests use it to turn
+// the warning into a failure.
+func WithOnModelKeyMismatch(fn func(ModelKeyMismatch)) Option {
+	return func(o *Options) { o.onModelKeyMismatch = fn }
+}
 
 func defaultOptions() *Options {
 	return &Options{
