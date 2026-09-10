@@ -334,7 +334,7 @@ func TestExecuteDBExec_XMLTableInsideInsert_Denied(t *testing.T) {
 // db:read on the cross-schema source (the implicit own-schema db:write
 // covers the INSERT target) lets the call through.
 func TestExecuteDBExec_XMLTableInsideInsert_WithReadCap_Allowed(t *testing.T) {
-	gdb, mock, cleanup := newMockGorm(t)
+	tx, mock, cleanup := newMockGormTx(t)
 	defer cleanup()
 
 	mock.ExpectExec(`SET LOCAL search_path TO "addon_tickets", public`).
@@ -347,7 +347,7 @@ func TestExecuteDBExec_XMLTableInsideInsert_WithReadCap_Allowed(t *testing.T) {
 			SELECT t.id FROM XMLTABLE('//r'
 				PASSING (SELECT data FROM other.src)
 				COLUMNS id INT PATH 'id') AS t`
-	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
+	out := executeDBExec(context.Background(), tx, nil, "tickets", "",
 		enforcerWithCaps("tickets", caps), sql, nil)
 
 	env := unmarshalExec(t, out)

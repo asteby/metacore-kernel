@@ -205,7 +205,7 @@ func TestExtractMutationRelations_RangeFunctionGatesBothCaps(t *testing.T) {
 // a mutation against the addon's own implicit schema works without any
 // extra capability declaration.
 func TestExecuteDBExec_BareTableAllowed(t *testing.T) {
-	gdb, mock, cleanup := newMockGorm(t)
+	tx, mock, cleanup := newMockGormTx(t)
 	defer cleanup()
 
 	mock.ExpectExec(`SET LOCAL search_path TO "addon_tickets", public`).
@@ -213,7 +213,7 @@ func TestExecuteDBExec_BareTableAllowed(t *testing.T) {
 	mock.ExpectExec(`UPDATE tickets SET status`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
+	out := executeDBExec(context.Background(), tx, nil, "tickets", "",
 		enforcerWithCaps("tickets", nil),
 		"UPDATE tickets SET status = 'closed' WHERE id = 1", nil)
 
@@ -229,7 +229,7 @@ func TestExecuteDBExec_BareTableAllowed(t *testing.T) {
 // TestExecuteDBExec_OwnSchemaQualifiedAllowed — explicit own-schema target
 // also passes without extra grants.
 func TestExecuteDBExec_OwnSchemaQualifiedAllowed(t *testing.T) {
-	gdb, mock, cleanup := newMockGorm(t)
+	tx, mock, cleanup := newMockGormTx(t)
 	defer cleanup()
 
 	mock.ExpectExec(`SET LOCAL search_path TO "addon_tickets", public`).
@@ -237,7 +237,7 @@ func TestExecuteDBExec_OwnSchemaQualifiedAllowed(t *testing.T) {
 	mock.ExpectExec(`UPDATE addon_tickets.tickets SET status`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
+	out := executeDBExec(context.Background(), tx, nil, "tickets", "",
 		enforcerWithCaps("tickets", nil),
 		"UPDATE addon_tickets.tickets SET status = 'closed'", nil)
 

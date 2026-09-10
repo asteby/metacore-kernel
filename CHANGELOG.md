@@ -7,6 +7,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`db_exec`: pasar el pool a `InvokeInTx` ya no degrada en silencio a
+  autocommit.** La elección entre "uso la transacción del caller" y "abro la
+  mía" era un `nil`-check, así que un embebedor que pasaba su handle del *pool*
+  en la posición del `tx` obtenía lo peor de los dos mundos: no-nil se leía como
+  "hay una transacción en curso", se salteaba el `Begin`, y cada sentencia corría
+  en autocommit. Sin rollback, sin error, y con `SET LOCAL search_path`
+  degradado a no-op de paso (sólo liga dentro de un bloque de transacción).
+
+  Pasar el pool era por lo tanto **estrictamente peor que pasar `nil`**, que al
+  menos ganaba una transacción corta. ops hacía exactamente eso en su ruta de
+  dispatch de eventos/schedules/webhooks (#270) y nada lo delató, porque el
+  kernel no tenía forma de distinguir un pool de un tx.
+
+  Ahora lo pregunta en vez de creerle al caller: `Statement.ConnPool` es el
+  `*sql.Tx` (que satisface `gorm.TxCommitter`) sólo después de un `Begin`. Un
+  handle que no está en transacción recibe una.
+
+  El propio suite del kernel no distinguía tampoco: nueve tests pasaban el pool
+  en la posición del `tx` y afirmaban "no se emite Begin", sin probar nada de la
+  ruta transaccional real. Ahora usan una transacción de verdad
+  (`newMockGormTx`).
+
+### Changed
+
+- **`docs/wasm-abi.md` § 10 decía lo que el kernel no hace.** Prometía que
+  `db_exec` sin transacción devuelve `{code:"no_active_tx"}` — un código que el
+  kernel **nunca emite**; la implementación cae a una transacción corta por
+  llamada. Y § 10.6 especificaba un `SAVEPOINT` por llamada que **nunca se
+  construyó**, del que deducía que el guest puede capturar un
+  `constraint_violation` y seguir. Sobre la transacción del caller no puede: un
+  error la deja en estado abortado (25P02) y toda sentencia posterior falla.
+
+  § 10 ahora describe las dos garantías que existen de verdad —atómico con la
+  acción, o atómico por llamada— y § 11 queda marcada como registro de diseño,
+  no como especificación de lo embarcado.
+
 ### Added
 
 - **`null` / `not_null` en el `where` de una agregación.** Un widget puede por

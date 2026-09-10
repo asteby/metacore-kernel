@@ -61,11 +61,11 @@ type Host struct {
 	// modelOwner resolves the addon that OWNS a ModelKey for canonical-event
 	// namespacing on data_mutate / data_batch (mirrors dynamic.Service's
 	// AddonKeyForModel). When unset, events stay under the CALLER addon.
-	modelOwner    func(model string) string
-	execSchema    func(addonKey string) string
-	sequenceNext  func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)
-	routingTable  RoutingTableFn
-	mutationGuard func(ctx context.Context, logicalTable string, row map[string]any) error
+	modelOwner      func(model string) string
+	execSchema      func(addonKey string) string
+	sequenceNext    func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)
+	routingTable    RoutingTableFn
+	mutationGuard   func(ctx context.Context, logicalTable string, row map[string]any) error
 	mutationCompute MutationComputeFn
 	// approvalRequester is the embedder-injected dynamic.Service.RequestApproval
 	// the `approval_request` import calls (Host.WithApprovals). nil = import
