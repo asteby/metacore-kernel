@@ -23,6 +23,11 @@ func nativeRuntime() map[string]interface{} {
 			"secrets": []interface{}{map[string]interface{}{
 				"handle": "whatsapp.session", "mount": "/run/secrets/session",
 			}},
+			"artifacts": []interface{}{map[string]interface{}{
+				"os": "linux", "arch": "amd64", "path": "backend/native/linux-amd64.tar.gz",
+				"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"sbom":   "backend/native/linux-amd64.spdx.json",
+			}},
 		},
 	}
 }

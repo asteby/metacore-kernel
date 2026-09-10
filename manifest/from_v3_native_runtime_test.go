@@ -16,7 +16,8 @@ func TestFromV3ProjectsNativeServiceBackend(t *testing.T) {
     "entrypoint":"backend/connector", "scope":"instance",
     "health":{"path":"/health","interval":"10s","timeout":"2s"},
     "resources":{"memory_mb":512,"cpu_quota_mcpu":500,"pids":128},
-    "network":{"egress":["web.whatsapp.com:443"]}
+    "network":{"egress":["web.whatsapp.com:443"]},
+    "artifacts":[{"os":"linux","arch":"amd64","path":"backend/native/linux-amd64.tar.gz","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sbom":"backend/native/linux-amd64.spdx.json"}]
   }}
 }`)
 	m, err := v3.Parse(raw)
