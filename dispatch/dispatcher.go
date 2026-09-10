@@ -109,6 +109,12 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 		ce.ActorID = dynamic.ActorIDFromContext(ctx)
 	}
 
+	// Model-key guard (see model_key_guard.go). A publisher that named the
+	// event after the table instead of the manifest ModelKey routes to nobody
+	// and says nothing about it; this warns and routes to the canonical name.
+	// Inert until a host wires WithModelKeyResolver.
+	eventName = d.checkModelKey(ctx, eventName, ce)
+
 	// occurrenceID is the idempotency discriminator for this PUBLICATION. It
 	// must distinguish two different updates of the same row while staying
 	// identical across a re-delivery of one update — that tension is the whole
