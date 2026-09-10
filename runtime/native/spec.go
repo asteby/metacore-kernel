@@ -5,6 +5,8 @@
 package native
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path"
@@ -29,6 +31,17 @@ type Spec struct {
 	Resources  ResourceLimits `json:"resources"`
 	Network    NetworkPolicy  `json:"network"`
 	Secrets    []SecretRef    `json:"secrets,omitempty"`
+	Artifacts  []Artifact     `json:"artifacts"`
+}
+
+// Artifact selects one content-addressed payload for a host platform. Path and
+// SBOM are bundle-relative backend paths; SHA256 covers the payload bytes.
+type Artifact struct {
+	OS     string `json:"os"`
+	Arch   string `json:"arch"`
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	SBOM   string `json:"sbom"`
 }
 
 type HealthCheck struct {
@@ -100,6 +113,61 @@ func (s Spec) Validate() error {
 		if target == "" || strings.ContainsAny(target, "/* \t\n") {
 			return fmt.Errorf("native runtime: network.egress[%d] must be an exact hostname or hostname:port", i)
 		}
+	}
+	if len(s.Artifacts) == 0 {
+		return errors.New("native runtime: at least one artifact is required")
+	}
+	seenPlatforms := map[string]struct{}{}
+	for i, artifact := range s.Artifacts {
+		platform := artifact.OS + "/" + artifact.Arch
+		if artifact.OS == "" || artifact.Arch == "" || strings.ContainsAny(artifact.OS, " /\\") || strings.ContainsAny(artifact.Arch, " /\\") {
+			return fmt.Errorf("native runtime: artifacts[%d] requires simple os and arch values", i)
+		}
+		if _, exists := seenPlatforms[platform]; exists {
+			return fmt.Errorf("native runtime: duplicate artifact platform %q", platform)
+		}
+		seenPlatforms[platform] = struct{}{}
+		if !cleanBackendPath(artifact.Path) || !cleanBackendPath(artifact.SBOM) {
+			return fmt.Errorf("native runtime: artifacts[%d] path and sbom must be clean backend/ paths", i)
+		}
+		decoded, err := hex.DecodeString(artifact.SHA256)
+		if err != nil || len(decoded) != sha256.Size {
+			return fmt.Errorf("native runtime: artifacts[%d].sha256 must be 64 lowercase hexadecimal characters", i)
+		}
+		if artifact.SHA256 != strings.ToLower(artifact.SHA256) {
+			return fmt.Errorf("native runtime: artifacts[%d].sha256 must be lowercase", i)
+		}
+	}
+	return nil
+}
+
+func cleanBackendPath(value string) bool {
+	return strings.HasPrefix(value, "backend/") && path.Clean(value) == value && !strings.Contains(value, "..")
+}
+
+// ArtifactFor returns the exact host-platform artifact without fallback.
+func (s Spec) ArtifactFor(os, arch string) (Artifact, bool) {
+	for _, artifact := range s.Artifacts {
+		if artifact.OS == os && artifact.Arch == arch {
+			return artifact, true
+		}
+	}
+	return Artifact{}, false
+}
+
+// VerifyArtifact checks the selected payload against its manifest digest and
+// requires the declared SBOM to be present in the same verified bundle.
+func VerifyArtifact(artifact Artifact, files map[string][]byte) error {
+	payload, ok := files[artifact.Path]
+	if !ok {
+		return fmt.Errorf("native runtime: artifact %q is missing from bundle", artifact.Path)
+	}
+	if _, ok := files[artifact.SBOM]; !ok {
+		return fmt.Errorf("native runtime: SBOM %q is missing from bundle", artifact.SBOM)
+	}
+	sum := sha256.Sum256(payload)
+	if hex.EncodeToString(sum[:]) != artifact.SHA256 {
+		return fmt.Errorf("native runtime: artifact %q digest mismatch", artifact.Path)
 	}
 	return nil
 }

@@ -1,6 +1,10 @@
 package native
 
-import "testing"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"testing"
+)
 
 func validSpec() Spec {
 	return Spec{
@@ -10,6 +14,32 @@ func validSpec() Spec {
 		Resources:  ResourceLimits{MemoryMB: 512, CPUQuotaMCPU: 500, PIDs: 128},
 		Network:    NetworkPolicy{Egress: []string{"web.whatsapp.com:443"}},
 		Secrets:    []SecretRef{{Handle: "whatsapp.session", Mount: "/run/secrets/session"}},
+		Artifacts: []Artifact{{OS: "linux", Arch: "amd64", Path: "backend/native/linux-amd64.tar.gz",
+			SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SBOM: "backend/native/linux-amd64.spdx.json"}},
+	}
+}
+
+func TestVerifyArtifact(t *testing.T) {
+	payload := []byte("signed connector")
+	sum := sha256.Sum256(payload)
+	a := Artifact{Path: "backend/native/connector.tar.gz", SBOM: "backend/native/sbom.json", SHA256: hex.EncodeToString(sum[:])}
+	files := map[string][]byte{a.Path: payload, a.SBOM: []byte(`{"spdxVersion":"SPDX-2.3"}`)}
+	if err := VerifyArtifact(a, files); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	files[a.Path] = []byte("tampered")
+	if err := VerifyArtifact(a, files); err == nil {
+		t.Fatal("tampered payload must fail")
+	}
+}
+
+func TestSpecArtifactForRequiresExactPlatform(t *testing.T) {
+	s := validSpec()
+	if _, ok := s.ArtifactFor("linux", "amd64"); !ok {
+		t.Fatal("expected exact artifact match")
+	}
+	if _, ok := s.ArtifactFor("linux", "arm64"); ok {
+		t.Fatal("platform selection must not silently fall back")
 	}
 }
 

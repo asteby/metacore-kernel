@@ -618,6 +618,10 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 		if runtime == nil {
 			runtime = UnsupportedNativeServiceRuntime{}
 		}
+		if err := verifyNativeBundle(b, runtime); err != nil {
+			i.DB.Model(&Installation{}).Where("id = ?", persisted.ID).Update("status", "failed")
+			return nil, nil, fmt.Errorf("LoadNativeService: %w", err)
+		}
 		if err := runtime.Ensure(context.Background(), b, persisted); err != nil {
 			i.DB.Model(&Installation{}).Where("id = ?", persisted.ID).Update("status", "failed")
 			return nil, nil, fmt.Errorf("LoadNativeService: %w", err)
@@ -1044,6 +1048,9 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 		runtime := i.NativeRuntime
 		if runtime == nil {
 			runtime = UnsupportedNativeServiceRuntime{}
+		}
+		if err := verifyNativeBundle(newBundle, runtime); err != nil {
+			return nil, fmt.Errorf("installer.Upgrade: LoadNativeService: %w", err)
 		}
 		if err := runtime.Ensure(ctx, newBundle, existing); err != nil {
 			return nil, fmt.Errorf("installer.Upgrade: LoadNativeService: %w", err)

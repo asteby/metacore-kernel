@@ -13,6 +13,8 @@ import (
 
 type recordingNativeRuntime struct{ calls int }
 
+func (r *recordingNativeRuntime) Platform() (string, string) { return "linux", "amd64" }
+
 func (r *recordingNativeRuntime) Ensure(context.Context, *bundle.Bundle, Installation) error {
 	r.calls++
 	return nil
@@ -34,7 +36,9 @@ func TestUpgradeEnsuresNativeServiceBeforeVersionCommit(t *testing.T) {
 		Health:    native.HealthCheck{Path: "/health"},
 		Resources: native.ResourceLimits{MemoryMB: 512, CPUQuotaMCPU: 500, PIDs: 128},
 		Network:   native.NetworkPolicy{Egress: []string{"web.whatsapp.com:443"}},
+		Artifacts: []native.Artifact{{OS: "linux", Arch: "amd64", Path: "backend/native/linux-amd64.tar.gz", SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", SBOM: "backend/native/linux-amd64.spdx.json"}},
 	}
+	b.Backend = map[string][]byte{"backend/native/linux-amd64.tar.gz": {}, "backend/native/linux-amd64.spdx.json": []byte("{}")}
 	row, err := i.Upgrade(context.Background(), orgID, b)
 	if err != nil {
 		t.Fatalf("upgrade: %v", err)
@@ -58,7 +62,9 @@ func TestUpgradeWithoutNativeAdapterKeepsPreviousVersion(t *testing.T) {
 		Health:    native.HealthCheck{Path: "/health"},
 		Resources: native.ResourceLimits{MemoryMB: 512, CPUQuotaMCPU: 500, PIDs: 128},
 		Network:   native.NetworkPolicy{Egress: []string{"web.whatsapp.com:443"}},
+		Artifacts: []native.Artifact{{OS: "linux", Arch: "amd64", Path: "backend/native/linux-amd64.tar.gz", SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", SBOM: "backend/native/linux-amd64.spdx.json"}},
 	}
+	b.Backend = map[string][]byte{"backend/native/linux-amd64.tar.gz": {}, "backend/native/linux-amd64.spdx.json": []byte("{}")}
 	_, err := i.Upgrade(context.Background(), orgID, b)
 	if !errors.Is(err, ErrNativeRuntimeUnavailable) {
 		t.Fatalf("expected unavailable runtime, got %v", err)
