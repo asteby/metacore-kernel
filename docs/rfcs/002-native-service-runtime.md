@@ -40,6 +40,15 @@ The first contract intentionally separates definition from execution:
 9. Every operation carries tenant, installation, actor and trace envelopes.
 10. Logs are structured and redacted at the supervisor boundary.
 
+## Local control protocol
+
+Every sidecar speaks `metacore.native/v1` over an Ops-assigned Unix HTTP
+socket. Kernel reserves a small environment envelope containing only the
+socket path, an opaque token-file path, installation ID, organization ID and
+addon key. Manifests cannot add environment variables or choose host paths.
+Health checks use the declared URL path over this authenticated socket, so no
+fixed TCP port is exposed and concurrent installations cannot collide.
+
 ## Baileys target topology
 
 `connector_whatsapp` owns the native service. `link_inbox` owns conversations

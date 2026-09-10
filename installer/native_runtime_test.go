@@ -37,6 +37,7 @@ func TestUpgradeEnsuresNativeServiceBeforeVersionCommit(t *testing.T) {
 		Resources: native.ResourceLimits{MemoryMB: 512, CPUQuotaMCPU: 500, PIDs: 128},
 		Network:   native.NetworkPolicy{Egress: []string{"web.whatsapp.com:443"}},
 		Artifacts: []native.Artifact{{OS: "linux", Arch: "amd64", Path: "backend/native/linux-amd64.tar.gz", SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", SBOM: "backend/native/linux-amd64.spdx.json"}},
+		Control:   native.Control{Protocol: native.ProtocolV1, Transport: native.TransportUnixHTTP},
 	}
 	b.Backend = map[string][]byte{"backend/native/linux-amd64.tar.gz": {}, "backend/native/linux-amd64.spdx.json": []byte("{}")}
 	row, err := i.Upgrade(context.Background(), orgID, b)
@@ -63,6 +64,7 @@ func TestUpgradeWithoutNativeAdapterKeepsPreviousVersion(t *testing.T) {
 		Resources: native.ResourceLimits{MemoryMB: 512, CPUQuotaMCPU: 500, PIDs: 128},
 		Network:   native.NetworkPolicy{Egress: []string{"web.whatsapp.com:443"}},
 		Artifacts: []native.Artifact{{OS: "linux", Arch: "amd64", Path: "backend/native/linux-amd64.tar.gz", SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", SBOM: "backend/native/linux-amd64.spdx.json"}},
+		Control:   native.Control{Protocol: native.ProtocolV1, Transport: native.TransportUnixHTTP},
 	}
 	b.Backend = map[string][]byte{"backend/native/linux-amd64.tar.gz": {}, "backend/native/linux-amd64.spdx.json": []byte("{}")}
 	_, err := i.Upgrade(context.Background(), orgID, b)
