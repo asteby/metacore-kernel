@@ -501,16 +501,34 @@ once the read path is exercised in production:
 
 `db_exec` is the dedicated mutation import. It is intentionally narrow: a
 single mutating statement, scoped to the addon's own schema, parameterised,
-capability-checked, and **always executed against the action handler's open
-`*gorm.DB` transaction** so an error inside the guest rolls back the whole
-action atomically (manifest record write + side-effects + audit row).
+capability-checked, and **always executed inside a transaction**.
 
-> Pre-condition: the host must have entered `Host.InvokeInTx(ctx, tx, ...)`.
-> Calling `db_exec` from a guest invoked by the plain `Host.Invoke` (no tx
-> in flight) returns `{success:false, error:{code:"no_active_tx"}}` — see
-> § 10.6. Action triggers wired with `Trigger.Type="wasm"` + `RunInTx=true`
-> always satisfy this pre-condition (see audit
-> [`docs/audits/2026-05-04-action-trigger-gap.md`](audits/2026-05-04-action-trigger-gap.md)).
+Which transaction depends on how the host entered, and this determines how
+much atomicity the guest actually gets:
+
+| Entry point | Transaction | Guarantee the guest can rely on |
+|---|---|---|
+| `Host.InvokeInTx` / `InvokeForInTx` with an **open transaction** | The caller's | Every `db_exec` in the invocation shares the surrounding action's commit/rollback fate. An error inside the guest rolls back the whole action atomically (manifest record write + side-effects + audit row). |
+| `Host.Invoke` / `InvokeFor`, or `InvokeInTx` with a nil / non-transaction handle | One the kernel opens per call | Each `db_exec` call is atomic **on its own**. There is **no** atomicity *between* two calls: if the second fails, the first stays committed. |
+
+> **The second row is the one that bites.** A guest that groups several
+> writes expecting them to land together only gets that on the first row.
+> On the second, a partial failure leaves partial data with no error and no
+> rollback — so a guest that may run outside an action must either express
+> its change as a single statement (a conditional `UPDATE … WHERE` is atomic
+> by itself) or compensate explicitly on every error path. The `customers`
+> addon's credit gate is the worked example.
+>
+> The kernel determines which row applies by **inspecting the handle**, not
+> by trusting the caller: a `*gorm.DB` that is not actually in a transaction
+> gets one opened for it. Before v0.94.0 this was a nil-check, so an
+> embedder passing its connection *pool* to `InvokeInTx` silently got
+> neither row — autocommit, no rollback, and `SET LOCAL search_path`
+> degraded to a no-op. See metacore-kernel#270.
+
+Action triggers wired with `Trigger.Type="wasm"` + `RunInTx=true` satisfy the
+first row (see audit
+[`docs/audits/2026-05-04-action-trigger-gap.md`](audits/2026-05-04-action-trigger-gap.md)).
 
 ### 10.1 Signature
 
@@ -680,7 +698,6 @@ Defined error codes (in addition to those shared with `db_query`):
 | `constraint_violation`| Underlying SQLSTATE 23xxx (FK / unique / check). Driver detail redacted; SQLSTATE preserved in `error.sqlstate`. |
 | `serialization_failure`| Underlying SQLSTATE 40001 / 40P01 (concurrent-update conflict). Caller is expected to retry the whole action. |
 | `db_error`            | Any other driver/SQL error (message redacted, SQLSTATE preserved).    |
-| `no_active_tx`        | Guest invoked via `Host.Invoke` (no transaction in flight).           |
 
 ### 10.5 Limits
 
@@ -700,9 +717,10 @@ the lower of the two wins.
 
 ### 10.6 Transaction reuse — the `*gorm.DB` contract
 
-`db_exec` is the only host import that is **not** safe to call from a
-guest invoked via the plain `Host.Invoke`. The host enforces this at the
-call site:
+`db_exec` is the only host import whose *atomicity* depends on how the
+host entered (§ 10). It is safe to call either way — via `Host.Invoke` it
+runs in a transaction the kernel opens per call — but only the `InvokeInTx`
+path shares the caller's commit/rollback fate. The entry point:
 
 ```go
 // runtime/wasm/wasm.go (sketch — implementation lives in v1.2 PR)
@@ -722,21 +740,31 @@ context bag (`runtime/wasm/capabilities.go:invocation`). When the guest
 calls `db_exec`, the host import:
 
 1. Reads `inv := invocationFrom(ctx)`.
-2. Returns `{success:false, error:{code:"no_active_tx"}}` if `inv.tx == nil`.
+2. Selects the transaction to run on: `inv.tx` when it is genuinely an
+   open transaction, otherwise one opened per call on `inv.db` (§ 10).
 3. Parses + validates the SQL (§ 10.2) and capability-checks each target
    relation (§ 10.3).
 4. Decodes the JSON args (§ 9.6).
-5. Opens a `SAVEPOINT addon_<key>_exec_<n>` on `inv.tx` (`n` is the
-   per-invocation call counter — capped at 32 per § 10.5). The savepoint
-   isolates a single `db_exec` call: a SQLSTATE rollback unwinds **only the
-   savepoint**, leaving the surrounding action transaction intact so the
-   guest can react to the error and continue. The action itself still
-   rolls back if the guest returns `{success:false}` — see § 10.7.
-6. Executes the statement on `inv.tx.WithContext(callCtx)` so the
-   per-call statement timeout and the cancellation bound by
-   `Trigger.TimeoutMs` are honoured.
-7. Releases the savepoint on success; rolls back to it on driver error
-   and surfaces the JSON error envelope to the guest.
+5. Issues `SET LOCAL search_path` (§ 10.2) to scope bare table names.
+6. Executes the statement on `WithContext(callCtx)` so the per-call
+   statement timeout and the cancellation bound by `Trigger.TimeoutMs`
+   are honoured.
+7. On driver error, surfaces the JSON error envelope to the guest. When
+   the kernel opened the transaction itself it also rolls it back; when
+   running on the **caller's** transaction it does not — see the warning
+   below.
+
+> **No per-call savepoint.** Earlier revisions of this section specified a
+> `SAVEPOINT addon_<key>_exec_<n>` around each call, so that a failed
+> statement would unwind only that call and the guest could recover and
+> keep going. **That was never implemented.** On the caller's-transaction
+> path a driver error leaves the surrounding transaction in Postgres'
+> aborted state (SQLSTATE 25P02), where every subsequent statement fails
+> until someone rolls back. A guest that catches `constraint_violation`
+> and continues issuing `db_exec` calls inside an action will therefore
+> see every one of them fail. Treat any `db_exec` error inside an action
+> as terminal for that invocation: return `{success:false}` and let the
+> host roll back.
 
 Reusing the *same* `*gorm.DB` handle (rather than opening a sibling
 session) is load-bearing for two reasons:
@@ -766,9 +794,10 @@ when the top-level guest call returns:
    with `"success": true`.
 2. No `db_exec` call returned an error envelope to the guest **that the
    guest then re-surfaced** (i.e. the final envelope is `success:true`).
-   A guest is free to call `db_exec`, observe a `constraint_violation`,
-   and recover — the savepoint kept the surrounding tx alive precisely
-   for that purpose.
+   Note that "recover and continue" is NOT available on the caller's
+   transaction: there is no per-call savepoint, so a failed `db_exec`
+   poisons the transaction (§ 10.6). A guest may only recover by doing no
+   further `db_exec` work in that invocation.
 3. The guest did not panic, abort-trap, exceed `timeout_ms`, exceed
    `memory_limit_mb`, or exceed any of the per-call db limits (§ 10.5).
 
@@ -840,7 +869,10 @@ These are deliberately **not** in v1.2 and will land as separate proposals:
   runs.
 - `SELECT 1` → `invalid_sql`.
 - `BEGIN` / `COMMIT` / `SAVEPOINT foo` → `invalid_sql`.
-- Guest invoked via `Host.Invoke` (no tx) → `no_active_tx`.
+- Guest invoked via `Host.Invoke` (no tx) → the call runs in its own
+  short-lived transaction; a second call does NOT share its fate.
+- A connection *pool* handed to `InvokeInTx` → treated as "no tx", per
+  the row above, instead of silently running in autocommit (#270).
 - Guest returns `{success:false}` after a successful `db_exec` →
   `tx.Rollback()`, no row visible after the action.
 - Guest panics inside an exported function after `db_exec` → rollback.
@@ -852,6 +884,13 @@ These are deliberately **not** in v1.2 and will land as separate proposals:
   bridge retries when `Trigger.RetryPolicy.MaxAttempts > 0`.
 
 ## 11. Implementation notes (kernel-side)
+
+> **Status: design record, not a specification of shipped behaviour.** This
+> section captures the original v1.2 implementation plan and has drifted
+> from the kernel. Where it disagrees with § 10, § 10 is normative. The
+> known divergence is § 11.4 (per-call savepoints), which was never built —
+> see the warning in § 10.6.
+
 
 These are non-normative pointers for whoever lands the implementation; they
 do not form part of the ABI itself.
@@ -868,9 +907,9 @@ do not form part of the ABI itself.
   in-memory fake.
 - The `invocation` struct in `capabilities.go` (`runtime/wasm/capabilities.go:22`)
   grows two new fields: `db DBQuerier` (v1.1, read path) and
-  `tx *gorm.DB` (v1.2, write path). `tx` is populated only by the new
-  `Host.InvokeInTx` entry point — the legacy `Host.Invoke` leaves it nil
-  so any guest call to `db_exec` cleanly fails with `no_active_tx`.
+  `tx *gorm.DB` (v1.2, write path). `tx` is populated only by the
+  `Host.InvokeInTx` entry point — the legacy `Host.Invoke` leaves it nil,
+  and `db_exec` then opens its own short-lived transaction on `db`.
 - The action bridge (audit
   [`docs/audits/2026-05-04-action-trigger-gap.md`](audits/2026-05-04-action-trigger-gap.md))
   is the canonical caller of `InvokeInTx`. It opens the transaction,
@@ -947,7 +986,12 @@ The `db.Transaction` closure form is preferred over manual `Begin`/`Commit`
 because it normalises panic recovery: GORM converts a panic into a
 rollback before re-raising, which dovetails with § 10.7.
 
-### 11.4 Savepoint per `db_exec` call
+### 11.4 Savepoint per `db_exec` call — NOT IMPLEMENTED
+
+> Never built. `grep -rn SAVEPOINT runtime/wasm/` finds it only in the
+> banned-keyword lists that reject guest-issued transaction control.
+> Retained as a record of the intended design; see § 10.6 for what the
+> kernel actually does on a `db_exec` error.
 
 ```sql
 SAVEPOINT addon_<key>_exec_<n>;
@@ -986,9 +1030,9 @@ Do not re-roll the JSON encoding inline. The same helper writes both the
 
 See § 10.11 for the functional matrix. Additional kernel-side tests:
 
-- `Host.Invoke` (no tx) + guest calls `db_exec` → `no_active_tx`,
-  module instance survives so subsequent calls within the same
-  invocation still work.
+- `Host.Invoke` (no tx) + guest calls `db_exec` → runs in a per-call
+  transaction; module instance survives so subsequent calls within the
+  same invocation still work.
 - Two `db_exec` calls on the same `tx`: first succeeds, second hits
   `constraint_violation` → savepoint rollback leaves the first call's
   effects visible to a third call within the same invocation.

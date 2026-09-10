@@ -64,11 +64,32 @@ func executeDBExec(
 	// Prefer the action handler's tx so the guest's writes piggy-back on
 	// the surrounding action transaction; fall back to a fresh tx on the
 	// standalone db only when no action transaction is in flight.
+	//
+	// `tx` is NOT trusted to actually be a transaction. Until v0.94.0 this
+	// was a bare nil-check, so an embedder that passed its *pool* handle to
+	// Host.InvokeInTx got the worst of both worlds: non-nil meant "a tx is in
+	// flight", the Begin below was skipped, and every statement ran in
+	// autocommit — silently, with no rollback and with `SET LOCAL
+	// search_path` degraded to a no-op (it only binds inside a transaction
+	// block). Passing the pool was therefore strictly WORSE than passing nil,
+	// which at least earned a short-lived tx here. ops did exactly that for
+	// three years on its event/schedule/webhook dispatch path
+	// (metacore-kernel#270) and nothing surfaced it, because the kernel had
+	// no way to tell a pool from a tx.
+	//
+	// isTx asks gorm instead of believing the caller, so a mis-wired embedder
+	// now gets a real transaction rather than a quiet downgrade.
 	conn := tx
 	standalone := false
-	if conn == nil {
-		conn = db
-		standalone = true
+	if !isTx(conn) {
+		if conn != nil && db == nil {
+			// Caller handed us a non-tx handle and there is no separate
+			// standalone db: use it, but open our own transaction on it.
+			standalone = true
+		} else {
+			conn = db
+			standalone = true
+		}
 	}
 	if conn == nil {
 		return dbExecErr(schema, "db_unavailable",
@@ -365,4 +386,18 @@ var bannedDBExecKeywords = []string{
 	"GRANT", "REVOKE", "CALL", "DO",
 	"LISTEN", "NOTIFY", "COPY",
 	"BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT", "RELEASE",
+}
+
+// isTx reports whether handle is a *gorm.DB that is actually inside an open
+// transaction, as opposed to a pool handle. gorm swaps Statement.ConnPool for
+// the *sql.Tx (which satisfies gorm.TxCommitter) on Begin, so this is the
+// authoritative check — the static type is *gorm.DB either way and carries no
+// such information. See the standalone selection in executeDBExec and
+// docs/wasm-abi.md § 10.6.
+func isTx(handle *gorm.DB) bool {
+	if handle == nil || handle.Statement == nil || handle.Statement.ConnPool == nil {
+		return false
+	}
+	_, ok := handle.Statement.ConnPool.(gorm.TxCommitter)
+	return ok
 }

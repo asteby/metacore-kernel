@@ -317,7 +317,7 @@ func firstWordUpper(s string) string {
 
 // stripSQLLiterals removes single-quoted string literals so banned-keyword
 // scanning doesn't false-positive on data like `'DELETE me'`. Doubled
-// single quotes inside a literal (`''`) are SQL escape — kept as a single
+// single quotes inside a literal (`”`) are SQL escape — kept as a single
 // character inside the literal.
 func stripSQLLiterals(s string) string {
 	var b strings.Builder

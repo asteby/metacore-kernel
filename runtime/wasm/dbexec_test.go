@@ -8,6 +8,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/asteby/metacore-kernel/security"
+	"gorm.io/gorm"
 )
 
 // dbeEnvelope is the db_exec wire shape (rowsAffected lives on data, not
@@ -26,6 +27,28 @@ type dbeData struct {
 	Columns      []map[string]any `json:"columns,omitempty"`
 }
 
+// newMockGormTx returns a gorm handle that is REALLY inside a transaction,
+// plus its sqlmock. Tests of the InvokeInTx path must use this rather than
+// handing executeDBExec the pool handle from newMockGorm: gorm only swaps
+// Statement.ConnPool for the *sql.Tx on Begin, so a pool handle is not a tx
+// and executeDBExec now (correctly) opens its own transaction on it.
+//
+// Every test here used to pass the pool as `tx`, which is exactly the
+// mis-wiring metacore-kernel#270 reported in ops — the suite could not tell
+// the two apart either, so it asserted "no Begin is issued" while proving
+// nothing about the real tx path.
+func newMockGormTx(t *testing.T) (*gorm.DB, sqlmock.Sqlmock, func()) {
+	t.Helper()
+	gdb, mock, cleanup := newMockGorm(t)
+	mock.ExpectBegin()
+	tx := gdb.Begin()
+	if tx.Error != nil {
+		cleanup()
+		t.Fatalf("begin: %v", tx.Error)
+	}
+	return tx, mock, cleanup
+}
+
 func unmarshalExec(t *testing.T, raw []byte) dbeEnvelope {
 	t.Helper()
 	var env dbeEnvelope
@@ -36,7 +59,7 @@ func unmarshalExec(t *testing.T, raw []byte) dbeEnvelope {
 }
 
 func TestExecuteDBExec_HappyPathTx(t *testing.T) {
-	gdb, mock, cleanup := newMockGorm(t)
+	tx, mock, cleanup := newMockGormTx(t)
 	defer cleanup()
 
 	// When the host enters via InvokeInTx the surrounding action handler
@@ -49,7 +72,7 @@ func TestExecuteDBExec_HappyPathTx(t *testing.T) {
 		WithArgs("hello", "open").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
+	out := executeDBExec(context.Background(), tx, nil, "tickets", "",
 		permissiveEnforcer(),
 		"INSERT INTO tickets (title, status) VALUES ($1, $2)",
 		[]byte(`["hello", "open"]`))
@@ -74,7 +97,7 @@ func TestExecuteDBExec_HappyPathTx(t *testing.T) {
 // schema in the runtime search_path WITHOUT relaxing the capability gate: the
 // envelope's schema (gate identity) stays the addon's own `addon_tickets`.
 func TestExecuteDBExec_ExecSchemaOverride(t *testing.T) {
-	gdb, mock, cleanup := newMockGorm(t)
+	tx, mock, cleanup := newMockGormTx(t)
 	defer cleanup()
 
 	// search_path points at the host's shared schema (public), not addon_tickets.
@@ -83,7 +106,7 @@ func TestExecuteDBExec_ExecSchemaOverride(t *testing.T) {
 	mock.ExpectExec(`UPDATE tickets`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	out := executeDBExec(context.Background(), gdb, nil, "tickets", "public",
+	out := executeDBExec(context.Background(), tx, nil, "tickets", "public",
 		permissiveEnforcer(),
 		"UPDATE tickets SET status = 'closed' WHERE id = 1", nil)
 
@@ -198,7 +221,7 @@ func TestExecuteDBExec_RejectsBannedKeyword(t *testing.T) {
 func TestExecuteDBExec_LiteralWithKeyword(t *testing.T) {
 	// A literal containing a banned keyword must NOT trip validation —
 	// e.g. an INSERT that stores the word 'DROP' as a plain string is fine.
-	gdb, mock, cleanup := newMockGorm(t)
+	tx, mock, cleanup := newMockGormTx(t)
 	defer cleanup()
 
 	mock.ExpectExec(`SET LOCAL search_path TO "addon_tickets", public`).
@@ -206,7 +229,7 @@ func TestExecuteDBExec_LiteralWithKeyword(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO tickets`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
+	out := executeDBExec(context.Background(), tx, nil, "tickets", "",
 		permissiveEnforcer(),
 		"INSERT INTO tickets (note) VALUES ('DROP me')", nil)
 
@@ -324,7 +347,7 @@ func TestExecuteDBExec_InsertReturningIncludesRows(t *testing.T) {
 	// because the host routed every statement through Exec. The kernel now
 	// detects RETURNING and routes through the Rows path so the projected
 	// rows surface inside data.rows alongside rowsAffected.
-	gdb, mock, cleanup := newMockGorm(t)
+	tx, mock, cleanup := newMockGormTx(t)
 	defer cleanup()
 
 	mock.ExpectExec(`SET LOCAL search_path TO "addon_tickets", public`).
@@ -334,7 +357,7 @@ func TestExecuteDBExec_InsertReturningIncludesRows(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "title"}).
 			AddRow(int64(42), "hello"))
 
-	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
+	out := executeDBExec(context.Background(), tx, nil, "tickets", "",
 		permissiveEnforcer(),
 		"INSERT INTO tickets (title, status) VALUES ($1, $2) RETURNING id, title",
 		[]byte(`["hello", "open"]`))
@@ -403,7 +426,7 @@ func TestExecuteDBExec_InsertWithoutReturningOmitsRows(t *testing.T) {
 	// only, no rows / columns). Downstream apps wrote against that shape
 	// before v0.11.0 and the field is additive — old behaviour is preserved
 	// verbatim.
-	gdb, mock, cleanup := newMockGorm(t)
+	tx, mock, cleanup := newMockGormTx(t)
 	defer cleanup()
 
 	mock.ExpectExec(`SET LOCAL search_path TO "addon_tickets", public`).
@@ -412,7 +435,7 @@ func TestExecuteDBExec_InsertWithoutReturningOmitsRows(t *testing.T) {
 		WithArgs("hello", "open").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
+	out := executeDBExec(context.Background(), tx, nil, "tickets", "",
 		permissiveEnforcer(),
 		"INSERT INTO tickets (title, status) VALUES ($1, $2)",
 		[]byte(`["hello", "open"]`))
@@ -439,7 +462,7 @@ func TestExecuteDBExec_ReturningLiteralDoesNotTrigger(t *testing.T) {
 	// A literal containing the word RETURNING (e.g. a label stored verbatim
 	// in a column) must NOT trip the routing — stripSQLLiterals guards
 	// against false-triggering and the statement keeps using the Exec path.
-	gdb, mock, cleanup := newMockGorm(t)
+	tx, mock, cleanup := newMockGormTx(t)
 	defer cleanup()
 
 	mock.ExpectExec(`SET LOCAL search_path TO "addon_tickets", public`).
@@ -447,7 +470,7 @@ func TestExecuteDBExec_ReturningLiteralDoesNotTrigger(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO tickets`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
+	out := executeDBExec(context.Background(), tx, nil, "tickets", "",
 		permissiveEnforcer(),
 		"INSERT INTO tickets (note) VALUES ('returning home')", nil)
 
@@ -531,5 +554,47 @@ func TestValidateMutationOnly(t *testing.T) {
 		if err := validateMutationOnly(s); err == nil {
 			t.Errorf("validateMutationOnly(%q) should have failed", s)
 		}
+	}
+}
+
+// TestExecuteDBExec_PoolHandleAsTxStillOpensTransaction is the regression for
+// metacore-kernel#270.
+//
+// An embedder that wires Host.InvokeInTx with its *pool* handle instead of an
+// open transaction used to get a silent downgrade: the old nil-check read the
+// non-nil handle as "an action tx is in flight", skipped the Begin, and ran
+// every statement in autocommit. Two writes from one guest were then two
+// independent commits — the second failing left the first standing, with no
+// error and no rollback. `SET LOCAL search_path` degraded to a no-op in the
+// same breath, since it only binds inside a transaction block.
+//
+// Passing the pool was therefore strictly WORSE than passing nil, which at
+// least earned a short-lived transaction. This asserts the kernel now checks
+// the handle instead of believing the caller: a pool arrives, a real BEGIN
+// goes out. Without the isTx() fix no Begin is issued and sqlmock fails.
+func TestExecuteDBExec_PoolHandleAsTxStillOpensTransaction(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+
+	// gdb is the POOL, deliberately passed in the `tx` position.
+	mock.ExpectBegin()
+	mock.ExpectExec(`SET LOCAL search_path TO "addon_tickets", public`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`UPDATE tickets`).
+		WithArgs("open").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	out := executeDBExec(context.Background(), gdb, nil, "tickets", "",
+		permissiveEnforcer(),
+		"UPDATE tickets SET status = $1",
+		[]byte(`["open"]`))
+
+	env := unmarshalExec(t, out)
+	if !env.Success {
+		t.Fatalf("expected success, got %s", out)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("pool handle passed as tx did not open its own transaction: %v", err)
 	}
 }
