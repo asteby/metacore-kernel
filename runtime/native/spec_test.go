@@ -16,6 +16,7 @@ func validSpec() Spec {
 		Secrets:    []SecretRef{{Handle: "whatsapp.session", Mount: "/run/secrets/session"}},
 		Artifacts: []Artifact{{OS: "linux", Arch: "amd64", Path: "backend/native/linux-amd64.tar.gz",
 			SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SBOM: "backend/native/linux-amd64.spdx.json"}},
+		Control: Control{Protocol: ProtocolV1, Transport: TransportUnixHTTP},
 	}
 }
 

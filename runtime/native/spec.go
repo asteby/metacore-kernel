@@ -17,6 +17,14 @@ import (
 const (
 	ScopeInstance     = "instance"
 	ScopeInstallation = "installation"
+	ProtocolV1        = "metacore.native/v1"
+	TransportUnixHTTP = "unix_http"
+
+	EnvSocket         = "METACORE_NATIVE_SOCKET"
+	EnvTokenFile      = "METACORE_NATIVE_TOKEN_FILE"
+	EnvInstallationID = "METACORE_INSTALLATION_ID"
+	EnvOrganizationID = "METACORE_ORGANIZATION_ID"
+	EnvAddonKey       = "METACORE_ADDON_KEY"
 )
 
 // Spec is the portable, declarative process contract stored in a signed addon
@@ -32,6 +40,14 @@ type Spec struct {
 	Network    NetworkPolicy  `json:"network"`
 	Secrets    []SecretRef    `json:"secrets,omitempty"`
 	Artifacts  []Artifact     `json:"artifacts"`
+	Control    Control        `json:"control"`
+}
+
+// Control pins the local host↔sidecar protocol. The supervisor assigns the
+// socket and one-time token file; addon manifests cannot choose host paths.
+type Control struct {
+	Protocol  string `json:"protocol"`
+	Transport string `json:"transport"`
 }
 
 // Artifact selects one content-addressed payload for a host platform. Path and
@@ -77,6 +93,9 @@ func (s Spec) Validate() error {
 	}
 	if s.Scope != ScopeInstance && s.Scope != ScopeInstallation {
 		return fmt.Errorf("native runtime: scope %q must be %q or %q", s.Scope, ScopeInstance, ScopeInstallation)
+	}
+	if s.Control.Protocol != ProtocolV1 || s.Control.Transport != TransportUnixHTTP {
+		return fmt.Errorf("native runtime: control must use protocol %q over %q", ProtocolV1, TransportUnixHTTP)
 	}
 	if s.Health.Path == "" || !strings.HasPrefix(s.Health.Path, "/") || strings.Contains(s.Health.Path, "..") {
 		return errors.New("native runtime: health.path must be an absolute URL path without traversal")

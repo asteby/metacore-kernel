@@ -28,6 +28,7 @@ func nativeRuntime() map[string]interface{} {
 				"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				"sbom":   "backend/native/linux-amd64.spdx.json",
 			}},
+			"control": map[string]interface{}{"protocol": "metacore.native/v1", "transport": "unix_http"},
 		},
 	}
 }

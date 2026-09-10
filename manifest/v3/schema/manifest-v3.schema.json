@@ -247,7 +247,7 @@
     "NativeService": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["entrypoint", "scope", "health", "resources", "network", "artifacts"],
+      "required": ["entrypoint", "scope", "health", "resources", "network", "artifacts", "control"],
       "properties": {
         "entrypoint": {"type": "string", "minLength": 1},
         "args": {"type": "array", "items": {"type": "string"}},
@@ -256,7 +256,8 @@
         "resources": {"$ref": "#/$defs/NativeResources"},
         "network": {"$ref": "#/$defs/NativeNetwork"},
         "secrets": {"type": "array", "items": {"$ref": "#/$defs/NativeSecret"}},
-        "artifacts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/NativeArtifact"}}
+        "artifacts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/NativeArtifact"}},
+        "control": {"$ref": "#/$defs/NativeControl"}
       }
     },
     "NativeHealth": {
@@ -304,6 +305,14 @@
         "path": {"type": "string", "pattern": "^backend/"},
         "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         "sbom": {"type": "string", "pattern": "^backend/"}
+      }
+    },
+    "NativeControl": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocol", "transport"],
+      "properties": {
+        "protocol": {"const": "metacore.native/v1"},
+        "transport": {"const": "unix_http"}
       }
     },
     "Metadata": {
