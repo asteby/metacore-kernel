@@ -2039,9 +2039,11 @@ type NotificationEntered struct {
 
 // Handler is the polymorphic invocation target for actions/tools/subscriptions.
 type Handler struct {
-	Type     string `json:"type"` // "wasm" | "webhook" | "compiled" | "connector"
+	Type     string `json:"type"` // "wasm" | "webhook" | "compiled" | "connector" | "native"
 	Function string `json:"function,omitempty"`
 	URL      string `json:"url,omitempty"`
+	// Operation names the metacore.native/v1 operation when Type=="native".
+	Operation string `json:"operation,omitempty"`
 	// Connector + Export target the export of ANOTHER addon's connector when
 	// Type=="connector": the action runs `Export` on the addon that provides
 	// connector `Connector`, org-scoped, with the action's field payload. This

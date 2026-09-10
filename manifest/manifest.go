@@ -661,9 +661,12 @@ type IdempotencyDef struct {
 // prompted the action. This is what unlocks "stamp this invoice and write
 // the linked log entry atomically" without leaking partially-applied state.
 type ActionTrigger struct {
-	Type    string `json:"type"`             // "wasm" | "webhook" | "noop" | "connector"
+	Type    string `json:"type"`             // "wasm" | "webhook" | "noop" | "connector" | "native"
 	Export  string `json:"export,omitempty"` // wasm export name; required when Type=wasm or connector
 	RunInTx bool   `json:"run_in_tx,omitempty"`
+	// Operation is required for native triggers and is dispatched over the
+	// authenticated metacore.native/v1 local channel.
+	Operation string `json:"operation,omitempty"`
 	// Connector names the connector (declared by any installed addon) whose
 	// Export the host invokes when Type=="connector" — a cross-addon dispatch:
 	// the export runs in the connector-owning addon, org-scoped, so an action can
