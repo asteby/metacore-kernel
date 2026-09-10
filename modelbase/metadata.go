@@ -409,6 +409,10 @@ type ActionTrigger struct {
 	Export    string `json:"export,omitempty"`
 	RunInTx   bool   `json:"run_in_tx,omitempty"`
 	Connector string `json:"connector,omitempty"`
+	// Operation names the metacore.native/v1 operation for Type=="native".
+	// The tag mirrors manifest.ActionTrigger so host JSON projections cannot
+	// silently erase the dispatch target.
+	Operation string `json:"operation,omitempty"`
 }
 
 // ActionStepDef is one wizard page of a multi-step action form — the served
