@@ -76,6 +76,7 @@ var (
 		"webhook":   {},
 		"noop":      {},
 		"connector": {},
+		"native":    {},
 	}
 	// validLifecycleHookEvents enumerates the manifest.LifecycleHooks map
 	// keys the kernel knows how to fire. "install"/"uninstall"/"enable"/
@@ -583,7 +584,7 @@ func validateActionTrigger(t *ActionTrigger, exports map[string]struct{}) error 
 		return nil
 	}
 	if _, ok := validTriggerTypes[t.Type]; !ok {
-		return fmt.Errorf("trigger.type: unknown %q (want wasm|webhook|noop)", t.Type)
+		return fmt.Errorf("trigger.type: unknown %q (want wasm|webhook|noop|connector|native)", t.Type)
 	}
 	switch t.Type {
 	case "wasm":
@@ -618,6 +619,13 @@ func validateActionTrigger(t *ActionTrigger, exports map[string]struct{}) error 
 		}
 		if !triggerExportRe.MatchString(t.Export) {
 			return fmt.Errorf("trigger.export: invalid symbol %q", t.Export)
+		}
+	case "native":
+		if !triggerExportRe.MatchString(t.Operation) {
+			return fmt.Errorf("trigger.operation: valid operation is required when type=native")
+		}
+		if t.Export != "" || t.Connector != "" || t.RunInTx {
+			return fmt.Errorf("trigger: native cannot declare export, connector, or run_in_tx")
 		}
 	case "webhook":
 		// Webhook triggers cannot honour RunInTx — the network hop escapes

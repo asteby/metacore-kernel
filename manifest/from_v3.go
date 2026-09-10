@@ -915,6 +915,8 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 		case "connector":
 			// Cross-addon dispatch: the export runs in the connector-owning addon.
 			def.Trigger = &ActionTrigger{Type: "connector", Connector: a.Handler.Connector, Export: a.Handler.Export}
+		case "native":
+			def.Trigger = &ActionTrigger{Type: "native", Operation: a.Handler.Operation}
 		}
 		if a.Idempotency != nil {
 			def.Idempotency = &IdempotencyDef{KeyField: a.Idempotency.KeyField}
