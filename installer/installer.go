@@ -781,6 +781,19 @@ func (i *Installer) Enable(orgID uuid.UUID, addonKey string) error {
 	if err := i.runLifecycleHooks(context.Background(), lc.Manifest(), orgID, lifecycle.HookEventEnable); err != nil {
 		return fmt.Errorf("lifecycle hook enable: %w", err)
 	}
+	if lc.Manifest().NativeService != nil {
+		var installation Installation
+		if err := i.DB.Where("organization_id = ? AND addon_key = ?", orgID, addonKey).Take(&installation).Error; err != nil {
+			return err
+		}
+		runtime := i.NativeRuntime
+		if runtime == nil {
+			runtime = UnsupportedNativeServiceRuntime{}
+		}
+		if err := runtime.Start(context.Background(), lc.Manifest(), installation); err != nil {
+			return fmt.Errorf("StartNativeService: %w", err)
+		}
+	}
 	now := time.Now()
 	return i.DB.Model(&Installation{}).
 		Where("organization_id = ? AND addon_key = ?", orgID, addonKey).
@@ -800,9 +813,25 @@ func (i *Installer) Disable(orgID uuid.UUID, addonKey string) error {
 		return fmt.Errorf("lifecycle hook disable: %w", err)
 	}
 	now := time.Now()
-	return i.DB.Model(&Installation{}).
+	if err := i.DB.Model(&Installation{}).
 		Where("organization_id = ? AND addon_key = ?", orgID, addonKey).
-		Updates(map[string]any{"status": "disabled", "disabled_at": now}).Error
+		Updates(map[string]any{"status": "disabled", "disabled_at": now}).Error; err != nil {
+		return err
+	}
+	if lc.Manifest().NativeService != nil {
+		var installation Installation
+		if err := i.DB.Where("organization_id = ? AND addon_key = ?", orgID, addonKey).Take(&installation).Error; err != nil {
+			return err
+		}
+		runtime := i.NativeRuntime
+		if runtime == nil {
+			runtime = UnsupportedNativeServiceRuntime{}
+		}
+		if err := runtime.Stop(context.Background(), lc.Manifest(), installation); err != nil {
+			return fmt.Errorf("StopNativeService: %w", err)
+		}
+	}
+	return nil
 }
 
 // Uninstall removes an addon from an organization. If dropSchema is true the
@@ -814,6 +843,8 @@ func (i *Installer) Disable(orgID uuid.UUID, addonKey string) error {
 // dropped when no org still has the addon installed.
 func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool) error {
 	lc, ok := i.Lifecycles.Get(addonKey)
+	var installation Installation
+	_ = i.DB.Where("organization_id = ? AND addon_key = ?", orgID, addonKey).Take(&installation).Error
 	var iso dynamic.Isolation = dynamic.IsolationShared
 	if ok {
 		iso = dynamic.ParseIsolation(lc.Manifest().TenantIsolation)
@@ -828,6 +859,15 @@ func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool)
 		}
 		if err := i.runLifecycleHooks(context.Background(), lc.Manifest(), orgID, lifecycle.HookEventUninstall); err != nil {
 			return fmt.Errorf("lifecycle hook uninstall: %w", err)
+		}
+		if lc.Manifest().NativeService != nil {
+			runtime := i.NativeRuntime
+			if runtime == nil {
+				runtime = UnsupportedNativeServiceRuntime{}
+			}
+			if err := runtime.Remove(context.Background(), lc.Manifest(), installation); err != nil {
+				return fmt.Errorf("RemoveNativeService: %w", err)
+			}
 		}
 	}
 	if err := i.DB.Where("organization_id = ? AND addon_key = ?", orgID, addonKey).

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/asteby/metacore-kernel/bundle"
+	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/runtime/native"
 )
 
@@ -19,6 +20,9 @@ var ErrNativeRuntimeUnavailable = errors.New("installer: native service runtime 
 type NativeServiceRuntime interface {
 	Platform() (os, arch string)
 	Ensure(ctx context.Context, b *bundle.Bundle, installation Installation) error
+	Start(ctx context.Context, m manifest.Manifest, installation Installation) error
+	Stop(ctx context.Context, m manifest.Manifest, installation Installation) error
+	Remove(ctx context.Context, m manifest.Manifest, installation Installation) error
 }
 
 type UnsupportedNativeServiceRuntime struct{}
@@ -27,6 +31,16 @@ func (UnsupportedNativeServiceRuntime) Platform() (string, string) { return "", 
 
 func (UnsupportedNativeServiceRuntime) Ensure(context.Context, *bundle.Bundle, Installation) error {
 	return ErrNativeRuntimeUnavailable
+}
+
+func (UnsupportedNativeServiceRuntime) Start(context.Context, manifest.Manifest, Installation) error {
+	return ErrNativeRuntimeUnavailable
+}
+func (UnsupportedNativeServiceRuntime) Stop(context.Context, manifest.Manifest, Installation) error {
+	return nil
+}
+func (UnsupportedNativeServiceRuntime) Remove(context.Context, manifest.Manifest, Installation) error {
+	return nil
 }
 
 func verifyNativeBundle(b *bundle.Bundle, runtime NativeServiceRuntime) error {
