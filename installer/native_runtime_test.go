@@ -7,6 +7,7 @@ import (
 
 	"github.com/asteby/metacore-kernel/bundle"
 	"github.com/asteby/metacore-kernel/lifecycle"
+	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/runtime/native"
 	"github.com/google/uuid"
 )
@@ -14,6 +15,15 @@ import (
 type recordingNativeRuntime struct{ calls int }
 
 func (r *recordingNativeRuntime) Platform() (string, string) { return "linux", "amd64" }
+func (r *recordingNativeRuntime) Start(context.Context, manifest.Manifest, Installation) error {
+	return nil
+}
+func (r *recordingNativeRuntime) Stop(context.Context, manifest.Manifest, Installation) error {
+	return nil
+}
+func (r *recordingNativeRuntime) Remove(context.Context, manifest.Manifest, Installation) error {
+	return nil
+}
 
 func (r *recordingNativeRuntime) Ensure(context.Context, *bundle.Bundle, Installation) error {
 	r.calls++
