@@ -1,7 +1,7 @@
 # RFC 002 — Native service runtime for addon sidecars
 
-Status: foundation accepted; Module Contract v3 wiring implemented; artifact,
-installer and host-supervisor integration pending.
+Status: foundation accepted; Module Contract v3, verified artifacts, installer,
+host lifecycle and the v1 operation envelope are implemented.
 
 ## Problem
 
@@ -49,6 +49,14 @@ addon key. Manifests cannot add environment variables or choose host paths.
 Health checks use the declared URL path over this authenticated socket, so no
 fixed TCP port is exposed and concurrent installations cannot collide.
 
+The data plane uses exactly `POST /v1/operations`. The host creates the
+`runtime/native.Invocation` envelope and supplies organization, installation,
+addon, actor and trace context from trusted runtime state; callers cannot put
+tenant identity in a URL or override it in input. Services respond with the
+closed `InvocationResult` success/error union. Both directions are capped at
+4 MiB. A future streaming protocol will handle large media without weakening
+this control channel.
+
 ## Baileys target topology
 
 `connector_whatsapp` owns the native service. `link_inbox` owns conversations
@@ -73,12 +81,14 @@ High-isolation deployments may choose `installation` scope.
 
 1. Complete: portable spec, validation and supervisor port.
 2. Complete: Manifest v3 `runtime.native_service` schema and projection.
-3. Bundle: OS/arch artifact descriptors, digest and SBOM verification.
-4. Installer: journaled ensure/health/rollback integration.
-5. Ops: rootless supervisor adapter and local authenticated transport.
-6. Addons: package Baileys under `connector_whatsapp`.
-7. Migration: import sessions through secret broker; canary one tenant.
-8. Hub: host-profile filtering by OS/arch/native-runtime capability.
+3. Complete: OS/arch artifact descriptors, digest and SBOM verification.
+4. Complete: installer ensure/health and full enable/disable/uninstall lifecycle.
+5. Complete: Ops rootless supervisor and authenticated local health transport.
+6. Complete: versioned operation request/response envelope.
+7. Ops: operation dispatcher over the authenticated Unix socket.
+8. Addons: package Baileys under `connector_whatsapp`.
+9. Migration: import sessions through secret broker; canary one tenant.
+10. Hub: host-profile filtering by OS/arch/native-runtime capability.
 
 ## Non-goals
 
