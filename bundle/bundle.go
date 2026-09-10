@@ -2,13 +2,13 @@
 //
 // A bundle is a tar.gz containing:
 //
-//   manifest.json              (required — parsed into manifest.Manifest)
-//   migrations/0001_init.sql   (optional — applied via dynamic.Apply)
-//   migrations/0002_*.sql
-//   frontend/remoteEntry.js    (optional — federated UI)
-//   frontend/assets/*          (optional — static assets)
-//   templates/*.html           (optional — printable documents)
-//   README.md                  (optional)
+//	manifest.json              (required — parsed into manifest.Manifest)
+//	migrations/0001_init.sql   (optional — applied via dynamic.Apply)
+//	migrations/0002_*.sql
+//	frontend/remoteEntry.js    (optional — federated UI)
+//	frontend/assets/*          (optional — static assets)
+//	templates/*.html           (optional — printable documents)
+//	README.md                  (optional)
 //
 // Bundles are self-describing and may be hosted by any marketplace, or even
 // side-loaded by an admin via upload.
@@ -23,7 +23,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -62,7 +64,7 @@ func parseManifest(data []byte, dst *manifest.Manifest) error {
 
 // Bundle is the in-memory representation after reading a .tar.gz.
 type Bundle struct {
-	Manifest   manifest.Manifest
+	Manifest manifest.Manifest
 	// RawManifest holds the verbatim manifest.json bytes as they appeared in
 	// the archive, BEFORE the dual-read v2/v3 normalisation that produces the
 	// legacy Manifest above. It is the only place the original v3 document
@@ -71,7 +73,7 @@ type Bundle struct {
 	// the v3-only surface (e.g. preset.Resolve to read preset.addons[]) parse
 	// these bytes with v3.Parse. Empty for in-memory bundles built via Write.
 	RawManifest []byte
-	Migrations []dynamic.File
+	Migrations  []dynamic.File
 	// Frontend holds static files keyed by bundle-relative path
 	// (e.g. "frontend/remoteEntry.js"). Callers persist them where needed.
 	Frontend map[string][]byte
@@ -231,8 +233,18 @@ func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
 	// the translations without a second pass over the bundle. Best effort: a
 	// missing or malformed locale file degrades to an empty map for that locale
 	// instead of failing the whole bundle read.
-	if len(b.Locales) > 0 && len(b.RawManifest) > 0 {
+	if len(b.Locales) > 0 {
 		hydrateManifestI18n(&b.Manifest, b.RawManifest, b.Locales)
+		if countI18nStrings(b.Manifest.I18n) == 0 {
+			// The bundle carries translations and not one of them made it into
+			// the manifest. Nothing downstream fails — the addon installs, the
+			// version bumps, and the UI renders raw i18n keys — so this warning
+			// is the only place the loss is visible.
+			slog.Warn("bundle.i18n_locales_not_ingested",
+				"addon_key", b.Manifest.Key,
+				"version", b.Manifest.Version,
+				"locale_files", len(b.Locales))
+		}
 	}
 	return b, nil
 }
@@ -243,6 +255,15 @@ func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
 // flattened into {"accounting.nav.group": "Contabilidad"} so the hub's
 // `/v1/addons/{key}/i18n/{lang}.json` endpoint can serve the bundle directly,
 // and host i18next instances can register it without a custom transform.
+//
+// Files under `locales/` that no `i18n.bundles` entry points at are loaded too,
+// deriving the locale from the file name (`locales/es-MX.json` → "es-MX"). The
+// declaration stays the contract — an explicit entry always wins — but an addon
+// that ships translations and forgets to declare them gets them ingested
+// anyway. Before this fallback, 22 addons in the first-party catalog shipped
+// locale files the kernel never opened, and the only symptom was raw keys in
+// the UI. A file whose name is not a plausible locale tag is skipped, so a
+// stray `locales/common.json` does not become a language.
 //
 // Behaviour:
 //   - The exact bundle locale (e.g. "es-MX") is loaded as-is.
@@ -256,39 +277,84 @@ func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
 // `manifest.Manifest` (the v2 shape) drops the `i18n.bundles` block during
 // FromV3 — only the file PATHS know which locale maps to which file.
 func hydrateManifestI18n(m *manifest.Manifest, rawManifest []byte, locales map[string][]byte) {
-	parsed, err := v3.Parse(rawManifest)
-	if err != nil || parsed == nil || parsed.I18n == nil || len(parsed.I18n.Bundles) == 0 {
-		return
-	}
 	if m.I18n == nil {
 		m.I18n = map[string]map[string]string{}
 	}
-	for _, bndl := range parsed.I18n.Bundles {
-		if bndl.Locale == "" || bndl.Path == "" {
-			continue
-		}
-		raw, ok := locales[bndl.Path]
-		if !ok {
-			continue
-		}
-		var doc map[string]any
-		if err := json.Unmarshal(raw, &doc); err != nil {
-			continue
-		}
-		flat := map[string]string{}
-		flattenLocale("", doc, flat)
-		if len(flat) == 0 {
-			continue
-		}
-		m.I18n[bndl.Locale] = flat
-		// Mirror to the base language tag (e.g. "es" from "es-MX") so callers
-		// asking for the bare language still resolve. Only when not already
-		// populated by an explicit bundle entry for the base tag.
-		if dash := strings.IndexByte(bndl.Locale, '-'); dash > 0 {
-			base := bndl.Locale[:dash]
-			if _, exists := m.I18n[base]; !exists {
-				m.I18n[base] = flat
+	// Declared bundles first: the manifest is the contract, so an explicit
+	// (locale, path) pair wins over anything the file name suggests.
+	declared := map[string]bool{}
+	if parsed, err := v3.Parse(rawManifest); err == nil && parsed != nil && parsed.I18n != nil {
+		for _, bndl := range parsed.I18n.Bundles {
+			if bndl.Locale == "" || bndl.Path == "" {
+				continue
 			}
+			declared[bndl.Path] = true
+			setLocaleBundle(m, bndl.Locale, locales[bndl.Path])
+		}
+	}
+	// Then the undeclared leftovers, keyed by file name. Sorted so a bundle
+	// with several files hydrates in a deterministic order.
+	paths := make([]string, 0, len(locales))
+	for p := range locales {
+		if !declared[p] {
+			paths = append(paths, p)
+		}
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		locale := strings.TrimSuffix(path.Base(p), ".json")
+		if !localeTagRe.MatchString(locale) {
+			continue
+		}
+		setLocaleBundle(m, locale, locales[p])
+	}
+	if countI18nStrings(m.I18n) == 0 {
+		m.I18n = nil
+	}
+}
+
+// countI18nStrings counts actual translation entries, not language keys.
+// FromV3.mapI18n emits one EMPTY inner map per declared locale, so a manifest
+// can carry several languages and zero strings — len(m.I18n) would report that
+// as populated and hide exactly the failure this is here to catch.
+func countI18nStrings(byLang map[string]map[string]string) int {
+	n := 0
+	for _, kv := range byLang {
+		n += len(kv)
+	}
+	return n
+}
+
+// localeTagRe matches the locale tags a bundle file name may encode — "es",
+// "es-MX", "zh-Hans". Deliberately narrow: it guards the file-name fallback so
+// a non-locale JSON dropped under locales/ is skipped rather than registered as
+// a language nobody can request.
+var localeTagRe = regexp.MustCompile(`^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$`)
+
+// setLocaleBundle flattens one locale document into m.I18n[locale], mirroring
+// it onto the base language tag. A missing, malformed or empty document is a
+// no-op: one bad file must not cost the bundle its other languages.
+func setLocaleBundle(m *manifest.Manifest, locale string, raw []byte) {
+	if len(raw) == 0 {
+		return
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return
+	}
+	flat := map[string]string{}
+	flattenLocale("", doc, flat)
+	if len(flat) == 0 {
+		return
+	}
+	m.I18n[locale] = flat
+	// Mirror to the base language tag (e.g. "es" from "es-MX") so callers
+	// asking for the bare language still resolve. Only when not already
+	// populated by an explicit bundle entry for the base tag.
+	if dash := strings.IndexByte(locale, '-'); dash > 0 {
+		base := locale[:dash]
+		if _, exists := m.I18n[base]; !exists {
+			m.I18n[base] = flat
 		}
 	}
 }

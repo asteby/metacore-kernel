@@ -169,3 +169,106 @@ func TestRead_NoLocalesBundleStillSucceeds(t *testing.T) {
 		t.Errorf("Manifest.I18n unexpectedly populated: %+v", b.Manifest.I18n)
 	}
 }
+
+// v3ManifestNoI18nBlock is the shape that cost the first-party catalog its
+// translations: a perfectly valid v3 addon that ships `locales/` and never
+// declares an `i18n.bundles` block.
+const v3ManifestNoI18nBlock = `{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": {
+    "key": "demo_undeclared",
+    "name": "Demo undeclared",
+    "version": "0.1.0",
+    "icon": { "type": "lucide", "slug": "Globe" }
+  },
+  "compatibility": {
+    "requires": [{ "key": "kernel", "version": ">=3.0.0" }]
+  }
+}`
+
+// TestRead_HydratesUndeclaredLocalesByFileName is the safety net. Until it
+// existed, a manifest without `i18n.bundles` made Read skip the locale files
+// entirely: the tarball carried the translations, the install succeeded, the
+// version bumped, and the UI rendered raw keys. Nothing in the pipeline said
+// a word. 22 first-party addons were in that state at once.
+func TestRead_HydratesUndeclaredLocalesByFileName(t *testing.T) {
+	files := map[string][]byte{
+		"manifest.json":      []byte(v3ManifestNoI18nBlock),
+		"locales/es-MX.json": []byte(`{"demo": {"nav": {"group": "Demostración"}}}`),
+		"locales/en-US.json": []byte(`{"demo": {"nav": {"group": "Demo"}}}`),
+	}
+	b, err := Read(packBundle(t, files), 1<<20)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got := b.Manifest.I18n["es-MX"]["demo.nav.group"]; got != "Demostración" {
+		t.Errorf("es-MX not hydrated from file name: got %q", got)
+	}
+	if got := b.Manifest.I18n["en-US"]["demo.nav.group"]; got != "Demo" {
+		t.Errorf("en-US not hydrated from file name: got %q", got)
+	}
+	// The base-tag mirror must work the same way here, or a host asking for
+	// "es" still sees nothing.
+	if got := b.Manifest.I18n["es"]["demo.nav.group"]; got != "Demostración" {
+		t.Errorf("base tag not mirrored: got %q", got)
+	}
+}
+
+// TestRead_SkipsNonLocaleFileNames keeps the fallback from inventing
+// languages. A helper JSON parked under locales/ is not a locale, and
+// registering it as one would put unreachable strings in the catalog.
+func TestRead_SkipsNonLocaleFileNames(t *testing.T) {
+	files := map[string][]byte{
+		"manifest.json":       []byte(v3ManifestNoI18nBlock),
+		"locales/common.json": []byte(`{"demo": {"shared": "x"}}`),
+		"locales/es-MX.json":  []byte(`{"demo": {"nav": {"group": "Demostración"}}}`),
+	}
+	b, err := Read(packBundle(t, files), 1<<20)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if _, ok := b.Manifest.I18n["common"]; ok {
+		t.Error(`"common" was registered as a language`)
+	}
+	if got := b.Manifest.I18n["es-MX"]["demo.nav.group"]; got != "Demostración" {
+		t.Errorf("real locale lost alongside the skipped file: got %q", got)
+	}
+}
+
+// TestRead_DeclaredBundleWinsOverFileName pins the precedence: the manifest is
+// the contract and the file name is only the net. Here the declaration maps
+// es-MX to a file whose name says otherwise, and the declaration must win.
+func TestRead_DeclaredBundleWinsOverFileName(t *testing.T) {
+	manifest := `{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": {
+    "key": "demo_precedence",
+    "name": "Demo precedence",
+    "version": "0.1.0",
+    "icon": { "type": "lucide", "slug": "Globe" }
+  },
+  "compatibility": {
+    "requires": [{ "key": "kernel", "version": ">=3.0.0" }]
+  },
+  "i18n": {
+    "default_locale": "es-MX",
+    "bundles": [{ "locale": "es-MX", "path": "locales/pt-BR.json" }]
+  }
+}`
+	files := map[string][]byte{
+		"manifest.json":      []byte(manifest),
+		"locales/pt-BR.json": []byte(`{"demo": {"nav": {"group": "declarado"}}}`),
+	}
+	b, err := Read(packBundle(t, files), 1<<20)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got := b.Manifest.I18n["es-MX"]["demo.nav.group"]; got != "declarado" {
+		t.Errorf("declaration did not win: es-MX = %q", got)
+	}
+	if _, ok := b.Manifest.I18n["pt-BR"]; ok {
+		t.Error("declared file was hydrated a second time under its file name")
+	}
+}

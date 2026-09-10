@@ -7,6 +7,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`bundle.Read` ingesta los `locales/*.json` que el manifest no declara.**
+  Hasta ahora sólo se cargaban los archivos apuntados por `i18n.bundles[]`:
+  sin ese bloque, `hydrateManifestI18n` cortaba antes de abrir nada,
+  `Manifest.I18n` quedaba vacío y a `metacore_addon_i18n` llegaban únicamente
+  las claves `catalog.*` de `metadata.i18n`. El tarball viajaba con las
+  traducciones adentro y nadie las leía.
+
+  Nada fallaba: el addon se instalaba, la versión subía, el wasm era correcto
+  y la interfaz mostraba la clave cruda
+  (`FISCAL_MEXICO.EXT.CUSTOMER.RFC_RECEPTOR`). **22 addons del catálogo
+  first-party estaban así al mismo tiempo**, y el fallo era invisible además
+  porque el endpoint `/api/addons/:key/i18n/:lang` de ops lee `locales/` del
+  bundle en disco por otro camino: revisarlo confirmaba la mitad sana.
+
+  Ahora un archivo bajo `locales/` que ninguna entrada declara se carga igual,
+  derivando el locale del nombre (`locales/es-MX.json` → `es-MX`). **La
+  declaración sigue siendo el contrato** —una entrada explícita siempre gana—
+  y esto es sólo la red. Un nombre que no sea un tag de locale plausible
+  (`locales/common.json`) se ignora en vez de convertirse en un idioma.
+
+  Se suma un `slog.Warn("bundle.i18n_locales_not_ingested")` cuando el bundle
+  trae archivos de locale y no entra ni una cadena. Cuenta cadenas reales, no
+  claves de idioma: `FromV3.mapI18n` emite un mapa interno vacío por locale
+  declarado, así que `len(m.I18n)` daba "poblado" justo en el caso que hay que
+  detectar.
+
+  El arreglo de raíz es declarar el bloque (asteby-hq/addons#1346) y el gate
+  que lo exige (asteby-hq/addons#1348); esto evita que la próxima omisión
+  cueste traducciones.
+
 ### Added
 
 - **`null` / `not_null` en el `where` de una agregación.** Un widget puede por
