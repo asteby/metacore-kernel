@@ -25,6 +25,14 @@ const (
 	EnvInstallationID = "METACORE_INSTALLATION_ID"
 	EnvOrganizationID = "METACORE_ORGANIZATION_ID"
 	EnvAddonKey       = "METACORE_ADDON_KEY"
+
+	// EnvEventSocket and EnvEventTokenFile provision the reverse channel: a
+	// second unix_http socket, scoped to this same installation, that the
+	// sidecar dials to POST /v1/events on the host. See events.go for the
+	// wire contract. Both are assigned by the supervisor exactly like
+	// EnvSocket/EnvTokenFile; manifests cannot choose or see these paths.
+	EnvEventSocket    = "METACORE_NATIVE_EVENT_SOCKET"
+	EnvEventTokenFile = "METACORE_NATIVE_EVENT_TOKEN_FILE"
 )
 
 // Spec is the portable, declarative process contract stored in a signed addon
