@@ -399,6 +399,22 @@ func (d *Dispatcher) invoke(ctx context.Context, orgID uuid.UUID, payload []byte
 			return fmt.Errorf("guest: %s", msg)
 		}
 		return nil
+	case handlerTypeNative:
+		if d.opts.native == nil {
+			return errors.New("native subscription but no NativeInvoker wired")
+		}
+		out, err := d.opts.native.Invoke(ctx, orgID, sub.Installation, sub.AddonKey, sub.Function, payload)
+		if err != nil {
+			return err
+		}
+		if msg := guestEnvelopeError(out); msg != "" {
+			d.logger.Warn("dispatch.native_error",
+				slog.String("addon", sub.AddonKey),
+				slog.String("operation", sub.Function),
+				slog.String("err", msg))
+			return fmt.Errorf("native: %s", msg)
+		}
+		return nil
 	case handlerTypeCompiled:
 		if d.opts.compiled == nil {
 			return ErrNoCompiledRegistry
