@@ -57,6 +57,46 @@ closed `InvocationResult` success/error union. Both directions are capped at
 4 MiB. A future streaming protocol will handle large media without weakening
 this control channel.
 
+## Event plane: sidecar → host
+
+`POST /v1/operations` only lets the host call into a sidecar. Some
+integrations (an inbound WhatsApp message, a connection-state change) need
+the opposite direction. `runtime/native/events.go` defines that reverse
+channel as a second, symmetric leg of the same `metacore.native/v1`
+protocol rather than a bespoke bridge per addon:
+
+- The supervisor provisions a **second** `unix_http` socket per
+  installation, scoped 1:1 to it, at `EnvEventSocket` with its own one-time
+  bearer token at `EnvEventTokenFile` — assigned exactly like
+  `EnvSocket`/`EnvTokenFile` for operations. Manifests cannot choose or see
+  either path.
+- The sidecar `POST`s a `native.Event` to `EventsPath` (`/v1/events`) on
+  that socket. **`Event` carries no organization_id/installation_id/
+  addon_key.** The host resolves that trusted context from which
+  authenticated socket/token the request arrived on, exactly as it already
+  authors `InvocationContext` itself for operations instead of trusting
+  addon input. A sidecar cannot claim an identity it doesn't hold.
+- Payload is capped at `MaxEventPayloadBytes` (4 MiB, same limit as
+  operations) and must be valid JSON; oversized or malformed bodies are
+  rejected before any queuing.
+- `type` is a dot-namespaced event name (`whatsapp.message.received`);
+  `trace_id` is mandatory and must be propagated end-to-end from sidecar to
+  the canonical event bus to the downstream consumer.
+- `idempotency_key` is **mandatory** (unlike the optional one on
+  operations, which are host-initiated). The host is the deduplication
+  authority: replaying the same `(installation, idempotency_key)` returns
+  `accepted:true, duplicate:true` without reprocessing, so an at-least-once
+  sidecar retry after a dropped ack never double-publishes.
+- Backpressure is a first-class, non-fatal outcome: a host that cannot keep
+  up responds `429` with `Retry-After` and `EventAck{accepted:false,
+  error:{code:"backpressure", retryable:true}}`. It must never block the
+  connection indefinitely or tear down the sidecar to apply backpressure.
+
+Kernel's scope stops at this contract (types, validation, wire shape,
+env envelope). The host-side listener, queue, dedup store and canonical-bus
+publisher are Ops' responsibility, the same split already used for the
+operations dispatcher.
+
 ## Baileys target topology
 
 `connector_whatsapp` owns the native service. `link_inbox` owns conversations
@@ -86,9 +126,12 @@ High-isolation deployments may choose `installation` scope.
 5. Complete: Ops rootless supervisor and authenticated local health transport.
 6. Complete: versioned operation request/response envelope.
 7. Ops: operation dispatcher over the authenticated Unix socket.
-8. Addons: package Baileys under `connector_whatsapp`.
-9. Migration: import sessions through secret broker; canary one tenant.
-10. Hub: host-profile filtering by OS/arch/native-runtime capability.
+8. Complete: versioned sidecar -> host event envelope (`/v1/events`,
+   `runtime/native/events.go`) — kernel side only.
+9. Ops: event-plane receiver, dedup store and canonical-bus publisher.
+10. Addons: package Baileys under `connector_whatsapp`.
+11. Migration: import sessions through secret broker; canary one tenant.
+12. Hub: host-profile filtering by OS/arch/native-runtime capability.
 
 ## Non-goals
 

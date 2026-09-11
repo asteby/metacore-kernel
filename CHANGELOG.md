@@ -7,6 +7,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime/native`: canal de eventos sidecar → host (`POST /v1/events`).**
+  El protocolo `metacore.native/v1` solo permitía host → sidecar
+  (`/v1/operations`). Esta es la pata simétrica para que un sidecar (por
+  ejemplo el futuro conector de WhatsApp) publique eventos entrantes sin un
+  bridge HTTP ad hoc por addon.
+
+  Reusa exactamente las mismas garantías de identidad que ya existían: un
+  segundo socket `unix_http` por instalación (`EnvEventSocket` +
+  `EnvEventTokenFile`, asignados por el supervisor igual que
+  `EnvSocket`/`EnvTokenFile`), y el `Event` publicado **no** trae
+  `organization_id`/`installation_id`/`addon_key` — el host los resuelve de
+  qué socket/token autenticado recibió la llamada, nunca del payload.
+
+  Incluye límite de payload (4 MiB, mismo tope que operations), validación
+  de forma del evento (`type` namespaced, `trace_id` y `idempotency_key`
+  obligatorios, `data` JSON válido), un código de error sancionado
+  `backpressure` (siempre `retryable`, para que el host nunca tenga que
+  tumbar el sidecar cuando no da abasto) y semántica de deduplicación
+  (`accepted:true, duplicate:true` en un replay de la misma
+  `idempotency_key`). Ver `docs/rfcs/002-native-service-runtime.md` § "Event
+  plane: sidecar → host" para el contrato de wire completo.
+
 ### Fixed
 
 - **`db_exec`: pasar el pool a `InvokeInTx` ya no degrada en silencio a
