@@ -28,6 +28,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/asteby/metacore-kernel/manifest"
 	"gorm.io/gorm"
@@ -113,23 +114,35 @@ func RegisterAddonI18n(ctx context.Context, db *gorm.DB, addonKey string, m mani
 // returned map because the manifest authors already namespace their
 // strings (e.g. "tires.products.title").
 //
-// An empty lang returns an empty map without error — callers that don't
-// know the user language yet just get nothing localized instead of a
-// random fallback (the metadata localizer handles fallback chains
-// elsewhere).
+// Region tags are tolerated: a request for "es" also merges rows stored
+// under "es-MX" / "es-ES" (exact lang wins on collision). An empty lang
+// returns an empty map without error.
 func GetAddonI18n(ctx context.Context, db *gorm.DB, lang string) (map[string]string, error) {
 	if db == nil || lang == "" {
 		return map[string]string{}, nil
 	}
+	base := lang
+	if i := strings.IndexByte(lang, '-'); i > 0 {
+		base = lang[:i]
+	}
 	var rows []AddonI18nString
+	// Exact lang + any regional sibling of the same base (es-MX when asking es).
 	if err := db.WithContext(ctx).
-		Where("lang = ?", lang).
+		Where("lang = ? OR lang LIKE ?", lang, base+"-%").
 		Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("i18n.GetAddonI18n: query: %w", err)
 	}
 	out := make(map[string]string, len(rows))
+	// Least specific first: regional rows, then exact lang overwrites.
 	for _, r := range rows {
-		out[r.Key] = r.Value
+		if r.Lang != lang {
+			out[r.Key] = r.Value
+		}
+	}
+	for _, r := range rows {
+		if r.Lang == lang {
+			out[r.Key] = r.Value
+		}
 	}
 	return out, nil
 }
