@@ -110,6 +110,7 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.Settings = mapSettings(m.Settings)
 	out.Actions = mapActions(m)
 	out.Tools = mapTools(m)
+	out.Subscriptions = mapSubscriptions(m)
 	out.Events = mapEvents(m)
 	out.LifecycleHooks = mapLifecycle(m.Lifecycle)
 	out.I18n = mapI18n(m.I18n)
@@ -907,17 +908,7 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 			Steps:          mapActionSteps(a.Steps),
 			Condition:      mapCondition(a.Condition),
 		}
-		switch a.Handler.Type {
-		case "wasm":
-			def.Trigger = &ActionTrigger{Type: "wasm", Export: a.Handler.Function}
-		case "webhook":
-			def.Trigger = &ActionTrigger{Type: "webhook"}
-		case "connector":
-			// Cross-addon dispatch: the export runs in the connector-owning addon.
-			def.Trigger = &ActionTrigger{Type: "connector", Connector: a.Handler.Connector, Export: a.Handler.Export}
-		case "native":
-			def.Trigger = &ActionTrigger{Type: "native", Operation: a.Handler.Operation}
-		}
+		def.Trigger = handlerToTrigger(a.Handler)
 		if a.Idempotency != nil {
 			def.Idempotency = &IdempotencyDef{KeyField: a.Idempotency.KeyField}
 		}
@@ -1192,9 +1183,52 @@ func mapTools(m *v3.Manifest) []ToolDef {
 		if t.Handler.Type == "webhook" {
 			td.Endpoint = t.Handler.URL
 		}
+		td.Trigger = handlerToTrigger(t.Handler)
 		out = append(out, td)
 	}
 	return out
+}
+
+// mapSubscriptions projects contributions.subscriptions into legacy
+// SubscriptionDef, reusing handlerToTrigger — the SAME wasm/native/connector
+// Handler→Trigger projection mapActions already uses — so the host dispatches
+// a subscription through the identical invoker/context as an action (Fase D,
+// asteby-platform-continuation-2026-09-10.md §6: "reuse the same invoker and
+// trusted context", no second dispatch mechanism).
+func mapSubscriptions(m *v3.Manifest) []SubscriptionDef {
+	if m.Contributions == nil || len(m.Contributions.Subscriptions) == 0 {
+		return nil
+	}
+	out := make([]SubscriptionDef, 0, len(m.Contributions.Subscriptions))
+	for _, s := range m.Contributions.Subscriptions {
+		out = append(out, SubscriptionDef{
+			Event:   s.Event,
+			Trigger: handlerToTrigger(s.Handler),
+			Filter:  s.Filter,
+		})
+	}
+	return out
+}
+
+// handlerToTrigger is the shared v3 Handler → legacy ActionTrigger
+// projection used by actions, tools, and subscriptions alike. Keeping this
+// as ONE function is deliberate: it is the single place that decides how a
+// declarative handler.type becomes a dispatchable ActionTrigger, so actions,
+// tools and subscriptions can never drift into different native/wasm/
+// connector semantics.
+func handlerToTrigger(h v3.Handler) *ActionTrigger {
+	switch h.Type {
+	case "wasm":
+		return &ActionTrigger{Type: "wasm", Export: h.Function}
+	case "webhook":
+		return &ActionTrigger{Type: "webhook"}
+	case "connector":
+		return &ActionTrigger{Type: "connector", Connector: h.Connector, Export: h.Export}
+	case "native":
+		return &ActionTrigger{Type: "native", Operation: h.Operation}
+	default:
+		return nil
+	}
 }
 
 // mapEvents derives the legacy Events list from the events this addon publishes
@@ -1342,6 +1376,11 @@ func deriveBackend(m *v3.Manifest) *BackendSpec {
 		for _, s := range m.Contributions.Subscriptions {
 			if s.Handler.Type == "wasm" {
 				add(s.Handler.Function)
+			}
+		}
+		for _, t := range m.Contributions.Tools {
+			if t.Handler.Type == "wasm" {
+				add(t.Handler.Function)
 			}
 		}
 	}
