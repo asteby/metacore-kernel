@@ -471,6 +471,18 @@ func (m *Manifest) validateActionTriggers() error {
 			}
 		}
 	}
+	// Tools and subscriptions share the exact same ActionTrigger shape (Fase D:
+	// one invoker, one validation path — see handlerToTrigger in from_v3.go).
+	for i := range m.Tools {
+		if err := validateActionTrigger(m.Tools[i].Trigger, exports); err != nil {
+			return fmt.Errorf("manifest.tools[%d].%w", i, err)
+		}
+	}
+	for i := range m.Subscriptions {
+		if err := validateActionTrigger(m.Subscriptions[i].Trigger, exports); err != nil {
+			return fmt.Errorf("manifest.subscriptions[%d].%w", i, err)
+		}
+	}
 	return nil
 }
 

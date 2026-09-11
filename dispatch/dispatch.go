@@ -1,5 +1,5 @@
 // Package dispatch is the event-subscription dispatcher: the layer that routes
-// the kernel's canonical bus events to the handlers (wasm / compiled) that
+// the kernel's canonical bus events to the handlers (wasm / compiled / native) that
 // installed addons declare via `contributions.subscriptions` in their v3
 // manifest.
 //
@@ -68,20 +68,23 @@ import (
 // trusted subscription is purely a fan-out tap, not an authorization grant.
 const subscriberKey = "kernel"
 
-// handlerTypeWasm / handlerTypeCompiled are the v3 `handler.type` discriminator
-// values the dispatcher routes. "webhook" is intentionally unhandled here — the
-// dispatcher is the in-process tier; a webhook fan-out belongs to a future
-// transport and would log an unsupported-tier warning.
+// handlerTypeWasm / handlerTypeCompiled / handlerTypeNative are the v3
+// `handler.type` discriminator values the dispatcher routes. "webhook" is
+// intentionally unhandled here — the dispatcher is the in-process tier; a
+// webhook fan-out belongs to a future transport and would log an
+// unsupported-tier warning.
 const (
 	handlerTypeWasm     = "wasm"
 	handlerTypeCompiled = "compiled"
+	handlerTypeNative   = "native"
 )
 
 // Subscription is the dispatcher's view of one declared subscription on an
 // installed addon. It is the projection a SubscriptionProvider returns — the
 // host materialises it from the stored v3 manifest of an installed+enabled
 // addon. It deliberately mirrors v3.Subscription + the addon's installation
-// identity (needed to invoke the right per-installation wasm module).
+// identity (needed to invoke the right per-installation wasm module or
+// native-service instance).
 type Subscription struct {
 	// AddonKey is the owning addon (namespacing + capability subject).
 	AddonKey string
@@ -91,9 +94,13 @@ type Subscription struct {
 	// Event is the subscribed pattern: an exact event name
 	// ("inventory.product.updated") or a trailing wildcard ("inventory.*").
 	Event string
-	// HandlerType is the v3 handler discriminator: "wasm" | "compiled".
+	// HandlerType is the v3 handler discriminator: "wasm" | "compiled" | "native".
 	HandlerType string
-	// Function is the wasm export name or the compiled symbol to invoke.
+	// Function is the wasm export name or the compiled symbol to invoke. For
+	// HandlerType=="native" this carries the v3 handler.operation value
+	// instead — reused rather than adding a parallel Operation field, since
+	// exactly one of "wasm export" / "compiled symbol" / "native operation"
+	// is meaningful per HandlerType.
 	Function string
 	// Settings is the installation's stored settings, threaded to the wasm
 	// invocation (env_get). Optional.
@@ -145,6 +152,34 @@ type WasmInvokerFunc func(ctx context.Context, orgID, installation uuid.UUID, ad
 // InvokeFor satisfies WasmInvoker.
 func (f WasmInvokerFunc) InvokeFor(ctx context.Context, orgID, installation uuid.UUID, addonKey, function string, payload []byte, settings map[string]string) ([]byte, error) {
 	return f(ctx, orgID, installation, addonKey, function, payload, settings)
+}
+
+// NativeInvoker is the seam to a native-service subscription (Fase D,
+// asteby-platform-continuation-2026-09-10.md §6): a subscription whose v3
+// handler.type is "native" dispatches over the SAME authenticated
+// metacore.native/v1 local channel a native ACTION already uses
+// (metacore-kernel#344/#345, asteby-hq/ops#1433) — this interface is
+// deliberately as narrow as WasmInvoker so dispatch stays a clean leaf with
+// no dependency on the native runtime's supervisor/manifest types; the host
+// adapts its richer NativeOperationInvoker (which needs the full
+// kernelmanifest.Manifest + kernelinstaller.Installation) down to this shape
+// (see NativeInvokerFunc).
+//
+// Contract: Invoke resolves the enabled installation for (orgID, addonKey),
+// dispatches `operation` with payload over the native channel, and returns
+// the guest's {success,data,error} envelope bytes. A non-nil error means the
+// invocation itself failed (no native service, unreachable socket, timeout)
+// and the delivery should be retried, exactly like WasmInvoker.InvokeFor.
+type NativeInvoker interface {
+	Invoke(ctx context.Context, orgID, installation uuid.UUID, addonKey, operation string, payload []byte) ([]byte, error)
+}
+
+// NativeInvokerFunc adapts a plain function to NativeInvoker.
+type NativeInvokerFunc func(ctx context.Context, orgID, installation uuid.UUID, addonKey, operation string, payload []byte) ([]byte, error)
+
+// Invoke satisfies NativeInvoker.
+func (f NativeInvokerFunc) Invoke(ctx context.Context, orgID, installation uuid.UUID, addonKey, operation string, payload []byte) ([]byte, error) {
+	return f(ctx, orgID, installation, addonKey, operation, payload)
 }
 
 // CompiledHandler is one first-party, compiled-in subscription handler. The

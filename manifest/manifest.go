@@ -66,6 +66,15 @@ type Manifest struct {
 	// user message. Unlike Actions (UI-triggered record operations) Tools
 	// are semantic and carry extraction hints for parameter inference.
 	Tools []ToolDef `json:"tools,omitempty"`
+	// Subscriptions are the addon's declarative event handlers (v3
+	// contributions.subscriptions[]), carried over to the host's dispatch
+	// plane. Fase D (asteby-platform-continuation-2026-09-10.md §6): a
+	// wasm/native Trigger here is invoked by the SAME
+	// NativeOperationInvoker/wasm export runtime actions already use — the
+	// host matches Event against its canonical bus name
+	// (`<addonKey>.<event.type>`) for every INSTALLED addon with an effective
+	// grant and dispatches Trigger exactly like an ActionDef.Trigger.
+	Subscriptions []SubscriptionDef `json:"subscriptions,omitempty"`
 	// Routes are the addon's entries in the host's declarative routing tables
 	// (which named handler wins for a record, per decision domain). See
 	// RouteDef and the routing package.
@@ -557,6 +566,13 @@ type ToolDef struct {
 	Timeout          int              `json:"timeout,omitempty"` // seconds
 	CacheTTL         int              `json:"cache_ttl,omitempty"`
 	Priority         int              `json:"priority,omitempty"`
+	// Trigger is the v3 → legacy projection of the tool's handler when it is
+	// wasm/connector/native (mirrors ActionDef.Trigger). Nil for a plain
+	// webhook tool (Endpoint/Method above already cover that case). A native
+	// trigger here reuses the EXACT same NativeOperationInvoker contract the
+	// host wires for actions (metacore-kernel#344/asteby-hq/ops#1433) — no
+	// second dispatch mechanism.
+	Trigger *ActionTrigger `json:"trigger,omitempty"`
 }
 
 // ToolInputParam describes a single LLM-extractable argument for a tool.
@@ -672,6 +688,20 @@ type ActionTrigger struct {
 	// the export runs in the connector-owning addon, org-scoped, so an action can
 	// drive a connector it does not own without duplicating its client.
 	Connector string `json:"connector,omitempty"`
+}
+
+// SubscriptionDef is the legacy/host projection of a v3
+// contributions.subscriptions[] entry: an event name plus an ActionTrigger
+// reused verbatim so the host dispatches wasm/native/connector subscription
+// handlers through the exact same invoker as actions (Fase D,
+// asteby-platform-continuation-2026-09-10.md §6). Trigger.Type=="webhook" is
+// carried for completeness (legacy inbound-webhook subscriptions) but the
+// host has no generic outbound-webhook subscription dispatcher today; only
+// wasm/native/connector are actually invoked by the reference host (ops).
+type SubscriptionDef struct {
+	Event   string         `json:"event"`
+	Trigger *ActionTrigger `json:"trigger,omitempty"`
+	Filter  string         `json:"filter,omitempty"`
 }
 
 // FieldDef is an input field used by action forms and model definitions.

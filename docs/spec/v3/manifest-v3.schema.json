@@ -2651,7 +2651,8 @@
                 "wasm",
                 "webhook",
                 "compiled",
-                "connector"
+                "connector",
+                "native"
               ]
             },
             "function": {
@@ -2659,6 +2660,11 @@
             },
             "url": {
               "type": "string"
+            },
+            "operation": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,127}$",
+              "description": "When type=native: operation dispatched over the authenticated metacore.native/v1 local channel, via the SAME NativeOperationInvoker actions use."
             },
             "connector": {
               "type": "string",
@@ -2697,7 +2703,8 @@
                 "wasm",
                 "webhook",
                 "compiled",
-                "connector"
+                "connector",
+                "native"
               ]
             },
             "function": {
@@ -2705,6 +2712,11 @@
             },
             "url": {
               "type": "string"
+            },
+            "operation": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,127}$",
+              "description": "When type=native: operation dispatched over the authenticated metacore.native/v1 local channel, via the SAME NativeOperationInvoker actions use."
             },
             "connector": {
               "type": "string",

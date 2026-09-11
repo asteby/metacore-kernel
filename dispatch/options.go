@@ -39,6 +39,7 @@ type Options struct {
 	retryBackoffMax time.Duration
 	capability      CapabilityChecker
 	compiled        CompiledRegistry
+	native          NativeInvoker
 	logger          *slog.Logger
 	onDelivery      func(DeliveryResult)
 
@@ -155,6 +156,15 @@ func WithCapabilityChecker(c CapabilityChecker) Option {
 // "compiled" subscription handlers. Without it the compiled tier is inert.
 func WithCompiledRegistry(r CompiledRegistry) Option {
 	return func(o *Options) { o.compiled = r }
+}
+
+// WithNativeInvoker wires the seam that dispatches "native" subscriptions
+// (Fase D) over the same authenticated metacore.native/v1 channel a native
+// ACTION already uses. Without it the native tier is inert — a matching
+// subscription dead-letters with "native subscription but no NativeInvoker
+// wired", exactly like an unwired wasm tier does today.
+func WithNativeInvoker(inv NativeInvoker) Option {
+	return func(o *Options) { o.native = inv }
 }
 
 // WithLogger replaces the slog.Logger (default slog.Default()).
