@@ -895,7 +895,10 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 		// historically gated only on `confirm`, so a message-only action opened
 		// as executable and then rendered null. Derive Confirm when a message
 		// is present so host metadata and the SDK stay aligned.
-		confirm := a.Confirm || a.ConfirmMessage != ""
+		// Exception: when `modal` declares a federated custom UI, never invent
+		// Confirm — the SDK must fail closed if the remote is missing instead
+		// of opening a generic confirmation that hides the broken custom flow.
+		confirm := a.Modal == "" && (a.Confirm || a.ConfirmMessage != "")
 		def := ActionDef{
 			Key:            a.Key,
 			Name:           a.Key,
