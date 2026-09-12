@@ -1760,6 +1760,12 @@ type ActionField struct {
 	LabelIcon  string `json:"label_icon,omitempty"`
 	LabelColor string `json:"label_color,omitempty"`
 
+	// Readonly marks the field (typically an ItemFields column, e.g. a computed
+	// subtotal alongside Total) as display-only: the SDK renders its current
+	// value but disables input. Pure UI metadata — the kernel neither derives
+	// nor validates the value; the addon's own action handler computes it.
+	Readonly bool `json:"readonly,omitempty"`
+
 	// Total, on an ItemFields column, flags it for summation in the line-items
 	// footer. The SDK renders a totals row summing every numeric column marked
 	// Total (e.g. debit and credit of a journal entry). Ignored on flat fields.

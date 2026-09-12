@@ -1094,6 +1094,7 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 			Ref:            f.Ref,
 			Placeholder:    f.Placeholder,
 			SearchEndpoint: f.SearchEndpoint,
+			Readonly:       f.Readonly,
 			Total:          f.Total,
 			// Scan opts the field into camera barcode scan-to-fill (text/number
 			// input or dynamic_select reference). Forwarded to modelbase.FieldDef.
