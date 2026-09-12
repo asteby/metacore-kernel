@@ -944,7 +944,10 @@ func mapRoutes(m *v3.Manifest) []RouteDef {
 
 // mapCondition projects a v3 contribution Condition onto its host carrier so
 // the server-side gate survives the v3 → host conversion. Nil stays nil (the
-// contribution is unconditional).
+// contribution is unconditional). Org-level predicates (addon_installed /
+// connector_connected / unmet) AND record-level Field/Operator/Value are all
+// carried — the latter is what lets the SDK hide row actions that don't apply
+// to the hovered record (credit_pending, fiscal_uuid, …).
 func mapCondition(c *v3.Condition) *ConditionDef {
 	if c == nil {
 		return nil
@@ -953,6 +956,9 @@ func mapCondition(c *v3.Condition) *ConditionDef {
 		AddonInstalled:     c.AddonInstalled,
 		ConnectorConnected: c.ConnectorConnected,
 		Unmet:              c.Unmet,
+		Field:              c.Field,
+		Operator:           c.Operator,
+		Value:              c.Value,
 	}
 }
 
