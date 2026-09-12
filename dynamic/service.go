@@ -1092,6 +1092,13 @@ func (s *Service) scopeOrDeny(db *gorm.DB, instance any, user modelbase.AuthUser
 // in their handler layer do not break). New() warns loudly about the second
 // case at construction.
 func (s *Service) checkPerm(ctx context.Context, user modelbase.AuthUser, model, action string) error {
+	// System-caller bypass: gated on the concrete unexported type, never on
+	// role or any interface an external package could satisfy. See
+	// NewSystemCaller's doc for the security contract — tenant scoping still
+	// applies below via ScopeQuery(user), this only skips the perms gate.
+	if _, ok := user.(systemPrincipal); ok {
+		return nil
+	}
 	if s.perms == nil {
 		if s.requirePerms {
 			return ErrPermissionServiceMissing
