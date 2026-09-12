@@ -1457,7 +1457,15 @@ type NavItem struct {
 	// status (e.g. {"status":"reception"} for an "En recepción" entry pointing
 	// at the same model). The host AND-combines these with any runtime filters.
 	// Empty/omitted means no filter (the default, unfiltered list).
+	//
+	// When LockedScope is true, Filter is also a server-side authorization
+	// predicate gated by Permission (not a removable UI chip).
 	Filter map[string]string `json:"filter,omitempty"`
+
+	// LockedScope marks Filter as a security view scope. Hosts must enforce it
+	// on list/show/export for callers that hold Permission. Default false keeps
+	// cosmetic status/type sidebar tabs as client-only deep-links.
+	LockedScope bool `json:"locked_scope,omitempty"`
 
 	// ViewType selects the renderer the SDK mounts for this entry's model.
 	// "table" (the default when empty) renders the DynamicTable; "kanban"

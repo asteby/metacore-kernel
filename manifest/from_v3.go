@@ -818,6 +818,7 @@ func mapNavItems(in []v3.NavItem, modelTable map[string]string) []NavItem {
 			Permission: it.Permission,
 			Items:      mapNavItems(it.Items, modelTable),
 			Filter:     it.Filter,
+			LockedScope: it.LockedScope,
 			// Kanban view-type hint rides across so the host can project it onto
 			// the served TableMetadata and the SDK picks the board renderer.
 			ViewType: it.ViewType,

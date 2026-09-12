@@ -402,7 +402,11 @@ type NavItem struct {
 	// Filter is a static column→value filter the host applies when rendering
 	// this entry's list view (e.g. {"status":"reception"}), so an addon can
 	// publish one nav entry per status. Empty/omitted means no filter.
+	// When LockedScope is true, Filter is also a server-enforced authorization
+	// predicate gated by Permission.
 	Filter map[string]string `json:"filter,omitempty"`
+	// LockedScope marks Filter as security view scope (not a cosmetic deep-link).
+	LockedScope bool `json:"locked_scope,omitempty"`
 
 	// ViewType / GroupBy are the host projection of the v3 NavItem kanban hint:
 	// ViewType "kanban" makes the SDK render a board grouped by GroupBy (else the

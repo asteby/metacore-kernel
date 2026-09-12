@@ -1919,6 +1919,10 @@
           },
           "description": "Static column\u2192value filter the host applies when rendering this entry's list view (e.g. {\"status\":\"reception\"}), so an addon can publish one nav entry per status."
         },
+        "locked_scope": {
+          "type": "boolean",
+          "description": "When true, Filter is a server-enforced authorization view scope gated by Permission (not a removable UI chip). Default false keeps cosmetic sidebar deep-links client-only."
+        },
         "view_type": {
           "type": "string",
           "enum": [
