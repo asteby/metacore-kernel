@@ -304,7 +304,8 @@
         "arch": {"type": "string", "pattern": "^[a-z0-9_]+$"},
         "path": {"type": "string", "pattern": "^backend/"},
         "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-        "sbom": {"type": "string", "pattern": "^backend/"}
+        "sbom": {"type": "string", "pattern": "^backend/"},
+        "download_url": {"type": "string", "pattern": "^https://"}
       }
     },
     "NativeControl": {
