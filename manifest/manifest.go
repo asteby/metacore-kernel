@@ -1374,6 +1374,15 @@ type ConditionDef struct {
 	// Unmet is the policy when the predicate fails: "hide" | "disable". Empty
 	// = the per-predicate default (see UnmetPolicy).
 	Unmet string `json:"unmet,omitempty"`
+	// Field/Operator/Value are the host projection of a v3 record-level
+	// Condition gate: the SDK surfaces the action only when the target row
+	// matches (isActionConditionMet). SatisfiedBy deliberately ignores them —
+	// they are not org-level. Without this projection, authors that declare
+	// condition.field on an action (e.g. reject_credit → credit_pending) lose
+	// the predicate at FromV3 and the host must hardcode it again.
+	Field    string `json:"field,omitempty"`
+	Operator string `json:"operator,omitempty"`
+	Value    any    `json:"value,omitempty"`
 }
 
 // UnmetPolicy resolves the effective unmet policy — the declared value, else

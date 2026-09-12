@@ -895,7 +895,10 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 		// historically gated only on `confirm`, so a message-only action opened
 		// as executable and then rendered null. Derive Confirm when a message
 		// is present so host metadata and the SDK stay aligned.
-		confirm := a.Confirm || a.ConfirmMessage != ""
+		// Exception: when `modal` declares a federated custom UI, never invent
+		// Confirm — the SDK must fail closed if the remote is missing instead
+		// of opening a generic confirmation that hides the broken custom flow.
+		confirm := a.Modal == "" && (a.Confirm || a.ConfirmMessage != "")
 		def := ActionDef{
 			Key:            a.Key,
 			Name:           a.Key,
@@ -944,7 +947,10 @@ func mapRoutes(m *v3.Manifest) []RouteDef {
 
 // mapCondition projects a v3 contribution Condition onto its host carrier so
 // the server-side gate survives the v3 → host conversion. Nil stays nil (the
-// contribution is unconditional).
+// contribution is unconditional). Org-level predicates (addon_installed /
+// connector_connected / unmet) AND record-level Field/Operator/Value are all
+// carried — the latter is what lets the SDK hide row actions that don't apply
+// to the hovered record (credit_pending, fiscal_uuid, …).
 func mapCondition(c *v3.Condition) *ConditionDef {
 	if c == nil {
 		return nil
@@ -953,6 +959,9 @@ func mapCondition(c *v3.Condition) *ConditionDef {
 		AddonInstalled:     c.AddonInstalled,
 		ConnectorConnected: c.ConnectorConnected,
 		Unmet:              c.Unmet,
+		Field:              c.Field,
+		Operator:           c.Operator,
+		Value:              c.Value,
 	}
 }
 

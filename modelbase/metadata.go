@@ -384,7 +384,12 @@ type ActionDef struct {
 	Condition      interface{} `json:"condition,omitempty"`
 	Confirm        bool        `json:"confirm,omitempty"`
 	ConfirmMessage string      `json:"confirmMessage,omitempty"`
-	Fields         []FieldDef  `json:"fields,omitempty"`
+	// Modal is the federated UI slot ("<addon_key>.<action_key>"). Must match
+	// manifest.ActionDef.Modal so the host→frontend JSON round-trip preserves it;
+	// without this field the SDK never learns a custom modal was declared and
+	// falls back to a generic confirm that hides a missing remote.
+	Modal  string     `json:"modal,omitempty"`
+	Fields []FieldDef `json:"fields,omitempty"`
 	// Steps mirrors manifest.ActionDef.Steps (a declarative multi-step wizard);
 	// JSON key matches the SDK's ActionMetadata.steps so the host→SDK round-trip
 	// preserves it.
