@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`Connector.scopes`:** declares the OAuth scopes a connector needs
+  (e.g. `calendar.readonly`, `mail.send`) as a typed `[]string` instead of
+  free-text documentation inside a credential's `help`. Optional and
+  backward-compatible — manifests without it validate unchanged. Consuming
+  this field to pre-arm the authorize URL's `scope=` query param is a
+  follow-up in the hub/connector-broker repo, not done here; existing
+  manifests (e.g. calendar/mail addons) that documented the scope as free
+  text still need to be migrated to use it.
+
 - **`NavItem.locked_scope`:** when `true`, the item's `filter` is a
   server-enforced authorization view scope gated by `permission` (not a
   removable UI chip / cosmetic deep-link). Projected from v3 → host NavItem
