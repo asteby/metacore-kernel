@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -60,12 +61,25 @@ type Control struct {
 
 // Artifact selects one content-addressed payload for a host platform. Path and
 // SBOM are bundle-relative backend paths; SHA256 covers the payload bytes.
+//
+// DownloadURL is an optional escape hatch for payloads too large to embed in
+// the signed bundle tar.gz (the bundle reader enforces a decompressed-size
+// cap; see bundle.Read). When set, the host fetches the artifact bytes from
+// this URL out of band instead of reading them from the bundle's backend/
+// files, and MUST verify the downloaded bytes against SHA256 before ever
+// executing or persisting them — see VerifyDownloadedArtifact. The URL itself
+// is never trusted: it is only a transport hint, not a security boundary. In
+// this mode Path still names the local install destination (and is still
+// validated as a clean backend/ path) but the bytes at that path need not
+// exist inside the signed bundle. SBOM must still ship inside the bundle
+// (it's small) and is still verified as present regardless of DownloadURL.
 type Artifact struct {
-	OS     string `json:"os"`
-	Arch   string `json:"arch"`
-	Path   string `json:"path"`
-	SHA256 string `json:"sha256"`
-	SBOM   string `json:"sbom"`
+	OS          string `json:"os"`
+	Arch        string `json:"arch"`
+	Path        string `json:"path"`
+	SHA256      string `json:"sha256"`
+	SBOM        string `json:"sbom"`
+	DownloadURL string `json:"download_url,omitempty"`
 }
 
 type HealthCheck struct {
@@ -164,6 +178,12 @@ func (s Spec) Validate() error {
 		if artifact.SHA256 != strings.ToLower(artifact.SHA256) {
 			return fmt.Errorf("native runtime: artifacts[%d].sha256 must be lowercase", i)
 		}
+		if artifact.DownloadURL != "" {
+			u, err := url.Parse(artifact.DownloadURL)
+			if err != nil || u.Scheme != "https" || u.Host == "" {
+				return fmt.Errorf("native runtime: artifacts[%d].download_url must be an https URL", i)
+			}
+		}
 	}
 	return nil
 }
@@ -184,17 +204,42 @@ func (s Spec) ArtifactFor(os, arch string) (Artifact, bool) {
 
 // VerifyArtifact checks the selected payload against its manifest digest and
 // requires the declared SBOM to be present in the same verified bundle.
+//
+// When artifact.DownloadURL is set, the payload bytes are expected to live
+// outside the bundle (see the Artifact doc comment); this only checks the
+// SBOM is present. The caller MUST separately fetch the payload and call
+// VerifyDownloadedArtifact on the fetched bytes before trusting them.
 func VerifyArtifact(artifact Artifact, files map[string][]byte) error {
+	if _, ok := files[artifact.SBOM]; !ok {
+		return fmt.Errorf("native runtime: SBOM %q is missing from bundle", artifact.SBOM)
+	}
+	if artifact.DownloadURL != "" {
+		return nil
+	}
 	payload, ok := files[artifact.Path]
 	if !ok {
 		return fmt.Errorf("native runtime: artifact %q is missing from bundle", artifact.Path)
 	}
-	if _, ok := files[artifact.SBOM]; !ok {
-		return fmt.Errorf("native runtime: SBOM %q is missing from bundle", artifact.SBOM)
-	}
 	sum := sha256.Sum256(payload)
 	if hex.EncodeToString(sum[:]) != artifact.SHA256 {
 		return fmt.Errorf("native runtime: artifact %q digest mismatch", artifact.Path)
+	}
+	return nil
+}
+
+// VerifyDownloadedArtifact hashes bytes fetched out-of-band from
+// Artifact.DownloadURL and checks them against the manifest-pinned SHA256.
+// Callers MUST call this AFTER the full download completes and BEFORE the
+// bytes are executed, installed, or cached anywhere durable: the download URL
+// is only a transport hint, never a trust boundary — only the digest pinned
+// in the (already Ed25519-signed) manifest is authoritative.
+func VerifyDownloadedArtifact(artifact Artifact, payload []byte) error {
+	if artifact.DownloadURL == "" {
+		return errors.New("native runtime: artifact has no download_url to verify against")
+	}
+	sum := sha256.Sum256(payload)
+	if hex.EncodeToString(sum[:]) != artifact.SHA256 {
+		return fmt.Errorf("native runtime: downloaded artifact %q digest mismatch", artifact.Path)
 	}
 	return nil
 }

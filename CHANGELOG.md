@@ -37,6 +37,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `idempotency_key`). Ver `docs/rfcs/002-native-service-runtime.md` § "Event
   plane: sidecar → host" para el contrato de wire completo.
 
+- **`runtime/native.Artifact.DownloadURL`: fetch de artifact fuera de banda.**
+  El bundle tar.gz tiene un tope de 64 MiB descomprimidos
+  (`bundle.Read`), y un binario nativo real (p. ej. `connector_whatsapp`
+  compilado con Bun: 107 MB) no entra ahí — el parser de bundle rechaza el
+  bundle completo antes siquiera de leer el manifest. `Artifact` ahora acepta
+  un campo opcional `download_url` (debe ser `https://`, validado en
+  `Spec.Validate`): cuando está presente, el binario no viaja dentro del
+  tar.gz firmado — el host lo descarga aparte y **verifica el SHA256 después
+  de la descarga completa**, nunca confiando en la URL como límite de
+  confianza. `VerifyArtifact` deja de exigir el payload embebido cuando hay
+  `download_url` (el SBOM sigue siendo obligatorio dentro del bundle), y la
+  nueva `VerifyDownloadedArtifact`/`FetchArtifact` (con un tope de 256 MiB
+  para el fetch out-of-band) implementan esa verificación para que cada host
+  la reutilice en vez de reinventarla. Este es un cambio de contrato
+  aditivo — los artifacts embebidos existentes (sin `download_url`) siguen
+  verificándose exactamente igual que antes.
+
 ### Fixed
 
 - **`db_exec`: pasar el pool a `InvokeInTx` ya no degrada en silencio a
