@@ -153,6 +153,13 @@ type Connector struct {
 	// connector context and returns {success,data:{ok,message}}. Powers the
 	// config UI's "test connection" button. Empty = no health-check offered.
 	TestExport string `json:"test_export,omitempty"`
+	// Scopes lists the OAuth scopes this connector needs when Auth is "oauth2"
+	// (e.g. "calendar.readonly", "mail.send"). The host/broker joins them into
+	// the authorize URL's `scope` query param instead of an addon documenting
+	// the required scope as free text in a credential's help. Empty is valid
+	// for a provider with no scope concept, or for Auth "token". Order is
+	// preserved; the host does not dedupe or sort.
+	Scopes []string `json:"scopes,omitempty"`
 }
 
 // Schedule is one declarative cron job. The kernel scheduler parses Every as a

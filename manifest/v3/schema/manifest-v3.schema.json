@@ -3159,6 +3159,13 @@
         "test_export": {
           "type": "string",
           "description": "Names a WASM export the host invokes to validate the credentials (a cheap read-only call to the third-party API). Powers the config UI's 'test connection' button; returns {success,data:{ok,message}}."
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "OAuth scopes this connector needs when auth is 'oauth2' (e.g. 'calendar.readonly', 'mail.send'). The host/broker joins them into the authorize URL's scope query param instead of an addon documenting the required scope as free text in a credential's help."
         }
       }
     },
