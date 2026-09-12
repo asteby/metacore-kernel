@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`NavItem.locked_scope`:** when `true`, the item's `filter` is a
+  server-enforced authorization view scope gated by `permission` (not a
+  removable UI chip / cosmetic deep-link). Projected from v3 → host NavItem
+  and documented in the manifest schema so hosts can stop stripping the field
+  before schema.Parse.
+
 - **`runtime/native`: canal de eventos sidecar → host (`POST /v1/events`).**
   El protocolo `metacore.native/v1` solo permitía host → sidecar
   (`/v1/operations`). Esta es la pata simétrica para que un sidecar (por
