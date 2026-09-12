@@ -2390,6 +2390,10 @@
         "visible_when": {
           "$ref": "#/$defs/VisibleWhen"
         },
+        "readonly": {
+          "type": "boolean",
+          "description": "Marks the field (typically an item_fields column, e.g. a computed subtotal alongside total) as display-only: the SDK renders its current value but disables input. Pure UI metadata."
+        },
         "total": {
           "type": "boolean",
           "description": "Set on an item_fields column to sum it in the line-items footer. The SDK renders a per-column total row for every numeric column flagged with total."

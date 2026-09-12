@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`v3.ActionField` (and its host projection `manifest.FieldDef`) had no
+  `readonly` property:** the JSON schema's `ActionField` def sets
+  `additionalProperties: false` and never declared `readonly`, so any addon
+  using it on an `item_fields` column (a display-only computed value
+  alongside `total`, e.g. a line-item subtotal) failed strict v3 validation
+  outright — not silently dropped like the `DocumentDef` gap below, a hard
+  parse error. Added `Readonly bool` to both the v3 and host `ActionField`
+  structs, the schema, and `mapActionFields`' projection, mirroring `Total`.
+
 - **`manifest.FromV3` dropped `DocumentDef.RequiresState`/`.Condition`:**
   `v3.DocumentDef` has accepted `requires_state` and `condition` since the
   print-lifecycle-gate feature shipped, and `manifest/v3/validate.go`
