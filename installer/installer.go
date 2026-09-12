@@ -313,17 +313,22 @@ var ErrSameVersionUpgrade = errors.New("installer: upgrade target version matche
 // trail; panicking at boot can mask the cause.
 func New(db *gorm.DB, kernelVersion string) *Installer {
 	pubs, _ := loadTrustedKeysFromEnv()
+	allowUnsigned := envFlag("ALLOW_UNSIGNED_BUNDLES")
 	// Central trust anchor: when no key is pinned via env we try to fetch
 	// the hub's marketplace pubkey at boot. Best-effort + logged — see
-	// central_trust.go for the contract.
-	pubs = loadCentralPubKeyIfNeeded(pubs)
+	// central_trust.go for the contract. Skipped when the operator has
+	// explicitly opted into ALLOW_UNSIGNED_BUNDLES and pinned no key: the
+	// fetch would otherwise silently populate PublicKeys and defeat the
+	// escape hatch (verifySignature only honours AllowUnsigned when
+	// PublicKeys is empty — see signature_gate_test.go).
+	pubs = loadCentralPubKeyIfNeeded(pubs, allowUnsigned)
 	return &Installer{
 		DB:             db,
 		KernelVersion:  kernelVersion,
 		Lifecycles:     lifecycle.NewRegistry(),
 		Interceptors:   lifecycle.NewInterceptorRegistry(),
 		PublicKeys:     pubs,
-		AllowUnsigned:  envFlag("ALLOW_UNSIGNED_BUNDLES"),
+		AllowUnsigned:  allowUnsigned,
 		Broadcaster:    NoopBroadcaster{},
 		BackendRuntime: NoopBackendRuntimeLoader{},
 		NativeRuntime:  UnsupportedNativeServiceRuntime{},

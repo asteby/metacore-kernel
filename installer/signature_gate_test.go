@@ -6,7 +6,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -99,6 +102,64 @@ func TestVerifySignatureGate(t *testing.T) {
 			t.Fatalf("want error, got nil")
 		}
 	})
+}
+
+// TestNewHonoursAllowUnsignedEvenWithReachableHub is the end-to-end
+// regression for the live-verified gap: a kernel-native host constructed via
+// New() with ALLOW_UNSIGNED_BUNDLES=true and a reachable MARKETPLACE_URL
+// must still permit an unsigned bundle through Install's signature gate.
+// Before the central_trust.go fix, New() fetched the central pubkey
+// regardless of ALLOW_UNSIGNED_BUNDLES, populated PublicKeys, and made
+// verifySignature's AllowUnsigned branch (guarded on len(PublicKeys)==0)
+// unreachable — the exact failure observed against a real local `ops`
+// instance (asteby-hq/addons PR #1409, packages/connector_whatsapp/
+// AUDIT.md §12: "installer: bundle signature rejected: security: bundle
+// has no signature" regardless of the env var).
+func TestNewHonoursAllowUnsignedEvenWithReachableHub(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(marketplacePubKeyResponse{
+			PubKey:    hex.EncodeToString(pub),
+			Algorithm: "ed25519",
+		})
+	}))
+	defer srv.Close()
+	t.Setenv("MARKETPLACE_URL", srv.URL)
+	t.Setenv("ALLOW_UNSIGNED_BUNDLES", "true")
+	t.Setenv("MARKETPLACE_PUBKEY", "")
+	t.Setenv("MARKETPLACE_PUBKEYS", "")
+
+	inst := New(nil, "test")
+	if len(inst.PublicKeys) != 0 {
+		t.Fatalf("want PublicKeys empty so AllowUnsigned takes effect, got %d keys", len(inst.PublicKeys))
+	}
+	if !inst.AllowUnsigned {
+		t.Fatalf("want AllowUnsigned true")
+	}
+
+	src := &bundle.Bundle{
+		Manifest: manifest.Manifest{
+			Key:         "demo",
+			Name:        "Demo",
+			Description: "x",
+			Version:     "1.0.0",
+			Category:    "utility",
+		},
+	}
+	var buf bytes.Buffer
+	if err := bundle.Write(&buf, src); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	b, err := bundle.Read(bytes.NewReader(buf.Bytes()), 0)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if err := inst.verifySignature(b); err != nil {
+		t.Fatalf("verifySignature: want unsigned dev bundle permitted, got %v", err)
+	}
 }
 
 // TestVerifySignatureRejectsTamperedEntry exercises the per-file SHA-256

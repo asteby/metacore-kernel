@@ -56,6 +56,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`installer.New`: `ALLOW_UNSIGNED_BUNDLES` no longer silently defeated by
+  the central trust-anchor auto-fetch.** `New()` always tried to fetch the
+  hub's marketplace pubkey from `MARKETPLACE_URL` (defaulting to
+  `hub.asteby.com`) when no key was pinned via env, even when the operator
+  had explicitly set `ALLOW_UNSIGNED_BUNDLES=true`. A successful fetch
+  populated `PublicKeys`, and `Installer.verifySignature`'s `AllowUnsigned`
+  branch only fires when `PublicKeys` is empty — so any host reachable over
+  the network got the escape hatch silently overridden, rejecting every
+  unsigned dev/sideload bundle through `Install`/`Upgrade` regardless of the
+  env var. Verified live against a real local `ops` instance: `POST
+  /api/kernel/marketplace/install` always failed with `"installer: bundle
+  signature rejected: security: bundle has no signature"` (see
+  asteby-hq/addons PR #1409, `packages/connector_whatsapp/AUDIT.md` §12).
+  `loadCentralPubKeyIfNeeded` now skips the fetch when
+  `ALLOW_UNSIGNED_BUNDLES=true` and no key is pinned, restoring the
+  documented matrix in `installer/central_trust.go`. An explicitly pinned
+  `MARKETPLACE_PUBKEY`/`MARKETPLACE_PUBKEYS` still wins over
+  `ALLOW_UNSIGNED_BUNDLES` — production hosts that configure real trust
+  anchors are unaffected, and a bundle that legitimately fails signature
+  verification against a pinned key is still rejected.
+
 - **`db_exec`: pasar el pool a `InvokeInTx` ya no degrada en silencio a
   autocommit.** La elección entre "uso la transacción del caller" y "abro la
   mía" era un `nil`-check, así que un embebedor que pasaba su handle del *pool*
