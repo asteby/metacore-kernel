@@ -29,7 +29,7 @@ const documentsManifestJSON = `{
   ],
   "contributions": {
     "documents": [
-      { "key": "remision", "model": "Order", "template": "templates/remision.html", "paper": "A4", "filename": "remision-{{record.folio}}", "label": "Remisión" },
+      { "key": "remision", "model": "Order", "template": "templates/remision.html", "paper": "A4", "filename": "remision-{{record.folio}}", "label": "Remisión", "requires_state": ["surtido", "salida"], "condition": { "field": "fiscal_uuid", "operator": "truthy" } },
       { "key": "ticket", "model": "Order", "template": "templates/ticket.html", "paper": "ticket80" }
     ]
   }
@@ -62,6 +62,15 @@ func TestFromV3_ProjectsDocumentsToHostManifest(t *testing.T) {
 		remision.Template != "templates/remision.html" || remision.Paper != "A4" ||
 		remision.Filename != "remision-{{record.folio}}" || remision.Label != "Remisión" {
 		t.Fatalf("remision projection wrong: %+v", remision)
+	}
+	if len(remision.RequiresState) != 2 || remision.RequiresState[0] != "surtido" || remision.RequiresState[1] != "salida" {
+		t.Fatalf("remision.RequiresState not projected: %+v", remision.RequiresState)
+	}
+	if remision.Condition == nil || remision.Condition.Field != "fiscal_uuid" || remision.Condition.Operator != "truthy" {
+		t.Fatalf("remision.Condition not projected: %+v", remision.Condition)
+	}
+	if host.Documents[1].RequiresState != nil || host.Documents[1].Condition != nil {
+		t.Fatalf("ticket should have no gate, got RequiresState=%+v Condition=%+v", host.Documents[1].RequiresState, host.Documents[1].Condition)
 	}
 	if host.Documents[1].Paper != "ticket80" {
 		t.Fatalf("ticket paper wrong: %+v", host.Documents[1])
