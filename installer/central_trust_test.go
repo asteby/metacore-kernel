@@ -136,7 +136,7 @@ func TestLoadCentralPubKeyIfNeeded(t *testing.T) {
 		}))
 		defer srv.Close()
 		t.Setenv("MARKETPLACE_URL", srv.URL)
-		got := loadCentralPubKeyIfNeeded([]ed25519.PublicKey{other})
+		got := loadCentralPubKeyIfNeeded([]ed25519.PublicKey{other}, false)
 		if len(got) != 1 {
 			t.Fatalf("want 1 key, got %d", len(got))
 		}
@@ -154,7 +154,7 @@ func TestLoadCentralPubKeyIfNeeded(t *testing.T) {
 		}))
 		defer srv.Close()
 		t.Setenv("MARKETPLACE_URL", srv.URL)
-		got := loadCentralPubKeyIfNeeded(nil)
+		got := loadCentralPubKeyIfNeeded(nil, false)
 		if len(got) != 1 {
 			t.Fatalf("want 1 fetched key, got %d", len(got))
 		}
@@ -169,9 +169,54 @@ func TestLoadCentralPubKeyIfNeeded(t *testing.T) {
 		}))
 		defer srv.Close()
 		t.Setenv("MARKETPLACE_URL", srv.URL)
-		got := loadCentralPubKeyIfNeeded(nil)
+		got := loadCentralPubKeyIfNeeded(nil, false)
 		if len(got) != 0 {
 			t.Fatalf("want 0 keys when fetch fails, got %d", len(got))
+		}
+	})
+
+	// Regression for the kernel-native install path silently rejecting every
+	// unsigned dev bundle even with ALLOW_UNSIGNED_BUNDLES=true: a reachable
+	// MARKETPLACE_URL (the SaaS default, hub.asteby.com) used to populate
+	// PublicKeys unconditionally, which made Installer.verifySignature's
+	// AllowUnsigned branch (only taken when PublicKeys is empty)
+	// unreachable. See asteby-hq/addons PR #1409,
+	// packages/connector_whatsapp/AUDIT.md §12.
+	t.Run("fetch skipped when AllowUnsigned and no env key pinned", func(t *testing.T) {
+		called := false
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			called = true
+			_ = json.NewEncoder(w).Encode(marketplacePubKeyResponse{
+				PubKey:    pubHex,
+				Algorithm: "ed25519",
+			})
+		}))
+		defer srv.Close()
+		t.Setenv("MARKETPLACE_URL", srv.URL)
+		got := loadCentralPubKeyIfNeeded(nil, true)
+		if called {
+			t.Fatalf("central fetch must not run when ALLOW_UNSIGNED_BUNDLES is set and no key is pinned")
+		}
+		if len(got) != 0 {
+			t.Fatalf("want 0 keys, got %d", len(got))
+		}
+	})
+
+	t.Run("pinned env key still wins over AllowUnsigned", func(t *testing.T) {
+		other, _, _ := ed25519.GenerateKey(rand.Reader)
+		called := false
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+		t.Setenv("MARKETPLACE_URL", srv.URL)
+		got := loadCentralPubKeyIfNeeded([]ed25519.PublicKey{other}, true)
+		if called {
+			t.Fatalf("central fetch must not run when env keys are pinned")
+		}
+		if len(got) != 1 {
+			t.Fatalf("want the pinned key preserved, got %d", len(got))
 		}
 	})
 }

@@ -151,13 +151,34 @@ func FetchCentralPubKey(ctx context.Context, baseURL string) (string, error) {
 // behaviour catches the misconfiguration at the first Install rather
 // than crashing the host at boot.
 //
+// allowUnsigned mirrors ALLOW_UNSIGNED_BUNDLES as read by New(). When true
+// and no key was pinned via env, the fetch is skipped entirely: the
+// documented escape hatch (case 3 in the matrix above — "Nothing
+// configured + ALLOW_UNSIGNED_BUNDLES=true") requires PublicKeys to stay
+// empty so Installer.verifySignature's AllowUnsigned branch fires. Without
+// this guard, a host reachable over the network still gets the central
+// pubkey auto-populated at boot (the default MARKETPLACE_URL resolves even
+// when the operator never asked for signature enforcement), which silently
+// turns ALLOW_UNSIGNED_BUNDLES into dead code for the kernel-native install
+// path — verified live against a real local `ops` instance 2026-09-12 (see
+// asteby-hq/addons PR #1409, packages/connector_whatsapp/AUDIT.md §12).
+// An operator who explicitly pins MARKETPLACE_PUBKEY[S] is unaffected: that
+// branch already returns before this check runs, so an explicit key pin
+// always wins over ALLOW_UNSIGNED_BUNDLES.
+//
 // Called exactly once from New(); subsequent re-fetches are the host's
 // responsibility (e.g. on a rotation event) via the exported
 // FetchCentralPubKey + Installer.AppendTrustedPubKey.
-func loadCentralPubKeyIfNeeded(envKeys []ed25519.PublicKey) []ed25519.PublicKey {
+func loadCentralPubKeyIfNeeded(envKeys []ed25519.PublicKey, allowUnsigned bool) []ed25519.PublicKey {
 	if len(envKeys) > 0 {
 		// Operator pinned at least one key explicitly. Respect the pin —
 		// the central fetch is for hosts that want zero-config trust.
+		return envKeys
+	}
+	if allowUnsigned {
+		slog.Info("installer.marketplace_pubkey_fetch_skipped",
+			"reason", "ALLOW_UNSIGNED_BUNDLES=true and no pinned key",
+			"hint", "unset ALLOW_UNSIGNED_BUNDLES to enforce signatures via the central trust anchor")
 		return envKeys
 	}
 	baseURL := strings.TrimSpace(os.Getenv("MARKETPLACE_URL"))
