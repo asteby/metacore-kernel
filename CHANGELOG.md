@@ -9,6 +9,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`dynamic.NewSystemCaller(orgID)`:** a system-caller `modelbase.AuthUser`
+  principal for background workers, scheduled jobs and migrations that need
+  to call `Service.Create/Update/Delete/Get/List/Aggregate` without an HTTP
+  request to authorize against. It skips the permission gate entirely
+  (`checkPerm` bypasses on the concrete unexported type, never on role or an
+  exported interface, so it cannot be forged by a claim or a request field)
+  while keeping every other behaviour unchanged — tenant scoping, field
+  validation, hooks, guards, canonical events, sequences and relation sync
+  all still run scoped to `orgID`, exactly as for a real user. See the
+  `NewSystemCaller` doc comment for the security contract (never derive
+  `orgID` from request input, never wire it into an `AuthUserExtractor` /
+  `UserResolver`). Replaces the pattern of workers reaching past `dynamic`
+  straight to `db.Table("addon_x.tabla")`, which skipped tenant scoping and
+  the manifest-driven table resolution along with the (correctly skipped)
+  permission gate.
+
 - **`Connector.scopes`:** declares the OAuth scopes a connector needs
   (e.g. `calendar.readonly`, `mail.send`) as a typed `[]string` instead of
   free-text documentation inside a credential's `help`. Optional and
