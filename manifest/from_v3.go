@@ -156,12 +156,14 @@ func mapDocuments(m *v3.Manifest) []DocumentDef {
 	out := make([]DocumentDef, 0, len(m.Contributions.Documents))
 	for _, d := range m.Contributions.Documents {
 		out = append(out, DocumentDef{
-			Key:      d.Key,
-			Model:    d.Model,
-			Template: d.Template,
-			Paper:    d.Paper,
-			Filename: d.Filename,
-			Label:    d.Label,
+			Key:           d.Key,
+			Model:         d.Model,
+			Template:      d.Template,
+			Paper:         d.Paper,
+			Filename:      d.Filename,
+			Label:         d.Label,
+			RequiresState: d.RequiresState,
+			Condition:     d.Condition,
 		})
 	}
 	return out

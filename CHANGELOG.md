@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`manifest.FromV3` dropped `DocumentDef.RequiresState`/`.Condition`:**
+  `v3.DocumentDef` has accepted `requires_state` and `condition` since the
+  print-lifecycle-gate feature shipped, and `manifest/v3/validate.go`
+  correctly validates them — but `mapDocuments` (the v3 → host projection)
+  never copied them onto the host `manifest.DocumentDef`, so any consumer
+  reading the host `Manifest.Documents` slice (rather than re-parsing the
+  raw manifest JSON) saw the gate silently vanish. Hosts that resolve
+  documents by parsing the bundle's `manifest.json` directly were never
+  affected; this only fixes the Go-struct projection path.
+
 ### Added
 
 - **`dynamic.NewSystemCaller(orgID)`:** a system-caller `modelbase.AuthUser`

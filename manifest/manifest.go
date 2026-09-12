@@ -209,6 +209,17 @@ type DocumentDef struct {
 	Paper    string `json:"paper"`
 	Filename string `json:"filename,omitempty"`
 	Label    string `json:"label,omitempty"`
+	// RequiresState gates the print action on the target record's lifecycle
+	// column (`status`, or `state` when status is empty): the host only
+	// surfaces the document (and Render rejects deep links) when that value
+	// is one of these. Empty/omitted means always available. Projected
+	// verbatim from v3.DocumentDef.RequiresState.
+	RequiresState []string `json:"requires_state,omitempty"`
+	// Condition is an optional field gate on the target record (e.g.
+	// fiscal_uuid must be set before printing a CFDI), evaluated by the host
+	// against the row being printed. Projected verbatim from
+	// v3.DocumentDef.Condition.
+	Condition *v3.RecordFieldCondition `json:"condition,omitempty"`
 }
 
 // ConnectorDef is the host/runtime projection of a v3 Connector: a third-party
