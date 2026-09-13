@@ -34,6 +34,18 @@ const (
 	// EnvSocket/EnvTokenFile; manifests cannot choose or see these paths.
 	EnvEventSocket    = "METACORE_NATIVE_EVENT_SOCKET"
 	EnvEventTokenFile = "METACORE_NATIVE_EVENT_TOKEN_FILE"
+
+	// EnvStateDir provisions a writable, per-installation directory for a
+	// sidecar that needs to persist local state across restarts (e.g. a
+	// WhatsApp connector's Baileys multi-file auth credentials). The
+	// artifact root itself (the sidecar's CWD) is content-addressed by the
+	// binary's SHA256 and shared across every installation of the same
+	// version/arch, so it is treated as immutable by the host sandbox
+	// (ProtectSystem=strict, no ReadWritePaths) — a sidecar must never write
+	// there. EnvStateDir is a separate, per-installation path the supervisor
+	// creates and grants write access to; a sidecar with no durable state
+	// simply ignores it.
+	EnvStateDir = "METACORE_NATIVE_STATE_DIR"
 )
 
 // Spec is the portable, declarative process contract stored in a signed addon
