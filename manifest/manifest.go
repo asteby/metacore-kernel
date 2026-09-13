@@ -1259,6 +1259,18 @@ type ColumnDef struct {
 	// and marks read-only in edit. Pure UI metadata; the DDL plane ignores it.
 	Readonly bool `json:"readonly,omitempty"`
 
+	// Protected carries the v3 Column.protected flag through the v3 → host
+	// conversion. Unlike Readonly (UI-only guidance), this is a SERVER-ENFORCED
+	// write gate: dynamic.Service.Create/Update rejects the column whenever it
+	// is present in the caller's input, with no bypass by role or permission.
+	// A declared Action is unaffected — action handlers write through the wasm
+	// data_mutate host import, a separate path the generic gate never
+	// intercepts. Use for a state-machine field or any column whose only valid
+	// mutation is a business action with its own gate (e.g. a return's
+	// refund_outcome). Empty/false = ordinary column (fully backward
+	// compatible).
+	Protected bool `json:"protected,omitempty"`
+
 	// Constraints carries the v3 Column.constraints (declarative guard
 	// predicates) through the v3 → host conversion so the dynamic engine can
 	// evaluate them inside the create/update transaction. See manifest/v3.Constraint
