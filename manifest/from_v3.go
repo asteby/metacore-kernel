@@ -468,6 +468,11 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// Readonly rides through so DeriveFormFields excludes the
 				// system-generated column from create and marks it read-only in edit.
 				Readonly: c.Readonly,
+				// Protected rides through so dynamic.Service.Create/Update rejects
+				// the column from generic caller input, with no role/permission
+				// bypass; only a declared Action's own write path (data_mutate)
+				// can change it.
+				Protected: c.Protected,
 				// Constraints ride through so the dynamic engine evaluates the
 				// declarative guard predicates inside the create/update transaction.
 				Constraints: mapColumnConstraints(c.Constraints),

@@ -27,6 +27,7 @@ const (
 	codeNotFound      = "not_found"
 	codeDuplicate     = "duplicate"
 	codeInvalidType   = "invalid_type"
+	codeProtected     = "protected_field"
 )
 
 // nilUUIDString is the all-zero UUID; an empty ref may arrive as "" or this.
@@ -132,6 +133,18 @@ func (s *Service) validateWrite(ctx context.Context, model, tableName string, us
 		}
 
 		raw, present := input[name]
+
+		// Protected: a SERVER-ENFORCED write gate, unlike Readonly (UI-only
+		// guidance). Present in generic create/update input, this column is
+		// ALWAYS rejected — no role/permission bypass. The only legitimate way
+		// to change it is a declared Action, which writes through the wasm
+		// data_mutate host import (an entirely separate path this generic
+		// gate never touches), so the action's own business gate stays the
+		// sole authority over the value.
+		if col.Protected && present {
+			ve.add(name, codeProtected, nil)
+			continue
+		}
 
 		// PATCH semantics: on update only validate what the caller sent.
 		if isUpdate && !present {

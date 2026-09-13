@@ -38,6 +38,7 @@ type ValItem struct {
 	Status     string     `json:"status" gorm:"size:64"`
 	Qty        int        `json:"qty"`
 	CategoryID *uuid.UUID `json:"category_id"`
+	State      string     `json:"state" gorm:"size:64"`
 }
 
 func (ValItem) TableName() string { return "val_items" }
@@ -58,6 +59,7 @@ func valItemColumns() []manifest.ColumnDef {
 		}},
 		{Name: "qty", Type: "int"},
 		{Name: "category_id", Type: "uuid", Ref: "val_categories"},
+		{Name: "state", Type: "string", Protected: true},
 	}
 }
 
@@ -70,7 +72,7 @@ func setupValidationDB(t *testing.T) *gorm.DB {
 	db.Exec(`CREATE TABLE IF NOT EXISTS val_items (
 		id TEXT PRIMARY KEY, organization_id TEXT, created_by_id TEXT,
 		created_at DATETIME, updated_at DATETIME, deleted_at DATETIME,
-		name TEXT, sku TEXT, status TEXT, qty INTEGER, category_id TEXT)`)
+		name TEXT, sku TEXT, status TEXT, qty INTEGER, category_id TEXT, state TEXT)`)
 	return db
 }
 
@@ -164,6 +166,51 @@ func TestValidate_EmptyRefPasses(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("empty ref %q should pass, got %v", v, err)
 		}
+	}
+}
+
+func TestValidate_ProtectedRejectsOnCreate(t *testing.T) {
+	svc := validationService(t, setupValidationDB(t))
+	user := newUser(uuid.New())
+	_, err := svc.Create(context.Background(), "val_items", user, map[string]any{
+		"name": "Widget", "state": "approved",
+	})
+	if !hasCode(fieldCodes(t, err, "state"), codeProtected) {
+		t.Fatalf("want protected_field on state, got %v", err)
+	}
+}
+
+func TestValidate_ProtectedRejectsOnUpdate(t *testing.T) {
+	svc := validationService(t, setupValidationDB(t))
+	user := newUser(uuid.New())
+	rec, err := svc.Create(context.Background(), "val_items", user, map[string]any{"name": "Widget"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id, _ := uuid.Parse(rec["id"].(string))
+
+	// A bare PATCH holding permission to update the model must still never be
+	// able to change a Protected column — no role/permission bypass exists.
+	_, err = svc.Update(context.Background(), "val_items", user, id, map[string]any{
+		"state": "approved",
+	})
+	if !hasCode(fieldCodes(t, err, "state"), codeProtected) {
+		t.Fatalf("want protected_field on state, got %v", err)
+	}
+}
+
+func TestValidate_ProtectedColumnOmittedPasses(t *testing.T) {
+	svc := validationService(t, setupValidationDB(t))
+	user := newUser(uuid.New())
+	rec, err := svc.Create(context.Background(), "val_items", user, map[string]any{"name": "Widget"})
+	if err != nil {
+		t.Fatalf("create should pass when Protected column is simply omitted: %v", err)
+	}
+	id, _ := uuid.Parse(rec["id"].(string))
+	if _, err := svc.Update(context.Background(), "val_items", user, id, map[string]any{
+		"name": "Widget Renamed",
+	}); err != nil {
+		t.Fatalf("update of an unrelated column should pass: %v", err)
 	}
 }
 

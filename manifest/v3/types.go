@@ -918,6 +918,27 @@ type Column struct {
 	// external id, or any value the user must never hand-edit.
 	Readonly bool `json:"readonly,omitempty"`
 
+	// Protected marks a column that a GENERIC create/update (a bare PATCH/POST
+	// against the model's HTTP endpoint) must NEVER write, regardless of the
+	// caller's role or update permission — unlike Readonly (UI-only guidance),
+	// this is a SERVER-ENFORCED write gate. Use it for a state-machine field
+	// (paired with Model.StageField/Stages) or any column whose only valid
+	// mutation path is a declared business action (e.g. a return's
+	// refund_outcome, only settable by an "approve_refund"/"reject_refund"
+	// action, never a direct attribute edit that skips the action's own
+	// business gate). The column still reads normally everywhere.
+	//
+	// Enforcement lives at the generic dynamic.Service.Create/Update boundary
+	// (the ONLY path a bare authenticated PATCH can reach): a Protected column
+	// present in the caller's input is always rejected with a validation error,
+	// with NO bypass — not by role, not by permission grant. A declared Action
+	// (ActionDef) is unaffected: action handlers write through the wasm
+	// data_mutate host import, an entirely separate write path the generic
+	// gate never intercepts, so the action's own business logic (its
+	// requires_state gate, its handler code) remains the sole way to change
+	// the value. Optional; defaults false (fully backward compatible).
+	Protected bool `json:"protected,omitempty"`
+
 	// Validation is the write-time constraint the kernel enforces on create/
 	// update (regex / min / max / custom) and the SDK pre-flights in the form.
 	// Same shape as ActionField.validation. Nil = no extra rules (not_null

@@ -966,6 +966,10 @@
           "type": "boolean",
           "description": "Marks a SYSTEM-GENERATED column: a value the addon/host populates server-side (e.g. an external id or number a remote API returns after a create), never something a user types. The host projects it onto ColumnDef.readonly / FieldDef.readonly so form derivation EXCLUDES the column from the create form and marks it read-only in edit; the column still renders in tables/kanban/detail. Pure UI metadata; the DDL and write planes ignore it (an addon or compute rule writes the value as usual)."
         },
+        "protected": {
+          "type": "boolean",
+          "description": "SERVER-ENFORCED write gate (unlike 'readonly', which is UI-only guidance): a generic create/update against the model's HTTP endpoint always rejects this column when present in the caller's input, regardless of role or update permission. Use for a state-machine field or any column whose only valid mutation is a declared business action (e.g. a return's refund_outcome, settable only by its approve/reject action, never a bare attribute edit that skips the action's gate). A declared Action is unaffected: action handlers write through the wasm data_mutate host import, a path the generic gate never intercepts. Defaults false."
+        },
         "scan": {
           "type": "boolean",
           "description": "Opts the column's create/edit form input into CAMERA BARCODE SCANNING: when true and the browser supports it, the SDK shows a camera button that scans a barcode to FILL the field fast (e.g. a product SKU). The host projects it onto ColumnDef.scan / FieldDef.scan. Country/business-agnostic UI metadata; the DDL plane ignores it. Defaults false."
