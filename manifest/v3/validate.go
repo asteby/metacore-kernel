@@ -978,7 +978,7 @@ func validatePipelineRuntime(m *Manifest) []string {
 			seenDevice[d.Key] = struct{}{}
 		}
 		if _, ok := edgeDeviceKinds[d.Kind]; !ok {
-			errs = append(errs, fmt.Sprintf("edge_devices[%d].kind %q is not one of cash_recycler|card_terminal|scale|fiscal_printer", di, d.Kind))
+			errs = append(errs, fmt.Sprintf("edge_devices[%d].kind %q is not one of cash_recycler|card_terminal|scale|fiscal_printer|receipt_printer", di, d.Kind))
 		}
 		if _, ok := edgeDeviceTransports[d.Transport]; !ok {
 			errs = append(errs, fmt.Sprintf("edge_devices[%d].transport %q is not one of: ws", di, d.Transport))

@@ -310,10 +310,11 @@ type InboundWebhook struct {
 // declare in v1. Drives the pairing wizard's copy/icon and lets the host
 // apply category-specific health checks.
 var edgeDeviceKinds = map[string]struct{}{
-	"cash_recycler":  {},
-	"card_terminal":  {},
-	"scale":          {},
-	"fiscal_printer": {},
+	"cash_recycler":   {},
+	"card_terminal":   {},
+	"scale":           {},
+	"fiscal_printer":  {},
+	"receipt_printer": {},
 }
 
 // edgeDeviceTransports is the closed set of channels a store-local agent may
@@ -339,7 +340,9 @@ type EdgeDevice struct {
 	// Label is the human/i18n name shown in the device pairing UI.
 	Label string `json:"label,omitempty"`
 	// Kind is the hardware category: "cash_recycler" | "card_terminal" |
-	// "scale" | "fiscal_printer".
+	// "scale" | "fiscal_printer" | "receipt_printer" (a plain, non-fiscal
+	// thermal ticket printer — distinct from "fiscal_printer", which means
+	// a SAT-certified tax printer with its own regulated protocol).
 	Kind string `json:"kind"`
 	// Transport is how the local agent reaches the host. "ws" is the only
 	// value accepted in v1.

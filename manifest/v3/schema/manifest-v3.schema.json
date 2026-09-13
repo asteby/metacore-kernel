@@ -3387,7 +3387,8 @@
             "cash_recycler",
             "card_terminal",
             "scale",
-            "fiscal_printer"
+            "fiscal_printer",
+            "receipt_printer"
           ],
           "description": "Hardware category. Drives the pairing wizard's copy/icon and category-specific host health checks."
         },

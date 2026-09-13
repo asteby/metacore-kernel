@@ -1150,7 +1150,7 @@ func (m *Manifest) validatePipelineRuntime() error {
 		}
 		seenDevice[d.Key] = struct{}{}
 		if _, ok := edgeDeviceKinds[d.Kind]; !ok {
-			return fmt.Errorf("edge_devices[%d].kind %q is not one of cash_recycler|card_terminal|scale|fiscal_printer", di, d.Kind)
+			return fmt.Errorf("edge_devices[%d].kind %q is not one of cash_recycler|card_terminal|scale|fiscal_printer|receipt_printer", di, d.Kind)
 		}
 		if _, ok := edgeDeviceTransports[d.Transport]; !ok {
 			return fmt.Errorf("edge_devices[%d].transport %q is not one of: ws", di, d.Transport)
@@ -1187,10 +1187,11 @@ func (m *Manifest) validatePipelineRuntime() error {
 // install surface so a manifest fails identically on both (the "dual
 // validation" invariant this file's other checks already follow).
 var edgeDeviceKinds = map[string]struct{}{
-	"cash_recycler":  {},
-	"card_terminal":  {},
-	"scale":          {},
-	"fiscal_printer": {},
+	"cash_recycler":   {},
+	"card_terminal":   {},
+	"scale":           {},
+	"fiscal_printer":  {},
+	"receipt_printer": {},
 }
 
 var edgeDeviceTransports = map[string]struct{}{
