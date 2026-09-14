@@ -41,10 +41,13 @@ func TestInjectCentralSignature_FromHeader(t *testing.T) {
 	}
 }
 
-func TestInjectCentralSignature_PreservesPublisherSignature(t *testing.T) {
-	// A publisher who embedded their own signature in the manifest at publish
-	// time should keep it — the multi-key trust path in
-	// security.VerifyBundle can match either the publisher or the central key.
+func TestInjectCentralSignature_OverwritesPublisherSignature(t *testing.T) {
+	// A publisher-embedded signature (e.g. CI signs with
+	// ADDON_SIGNING_KEY_ED25519 before uploading to the hub) is provenance,
+	// not a trust path: a host that only configures MARKETPLACE_PUBKEY (the
+	// common/production case) cannot verify it. The central header signature
+	// must always win, or installs of pre-signed bundles fail closed against
+	// a key the host never trusted.
 	b := &bundle.Bundle{
 		Manifest: manifest.Manifest{
 			Signature: &manifest.Signature{
@@ -58,8 +61,27 @@ func TestInjectCentralSignature_PreservesPublisherSignature(t *testing.T) {
 
 	injectCentralSignature(b, h)
 
+	if b.Manifest.Signature.Value != "central-sig" {
+		t.Errorf("central signature should overwrite publisher signature: got %q", b.Manifest.Signature.Value)
+	}
+}
+
+func TestInjectCentralSignature_KeepsPublisherSignatureWhenNoCentralHeader(t *testing.T) {
+	// Local/dev hubs without MARKETPLACE_SIGNING_SEED configured ship no
+	// central header at all — fall back to whatever signature (if any) the
+	// bundle already carried rather than clearing it.
+	b := &bundle.Bundle{
+		Manifest: manifest.Manifest{
+			Signature: &manifest.Signature{
+				Algorithm: "ed25519",
+				Value:     "publisher-sig",
+			},
+		},
+	}
+	injectCentralSignature(b, http.Header{})
+
 	if b.Manifest.Signature.Value != "publisher-sig" {
-		t.Errorf("publisher signature was overwritten: got %q", b.Manifest.Signature.Value)
+		t.Errorf("publisher signature should be kept when no central header present: got %q", b.Manifest.Signature.Value)
 	}
 }
 
