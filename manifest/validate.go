@@ -1061,9 +1061,11 @@ func (m *Manifest) validatePublicRoutes() error {
 // v3.validatePipelineRuntime: connector keys unique; a schedule's `every` parses
 // as a positive Go duration and its `do` carries a known prefix; a webhook's
 // `do` carries a known prefix and, when it declares a `verify`, its `secret_ref`
-// resolves to a declared connector credential; an edge device's `kind`/
-// `transport` come from the closed v1 sets and its events/commands carry
-// non-empty, unique types (an event's `do` is validated like a webhook's).
+// resolves to a declared connector credential; an edge device declares a
+// non-empty, deduped `capabilities` list and a `transport` from the closed v1
+// set, and its events/commands carry non-empty, unique types (an event's
+// `do` is validated like a webhook's). `kind` is optional legacy/UI metadata
+// and is not validated against a closed set.
 // Empty blocks pass unchanged so addons without runtime primitives are
 // unaffected. Mirrors the v3 validator so a manifest fails identically on both
 // surfaces ("dual validation").
@@ -1149,8 +1151,18 @@ func (m *Manifest) validatePipelineRuntime() error {
 			return fmt.Errorf("edge_devices[%d].key %q duplicated", di, d.Key)
 		}
 		seenDevice[d.Key] = struct{}{}
-		if _, ok := edgeDeviceKinds[d.Kind]; !ok {
-			return fmt.Errorf("edge_devices[%d].kind %q is not one of cash_recycler|card_terminal|scale|fiscal_printer|receipt_printer", di, d.Kind)
+		if len(d.Capabilities) == 0 {
+			return fmt.Errorf("edge_devices[%d].capabilities is empty: at least one capability is required", di)
+		}
+		seenCap := make(map[string]struct{}, len(d.Capabilities))
+		for ci, cap := range d.Capabilities {
+			if cap == "" {
+				return fmt.Errorf("edge_devices[%d].capabilities[%d] is empty", di, ci)
+			}
+			if _, dup := seenCap[cap]; dup {
+				return fmt.Errorf("edge_devices[%d].capabilities[%d] %q duplicated", di, ci, cap)
+			}
+			seenCap[cap] = struct{}{}
 		}
 		if _, ok := edgeDeviceTransports[d.Transport]; !ok {
 			return fmt.Errorf("edge_devices[%d].transport %q is not one of: ws", di, d.Transport)

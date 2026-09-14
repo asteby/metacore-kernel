@@ -30,6 +30,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`EdgeDevice.capabilities`:** replaces `kind` as the discriminator an
+  addon uses to describe what a paired device class can do. `kind` was a
+  closed enum hardcoded in the kernel (`cash_recycler | card_terminal |
+  scale | fiscal_printer | receipt_printer`) — every new hardware category
+  needed a kernel release to add its `kind` to the enum before an addon
+  could declare it. `capabilities` is an open `[]string` (`print`, `scan`,
+  `weigh`, `pay_terminal`, `open_cash_drawer`, ...), the same
+  free-list-of-strings primitive `Manifest.capabilities` /
+  `NavItem.requires_capabilities` already use, so a new device class ships
+  entirely from the addon side. `kind` is now optional legacy/UI metadata
+  (drives the pairing wizard's copy/icon when it matches the old closed
+  set) and is no longer validated against that set — any value, or none,
+  is accepted. `capabilities` is required and must be non-empty.
+  Backward-compatible for manifests already declaring `kind`: they now
+  also need to add `capabilities` to pass v3 validation. Downstream: ops'
+  edge gateway / pairing UI and the POS device picker should move from
+  filtering by `kind` to filtering by `capabilities.includes(...)` (already
+  the pattern the runtime `hello` frame uses); the SDK's device-resolver
+  helpers need the same follow-up. Not done in this PR.
+
 - **`dynamic.NewSystemCaller(orgID)`:** a system-caller `modelbase.AuthUser`
   principal for background workers, scheduled jobs and migrations that need
   to call `Service.Create/Update/Delete/Get/List/Aggregate` without an HTTP

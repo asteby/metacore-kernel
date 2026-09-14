@@ -977,8 +977,24 @@ func validatePipelineRuntime(m *Manifest) []string {
 			}
 			seenDevice[d.Key] = struct{}{}
 		}
-		if _, ok := edgeDeviceKinds[d.Kind]; !ok {
-			errs = append(errs, fmt.Sprintf("edge_devices[%d].kind %q is not one of cash_recycler|card_terminal|scale|fiscal_printer|receipt_printer", di, d.Kind))
+		// Kind is optional legacy/UI metadata, not a discriminator: any value
+		// (including one outside the v1 closed set, or empty) is accepted.
+		// Capabilities is the field that MUST be declared and is what the
+		// host actually dispatches on.
+		if len(d.Capabilities) == 0 {
+			errs = append(errs, fmt.Sprintf("edge_devices[%d].capabilities is empty: at least one capability is required", di))
+		} else {
+			seenCap := make(map[string]struct{}, len(d.Capabilities))
+			for ci, cap := range d.Capabilities {
+				if cap == "" {
+					errs = append(errs, fmt.Sprintf("edge_devices[%d].capabilities[%d] is empty", di, ci))
+					continue
+				}
+				if _, dup := seenCap[cap]; dup {
+					errs = append(errs, fmt.Sprintf("edge_devices[%d].capabilities[%d] %q is duplicated", di, ci, cap))
+				}
+				seenCap[cap] = struct{}{}
+			}
 		}
 		if _, ok := edgeDeviceTransports[d.Transport]; !ok {
 			errs = append(errs, fmt.Sprintf("edge_devices[%d].transport %q is not one of: ws", di, d.Transport))

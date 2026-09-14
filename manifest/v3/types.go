@@ -339,11 +339,25 @@ type EdgeDevice struct {
 	Key string `json:"key"`
 	// Label is the human/i18n name shown in the device pairing UI.
 	Label string `json:"label,omitempty"`
-	// Kind is the hardware category: "cash_recycler" | "card_terminal" |
-	// "scale" | "fiscal_printer" | "receipt_printer" (a plain, non-fiscal
-	// thermal ticket printer — distinct from "fiscal_printer", which means
-	// a SAT-certified tax printer with its own regulated protocol).
-	Kind string `json:"kind"`
+	// Kind is an optional legacy/UI hint: when set to one of the v1 closed
+	// categories ("cash_recycler" | "card_terminal" | "scale" |
+	// "fiscal_printer" | "receipt_printer") it still drives the pairing
+	// wizard's copy/icon. It is no longer the discriminator an addon MUST
+	// use to describe what a device can do — Capabilities is. An addon may
+	// set Kind to any value (including one outside the legacy set, or leave
+	// it empty) without failing validation; a value inside the legacy set
+	// keeps the existing UI treatment, anything else is opaque metadata the
+	// host does not interpret.
+	Kind string `json:"kind,omitempty"`
+	// Capabilities is the open list of operations this device class exposes
+	// (e.g. "print", "scan", "weigh", "pay_terminal", "open_cash_drawer").
+	// This is the same "open list of free strings" primitive as
+	// Manifest's top-level Capabilities/RequiresCapabilities: any addon can
+	// declare a new capability string without a kernel change. The host's
+	// edge gateway and the local agent's `hello` frame both key off these
+	// strings (not Kind) to match a device instance to the operations an
+	// addon needs — Kind never gates dispatch. Must be non-empty.
+	Capabilities []string `json:"capabilities"`
 	// Transport is how the local agent reaches the host. "ws" is the only
 	// value accepted in v1.
 	Transport string `json:"transport"`

@@ -350,7 +350,8 @@ type InboundWebhookDef struct {
 type EdgeDeviceDef struct {
 	Key                      string                 `json:"key"`
 	Label                    string                 `json:"label,omitempty"`
-	Kind                     string                 `json:"kind"`
+	Kind                     string                 `json:"kind,omitempty"`
+	Capabilities             []string               `json:"capabilities"`
 	Transport                string                 `json:"transport"`
 	PairingCredentials       []CredentialDef        `json:"pairing_credentials,omitempty"`
 	FormLayout               *v3.FormLayout         `json:"form_layout,omitempty"`

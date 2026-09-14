@@ -3367,7 +3367,7 @@
       "additionalProperties": false,
       "required": [
         "key",
-        "kind",
+        "capabilities",
         "transport"
       ],
       "description": "One class of local hardware (a cash recycler, a card terminal, a scale, a fiscal printer) the addon can drive through a persistent channel a store-local agent maintains outside the addon's own wasm code.",
@@ -3383,14 +3383,16 @@
         },
         "kind": {
           "type": "string",
-          "enum": [
-            "cash_recycler",
-            "card_terminal",
-            "scale",
-            "fiscal_printer",
-            "receipt_printer"
-          ],
-          "description": "Hardware category. Drives the pairing wizard's copy/icon and category-specific host health checks."
+          "description": "Optional legacy/UI hint. A value from the v1 closed set (cash_recycler | card_terminal | scale | fiscal_printer | receipt_printer) still drives the pairing wizard's copy/icon; any other value (or an empty/omitted field) is accepted as opaque metadata. No longer the discriminator dispatch is based on — use 'capabilities' for that."
+        },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Open list of operations this device class exposes (e.g. 'print', 'scan', 'weigh', 'pay_terminal', 'open_cash_drawer'). The host's edge gateway and the local agent's 'hello' frame match a paired device instance to what an addon needs by these strings, not by 'kind'. Same open-list-of-free-strings primitive as the top-level capabilities/requires_capabilities fields."
         },
         "transport": {
           "type": "string",

@@ -22,6 +22,7 @@ const edgeDeviceManifestJSON = `{
       "key": "cashdro",
       "label": "CashDro",
       "kind": "cash_recycler",
+      "capabilities": ["dispense_cash", "accept_cash"],
       "transport": "ws",
       "heartbeat_interval_seconds": 15,
       "pairing_credentials": [
@@ -53,6 +54,9 @@ func TestParse_EdgeDevice_Accepted(t *testing.T) {
 	if d.Key != "cashdro" || d.Kind != "cash_recycler" || d.Transport != "ws" {
 		t.Fatalf("device = %+v", d)
 	}
+	if len(d.Capabilities) != 2 || d.Capabilities[0] != "dispense_cash" || d.Capabilities[1] != "accept_cash" {
+		t.Fatalf("capabilities = %+v", d.Capabilities)
+	}
 	if d.HeartbeatIntervalSeconds != 15 {
 		t.Fatalf("heartbeat_interval_seconds = %d", d.HeartbeatIntervalSeconds)
 	}
@@ -79,6 +83,9 @@ func TestFromV3_EdgeDevice_Mapped(t *testing.T) {
 	dev := out.EdgeDevices[0]
 	if dev.Key != "cashdro" || dev.Kind != "cash_recycler" || dev.Transport != "ws" {
 		t.Fatalf("mapped device = %+v", dev)
+	}
+	if len(dev.Capabilities) != 2 || dev.Capabilities[0] != "dispense_cash" {
+		t.Fatalf("mapped capabilities = %+v", dev.Capabilities)
 	}
 	// The "secret"-typed pairing credential maps to Secret=true, mirroring a
 	// Connector credential, so the host stores it encrypted.
@@ -130,11 +137,18 @@ func TestValidate_EdgeDevice_Rejections(t *testing.T) {
 			want:   "transport",
 		},
 		{
-			name: "unknown kind",
+			name: "unknown kind is accepted (kind is optional legacy metadata)",
 			mutate: func(s string) string {
 				return strings.Replace(s, `"kind": "cash_recycler",`, `"kind": "vending_machine",`, 1)
 			},
-			want: "kind",
+			want: "",
+		},
+		{
+			name: "empty capabilities",
+			mutate: func(s string) string {
+				return strings.Replace(s, `"capabilities": ["dispense_cash", "accept_cash"],`, `"capabilities": [],`, 1)
+			},
+			want: "capabilities",
 		},
 		{
 			name: "event missing do",
@@ -162,6 +176,12 @@ func TestValidate_EdgeDevice_Rejections(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := tc.mutate(edgeDeviceManifestJSON)
 			err := v3.Validate([]byte(raw))
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("expected no validation error, got %v", err)
+				}
+				return
+			}
 			if err == nil {
 				t.Fatalf("expected validation error mentioning %q, got nil", tc.want)
 			}

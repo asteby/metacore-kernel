@@ -312,6 +312,7 @@ func mapEdgeDevices(in []v3.EdgeDevice) []EdgeDeviceDef {
 			Key:                      d.Key,
 			Label:                    d.Label,
 			Kind:                     d.Kind,
+			Capabilities:             d.Capabilities,
 			Transport:                d.Transport,
 			PairingCredentials:       mapCredentials(d.PairingCredentials),
 			FormLayout:               d.FormLayout,
