@@ -396,10 +396,8 @@ func extractRequires(b *bundle.Bundle) AddonKeyList {
 // Central trust anchor wiring: the hub counter-signs every served bundle
 // with its central Ed25519 key (Let's Encrypt-style) and ships the hex
 // signature in the X-Asteby-Marketplace-Signature header (see
-// installer.HeaderMarketplaceSignature). The publisher's own embedded
-// manifest.Signature (if any) is kept; otherwise the header signature is
-// injected here so installer/security.VerifyBundle can verify it against
-// the trusted MARKETPLACE_PUBKEY set the installer auto-fetches at boot.
+// installer.HeaderMarketplaceSignature). That header signature ALWAYS
+// overwrites manifest.Signature — see injectCentralSignature below for why.
 // Without this injection the bundle reaches the security gate as unsigned
 // and the install fails with "security: bundle has no signature" even
 // though the marketplace signed it correctly.
@@ -426,14 +424,20 @@ func (h *Handler) fetchBundle(url, expectedKey string) (*bundle.Bundle, error) {
 
 // injectCentralSignature copies the marketplace counter-signature from the
 // HTTP response headers into the in-memory manifest.Signature so the
-// security gate sees a signature to verify. Publisher-embedded signatures
-// take precedence — multi-key trust means either may verify. Split out so
-// the upgrade flow (which also calls fetchBundle's HTTP path) can share it.
+// security gate verifies it against the ONE trust anchor (MARKETPLACE_PUBKEY,
+// see installer/central_trust.go). This ALWAYS overwrites any publisher-
+// embedded manifest.Signature: the whole point of the central-signing model
+// is that a host trusts exactly one well-known key instead of enumerating
+// every developer's key. A publisher's own signature is provenance/audit
+// data, never a valid trust path on its own — a host that only configures
+// MARKETPLACE_PUBKEY (the common case, including production hosts) cannot
+// verify a developer signature at all, so preserving it here silently broke
+// every install whose bundle happened to arrive pre-signed by CI (e.g.
+// pos@0.27.12, signed by ADDON_SIGNING_KEY_ED25519 before upload). Split out
+// so the upgrade flow (which also calls fetchBundle's HTTP path) can share
+// it.
 func injectCentralSignature(b *bundle.Bundle, headers http.Header) {
 	if b == nil {
-		return
-	}
-	if b.Manifest.Signature != nil && strings.TrimSpace(b.Manifest.Signature.Value) != "" {
 		return
 	}
 	sig := strings.TrimSpace(headers.Get(installer.HeaderMarketplaceSignature))
