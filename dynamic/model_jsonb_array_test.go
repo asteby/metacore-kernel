@@ -19,8 +19,8 @@ func TestJSONBColumnAcceptsArrayAndObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("columnToField(jsonb): %v", err)
 	}
-	if got := field.Type; got != reflect.TypeOf(json.RawMessage{}) {
-		t.Fatalf("jsonb field type = %v, want json.RawMessage", got)
+	if got := field.Type; got != reflect.TypeOf(JSONBValue{}) {
+		t.Fatalf("jsonb field type = %v, want JSONBValue", got)
 	}
 
 	st := reflect.StructOf([]reflect.StructField{field})

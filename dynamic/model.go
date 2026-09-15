@@ -4,6 +4,7 @@
 package dynamic
 
 import (
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -15,6 +16,62 @@ import (
 	"github.com/pgvector/pgvector-go"
 	"gorm.io/gorm"
 )
+
+// JSONBValue is the Go type a jsonb/json ColumnDef maps onto (see
+// columnGoType). It stores the same raw JSON bytes json.RawMessage would,
+// but additionally implements driver.Valuer/sql.Scanner so database/sql
+// binds it as a STRING parameter on write. That distinction matters only on
+// UPDATE: a bare []byte (json.RawMessage has no Valuer) binds as the bytea
+// OID, and Postgres refuses to assign bytea into a jsonb column without an
+// explicit cast — INSERT happened to dodge this because ops's create path
+// pre-marshals jsonb columns itself before the generic write, but
+// Service.Update's plain `.Save(instance)` has no such special-casing, so
+// every UPDATE touching a jsonb column 500'd. A string parameter binds as
+// the text/unknown OID, which Postgres DOES implicitly cast to jsonb in a
+// column-typed assignment — same fix class as pq.StringArray/
+// datatypes.JSON, kept local here instead of a new dependency.
+type JSONBValue json.RawMessage
+
+// Value implements driver.Valuer. An empty/nil value writes SQL NULL rather
+// than the empty string (which Postgres would reject as invalid JSON).
+func (j JSONBValue) Value() (driver.Value, error) {
+	if len(j) == 0 {
+		return nil, nil
+	}
+	return string(j), nil
+}
+
+// Scan implements sql.Scanner, accepting whatever the driver hands back for
+// a jsonb column ([]byte is typical, string on some paths, nil for NULL).
+func (j *JSONBValue) Scan(v any) error {
+	switch val := v.(type) {
+	case nil:
+		*j = nil
+	case []byte:
+		*j = append(JSONBValue(nil), val...)
+	case string:
+		*j = JSONBValue(val)
+	default:
+		return fmt.Errorf("JSONBValue: unsupported Scan source %T", v)
+	}
+	return nil
+}
+
+// MarshalJSON/UnmarshalJSON make JSONBValue behave exactly like
+// json.RawMessage in the JSON round-trips the rest of the service layer
+// already relies on (mapToStruct merges the request body via
+// encoding/json, toMap re-marshals the row back out for canonical events).
+func (j JSONBValue) MarshalJSON() ([]byte, error) {
+	if len(j) == 0 {
+		return []byte("null"), nil
+	}
+	return j, nil
+}
+
+func (j *JSONBValue) UnmarshalJSON(data []byte) error {
+	*j = append(JSONBValue(nil), data...)
+	return nil
+}
 
 // QualifiedTable returns "<schema>.<table>" for the shared-isolation layout.
 // For per-tenant addons, callers should build the schema via
@@ -244,14 +301,27 @@ func columnGoType(c manifest.ColumnDef) (reflect.Type, string, error) {
 	case "date":
 		return reflect.TypeOf(time.Time{}), "date", nil
 	case "jsonb", "json":
-		// json.RawMessage (not map[string]any): a jsonb column must accept ANY
-		// JSON value — an OBJECT (e.g. address, display_config) OR an ARRAY (e.g.
-		// transfer/adjust line-items items[]/lines[]). map[string]any makes
-		// json.Unmarshal reject arrays ("cannot unmarshal array into map"), which
-		// surfaced as a 400 "invalid request body" on every line-items create.
-		// RawMessage stores the raw JSON bytes and GORM passes them straight to
-		// the jsonb column; toMap re-marshals to the original object/array.
-		return reflect.TypeOf(json.RawMessage{}), "jsonb", nil
+		// JSONBValue (not map[string]any, not bare json.RawMessage): a jsonb
+		// column must accept ANY JSON value — an OBJECT (e.g. address,
+		// display_config) OR an ARRAY (e.g. transfer/adjust line-items
+		// items[]/lines[], PriceList.segment_ids). map[string]any makes
+		// json.Unmarshal reject arrays ("cannot unmarshal array into map"),
+		// which surfaced as a 400 "invalid request body" on every line-items
+		// create.
+		//
+		// A bare json.RawMessage ([]byte with no driver.Valuer) looked
+		// right — GORM/pgx DOES pass its bytes straight through on INSERT —
+		// but Service.Update's generic `.Save(instance)` binds it as the
+		// bytea OID (the natural inference for an unadorned []byte), and
+		// Postgres refuses to assign bytea to a jsonb column without an
+		// explicit cast: every UPDATE touching a jsonb column 500'd with a
+		// swallowed "column is of type jsonb but expression is of type
+		// bytea" (SQLSTATE 42804) — reproduced live trying to save
+		// PriceList.segment_ids from the SDK's new multi-select field.
+		// JSONBValue.Value() returns the bytes as a STRING instead: a
+		// string parameter binds as the text/unknown OID, which Postgres
+		// DOES implicitly cast to jsonb in a column-typed assignment.
+		return reflect.TypeOf(JSONBValue{}), "jsonb", nil
 	case "vector":
 		// pgvector embedding column. pgvector.Vector implements GORM's
 		// Valuer/Scanner and driver serialization, so GORM reads/writes the
