@@ -134,6 +134,13 @@ type ColumnDef struct {
 	// targeting a belongs-to relation reports Ref="customers" without any
 	// per-column declaration.
 	Ref string `json:"ref,omitempty"`
+	// Multiple opts a Ref column into the MULTI-select picker (SDK
+	// DynamicMultiSelectField) instead of the default single-value
+	// dynamic_select — the column's value is a plain JSON array of target
+	// ids, so the backing column must be a jsonb (array-shaped) type. Mirrors
+	// manifest/v3 Column.multiple. Only meaningful alongside Ref; pure UI
+	// metadata, ignored by the DDL plane.
+	Multiple bool `json:"multiple,omitempty"`
 	// OptionsSource names a DYNAMIC options provider (e.g.
 	// "registered_models", "installed_addons") the HOST resolves when serving
 	// this metadata: it materialises the provider's localized value/label list
@@ -257,6 +264,11 @@ type FieldDef struct {
 	SearchEndpoint string          `json:"searchEndpoint,omitempty"`
 	Placeholder    string          `json:"placeholder,omitempty"`
 	Ref            string          `json:"ref,omitempty"`
+	// Multiple opts a Ref field into the multi-select picker (SDK
+	// DynamicMultiSelectField) instead of the default single-value
+	// dynamic_select — submitted/stored as a plain array of target ids.
+	// Mirrors manifest/v3 ActionField.multiple / Column.multiple.
+	Multiple bool `json:"multiple,omitempty"`
 
 	// OptionsSource names a DYNAMIC options provider the HOST resolves when
 	// serving this metadata, materialising the localized value/label list onto

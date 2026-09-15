@@ -742,8 +742,12 @@ type FieldDef struct {
 	// field to a plain input. The legacy flat FieldDef intentionally had no slot
 	// for these; the SDK reads them off the host-served action metadata, so they
 	// must survive the v3 → host conversion. JSON tags match modelbase.FieldDef.
-	Widget         string            `json:"widget,omitempty"`
-	Ref            string            `json:"ref,omitempty"`
+	Widget string `json:"widget,omitempty"`
+	Ref    string `json:"ref,omitempty"`
+	// Multiple opts a Ref field into the multi-select picker (SDK
+	// DynamicMultiSelectField) instead of the default single-value
+	// dynamic_select. JSON tag matches modelbase.FieldDef.Multiple.
+	Multiple       bool              `json:"multiple,omitempty"`
 	Placeholder    string            `json:"placeholder,omitempty"`
 	SearchEndpoint string            `json:"searchEndpoint,omitempty"`
 	ItemFields     []FieldDef        `json:"item_fields,omitempty"`
@@ -1225,6 +1229,12 @@ type ColumnDef struct {
 	// literals from JSON. They are coerced to a DDL-safe string at install.
 	Default any    `json:"default,omitempty"`
 	Ref     string `json:"ref,omitempty"` // foreign key target: "orders" or "addon_tickets.comments"
+	// Multiple carries the v3 Column.multiple flag through the v3 → host
+	// conversion onto modelbase.ColumnDef/FieldDef.Multiple, opting a Ref
+	// column into the multi-select picker (SDK DynamicMultiSelectField) —
+	// the value round-trips as a plain JSON array of target ids. Only
+	// meaningful alongside Ref; pure UI metadata, ignored by the DDL plane.
+	Multiple bool `json:"multiple,omitempty"`
 
 	// Options is a STATIC select choice list for the column. It rides the
 	// legacy ColumnDef as a carrier for the v3 Column.Options so a declared

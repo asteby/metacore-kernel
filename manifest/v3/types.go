@@ -832,6 +832,12 @@ type Column struct {
 	// states the relation directly on the column instead of relying on name
 	// heuristics. Pure UI metadata; the DDL/install plane ignores it.
 	Ref string `json:"ref,omitempty"`
+	// Multiple opts a Ref column into the MULTI-select picker (SDK
+	// DynamicMultiSelectField) instead of the default single-value
+	// dynamic_select — the column's value is then a plain JSON array of
+	// target ids, so the backing column type must be jsonb. Only meaningful
+	// alongside Ref; pure UI metadata, ignored by the DDL plane.
+	Multiple bool `json:"multiple,omitempty"`
 	// Options declares a STATIC select for the column: a fixed value/label
 	// choice list (with optional icon/color/image visuals per FieldOption,
 	// from #127) the host projects onto modelbase.ColumnDef.Options /
@@ -1705,15 +1711,19 @@ type ActionStep struct {
 // the SDK's ActionFieldDef (runtime-react/src/types.ts) 1:1 so the v3 field
 // maps cleanly onto what dynamic-form / ActionModalDispatcher render.
 type ActionField struct {
-	Key            string           `json:"key"`
-	Label          string           `json:"label,omitempty"`
-	Type           string           `json:"type"`
-	Required       bool             `json:"required,omitempty"`
-	Options        FieldOptions     `json:"options,omitempty"`
-	Default        any              `json:"default,omitempty"`
-	Placeholder    string           `json:"placeholder,omitempty"`
-	Widget         string           `json:"widget,omitempty"`
-	Ref            string           `json:"ref,omitempty"`
+	Key         string       `json:"key"`
+	Label       string       `json:"label,omitempty"`
+	Type        string       `json:"type"`
+	Required    bool         `json:"required,omitempty"`
+	Options     FieldOptions `json:"options,omitempty"`
+	Default     any          `json:"default,omitempty"`
+	Placeholder string       `json:"placeholder,omitempty"`
+	Widget      string       `json:"widget,omitempty"`
+	Ref         string       `json:"ref,omitempty"`
+	// Multiple opts a Ref field into the multi-select picker (SDK
+	// DynamicMultiSelectField) instead of the default single-value
+	// dynamic_select — submitted as a plain array of target ids.
+	Multiple       bool             `json:"multiple,omitempty"`
 	SearchEndpoint string           `json:"search_endpoint,omitempty"`
 	Validation     *FieldValidation `json:"validation,omitempty"`
 

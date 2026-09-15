@@ -69,6 +69,7 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			// served metadata so the SDK renders a relation picker / plain
 			// select without any per-app wiring or belongs_to auto-derivation.
 			Ref:        c.Ref,
+			Multiple:   c.Multiple,
 			Options:    toOptionDefs(c.Options),
 			UseOptions: len(c.Options) > 0,
 			// OptionsSource (dynamic provider key) rides through so the HOST
@@ -362,8 +363,9 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 			// Ref (dynamic_select target) and Options (static select) project
 			// onto the served form field so the SDK renders the picker/select
 			// in the native create/edit modal without a custom action.
-			Ref:     c.Ref,
-			Options: toOptionDefs(c.Options),
+			Ref:      c.Ref,
+			Multiple: c.Multiple,
+			Options:  toOptionDefs(c.Options),
 			// OptionsSource rides through so the host materialises the
 			// provider's options onto the served form field.
 			OptionsSource: c.OptionsSource,

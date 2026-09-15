@@ -452,6 +452,11 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// the SDK renders a searchable relation picker — without a
 				// belongs_to relation or a custom action. Pure UI metadata.
 				Ref: c.Ref,
+				// Multiple opts a Ref column into the multi-select picker;
+				// rides the legacy ColumnDef.Multiple so DeriveTableColumns /
+				// DeriveFormFields project it onto the served modelbase field
+				// and the SDK renders/stores a jsonb array of ids.
+				Multiple: c.Multiple,
 				// OptionsSource is the DYNAMIC twin of Options: a provider key
 				// (e.g. "registered_models") the HOST resolves at serve time to
 				// materialise localized options. It rides the legacy
@@ -819,13 +824,13 @@ func mapNavItems(in []v3.NavItem, modelTable map[string]string) []NavItem {
 			}
 		}
 		out = append(out, NavItem{
-			Title:      it.Title,
-			URL:        url,
-			Icon:       it.Icon,
-			Model:      it.Model,
-			Permission: it.Permission,
-			Items:      mapNavItems(it.Items, modelTable),
-			Filter:     it.Filter,
+			Title:       it.Title,
+			URL:         url,
+			Icon:        it.Icon,
+			Model:       it.Model,
+			Permission:  it.Permission,
+			Items:       mapNavItems(it.Items, modelTable),
+			Filter:      it.Filter,
 			LockedScope: it.LockedScope,
 			// Kanban view-type hint rides across so the host can project it onto
 			// the served TableMetadata and the SDK picks the board renderer.
@@ -1107,6 +1112,7 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 			// searchable pickers and line-items grids instead of plain inputs.
 			Widget:         f.Widget,
 			Ref:            f.Ref,
+			Multiple:       f.Multiple,
 			Placeholder:    f.Placeholder,
 			SearchEndpoint: f.SearchEndpoint,
 			Readonly:       f.Readonly,
