@@ -171,6 +171,13 @@ var (
 		// "icon": lucide-name-or-image picker (runtime-react IconPickerField,
 		// SDK 28.2.0). Value is a lucide slug or an uploaded image path.
 		"icon": {},
+		// "upload": file picker that POSTs to the host upload endpoint and
+		// stores the returned path (runtime-react UploadField). Documented in
+		// the v3 schema since day one; the whitelist just never caught up.
+		"upload": {},
+		// "color": hex color picker (runtime-react ColorPickerField). Value is
+		// a "#rrggbb" string — brand kits, theme tokens, stage colors.
+		"color": {},
 	}
 	// defaultRe allows only safe DDL DEFAULT expressions:
 	//   numeric literal:   42 | 42.5 | -3

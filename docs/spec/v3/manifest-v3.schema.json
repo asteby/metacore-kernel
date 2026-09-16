@@ -921,7 +921,7 @@
         },
         "widget": {
           "type": "string",
-          "description": "Optional FORM input the SDK renders for this column in the create/edit modal (maps to FieldDef.type/widget). DDL-agnostic input plane: a text column can declare 'image' or 'upload' so a product photo / logo / attachment renders a file picker instead of a raw text box. Other values: textarea, select, email, url, date, number, boolean, dynamic_select. Pure UI metadata; ignored by the DDL plane."
+          "description": "Optional FORM input the SDK renders for this column in the create/edit modal (maps to FieldDef.type/widget). DDL-agnostic input plane: a text column can declare 'image' or 'upload' so a product photo / logo / attachment renders a file picker instead of a raw text box. Other values: textarea, select, email, url, date, number, boolean, dynamic_select, color (hex picker), icon. Pure UI metadata; ignored by the DDL plane."
         },
         "display_config": {
           "type": "object",

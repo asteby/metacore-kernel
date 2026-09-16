@@ -144,6 +144,18 @@ func TestValidate_ColumnWidgetAccepted(t *testing.T) {
 	}
 }
 
+// The SDK has rendered both of these for a while (UploadField /
+// ColorPickerField); the whitelist rejecting them at install time meant a
+// manifest could not declare a logo picker or a brand color.
+func TestValidate_ColumnWidgetUploadAndColorAccepted(t *testing.T) {
+	for _, w := range []string{"upload", "color"} {
+		m := withColumn(manifest.ColumnDef{Name: "title", Type: "string", Widget: w})
+		if err := m.Validate("2.0.0"); err != nil {
+			t.Fatalf("widget=%s should be accepted, got %v", w, err)
+		}
+	}
+}
+
 func TestValidate_ColumnWidgetRejected(t *testing.T) {
 	m := withColumn(manifest.ColumnDef{Name: "title", Type: "string", Widget: "neural-blob"})
 	err := m.Validate("2.0.0")
