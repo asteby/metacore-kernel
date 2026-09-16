@@ -1,7 +1,9 @@
 package query
 
 import (
+	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +121,57 @@ func TestParseOpsFilterValue_TruncatesAndStripsControl(t *testing.T) {
 	acc := ParseOpsFilterValue("piñón")
 	if v := acc.Value.(string); v != "piñón" {
 		t.Errorf("accents stripped: %q", v)
+	}
+}
+
+func TestParseOpsFilterValue_InListCapIsPerElement(t *testing.T) {
+	// 7 UUIDs joined behind "in:" is 261 bytes, over MaxFilterValueLength.
+	// The cap is per element, so every id must survive intact and in order.
+	// Capping the joined string sliced the 7th id to 30 chars and 22P02'd
+	// the query; 40 is what the POS grid actually sends per page.
+	for _, n := range []int{7, 40} {
+		ids := make([]string, n)
+		for i := range ids {
+			ids[i] = fmt.Sprintf("%08x-%04x-4000-8000-%012x", i, i, i)
+		}
+		got := ParseOpsFilterValue("in:" + strings.Join(ids, ","))
+		if got.Op != OpIn {
+			t.Fatalf("n=%d: op = %q, want %q", n, got.Op, OpIn)
+		}
+		vals := got.Value.([]string)
+		if len(vals) != n {
+			t.Fatalf("n=%d: got %d elements, want %d", n, len(vals), n)
+		}
+		for i := range ids {
+			if vals[i] != ids[i] {
+				t.Errorf("n=%d: element %d = %q, want %q", n, i, vals[i], ids[i])
+			}
+		}
+	}
+}
+
+func TestParseOpsFilterValue_InListCapsEachElementAndCount(t *testing.T) {
+	long := strings.Repeat("x", MaxFilterValueLength+10)
+	got := ParseOpsFilterValue("in:a," + long + ",b")
+	vals := got.Value.([]string)
+	if len(vals) != 3 {
+		t.Fatalf("per-element cap: got %d elements, want 3", len(vals))
+	}
+	if vals[0] != "a" || len(vals[1]) != MaxFilterValueLength || vals[2] != "b" {
+		t.Errorf("per-element cap: got (%q, len %d, %q)", vals[0], len(vals[1]), vals[2])
+	}
+
+	many := make([]string, MaxFilterListLength+5)
+	for i := range many {
+		many[i] = strconv.Itoa(i)
+	}
+	got = ParseOpsFilterValue("not_in:" + strings.Join(many, ","))
+	vals = got.Value.([]string)
+	if len(vals) != MaxFilterListLength {
+		t.Fatalf("list cap: got %d elements, want %d", len(vals), MaxFilterListLength)
+	}
+	if last := vals[len(vals)-1]; last != strconv.Itoa(MaxFilterListLength-1) {
+		t.Errorf("list cap must drop whole trailing elements: last = %q", last)
 	}
 }
 

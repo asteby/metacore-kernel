@@ -23,9 +23,18 @@ type ParseFilterValue func(raw string) Filter
 // a 10-char date; the end is snapped to 23:59:59 of that day.
 const dateRangeLayout = "2006-01-02"
 
-// MaxFilterValueLength caps the accepted filter value length, matching the
-// ops sanitiser. Values longer than this are truncated before parsing.
+// MaxFilterValueLength caps ONE filter value: a scalar argument (EQ, LIKE,
+// …) or a single element of an IN/NOT_IN list. It is deliberately not a cap
+// on the whole raw `f_<col>` string — applied there it sliced the last id
+// of a 7-UUID list to 30 chars (22P02 on a uuid column) and silently dropped
+// every id after it, which on a text column just matched fewer rows.
 const MaxFilterValueLength = 255
+
+// MaxFilterListLength caps how many elements an IN/NOT_IN list keeps.
+// Surplus elements are dropped whole, never mid-element, so the clause stays
+// well-formed. Generous on purpose: it only exists so a hostile query string
+// cannot balloon the bind list, and every SDK batch sits far below it.
+const MaxFilterListLength = 500
 
 // ParseOpsFilterValue decodes one flat-column filter value using the ops
 // wire dialect. It is ADDITIVE — the default ParseFromMap never calls it,
@@ -47,14 +56,10 @@ const MaxFilterValueLength = 255
 // to OpEq with the whole string as the value — matching the default
 // dialect's defensive "match literally" stance.
 func ParseOpsFilterValue(raw string) Filter {
-	raw = strings.TrimSpace(raw)
+	raw = stripControl(strings.TrimSpace(raw))
 	if raw == "" {
 		return Filter{Op: OpEq, Value: ""}
 	}
-	if len(raw) > MaxFilterValueLength {
-		raw = raw[:MaxFilterValueLength]
-	}
-	raw = stripControl(raw)
 
 	// Bare NULL / NOT_NULL with no ':' — accepted as a convenience even
 	// though the audited ops code path required the ':'. This is the
@@ -76,7 +81,7 @@ func ParseOpsFilterValue(raw string) Filter {
 	idx := strings.Index(raw, ":")
 	if idx < 0 {
 		// No operator → exact match.
-		return Filter{Op: OpEq, Value: raw}
+		return Filter{Op: OpEq, Value: capValue(raw)}
 	}
 
 	op := strings.ToUpper(strings.TrimSpace(raw[:idx]))
@@ -92,25 +97,25 @@ func ParseOpsFilterValue(raw string) Filter {
 		// which silently never matched on text columns and 500'd on numeric ones
 		// (`invalid input syntax for type numeric: "eq:10"`). Strip the operator
 		// and match on the bare argument.
-		return Filter{Op: OpEq, Value: arg}
+		return Filter{Op: OpEq, Value: capValue(arg)}
 	case "NEQ", "NE":
 		// Not-equal. The SDK exposes `neq` as a first-class operator
 		// (runtime-react types FilterOperator) but the dialect never decoded it,
 		// so it degraded to the same literal-match footgun as EQ.
-		return Filter{Op: OpNeq, Value: arg}
+		return Filter{Op: OpNeq, Value: capValue(arg)}
 	case "IN":
 		return Filter{Op: OpIn, Value: splitCSVNonEmpty(arg)}
 	case "NOT_IN":
 		return Filter{Op: OpNotIn, Value: splitCSVNonEmpty(arg)}
 	case "LIKE":
-		return Filter{Op: OpLike, Value: arg}
+		return Filter{Op: OpLike, Value: capValue(arg)}
 	case "ILIKE", "CONTAINS":
 		// CONTAINS is the SDK runtime's internal operator name for an accent/
 		// case-insensitive substring match. The client SHOULD map it to the
 		// ILIKE alias, but accept the raw name too so a text filter works either
 		// way — an unrecognised operator silently exact-matched the whole
 		// "contains:foo" literal, so the filter appeared to do nothing.
-		return Filter{Op: OpUnaccentIlike, Value: arg}
+		return Filter{Op: OpUnaccentIlike, Value: capValue(arg)}
 	case "GT":
 		if n, ok := parseFloat(arg); ok {
 			return Filter{Op: OpGt, Value: n}
@@ -140,8 +145,18 @@ func ParseOpsFilterValue(raw string) Filter {
 	default:
 		// Unknown operator → literal exact match on the WHOLE string,
 		// mirroring the default dialect.
-		return Filter{Op: OpEq, Value: raw}
+		return Filter{Op: OpEq, Value: capValue(raw)}
 	}
+}
+
+// capValue enforces MaxFilterValueLength on one value. Bytes, not runes, to
+// match the ops sanitiser this dialect mirrors; a rune split at the boundary
+// is bounded garbage in a bind parameter, never interpolated SQL.
+func capValue(s string) string {
+	if len(s) > MaxFilterValueLength {
+		return s[:MaxFilterValueLength]
+	}
+	return s
 }
 
 // noopFilter returns a Filter whose Op no switch handles, so applyOneFilter
@@ -215,12 +230,16 @@ func parseFloat(s string) (float64, bool) {
 
 func splitCSVNonEmpty(s string) []string {
 	parts := strings.Split(s, ",")
-	out := make([]string, 0, len(parts))
+	out := make([]string, 0, min(len(parts), MaxFilterListLength))
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
+		if p == "" {
+			continue
 		}
+		if len(out) == MaxFilterListLength {
+			break
+		}
+		out = append(out, capValue(p))
 	}
 	return out
 }
