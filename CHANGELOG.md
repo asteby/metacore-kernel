@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`ParseOpsFilterValue` capped the whole raw `f_<col>` value at 255 bytes
+  before parsing, so an `IN`/`NOT_IN` list of 7+ UUIDs lost the tail of its
+  last element and every element after it:** on a uuid column the sliced id
+  failed the whole request (`invalid input syntax for type uuid`, 22P02 — the
+  POS price-list lookup 500'd on every grid page of ≥7 products); on a text
+  column the list just silently matched fewer rows. `MaxFilterValueLength` is
+  now enforced per value — each scalar argument and each list element — and
+  a new `MaxFilterListLength` (500) bounds the element count, dropping
+  surplus elements whole rather than mid-value.
+
 - **`v3.ActionField` (and its host projection `manifest.FieldDef`) had no
   `readonly` property:** the JSON schema's `ActionField` def sets
   `additionalProperties: false` and never declared `readonly`, so any addon
