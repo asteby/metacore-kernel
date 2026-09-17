@@ -783,3 +783,34 @@ func TestParse_PrefillFromRecord_RoundTrip(t *testing.T) {
 		t.Fatalf("Default[$prefillFromRecord] = %v, want %q", got["$prefillFromRecord"], "items")
 	}
 }
+
+func TestValidate_FormSectionAssist(t *testing.T) {
+	build := func(trigger string) []byte {
+		m := baseValid()
+		model := map[string]interface{}{
+			"key":     "BrandKit",
+			"table":   "brand_kits",
+			"columns": []interface{}{
+				map[string]interface{}{"name": "organization_id", "type": "uuid"},
+				map[string]interface{}{"name": "website", "type": "text", "section": "site"},
+			},
+		}
+		m["models"] = []interface{}{model}
+		model["form_layout"] = map[string]interface{}{
+			"mode": "steps",
+			"sections": []interface{}{
+				map[string]interface{}{"key": "site", "title": "Sitio", "assist": map[string]interface{}{
+					"provider": "brand.website_dna", "label": "Analizar", "input": []interface{}{"website"}, "output": []interface{}{"tagline"}, "trigger": trigger,
+				}},
+				map[string]interface{}{"key": "voice"},
+			},
+		}
+		return mustJSON(t, m)
+	}
+	if err := Validate(build("button")); err != nil {
+		t.Fatalf("assist step must validate: %v", err)
+	}
+	if err := Validate(build("later")); err == nil {
+		t.Fatal("unknown assist trigger must be rejected")
+	}
+}

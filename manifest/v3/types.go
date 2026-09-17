@@ -1028,6 +1028,32 @@ type FormSection struct {
 	// the v3 → host conversion onto the served form_layout; the SDK does the
 	// actual show/hide. Nil = always visible.
 	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`
+	// Assist declares an AI-ASSISTED step: the SDK renders a provider-driven
+	// panel inside this section (button or auto-run) that sends the listed
+	// input fields to the host's assist provider and merges the returned
+	// output fields into the form, showing progress while it works. The
+	// kernel only carries it through; the host owns the provider registry
+	// and the SDK the panel. Nil = a plain section.
+	Assist *FormAssist `json:"assist,omitempty"`
+}
+
+// FormAssist is the declaration of an AI-assisted form step (see
+// FormSection.Assist).
+type FormAssist struct {
+	// Provider is the host-registered assist provider key (e.g.
+	// "brand.website_dna"). The host maps it to an implementation.
+	Provider string `json:"provider"`
+	// Label / Description are the button text and helper copy (literal or
+	// i18n key).
+	Label       string `json:"label,omitempty"`
+	Description string `json:"description,omitempty"`
+	// Input lists the form fields sent to the provider; Output the fields the
+	// provider may fill. Both are column names of the owning model.
+	Input  []string `json:"input,omitempty"`
+	Output []string `json:"output,omitempty"`
+	// Trigger: "button" (default) renders a call-to-action; "auto" runs the
+	// provider as soon as the step opens with every input filled.
+	Trigger string `json:"trigger,omitempty"`
 }
 
 // Sequence declares one atomic counter the kernel maintains for the owning

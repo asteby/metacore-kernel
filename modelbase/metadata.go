@@ -70,6 +70,19 @@ type FormSection struct {
 	// live form values (same {field, equals?, in?} shape as a field's
 	// visible_when). Nil = always visible. The SDK does the show/hide.
 	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`
+	// Assist is the AI-assisted step the SDK renders inside this section
+	// (provider panel + progress + merge of the returned fields). Nil = plain.
+	Assist *FormAssist `json:"assist,omitempty"`
+}
+
+// FormAssist is the served declaration of an AI-assisted form step.
+type FormAssist struct {
+	Provider    string   `json:"provider"`
+	Label       string   `json:"label,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Input       []string `json:"input,omitempty"`
+	Output      []string `json:"output,omitempty"`
+	Trigger     string   `json:"trigger,omitempty"`
 }
 
 // RelationMeta is one inverse relation projected onto served TableMetadata so
