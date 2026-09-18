@@ -991,6 +991,19 @@ type FormSectionDef struct {
 	Description string          `json:"description,omitempty"`
 	Collapsed   bool            `json:"collapsed,omitempty"`
 	VisibleWhen *VisibleWhenDef `json:"visible_when,omitempty"`
+	// Assist is the AI-assisted step declaration (v3 FormSection.Assist),
+	// carried through to the served form_layout.
+	Assist *FormAssistDef `json:"assist,omitempty"`
+}
+
+// FormAssistDef mirrors v3.FormAssist on the host/runtime side.
+type FormAssistDef struct {
+	Provider    string   `json:"provider"`
+	Label       string   `json:"label,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Input       []string `json:"input,omitempty"`
+	Output      []string `json:"output,omitempty"`
+	Trigger     string   `json:"trigger,omitempty"`
 }
 
 // StageDef is the host/runtime projection of a v3 Stage. See manifest/v3.Stage

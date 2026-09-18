@@ -413,9 +413,26 @@ func DeriveFormLayout(def manifest.ModelDefinition) *modelbase.FormLayout {
 			Description: s.Description,
 			Collapsed:   s.Collapsed,
 			VisibleWhen: toVisibleWhen(s.VisibleWhen),
+			Assist:      toFormAssist(s.Assist),
 		})
 	}
 	return out
+}
+
+// toFormAssist projects the AI-assisted step declaration onto the served
+// modelbase.FormAssist the SDK reads. Nil stays nil (plain section).
+func toFormAssist(in *manifest.FormAssistDef) *modelbase.FormAssist {
+	if in == nil {
+		return nil
+	}
+	return &modelbase.FormAssist{
+		Provider:    in.Provider,
+		Label:       in.Label,
+		Description: in.Description,
+		Input:       append([]string(nil), in.Input...),
+		Output:      append([]string(nil), in.Output...),
+		Trigger:     in.Trigger,
+	}
 }
 
 // columnLabel returns the label the derivation should emit for a column: the

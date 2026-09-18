@@ -1080,9 +1080,24 @@ func mapFormLayout(fl *v3.FormLayout) *FormLayoutDef {
 			Description: s.Description,
 			Collapsed:   s.Collapsed,
 			VisibleWhen: mapVisibleWhen(s.VisibleWhen),
+			Assist:      mapFormAssist(s.Assist),
 		})
 	}
 	return out
+}
+
+func mapFormAssist(a *v3.FormAssist) *FormAssistDef {
+	if a == nil {
+		return nil
+	}
+	return &FormAssistDef{
+		Provider:    a.Provider,
+		Label:       a.Label,
+		Description: a.Description,
+		Input:       append([]string(nil), a.Input...),
+		Output:      append([]string(nil), a.Output...),
+		Trigger:     a.Trigger,
+	}
 }
 
 // FieldOptions copy across.
