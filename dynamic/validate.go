@@ -74,6 +74,7 @@ func (s *Service) resolveValidationSchema(ctx context.Context, model string) []m
 // validation: nil, an empty/whitespace string, or the nil UUID (for ref
 // columns an empty relation may arrive as "" or the all-zero uuid).
 func isEmptyValue(raw any) bool {
+	raw = derefRaw(raw)
 	if raw == nil {
 		return true
 	}
@@ -86,7 +87,7 @@ func isEmptyValue(raw any) bool {
 
 // isNumeric reports whether raw is (or parses as) a number.
 func isNumeric(raw any) bool {
-	switch v := raw.(type) {
+	switch v := derefRaw(raw).(type) {
 	case float64, float32, int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64:
 		return true
