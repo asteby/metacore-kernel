@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -63,9 +65,22 @@ func Apply(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, files [
 			First(&existing).Error
 		if err == nil {
 			if existing.Checksum != got {
-				return fmt.Errorf(
-					"migration %s@%s checksum mismatch: recorded %s, file %s (refusing to re-apply mutated SQL)",
+				if !declaresInPlaceEdit(f.SQL) {
+					return fmt.Errorf(
+						"migration %s@%s checksum mismatch: recorded %s, file %s (refusing to re-apply mutated SQL)",
+						addonKey, f.Version, existing.Checksum, got)
+				}
+				// The author declared this file was edited after publishing
+				// (an exception to immutability, always idempotent SQL). It is
+				// already applied, so skip it — never re-run it — and pin the
+				// new checksum so the drift is reported once, not every upgrade.
+				log.Printf("dynamic: migration %s@%s edited in place (recorded %s, file %s): keeping it applied, updating ledger checksum",
 					addonKey, f.Version, existing.Checksum, got)
+				if err := db.Table("public.metacore_addon_migrations").
+					Where("addon_key = ? AND version = ?", addonKey, f.Version).
+					Update("checksum", got).Error; err != nil {
+					return fmt.Errorf("update ledger checksum %s@%s: %w", addonKey, f.Version, err)
+				}
 			}
 			continue
 		}
@@ -122,6 +137,14 @@ func recordMigration(db *gorm.DB, addonKey, version, checksum string) error {
 	}
 	return err
 }
+
+// inPlaceEditMarker is the convention addons use when a migration that was
+// already published had to be edited anyway ("EDITED IN PLACE (exception to
+// the immutable-migrations rule ...)"). Only files carrying it may drift from
+// their recorded checksum; every other mutated migration is still refused.
+var inPlaceEditMarker = regexp.MustCompile(`(?im)^\s*--.*\bEDITED IN PLACE\b`)
+
+func declaresInPlaceEdit(sql string) bool { return inPlaceEditMarker.MatchString(sql) }
 
 func isNotFound(err error) bool {
 	return errors.Is(err, gorm.ErrRecordNotFound)
