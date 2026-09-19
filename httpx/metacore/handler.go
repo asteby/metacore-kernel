@@ -112,6 +112,7 @@ func (f fiberLookup) Locals(key string) any { return f.c.Locals(key) }
 // for the caller's organization.
 //
 // GET /api/metacore/manifests
+// GET /api/metacore/manifests?lite=1  — shell projection (no columns/actions/…)
 //
 // Returns the empty array when the request has no organization context
 // (anonymous / unauthenticated). The SDK frontend boots before auth has
@@ -133,6 +134,11 @@ func (h *Handler) ListManifests(c fiber.Ctx) error {
 	}
 	if manifests == nil {
 		manifests = []manifest.Manifest{}
+	}
+	lite := c.Query("lite") == "1" || strings.EqualFold(c.Query("lite"), "true")
+	if lite {
+		manifests = manifest.LiteAll(manifests)
+		c.Set("X-Metacore-Manifests-Lite", "1")
 	}
 	return c.JSON(manifests)
 }

@@ -88,6 +88,7 @@ func FromV3(m *v3.Manifest) Manifest {
 			Integrity: m.Frontend.Integrity,
 			Container: m.Frontend.Container,
 			Layout:    m.Frontend.Layout,
+			Load:      m.Frontend.Load,
 		}
 	}
 
