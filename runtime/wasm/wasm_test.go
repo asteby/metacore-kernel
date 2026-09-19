@@ -407,6 +407,45 @@ func TestHost_LoadRequiresWasmRuntime(t *testing.T) {
 	}
 }
 
+func TestHost_LoadSkipsRecompileOnSameBytes(t *testing.T) {
+	ctx := context.Background()
+	h, err := NewHost(ctx, security.Compile("testaddon", nil), nil)
+	if err != nil {
+		t.Fatalf("NewHost: %v", err)
+	}
+	defer h.Close(ctx)
+
+	spec := &manifest.BackendSpec{
+		Runtime: "wasm",
+		Exports: []string{"echo", "alloc"},
+	}
+	bytes := echoWasm()
+	if err := h.Load(ctx, "testaddon", bytes, spec); err != nil {
+		t.Fatalf("first Load: %v", err)
+	}
+	ce, ok := h.compiled.Load("testaddon")
+	if !ok {
+		t.Fatal("expected compiled entry after first Load")
+	}
+	first := ce.(*compiledEntry).mod
+
+	spec2 := &manifest.BackendSpec{
+		Runtime: "wasm",
+		Exports: []string{"echo", "alloc"},
+	}
+	if err := h.Load(ctx, "testaddon", bytes, spec2); err != nil {
+		t.Fatalf("second Load: %v", err)
+	}
+	ce2, _ := h.compiled.Load("testaddon")
+	second := ce2.(*compiledEntry).mod
+	if first != second {
+		t.Fatal("identical wasm bytes must reuse CompiledModule (no recompile)")
+	}
+	if ce2.(*compiledEntry).spec != spec2 {
+		t.Fatal("second Load should refresh BackendSpec pointer")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Hand-built WASM module. Encodes, in WebAssembly binary format, a module
 // with one memory (1 page), a mutable global "bump" allocator, and two

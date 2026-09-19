@@ -20,6 +20,7 @@ package wasm
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log"
@@ -87,6 +88,10 @@ type Host struct {
 type compiledEntry struct {
 	mod  wazero.CompiledModule
 	spec *manifest.BackendSpec
+	// hash of the wasm bytes last compiled for this addonKey. Load skips
+	// CompileModule when the payload is unchanged (healer / re-hydrate paths
+	// used to recompile identical modules on every boot).
+	hash [32]byte
 }
 
 // Module is an instantiated wasm module bound to one installation.
@@ -316,17 +321,27 @@ func (h *Host) capsFor(addonKey string) *security.Capabilities {
 }
 
 // Load compiles wasmBytes for addonKey and caches the CompiledModule. Calling
-// Load again for the same addonKey replaces the prior compile and drops any
-// installation instances — use this on addon upgrade.
+// Load again for the same addonKey with identical bytes is a no-op (keeps
+// live installation instances). A different payload replaces the prior
+// compile and drops installation instances — use this on addon upgrade.
 func (h *Host) Load(ctx context.Context, addonKey string, wasmBytes []byte, spec *manifest.BackendSpec) error {
 	if spec == nil || spec.Runtime != "wasm" {
 		return fmt.Errorf("wasm: backend spec must have runtime=wasm")
+	}
+	sum := sha256.Sum256(wasmBytes)
+	if prev, ok := h.compiled.Load(addonKey); ok {
+		if p, _ := prev.(*compiledEntry); p != nil && p.hash == sum {
+			// Same artifact — refresh the spec pointer only (exports/limits
+			// may have been edited without a binary change).
+			p.spec = spec
+			return nil
+		}
 	}
 	cm, err := h.rt.CompileModule(ctx, wasmBytes)
 	if err != nil {
 		return fmt.Errorf("wasm: compile %s: %w", addonKey, err)
 	}
-	if prev, ok := h.compiled.Swap(addonKey, &compiledEntry{mod: cm, spec: spec}); ok {
+	if prev, ok := h.compiled.Swap(addonKey, &compiledEntry{mod: cm, spec: spec, hash: sum}); ok {
 		if p, _ := prev.(*compiledEntry); p != nil {
 			_ = p.mod.Close(ctx)
 		}

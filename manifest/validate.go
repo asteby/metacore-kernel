@@ -131,6 +131,15 @@ var (
 		"shell":     {},
 		"immersive": {},
 	}
+	// validFrontendLoads is the closed set of FrontendSpec.Load values.
+	// Empty string = host default (action). "idle" is accepted for forward
+	// compat but hosts should not idle-prefetch remotes (shell TTI regression).
+	validFrontendLoads = map[string]struct{}{
+		"eager":  {},
+		"route":  {},
+		"action": {},
+		"idle":   {},
+	}
 	// triggerExportRe matches a wasm export symbol. Same alphabet as a Go
 	// identifier (lower/upper letters, digits, underscore) so the validator
 	// can be used identically against TinyGo, Rust and AssemblyScript
@@ -409,6 +418,11 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 		if m.Frontend.Layout != "" {
 			if _, ok := validFrontendLayouts[m.Frontend.Layout]; !ok {
 				return fmt.Errorf("manifest.frontend.layout: unknown %q (want shell|immersive)", m.Frontend.Layout)
+			}
+		}
+		if m.Frontend.Load != "" {
+			if _, ok := validFrontendLoads[m.Frontend.Load]; !ok {
+				return fmt.Errorf("manifest.frontend.load: unknown %q (want eager|route|action|idle)", m.Frontend.Load)
 			}
 		}
 	}

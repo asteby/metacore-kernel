@@ -431,6 +431,9 @@ type Frontend struct {
 	Container string `json:"container,omitempty"`
 	// Layout selects how the host frames the addon UI ("shell" | "immersive").
 	Layout string `json:"layout,omitempty"`
+	// Load tells the host when to mount the federated remote
+	// ("eager" | "route" | "action" | "idle"). Empty = host default (action).
+	Load string `json:"load,omitempty"`
 }
 
 // Metadata is identity + presentation + authorship.

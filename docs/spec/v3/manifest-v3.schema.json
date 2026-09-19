@@ -2164,6 +2164,16 @@
             "immersive"
           ],
           "description": "How the host frames the addon UI."
+        },
+        "load": {
+          "type": "string",
+          "enum": [
+            "eager",
+            "route",
+            "action",
+            "idle"
+          ],
+          "description": "When the host mounts the federated remoteEntry. Empty = host default (action). Prefer action/route; eager taxes every shell open."
         }
       }
     },

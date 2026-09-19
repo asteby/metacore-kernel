@@ -824,6 +824,34 @@ func TestValidate_FrontendLayout_RejectsArbitraryValue(t *testing.T) {
 	}
 }
 
+func withFrontendLoad(load string) manifest.Manifest {
+	m := withFrontendLayout("")
+	m.Frontend.Load = load
+	return m
+}
+
+func TestValidate_FrontendLoad_EmptyOK(t *testing.T) {
+	m := withFrontendLoad("")
+	if err := m.Validate("2.0.0"); err != nil {
+		t.Fatalf("empty load should validate, got %v", err)
+	}
+}
+
+func TestValidate_FrontendLoad_ActionOK(t *testing.T) {
+	m := withFrontendLoad("action")
+	if err := m.Validate("2.0.0"); err != nil {
+		t.Fatalf("load=action should validate, got %v", err)
+	}
+}
+
+func TestValidate_FrontendLoad_RejectsUnknown(t *testing.T) {
+	m := withFrontendLoad("always")
+	err := m.Validate("2.0.0")
+	if err == nil || !strings.Contains(err.Error(), "frontend.load") {
+		t.Fatalf("expected frontend.load error for always, got %v", err)
+	}
+}
+
 func TestValidate_FrontendLayout_NilFrontendIsOK(t *testing.T) {
 	// Manifests without a Frontend section at all (e.g. backend-only addons)
 	// must keep validating regardless of the new field.

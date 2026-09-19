@@ -489,6 +489,21 @@ type FrontendSpec struct {
 	// Validate rejects any value outside this closed set so addon authors
 	// catch typos at install time rather than at first paint.
 	Layout string `json:"layout,omitempty"`
+
+	// Load tells the host WHEN to mount the federated remoteEntry.
+	//
+	//	"" / omitted — host default (typically "action": mount on first
+	//	               federated action / ensureAddonRemote).
+	//	"eager"      — mount as soon as manifests arrive (shell tax; rare).
+	//	"route"      — mount when navigating to a surface that needs it
+	//	               (immersive routes, model pages with custom UI).
+	//	"action"     — mount only on hover/click of a federated action.
+	//	"idle"       — reserved; hosts MAY treat as "action" (no idle-prefetch
+	//	               of remotes — that regresses cold TTI with large fleets).
+	//
+	// Closed set validated at install time. See ops addon-load-policy +
+	// PLAN-ESCALA shell-fino for host behaviour.
+	Load string `json:"load,omitempty"`
 }
 
 // BackendSpec declares how the addon's backend code is executed.
