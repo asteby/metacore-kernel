@@ -37,9 +37,22 @@ type Manifest struct {
 	IconColor string `json:"icon_color,omitempty"`
 
 	// Kernel is a semver range the host kernel must satisfy. Empty = legacy.
-	Kernel   string   `json:"kernel,omitempty"`
-	Requires []Module `json:"requires,omitempty"`
-	Models   []Module `json:"models,omitempty"`
+	Kernel string `json:"kernel,omitempty"`
+	// SDK is a semver range the host's addon SDK version must satisfy. Empty
+	// = no constraint (the addon does not depend on SDK-surface behaviour
+	// beyond what Kernel already implies). Distinct from Kernel because a
+	// host can ship a newer SDK (client-facing helpers/types) on an older
+	// kernel minor, or vice versa — see HostCapabilityProfile.
+	SDK string `json:"sdk,omitempty"`
+	// HostCapabilities lists named host runtime capabilities the addon
+	// requires to be present (e.g. "wasm-runtime", "native-service",
+	// "webhooks"). Unlike Capabilities (scoped permissions the runtime
+	// enforces) and RequiresCapabilities on NavItem (RBAC gating), these
+	// describe host BUILD/FEATURE presence checked once before install —
+	// see HostCapabilityProfile.EvaluateCompatibility.
+	HostCapabilities []string `json:"host_capabilities,omitempty"`
+	Requires         []Module `json:"requires,omitempty"`
+	Models           []Module `json:"models,omitempty"`
 	// Provides lists other addon keys this package satisfies for install /
 	// marketplace coverage (e.g. full "hr" provides "hr_lite"). Empty = none.
 	Provides []string `json:"provides,omitempty"`
