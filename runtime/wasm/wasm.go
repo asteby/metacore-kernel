@@ -483,6 +483,13 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 	}
 	results, err := fn.Call(callCtx, uint64(ptr), uint64(len(payload)))
 	if err != nil {
+		// A trap (unreachable, fatalpanic, out-of-bounds, host-import panic)
+		// abandons the guest mid-call: its runtime (Go's scheduler/heap) is
+		// left half-unwound but wazero keeps the instance open. Serving it
+		// again cascades into "unreachable" / "invalid table access" on
+		// unrelated exports until restart. Evict so the next Invoke gets a
+		// fresh reactor; the failed call itself is NOT retried (not idempotent).
+		h.dropModuleIfCurrent(addonKey, installation, mod)
 		return nil, fmt.Errorf("wasm: call %s: %w", funcName, err)
 	}
 	if len(results) != 1 {
@@ -519,6 +526,18 @@ func (h *Host) dropModule(addonKey string, installation uuid.UUID) {
 	if v, ok := h.modules.LoadAndDelete(key); ok {
 		if m, _ := v.(*Module); m != nil && m.inst != nil {
 			_ = m.inst.Close(context.Background())
+		}
+	}
+}
+
+// dropModuleIfCurrent evicts mod only when it is still the cached instance for
+// the key, so a concurrent re-instantiation is never torn down by a stale caller.
+func (h *Host) dropModuleIfCurrent(addonKey string, installation uuid.UUID, mod *Module) {
+	key := addonKey + "|" + installation.String()
+	if v, ok := h.modules.Load(key); ok && v.(*Module) == mod {
+		h.modules.CompareAndDelete(key, v)
+		if mod.inst != nil {
+			_ = mod.inst.Close(context.Background())
 		}
 	}
 }
