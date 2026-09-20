@@ -39,6 +39,10 @@ import (
 //	      documented in docs/wasm-abi.md § 15. Read-only sibling of
 //	      data_mutate: one org-scoped equality-filtered SELECT on a logical
 //	      table (TableResolver, soft-delete aware). No events.
+//	  - ctx_get(reqPtr, reqLen) -> i64
+//	      Packed (ptr<<32)|len of the v1 `{success, data, meta}` envelope
+//	      documented in docs/wasm-abi.md § 20: acting user, roles and the org's
+//	      currency/tax/locale/timezone, each slice gated by a ctx:* capability.
 //	  - event_emit(eventPtr, eventLen, payloadPtr, payloadLen) -> i64
 //	      Packed (ptr<<32)|len of the v1 `{success, data, meta}` envelope
 //	      documented in docs/wasm-abi.md § 12.4. Legacy guests that ignore

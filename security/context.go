@@ -19,7 +19,8 @@ type Capabilities struct {
 	httpHost []string // host globs: "api.stripe.com", "*.slack.com"
 	eventPub []string
 	eventSub []string
-	connRead []string // connector keys: "github", "*" for any
+	connRead []string        // connector keys: "github", "*" for any
+	ctxScope map[string]bool // ctx_get slices: "user", "roles", "org_config"
 }
 
 // Compile turns a manifest's declarations into a Capabilities policy.
@@ -39,6 +40,13 @@ func Compile(addonKey string, caps []manifest.Capability) *Capabilities {
 			c.eventSub = append(c.eventSub, cap.Target)
 		case "connector:read":
 			c.connRead = append(c.connRead, cap.Target)
+		case "ctx:user", "ctx:roles", "ctx:org_config":
+			// The target is ignored: each kind IS the slice. Kept as a set so
+			// the ctx_get import can answer "which slices may this addon see".
+			if c.ctxScope == nil {
+				c.ctxScope = map[string]bool{}
+			}
+			c.ctxScope[strings.TrimPrefix(cap.Kind, "ctx:")] = true
 		}
 	}
 	// Every addon is implicitly allowed to read/write its own schema.
@@ -187,6 +195,21 @@ func (c *Capabilities) CanReadConnector(connectorKey string) error {
 		return nil
 	}
 	return fmt.Errorf("addon %q lacks connector:read %q", c.addonKey, connectorKey)
+}
+
+// CanReadContext returns nil if the addon declared the `ctx:<scope>` capability
+// (scope: "user" | "roles" | "org_config") that unlocks that slice of the
+// ctx_get host import. Least privilege: there is no implicit grant and no
+// wildcard — an addon that declares only ctx:org_config never sees the user.
+func (c *Capabilities) CanReadContext(scope string) error {
+	if c != nil && c.ctxScope[scope] {
+		return nil
+	}
+	addon := ""
+	if c != nil {
+		addon = c.addonKey
+	}
+	return fmt.Errorf("addon %q lacks ctx:%s", addon, scope)
 }
 
 // matchAny reports whether value matches any of the glob patterns. A pattern

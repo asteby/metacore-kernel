@@ -180,6 +180,13 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 	rollback := func() { _ = work.Rollback() }
 
 	now := time.Now().UTC()
+	if req.Op == "create" && data == nil {
+		data = map[string]any{}
+	}
+	if code, sErr := stampCreateSequences(execCtx, inv, work, orgID, &req, data); sErr != nil {
+		rollback()
+		return fail(code, sErr.Error())
+	}
 	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now, dynamic.ActorIDFromContext(ctx))
 	if mErr != nil {
 		rollback()
@@ -697,4 +704,28 @@ func dataMutateErr(addonKey, code, message string, orgID uuid.UUID, start time.T
 		"meta":    dataMutateMeta(addonKey, orgID, start),
 	})
 	return b
+}
+
+// SequenceStampFn fills the declared sequence-bound columns of `row` (the
+// decoded `data` of a create on `model`) on the open transaction `tx`, leaving
+// any column the caller already supplied untouched. It mutates `row` in place.
+type SequenceStampFn func(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, model string, row map[string]any) error
+
+// stampCreateSequences is the data_mutate / data_batch analogue of
+// dynamic.Service's assignSequences: a create through the wasm ABI used to skip
+// it, so folio columns (work-order, sales-order, ...) came out empty unless the
+// guest minted them by hand with sequence_next. It runs on the SAME transaction
+// as the INSERT, so a failed or rolled-back create (constraint violation, a
+// retry hitting the deterministic id) also rolls the counter back: no burnt
+// folios, and an idempotent replay never advances the sequence.
+func stampCreateSequences(ctx context.Context, inv *invocation, work *gorm.DB, orgID uuid.UUID, req *dataMutateRequest, data map[string]any) (string, error) {
+	// data is never nil here: callers hand a non-nil map for creates (a create
+	// with no columns is legitimate when every column is sequence-stamped).
+	if inv.sequenceStamp == nil || req.Op != "create" || req.Model == "" {
+		return "", nil
+	}
+	if err := inv.sequenceStamp(ctx, work, orgID, req.Model, data); err != nil {
+		return "db_error", fmt.Errorf("sequence stamp: %w", err)
+	}
+	return "", nil
 }

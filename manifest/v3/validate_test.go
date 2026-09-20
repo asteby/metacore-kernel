@@ -220,6 +220,18 @@ func TestValidate_ConnectorReadCapabilityAccepted(t *testing.T) {
 	}
 }
 
+// ctx:* unlock the ctx_get wasm import (execution context). They must be in the
+// closed enum or the addon cannot declare what the runtime gates on.
+func TestValidate_CtxCapabilitiesAccepted(t *testing.T) {
+	for _, kind := range []string{"ctx:user", "ctx:roles", "ctx:org_config"} {
+		m := baseValid()
+		m["capabilities"] = []interface{}{map[string]interface{}{"kind": kind, "target": "*"}}
+		if err := Validate(mustJSON(t, m)); err != nil {
+			t.Fatalf("%s must be declarable: %v", kind, err)
+		}
+	}
+}
+
 func TestParse_ReturnsTypedManifestOnSuccess(t *testing.T) {
 	got, err := Parse(mustJSON(t, baseValid()))
 	if err != nil {

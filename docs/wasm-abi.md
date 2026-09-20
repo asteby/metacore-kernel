@@ -28,6 +28,7 @@ keep them in sync.
 | 1.3     | proposal | adds `event_emit` host import; guests publish a `<name>, <payload>` pair through the kernel's in-process `events.Bus`. Capability gated by `event:emit <name>` and tenant-scoped by the per-invocation `orgID` the host carries on the context bag. |
 | 1.4     | proposal | adds `data_mutate` host import; ONE org-scoped row mutation (`create` / `update` / `delete` with atomic `inc`) against a LOGICAL table resolved through the embedder-injected `TableResolver` (NOT the addon-schema `search_path`), followed by a post-commit `*dynamic.CanonicalEvent` on the host bus. Gated by `db:write <logical table>`. |
 | 1.5     | proposal | adds `data_query` host import; read-only sibling of `data_mutate`: ONE org-scoped, equality-filtered SELECT against a LOGICAL table resolved through the SAME `TableResolver` (NOT the addon-schema `search_path` of `db_query`, whose shadow schemas hold no live rows in embedding hosts). Soft-delete aware (`deleted_at IS NULL` auto-appended). Gated by `db:read <logical table>`. No events. |
+| 1.11    | proposal | adds `ctx_get` (read-only execution context: acting user id/email, role keys, the org's currency/tax/locale/timezone — the `env.user` / `env.company` of an Odoo module), each slice gated by a `ctx:user` / `ctx:roles` / `ctx:org_config` manifest capability, and makes `data_mutate` / `data_batch` **create** stamp the model's declared sequence-bound columns (folios) exactly like `POST /data` when the embedder wires `Host.WithSequenceStamp`. Additive: guests built against 1.0 – 1.10 keep working; a guest that already passes the folio (or mints it with `sequence_next`) is unaffected. See § 20 and § 14.10. |
 | 1.10    | proposal | `http_fetch` / `http_request` responses whose body is **not valid UTF-8** now travel as `body_base64` (standard base64) with `body_is_base64: true` and an EMPTY `body`; UTF-8 bodies are unchanged. Fixes silent corruption of every binary response (PDF / ZIP / image / XLSX): `encoding/json` rewrites each invalid byte as U+FFFD, so guests received corrupt bytes with a 200 status and no error. See § 3.1. |
 | 1.6     | proposal | adds `http_request` (outbound HTTP with caller-supplied request headers as a JSON object — enables `Authorization`/`Accept` for authenticated third-party calls; same `http:fetch` capability + SSRF guard + 30 s timeout + 8 MiB cap as `http_fetch`, which is left unchanged and now delegates to the shared path with empty headers) and `connector_get` (resolves one org's credentials for a declared connector — the v3 `connectors` block — returning a JSON object; gated by `connector:read <key>` and tenant-scoped by the invocation `orgID`). Guests built against 1.0 – 1.5 keep working. |
 
@@ -1669,6 +1670,35 @@ deleted row has none. When no guard is injected the imports behave as before
 (no declarative enforcement on the wasm path — embedding hosts SHOULD wire
 one).
 
+### 14.10 Declared sequences are stamped on create (v1.11)
+
+`Service.Create` (`POST /data`) fills every sequence-bound column the caller
+left empty (`dynamic/sequence.go`, `assignSequences`). `data_mutate` /
+`data_batch` bypass `Service`, so a create through the ABI used to leave folio
+columns (`work_orders.folio`, `sales_orders.folio`, …) empty unless the guest
+minted the value by hand with `sequence_next` (§ 17). With
+
+```go
+host.WithSequenceStamp(dynamicService.StampSequences)
+```
+
+every `create` runs the stamper INSIDE the write transaction, before the
+INSERT, keyed by the request's `model` (the ModelKey — same key `sequence_next`
+takes). Rules:
+
+- A column the guest supplied (non-null, non-empty) is left untouched — an
+  explicit folio wins, so guests that already call `sequence_next` or import
+  historical numbers keep working and do not consume the counter.
+- Idempotent by construction: the counter UPSERT shares the transaction of the
+  INSERT, so a rolled-back create (constraint violation, PK conflict on a
+  replayed deterministic id) rolls the counter back too — no burnt folios and a
+  retry never advances the series.
+- `scope: branch` sequences take the partition from the row's own `branch_id`;
+  a row without one falls back to org scope (same fallback as a branch-less
+  user on `POST /data`).
+- `update` / `delete` are never stamped. Models with no declared sequences are
+  a no-op. Without `WithSequenceStamp` the behaviour is the pre-1.11 one.
+
 ## 15. `data_query` — org-scoped logical-table read (v1.5)
 
 `data_query` is the read-only sibling of `data_mutate` (§ 14). It exists
@@ -2090,3 +2120,68 @@ dynamicService.RegisterApprovalApplier("wasm_callback", func(ctx context.Context
 ```
 
 Implementation: `runtime/wasm/approvalrequest.go`; package: `dynamic/approvals.go`.
+
+## 20. `ctx_get` — execution context (v1.11)
+
+Read-only view of WHO is acting and the org's settings, so a guest stops
+hard-coding `NULL` approvers, `0` taxes or an empty currency. Odoo analogue:
+`env.user` / `env.company`.
+
+```
+ctx_get(reqPtr i32, reqLen i32) -> i64          [v1.11]
+```
+
+Request (optional, may be empty): `{"scopes": ["user", "org_config"]}`.
+Empty / omitted = every scope the addon declared. Asking for a scope the addon
+did not declare is `forbidden` (loud on purpose); an unknown scope is
+`invalid_request`.
+
+### 20.1 Capabilities (manifest v3 `capabilities[]`)
+
+| kind             | unlocks                                   |
+|------------------|-------------------------------------------|
+| `ctx:user`       | `user_id`, `user_email`                   |
+| `ctx:roles`      | `roles` (role keys of the acting user)    |
+| `ctx:org_config` | `org` (currency, tax, locale, timezone)   |
+
+`target` is ignored (use `"*"`). There is no implicit grant and no wildcard
+between kinds. The gate is hard-enforced (independent of the enforcer's shadow
+mode), like `connector_get`. `org_id` is always returned (the guest already
+receives it in every invocation).
+
+### 20.2 Response
+
+```jsonc
+{ "success": true,
+  "data": {
+    "org_id": "<uuid>",
+    "user_id": "<uuid>" | null,          // null: system-driven work (no actor on the ctx)
+    "user_email": "ana@example.com",
+    "roles": ["admin", "warehouse"],     // sorted
+    "org": { "currency_code": "MXN", "tax_rate": 16, "tax_included": true,
+             "locale": "es-MX", "timezone": "America/Mexico_City" }
+  },
+  "meta": { "addon": "...", "orgId": "...", "durationMs": N, "envelopeVersion": 1 } }
+```
+
+Keys of a slice the addon did not declare are absent. `tax_rate` /
+`tax_included` are `null` when the org has not configured them (0 is a real
+value). Errors: `forbidden`, `invalid_request`, `no_active_org`,
+`context_unavailable` (host wired no provider), `context_error`.
+
+`user_id` is the acting user already carried on the context
+(`dynamic.WithActorID`, the same value `data_mutate` stamps into
+`created_by_id`); the guest cannot choose it.
+
+### 20.3 Embedder port
+
+```go
+host.WithContextProvider(func(ctx context.Context, orgID, userID uuid.UUID,
+    want wasm.HostContextScopes) (*wasm.HostContext, error) { ... })
+```
+
+The provider receives only the slices the guest is entitled to and asked for
+(skip the queries for the rest) and SHOULD cache per (org, user) within the
+invocation. `OrgConfig` is a closed allow-list, not the organization row.
+
+Implementation: `runtime/wasm/ctxget.go`; capability: `security.Capabilities.CanReadContext`.

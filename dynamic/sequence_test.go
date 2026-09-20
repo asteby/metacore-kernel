@@ -162,3 +162,88 @@ func TestNextSequenceValue_MonotonicWithoutGapsPerScope(t *testing.T) {
 		t.Fatalf("branch-scoped series must start at 1, got %d", v)
 	}
 }
+
+// StampSequences (wasm data_mutate path) must number exactly like POST /data,
+// honour an explicit value, and roll the counter back with its transaction.
+func TestStampSequences_StampsLikeCreateAndHonoursExplicit(t *testing.T) {
+	db := setupTestDB(t)
+	svc := sequenceService(t, db, folioConfig())
+	org := uuid.New()
+
+	row := map[string]any{"price": 1.0}
+	if err := svc.StampSequences(context.Background(), db, org, "test_products", row); err != nil {
+		t.Fatal(err)
+	}
+	if row["name"] != "F-0001" {
+		t.Fatalf("name = %v, want F-0001", row["name"])
+	}
+	explicit := map[string]any{"name": "LEGACY-1"}
+	if err := svc.StampSequences(context.Background(), db, org, "test_products", explicit); err != nil {
+		t.Fatal(err)
+	}
+	if explicit["name"] != "LEGACY-1" {
+		t.Fatalf("explicit folio overwritten: %v", explicit["name"])
+	}
+	next := map[string]any{}
+	_ = svc.StampSequences(context.Background(), db, org, "test_products", next)
+	if next["name"] != "F-0002" {
+		t.Fatalf("explicit value consumed the counter: got %v, want F-0002", next["name"])
+	}
+	// A model with no declared sequences is a no-op.
+	other := map[string]any{}
+	if err := svc.StampSequences(context.Background(), db, org, "unknown_model", other); err != nil || len(other) != 0 {
+		t.Fatalf("no-sequence model must be untouched: %v %v", err, other)
+	}
+}
+
+func TestStampSequences_RollbackDoesNotBurnFolio(t *testing.T) {
+	db := setupTestDB(t)
+	svc := sequenceService(t, db, folioConfig())
+	org := uuid.New()
+	// Warm the counter table on the pool's connection first (the in-memory
+	// sqlite test DB is per-connection; on Postgres this is a no-op concern).
+	_ = svc.StampSequences(context.Background(), db, uuid.New(), "test_products", map[string]any{})
+
+	tx := db.Begin()
+	row := map[string]any{}
+	if err := svc.StampSequences(context.Background(), tx, org, "test_products", row); err != nil {
+		t.Fatal(err)
+	}
+	if row["name"] != "F-0001" {
+		t.Fatalf("name = %v", row["name"])
+	}
+	tx.Rollback() // e.g. the INSERT hit the deterministic-id PK on an idempotent replay
+
+	after := map[string]any{}
+	_ = svc.StampSequences(context.Background(), db, org, "test_products", after)
+	if after["name"] != "F-0001" {
+		t.Fatalf("rolled-back create burnt a folio: next = %v, want F-0001", after["name"])
+	}
+}
+
+func TestStampSequences_BranchScopeFromRowBranchID(t *testing.T) {
+	db := setupTestDB(t)
+	ms := &ModelSequences{
+		Sequences:      []manifest.SequenceDef{{Key: "folio", Scope: "branch", Format: "B-{seq:03}"}},
+		ColumnBindings: map[string]string{"name": "folio"},
+	}
+	svc := sequenceService(t, db, ms)
+	org, b1, b2 := uuid.New(), uuid.New(), uuid.New()
+	stamp := func(branch any) string {
+		row := map[string]any{}
+		if branch != nil {
+			row["branch_id"] = branch
+		}
+		if err := svc.StampSequences(context.Background(), db, org, "test_products", row); err != nil {
+			t.Fatal(err)
+		}
+		return row["name"].(string)
+	}
+	if a, b, c := stamp(b1.String()), stamp(b1), stamp(b2.String()); a != "B-001" || b != "B-002" || c != "B-001" {
+		t.Fatalf("branch series not partitioned: %s %s %s", a, b, c)
+	}
+	// No branch on the row: org-scope fallback, same as a branch-less user.
+	if got := stamp(nil); got != "B-001" {
+		t.Fatalf("org fallback = %s, want B-001", got)
+	}
+}
