@@ -732,7 +732,26 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 
 	// .Table pins the INTO so reflect-built addon models (no TableName()
 	// method) insert into the right table instead of GORM's pluralized guess.
-	if err := s.db.WithContext(ctx).Table(tableName).Create(instance).Error; err != nil {
+	//
+	// Cross-record rules need the write and their parent-row read/lock in ONE
+	// transaction (a payment must not slip past a concurrently-closed session
+	// or a concurrent payment's share of the order total). Models without
+	// rules keep the plain single-statement insert.
+	if mc := s.resolveConstraints(ctx, model); mc != nil && len(mc.Rules) > 0 {
+		row := toMap(instance)
+		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := EvalCrossRecordRules(ctx, tx, mc.Rules, tableName, user.GetOrganizationID(), row, nil, s.parentTableFn(ctx)); err != nil {
+				return err
+			}
+			return tx.Table(tableName).Create(instance).Error
+		}); err != nil {
+			var ce *ConstraintError
+			if errors.As(err, &ce) || errors.Is(err, ErrInvalidInput) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("dynamic: create: %w", err)
+		}
+	} else if err := s.db.WithContext(ctx).Table(tableName).Create(instance).Error; err != nil {
 		return nil, fmt.Errorf("dynamic: create: %w", err)
 	}
 
@@ -779,6 +798,7 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	// increment-then-check guard is then race-free). When there is no row
 	// locking, execDB stays s.db and the legacy per-statement flow is unchanged.
 	mc := s.resolveConstraints(ctx, model)
+	hasRules := mc != nil && len(mc.Rules) > 0
 	lockRows := mc.locksRows()
 
 	sm := s.resolveStageMachine(ctx, model)
@@ -885,6 +905,21 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 			}
 		}
 
+		// Cross-record rules read/lock the parent row on the SAME handle as the
+		// save (a transaction: hasRules forces the tx path below).
+		if hasRules && inTx {
+			merged := make(map[string]any, len(before)+len(input))
+			for k, v := range before {
+				merged[k] = v
+			}
+			for k, v := range input {
+				merged[k] = v
+			}
+			if err := EvalCrossRecordRules(ctx, execDB, mc.Rules, tableName, user.GetOrganizationID(), merged, before, s.parentTableFn(ctx)); err != nil {
+				return err
+			}
+		}
+
 		if err := mapToStruct(input, instance); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidInput, err)
 		}
@@ -923,7 +958,7 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	}
 
 	var coreErr error
-	if lockRows {
+	if lockRows || hasRules {
 		coreErr = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			return core(tx, true)
 		})

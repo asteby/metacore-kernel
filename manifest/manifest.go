@@ -965,6 +965,11 @@ type ModelDefinition struct {
 	// manifest/v3.Model and dynamic constraint evaluation.
 	Locking string `json:"locking,omitempty"`
 
+	// Rules is the host/runtime projection of v3 Model.rules: cross-record
+	// guards over the parent row referenced by FK, evaluated inside the write
+	// transaction (dynamic.EvalCrossRecordRules). Empty = none.
+	Rules []CrossRuleDef `json:"rules,omitempty"`
+
 	// FormLayout carries the v3 Model.form_layout (create/edit form grouping —
 	// collapsible sections or a step wizard) through the v3 → host conversion so
 	// the host can project it onto the served form metadata. Columns bind to a
@@ -1562,4 +1567,16 @@ func ModuleKeys(modules []Module) []string {
 		keys[i] = m.Key
 	}
 	return keys
+}
+
+// CrossRuleDef is the host/runtime projection of a v3 CrossRule.
+type CrossRuleDef struct {
+	Kind     string         `json:"kind"`
+	ErrorKey string         `json:"errorKey"`
+	Ref      string         `json:"ref"`
+	Parent   string         `json:"parent"`
+	Require  map[string]any `json:"require,omitempty"`
+	Sum      string         `json:"sum,omitempty"`
+	Max      string         `json:"max,omitempty"`
+	Where    map[string]any `json:"where,omitempty"`
 }

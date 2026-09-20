@@ -218,7 +218,7 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		}
 		if cErr := inv.mutationCompute(execCtx, work, orgID, req.Table, action, computeRow); cErr != nil {
 			rollback()
-			return fail("db_error", cErr.Error())
+			return fail(computeErrCode(cErr), cErr.Error())
 		}
 	}
 
@@ -728,4 +728,15 @@ func stampCreateSequences(ctx context.Context, inv *invocation, work *gorm.DB, o
 		return "db_error", fmt.Errorf("sequence stamp: %w", err)
 	}
 	return "", nil
+}
+
+// computeErrCode classifies an error from the embedder's MutationComputeFn: a
+// declarative cross-record rule violation (dynamic.EvalCrossRecordRules) is the
+// same stable `constraint_violation` the row guard reports; anything else is a
+// db_error.
+func computeErrCode(err error) string {
+	if errors.Is(err, dynamic.ErrConstraintViolation) {
+		return "constraint_violation"
+	}
+	return "db_error"
 }

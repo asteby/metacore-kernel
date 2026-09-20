@@ -28,6 +28,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `deliver` came out without folio. `dynamic.Service.StampSequences` is the new
   public entry point.
 
+- **Reglas declarativas entre registros (`models[].rules`, kinds `ref_state` y
+  `sum_lte`):** validan contra la fila padre referenciada por FK dentro de la
+  MISMA transacción del create/update (CRUD y wasm `data_mutate`/`data_batch`),
+  con 422/`constraint_violation` + `error_key`. `sum_lte` bloquea el padre
+  `FOR UPDATE`. Primitivo de manifest: el hub valida con el schema embebido, así
+  que basta subir el kernel en hub y ops. Ver `docs/rfcs/2026-09-20-cross-record-rules.md`.
+
 ### Fixed
 
 - **`ParseOpsFilterValue` capped the whole raw `f_<col>` value at 255 bytes

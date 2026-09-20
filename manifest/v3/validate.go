@@ -1329,6 +1329,12 @@ func Validate(raw []byte) error {
 		if mod.Locking != "" && mod.Locking != "row" {
 			errs = append(errs, fmt.Sprintf("models[%d].locking %q is not one of \"\"|\"row\"", mi, mod.Locking))
 		}
+		// Cross-record rules (see CrossRule): shape per kind, columns declared.
+		for ri, r := range mod.Rules {
+			if err := ValidateCrossRule(r.Kind, r.ErrorKey, r.Ref, r.Parent, r.Require, r.Sum, r.Max, r.Where, ownCols); err != nil {
+				errs = append(errs, fmt.Sprintf("models[%d].rules[%d]: %v", mi, ri, err))
+			}
+		}
 		// Folio sequences: unique keys, scope enum, a well-formed format with
 		// exactly one {seq}/{seq:0N} placeholder.
 		seqKeys := make(map[string]struct{}, len(mod.Sequences))
@@ -1714,3 +1720,55 @@ func validatePermissionModels(m *Manifest) []string {
 	}
 	return errs
 }
+
+// ValidateCrossRule checks one cross-record rule's shape. ownCols are the
+// owning model's declared columns; the parent's columns are not visible here
+// (a bad parent column surfaces at first evaluation as an invalid-input error).
+// Shared by the v3 and legacy validators so both surfaces reject identically.
+func ValidateCrossRule(kind, errorKey, ref, parent string, require map[string]any, sum, max string, where map[string]any, ownCols map[string]struct{}) error {
+	if strings.TrimSpace(errorKey) == "" {
+		return fmt.Errorf("error_key required")
+	}
+	if strings.TrimSpace(parent) == "" {
+		return fmt.Errorf("parent required")
+	}
+	if _, ok := ownCols[ref]; !ok {
+		return fmt.Errorf("ref %q is not a declared column", ref)
+	}
+	for _, m := range []map[string]any{require, where} {
+		for col := range m {
+			if !crossIdentRe.MatchString(col) {
+				return fmt.Errorf("column %q is not a valid identifier", col)
+			}
+		}
+	}
+	switch kind {
+	case "ref_state":
+		if len(require) == 0 {
+			return fmt.Errorf("ref_state requires a non-empty require")
+		}
+		if sum != "" || max != "" || len(where) > 0 {
+			return fmt.Errorf("ref_state does not accept sum/max/where")
+		}
+	case "sum_lte":
+		if _, ok := ownCols[sum]; !ok {
+			return fmt.Errorf("sum %q is not a declared column", sum)
+		}
+		if !crossIdentRe.MatchString(max) {
+			return fmt.Errorf("max %q is not a valid identifier", max)
+		}
+		if len(require) > 0 {
+			return fmt.Errorf("sum_lte does not accept require")
+		}
+		for col := range where {
+			if _, ok := ownCols[col]; !ok {
+				return fmt.Errorf("where column %q is not a declared column", col)
+			}
+		}
+	default:
+		return fmt.Errorf("kind %q is not one of ref_state|sum_lte", kind)
+	}
+	return nil
+}
+
+var crossIdentRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
