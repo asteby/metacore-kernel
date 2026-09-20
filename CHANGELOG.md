@@ -7,6 +7,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **wasm ABI 1.11: `ctx_get` host import + capabilities `ctx:user` / `ctx:roles` /
+  `ctx:org_config`.** A guest can now read who is acting (`user_id`,
+  `user_email`, role keys) and the org's `currency_code` / `tax_rate` /
+  `tax_included` / `locale` / `timezone` — the `env.user` / `env.company` of an
+  Odoo module — instead of finding `approved_by` NULL, tax 0 and an empty
+  currency because a guest cannot read `organizations`. Least privilege: one
+  capability per slice, hard-enforced, closed allow-list (not the org row),
+  provider port `Host.WithContextProvider`. The three kinds join the closed
+  v3 capability enum (hub validator needs the kernel bump). See
+  docs/wasm-abi.md § 20 and docs/rfcs/2026-09-20-wasm-execution-context.md.
+
+- **wasm `data_mutate` / `data_batch` create now stamps declared sequences
+  (folios)** when the embedder wires `Host.WithSequenceStamp(svc.StampSequences)`:
+  same semantics as `POST /data` (explicit value wins), run inside the write
+  transaction so a rolled-back or replayed create never burns a folio.
+  Previously `create_work_order` / `create_sales_order` / a sale born from
+  `deliver` came out without folio. `dynamic.Service.StampSequences` is the new
+  public entry point.
+
 ### Fixed
 
 - **`ParseOpsFilterValue` capped the whole raw `f_<col>` value at 255 bytes

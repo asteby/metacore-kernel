@@ -180,7 +180,8 @@ db:read         db:write         http:fetch
 event:emit      event:subscribe  fs:read
 secrets:read    cron:register    queue:produce
 queue:consume   file-storage:write
-time:wallclock
+time:wallclock  ctx:user         ctx:roles
+ctx:org_config
 ```
 
 `target` syntax depends on `kind` (a glob for db, a URL prefix for

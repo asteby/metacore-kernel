@@ -70,6 +70,13 @@ type invocation struct {
 	// sequenceNext is the embedder-injected folio-sequence backend the
 	// sequence_next import calls (Host.WithSequenceNext). nil = unavailable.
 	sequenceNext func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)
+	// sequenceStamp is the embedder-injected declarative-folio stamper
+	// (Host.WithSequenceStamp) data_mutate / data_batch run on every create,
+	// inside the transaction. nil = creates are not auto-stamped.
+	sequenceStamp SequenceStampFn
+	// ctxProvider is the embedder-injected execution-context port the ctx_get
+	// import calls (Host.WithContextProvider). nil = context_unavailable.
+	ctxProvider ContextProviderFn
 	// routingTable is the embedder-injected org routing-table builder the
 	// routing_resolve import calls (Host.WithRoutingTable). nil = unavailable.
 	routingTable RoutingTableFn
@@ -505,6 +512,23 @@ func registerHostModule(ctx context.Context, h *Host) error {
 			return writeToGuest(ctx, mod, env)
 		}).
 		Export("sequence_next")
+
+	// ctx_get(reqPtr, reqLen) -> i64 (ptr|len envelope)
+	// Read-only execution context of the invocation (acting user, roles, the
+	// org's currency/tax/locale/timezone), each slice gated by a `ctx:*`
+	// capability. See docs/wasm-abi.md § 20.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			reqPtr, reqLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			req := readBytes(mod, reqPtr, reqLen)
+			env := executeCtxGet(ctx, inv, req)
+			return writeToGuest(ctx, mod, env)
+		}).
+		Export("ctx_get")
 
 	// routing_resolve(reqPtr, reqLen) -> i64 (ptr|len envelope)
 	// Answers which handler wins a decision domain for this org given attrs,

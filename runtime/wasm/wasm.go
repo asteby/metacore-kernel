@@ -66,6 +66,8 @@ type Host struct {
 	execSchema      func(addonKey string) string
 	sequenceNext    func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)
 	routingTable    RoutingTableFn
+	sequenceStamp   SequenceStampFn
+	ctxProvider     ContextProviderFn
 	mutationGuard   func(ctx context.Context, logicalTable string, row map[string]any) error
 	mutationCompute MutationComputeFn
 	// approvalRequester is the embedder-injected dynamic.Service.RequestApproval
@@ -189,6 +191,25 @@ func (h *Host) WithModelOwner(r func(model string) string) *Host {
 // `sequence_unavailable` envelope. See docs/wasm-abi.md § 17.
 func (h *Host) WithSequenceNext(f func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)) *Host {
 	h.sequenceNext = f
+	return h
+}
+
+// WithSequenceStamp injects the embedder's declarative-folio stamper: on every
+// data_mutate / data_batch CREATE the host calls it, inside the transaction and
+// before the INSERT, so the model's declared sequence-bound columns are filled
+// exactly as the dynamic CRUD `POST /data` does. Wire it to
+// dynamic.Service.StampSequences. When unset creates are not auto-stamped
+// (legacy behaviour). See docs/wasm-abi.md § 14.10.
+func (h *Host) WithSequenceStamp(f SequenceStampFn) *Host {
+	h.sequenceStamp = f
+	return h
+}
+
+// WithContextProvider injects the embedder's execution-context port for the
+// `metacore_host.ctx_get` import (acting user, roles, org config). When unset
+// the import answers `context_unavailable`. See docs/wasm-abi.md § 20.
+func (h *Host) WithContextProvider(f ContextProviderFn) *Host {
+	h.ctxProvider = f
 	return h
 }
 
@@ -459,6 +480,8 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		execSchema:        h.execSchema,
 		sequenceNext:      h.sequenceNext,
 		routingTable:      h.routingTable,
+		sequenceStamp:     h.sequenceStamp,
+		ctxProvider:       h.ctxProvider,
 		mutationGuard:     h.mutationGuard,
 		mutationCompute:   h.mutationCompute,
 		approvalRequester: h.approvalRequester,

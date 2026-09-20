@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,8 +89,15 @@ func nextSequenceValue(ctx context.Context, db *gorm.DB, orgID uuid.UUID, scopeV
 	if err := ensureSequenceTable(db); err != nil {
 		return 0, err
 	}
+	return bumpSequence(ctx, db, orgID, scopeValue, model, key)
+}
+
+// bumpSequence is the UPSERT … RETURNING on an already-migrated counter table.
+// `exec` may be a transaction: the wasm data_mutate path passes its open tx so
+// the increment commits (or rolls back) together with the row it numbers.
+func bumpSequence(ctx context.Context, exec *gorm.DB, orgID uuid.UUID, scopeValue, model, key string) (int64, error) {
 	var value int64
-	err := db.WithContext(ctx).Raw(`
+	err := exec.WithContext(ctx).Raw(`
 		INSERT INTO metacore_sequences (org_id, scope_value, model, seq_key, value)
 		VALUES (?, ?, ?, ?, 1)
 		ON CONFLICT (org_id, scope_value, model, seq_key)
@@ -156,6 +164,57 @@ func (s *Service) NextSequence(ctx context.Context, user modelbase.AuthUser, mod
 		return "", err
 	}
 	return FormatSequence(spec.Format, n), nil
+}
+
+// StampSequences is the wasm-side twin of assignSequences: it fills every
+// sequence-bound column of `row` that the caller left empty, running the counter
+// UPSERT on `tx` (the data_mutate transaction) instead of a separate connection.
+// An explicit value wins, exactly as on POST /data. There is no AuthUser here,
+// so a `scope: branch` sequence takes its partition from the row's own
+// `branch_id` (falling back to org scope when the row carries none — the same
+// fallback scopeValueFor applies to a branch-less user). Wire it into
+// wasm.Host.WithSequenceStamp.
+func (s *Service) StampSequences(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, model string, row map[string]any) error {
+	ms, ok := s.resolveSequences(ctx, model)
+	if !ok || len(ms.ColumnBindings) == 0 {
+		return nil
+	}
+	if orgID == uuid.Nil {
+		return fmt.Errorf("dynamic: sequence stamp requires a bound org")
+	}
+	// The counter table is DDL'd on the service's own handle, never inside the
+	// caller's transaction.
+	if err := ensureSequenceTable(s.db); err != nil {
+		return err
+	}
+	// Deterministic order: two bound columns must not race for numbers.
+	cols := make([]string, 0, len(ms.ColumnBindings))
+	for c := range ms.ColumnBindings {
+		cols = append(cols, c)
+	}
+	sort.Strings(cols)
+	for _, col := range cols {
+		if v, present := row[col]; present && v != nil && v != "" {
+			continue
+		}
+		key := ms.ColumnBindings[col]
+		spec, ok := ms.spec(key)
+		if !ok {
+			return fmt.Errorf("dynamic: column %q binds unknown sequence %q on %q", col, key, model)
+		}
+		scopeValue := ""
+		if strings.EqualFold(spec.Scope, "branch") {
+			if id, err := uuid.Parse(fmt.Sprint(row["branch_id"])); err == nil && id != uuid.Nil {
+				scopeValue = id.String()
+			}
+		}
+		n, err := bumpSequence(ctx, tx, orgID, scopeValue, model, key)
+		if err != nil {
+			return err
+		}
+		row[col] = FormatSequence(spec.Format, n)
+	}
+	return nil
 }
 
 // resolveSequences looks up a model's folio config via the host resolver.
