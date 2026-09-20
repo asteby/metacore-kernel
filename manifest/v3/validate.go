@@ -1203,6 +1203,8 @@ func Validate(raw []byte) error {
 		}
 	}
 
+	errs = append(errs, validatePermissionModels(&m)...)
+
 	// Index every model's declared columns by model KEY so rollup/formula
 	// cross-field checks can resolve targets/identifiers on the PARENT (the
 	// model owning the relation) and on the CHILD (relation.Through). Built
@@ -1244,6 +1246,23 @@ func Validate(raw []byte) error {
 
 	for mi, mod := range m.Models {
 		ownCols := colsByModel[mod.Key]
+		for ii, idx := range mod.Indices {
+			where := fmt.Sprintf("models[%d].indices[%d]", mi, ii)
+			for _, c := range idx.Columns {
+				if _, ok := ownCols[c]; !ok && idx.Where != "" {
+					errs = append(errs, fmt.Sprintf("%s.columns: %q is not a declared column on the model", where, c))
+				}
+			}
+			if idx.Where == "" {
+				continue
+			}
+			if idx.Method != "" && idx.Method != "btree" {
+				errs = append(errs, fmt.Sprintf("%s.where is only supported on btree indices", where))
+			}
+			if _, err := ParseIndexWhere(idx.Where, ownCols); err != nil {
+				errs = append(errs, fmt.Sprintf("%s.where: %v", where, err))
+			}
+		}
 		// Formulas: target must be a column on THIS model. Tier-2 (default)
 		// exprs pass the strict arithmetic allowlist; Tier-3 swaps the expr for
 		// a "wasm:<export>" handler.
@@ -1637,6 +1656,61 @@ func validateRoutes(m *Manifest) []string {
 			continue
 		}
 		seen[sig] = i
+	}
+	return errs
+}
+
+// permissionActionRe is a data-gate action: a builtin (index/show/create/
+// update/delete/export/import) or a custom action key.
+var permissionActionRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// validatePermissionModels checks rbac.permissions[].models: every entry names
+// a model and at least one action. A bare model, or one qualified with THIS
+// addon's key, must exist in the manifest; a model qualified with another
+// addon's key is a cross-addon grant the host resolves against that addon at
+// runtime (it may not be installed yet), so only its shape is checked.
+func validatePermissionModels(m *Manifest) []string {
+	if m.RBAC == nil {
+		return nil
+	}
+	own := map[string]struct{}{}
+	for _, mod := range m.Models {
+		own[mod.Key] = struct{}{}
+		if mod.Table != "" {
+			own[mod.Table] = struct{}{}
+		}
+	}
+	var errs []string
+	for pi, p := range m.RBAC.Permissions {
+		for mi, pm := range p.Models {
+			where := fmt.Sprintf("rbac.permissions[%d] (%s).models[%d]", pi, p.Key, mi)
+			model := strings.TrimSpace(pm.Model)
+			if model == "" {
+				errs = append(errs, where+".model is empty")
+				continue
+			}
+			addon, name := "", model
+			if i := strings.Index(model, "."); i >= 0 {
+				addon, name = model[:i], model[i+1:]
+				if addon == "" || name == "" {
+					errs = append(errs, fmt.Sprintf("%s.model %q must be \"Model\" or \"addon.Model\"", where, model))
+					continue
+				}
+			}
+			if addon == "" || addon == m.Metadata.Key {
+				if _, ok := own[name]; !ok {
+					errs = append(errs, fmt.Sprintf("%s.model %q is not a model of this addon (qualify it as \"<addon>.<Model>\" for a cross-addon grant)", where, model))
+				}
+			}
+			if len(pm.Actions) == 0 {
+				errs = append(errs, where+".actions is empty")
+			}
+			for _, a := range pm.Actions {
+				if !permissionActionRe.MatchString(a) {
+					errs = append(errs, fmt.Sprintf("%s.actions: %q is not a valid action key", where, a))
+				}
+			}
+		}
 	}
 	return errs
 }

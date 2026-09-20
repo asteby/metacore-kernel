@@ -1151,6 +1151,14 @@ type Index struct {
 	Columns []string `json:"columns"`
 	Unique  bool     `json:"unique,omitempty"`
 	Method  string   `json:"method,omitempty"`
+	// Where makes the index PARTIAL: it only covers rows matching the predicate
+	// (e.g. "external_id IS NOT NULL" so many NULL/empty rows never collide). A
+	// conjunction of `<column> IS [NOT] NULL` and `<column> <op> <literal>`
+	// terms joined by AND (see manifest.ParseIndexWhere). A unique index with a
+	// Where is NEVER folded onto ColumnDef.Unique (that would create the global
+	// unique index the predicate exists to avoid): the DDL plane emits it as its
+	// own CREATE UNIQUE INDEX ... WHERE at install time.
+	Where string `json:"where,omitempty"`
 }
 
 // ForeignKey is a cross-model reference, materialised physically or logically.
@@ -2228,6 +2236,23 @@ type PermissionDef struct {
 	Key         string `json:"key"`
 	Label       string `json:"label,omitempty"`
 	Description string `json:"description,omitempty"`
+	// Models is the explicit capability -> (model, actions) mapping. Hosts
+	// resolve a grant of Key against the data gate through it, so a capability
+	// can cover a model owned by ANOTHER addon (pos.sale.read over the
+	// customers-owned SalesOrder) or a model with no owner segment in the key
+	// (caja.queue.read, refund_claims.settle). Only the listed (model, action)
+	// pairs are authorized: a capability never leaks onto unmapped models.
+	Models []PermissionModel `json:"models,omitempty"`
+}
+
+// PermissionModel is one (model, actions) entry of PermissionDef.Models.
+type PermissionModel struct {
+	// Model is the model key ("SalesOrder"), table name, or "addon.Model"
+	// qualified key of any addon's model (cross-addon grants are the point).
+	Model string `json:"model"`
+	// Actions are the data-gate actions the capability authorizes: index, show,
+	// create, update, delete, export, import, or a declared custom action key.
+	Actions []string `json:"actions"`
 }
 
 // Setting is a user-facing tenant-scoped setting.
