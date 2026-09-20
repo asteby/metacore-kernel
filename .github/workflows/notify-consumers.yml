@@ -1,0 +1,104 @@
+name: Notify consumers
+
+# Release-train MVP: on every v* tag, open (or update) a tracking issue in
+# each consumer repo with go.mod bump instructions for metacore-kernel.
+# Renovate still owns the actual PR; this workflow makes the bump visible
+# immediately instead of waiting for the next schedule tick.
+#
+# Requires secret CONSUMER_BUMP_TOKEN — a PAT (or GitHub App token) with
+# `issues: write` on asteby-hq/ops and asteby-hq/hub. When unset the job
+# skips gracefully so tag releases never fail for missing wiring.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to announce (e.g. v0.144.0). Defaults to the pushed tag."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "value=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip prereleases
+        id: gate
+        env:
+          TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          case "$TAG" in
+            *-alpha*|*-beta*|*-rc*)
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "Skipping prerelease tag $TAG"
+              ;;
+            *)
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Open bump issues in consumers
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CONSUMER_BUMP_TOKEN }}
+          TAG: ${{ steps.tag.outputs.value }}
+          MODULE: github.com/asteby/metacore-kernel
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::CONSUMER_BUMP_TOKEN unset — skipping consumer notify"
+            exit 0
+          fi
+
+          BODY=$(cat <<EOF
+          ## Kernel release \`${TAG}\`
+
+          A new \`metacore-kernel\` tag was pushed. Please bump the Go module pin.
+
+          \`\`\`bash
+          go env -w GOPRIVATE="github.com/asteby/*"
+          go get ${MODULE}@${TAG}
+          go mod tidy
+          \`\`\`
+
+          ### Suggested PR title
+          \`chore: bump metacore-kernel to ${TAG}\`
+
+          Renovate may open an automerge PR for patch/minor; this issue is the
+          immediate human-visible signal for majors and for when Renovate is lagging.
+
+          — opened by metacore-kernel release train (\`notify-consumers.yml\`)
+          EOF
+          )
+
+          TITLE="chore: bump metacore-kernel to ${TAG}"
+          # Consumers that pin github.com/asteby/metacore-kernel in go.mod
+          CONSUMERS=("asteby-hq/ops" "asteby-hq/hub")
+
+          for repo in "${CONSUMERS[@]}"; do
+            echo "::group::${repo}"
+            existing=$(gh issue list --repo "$repo" --state open --search "$TITLE in:title" --json number,title --jq '.[0].number // empty' || true)
+            if [ -n "$existing" ]; then
+              echo "Issue #${existing} already open — commenting"
+              gh issue comment "$existing" --repo "$repo" --body "Re-notified for \`${TAG}\` (tag push / workflow_dispatch)."
+            else
+              url=$(gh issue create --repo "$repo" --title "$TITLE" --body "$BODY" --label "dependencies" 2>/dev/null \
+                || gh issue create --repo "$repo" --title "$TITLE" --body "$BODY")
+              echo "Opened $url"
+            fi
+            echo "::endgroup::"
+          done

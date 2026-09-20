@@ -10,6 +10,15 @@ import (
 // version range the kernel reads as the legacy `Manifest.Kernel` field.
 const kernelRequirementKey = "kernel"
 
+// sdkRequirementKeys are reserved compatibility.requires[] keys whose version
+// range projects onto Manifest.SDK (host @asteby/metacore-sdk / equivalent).
+// First match in declaration order wins. Keep in sync with hub/internal/compat.
+var sdkRequirementKeys = map[string]struct{}{
+	"sdk":                  {},
+	"metacore-sdk":         {},
+	"@asteby/metacore-sdk": {},
+}
+
 // managedColumns are the physical columns the kernel's dynamic schema layer
 // injects automatically for every addon table (see dynamic.CreateTable). A v3
 // model declares these explicitly to document its full physical shape, but the
@@ -61,11 +70,16 @@ func FromV3(m *v3.Manifest) Manifest {
 		out.IconColor = m.Metadata.Icon.Color
 	}
 
-	// Kernel semver range lives under compatibility.requires[key=="kernel"].
+	// Kernel / SDK semver ranges live under compatibility.requires[].
+	// Key "kernel" → Manifest.Kernel; keys sdk / metacore-sdk /
+	// @asteby/metacore-sdk → Manifest.SDK. First match per field wins.
 	for _, r := range m.Compatibility.Requires {
-		if r.Key == kernelRequirementKey {
+		if r.Key == kernelRequirementKey && out.Kernel == "" {
 			out.Kernel = r.Version
-			break
+			continue
+		}
+		if _, ok := sdkRequirementKeys[r.Key]; ok && out.SDK == "" && strings.TrimSpace(r.Version) != "" {
+			out.SDK = strings.TrimSpace(r.Version)
 		}
 	}
 	if len(m.Compatibility.Provides) > 0 {
