@@ -1330,6 +1330,10 @@
           "type": "boolean",
           "default": false
         },
+        "where": {
+          "type": "string",
+          "description": "Partial-index predicate: AND-joined `<column> IS [NOT] NULL` / `<column> <op> <literal>` terms. A unique index with a where is emitted as its own CREATE UNIQUE INDEX ... WHERE and never folded onto the column-level (global) unique flag."
+        },
         "method": {
           "type": "string",
           "enum": [
@@ -3193,6 +3197,29 @@
         },
         "description": {
           "type": "string"
+        },
+        "models": {
+          "type": "array",
+          "description": "Explicit capability -> (model, actions) mapping the host resolves on the data gate; enables cross-addon grants (pos.sale.read over a customers-owned model). Only listed pairs are authorized.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["model", "actions"],
+            "properties": {
+              "model": {
+                "type": "string",
+                "description": "Model key, table name or 'addon.Model' qualified key."
+              },
+              "actions": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$"
+                }
+              }
+            }
+          }
         }
       }
     },

@@ -8,6 +8,7 @@ import (
 
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/manifest/computeexpr"
+	"github.com/asteby/metacore-kernel/manifest/v3"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -115,6 +116,29 @@ func indexStatementsWithPrefix(schema string, def manifest.ModelDefinition, hasO
 			stmts = append(stmts, fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS %q ON %q.%q (%q)`,
 				uniquePrefix+def.TableName+"_"+c.Name, schema, def.TableName, c.Name))
 		}
+	}
+	for _, ix := range def.Indices {
+		if ix.Where == "" || len(ix.Columns) == 0 {
+			continue // only partial indices are emitted from Indices.
+		}
+		pred, err := v3.ParseIndexWhere(ix.Where, nil)
+		if err != nil {
+			continue // Validate rejects this at publish; never emit unsafe DDL.
+		}
+		name := ix.Name
+		if name == "" {
+			name = "idx_" + def.TableName + "_" + strings.Join(ix.Columns, "_") + "_partial"
+		}
+		cols := make([]string, len(ix.Columns))
+		for i, c := range ix.Columns {
+			cols[i] = fmt.Sprintf("%q", c)
+		}
+		kind := "INDEX"
+		if ix.Unique {
+			kind = "UNIQUE INDEX"
+		}
+		stmts = append(stmts, fmt.Sprintf(`CREATE %s IF NOT EXISTS %q ON %q.%q (%s) WHERE %s`,
+			kind, name, schema, def.TableName, strings.Join(cols, ", "), pred))
 	}
 	return stmts
 }

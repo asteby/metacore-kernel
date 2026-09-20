@@ -397,6 +397,16 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		uniqueCols := map[string]struct{}{}
 		indexCols := map[string]struct{}{}
 		for _, idx := range m.Indices {
+			if idx.Where != "" {
+				// Partial index: it must NOT fold onto ColumnDef.Unique/Index
+				// (that would emit the global index the predicate exists to
+				// avoid). It rides ModelDefinition.Indices instead.
+				def.Indices = append(def.Indices, IndexDef{
+					Name: idx.Name, Columns: append([]string(nil), idx.Columns...),
+					Unique: idx.Unique, Where: idx.Where,
+				})
+				continue
+			}
 			if len(idx.Columns) != 1 {
 				continue // composite indices have no ColumnDef equivalent.
 			}

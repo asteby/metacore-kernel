@@ -918,6 +918,10 @@ type ModelDefinition struct {
 	OrgScoped  bool        `json:"org_scoped,omitempty"`
 	SoftDelete bool        `json:"soft_delete,omitempty"`
 	Columns    []ColumnDef `json:"columns"`
+	// Indices carries the v3 model's PARTIAL indices (those with a Where). Plain
+	// single-column indices keep riding ColumnDef.Index/Unique; only entries with
+	// a Where are emitted from here (see IndexDef).
+	Indices []IndexDef `json:"indices,omitempty"`
 	// Relations declares model-to-model edges the kernel uses to derive
 	// joins, eager loading, REST sub-resources and SDK metadata. The slice
 	// is optional — addons that only expose flat tables can omit it and
@@ -1249,6 +1253,18 @@ type RelationDef struct {
 	// rollup target on the affected parent. Optional; only meaningful for
 	// one_to_many. See Rollup.
 	Rollups []Rollup `json:"rollups,omitempty"`
+}
+
+// IndexDef is a declared index on an addon-installed table. The DDL plane emits
+// only entries with a Where (partial indices); everything else is expressed by
+// the column-level Index/Unique flags and the entry is informational.
+type IndexDef struct {
+	Name    string   `json:"name,omitempty"`
+	Columns []string `json:"columns"`
+	Unique  bool     `json:"unique,omitempty"`
+	Method  string   `json:"method,omitempty"`
+	// Where is the partial-index predicate (see v3.ParseIndexWhere).
+	Where string `json:"where,omitempty"`
 }
 
 // ColumnDef is a column on an addon-installed table.
