@@ -584,6 +584,13 @@ type Model struct {
 	//            Constraints; harmless otherwise.
 	Locking string `json:"locking,omitempty"`
 
+	// Rules declare CROSS-RECORD guards: predicates over the PARENT row this
+	// model references by FK (a payment over a closed session, payments summing
+	// past the order total). Evaluated inside the same transaction as the write
+	// on every path (CRUD and wasm data_mutate/data_batch); a violation rolls it
+	// back with 422 constraint_violation + ErrorKey. See CrossRule.
+	Rules []CrossRule `json:"rules,omitempty"`
+
 	// StageField names the column that carries the model's pipeline stage
 	// (e.g. "stage"). Declaring it — together with Stages — turns the model
 	// into a stage machine: the kernel derives a `status` display type for the
@@ -2542,4 +2549,26 @@ type Route struct {
 	// serves it to organizations where the predicate holds (e.g. another addon
 	// is installed). Nil = always served. See Condition.
 	Condition *Condition `json:"condition,omitempty"`
+}
+
+// CrossRule is one declarative cross-record rule. Kind selects the shape:
+//
+//	ref_state — the parent row (Parent, addressed by this row's Ref column)
+//	            must match Require (parent column -> scalar or list). Checked
+//	            on create and when Ref changes on update.
+//	sum_lte   — sum(Sum over this model's rows sharing the same Ref and
+//	            matching Where) must stay <= parent.Max. The parent row is
+//	            locked FOR UPDATE first so concurrent writers serialize.
+//
+// SECURITY: nothing here is free-form SQL — columns are identifiers checked
+// against the manifest, values are bound parameters.
+type CrossRule struct {
+	Kind     string         `json:"kind"`
+	ErrorKey string         `json:"error_key"`
+	Ref      string         `json:"ref"`
+	Parent   string         `json:"parent"`
+	Require  map[string]any `json:"require,omitempty"`
+	Sum      string         `json:"sum,omitempty"`
+	Max      string         `json:"max,omitempty"`
+	Where    map[string]any `json:"where,omitempty"`
 }

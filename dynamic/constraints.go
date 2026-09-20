@@ -20,6 +20,10 @@ type ModelConstraints struct {
 	// inside a transaction on Update (so an increment-then-check guard is
 	// race-free), or "" for no extra locking.
 	Locking string
+	// Rules are the model's cross-record rules (manifest Model.rules). Unlike
+	// Constraints they need a transaction and the parent row, so Service and the
+	// wasm mutation path evaluate them via EvalCrossRecordRules.
+	Rules []manifest.CrossRuleDef
 }
 
 // ConstraintResolver returns the guard configuration for a model name. Hosts
@@ -31,7 +35,7 @@ type ConstraintResolver func(ctx context.Context, model string) (*ModelConstrain
 // active reports whether the config actually carries guard predicates. Locking
 // alone (no constraints) is inert — there is nothing to serialize on.
 func (mc *ModelConstraints) active() bool {
-	return mc != nil && len(mc.Constraints) > 0
+	return mc != nil && (len(mc.Constraints) > 0 || len(mc.Rules) > 0)
 }
 
 // locksRows reports whether Update should take a FOR UPDATE row lock. Only

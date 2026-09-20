@@ -583,6 +583,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		def.Transitions = mapModelTransitions(m.Transitions)
 		def.OnTransition = mapModelTransitionHooks(m.OnTransition)
 		def.Locking = m.Locking
+		def.Rules = mapModelRules(m.Rules)
 		def.Sequences = mapModelSequences(m.Sequences)
 		// FormLayout rides through so the host projects the create/edit form
 		// grouping (collapsible sections or step wizard) onto the served metadata.
@@ -1532,4 +1533,17 @@ func mapSignature(s *v3.Signature) *Signature {
 		Value:     s.Value,
 		SignedAt:  s.SignedAt,
 	}
+}
+
+// mapModelRules folds v3 cross-record rules onto ModelDefinition.Rules.
+func mapModelRules(in []v3.CrossRule) []CrossRuleDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]CrossRuleDef, 0, len(in))
+	for _, r := range in {
+		out = append(out, CrossRuleDef{Kind: r.Kind, ErrorKey: r.ErrorKey, Ref: r.Ref, Parent: r.Parent,
+			Require: r.Require, Sum: r.Sum, Max: r.Max, Where: r.Where})
+	}
+	return out
 }
