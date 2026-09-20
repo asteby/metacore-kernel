@@ -490,7 +490,10 @@ type Compatibility struct {
 	Provides []string `json:"provides,omitempty"`
 }
 
-// Requirement is a single peer dependency. Key "kernel" is reserved.
+// Requirement is a single peer dependency. Key "kernel" is reserved for the
+// host kernel range (→ Manifest.Kernel). Keys "sdk", "metacore-sdk", and
+// "@asteby/metacore-sdk" are reserved for the host metacore-sdk range
+// (→ Manifest.SDK). All other keys are installable peer addons.
 type Requirement struct {
 	Key      string `json:"key"`
 	Version  string `json:"version"`

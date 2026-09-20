@@ -94,9 +94,16 @@ git push --tags
    - Checksums.
    - Automatic `prerelease: true` when the tag carries a SemVer suffix
      (`-alpha`, `-beta`, `-rc`).
-Consumers are not notified by the kernel. They discover new versions on
+5. **Consumer notify** (`.github/workflows/notify-consumers.yml`) — opens
+   (or comments on) tracking issues in `asteby-hq/ops` and `asteby-hq/hub`
+   with `go get github.com/asteby/metacore-kernel@vX.Y.Z` instructions.
+   Requires repo secret `CONSUMER_BUMP_TOKEN`; skipped cleanly when unset.
+   Prerelease tags are ignored. Renovate still opens the actual bump PRs
+   (section 6); this is the immediate human-visible release-train signal.
+
+Consumers are not auto-merged by the kernel. They discover new versions on
 their own through Renovate / Dependabot polling the Go proxy — see
-section 6.
+section 6 — and via the notify issues above.
 
 ## 4. Verify the release
 
