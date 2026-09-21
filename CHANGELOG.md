@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`desktop_clients[]` on Module Contract v3:** declare per-user desktop/mobile
+  agents (Tauri/Electron) that authenticate as Ops users (`auth: ops_user`) and
+  point at an https Hub/CDN `download_url`. Distinct from `edge_devices` (store
+  hardware + pairing). Hub and Ops surface download CTAs from this block so new
+  product agents do not require a landing hardcode. Projected onto the host
+  `Manifest.DesktopClients`.
+
 - **Cross-record rules: `on_missing_parent: "skip"`.** `ref_state` / `sum_lte`
   rules may opt in to being skipped (instead of rejected with `error_key`) when
   the referenced parent row does not exist yet, for flows that write children
