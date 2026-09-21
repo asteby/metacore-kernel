@@ -175,6 +175,11 @@ type Manifest struct {
 	// the addon may send. Empty = the addon drives no edge hardware.
 	EdgeDevices []EdgeDeviceDef `json:"edge_devices,omitempty"`
 
+	// DesktopClients is the host projection of v3 desktop_clients[]: per-user
+	// desktop/mobile agents (Tauri/Electron) that authenticate as Ops users.
+	// Hub and Ops surface download CTAs from this list. Empty = none.
+	DesktopClients []DesktopClientDef `json:"desktop_clients,omitempty"`
+
 	// ProvidesOptions is the host projection of the v3 provides_options block:
 	// the models this addon publishes as reusable option catalogs. The host's
 	// generic dynamic-options provider reads these off every installed addon
@@ -371,6 +376,27 @@ type EdgeDeviceDef struct {
 	Events                   []EdgeDeviceEventDef   `json:"events,omitempty"`
 	Commands                 []EdgeDeviceCommandDef `json:"commands,omitempty"`
 	HeartbeatIntervalSeconds int                    `json:"heartbeat_interval_seconds,omitempty"`
+}
+
+// DesktopClientDef is the host projection of a v3 DesktopClient: a per-user
+// desktop/mobile agent installer authenticated as an Ops user (not edge
+// pairing). Hub/Ops read DownloadURL to render download CTAs.
+type DesktopClientDef struct {
+	Key         string                 `json:"key"`
+	Label       string                 `json:"label,omitempty"`
+	Auth        string                 `json:"auth"`
+	DownloadURL string                 `json:"download_url"`
+	ListOnHub   bool                   `json:"list_on_hub,omitempty"`
+	Brand       string                 `json:"brand,omitempty"`
+	Logo        string                 `json:"logo,omitempty"`
+	Files       *DesktopClientFilesDef `json:"files,omitempty"`
+}
+
+// DesktopClientFilesDef names optional installer filenames under DownloadURL.
+type DesktopClientFilesDef struct {
+	Mac     string `json:"mac,omitempty"`
+	Windows string `json:"windows,omitempty"`
+	Linux   string `json:"linux,omitempty"`
 }
 
 // EdgeDeviceEventDef is one inbound event type an EdgeDeviceDef's paired

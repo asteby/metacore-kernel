@@ -1030,6 +1030,56 @@ func validatePipelineRuntime(m *Manifest) []string {
 	return errs
 }
 
+// validateDesktopClients enforces unique keys, closed auth set, https
+// download_url, and bare installer filenames. Empty is a no-op. Allowed on
+// Addon and Preset (a vertical may advertise its bundled agent's download).
+func validateDesktopClients(m *Manifest) []string {
+	if len(m.DesktopClients) == 0 {
+		return nil
+	}
+	var errs []string
+	seen := make(map[string]struct{}, len(m.DesktopClients))
+	for i, c := range m.DesktopClients {
+		if c.Key == "" {
+			errs = append(errs, fmt.Sprintf("desktop_clients[%d].key is empty", i))
+		} else {
+			if _, dup := seen[c.Key]; dup {
+				errs = append(errs, fmt.Sprintf("desktop_clients[%d].key %q is duplicated", i, c.Key))
+			}
+			seen[c.Key] = struct{}{}
+		}
+		if _, ok := desktopClientAuths[c.Auth]; !ok {
+			errs = append(errs, fmt.Sprintf("desktop_clients[%d].auth %q is not one of: ops_user", i, c.Auth))
+		}
+		u := strings.TrimSpace(c.DownloadURL)
+		if u == "" {
+			errs = append(errs, fmt.Sprintf("desktop_clients[%d].download_url is empty", i))
+		} else if !strings.HasPrefix(u, "https://") {
+			errs = append(errs, fmt.Sprintf("desktop_clients[%d].download_url must be an https URL", i))
+		}
+		if c.Brand != "" && !strings.HasPrefix(c.Brand, "#") {
+			errs = append(errs, fmt.Sprintf("desktop_clients[%d].brand must be a #hex color when set", i))
+		}
+		if c.Files != nil {
+			for _, pair := range []struct {
+				name, val string
+			}{
+				{"mac", c.Files.Mac},
+				{"windows", c.Files.Windows},
+				{"linux", c.Files.Linux},
+			} {
+				if pair.val == "" {
+					continue
+				}
+				if strings.ContainsAny(pair.val, `/\`) || pair.val == "." || pair.val == ".." {
+					errs = append(errs, fmt.Sprintf("desktop_clients[%d].files.%s must be a bare filename", i, pair.name))
+				}
+			}
+		}
+	}
+	return errs
+}
+
 //go:embed schema/manifest-v3.schema.json
 var schemaBytes []byte
 
@@ -1437,6 +1487,8 @@ func Validate(raw []byte) error {
 
 	// Addon-level pipeline-runtime primitives (connectors / schedules / webhooks).
 	errs = append(errs, validatePipelineRuntime(&m)...)
+	// Per-user desktop agents (distinct from edge_devices hardware pairing).
+	errs = append(errs, validateDesktopClients(&m)...)
 
 	// Published option catalogs (provides_options[]).
 	errs = append(errs, validateProvidesOptions(&m, colsByModel)...)
