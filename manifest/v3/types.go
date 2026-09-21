@@ -2571,4 +2571,9 @@ type CrossRule struct {
 	Sum      string         `json:"sum,omitempty"`
 	Max      string         `json:"max,omitempty"`
 	Where    map[string]any `json:"where,omitempty"`
+	// OnMissingParent decides what happens when the referenced parent row does
+	// not exist (yet): "reject" (default, fail closed) or "skip" (the rule is
+	// not applied for this write). Use "skip" only when the flow legitimately
+	// writes children before their parent (e.g. POS tenders before the order).
+	OnMissingParent string `json:"on_missing_parent,omitempty"`
 }

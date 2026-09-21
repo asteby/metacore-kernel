@@ -87,6 +87,9 @@ func evalCrossRule(ctx context.Context, tx *gorm.DB, r manifest.CrossRuleDef, ow
 	parent := map[string]any{}
 	if err := q.Take(&parent).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
+			if r.OnMissingParent == "skip" {
+				return nil // parent not written yet: rule not applied to this write
+			}
 			return crossViolation(r, r.Kind+" "+r.Ref, map[string]any{r.Ref: refStr, "parent": "not_found"})
 		}
 		return err

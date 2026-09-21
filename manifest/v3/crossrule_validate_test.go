@@ -22,6 +22,8 @@ func TestValidate_CrossRules(t *testing.T) {
 		map[string]interface{}{"kind": "sum_lte", "error_key": "sales.overpay", "ref": "sales_order_id", "parent": "SalesOrder",
 			"sum": "subtotal", "max": "total", "where": map[string]interface{}{"quantity": []interface{}{1, 2}}},
 	}
+	good = append(good, map[string]interface{}{"kind": "sum_lte", "error_key": "sales.overpay2", "ref": "sales_order_id", "parent": "SalesOrder",
+		"sum": "subtotal", "max": "total", "on_missing_parent": "skip"})
 	if err := Validate(withRules(good...)); err != nil {
 		t.Fatalf("valid rules rejected: %v", err)
 	}
@@ -32,6 +34,7 @@ func TestValidate_CrossRules(t *testing.T) {
 		"ref_state w/o require": map[string]interface{}{"kind": "ref_state", "error_key": "k", "ref": "sales_order_id", "parent": "SalesOrder"},
 		"sum_lte bad sum col":   map[string]interface{}{"kind": "sum_lte", "error_key": "k", "ref": "sales_order_id", "parent": "SalesOrder", "sum": "nope", "max": "total"},
 		"injection in require":  map[string]interface{}{"kind": "ref_state", "error_key": "k", "ref": "sales_order_id", "parent": "SalesOrder", "require": map[string]interface{}{"state; DROP TABLE x": "open"}},
+		"bad on_missing_parent": map[string]interface{}{"kind": "sum_lte", "error_key": "k", "ref": "sales_order_id", "parent": "SalesOrder", "sum": "subtotal", "max": "total", "on_missing_parent": "ignore"},
 		"missing error_key":     map[string]interface{}{"kind": "ref_state", "ref": "sales_order_id", "parent": "SalesOrder", "require": map[string]interface{}{"state": "open"}},
 	}
 	for name, rule := range bad {

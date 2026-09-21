@@ -360,6 +360,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 			if err := v3.ValidateCrossRule(r.Kind, r.ErrorKey, r.Ref, r.Parent, r.Require, r.Sum, r.Max, r.Where, colsByModel[md.ModelKey]); err != nil {
 				return fmt.Errorf("manifest.model_definitions[%d].rules[%d]: %w", i, ri, err)
 			}
+			if err := v3.ValidateOnMissingParent(r.OnMissingParent); err != nil {
+				return fmt.Errorf("manifest.model_definitions[%d].rules[%d]: %w", i, ri, err)
+			}
 		}
 		if err := validateSequences(md); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
