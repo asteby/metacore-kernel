@@ -304,3 +304,44 @@ func TestExecuteDataQueryRecords_ValidateRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestExecuteDataQueryRecords_OperatorsInAndOrderBy(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+	orgID := uuid.New()
+
+	expectProbe(mock, `"stock"`, "id", "organization_id", "status", "deleted_at")
+	mock.ExpectQuery(`SELECT \* FROM "stock" WHERE organization_id = \$1 AND "id" > \$2 AND "status" IN \(\$3, \$4\) AND deleted_at IS NULL ORDER BY "id" ASC LIMIT 200`).
+		WithArgs(orgID, "0000", "reserved", "backorder").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("0001"))
+
+	inv := testInvocation(gdb, nil, orgID, stockReadEnforcer(), nil)
+	out := executeDataQueryRecords(context.Background(), inv, []byte(`{
+		"table": "stock", "limit": 200, "order_by": "id",
+		"where": {"id": {"gt": "0000"}, "status": {"in": ["reserved", "backorder"]}}
+	}`))
+	if env := unmarshalDataQuery(t, out); !env.Success || len(env.Data.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %s", out)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations not met: %v", err)
+	}
+}
+
+func TestExecuteDataQueryRecords_RejectsBadOperators(t *testing.T) {
+	for _, req := range []string{
+		`{"table":"stock","where":{"id":{"like":"x"}}}`,
+		`{"table":"stock","where":{"id":{"in":[]}}}`,
+		`{"table":"stock","where":{"id":{"gt":null}}}`,
+		`{"table":"stock","order_by":"deleted_at"}`,
+		`{"table":"stock","order_by":"id","order_dir":"sideways"}`,
+	} {
+		gdb, _, cleanup := newMockGorm(t)
+		inv := testInvocation(gdb, nil, uuid.New(), stockReadEnforcer(), nil)
+		env := unmarshalDataQuery(t, executeDataQueryRecords(context.Background(), inv, []byte(req)))
+		cleanup()
+		if env.Success {
+			t.Fatalf("expected invalid_request for %s", req)
+		}
+	}
+}

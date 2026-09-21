@@ -33,8 +33,106 @@ const (
 // predicate on every query.
 type dataQueryRequest struct {
 	Table string                     `json:"table"` // logical, unqualified
-	Where map[string]json.RawMessage `json:"where"` // equality-only filters
+	Where map[string]json.RawMessage `json:"where"` // equality filters; object form = operators
 	Limit int                        `json:"limit"` // default 50, max 200
+	// OrderBy/OrderDir give a stable order so a guest can page with a cursor
+	// (`where: {id: {gt: last}}`, order_by "id"). OrderDir is "asc" (default)
+	// or "desc". Without OrderBy the row order is unspecified, as before.
+	OrderBy  string `json:"order_by"`
+	OrderDir string `json:"order_dir"`
+}
+
+// dataQueryOps are the operators accepted in the object form of a where value,
+// e.g. {"id": {"gt": "…"}} or {"state": {"in": ["a","b"]}}. Plain scalars stay
+// equality, so every existing guest keeps working.
+var dataQueryOps = map[string]string{"gt": ">", "gte": ">=", "lt": "<", "lte": "<=", "ne": "<>"}
+
+// dataQueryMaxInList bounds an `in` list (parameters per query).
+const dataQueryMaxInList = 200
+
+// dataQueryPred is one compiled predicate of a guest filter.
+type dataQueryPred struct {
+	col  string
+	op   string // "=", "IS NULL", ">", …, "IN"
+	vals []any
+}
+
+// decodeDataQueryScalar validates a scalar filter value.
+func decodeDataQueryScalar(col string, rv json.RawMessage) (any, error) {
+	dec := json.NewDecoder(strings.NewReader(string(rv)))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, fmt.Errorf("where.%s: %v", col, err)
+	}
+	switch t := v.(type) {
+	case nil, bool, string:
+		return t, nil
+	case json.Number:
+		if i, err := t.Int64(); err == nil {
+			return i, nil
+		}
+		if f, err := t.Float64(); err == nil {
+			return f, nil
+		}
+		return nil, fmt.Errorf("where.%s: invalid number %q", col, t)
+	}
+	return nil, fmt.Errorf("where.%s must be a scalar (string/number/bool/null)", col)
+}
+
+// compileDataQueryWhere turns one where entry into predicates: a scalar is
+// equality (null → IS NULL); an object holds operators gt/gte/lt/lte/ne (scalar)
+// and in (non-empty scalar array).
+func compileDataQueryWhere(col string, rv json.RawMessage) ([]dataQueryPred, error) {
+	trimmed := strings.TrimSpace(string(rv))
+	if !strings.HasPrefix(trimmed, "{") {
+		v, err := decodeDataQueryScalar(col, rv)
+		if err != nil {
+			return nil, err
+		}
+		if v == nil {
+			return []dataQueryPred{{col: col, op: "IS NULL"}}, nil
+		}
+		return []dataQueryPred{{col: col, op: "=", vals: []any{v}}}, nil
+	}
+	var ops map[string]json.RawMessage
+	if err := json.Unmarshal(rv, &ops); err != nil || len(ops) == 0 {
+		return nil, fmt.Errorf("where.%s: operator object must be non-empty", col)
+	}
+	names := make([]string, 0, len(ops))
+	for k := range ops {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	var preds []dataQueryPred
+	for _, name := range names {
+		if name == "in" {
+			var arr []json.RawMessage
+			if err := json.Unmarshal(ops[name], &arr); err != nil || len(arr) == 0 || len(arr) > dataQueryMaxInList {
+				return nil, fmt.Errorf("where.%s.in must be an array of 1..%d scalars", col, dataQueryMaxInList)
+			}
+			vals := make([]any, 0, len(arr))
+			for _, e := range arr {
+				v, err := decodeDataQueryScalar(col, e)
+				if err != nil || v == nil {
+					return nil, fmt.Errorf("where.%s.in: elements must be non-null scalars", col)
+				}
+				vals = append(vals, v)
+			}
+			preds = append(preds, dataQueryPred{col: col, op: "IN", vals: vals})
+			continue
+		}
+		sqlOp, ok := dataQueryOps[name]
+		if !ok {
+			return nil, fmt.Errorf("where.%s: unknown operator %q", col, name)
+		}
+		v, err := decodeDataQueryScalar(col, ops[name])
+		if err != nil || v == nil {
+			return nil, fmt.Errorf("where.%s.%s: value must be a non-null scalar", col, name)
+		}
+		preds = append(preds, dataQueryPred{col: col, op: sqlOp, vals: []any{v}})
+	}
+	return preds, nil
 }
 
 // dataQueryBlockedWhereCols are predicates the guest may never supply:
@@ -123,12 +221,16 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 		}
 	}
 
-	// Decode + validate the equality filters. Scalars only per the
-	// contract: string / number / bool / null. A null value compiles to
-	// `col IS NULL` (an `= NULL` predicate never matches in SQL).
+	// Decode + validate the filters. A scalar is equality (null compiles to
+	// `col IS NULL`; `= NULL` never matches in SQL); an object carries the
+	// operators of dataQueryOps plus `in`.
 	whereCols := make([]string, 0, len(req.Where))
-	whereVals := make(map[string]any, len(req.Where))
-	for col, rv := range req.Where {
+	for col := range req.Where {
+		whereCols = append(whereCols, col)
+	}
+	sort.Strings(whereCols)
+	var preds []dataQueryPred
+	for _, col := range whereCols {
 		if !dataMutateIdentRe.MatchString(col) {
 			return fail("invalid_request", fmt.Sprintf("invalid where column %q", col))
 		}
@@ -136,30 +238,28 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 			return fail("invalid_request",
 				fmt.Sprintf("where column %q is host-managed and cannot be filtered by the guest", col))
 		}
-		dec := json.NewDecoder(strings.NewReader(string(rv)))
-		dec.UseNumber()
-		var v any
-		if err := dec.Decode(&v); err != nil {
-			return fail("invalid_request", fmt.Sprintf("where.%s: %v", col, err))
+		ps, err := compileDataQueryWhere(col, req.Where[col])
+		if err != nil {
+			return fail("invalid_request", err.Error())
 		}
-		switch t := v.(type) {
-		case nil, bool, string:
-			whereVals[col] = t
-		case json.Number:
-			if i, err := t.Int64(); err == nil {
-				whereVals[col] = i
-			} else if f, err := t.Float64(); err == nil {
-				whereVals[col] = f
-			} else {
-				return fail("invalid_request", fmt.Sprintf("where.%s: invalid number %q", col, t))
-			}
-		default:
-			return fail("invalid_request",
-				fmt.Sprintf("where.%s must be a scalar (string/number/bool/null)", col))
-		}
-		whereCols = append(whereCols, col)
+		preds = append(preds, ps...)
 	}
-	sort.Strings(whereCols)
+	orderSQL := ""
+	if req.OrderBy != "" {
+		if !dataMutateIdentRe.MatchString(req.OrderBy) || dataQueryBlockedWhereCols[req.OrderBy] {
+			return fail("invalid_request", fmt.Sprintf("invalid order_by %q", req.OrderBy))
+		}
+		dir := strings.ToLower(req.OrderDir)
+		switch dir {
+		case "", "asc":
+			dir = "ASC"
+		case "desc":
+			dir = "DESC"
+		default:
+			return fail("invalid_request", "order_dir must be asc or desc")
+		}
+		orderSQL = " ORDER BY " + quoteIdent(req.OrderBy) + " " + dir
+	}
 
 	if inv.db == nil {
 		return fail("db_error", "host has no *gorm.DB configured")
@@ -209,21 +309,29 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 	conds := append([]string{}, orgConds...)
 	args := []any{orgID}
 	n := 1
-	for _, col := range whereCols {
-		v := whereVals[col]
-		if v == nil {
-			conds = append(conds, fmt.Sprintf("%s IS NULL", quoteIdent(col)))
-			continue
+	for _, p := range preds {
+		switch p.op {
+		case "IS NULL":
+			conds = append(conds, fmt.Sprintf("%s IS NULL", quoteIdent(p.col)))
+		case "IN":
+			ph := make([]string, 0, len(p.vals))
+			for _, v := range p.vals {
+				n++
+				ph = append(ph, fmt.Sprintf("$%d", n))
+				args = append(args, v)
+			}
+			conds = append(conds, fmt.Sprintf("%s IN (%s)", quoteIdent(p.col), strings.Join(ph, ", ")))
+		default:
+			n++
+			conds = append(conds, fmt.Sprintf("%s %s $%d", quoteIdent(p.col), p.op, n))
+			args = append(args, p.vals[0])
 		}
-		n++
-		conds = append(conds, fmt.Sprintf("%s = $%d", quoteIdent(col), n))
-		args = append(args, v)
 	}
 	if softDelete {
 		conds = append(conds, "deleted_at IS NULL")
 	}
-	stmt := fmt.Sprintf("SELECT * FROM %s WHERE %s LIMIT %d",
-		tbl, strings.Join(conds, " AND "), limit)
+	stmt := fmt.Sprintf("SELECT * FROM %s WHERE %s%s LIMIT %d",
+		tbl, strings.Join(conds, " AND "), orderSQL, limit)
 
 	rows, err := work.Raw(stmt, args...).Rows()
 	if err != nil {

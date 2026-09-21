@@ -1710,6 +1710,8 @@ the SAME embedder-injected `TableResolver` `data_mutate` writes through, so
 an addon reads exactly the rows the host's dynamic CRUD runtime serves —
 without hardcoding `public.*` and giving up portability.
 
+Filters: a scalar `where` value is equality (`null` → `IS NULL`). An object value takes operators `gt|gte|lt|lte|ne` (non-null scalar) or `in` (1..200 scalars), e.g. `{"id": {"gt": "<last>"}}`. `order_by` (column) + `order_dir` (`asc`|`desc`) give a stable order for cursor paging; `limit` is still clamped to 200. Guests on older kernels reject the object form with `invalid_request`.
+
 It is deliberately a lookup primitive, not a SQL surface: equality filters
 only, no joins, no projections, no ordering, hard row cap. Guests that need
 richer reads keep using `db_query` with explicit qualified names and
