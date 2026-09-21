@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`data_query` operators + ordering (backward compatible):** a `where` value may be an object with `gt|gte|lt|lte|ne` (scalar) or `in` (1..200 scalars), and the request accepts `order_by`/`order_dir`. Lets a guest page a table with a stable cursor (`id > last ORDER BY id`) instead of re-reading the same 200 rows. Scalars stay equality; `organization_id`/`deleted_at` remain host-managed.
 - **`desktop_clients[]` on Module Contract v3:** declare per-user desktop/mobile
   agents (Tauri/Electron) that authenticate as Ops users (`auth: ops_user`) and
   point at an https Hub/CDN `download_url`. Distinct from `edge_devices` (store
