@@ -132,6 +132,14 @@
         "$ref": "#/$defs/EdgeDevice"
       }
     },
+    "desktop_clients": {
+      "type": "array",
+      "description": "Per-user desktop/mobile agents the product ships as separate installers (Tauri/Electron/native). Unlike edge_devices (store hardware + pairing codes), a desktop_client authenticates as an Ops user (email/password). Hub and Ops surface download CTAs from this block so new product agents need no landing hardcode. Valid on Addon and Preset.",
+      "items": {
+        "$ref": "#/$defs/DesktopClient"
+      }
+    },
+
     "provides_options": {
       "type": "array",
       "description": "Publishes models of this addon as reusable option CATALOGS. Any other addon feeds a select from one by naming its 'key' in a column's or action field's options_source, with no host code and no hardcoded options list. The host scopes every catalog to the invoking org and serves it only while the owning addon is installed and enabled there.",
@@ -3598,6 +3606,59 @@
           "pattern": "^(wasm|webhook|compiled):.+$",
           "description": "Handler reference the verified body is routed to: 'wasm:<export>' | 'webhook:<key>' | 'compiled:<fn>'."
         }
+      }
+    },
+    "DesktopClient": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "auth", "download_url"],
+      "description": "One per-user desktop/mobile agent installer. Auth is ops_user (platform email/password); download_url is an https Hub/CDN page or /latest/ directory.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Client key within the addon/preset (e.g. 'agent')."
+        },
+        "label": {
+          "type": "string",
+          "description": "Human/i18n title for download CTAs."
+        },
+        "auth": {
+          "type": "string",
+          "enum": ["ops_user"],
+          "description": "Identity mode. v1: ops_user only (not edge pairing)."
+        },
+        "download_url": {
+          "type": "string",
+          "pattern": "^https://",
+          "description": "https URL of the Hub download page or artifact directory."
+        },
+        "list_on_hub": {
+          "type": "boolean",
+          "description": "When true, Hub /downloads lists this client as platform-wide. Product agents typically leave false."
+        },
+        "brand": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{3,8}$",
+          "description": "Optional accent hex for Hub download chrome."
+        },
+        "logo": {
+          "type": "string",
+          "description": "Optional public logo path for Hub download UI."
+        },
+        "files": {
+          "$ref": "#/$defs/DesktopClientFiles"
+        }
+      }
+    },
+    "DesktopClientFiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional installer filenames when download_url is an artifact directory. Bare filenames only.",
+      "properties": {
+        "mac": { "type": "string", "minLength": 1 },
+        "windows": { "type": "string", "minLength": 1 },
+        "linux": { "type": "string", "minLength": 1 }
       }
     },
     "EdgeDevice": {

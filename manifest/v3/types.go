@@ -79,6 +79,17 @@ type Manifest struct {
 	// Commands through its own action handlers. Empty = no edge devices.
 	EdgeDevices []EdgeDevice `json:"edge_devices,omitempty"`
 
+	// DesktopClients declares per-user desktop (or mobile) agents the product
+	// ships separately from the Ops addon — e.g. a Tauri time tracker that
+	// each worker installs on their PC and signs into with their Ops email/
+	// password. This is NOT EdgeDevice: no pairing codes, no store hardware,
+	// no edge gateway. Hub/Ops read this block to surface download CTAs on
+	// catalog/preset pages and after install without hardcoding product
+	// lists in the landing. Empty = no desktop client. Valid on Addon and
+	// Preset (a vertical may advertise the same agent its bundled addon
+	// ships).
+	DesktopClients []DesktopClient `json:"desktop_clients,omitempty"`
+
 	// Backfills declares one-shot materialization sweeps the host runs after
 	// install and after every version upgrade, so an addon whose data is
 	// maintained incrementally (an event subscription that refreshes a
@@ -412,6 +423,53 @@ type EdgeDeviceCommand struct {
 	// (not for the physical operation to finish — that arrives later as an
 	// Event). 0 = host default.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+}
+
+// desktopClientAuths is the closed set of identity modes a DesktopClient may
+// declare in v1. "ops_user" = platform email/password (same credentials as the
+// Ops SPA). Edge pairing stays on EdgeDevice — never here.
+var desktopClientAuths = map[string]struct{}{
+	"ops_user": {},
+}
+
+// DesktopClient describes one per-user desktop/mobile agent the product ships
+// as a separate installer (Tauri, Electron, native). Hub serves the binaries;
+// Ops/Hub UIs surface the download CTA from this declaration so adding a new
+// product agent is a manifest change, not a landing hardcode.
+type DesktopClient struct {
+	// Key identifies the client within the addon/preset (e.g. "agent").
+	Key string `json:"key"`
+	// Label is the human/i18n title shown on download CTAs.
+	Label string `json:"label,omitempty"`
+	// Auth is how the client identifies the worker. v1 accepts only
+	// "ops_user" (Ops email/password). Not an edge pairing flow.
+	Auth string `json:"auth"`
+	// DownloadURL is an https URL for the Hub download page or the
+	// /latest/ artifact directory (e.g.
+	// "https://hub.asteby.com/downloads/visor" or
+	// ".../downloads/visor-agent/latest/").
+	DownloadURL string `json:"download_url"`
+	// ListOnHub, when true, asks Hub's /downloads index to list this client
+	// as a platform-wide download. Product-tied agents leave this false and
+	// rely on the catalog/preset page CTA.
+	ListOnHub bool `json:"list_on_hub,omitempty"`
+	// Brand is an optional accent hex for Hub download chrome (e.g. "#0EA5E9").
+	Brand string `json:"brand,omitempty"`
+	// Logo is an optional public path or Hub-relative asset hint for the
+	// download UI (e.g. "/visor.svg").
+	Logo string `json:"logo,omitempty"`
+	// Files optionally names OS installers when DownloadURL points at an
+	// artifact directory. Hub may also probe disk; this is a hint.
+	Files *DesktopClientFiles `json:"files,omitempty"`
+}
+
+// DesktopClientFiles names installer filenames under DownloadURL (when that
+// URL is a directory of artifacts). Values are bare filenames — no path
+// separators.
+type DesktopClientFiles struct {
+	Mac     string `json:"mac,omitempty"`
+	Windows string `json:"windows,omitempty"`
+	Linux   string `json:"linux,omitempty"`
 }
 
 // Frontend describes the federated UI bundle the host loads at runtime for

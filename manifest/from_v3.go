@@ -139,6 +139,7 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.Schedules = mapSchedules(m.Schedules)
 	out.Webhooks = mapWebhooks(m.Webhooks)
 	out.EdgeDevices = mapEdgeDevices(m.EdgeDevices)
+	out.DesktopClients = mapDesktopClients(m.DesktopClients)
 	out.Backfills = mapBackfills(m.Backfills)
 	out.ProvidesOptions = mapProvidesOptions(m.ProvidesOptions, m.Models)
 	out.Documents = mapDocuments(m)
@@ -335,6 +336,35 @@ func mapEdgeDevices(in []v3.EdgeDevice) []EdgeDeviceDef {
 			Commands:                 mapEdgeDeviceCommands(d.Commands),
 			HeartbeatIntervalSeconds: d.HeartbeatIntervalSeconds,
 		})
+	}
+	return out
+}
+
+// mapDesktopClients folds v3 desktop_clients[] onto the host Manifest so Hub
+// and Ops can render download CTAs without re-parsing RawManifest. Empty → nil.
+func mapDesktopClients(in []v3.DesktopClient) []DesktopClientDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]DesktopClientDef, 0, len(in))
+	for _, c := range in {
+		def := DesktopClientDef{
+			Key:         c.Key,
+			Label:       c.Label,
+			Auth:        c.Auth,
+			DownloadURL: c.DownloadURL,
+			ListOnHub:   c.ListOnHub,
+			Brand:       c.Brand,
+			Logo:        c.Logo,
+		}
+		if c.Files != nil {
+			def.Files = &DesktopClientFilesDef{
+				Mac:     c.Files.Mac,
+				Windows: c.Files.Windows,
+				Linux:   c.Files.Linux,
+			}
+		}
+		out = append(out, def)
 	}
 	return out
 }
