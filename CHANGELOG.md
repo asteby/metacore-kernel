@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Cross-record rules: `on_missing_parent: "skip"`.** `ref_state` / `sum_lte`
+  rules may opt in to being skipped (instead of rejected with `error_key`) when
+  the referenced parent row does not exist yet, for flows that write children
+  before the parent (POS tenders before the sales order). Default stays
+  `reject` (fail closed). Closed enum in the v3 schema and both validators;
+  the hub validator needs the kernel bump. Rule is unenforced until the parent
+  exists; no re-evaluation on parent writes. See
+  docs/rfcs/2026-09-20-cross-record-rules.md.
+
 - **wasm ABI 1.11: `ctx_get` host import + capabilities `ctx:user` / `ctx:roles` /
   `ctx:org_config`.** A guest can now read who is acting (`user_id`,
   `user_email`, role keys) and the org's `currency_code` / `tax_rate` /

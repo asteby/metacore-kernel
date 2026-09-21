@@ -181,3 +181,46 @@ func TestCrossRecordCompute_SkipsDeletesAndEvaluatesWrites(t *testing.T) {
 		t.Fatalf("tables without rules are inert: %v", err)
 	}
 }
+
+func rxSetupSkip(t *testing.T, onMissing string) (*Service, *gorm.DB, *fakeUser, string, string) {
+	t.Helper()
+	svc, db, user, open, _, order := rxSetup(t)
+	rules := make([]manifest.CrossRuleDef, len(rxRules))
+	copy(rules, rxRules)
+	rules[1].OnMissingParent = onMissing
+	svc.constraints = func(_ context.Context, model string) (*ModelConstraints, bool) {
+		if model == "rx_payments" {
+			return &ModelConstraints{Rules: rules}, true
+		}
+		return nil, false
+	}
+	return svc, db, user, open, order
+}
+
+func TestCrossRecord_MissingParentRejectedByDefault(t *testing.T) {
+	for _, mode := range []string{"", "reject"} {
+		svc, db, user, open, _ := rxSetupSkip(t, mode)
+		_, err := svc.Create(context.Background(), "rx_payments", user, map[string]any{"session_id": open, "order_id": uuid.NewString(), "amount": 10.0, "status": "completed"})
+		wantRuleKey(t, err, "pos.overpay")
+		if rxCount(db) != 0 {
+			t.Fatalf("mode %q: rejected create must not insert", mode)
+		}
+	}
+}
+
+func TestCrossRecord_MissingParentSkippedWhenOptedIn(t *testing.T) {
+	svc, db, user, open, order := rxSetupSkip(t, "skip")
+	ctx := context.Background()
+	if _, err := svc.Create(ctx, "rx_payments", user, map[string]any{"session_id": open, "order_id": uuid.NewString(), "amount": 10.0, "status": "completed"}); err != nil {
+		t.Fatalf("missing parent with skip must pass: %v", err)
+	}
+	// Parent present: the cap still applies.
+	if _, err := svc.Create(ctx, "rx_payments", user, map[string]any{"session_id": open, "order_id": order, "amount": 400.0, "status": "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := svc.Create(ctx, "rx_payments", user, map[string]any{"session_id": open, "order_id": order, "amount": 200.0, "status": "completed"})
+	wantRuleKey(t, err, "pos.overpay")
+	if got := rxCount(db); got != 2 {
+		t.Fatalf("rows = %d, want 2 (overpay rolled back)", got)
+	}
+}

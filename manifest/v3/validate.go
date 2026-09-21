@@ -1333,6 +1333,8 @@ func Validate(raw []byte) error {
 		for ri, r := range mod.Rules {
 			if err := ValidateCrossRule(r.Kind, r.ErrorKey, r.Ref, r.Parent, r.Require, r.Sum, r.Max, r.Where, ownCols); err != nil {
 				errs = append(errs, fmt.Sprintf("models[%d].rules[%d]: %v", mi, ri, err))
+			} else if err := ValidateOnMissingParent(r.OnMissingParent); err != nil {
+				errs = append(errs, fmt.Sprintf("models[%d].rules[%d]: %v", mi, ri, err))
 			}
 		}
 		// Folio sequences: unique keys, scope enum, a well-formed format with
@@ -1769,6 +1771,15 @@ func ValidateCrossRule(kind, errorKey, ref, parent string, require map[string]an
 		return fmt.Errorf("kind %q is not one of ref_state|sum_lte", kind)
 	}
 	return nil
+}
+
+// ValidateOnMissingParent checks a cross-record rule's on_missing_parent value.
+func ValidateOnMissingParent(v string) error {
+	switch v {
+	case "", "reject", "skip":
+		return nil
+	}
+	return fmt.Errorf("on_missing_parent %q is not one of reject|skip", v)
 }
 
 var crossIdentRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)

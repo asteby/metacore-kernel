@@ -79,6 +79,32 @@ en su `ConstraintResolver`, y encadenar `CrossRecordCompute` en su
 `MutationComputeFn`. Sin ese cableado las reglas son inertes (comportamiento
 previo).
 
+## Decisión: padre opcional (`on_missing_parent`)
+
+Problema: ambos `kind` fallan cerrado si el padre no existe. El POS escribe los
+`POSSalePayment` ANTES de crear el `SalesOrder`, así que `sum_lte(amount) <=
+SalesOrder.total` rompía el cobro y no pudo declararse.
+
+Decisión: campo opcional `on_missing_parent` en la regla, enum cerrado
+`reject` (default, = comportamiento previo) | `skip`. Con `skip`, si la fila
+padre no existe (o es de otro tenant / borrada) la regla NO se aplica a esa
+escritura y no se bloquea nada. Con el padre presente el tope se aplica igual.
+Vale para ambos `kind`. Validado en el schema v3 (enum) y en ambos validadores Go.
+
+Riesgo (aceptado, documentado): con `skip` la regla no se aplica mientras el
+padre no exista, y un `id` de padre inexistente o de otro tenant también se
+omite (deja de fallar cerrado). Usar solo cuando el flujo legítimamente escribe
+hijos antes que el padre.
+
+Re-evaluación al crear/actualizar el padre: se evaluó y NO se implementa. Las
+reglas viven en el hijo y se evalúan sobre la escritura del hijo; evaluar en el
+UPDATE del padre exigiría una regla inversa (hijos -> padre) con otro
+vocabulario, bloqueos en orden padre->hijos y decidir a quién rechazar. El caso
+"total baja por debajo de lo pagado" queda como trabajo futuro (regla del lado
+del padre, p.ej. `kind: sum_gte` sobre `SalesOrder.total`); mientras tanto el
+addon puede validarlo en su handler al crear el pedido, que es cuando el padre
+nace y ya conoce los pagos.
+
 ## Límites conocidos
 
 - En wasm no hay `before`: las reglas se re-evalúan en cada update (un update que

@@ -1265,6 +1265,12 @@
           "pattern": "^[a-z][a-z0-9_]*$",
           "description": "sum_lte only: numeric column of the PARENT that caps the sum."
         },
+        "on_missing_parent": {
+          "type": "string",
+          "enum": ["reject", "skip"],
+          "default": "reject",
+          "description": "What to do when the parent row does not exist (yet). reject (default): fail closed with error_key. skip: do not apply the rule to this write. RISK: with skip the rule is unenforced until the parent exists, so use it only when children are legitimately written before the parent."
+        },
         "where": {
           "type": "object",
           "description": "sum_lte only: own column -> scalar or list restricting which rows (siblings and the written row) count toward the sum, e.g. {\"status\": [\"completed\"]}.",

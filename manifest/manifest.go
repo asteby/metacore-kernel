@@ -1579,4 +1579,6 @@ type CrossRuleDef struct {
 	Sum      string         `json:"sum,omitempty"`
 	Max      string         `json:"max,omitempty"`
 	Where    map[string]any `json:"where,omitempty"`
+	// OnMissingParent: "" / "reject" (default, fail closed) or "skip".
+	OnMissingParent string `json:"onMissingParent,omitempty"`
 }
