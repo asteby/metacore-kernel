@@ -44,6 +44,23 @@ type ModelSequences struct {
 	// ColumnBindings maps a column name to the sequence key whose next formatted
 	// value is stamped on create when that column is empty.
 	ColumnBindings map[string]string
+	// Model is the canonical identity the counters are keyed by in
+	// metacore_sequences. A host resolver usually answers for several aliases of
+	// the same model (model key "SalesOrder", table "sales_orders", qualified
+	// "customers.SalesOrder"); without a canonical name each alias would own an
+	// independent counter and the CRUD create, the wasm data_mutate stamp and the
+	// wasm sequence_next import would hand out duplicate folios. Empty = key the
+	// counter by the name the caller passed (legacy behaviour).
+	Model string
+}
+
+// counterModel is the metacore_sequences.model value for a request made under
+// the name `requested`: the resolver's canonical Model when it declares one.
+func (ms *ModelSequences) counterModel(requested string) string {
+	if ms != nil && ms.Model != "" {
+		return ms.Model
+	}
+	return requested
 }
 
 // SequenceResolver returns the folio configuration for a model name. Hosts wire
@@ -159,7 +176,7 @@ func (s *Service) NextSequence(ctx context.Context, user modelbase.AuthUser, mod
 	if orgID == uuid.Nil {
 		return "", fmt.Errorf("dynamic: sequence_next requires a bound org")
 	}
-	n, err := nextSequenceValue(ctx, s.db, orgID, scopeValueFor(spec.Scope, user), model, key)
+	n, err := nextSequenceValue(ctx, s.db, orgID, scopeValueFor(spec.Scope, user), ms.counterModel(model), key)
 	if err != nil {
 		return "", err
 	}
@@ -208,7 +225,7 @@ func (s *Service) StampSequences(ctx context.Context, tx *gorm.DB, orgID uuid.UU
 				scopeValue = id.String()
 			}
 		}
-		n, err := bumpSequence(ctx, tx, orgID, scopeValue, model, key)
+		n, err := bumpSequence(ctx, tx, orgID, scopeValue, ms.counterModel(model), key)
 		if err != nil {
 			return err
 		}
@@ -247,7 +264,7 @@ func (s *Service) assignSequences(ctx context.Context, model string, user modelb
 		if !ok {
 			return fmt.Errorf("dynamic: column %q binds unknown sequence %q on %q", col, key, model)
 		}
-		n, err := nextSequenceValue(ctx, s.db, orgID, scopeValueFor(spec.Scope, user), model, key)
+		n, err := nextSequenceValue(ctx, s.db, orgID, scopeValueFor(spec.Scope, user), ms.counterModel(model), key)
 		if err != nil {
 			return err
 		}

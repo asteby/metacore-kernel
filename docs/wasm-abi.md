@@ -1698,6 +1698,10 @@ takes). Rules:
   user on `POST /data`).
 - `update` / `delete` are never stamped. Models with no declared sequences are
   a no-op. Without `WithSequenceStamp` the behaviour is the pre-1.11 one.
+- The counter row is keyed by `ModelSequences.Model` when the embedder's
+  `SequenceResolver` sets it, so a guest passing the table name
+  (`sales_orders`) and `POST /data` passing the model key (`SalesOrder`) share
+  one series instead of issuing the same folio twice.
 
 ## 15. `data_query` — org-scoped logical-table read (v1.5)
 
