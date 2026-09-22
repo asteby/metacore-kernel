@@ -106,3 +106,57 @@ func TestFromV3_AgentCapabilities_NilContributions(t *testing.T) {
 		t.Fatalf("agent_capabilities must be omitted on the wire when empty:\n%s", raw)
 	}
 }
+
+const teachingGraphManifestJSON = `{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": { "key": "customers", "name": "Customers", "version": "0.60.3" },
+  "compatibility": { "requires": [{ "key": "kernel", "version": ">=3.0.0 <4.0.0" }] },
+  "contributions": {
+    "agent_capabilities": [
+      {
+        "id": "customers.guide.create-price-list",
+        "title": "Listas de precios",
+        "description": "Primero segmentos, luego la lista de precios.",
+        "kind": "guide",
+        "risk": "none",
+        "guide": {
+          "id": "customers.create-price-list",
+          "prerequisites": ["customers.create-segment"],
+          "intents": ["como creo precios"],
+          "steps": [
+            { "id": "concept", "kind": "concept", "title": "Precios", "description": "Segmentos primero." },
+            { "id": "nav", "target": "navigation./m/price_lists", "title": "Abre", "description": "Menú." }
+          ]
+        }
+      }
+    ]
+  }
+}`
+
+func TestFromV3_AgentGuide_PrerequisitesAndConcept(t *testing.T) {
+	m, err := v3.Parse([]byte(teachingGraphManifestJSON))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	out := manifest.FromV3(m)
+	if len(out.AgentCapabilities) != 1 || out.AgentCapabilities[0].Guide == nil {
+		t.Fatalf("capabilities = %+v", out.AgentCapabilities)
+	}
+	g := out.AgentCapabilities[0].Guide
+	if len(g.Prerequisites) != 1 || g.Prerequisites[0] != "customers.create-segment" {
+		t.Fatalf("prerequisites = %+v", g.Prerequisites)
+	}
+	if g.Steps[0].Kind != "concept" || g.Steps[0].Target != "" {
+		t.Fatalf("concept step = %+v", g.Steps[0])
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"prerequisites"`, `"customers.create-segment"`, `"kind":"concept"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("missing %s in %s", want, raw)
+		}
+	}
+}
