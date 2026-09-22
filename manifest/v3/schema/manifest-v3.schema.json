@@ -1699,6 +1699,15 @@
           },
           "uniqueItems": true
         },
+        "prerequisites": {
+          "type": "array",
+          "description": "Other guide ids that should run (or be offered) before this walkthrough.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
         "steps": {
           "type": "array",
           "minItems": 1,
@@ -1713,7 +1722,6 @@
       "additionalProperties": false,
       "required": [
         "id",
-        "target",
         "title",
         "description"
       ],
@@ -1727,7 +1735,16 @@
         },
         "target": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Semantic UI target. Omit for kind=concept teaching steps."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "ui",
+            "concept"
+          ],
+          "description": "ui (default) highlights a target; concept is teaching copy without a DOM spotlight."
         },
         "title": {
           "type": "string",

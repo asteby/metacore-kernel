@@ -2149,19 +2149,25 @@ type AgentGuide struct {
 	Title       string           `json:"title,omitempty"`
 	Description string           `json:"description,omitempty"`
 	Intents     []string         `json:"intents,omitempty"`
-	Steps       []AgentGuideStep `json:"steps"`
+	// Prerequisites lists other guide IDs that should run (or be offered) before
+	// this one — e.g. customer segments before price lists.
+	Prerequisites []string         `json:"prerequisites,omitempty"`
+	Steps         []AgentGuideStep `json:"steps"`
 }
 
 // AgentGuideStep is one highlighted stop of an AgentGuide: Target names the
 // federated UI element the host highlights (e.g. a data-testid-like anchor),
 // optionally scoped to Route. AdvanceOn, when set, lets the SDK auto-advance
 // on a DOM event instead of waiting for an explicit "next" from the user.
+// Kind "concept" (or an empty Target) is a teaching popover without a DOM
+// spotlight — used for domain context before UI steps.
 type AgentGuideStep struct {
 	ID          string             `json:"id"`
 	Route       string             `json:"route,omitempty"`
-	Target      string             `json:"target"`
+	Target      string             `json:"target,omitempty"`
 	Title       string             `json:"title"`
 	Description string             `json:"description"`
+	Kind        string             `json:"kind,omitempty"` // ui (default) | concept
 	AdvanceOn   *AgentGuideAdvance `json:"advanceOn,omitempty"`
 }
 
