@@ -247,3 +247,52 @@ func TestStampSequences_BranchScopeFromRowBranchID(t *testing.T) {
 		t.Fatalf("org fallback = %s, want B-001", got)
 	}
 }
+
+// A host resolver answers for every alias of a model (model key, table name).
+// With a canonical ModelSequences.Model, the CRUD create, the wasm sequence_next
+// import and the wasm data_mutate stamp must share ONE counter — QA 7Leguas
+// found SalesOrder (POST /data) and sales_orders (wasm) as two counters handing
+// out duplicate SO folios.
+func TestSequences_AliasesShareCanonicalCounter(t *testing.T) {
+	db := setupTestDB(t)
+	ms := folioConfig()
+	ms.Model = "TestProduct"
+	modelbase.Register("test_products", func() modelbase.ModelDefiner { return &TestProduct{} })
+	svc := New(Config{
+		DB:       db,
+		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
+		SequenceResolver: func(_ context.Context, model string) (*ModelSequences, bool) {
+			if model == "test_products" || model == "TestProduct" {
+				return ms, true
+			}
+			return nil, false
+		},
+	})
+	user := newUser(uuid.New())
+	ctx := context.Background()
+
+	out, err := svc.Create(ctx, "test_products", user, map[string]any{"price": 1.0})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	next, err := svc.NextSequence(ctx, user, "TestProduct", "folio")
+	if err != nil {
+		t.Fatalf("NextSequence: %v", err)
+	}
+	row := map[string]any{}
+	if err := svc.StampSequences(ctx, db, user.GetOrganizationID(), "test_products", row); err != nil {
+		t.Fatalf("StampSequences: %v", err)
+	}
+	got := []any{out["name"], next, row["name"]}
+	want := []any{"F-0001", "F-0002", "F-0003"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("aliases must share one counter: got %v, want %v", got, want)
+		}
+	}
+	var n int64
+	db.Model(&SequenceRecord{}).Count(&n)
+	if n != 1 {
+		t.Fatalf("metacore_sequences rows = %d, want 1 (canonical model only)", n)
+	}
+}

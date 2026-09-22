@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Folio counters keyed by a canonical model name:** `dynamic.ModelSequences`
+  gains `Model`, the identity `metacore_sequences` rows are keyed by. When the
+  host resolver sets it, `POST /data` (`assignSequences`), wasm `sequence_next`
+  (`NextSequence`) and wasm `data_mutate` (`StampSequences`) share one counter
+  no matter which alias the caller used (model key vs table name). Before, a
+  model reached as `SalesOrder` and as `sales_orders` owned two counters and
+  handed out duplicate folios. Empty `Model` keeps the previous behaviour.
+
 ### Added
 
 - **`wasm.Host.IsCompiled` / `CompiledKeys`:** process-wide readiness signal — has
