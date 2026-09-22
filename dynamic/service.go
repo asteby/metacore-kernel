@@ -743,7 +743,7 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 			if err := EvalCrossRecordRules(ctx, tx, mc.Rules, tableName, user.GetOrganizationID(), row, nil, s.parentTableFn(ctx)); err != nil {
 				return err
 			}
-			return tx.Table(tableName).Create(instance).Error
+			return omitUnsentNullableText(ctx, tx.Table(tableName), tableName, instance, input).Create(instance).Error
 		}); err != nil {
 			var ce *ConstraintError
 			if errors.As(err, &ce) || errors.Is(err, ErrInvalidInput) {
@@ -751,7 +751,7 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 			}
 			return nil, fmt.Errorf("dynamic: create: %w", err)
 		}
-	} else if err := s.db.WithContext(ctx).Table(tableName).Create(instance).Error; err != nil {
+	} else if err := omitUnsentNullableText(ctx, s.db.WithContext(ctx).Table(tableName), tableName, instance, input).Create(instance).Error; err != nil {
 		return nil, fmt.Errorf("dynamic: create: %w", err)
 	}
 
@@ -932,7 +932,7 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		// transaction, so save + hooks run directly on execDB.
 		runHooksInTx := stageChanged && len(sm.matchingHooks(fromStage, toStage)) > 0
 		if inTx {
-			if err := execDB.Table(tableName).Save(instance).Error; err != nil {
+			if err := omitUnsentNullableText(ctx, execDB.Table(tableName), tableName, instance, input).Save(instance).Error; err != nil {
 				return fmt.Errorf("dynamic: update: %w", err)
 			}
 			after = toMap(instance)
@@ -943,14 +943,14 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		}
 		if runHooksInTx {
 			return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-				if err := tx.Table(tableName).Save(instance).Error; err != nil {
+				if err := omitUnsentNullableText(ctx, tx.Table(tableName), tableName, instance, input).Save(instance).Error; err != nil {
 					return fmt.Errorf("dynamic: update: %w", err)
 				}
 				after = toMap(instance)
 				return s.runTransitionHooks(ctx, model, user, tx, sm, fromStage, toStage, before, after)
 			})
 		}
-		if err := s.db.WithContext(ctx).Table(tableName).Save(instance).Error; err != nil {
+		if err := omitUnsentNullableText(ctx, s.db.WithContext(ctx).Table(tableName), tableName, instance, input).Save(instance).Error; err != nil {
 			return fmt.Errorf("dynamic: update: %w", err)
 		}
 		after = toMap(instance)
