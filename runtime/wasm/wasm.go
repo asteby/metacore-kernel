@@ -624,6 +624,35 @@ func (h *Host) getOrInstantiate(ctx context.Context, addonKey string, installati
 
 // Close tears down every instance and the wazero runtime. Call once on
 // process shutdown.
+// IsCompiled reports whether addonKey's wasm module has been compiled into
+// this process's runtime (Load succeeded at least once since boot). This is
+// the readiness signal an embedder needs to answer "did the warm-up finish?"
+// instead of guessing a fixed sleep: right after a restart, `compiled` is
+// empty and every addon action 422s ("module not loaded") until Load catches
+// up (server.go's boot sequence loads addons one at a time, ~3-5s each — see
+// roadmap item 6, "despliegues sin ventana rota"). It does NOT mean an
+// instance exists for any particular org/installation — that's `modules`,
+// scoped per (addonKey, installation) and irrelevant to a process-wide
+// readiness check.
+func (h *Host) IsCompiled(addonKey string) bool {
+	_, ok := h.compiled.Load(addonKey)
+	return ok
+}
+
+// CompiledKeys returns the addon keys currently compiled into this process's
+// runtime, in no particular order. Same scope note as IsCompiled: process-wide,
+// not per-installation.
+func (h *Host) CompiledKeys() []string {
+	var keys []string
+	h.compiled.Range(func(k, _ any) bool {
+		if s, ok := k.(string); ok {
+			keys = append(keys, s)
+		}
+		return true
+	})
+	return keys
+}
+
 func (h *Host) Close(ctx context.Context) error {
 	h.modules.Range(func(_, v any) bool {
 		if m, _ := v.(*Module); m != nil {
