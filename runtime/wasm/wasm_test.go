@@ -62,6 +62,49 @@ func TestHost_ReinstantiatesAfterModuleClosed(t *testing.T) {
 	}
 }
 
+// TestHost_IsCompiledAndCompiledKeys covers the readiness signal (roadmap
+// "despliegues sin ventana rota"): before Load, an addon isn't compiled; after
+// a successful Load, it is — without ever having Invoked it (readiness must
+// not require a live installation/org, just the process-wide compile step).
+func TestHost_IsCompiledAndCompiledKeys(t *testing.T) {
+	ctx := context.Background()
+	caps := security.Compile("testaddon", nil)
+	h, err := NewHost(ctx, caps, nil)
+	if err != nil {
+		t.Fatalf("NewHost: %v", err)
+	}
+	defer h.Close(ctx)
+
+	if h.IsCompiled("testaddon") {
+		t.Fatal("expected testaddon NOT compiled before Load")
+	}
+	if keys := h.CompiledKeys(); len(keys) != 0 {
+		t.Fatalf("expected no compiled keys before any Load, got %v", keys)
+	}
+
+	spec := &manifest.BackendSpec{
+		Runtime:       "wasm",
+		Entry:         "backend.wasm",
+		Exports:       []string{"echo"},
+		MemoryLimitMB: 4,
+		TimeoutMs:     2000,
+	}
+	if err := h.Load(ctx, "testaddon", echoWasm(), spec); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if !h.IsCompiled("testaddon") {
+		t.Fatal("expected testaddon compiled after Load")
+	}
+	if h.IsCompiled("neveraddon") {
+		t.Fatal("expected an addon that was never loaded to report not-compiled")
+	}
+	keys := h.CompiledKeys()
+	if len(keys) != 1 || keys[0] != "testaddon" {
+		t.Fatalf("expected CompiledKeys()==[testaddon], got %v", keys)
+	}
+}
+
 // TestHost_InvokeEcho exercises the full path: compile -> instantiate ->
 // invoke. The guest is a hand-built module that exports alloc + echo; echo
 // simply returns the ptr/len it received, packed per our ABI convention.
