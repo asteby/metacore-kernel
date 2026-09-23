@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Capability contracts (`provides_capabilities[]` + handler `type: "capability"`).**
+  A consumer requires a provider-neutral contract (`messaging.whatsapp.send`)
+  instead of naming a connector; the host dispatches to whichever installed
+  addon provides it in the org. New package `capability` (well-known contracts,
+  `Resolve` input mapping `record.`/`payload.`/`const:`, `MissingRequired`),
+  v3 `ProvidedCapability`, `Handler.Capability/Input`, host projections
+  `manifest.CapabilityProviderDef` and `ActionTrigger.Capability/Input` (also on
+  `modelbase.ActionTrigger`), both JSON schemas and validation.
+
 ### Changed
 
 - **Deleted-ref rejection is now opt-in per column (`reject_deleted_ref`).**
