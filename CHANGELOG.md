@@ -18,6 +18,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `manifest.CapabilityProviderDef` and `ActionTrigger.Capability/Input` (also on
   `modelbase.ActionTrigger`), both JSON schemas and validation.
 
+- **`runtime/wasm/importpolicy`: una sola fuente de los imports que un guest
+  puede declarar.** `HostFunctions` (lo que este runtime registra en
+  `metacore_host`), `WASIFunctions` (el plumbing del runtime de Go en wasip1),
+  `Allowed`, `FunctionImports` y `Check` (lee la sección import del binario,
+  sin wazero). El hub (scanner de publicación) y el CI de addons (preflight de
+  PR) mantenían copias; el preflight ni siquiera revisaba imports, y
+  fiscal_mexico@0.32.0 (`path_open` vía `time.LoadLocation`) pasó el CI y murió
+  en el Release con `scan_failed`. `TestHostFunctionsMatchRegisteredModule`
+  falla si la lista y el módulo registrado divergen.
+
 ### Changed
 
 - **Deleted-ref rejection is now opt-in per column (`reject_deleted_ref`).**
