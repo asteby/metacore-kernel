@@ -352,3 +352,37 @@ func TestValidateActionPayload_LineItemsDottedKeys(t *testing.T) {
 		t.Fatalf("want required on items.0.qty, got %v", err)
 	}
 }
+
+// A multi-valued ref (jsonb array of ids, `multiple: true`) is checked id by
+// id instead of comparing the whole array against `id` (QA 0922: PUT
+// PriceList.segment_ids answered 500 22P02).
+func TestValidate_MultiRefChecksEveryID(t *testing.T) {
+	db := setupValidationDB(t)
+	svc := validationService(t, db)
+	org := uuid.New()
+	user := newUser(org)
+	a, b := uuid.New().String(), uuid.New().String()
+	for _, id := range []string{a, b} {
+		if err := db.Exec(`INSERT INTO val_categories (id, organization_id, name) VALUES (?, ?, 'c')`, id, org.String()).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	for _, raw := range []any{[]any{a, b}, []string{a}, `["` + a + `","` + b + `"]`, []any{}, "[]"} {
+		ok, err := svc.refExists(ctx, user, "val_categories", raw)
+		if err != nil || !ok {
+			t.Fatalf("existing ids %v: ok=%v err=%v", raw, ok, err)
+		}
+	}
+	missing := uuid.New().String()
+	for _, raw := range []any{[]any{a, missing}, `["` + missing + `"]`} {
+		ok, err := svc.refExists(ctx, user, "val_categories", raw)
+		if err != nil || ok {
+			t.Fatalf("missing id %v must be not_found: ok=%v err=%v", raw, ok, err)
+		}
+	}
+	// Scalar ref keeps working.
+	if ok, err := svc.refExists(ctx, user, "val_categories", a); err != nil || !ok {
+		t.Fatalf("scalar ref: ok=%v err=%v", ok, err)
+	}
+}

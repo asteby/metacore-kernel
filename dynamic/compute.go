@@ -271,6 +271,12 @@ func applyFormulas(ctx context.Context, invoke FormulaInvoker, b formulaBinding,
 			if err != nil {
 				return fmt.Errorf("formula %q handler %q: %w", f.Target, f.Handler, err)
 			}
+			// No value (the host could not run the export, or the handler
+			// answered none): leave the target as the caller sent it rather
+			// than NULL it — a NOT NULL target would otherwise fail the write.
+			if val == nil {
+				continue
+			}
 			input[f.Target] = val
 			env[f.Target] = computeexpr.ToFloat(val)
 			continue

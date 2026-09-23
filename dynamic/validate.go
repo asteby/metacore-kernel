@@ -2,6 +2,7 @@ package dynamic
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -341,20 +342,65 @@ func optionAllows(opts []manifest.Option, raw any) (allowed []string, ok bool) {
 }
 
 // refExists reports whether a row with the given id exists in the ref target
-// table, scoped to the caller's tenant.
+// table, scoped to the caller's tenant. A multi-valued ref (a jsonb array of
+// ids, e.g. `segment_ids` with `multiple: true`) arrives as a slice or as its
+// JSON text: every id must exist. Comparing the whole array against `id` used
+// to reach Postgres as `id = '["…"]'` and fail the write with a 500 (22P02).
 func (s *Service) refExists(ctx context.Context, user modelbase.AuthUser, ref string, raw any) (bool, error) {
 	table, ok := refTable(ref)
 	if !ok {
 		// Unrecognized / unsafe ref target — do not block the write on it.
 		return true, nil
 	}
+	ids, multi := refIDs(raw)
+	if !multi {
+		ids = []string{valueToString(raw)}
+	}
+	if len(ids) == 0 {
+		return true, nil
+	}
 	var count int64
 	q := s.scope.ScopeQuery(s.db.WithContext(ctx).Table(table), user).
-		Where("id = ?", valueToString(raw))
+		Where("id IN ?", ids)
 	if err := q.Count(&count).Error; err != nil {
 		return false, err
 	}
-	return count > 0, nil
+	return count >= int64(len(ids)), nil
+}
+
+// refIDs extracts the distinct, non-empty ids of a multi-valued ref value: a
+// []any / []string, or a JSON array in text form. multi=false when raw is a
+// scalar (the plain single-FK case).
+func refIDs(raw any) (ids []string, multi bool) {
+	var items []any
+	switch v := raw.(type) {
+	case []any:
+		items = v
+	case []string:
+		for _, s := range v {
+			items = append(items, s)
+		}
+	case string:
+		t := strings.TrimSpace(v)
+		if !strings.HasPrefix(t, "[") {
+			return nil, false
+		}
+		if err := json.Unmarshal([]byte(t), &items); err != nil {
+			return nil, false
+		}
+	default:
+		return nil, false
+	}
+	seen := make(map[string]bool, len(items))
+	for _, it := range items {
+		id := strings.TrimSpace(valueToString(it))
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids, true
 }
 
 // valueExists reports whether another row (excluding selfID) already holds the
