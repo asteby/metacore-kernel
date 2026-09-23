@@ -44,6 +44,16 @@ type Manifest struct {
 	// host can ship a newer SDK (client-facing helpers/types) on an older
 	// kernel minor, or vice versa — see HostCapabilityProfile.
 	SDK string `json:"sdk,omitempty"`
+	// Runtime is a semver range the HOST's metacore-kernel Go module version
+	// (e.g. 0.154.1) must satisfy, declared under the reserved
+	// compatibility.requires[] key "metacore-kernel". Distinct from Kernel,
+	// which is the manifest CONTRACT major every v3 addon targets (">=3.0.0
+	// <4.0.0") and says nothing about which kernel release the host runs. An
+	// addon that relies on a host behaviour shipped in a specific kernel
+	// release (a new primitive, a fixed dispatch path) declares it here, so an
+	// older host refuses the install / upgrade instead of breaking at runtime.
+	// Empty = no constraint.
+	Runtime string `json:"runtime,omitempty"`
 	// HostCapabilities lists named host runtime capabilities the addon
 	// requires to be present (e.g. "wasm-runtime", "native-service",
 	// "webhooks"). Unlike Capabilities (scoped permissions the runtime

@@ -572,7 +572,10 @@ type Compatibility struct {
 // Requirement is a single peer dependency. Key "kernel" is reserved for the
 // host kernel range (→ Manifest.Kernel). Keys "sdk", "metacore-sdk", and
 // "@asteby/metacore-sdk" are reserved for the host metacore-sdk range
-// (→ Manifest.SDK). All other keys are installable peer addons.
+// (→ Manifest.SDK). Key "metacore-kernel" is reserved for the host's
+// metacore-kernel Go module release (→ Manifest.Runtime), e.g. ">=0.154.1"
+// when the addon relies on a primitive shipped in that release. All other keys
+// are installable peer addons.
 type Requirement struct {
 	Key      string `json:"key"`
 	Version  string `json:"version"`
