@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **No new records pointing at soft-deleted rows:** `Service.Create`'s ref
+  check now ignores soft-deleted targets (`deleted_at` set), so a create that
+  references a deleted product/customer is a 422 `not_found`. Updates keep
+  accepting an existing link to a since-deleted row. For the wasm write tier,
+  `wasm.Host.WithCreateCheck` runs an embedder check inside the data_mutate /
+  data_batch create transaction before the INSERT, and
+  `dynamic.CheckNoDeletedRefs` is the ready-made check (rejects with
+  `invalid_reference` / `dynamic.ErrDeletedRef`). QA 7Leguas VEN-N08: a sale
+  line for a deleted product went through, moved stock and opened a warranty.
+
+### Fixed
+
 - **Folio counters keyed by a canonical model name:** `dynamic.ModelSequences`
   gains `Model`, the identity `metacore_sequences` rows are keyed by. When the
   host resolver sets it, `POST /data` (`assignSequences`), wasm `sequence_next`

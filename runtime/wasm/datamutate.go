@@ -187,6 +187,10 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		rollback()
 		return fail(code, sErr.Error())
 	}
+	if code, cErr := checkCreate(execCtx, inv, work, orgID, &req, data); cErr != nil {
+		rollback()
+		return fail(code, cErr.Error())
+	}
 	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now, dynamic.ActorIDFromContext(ctx))
 	if mErr != nil {
 		rollback()
@@ -726,6 +730,25 @@ func stampCreateSequences(ctx context.Context, inv *invocation, work *gorm.DB, o
 	}
 	if err := inv.sequenceStamp(ctx, work, orgID, req.Model, data); err != nil {
 		return "db_error", fmt.Errorf("sequence stamp: %w", err)
+	}
+	return "", nil
+}
+
+// CreateCheckFn validates the row of a create on `model` (logical table
+// `table`) on the open transaction before the INSERT. See Host.WithCreateCheck.
+type CreateCheckFn func(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, model, table string, row map[string]any) error
+
+// checkCreate runs the embedder's CreateCheckFn for a create; ("", nil) when
+// unset or not a create.
+func checkCreate(ctx context.Context, inv *invocation, work *gorm.DB, orgID uuid.UUID, req *dataMutateRequest, data map[string]any) (string, error) {
+	if inv.createCheck == nil || req.Op != "create" {
+		return "", nil
+	}
+	if err := inv.createCheck(ctx, work, orgID, req.Model, req.Table, data); err != nil {
+		if errors.Is(err, dynamic.ErrDeletedRef) {
+			return "invalid_reference", err
+		}
+		return "validation_error", err
 	}
 	return "", nil
 }

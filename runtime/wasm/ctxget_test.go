@@ -3,6 +3,7 @@ package wasm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -222,5 +223,34 @@ func TestHost_InvokeCtxGet_RealGuest(t *testing.T) {
 	}
 	if _, leaked := data["roles"]; leaked {
 		t.Fatal("roles leaked without ctx:roles")
+	}
+}
+
+// A create the embedder's CreateCheckFn rejects with dynamic.ErrDeletedRef is
+// rolled back before the INSERT and reported as invalid_reference (QA
+// VEN-N08: a guest created a sale line for a soft-deleted product).
+func TestDataMutate_CreateCheckRejectsDeletedRef(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+	org := uuid.New()
+	bus, _, _ := captureBus(t, "customers.SalesOrderItem.created")
+
+	mock.ExpectBegin()
+	mock.ExpectRollback() // rejected before any INSERT
+
+	inv := testInvocation(gdb, bus, org, nil, nil)
+	inv.createCheck = func(_ context.Context, _ *gorm.DB, o uuid.UUID, model, table string, row map[string]any) error {
+		if model != "SalesOrderItem" || table != "sales_order_items" || row["product_id"] != "p-deleted" {
+			t.Errorf("check got model=%q table=%q row=%v", model, table, row)
+		}
+		return fmt.Errorf("%w: product_id → products", dynamic.ErrDeletedRef)
+	}
+	out := executeDataMutate(context.Background(), inv, []byte(`{"op":"create","table":"sales_order_items","model":"SalesOrderItem","data":{"product_id":"p-deleted"}}`))
+	env := unmarshalMutate(t, out)
+	if env.Success || env.Error == nil || env.Error.Code != "invalid_reference" {
+		t.Fatalf("expected invalid_reference, got %s", out)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

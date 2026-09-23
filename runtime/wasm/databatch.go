@@ -174,6 +174,10 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 			_ = work.Rollback()
 			return fail(code, fmt.Sprintf("mutations[%d]: %s", i, sErr.Error()))
 		}
+		if code, cErr := checkCreate(execCtx, inv, work, orgID, p.req, p.data); cErr != nil {
+			_ = work.Rollback()
+			return fail(code, fmt.Sprintf("mutations[%d]: %s", i, cErr.Error()))
+		}
 		res, code, mErr := applyMutation(work, p.req, p.data, p.inc, orgID, p.tbl, now, dynamic.ActorIDFromContext(ctx))
 		if mErr != nil {
 			_ = work.Rollback()
