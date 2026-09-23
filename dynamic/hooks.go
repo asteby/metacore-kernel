@@ -54,6 +54,12 @@ type HookRegistry struct {
 	// formulaInvoker is the host-wired backend for Tier-3 (wasm) formulas.
 	// nil = Tier-3 formulas are skipped (declarative-only deployments).
 	formulaInvoker FormulaInvoker
+	// canonical maps any name a model is addressed by (its ModelKey, its table
+	// alias, a qualified key) to ONE key. Every registration and every lookup
+	// goes through it, so a hook registered under "QuoteItem" fires for a write
+	// that names the model "quote_items" and vice versa — one set of hooks per
+	// model instead of one per alias. nil = names are used verbatim.
+	canonical func(model string) string
 	// rollupsByChild indexes the Tier-1 rollup bindings registered through
 	// RegisterComputeHooks, keyed by CHILD model. The CRUD hooks close over
 	// their own copy; this index exists so a host write path that does NOT go
@@ -71,6 +77,29 @@ func (r *HookRegistry) SetFormulaInvoker(f FormulaInvoker) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.formulaInvoker = f
+}
+
+// SetModelCanonicalizer wires the host's model-name resolver (alias ->
+// canonical ModelKey). Hosts call it once at boot, before any hook is
+// registered. A resolver that returns "" for a name leaves it unchanged.
+func (r *HookRegistry) SetModelCanonicalizer(f func(model string) string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.canonical = f
+}
+
+// canon returns the key a model's hooks are stored under.
+func (r *HookRegistry) canon(model string) string {
+	r.mu.RLock()
+	f := r.canonical
+	r.mu.RUnlock()
+	if f == nil {
+		return model
+	}
+	if c := f(model); c != "" {
+		return c
+	}
+	return model
 }
 
 func (r *HookRegistry) getFormulaInvoker() FormulaInvoker {
@@ -91,73 +120,85 @@ func NewHookRegistry() *HookRegistry {
 }
 
 func (r *HookRegistry) RegisterBeforeCreate(model string, h BeforeCreateHook) {
+	model = r.canon(model)
 	r.mu.Lock(); defer r.mu.Unlock()
 	r.beforeCreate[model] = append(r.beforeCreate[model], h)
 }
 
 func (r *HookRegistry) RegisterAfterCreate(model string, h AfterCreateHook) {
+	model = r.canon(model)
 	r.mu.Lock(); defer r.mu.Unlock()
 	r.afterCreate[model] = append(r.afterCreate[model], h)
 }
 
 func (r *HookRegistry) RegisterBeforeUpdate(model string, h BeforeUpdateHook) {
+	model = r.canon(model)
 	r.mu.Lock(); defer r.mu.Unlock()
 	r.beforeUpdate[model] = append(r.beforeUpdate[model], h)
 }
 
 func (r *HookRegistry) RegisterAfterUpdate(model string, h AfterUpdateHook) {
+	model = r.canon(model)
 	r.mu.Lock(); defer r.mu.Unlock()
 	r.afterUpdate[model] = append(r.afterUpdate[model], h)
 }
 
 func (r *HookRegistry) RegisterBeforeDelete(model string, h BeforeDeleteHook) {
+	model = r.canon(model)
 	r.mu.Lock(); defer r.mu.Unlock()
 	r.beforeDelete[model] = append(r.beforeDelete[model], h)
 }
 
 func (r *HookRegistry) RegisterAfterDelete(model string, h AfterDeleteHook) {
+	model = r.canon(model)
 	r.mu.Lock(); defer r.mu.Unlock()
 	r.afterDelete[model] = append(r.afterDelete[model], h)
 }
 
 func (r *HookRegistry) runBeforeCreate(ctx context.Context, hc HookContext, input map[string]any) error {
 	if r == nil { return nil }
-	r.mu.RLock(); hooks := r.beforeCreate[hc.Model]; r.mu.RUnlock()
+	key := r.canon(hc.Model)
+	r.mu.RLock(); hooks := r.beforeCreate[key]; r.mu.RUnlock()
 	for _, h := range hooks { if err := h(ctx, hc, input); err != nil { return err } }
 	return nil
 }
 
 func (r *HookRegistry) runAfterCreate(ctx context.Context, hc HookContext, record any) error {
 	if r == nil { return nil }
-	r.mu.RLock(); hooks := r.afterCreate[hc.Model]; r.mu.RUnlock()
+	key := r.canon(hc.Model)
+	r.mu.RLock(); hooks := r.afterCreate[key]; r.mu.RUnlock()
 	for _, h := range hooks { if err := h(ctx, hc, record); err != nil { return err } }
 	return nil
 }
 
 func (r *HookRegistry) runBeforeUpdate(ctx context.Context, hc HookContext, id string, input map[string]any) error {
 	if r == nil { return nil }
-	r.mu.RLock(); hooks := r.beforeUpdate[hc.Model]; r.mu.RUnlock()
+	key := r.canon(hc.Model)
+	r.mu.RLock(); hooks := r.beforeUpdate[key]; r.mu.RUnlock()
 	for _, h := range hooks { if err := h(ctx, hc, id, input); err != nil { return err } }
 	return nil
 }
 
 func (r *HookRegistry) runAfterUpdate(ctx context.Context, hc HookContext, record any) error {
 	if r == nil { return nil }
-	r.mu.RLock(); hooks := r.afterUpdate[hc.Model]; r.mu.RUnlock()
+	key := r.canon(hc.Model)
+	r.mu.RLock(); hooks := r.afterUpdate[key]; r.mu.RUnlock()
 	for _, h := range hooks { if err := h(ctx, hc, record); err != nil { return err } }
 	return nil
 }
 
 func (r *HookRegistry) runBeforeDelete(ctx context.Context, hc HookContext, id string) error {
 	if r == nil { return nil }
-	r.mu.RLock(); hooks := r.beforeDelete[hc.Model]; r.mu.RUnlock()
+	key := r.canon(hc.Model)
+	r.mu.RLock(); hooks := r.beforeDelete[key]; r.mu.RUnlock()
 	for _, h := range hooks { if err := h(ctx, hc, id); err != nil { return err } }
 	return nil
 }
 
 func (r *HookRegistry) runAfterDelete(ctx context.Context, hc HookContext, id string) error {
 	if r == nil { return nil }
-	r.mu.RLock(); hooks := r.afterDelete[hc.Model]; r.mu.RUnlock()
+	key := r.canon(hc.Model)
+	r.mu.RLock(); hooks := r.afterDelete[key]; r.mu.RUnlock()
 	for _, h := range hooks { if err := h(ctx, hc, id); err != nil { return err } }
 	return nil
 }
@@ -222,7 +263,9 @@ func (r *HookRegistry) RegisterManifestHooks(addonKey string, m manifest.Manifes
 // matching sub-map. Adapter closures encode the CRUD payload as JSON so
 // downstream dispatchers (wasm/webhook) receive a stable contract.
 func (r *HookRegistry) registerManifestHook(addonKey, model, event string, m manifest.Manifest, invoker LifecycleHookInvoker) {
-	owned := addonHookRegistration{addonKey: addonKey, model: model, event: event}
+	// Track the CANONICAL key: that is where Register* stores the hooks, so
+	// UnregisterAddon must clear that slice.
+	owned := addonHookRegistration{addonKey: addonKey, model: r.canon(model), event: event}
 	switch event {
 	case "before_create":
 		r.registerOwned(owned, func() {

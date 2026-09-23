@@ -479,12 +479,17 @@ func (r *HookRegistry) indexRollupBindings(byChild map[string][]rollupBinding) {
 	if len(byChild) == 0 {
 		return
 	}
+	keyed := make(map[string][]rollupBinding, len(byChild))
+	for child, bindings := range byChild {
+		k := r.canon(child)
+		keyed[k] = append(keyed[k], bindings...)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.rollupsByChild == nil {
-		r.rollupsByChild = make(map[string][]rollupBinding, len(byChild))
+		r.rollupsByChild = make(map[string][]rollupBinding, len(keyed))
 	}
-	for child, bindings := range byChild {
+	for child, bindings := range keyed {
 		r.rollupsByChild[child] = append(r.rollupsByChild[child], bindings...)
 	}
 }
@@ -493,6 +498,7 @@ func (r *HookRegistry) indexRollupBindings(byChild map[string][]rollupBinding) {
 // `childModel`. Hosts use it to skip the map lookup + row projection on the hot
 // path of a model that feeds no aggregate.
 func (r *HookRegistry) HasRollupsForChild(childModel string) bool {
+	childModel = r.canon(childModel)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.rollupsByChild[childModel]) > 0
@@ -518,6 +524,7 @@ func (r *HookRegistry) RecomputeRollupsForChild(ctx context.Context, db *gorm.DB
 	if r == nil || db == nil || len(row) == 0 {
 		return nil
 	}
+	childModel = r.canon(childModel)
 	r.mu.RLock()
 	bindings := r.rollupsByChild[childModel]
 	r.mu.RUnlock()
