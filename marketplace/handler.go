@@ -378,7 +378,7 @@ func extractRequires(b *bundle.Bundle) AddonKeyList {
 	out := make(AddonKeyList, 0, len(m.Compatibility.Requires))
 	for _, r := range m.Compatibility.Requires {
 		key := strings.TrimSpace(r.Key)
-		if key == "" || key == "kernel" || r.Optional {
+		if key == "" || manifest.IsReservedRequirementKey(key) || r.Optional {
 			continue
 		}
 		out = append(out, key)

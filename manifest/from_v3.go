@@ -19,6 +19,30 @@ var sdkRequirementKeys = map[string]struct{}{
 	"@asteby/metacore-sdk": {},
 }
 
+// runtimeRequirementKeys are reserved compatibility.requires[] keys whose
+// version range projects onto Manifest.Runtime: the host's metacore-kernel Go
+// module release (see Manifest.Runtime). Keep in sync with hub/internal/compat.
+var runtimeRequirementKeys = map[string]struct{}{
+	"metacore-kernel":                   {},
+	"github.com/asteby/metacore-kernel": {},
+}
+
+// IsReservedRequirementKey reports whether a compatibility.requires[] key is a
+// host range (kernel contract, SDK or kernel runtime) rather than an
+// installable peer addon. Dependency graphs (install / uninstall / catalog
+// peers) must skip these.
+func IsReservedRequirementKey(key string) bool {
+	key = strings.TrimSpace(key)
+	if key == kernelRequirementKey {
+		return true
+	}
+	if _, ok := sdkRequirementKeys[key]; ok {
+		return true
+	}
+	_, ok := runtimeRequirementKeys[key]
+	return ok
+}
+
 // managedColumns are the physical columns the kernel's dynamic schema layer
 // injects automatically for every addon table (see dynamic.CreateTable). A v3
 // model declares these explicitly to document its full physical shape, but the
@@ -80,6 +104,10 @@ func FromV3(m *v3.Manifest) Manifest {
 		}
 		if _, ok := sdkRequirementKeys[r.Key]; ok && out.SDK == "" && strings.TrimSpace(r.Version) != "" {
 			out.SDK = strings.TrimSpace(r.Version)
+			continue
+		}
+		if _, ok := runtimeRequirementKeys[r.Key]; ok && out.Runtime == "" && strings.TrimSpace(r.Version) != "" {
+			out.Runtime = strings.TrimSpace(r.Version)
 		}
 	}
 	if len(m.Compatibility.Provides) > 0 {

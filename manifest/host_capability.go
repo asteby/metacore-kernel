@@ -2,8 +2,10 @@ package manifest
 
 import (
 	"fmt"
+	"runtime/debug"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/Masterminds/semver/v3"
 )
@@ -24,6 +26,10 @@ type HostCapabilityProfile struct {
 	// SDK constraint therefore fails closed; kernel and SDK releases are
 	// independent contracts and must never be substituted for one another.
 	SDKVersion string
+	// RuntimeVersion is the metacore-kernel Go module release the host is
+	// built with (e.g. "0.154.1"; see HostRuntimeVersion). Empty means the
+	// host cannot prove it: a manifest with a Runtime range fails closed.
+	RuntimeVersion string
 	// Capabilities is the set of named host capabilities available. Order
 	// and duplicates are insignificant — lookups are by membership.
 	Capabilities []string
@@ -46,6 +52,10 @@ const (
 	// IssueSDKRange: the profile's SDKVersion does not satisfy the manifest's
 	// SDK semver range.
 	IssueSDKRange CompatibilityIssueKind = "sdk_range"
+	// IssueRuntimeRange: the profile's RuntimeVersion (host metacore-kernel
+	// release) does not satisfy the manifest's Runtime range, or the host
+	// does not report it.
+	IssueRuntimeRange CompatibilityIssueKind = "runtime_range"
 	// IssueMissingCapability: the manifest declares a HostCapabilities entry
 	// the profile does not have.
 	IssueMissingCapability CompatibilityIssueKind = "missing_capability"
@@ -110,6 +120,21 @@ func (m *Manifest) EvaluateCompatibility(profile HostCapabilityProfile) Compatib
 		}
 	}
 
+	if m.Runtime != "" {
+		if strings.TrimSpace(profile.RuntimeVersion) == "" {
+			issues = append(issues, CompatibilityIssue{
+				Kind:   IssueRuntimeRange,
+				Field:  "runtime",
+				Detail: fmt.Sprintf("manifest.runtime: addon requires metacore-kernel %s but the host does not report its kernel release", m.Runtime),
+			})
+		} else if iss := checkSemverField("runtime", m.Runtime, profile.RuntimeVersion, IssueRuntimeRange); iss != nil {
+			if iss.Kind == IssueRuntimeRange {
+				iss.Detail = fmt.Sprintf("manifest.runtime: addon requires metacore-kernel %s; this host runs %s — upgrade the host first", m.Runtime, profile.RuntimeVersion)
+			}
+			issues = append(issues, *iss)
+		}
+	}
+
 	missing := make([]string, 0, len(m.HostCapabilities))
 	for _, name := range m.HostCapabilities {
 		if !profile.hasCapability(name) {
@@ -160,6 +185,63 @@ func checkSemverField(field, rangeExpr, version string, kind CompatibilityIssueK
 			Kind:   kind,
 			Field:  field,
 			Detail: fmt.Sprintf("manifest.%s: host %s %s does not satisfy %s", field, field, version, rangeExpr),
+		}
+	}
+	return nil
+}
+
+// kernelModulePath is the Go module whose release HostRuntimeVersion reports.
+const kernelModulePath = "github.com/asteby/metacore-kernel"
+
+// HostRuntimeVersion returns the metacore-kernel release the running binary
+// was built with ("0.154.1", without the "v"), read from the Go build info.
+// "" when it cannot be determined (a `replace` to a local path, or tests),
+// which EvaluateCompatibility treats as "cannot prove" for Runtime ranges.
+func HostRuntimeVersion() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	for _, d := range bi.Deps {
+		if d.Path != kernelModulePath {
+			continue
+		}
+		// A `replace` to a released version wins; a replace to a local path
+		// (no version) keeps the required release, which is what the code
+		// was written against.
+		if d.Replace != nil && d.Replace.Version != "" {
+			return normalizeModuleVersion(d.Replace.Version)
+		}
+		return normalizeModuleVersion(d.Version)
+	}
+	return ""
+}
+
+// normalizeModuleVersion strips the "v" and rejects pseudo / devel versions
+// that are not a real release ("(devel)", "").
+func normalizeModuleVersion(v string) string {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	if v == "" || strings.HasPrefix(v, "(") {
+		return ""
+	}
+	return v
+}
+
+// CheckRuntime returns an install-blocking error when the manifest declares a
+// Runtime range (compatibility.requires "metacore-kernel") the host release
+// does not satisfy — or the host cannot report one. nil when there is no
+// range or it is satisfied. Installers call it on install AND upgrade.
+func (m *Manifest) CheckRuntime(hostRuntimeVersion string) error {
+	if m.Runtime == "" {
+		return nil
+	}
+	r := m.EvaluateCompatibility(HostCapabilityProfile{
+		KernelVersion:  "",
+		RuntimeVersion: hostRuntimeVersion,
+	})
+	for _, iss := range r.Issues {
+		if iss.Field == "runtime" {
+			return fmt.Errorf("%s", iss.Detail)
 		}
 	}
 	return nil

@@ -178,8 +178,13 @@ func ensureInstallationUniqueIndex(db *gorm.DB) error {
 type Installer struct {
 	DB            *gorm.DB
 	KernelVersion string
-	Lifecycles    *lifecycle.Registry
-	Interceptors  *lifecycle.InterceptorRegistry
+	// RuntimeVersion is the host's metacore-kernel release (default
+	// manifest.HostRuntimeVersion()). An addon whose compatibility.requires
+	// "metacore-kernel" range it does not satisfy is refused on install and
+	// upgrade (manifest.CheckRuntime).
+	RuntimeVersion string
+	Lifecycles     *lifecycle.Registry
+	Interceptors   *lifecycle.InterceptorRegistry
 
 	// HookRunner reads manifest.LifecycleHooks at install/enable/disable/
 	// uninstall and dispatches each declared HookDef through its registered
@@ -325,6 +330,7 @@ func New(db *gorm.DB, kernelVersion string) *Installer {
 	return &Installer{
 		DB:             db,
 		KernelVersion:  kernelVersion,
+		RuntimeVersion: manifest.HostRuntimeVersion(),
 		Lifecycles:     lifecycle.NewRegistry(),
 		Interceptors:   lifecycle.NewInterceptorRegistry(),
 		PublicKeys:     pubs,
@@ -444,6 +450,9 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	}
 	warnings, err := b.Manifest.ValidateAdvisory(i.KernelVersion)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := b.Manifest.CheckRuntime(i.RuntimeVersion); err != nil {
 		return nil, nil, err
 	}
 	for _, w := range warnings {
@@ -991,6 +1000,9 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	}
 	warnings, err := newBundle.Manifest.ValidateAdvisory(i.KernelVersion)
 	if err != nil {
+		return nil, err
+	}
+	if err := newBundle.Manifest.CheckRuntime(i.RuntimeVersion); err != nil {
 		return nil, err
 	}
 	for _, w := range warnings {
