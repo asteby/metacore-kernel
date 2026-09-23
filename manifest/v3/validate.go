@@ -1386,6 +1386,8 @@ func Validate(raw []byte) error {
 				errs = append(errs, fmt.Sprintf("models[%d].rules[%d]: %v", mi, ri, err))
 			} else if err := ValidateOnMissingParent(r.OnMissingParent); err != nil {
 				errs = append(errs, fmt.Sprintf("models[%d].rules[%d]: %v", mi, ri, err))
+			} else if err := ValidateCrossRuleEnforce(r.Kind, r.Enforce); err != nil {
+				errs = append(errs, fmt.Sprintf("models[%d].rules[%d]: %v", mi, ri, err))
 			}
 		}
 		// Folio sequences: unique keys, scope enum, a well-formed format with
@@ -1835,6 +1837,22 @@ func ValidateOnMissingParent(v string) error {
 		return nil
 	}
 	return fmt.Errorf("on_missing_parent %q is not one of reject|skip", v)
+}
+
+// ValidateCrossRuleEnforce checks a cross-record rule's enforce value: empty
+// (default) or "always", and "always" only on ref_state (a sum_lte cap is
+// already re-checked whenever its inputs change).
+func ValidateCrossRuleEnforce(kind, v string) error {
+	switch v {
+	case "":
+		return nil
+	case "always":
+		if kind != "ref_state" {
+			return fmt.Errorf("enforce \"always\" is only valid on ref_state, not %q", kind)
+		}
+		return nil
+	}
+	return fmt.Errorf("enforce %q is not one of always", v)
 }
 
 var crossIdentRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)

@@ -2661,6 +2661,9 @@ type Route struct {
 //	ref_state — the parent row (Parent, addressed by this row's Ref column)
 //	            must match Require (parent column -> scalar or list). Checked
 //	            on create and when Ref changes on update.
+//	            With Enforce "always" it is checked on every create, update
+//	            and delete instead (the row is frozen while the parent is
+//	            outside Require).
 //	sum_lte   — sum(Sum over this model's rows sharing the same Ref and
 //	            matching Where) must stay <= parent.Max. The parent row is
 //	            locked FOR UPDATE first so concurrent writers serialize.
@@ -2681,4 +2684,14 @@ type CrossRule struct {
 	// not applied for this write). Use "skip" only when the flow legitimately
 	// writes children before their parent (e.g. POS tenders before the order).
 	OnMissingParent string `json:"on_missing_parent,omitempty"`
+	// Enforce widens WHEN a ref_state rule is checked:
+	//   ""       (default) — on create and when Ref changes on update. A later
+	//                        edit of a row whose parent moved on is allowed
+	//                        (a payment edited after its session closed).
+	//   "always" — on EVERY write of the row: create, any update (even one that
+	//              keeps Ref) and delete. The row is FROZEN while its parent is
+	//              outside Require — e.g. the lines of a quote once it is
+	//              accepted: none can be added, edited or removed (QA LIVE-10).
+	// Only valid on ref_state.
+	Enforce string `json:"enforce,omitempty"`
 }

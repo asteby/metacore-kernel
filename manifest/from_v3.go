@@ -1632,7 +1632,7 @@ func mapModelRules(in []v3.CrossRule) []CrossRuleDef {
 	out := make([]CrossRuleDef, 0, len(in))
 	for _, r := range in {
 		out = append(out, CrossRuleDef{Kind: r.Kind, ErrorKey: r.ErrorKey, Ref: r.Ref, Parent: r.Parent,
-			Require: r.Require, Sum: r.Sum, Max: r.Max, Where: r.Where, OnMissingParent: r.OnMissingParent})
+			Require: r.Require, Sum: r.Sum, Max: r.Max, Where: r.Where, OnMissingParent: r.OnMissingParent, Enforce: r.Enforce})
 	}
 	return out
 }

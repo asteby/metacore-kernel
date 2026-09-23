@@ -1642,4 +1642,7 @@ type CrossRuleDef struct {
 	Where    map[string]any `json:"where,omitempty"`
 	// OnMissingParent: "" / "reject" (default, fail closed) or "skip".
 	OnMissingParent string `json:"onMissingParent,omitempty"`
+	// Enforce: "" (default: create + Ref change) or "always" (every create,
+	// update and delete; ref_state only). See v3.CrossRule.Enforce.
+	Enforce string `json:"enforce,omitempty"`
 }

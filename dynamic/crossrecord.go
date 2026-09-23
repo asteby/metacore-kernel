@@ -65,7 +65,7 @@ func evalCrossRule(ctx context.Context, tx *gorm.DB, r manifest.CrossRuleDef, ow
 
 	switch r.Kind {
 	case "ref_state":
-		if before != nil && sameCol(before, row, r.Ref) {
+		if before != nil && sameCol(before, row, r.Ref) && r.Enforce != CrossEnforceAlways {
 			return nil // untouched relation: a later edit must not be blocked by a state change
 		}
 	case "sum_lte":
@@ -132,6 +132,35 @@ func evalCrossRule(ctx context.Context, tx *gorm.DB, r manifest.CrossRuleDef, ow
 			map[string]any{"sum": others + mine, "max": limit})
 	}
 	return nil
+}
+
+// CrossEnforceAlways is the CrossRuleDef.Enforce value that makes a ref_state
+// rule guard every write of the row — create, every update and delete — not
+// just the ones that set or change its Ref.
+const CrossEnforceAlways = "always"
+
+// deleteGuardRules returns the rules that also guard a DELETE: ref_state with
+// Enforce "always" (the row is frozen while its parent is outside Require).
+func deleteGuardRules(rules []manifest.CrossRuleDef) []manifest.CrossRuleDef {
+	var out []manifest.CrossRuleDef
+	for _, r := range rules {
+		if r.Kind == "ref_state" && r.Enforce == CrossEnforceAlways {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// EvalCrossRecordDeleteRules evaluates, for a DELETE, the rules that guard it
+// (see deleteGuardRules) against the row being removed. tx is the handle the
+// delete runs on; row is the pre-delete row. Rules without Enforce "always"
+// never block a delete.
+func EvalCrossRecordDeleteRules(ctx context.Context, tx *gorm.DB, rules []manifest.CrossRuleDef, ownTable string, orgID uuid.UUID, row map[string]any, parentTable func(model string) (string, error)) error {
+	guards := deleteGuardRules(rules)
+	if len(guards) == 0 || len(row) == 0 {
+		return nil
+	}
+	return EvalCrossRecordRules(ctx, tx, guards, ownTable, orgID, row, nil, parentTable)
 }
 
 // scopedTable narrows a physical table to the tenant and drops soft-deleted
@@ -206,15 +235,16 @@ func (s *Service) parentTableFn(ctx context.Context) func(string) (string, error
 // data_mutate / data_batch by chaining it (before or after its rollup pass) in
 // Host.WithMutationCompute. rulesFor returns a logical table's rules;
 // parentTable maps a parent model key to its physical table. Deletes are
-// exempt: rules predicate over a resulting row.
+// exempt — rules predicate over a resulting row — except ref_state rules with
+// Enforce "always", which are checked against the removed row.
 func CrossRecordCompute(rulesFor func(logicalTable string) []manifest.CrossRuleDef, ownTable func(logicalTable string) string, parentTable func(model string) (string, error)) func(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, logicalTable, action string, row map[string]any) error {
 	return func(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, logicalTable, action string, row map[string]any) error {
-		if action == "deleted" {
-			return nil
-		}
 		rules := rulesFor(logicalTable)
 		if len(rules) == 0 {
 			return nil
+		}
+		if action == "deleted" {
+			return EvalCrossRecordDeleteRules(ctx, tx, rules, ownTable(logicalTable), orgID, row, parentTable)
 		}
 		// The wasm path has no `before`: ref_state/sum_lte re-check on updates.
 		return EvalCrossRecordRules(ctx, tx, rules, ownTable(logicalTable), orgID, row, nil, parentTable)
