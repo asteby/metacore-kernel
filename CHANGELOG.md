@@ -17,6 +17,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   returns `*wasm.AddonNotLoadedError` (same message) implementing the new
   `dispatch.NotReadyError`, and the dispatcher waits for such a subscriber
   without consuming attempts, up to `WithNotReadyWait` (default 5 min).
+- **A guest waiting on a slow third party is no longer killed by its own
+  budget.** `BackendSpec.TimeoutMs` (10 s default) was a plain context
+  deadline, so the seconds a guest spent blocked in `http_fetch` /
+  `http_request` counted against it: a PAC taking 12 s to stamp a CFDI killed
+  fiscal_mexico after the stamp and before persisting it, leaving the document
+  `pending` until a sweep recovered it (QA 7Leguas 0922 ROL-FIS-01). The budget
+  now pauses during outbound HTTP (each call is still bounded by its 30 s client
+  timeout) under an absolute ceiling of budget + 2 min.
 
 ### Added
 

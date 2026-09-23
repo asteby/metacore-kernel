@@ -44,6 +44,8 @@ func (i *invocation) logf(format string, args ...any) {
 }
 
 type invocation struct {
+	// deadline lets outbound HTTP waits not count against the guest budget.
+	deadline     *guestDeadline
 	addonKey     string
 	installation uuid.UUID
 	settings     map[string]string
@@ -582,12 +584,20 @@ func doHTTP(ctx context.Context, mod api.Module, inv *invocation, url, method st
 		req.Header.Set("Content-Type", "application/json")
 	}
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	var (
+		resp     *http.Response
+		respBody []byte
+	)
+	inv.deadline.excluding(func() {
+		resp, err = client.Do(req)
+		if err == nil {
+			defer resp.Body.Close()
+			respBody, _ = io.ReadAll(io.LimitReader(resp.Body, 8<<20)) // 8 MiB safety cap
+		}
+	})
 	if err != nil {
 		return writeToGuest(ctx, mod, jsonError("transport", err.Error()))
 	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20)) // 8 MiB safety cap
 	return writeToGuest(ctx, mod, httpResponseEnvelope(resp.StatusCode, respBody))
 }
 
