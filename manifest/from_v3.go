@@ -142,6 +142,7 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.DesktopClients = mapDesktopClients(m.DesktopClients)
 	out.Backfills = mapBackfills(m.Backfills)
 	out.ProvidesOptions = mapProvidesOptions(m.ProvidesOptions, m.Models)
+	out.ProvidesCapabilities = mapProvidesCapabilities(m.ProvidesCapabilities)
 	out.Documents = mapDocuments(m)
 	if m.Contributions != nil {
 		out.AgentCapabilities = m.Contributions.AgentCapabilities
@@ -1325,6 +1326,8 @@ func handlerToTrigger(h v3.Handler) *ActionTrigger {
 		return &ActionTrigger{Type: "connector", Connector: h.Connector, Export: h.Export}
 	case "native":
 		return &ActionTrigger{Type: "native", Operation: h.Operation}
+	case "capability":
+		return &ActionTrigger{Type: "capability", Capability: h.Capability, Input: copyStringMap(h.Input)}
 	default:
 		return nil
 	}
@@ -1577,6 +1580,36 @@ func mapModelRules(in []v3.CrossRule) []CrossRuleDef {
 	for _, r := range in {
 		out = append(out, CrossRuleDef{Kind: r.Kind, ErrorKey: r.ErrorKey, Ref: r.Ref, Parent: r.Parent,
 			Require: r.Require, Sum: r.Sum, Max: r.Max, Where: r.Where, OnMissingParent: r.OnMissingParent})
+	}
+	return out
+}
+
+// mapProvidesCapabilities projects v3 provides_capabilities[] onto the host
+// form, reusing handlerToTrigger so the provider's dispatch target survives the
+// same way an action's does.
+func mapProvidesCapabilities(in []v3.ProvidedCapability) []CapabilityProviderDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]CapabilityProviderDef, 0, len(in))
+	for _, pc := range in {
+		out = append(out, CapabilityProviderDef{
+			Key:     pc.Key,
+			Label:   pc.Label,
+			Trigger: handlerToTrigger(pc.Handler),
+			Input:   copyStringMap(pc.Input),
+		})
+	}
+	return out
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
 	}
 	return out
 }

@@ -262,6 +262,7 @@ release added:
 | v0.20.0 | `metadata.countries[]` — ISO 3166-1 alpha-2 codes the addon targets (empty = global). The hub filters the catalog by the user's country. |
 | v0.111.0 | `contributions.public_routes[]` — org-scoped, token-addressed public views of a record served by the host without a login (see [Public routes](#public-routes)). New `PublicRoute` type; `enabled_when` record predicates parsed by `v3.ParseRecordExpr`. |
 | v0.117.0 | Top-level `provides_options[]` — publish a model as a reusable option **catalog** any other addon consumes through `options_source` (see [Published option catalogs](#published-option-catalogs)). New `OptionCatalog` type. |
+| next | Top-level `provides_capabilities[]` + handler `type: "capability"` — provider-neutral capability contracts (see [Capability contracts](#capability-contracts)). New `ProvidedCapability` type; `Handler.capability` / `Handler.input`; kernel package `capability`. |
 
 `metadata.i18n` and `metadata.countries` slot into the `metadata` block:
 
@@ -336,6 +337,46 @@ not hold for the record.
 Column-level checks run for models the addon owns; for extended models they are
 deferred to the host at serve time (their columns live in another manifest).
 
+
+## Capability contracts
+
+A consumer that needs "send a WhatsApp message" should not care whether the org
+runs WhatsApp through Link (a wasm connector) or through a local Baileys
+sidecar (a native service). A **capability contract** is a dotted key with a
+fixed input shape (kernel package `capability`, e.g.
+`messaging.whatsapp.send` = `to` required; `message`, `media_url`,
+`media_type`, `device_id` optional).
+
+**Provider** — declares which of its own handlers implements the contract and
+how to build that handler's payload from the contract input:
+
+```jsonc
+"provides_capabilities": [{
+  "key": "messaging.whatsapp.send",
+  "label": "connector_whatsapp.capability.send",
+  "handler": { "type": "native", "operation": "whatsapp_message_send" },
+  "input": { "device_id": "payload.device_id" }
+}]
+```
+
+**Consumer** — requires the contract, mapping each contract field from the
+acted-on row, the action form, or a constant:
+
+```jsonc
+"handler": {
+  "type": "capability",
+  "capability": "messaging.whatsapp.send",
+  "input": { "to": "record.phone", "message": "payload.text" }
+}
+```
+
+Mapping sources: `record.<column>`, `payload.<field>`, `const:<literal>`;
+unmapped fields pass through from the payload under their own name. The host
+resolves, per org, the enabled addon that provides the key (the org's default
+provider when several are installed), rejects a dispatch that misses a
+required contract field, and answers a typed "no provider installed" error
+when none is. For a well-known contract the validator rejects mappings to
+fields the contract does not have.
 
 ## Published option catalogs
 

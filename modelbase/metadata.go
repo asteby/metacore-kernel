@@ -443,6 +443,10 @@ type ActionTrigger struct {
 	// The tag mirrors manifest.ActionTrigger so host JSON projections cannot
 	// silently erase the dispatch target.
 	Operation string `json:"operation,omitempty"`
+	// Capability + Input mirror manifest.ActionTrigger for Type=="capability"
+	// (provider-neutral capability dispatch, package capability).
+	Capability string            `json:"capability,omitempty"`
+	Input      map[string]string `json:"input,omitempty"`
 }
 
 // ActionStepDef is one wizard page of a multi-step action form — the served

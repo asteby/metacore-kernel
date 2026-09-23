@@ -127,7 +127,28 @@ type Manifest struct {
 	// is absent. Empty = the addon publishes no catalogs (the default).
 	ProvidesOptions []OptionCatalog `json:"provides_options,omitempty"`
 
+	// ProvidesCapabilities declares the provider-neutral capability contracts
+	// this addon implements (package capability). Another addon's action /
+	// tool / subscription with handler.type "capability" reaches it without
+	// naming this addon or its connector; the host picks the provider
+	// installed in the org (the org's default when several are). Empty = the
+	// addon provides no capability (the default).
+	ProvidesCapabilities []ProvidedCapability `json:"provides_capabilities,omitempty"`
+
 	Signature *Signature `json:"signature,omitempty"`
+}
+
+// ProvidedCapability binds one capability contract to this addon's own
+// handler. Handler is restricted to "wasm" (Function) or "native" (Operation).
+// Input maps the provider handler's payload fields from the contract input
+// (payload.<contract field>) or constants; unmapped contract fields are passed
+// through under their own names.
+type ProvidedCapability struct {
+	Key         string            `json:"key"`
+	Label       string            `json:"label,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Handler     Handler           `json:"handler"`
+	Input       map[string]string `json:"input,omitempty"`
 }
 
 // Runtime declares addon-owned executable services. The wrapper is
@@ -2241,6 +2262,13 @@ type Handler struct {
 	// not own, WITHOUT duplicating that connector's client.
 	Connector string `json:"connector,omitempty"`
 	Export    string `json:"export,omitempty"`
+	// Capability + Input, when Type=="capability", require a provider-neutral
+	// capability contract (package capability, e.g. "messaging.whatsapp.send")
+	// instead of naming a connector: the host dispatches to whichever installed
+	// addon PROVIDES it (provides_capabilities[]) in the invoking org. Input
+	// maps contract fields to record.<col> | payload.<field> | const:<literal>.
+	Capability string            `json:"capability,omitempty"`
+	Input      map[string]string `json:"input,omitempty"`
 }
 
 // ExtensionPoints is what this addon publishes for others to extend.

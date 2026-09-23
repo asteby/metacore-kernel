@@ -140,6 +140,13 @@
       }
     },
 
+    "provides_capabilities": {
+      "type": "array",
+      "description": "Provider-neutral capability contracts this addon IMPLEMENTS (e.g. 'messaging.whatsapp.send'). Another addon's action/tool/subscription with handler.type 'capability' reaches this addon's handler without naming it or its connector; the host picks, per org, the installed provider (the org's default when several are).",
+      "items": {
+        "$ref": "#/$defs/ProvidedCapability"
+      }
+    },
     "provides_options": {
       "type": "array",
       "description": "Publishes models of this addon as reusable option CATALOGS. Any other addon feeds a select from one by naming its 'key' in a column's or action field's options_source, with no host code and no hardcoded options list. The host scopes every catalog to the invoking org and serves it only while the owning addon is installed and enabled there.",
@@ -242,6 +249,60 @@
     }
   ],
   "$defs": {
+    "ProvidedCapability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "handler"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+          "description": "Capability contract key (dotted, e.g. 'messaging.whatsapp.send'). Well-known contracts and their input fields live in the kernel package 'capability'."
+        },
+        "label": {
+          "type": "string",
+          "description": "Human/i18n name of this provider, shown when an org chooses its default provider."
+        },
+        "description": {
+          "type": "string"
+        },
+        "handler": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "description": "This addon's own implementation: a wasm export (function) or a native-service operation.",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "wasm",
+                "native"
+              ]
+            },
+            "function": {
+              "type": "string"
+            },
+            "operation": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,127}$"
+            }
+          }
+        },
+        "input": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Maps each field of THIS handler's payload from the contract input ('payload.<contract field>') or a constant ('const:<literal>'). Unmapped contract fields pass through under their own names."
+        }
+      }
+    },
     "Runtime": {
       "type": "object",
       "additionalProperties": false,
@@ -2484,7 +2545,8 @@
                 "webhook",
                 "compiled",
                 "connector",
-                "native"
+                "native",
+                "capability"
               ]
             },
             "function": {
@@ -2505,6 +2567,19 @@
             "export": {
               "type": "string",
               "description": "When type=connector: the WASM export of the connector-owning addon to invoke with the action's field payload, e.g. 'link_send_message'."
+            },
+            "capability": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+              "description": "When type=capability: the capability contract key this handler requires (e.g. 'messaging.whatsapp.send'). The host resolves, per org, the installed addon that declares it in provides_capabilities[] (the org's default provider when several are installed) and dispatches to that provider's handler. The consumer never names a connector or addon."
+            },
+            "input": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "When type=capability: maps each contract input field to its source: 'record.<column>' (the acted-on row), 'payload.<field>' (the action form / event payload) or 'const:<literal>'. Unmapped contract fields are taken from the payload under the same name."
             }
           }
         },
@@ -2968,7 +3043,8 @@
                 "webhook",
                 "compiled",
                 "connector",
-                "native"
+                "native",
+                "capability"
               ]
             },
             "function": {
@@ -2989,6 +3065,19 @@
             "export": {
               "type": "string",
               "description": "When type=connector: the WASM export of the connector-owning addon to invoke with the action's field payload, e.g. 'link_send_message'."
+            },
+            "capability": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+              "description": "When type=capability: the capability contract key this handler requires (e.g. 'messaging.whatsapp.send'). The host resolves, per org, the installed addon that declares it in provides_capabilities[] (the org's default provider when several are installed) and dispatches to that provider's handler. The consumer never names a connector or addon."
+            },
+            "input": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "When type=capability: maps each contract input field to its source: 'record.<column>' (the acted-on row), 'payload.<field>' (the action form / event payload) or 'const:<literal>'. Unmapped contract fields are taken from the payload under the same name."
             }
           }
         }
@@ -3020,7 +3109,8 @@
                 "webhook",
                 "compiled",
                 "connector",
-                "native"
+                "native",
+                "capability"
               ]
             },
             "function": {
@@ -3041,6 +3131,19 @@
             "export": {
               "type": "string",
               "description": "When type=connector: the WASM export of the connector-owning addon to invoke with the action's field payload, e.g. 'link_send_message'."
+            },
+            "capability": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+              "description": "When type=capability: the capability contract key this handler requires (e.g. 'messaging.whatsapp.send'). The host resolves, per org, the installed addon that declares it in provides_capabilities[] (the org's default provider when several are installed) and dispatches to that provider's handler. The consumer never names a connector or addon."
+            },
+            "input": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "When type=capability: maps each contract input field to its source: 'record.<column>' (the acted-on row), 'payload.<field>' (the action form / event payload) or 'const:<literal>'. Unmapped contract fields are taken from the payload under the same name."
             }
           }
         },

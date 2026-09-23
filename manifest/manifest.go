@@ -187,6 +187,10 @@ type Manifest struct {
 	// catalog never requires host code. See OptionCatalogDef.
 	ProvidesOptions []OptionCatalogDef `json:"provides_options,omitempty"`
 
+	// ProvidesCapabilities is the host projection of v3
+	// provides_capabilities[]: the capability contracts this addon implements.
+	ProvidesCapabilities []CapabilityProviderDef `json:"provides_capabilities,omitempty"`
+
 	// Backfills is the host projection of the v3 Backfills block: one-shot
 	// materialization sweeps the host runs at install/upgrade, dispatching
 	// Do once per distinct source key. See v3.Backfill.
@@ -758,6 +762,22 @@ type ActionTrigger struct {
 	// the export runs in the connector-owning addon, org-scoped, so an action can
 	// drive a connector it does not own without duplicating its client.
 	Connector string `json:"connector,omitempty"`
+	// Capability + Input (Type=="capability") require a provider-neutral
+	// capability contract instead of a named connector; the host dispatches to
+	// the addon installed in the org that provides it. Input maps contract
+	// fields to record.<col> | payload.<field> | const:<literal>.
+	Capability string            `json:"capability,omitempty"`
+	Input      map[string]string `json:"input,omitempty"`
+}
+
+// CapabilityProviderDef is the host projection of one v3
+// provides_capabilities[] entry: the contract key, the provider's own trigger
+// (wasm or native) and the provider-side input mapping.
+type CapabilityProviderDef struct {
+	Key     string            `json:"key"`
+	Label   string            `json:"label,omitempty"`
+	Trigger *ActionTrigger    `json:"trigger"`
+	Input   map[string]string `json:"input,omitempty"`
 }
 
 // SubscriptionDef is the legacy/host projection of a v3

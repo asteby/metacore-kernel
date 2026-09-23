@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/asteby/metacore-kernel/capability"
 	"path"
 	"regexp"
 	"sort"
@@ -1492,6 +1493,8 @@ func Validate(raw []byte) error {
 
 	// Published option catalogs (provides_options[]).
 	errs = append(errs, validateProvidesOptions(&m, colsByModel)...)
+	// Provided capability contracts + capability-typed handlers.
+	errs = append(errs, validateCapabilities(&m)...)
 
 	if m.Contributions != nil {
 		for ai, a := range m.Contributions.Actions {
@@ -1835,3 +1838,77 @@ func ValidateOnMissingParent(v string) error {
 }
 
 var crossIdentRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// validateCapabilities enforces provides_capabilities[] (unique well-formed
+// keys, a wasm/native handler of this addon, sound input mappings) and every
+// handler.type "capability" on actions/tools/subscriptions (a well-formed key
+// and, for a well-known contract, input keys that are contract fields).
+func validateCapabilities(m *Manifest) []string {
+	var errs []string
+	seen := map[string]struct{}{}
+	for i, pc := range m.ProvidesCapabilities {
+		w := fmt.Sprintf("provides_capabilities[%d]", i)
+		if !capability.ValidKey(pc.Key) {
+			errs = append(errs, fmt.Sprintf("%s.key %q must be a dotted lowercase capability key (e.g. messaging.whatsapp.send)", w, pc.Key))
+		}
+		if _, dup := seen[pc.Key]; dup {
+			errs = append(errs, fmt.Sprintf("%s.key %q is duplicated", w, pc.Key))
+		}
+		seen[pc.Key] = struct{}{}
+		switch pc.Handler.Type {
+		case "wasm":
+			if strings.TrimSpace(pc.Handler.Function) == "" {
+				errs = append(errs, fmt.Sprintf("%s.handler.function is required when type=wasm", w))
+			}
+		case "native":
+			if strings.TrimSpace(pc.Handler.Operation) == "" {
+				errs = append(errs, fmt.Sprintf("%s.handler.operation is required when type=native", w))
+			}
+		default:
+			errs = append(errs, fmt.Sprintf("%s.handler.type %q not allowed (want wasm|native)", w, pc.Handler.Type))
+		}
+		for _, e := range capability.ValidateInput(pc.Input, nil) {
+			errs = append(errs, w+"."+e)
+		}
+		if c, known := capability.Lookup(pc.Key); known {
+			for target, expr := range pc.Input {
+				if f, ok := strings.CutPrefix(expr, "payload."); ok && !c.Has(f) {
+					errs = append(errs, fmt.Sprintf("%s.input[%q] reads %q, which is not a field of capability %q", w, target, f, c.Key))
+				}
+			}
+		}
+	}
+	check := func(where string, h Handler) {
+		if h.Type != "capability" {
+			if h.Capability != "" || len(h.Input) > 0 {
+				errs = append(errs, where+".handler: capability/input are only allowed when type=capability")
+			}
+			return
+		}
+		if !capability.ValidKey(h.Capability) {
+			errs = append(errs, fmt.Sprintf("%s.handler.capability %q must be a dotted lowercase capability key", where, h.Capability))
+		}
+		if h.Function != "" || h.Operation != "" || h.Connector != "" || h.Export != "" || h.URL != "" {
+			errs = append(errs, where+".handler: type=capability cannot declare function, operation, connector, export or url")
+		}
+		var contract *capability.Contract
+		if c, known := capability.Lookup(h.Capability); known {
+			contract = &c
+		}
+		for _, e := range capability.ValidateInput(h.Input, contract) {
+			errs = append(errs, where+".handler."+e)
+		}
+	}
+	if m.Contributions != nil {
+		for i, a := range m.Contributions.Actions {
+			check(fmt.Sprintf("contributions.actions[%d]", i), a.Handler)
+		}
+		for i, t := range m.Contributions.Tools {
+			check(fmt.Sprintf("contributions.tools[%d]", i), t.Handler)
+		}
+		for i, s := range m.Contributions.Subscriptions {
+			check(fmt.Sprintf("contributions.subscriptions[%d]", i), s.Handler)
+		}
+	}
+	return errs
+}

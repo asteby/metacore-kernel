@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"fmt"
+	"github.com/asteby/metacore-kernel/capability"
 	"regexp"
 	"strings"
 	"time"
@@ -72,11 +73,12 @@ var (
 	// "wasm" (and ship the implementation as an exported function) rather
 	// than minting a new type.
 	validTriggerTypes = map[string]struct{}{
-		"wasm":      {},
-		"webhook":   {},
-		"noop":      {},
-		"connector": {},
-		"native":    {},
+		"wasm":       {},
+		"webhook":    {},
+		"noop":       {},
+		"connector":  {},
+		"native":     {},
+		"capability": {},
 	}
 	// validLifecycleHookEvents enumerates the manifest.LifecycleHooks map
 	// keys the kernel knows how to fire. "install"/"uninstall"/"enable"/
@@ -625,7 +627,10 @@ func validateActionTrigger(t *ActionTrigger, exports map[string]struct{}) error 
 		return nil
 	}
 	if _, ok := validTriggerTypes[t.Type]; !ok {
-		return fmt.Errorf("trigger.type: unknown %q (want wasm|webhook|noop|connector|native)", t.Type)
+		return fmt.Errorf("trigger.type: unknown %q (want wasm|webhook|noop|connector|native|capability)", t.Type)
+	}
+	if t.Type != "capability" && (t.Capability != "" || len(t.Input) > 0) {
+		return fmt.Errorf("trigger: capability/input are only allowed when type=capability")
 	}
 	switch t.Type {
 	case "wasm":
@@ -660,6 +665,20 @@ func validateActionTrigger(t *ActionTrigger, exports map[string]struct{}) error 
 		}
 		if !triggerExportRe.MatchString(t.Export) {
 			return fmt.Errorf("trigger.export: invalid symbol %q", t.Export)
+		}
+	case "capability":
+		if !capability.ValidKey(t.Capability) {
+			return fmt.Errorf("trigger.capability: valid capability key is required when type=capability")
+		}
+		if t.Export != "" || t.Connector != "" || t.Operation != "" || t.RunInTx {
+			return fmt.Errorf("trigger: capability cannot declare export, connector, operation, or run_in_tx")
+		}
+		var contract *capability.Contract
+		if c, known := capability.Lookup(t.Capability); known {
+			contract = &c
+		}
+		if errs := capability.ValidateInput(t.Input, contract); len(errs) > 0 {
+			return fmt.Errorf("trigger.%s", errs[0])
 		}
 	case "native":
 		if !triggerExportRe.MatchString(t.Operation) {
