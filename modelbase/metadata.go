@@ -22,6 +22,14 @@ type TableMetadata struct {
 	DefaultPerPage    int         `json:"defaultPerPage,omitempty"`
 	SearchPlaceholder string      `json:"searchPlaceholder,omitempty"`
 
+	// SearchRefs names foreign-key columns (ColumnDef.Ref set) the free-text
+	// search reaches THROUGH: a term matches a row when it matches the
+	// referenced record's own search columns (e.g. an order found by its
+	// customer's name, a work order by its vehicle's plate). The FK itself is
+	// never ILIKE'd. Resolved by dynamic.Service.List into query.RefSearch;
+	// hosts that do not set it keep today's behaviour.
+	SearchRefs []string `json:"searchRefs,omitempty"`
+
 	// Relations are the inverse 1:N / N:M edges the frontend renders as
 	// "related records" panels on a detail page (e.g. a Customer's vehicles,
 	// addresses and attachments). Populated by the metadata service from the

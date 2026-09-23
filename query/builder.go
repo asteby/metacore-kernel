@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -54,6 +55,12 @@ type Builder struct {
 	// just the per-value dialect. Set by WithOpsDialect.
 	opsParse bool
 
+	// refSearch maps a foreign-key column to the referenced table + its search
+	// columns. Set via WithRefSearch; each entry adds an `fk IN (subquery)` to the
+	// free-text OR-clause (see applySearch). Empty means no relation search.
+	refSearch map[string]RefSearch
+	refOrder  []string
+
 	// searchClause, when non-nil, builds the per-column SQL fragment + bind
 	// value for the free-text search OR-clause. Set via WithSearchClause. nil
 	// means the default `<col> ILIKE ?` with `%term%` — i.e. exactly today's
@@ -67,6 +74,16 @@ type Builder struct {
 // host can pass the same function to both Options/Search and List. Returning
 // ("", nil) skips the column.
 type SearchClause func(col, term string) (fragment string, value any)
+
+// RefSearch lets the free-text search reach THROUGH a foreign-key column:
+// a row matches when the referenced record (Table.id = <fk>) matches the term
+// on any of Columns — e.g. an order found by its customer's name or a work
+// order by its vehicle's plate. Table and Columns must be plain identifiers
+// (Table may be schema-qualified); anything else is dropped.
+type RefSearch struct {
+	Table   string
+	Columns []string
+}
 
 // Option configures a Builder at construction. Options are applied in
 // order after the meta-derived state is built. The variadic form keeps
@@ -109,6 +126,49 @@ func WithOpsDialect() Option {
 //	}))
 func WithSearchClause(c SearchClause) Option {
 	return func(b *Builder) { b.searchClause = c }
+}
+
+// WithRefSearch binds the relation search of the free-text `search` param:
+// fk column → referenced table + search columns. The fk must be a declared
+// column of the model; entries with unsafe identifiers are dropped. Requires a
+// table name (WithTableName) to correlate the subquery — without it the
+// relation search is skipped. Returns the same builder for chaining.
+func (b *Builder) WithRefSearch(refs map[string]RefSearch) *Builder {
+	b.refSearch = map[string]RefSearch{}
+	b.refOrder = nil
+	for fk, rs := range refs {
+		if _, ok := b.allowed[fk]; !ok || !isSafeIdent(fk) || !isSafeTable(rs.Table) {
+			continue
+		}
+		cols := make([]string, 0, len(rs.Columns))
+		for _, c := range rs.Columns {
+			if isSafeIdent(c) {
+				cols = append(cols, c)
+			}
+		}
+		if len(cols) == 0 {
+			continue
+		}
+		b.refSearch[fk] = RefSearch{Table: rs.Table, Columns: cols}
+		b.refOrder = append(b.refOrder, fk)
+	}
+	sort.Strings(b.refOrder)
+	return b
+}
+
+// isSafeTable accepts a plain identifier or a schema-qualified one
+// (schema.table), each part a safe identifier.
+func isSafeTable(t string) bool {
+	parts := strings.Split(t, ".")
+	if len(parts) > 2 {
+		return false
+	}
+	for _, p := range parts {
+		if !isSafeIdent(p) {
+			return false
+		}
+	}
+	return true
 }
 
 // New constructs a Builder bound to a TableMetadata. A nil meta is
@@ -591,7 +651,7 @@ func applyOneFilter(db *gorm.DB, col string, f Filter) *gorm.DB {
 // an error — matches the audited source behaviour).
 func (b *Builder) applySearch(db *gorm.DB, params Params) *gorm.DB {
 	term := strings.TrimSpace(params.Search)
-	if term == "" || len(b.searchable) == 0 {
+	if term == "" || (len(b.searchable) == 0 && len(b.refOrder) == 0) {
 		return db
 	}
 	if len(term) > MaxSearchTermLength {
@@ -620,6 +680,36 @@ func (b *Builder) applySearch(db *gorm.DB, params Params) *gorm.DB {
 		}
 		conds = append(conds, fmt.Sprintf("%s ILIKE ?", col))
 		args = append(args, pattern)
+	}
+	// Relation search: the fk matches a referenced record whose search columns
+	// match the term.
+	if b.tableName != "" && isSafeTable(b.tableName) {
+		for _, fk := range b.refOrder {
+			rs := b.refSearch[fk]
+			inner := make([]string, 0, len(rs.Columns))
+			for _, c := range rs.Columns {
+				qualified := "__rs." + c
+				if b.searchClause != nil {
+					frag, val := b.searchClause(qualified, term)
+					if frag == "" {
+						continue
+					}
+					inner = append(inner, frag)
+					args = append(args, val)
+					continue
+				}
+				inner = append(inner, fmt.Sprintf("%s ILIKE ?", qualified))
+				args = append(args, pattern)
+			}
+			if len(inner) == 0 {
+				continue
+			}
+			// IN (semi-join) rather than a correlated EXISTS: the planner hashes
+			// the matching referenced ids once instead of probing per row.
+			conds = append(conds, fmt.Sprintf(
+				"%s.%s IN (SELECT __rs.id FROM %s __rs WHERE %s)",
+				b.tableName, fk, rs.Table, strings.Join(inner, " OR ")))
+		}
 	}
 	if len(conds) == 0 {
 		return db

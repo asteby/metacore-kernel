@@ -17,6 +17,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   v3 `ProvidedCapability`, `Handler.Capability/Input`, host projections
   `manifest.CapabilityProviderDef` and `ActionTrigger.Capability/Input` (also on
   `modelbase.ActionTrigger`), both JSON schemas and validation.
+- **List search reaches through foreign keys (`TableMetadata.SearchRefs`).**
+  A host lists FK columns (with `ColumnDef.Ref`) in `searchRefs`; `Service.List`
+  (and the footer aggregate) resolve each ref to the referenced model's table
+  and its own search columns, and the builder adds
+  `<table>.<fk> IN (SELECT __rs.id FROM <ref_table> __rs WHERE <match>)` to the
+  free-text OR-clause (new `query.RefSearch` / `Builder.WithRefSearch`, using the
+  host `SearchClause`). An order is found by its customer's name, a work order by
+  its vehicle's plate. Unset = today's behaviour; unresolvable refs are skipped.
+  Refs QA-0922 UI-N12.
 
 ### Changed
 

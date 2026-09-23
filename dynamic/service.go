@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -487,6 +488,74 @@ func (s *Service) listBuilderOpts() []query.Option {
 	return opts
 }
 
+// maxRefSearchColumns caps how many of a referenced model's search columns a
+// relation search probes, keeping the subquery cheap.
+const maxRefSearchColumns = 4
+
+// refSearchFor resolves tableMeta.SearchRefs into the builder's relation
+// search: each fk column's Ref → the referenced model → its table and its own
+// (plain) search columns. A ref that cannot be resolved, or whose model has no
+// search columns, is skipped — the list never fails because of it. Skipped
+// entirely when there is no search term (no lookups on plain list requests).
+func (s *Service) refSearchFor(ctx context.Context, tableMeta *modelbase.TableMetadata, term string) map[string]query.RefSearch {
+	if tableMeta == nil || len(tableMeta.SearchRefs) == 0 || strings.TrimSpace(term) == "" {
+		return nil
+	}
+	refOf := make(map[string]string, len(tableMeta.Columns))
+	for _, c := range tableMeta.Columns {
+		if c.Ref != "" {
+			refOf[c.Key] = c.Ref
+		}
+	}
+	out := map[string]query.RefSearch{}
+	for _, fk := range tableMeta.SearchRefs {
+		ref, ok := refOf[fk]
+		if !ok {
+			continue
+		}
+		model, inst, refMeta := s.resolveRefModel(ctx, ref)
+		if inst == nil || refMeta == nil {
+			continue
+		}
+		table, err := s.tableNameFor(ctx, model, inst)
+		if err != nil || table == "" {
+			continue
+		}
+		cols := make([]string, 0, maxRefSearchColumns)
+		for _, c := range refMeta.SearchColumns {
+			if strings.Contains(c, ".") {
+				continue // one hop only
+			}
+			cols = append(cols, c)
+			if len(cols) == maxRefSearchColumns {
+				break
+			}
+		}
+		if len(cols) == 0 {
+			continue
+		}
+		out[fk] = query.RefSearch{Table: table, Columns: cols}
+	}
+	return out
+}
+
+// resolveRefModel resolves a column Ref ("customers.Customer", "Customer" or a
+// table key) to its model key, instance and table metadata. It tries the ref
+// verbatim, then the part after the last dot (addon-qualified refs).
+func (s *Service) resolveRefModel(ctx context.Context, ref string) (string, any, *modelbase.TableMetadata) {
+	candidates := []string{ref}
+	if i := strings.LastIndex(ref, "."); i >= 0 && i < len(ref)-1 {
+		candidates = append(candidates, ref[i+1:])
+	}
+	for _, m := range candidates {
+		inst, meta, err := s.resolveModel(ctx, m)
+		if err == nil && inst != nil && meta != nil {
+			return m, inst, meta
+		}
+	}
+	return "", nil, nil
+}
+
 // List returns paginated, filtered, sorted records for a model.
 func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUser, params query.Params) ([]map[string]any, query.PageMeta, error) {
 	instance, tableMeta, err := s.resolveModel(ctx, model)
@@ -511,7 +580,8 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	// f_<relation>.<field> filters work without callers having to plumb
 	// HasRelations themselves. Models that do not implement HasRelations
 	// get an empty relation set — the new query features are no-ops.
-	builder := query.New(tableMeta, s.listBuilderOpts()...).WithTableName(tableName)
+	builder := query.New(tableMeta, s.listBuilderOpts()...).WithTableName(tableName).
+		WithRefSearch(s.refSearchFor(ctx, tableMeta, params.Search))
 	if rels, ok := instance.(modelbase.HasRelations); ok {
 		builder = builder.WithRelations(rels.DefineRelations())
 	}
@@ -581,7 +651,8 @@ func (s *Service) Aggregate(ctx context.Context, model string, user modelbase.Au
 	// filter or totals include rows the list never shows.
 	db = scopeSoftDelete(db, instance)
 
-	builder := query.New(tableMeta, s.listBuilderOpts()...).WithTableName(tableName)
+	builder := query.New(tableMeta, s.listBuilderOpts()...).WithTableName(tableName).
+		WithRefSearch(s.refSearchFor(ctx, tableMeta, params.Search))
 	if rels, ok := instance.(modelbase.HasRelations); ok {
 		builder = builder.WithRelations(rels.DefineRelations())
 	}
