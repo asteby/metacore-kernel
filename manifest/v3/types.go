@@ -1033,6 +1033,16 @@ type Column struct {
 	// the value. Optional; defaults false (fully backward compatible).
 	Protected bool `json:"protected,omitempty"`
 
+	// RejectDeletedRef, on a column with a Ref, makes a CREATE fail when the
+	// referenced row exists but is soft-deleted (deleted_at set): a NEW sale
+	// line must not point at a product removed from the catalog (QA 7Leguas
+	// VEN-N08). Enforced by dynamic.Service.Create (POST /data, 422 not_found)
+	// and, when the host wires wasm.Host.WithCreateCheck, by data_mutate /
+	// data_batch creates (invalid_reference). OPT-IN: documents that must
+	// keep pointing at history — a return line for a product deleted after the
+	// sale, a credit note — leave it unset. Updates are never affected.
+	RejectDeletedRef bool `json:"reject_deleted_ref,omitempty"`
+
 	// Validation is the write-time constraint the kernel enforces on create/
 	// update (regex / min / max / custom) and the SDK pre-flights in the form.
 	// Same shape as ActionField.validation. Nil = no extra rules (not_null

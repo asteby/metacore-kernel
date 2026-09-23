@@ -992,6 +992,10 @@
           "type": "boolean",
           "description": "SERVER-ENFORCED write gate (unlike 'readonly', which is UI-only guidance): a generic create/update against the model's HTTP endpoint always rejects this column when present in the caller's input, regardless of role or update permission. Use for a state-machine field or any column whose only valid mutation is a declared business action (e.g. a return's refund_outcome, settable only by its approve/reject action, never a bare attribute edit that skips the action's gate). A declared Action is unaffected: action handlers write through the wasm data_mutate host import, a path the generic gate never intercepts. Defaults false."
         },
+        "reject_deleted_ref": {
+          "type": "boolean",
+          "description": "On a column with a 'ref': a CREATE fails when the referenced row exists but is soft-deleted (deleted_at set), on the generic create (422 not_found) and on the wasm data_mutate/data_batch create path when the host wires the create check (invalid_reference). Opt-in for NEW documents that must reference live catalog rows (a sale line's product); leave it unset on documents that legitimately point at history (a return or credit-note line). Updates are never affected. Defaults false."
+        },
         "scan": {
           "type": "boolean",
           "description": "Opts the column's create/edit form input into CAMERA BARCODE SCANNING: when true and the browser supports it, the SDK shows a camera button that scans a barcode to FILL the field fast (e.g. a product SKU). The host projects it onto ColumnDef.scan / FieldDef.scan. Country/business-agnostic UI metadata; the DDL plane ignores it. Defaults false."
