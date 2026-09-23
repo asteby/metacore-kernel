@@ -1370,6 +1370,11 @@ type ColumnDef struct {
 	// compatible).
 	Protected bool `json:"protected,omitempty"`
 
+	// RejectDeletedRef carries the v3 Column.reject_deleted_ref opt-in: a
+	// create whose Ref points at a soft-deleted row is rejected. See
+	// manifest/v3.Column.RejectDeletedRef.
+	RejectDeletedRef bool `json:"reject_deleted_ref,omitempty"`
+
 	// Constraints carries the v3 Column.constraints (declarative guard
 	// predicates) through the v3 → host conversion so the dynamic engine can
 	// evaluate them inside the create/update transaction. See manifest/v3.Constraint

@@ -534,6 +534,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// bypass; only a declared Action's own write path (data_mutate)
 				// can change it.
 				Protected: c.Protected,
+				// RejectDeletedRef rides through so a create pointing at a
+				// soft-deleted ref target is refused (opt-in, VEN-N08).
+				RejectDeletedRef: c.RejectDeletedRef,
 				// Constraints ride through so the dynamic engine evaluates the
 				// declarative guard predicates inside the create/update transaction.
 				Constraints: mapColumnConstraints(c.Constraints),

@@ -184,7 +184,7 @@ func (s *Service) validateWrite(ctx context.Context, model, tableName string, us
 
 		// not_found: a ref (FK) pointing at a non-existent (tenant-scoped) row.
 		if col.Ref != "" {
-			exists, err := s.refExists(ctx, user, col.Ref, raw, !isUpdate)
+			exists, err := s.refExists(ctx, user, col.Ref, raw, !isUpdate && col.RejectDeletedRef)
 			if err != nil {
 				return err
 			}
@@ -347,9 +347,11 @@ func optionAllows(opts []manifest.Option, raw any) (allowed []string, ok bool) {
 // JSON text: every id must exist. Comparing the whole array against `id` used
 // to reach Postgres as `id = '["…"]'` and fail the write with a 500 (22P02).
 //
-// liveOnly (creates) also excludes soft-deleted targets: a new record must not
-// point at a deleted product/customer (QA VEN-N08). Updates keep accepting an
-// existing link to a since-deleted row, so editing an old document still works.
+// liveOnly (creates on a column that opts in with reject_deleted_ref) also
+// excludes soft-deleted targets: a new sale line must not point at a deleted
+// product (QA VEN-N08). Opt-in so documents that reference history (a return
+// line for a product deleted after the sale) keep working; updates always keep
+// an existing link to a since-deleted row.
 func (s *Service) refExists(ctx context.Context, user modelbase.AuthUser, ref string, raw any, liveOnly bool) (bool, error) {
 	table, ok := refTable(ref)
 	if !ok {

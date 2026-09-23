@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Deleted-ref rejection is now opt-in per column (`reject_deleted_ref`).**
+  #383 made every create refuse a ref to a soft-deleted row, which would also
+  break documents that legitimately point at history (a return line for a
+  product deleted after the sale). Now only columns declaring
+  `reject_deleted_ref: true` (manifest v3 Column → `ColumnDef.RejectDeletedRef`)
+  get the check, on `Service.Create` and in `dynamic.CheckNoDeletedRefs`
+  (wasm `WithCreateCheck`). Without the flag behaviour is the pre-#383 one.
+
 ### Fixed
 
 - **No new records pointing at soft-deleted rows:** `Service.Create`'s ref

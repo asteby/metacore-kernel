@@ -42,8 +42,8 @@ func tableHasOrgID(db *gorm.DB, table string) bool {
 	return has
 }
 
-// CheckNoDeletedRefs rejects a CREATE row whose declared ref columns point at
-// soft-deleted rows of the ref target (scoped to orgID when the target is
+// CheckNoDeletedRefs rejects a CREATE row whose ref columns that opt in with
+// reject_deleted_ref point at soft-deleted rows of the ref target (scoped to orgID when the target is
 // tenant-scoped). Only DELETED targets fail: a ref to an id the table does not
 // hold at all is left to the caller's own rules (the wasm tier writes
 // cross-addon ids the kernel cannot always resolve). Hosts wire it into
@@ -53,7 +53,7 @@ func tableHasOrgID(db *gorm.DB, table string) bool {
 func CheckNoDeletedRefs(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, cols []manifest.ColumnDef, row map[string]any) error {
 	var bad []string
 	for _, col := range cols {
-		if col.Ref == "" {
+		if col.Ref == "" || !col.RejectDeletedRef {
 			continue
 		}
 		raw, present := row[col.Name]

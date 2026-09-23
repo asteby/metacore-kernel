@@ -15,6 +15,15 @@ import (
 func TestValidate_CreateRejectsSoftDeletedRef(t *testing.T) {
 	db := setupValidationDB(t)
 	svc := validationService(t, db)
+	svc.validationSchema = func(_ context.Context, model string) ([]manifest.ColumnDef, bool) {
+		cols := valItemColumns()
+		for i := range cols {
+			if cols[i].Name == "category_id" {
+				cols[i].RejectDeletedRef = true
+			}
+		}
+		return cols, model == "val_items"
+	}
 	org := uuid.New()
 	user := newUser(org)
 	cat := uuid.NewString()
@@ -38,7 +47,7 @@ func TestCheckNoDeletedRefs(t *testing.T) {
 	live, gone := uuid.NewString(), uuid.NewString()
 	db.Exec(`INSERT INTO val_categories (id, organization_id, name) VALUES (?, ?, 'live')`, live, org.String())
 	db.Exec(`INSERT INTO val_categories (id, organization_id, name, deleted_at) VALUES (?, ?, 'gone', CURRENT_TIMESTAMP)`, gone, org.String())
-	cols := []manifest.ColumnDef{{Name: "category_id", Ref: "val_categories"}, {Name: "name"}}
+	cols := []manifest.ColumnDef{{Name: "category_id", Ref: "val_categories", RejectDeletedRef: true}, {Name: "name"}}
 	ctx := context.Background()
 
 	if err := CheckNoDeletedRefs(ctx, db, org, cols, map[string]any{"category_id": live}); err != nil {
@@ -54,5 +63,23 @@ func TestCheckNoDeletedRefs(t *testing.T) {
 	// Another tenant's deleted row with the same id is invisible.
 	if err := CheckNoDeletedRefs(ctx, db, uuid.New(), cols, map[string]any{"category_id": gone}); err != nil {
 		t.Fatalf("other org must not see this org's rows: %v", err)
+	}
+}
+
+// Without the opt-in a create may still point at a soft-deleted row: a return
+// line for a product deleted after the sale must keep working (the default
+// before #383). Both the generic create and the wasm-tier check honour it.
+func TestDeletedRef_AllowedWithoutOptIn(t *testing.T) {
+	db := setupValidationDB(t)
+	svc := validationService(t, db)
+	org := uuid.New()
+	gone := uuid.NewString()
+	db.Exec(`INSERT INTO val_categories (id, organization_id, name, deleted_at) VALUES (?, ?, 'gone', CURRENT_TIMESTAMP)`, gone, org.String())
+	if _, err := svc.Create(context.Background(), "val_items", newUser(org), map[string]any{"name": "Devolución", "category_id": gone}); err != nil {
+		t.Fatalf("a create without reject_deleted_ref must accept a deleted ref: %v", err)
+	}
+	cols := []manifest.ColumnDef{{Name: "category_id", Ref: "val_categories"}}
+	if err := CheckNoDeletedRefs(context.Background(), db, org, cols, map[string]any{"category_id": gone}); err != nil {
+		t.Fatalf("wasm check without opt-in must pass: %v", err)
 	}
 }
