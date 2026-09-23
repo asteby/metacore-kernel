@@ -45,7 +45,10 @@ import (
 const (
 	defaultMemoryMB = 64
 	defaultTimeout  = 10 * time.Second
-	wasmPageSize    = 64 * 1024 // 64 KiB — wazero unit for memory caps
+	// maxGuestHTTPWait caps how much outbound-HTTP time an invocation may add
+	// on top of its budget (a few slow third-party round trips).
+	maxGuestHTTPWait = 2 * time.Minute
+	wasmPageSize     = 64 * 1024 // 64 KiB — wazero unit for memory caps
 )
 
 // Host owns the shared wazero runtime and compiled/instantiated module
@@ -475,11 +478,14 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 	if entry.spec.TimeoutMs > 0 {
 		timeout = time.Duration(entry.spec.TimeoutMs) * time.Millisecond
 	}
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	// Outbound HTTP waits do not count against the budget (see
+	// guestDeadline); maxGuestHTTPWait bounds the extension.
+	callCtx, deadline, cancel := withGuestDeadline(ctx, timeout, timeout+maxGuestHTTPWait)
 	defer cancel()
 	// Stash settings + caller id on the ctx so the host module imports
 	// (env_get, http_fetch, log) can read them without global state.
 	callCtx = withInvocation(callCtx, &invocation{
+		deadline:          deadline,
 		addonKey:          addonKey,
 		installation:      installation,
 		settings:          settings,
