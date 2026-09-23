@@ -30,6 +30,14 @@ const (
 	defaultRetryBackoffMax = 30 * time.Second
 )
 
+// defaultNotReadyWait bounds how long a delivery waits, WITHOUT consuming
+// attempts, for a subscriber whose runtime reports it is not ready yet (a
+// wasm module still loading after a restart — see NotReadyError). The boot
+// reload of ~20 addons takes 1–2 minutes; events published in that window
+// used to burn their 3 attempts in ~1.5 s and die, so a sale made while the
+// backend was starting never got its invoice or its CFDI (QA 0922 AUTO-F01).
+const defaultNotReadyWait = 5 * time.Minute
+
 // Options configures a Dispatcher. Construct via With* functional options
 // passed to Wire.
 type Options struct {
@@ -37,6 +45,7 @@ type Options struct {
 	maxAttempts     int
 	retryBackoff    time.Duration
 	retryBackoffMax time.Duration
+	notReadyWait    time.Duration
 	capability      CapabilityChecker
 	compiled        CompiledRegistry
 	native          NativeInvoker
@@ -102,6 +111,7 @@ func defaultOptions() *Options {
 		maxAttempts:     defaultMaxAttempts,
 		retryBackoff:    defaultRetryBackoff,
 		retryBackoffMax: defaultRetryBackoffMax,
+		notReadyWait:    defaultNotReadyWait,
 		capability:      nil, // permit-all until a host wires a checker
 		compiled:        nil, // compiled tier inert until a registry is wired
 		logger:          slog.Default(),
@@ -142,6 +152,18 @@ func WithRetryBackoff(base, max time.Duration) Option {
 		if max > 0 {
 			o.retryBackoffMax = max
 		}
+	}
+}
+
+// WithNotReadyWait sets how long a delivery keeps waiting for a subscriber that
+// is not ready yet (NotReadyError) before those failures start counting as
+// attempts. 0 disables the wait (not-ready counts as a normal failure).
+func WithNotReadyWait(d time.Duration) Option {
+	return func(o *Options) {
+		if d < 0 {
+			d = 0
+		}
+		o.notReadyWait = d
 	}
 }
 
