@@ -1528,6 +1528,22 @@ func deriveBackend(m *v3.Manifest) *BackendSpec {
 		}
 	}
 
+	// Tier-3 formulas: a model formula with tier 3 names a "wasm:<export>"
+	// handler the compute engine invokes in the model's BeforeCreate /
+	// BeforeUpdate (dynamic/compute.go, via the host FormulaInvoker). It must
+	// be in the whitelist too, or the host refuses the call ("not in
+	// backend.exports") and the formula never runs.
+	for _, md := range m.Models {
+		for _, f := range md.Formulas {
+			if f.Tier != 3 {
+				continue
+			}
+			if prefix, fn, found := strings.Cut(f.Handler, ":"); found && prefix == "wasm" {
+				add(fn)
+			}
+		}
+	}
+
 	// Lifecycle hooks declared with wasm function names also contribute
 	// to the export list so the wasm host can resolve them at dispatch time.
 	if m.Lifecycle != nil {
