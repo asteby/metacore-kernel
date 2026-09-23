@@ -435,7 +435,7 @@ func (h *Host) InvokeForInTx(ctx context.Context, tx *gorm.DB, orgID, installati
 func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) ([]byte, error) {
 	ce, ok := h.compiled.Load(addonKey)
 	if !ok {
-		return nil, fmt.Errorf("wasm: addon %q not loaded", addonKey)
+		return nil, &AddonNotLoadedError{AddonKey: addonKey}
 	}
 	entry := ce.(*compiledEntry)
 
@@ -686,3 +686,17 @@ func containsString(ss []string, s string) bool {
 	}
 	return false
 }
+
+// AddonNotLoadedError reports an invocation of an addon whose module is not in
+// the runtime — typically because the boot-time reload after a restart has
+// not reached it yet. It implements dispatch.NotReadyError, so event
+// deliveries wait for the module instead of dying in the reload window. The
+// message is unchanged ("wasm: addon %q not loaded"): hosts match on it.
+type AddonNotLoadedError struct{ AddonKey string }
+
+func (e *AddonNotLoadedError) Error() string {
+	return fmt.Sprintf("wasm: addon %q not loaded", e.AddonKey)
+}
+
+// NotReady marks the error as transient-until-loaded (dispatch.NotReadyError).
+func (e *AddonNotLoadedError) NotReady() bool { return true }

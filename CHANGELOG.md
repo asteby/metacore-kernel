@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Events published while a wasm module is still loading are no longer
+  lost.** After a restart the runtime reloads every addon module (1–2 min);
+  deliveries in that window failed with `wasm: addon "x" not loaded`, spent
+  their 3 attempts in ~1.5 s and dead-lettered — a sale made during the boot
+  never got its invoice or CFDI (QA 7Leguas 0922 AUTO-F01). The runtime now
+  returns `*wasm.AddonNotLoadedError` (same message) implementing the new
+  `dispatch.NotReadyError`, and the dispatcher waits for such a subscriber
+  without consuming attempts, up to `WithNotReadyWait` (default 5 min).
+
 ### Added
 
 - **Capability contracts (`provides_capabilities[]` + handler `type: "capability"`).**

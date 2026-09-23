@@ -231,7 +231,20 @@ func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName, oc
 func (d *Dispatcher) deliveryTimeout() time.Duration {
 	// MaxAttempts invocations, each bounded by the runtime; a generous outer
 	// envelope. Kept simple — not configurable until a host needs it.
-	return time.Duration(d.opts.maxAttempts) * 30 * time.Second
+	return time.Duration(d.opts.maxAttempts)*30*time.Second + d.opts.notReadyWait
+}
+
+// NotReadyError is implemented by invoker errors that mean "the subscriber
+// cannot run YET" (runtime still loading) rather than "the subscriber
+// failed". The dispatcher waits for it instead of spending attempts.
+type NotReadyError interface {
+	error
+	NotReady() bool
+}
+
+func isNotReady(err error) bool {
+	var nr NotReadyError
+	return errors.As(err, &nr) && nr.NotReady()
 }
 
 // deliver runs the bounded retry loop for one delivery. Each attempt:
@@ -254,6 +267,8 @@ func (d *Dispatcher) deliver(ctx context.Context, orgID uuid.UUID, eventName, id
 	}
 
 	var lastErr error
+	notReadyUntil := time.Now().Add(d.opts.notReadyWait)
+	notReadyPause := d.opts.retryBackoff
 	for attempt := 1; attempt <= d.opts.maxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			lastErr = err
@@ -279,6 +294,27 @@ func (d *Dispatcher) deliver(ctx context.Context, orgID uuid.UUID, eventName, id
 			return
 		}
 		lastErr = err
+		// The subscriber is not up yet (its module is still loading after a
+		// restart): wait for it instead of spending an attempt, up to
+		// notReadyWait. The first attempt after it comes up runs as attempt
+		// `attempt` again, with the normal retry budget intact.
+		if isNotReady(err) && time.Now().Before(notReadyUntil) {
+			d.logger.Info("dispatch.subscriber_not_ready",
+				slog.String("addon", sub.AddonKey),
+				slog.String("event", eventName),
+				slog.String("err", err.Error()))
+			if serr := sleepCtx(ctx, notReadyPause); serr != nil {
+				lastErr = serr
+				break
+			}
+			if notReadyPause < time.Second {
+				notReadyPause = time.Second
+			} else if notReadyPause < 10*time.Second {
+				notReadyPause *= 2
+			}
+			attempt--
+			continue
+		}
 		d.bumpAttempt(id, attempt, err.Error())
 		d.logger.Warn("dispatch.delivery_attempt_failed",
 			slog.String("addon", sub.AddonKey),
