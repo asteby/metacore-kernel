@@ -1487,6 +1487,15 @@ func deriveBackend(m *v3.Manifest) *BackendSpec {
 		}
 	}
 
+	// Provided capabilities: a wasm provider's function is invoked by the host
+	// when ANOTHER addon's handler.type=capability resolves to this addon, so
+	// it must be whitelisted exactly like an action's own handler.
+	for _, pc := range m.ProvidesCapabilities {
+		if pc.Handler.Type == "wasm" {
+			add(pc.Handler.Function)
+		}
+	}
+
 	// Connector lookups/health-checks: a credential's options_source (populates
 	// a dynamic_select at config time) and a connector's test_export ("test
 	// connection") are wasm exports the host invokes, so they must be in the
