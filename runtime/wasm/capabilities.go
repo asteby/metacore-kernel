@@ -74,6 +74,10 @@ type invocation struct {
 	// (Host.WithSequenceStamp) data_mutate / data_batch run on every create,
 	// inside the transaction. nil = creates are not auto-stamped.
 	sequenceStamp SequenceStampFn
+	// createCheck is the embedder-injected pre-INSERT check
+	// (Host.WithCreateCheck) data_mutate / data_batch run on every create,
+	// inside the transaction. nil = no check.
+	createCheck CreateCheckFn
 	// ctxProvider is the embedder-injected execution-context port the ctx_get
 	// import calls (Host.WithContextProvider). nil = context_unavailable.
 	ctxProvider ContextProviderFn

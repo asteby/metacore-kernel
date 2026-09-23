@@ -67,6 +67,7 @@ type Host struct {
 	sequenceNext    func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)
 	routingTable    RoutingTableFn
 	sequenceStamp   SequenceStampFn
+	createCheck     CreateCheckFn
 	ctxProvider     ContextProviderFn
 	mutationGuard   func(ctx context.Context, logicalTable string, row map[string]any) error
 	mutationCompute MutationComputeFn
@@ -202,6 +203,19 @@ func (h *Host) WithSequenceNext(f func(ctx context.Context, orgID uuid.UUID, mod
 // (legacy behaviour). See docs/wasm-abi.md § 14.10.
 func (h *Host) WithSequenceStamp(f SequenceStampFn) *Host {
 	h.sequenceStamp = f
+	return h
+}
+
+// WithCreateCheck injects the embedder's pre-INSERT check for data_mutate /
+// data_batch creates. It runs inside the write transaction after the folio
+// stamp and before the INSERT; a non-nil error rolls the mutation (or the
+// whole batch) back and surfaces to the guest as `invalid_reference` when it
+// wraps dynamic.ErrDeletedRef, else `validation_error`. Embedders wire it to
+// dynamic.CheckNoDeletedRefs over the model's declared ref columns so a guest
+// cannot create a sale line for a soft-deleted product (QA VEN-N08). When
+// unset, creates are not checked (previous behaviour).
+func (h *Host) WithCreateCheck(f CreateCheckFn) *Host {
+	h.createCheck = f
 	return h
 }
 
@@ -481,6 +495,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		sequenceNext:      h.sequenceNext,
 		routingTable:      h.routingTable,
 		sequenceStamp:     h.sequenceStamp,
+		createCheck:       h.createCheck,
 		ctxProvider:       h.ctxProvider,
 		mutationGuard:     h.mutationGuard,
 		mutationCompute:   h.mutationCompute,

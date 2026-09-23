@@ -369,20 +369,20 @@ func TestValidate_MultiRefChecksEveryID(t *testing.T) {
 	}
 	ctx := context.Background()
 	for _, raw := range []any{[]any{a, b}, []string{a}, `["` + a + `","` + b + `"]`, []any{}, "[]"} {
-		ok, err := svc.refExists(ctx, user, "val_categories", raw)
+		ok, err := svc.refExists(ctx, user, "val_categories", raw, false)
 		if err != nil || !ok {
 			t.Fatalf("existing ids %v: ok=%v err=%v", raw, ok, err)
 		}
 	}
 	missing := uuid.New().String()
 	for _, raw := range []any{[]any{a, missing}, `["` + missing + `"]`} {
-		ok, err := svc.refExists(ctx, user, "val_categories", raw)
+		ok, err := svc.refExists(ctx, user, "val_categories", raw, false)
 		if err != nil || ok {
 			t.Fatalf("missing id %v must be not_found: ok=%v err=%v", raw, ok, err)
 		}
 	}
 	// Scalar ref keeps working.
-	if ok, err := svc.refExists(ctx, user, "val_categories", a); err != nil || !ok {
+	if ok, err := svc.refExists(ctx, user, "val_categories", a, false); err != nil || !ok {
 		t.Fatalf("scalar ref: ok=%v err=%v", ok, err)
 	}
 }

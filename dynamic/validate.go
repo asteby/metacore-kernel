@@ -184,7 +184,7 @@ func (s *Service) validateWrite(ctx context.Context, model, tableName string, us
 
 		// not_found: a ref (FK) pointing at a non-existent (tenant-scoped) row.
 		if col.Ref != "" {
-			exists, err := s.refExists(ctx, user, col.Ref, raw)
+			exists, err := s.refExists(ctx, user, col.Ref, raw, !isUpdate)
 			if err != nil {
 				return err
 			}
@@ -346,7 +346,11 @@ func optionAllows(opts []manifest.Option, raw any) (allowed []string, ok bool) {
 // ids, e.g. `segment_ids` with `multiple: true`) arrives as a slice or as its
 // JSON text: every id must exist. Comparing the whole array against `id` used
 // to reach Postgres as `id = '["…"]'` and fail the write with a 500 (22P02).
-func (s *Service) refExists(ctx context.Context, user modelbase.AuthUser, ref string, raw any) (bool, error) {
+//
+// liveOnly (creates) also excludes soft-deleted targets: a new record must not
+// point at a deleted product/customer (QA VEN-N08). Updates keep accepting an
+// existing link to a since-deleted row, so editing an old document still works.
+func (s *Service) refExists(ctx context.Context, user modelbase.AuthUser, ref string, raw any, liveOnly bool) (bool, error) {
 	table, ok := refTable(ref)
 	if !ok {
 		// Unrecognized / unsafe ref target — do not block the write on it.
@@ -362,6 +366,9 @@ func (s *Service) refExists(ctx context.Context, user modelbase.AuthUser, ref st
 	var count int64
 	q := s.scope.ScopeQuery(s.db.WithContext(ctx).Table(table), user).
 		Where("id IN ?", ids)
+	if liveOnly && tableHasDeletedAt(s.db, table) {
+		q = q.Where("deleted_at IS NULL")
+	}
 	if err := q.Count(&count).Error; err != nil {
 		return false, err
 	}
