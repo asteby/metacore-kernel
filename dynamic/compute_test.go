@@ -469,3 +469,22 @@ func TestRecomputeRollupsForChild_Guards(t *testing.T) {
 		t.Fatalf("a no-op case mutated the parent: total=%v count=%v, want 7/3", total, count)
 	}
 }
+
+// A Tier-3 handler that yields no value (host could not run the export) must
+// leave the target as sent, not NULL it: a NOT NULL target such as a sale
+// line's unit_price would otherwise fail the whole write.
+func TestApplyFormulas_Tier3NilKeepsTarget(t *testing.T) {
+	fb := formulaBinding{
+		model:    "test_products",
+		table:    "test_products",
+		formulas: []manifest.Formula{{Target: "price", Tier: 3, Handler: "wasm:resolve_price"}},
+	}
+	none := func(context.Context, string, string, map[string]any) (any, error) { return nil, nil }
+	input := map[string]any{"price": 2835.0}
+	if err := applyFormulas(context.Background(), none, fb, input, nil); err != nil {
+		t.Fatalf("applyFormulas: %v", err)
+	}
+	if input["price"] != 2835.0 {
+		t.Fatalf("price = %v, want the sent 2835", input["price"])
+	}
+}
