@@ -15,6 +15,7 @@ import (
 	"github.com/asteby/metacore-kernel/connectors"
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
+	"github.com/asteby/metacore-kernel/runtime/wasm/importpolicy"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
 	"github.com/tetratelabs/wazero"
@@ -158,7 +159,7 @@ func orgIDFrom(ctx context.Context) uuid.UUID {
 // on. We keep the surface deliberately narrow: one function per privileged
 // capability, each enforced by security.Capabilities.
 func registerHostModule(ctx context.Context, h *Host) error {
-	b := h.rt.NewHostModuleBuilder("metacore_host")
+	b := h.rt.NewHostModuleBuilder(importpolicy.HostModule)
 
 	// log(msgPtr, msgLen) — noop-safe; logger is always non-nil.
 	b.NewFunctionBuilder().
