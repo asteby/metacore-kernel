@@ -569,7 +569,10 @@ allocates an envelope, even for zero-row mutations.
   are accepted. Any other top-level statement (`SELECT`, `CREATE`, `DROP`,
   `ALTER`, `TRUNCATE`, `COPY`, `GRANT`, `SET`, `CALL`, `DO`, `LISTEN`,
   `NOTIFY`, `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`) is rejected with
-  `invalid_sql`. Read-only queries belong to `db_query`.
+  `invalid_sql`. Read-only queries belong to `db_query`. Conflict actions
+  inside the statement are not the `DO` utility statement and are allowed:
+  `INSERT … ON CONFLICT … DO NOTHING | DO UPDATE SET …` and MERGE's
+  `THEN DO NOTHING`.
 - **Single statement**: parsed into a statement list and must contain
   exactly one top-level node. Trailing `;` is tolerated; multi-statement
   payloads are rejected with `invalid_sql`.
