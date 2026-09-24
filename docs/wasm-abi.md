@@ -2213,3 +2213,27 @@ The provider receives only the slices the guest is entitled to and asked for
 invocation. `OrgConfig` is a closed allow-list, not the organization row.
 
 Implementation: `runtime/wasm/ctxget.go`; capability: `security.Capabilities.CanReadContext`.
+
+## 21. Actor in hook and event payloads
+
+The acting user reaches the guest in the payload itself, not only through
+`ctx_get`. The host always sets the value. A key the client or an emitting
+guest wrote is never trusted.
+
+- **Manifest CRUD hooks** (`before_create` … `after_delete`, `dynamic/hooks.go`).
+  The envelope `{event, model, input|record|id}` gets `actor_id` and
+  `user_id` at its root, both with the same uuid. The row stays under
+  `input` / `record`, so a client field named `actor_id` there does not
+  touch the root. Source: the ctx actor (`dynamic.WithActorID`), or else the
+  request user. With no real actor (no user, zero uuid, or
+  `dynamic.SystemActorID`), neither key is written.
+- **Canonical events** (`<addon>.<Model>.<action>`). `actor_id` is part of
+  the envelope that `publishCanonical` builds. The dispatcher fills it from
+  the ctx actor only when it is missing.
+- **Domain events** (`event_emit`). The payload is written by a guest, so the
+  dispatcher overwrites its top-level `actor_id` with the ctx actor of the
+  emitting invocation. With no ctx actor, the payload is delivered unchanged.
+  A non-object payload is never modified.
+
+Implementation: `dynamic/hooks.go` (`withHookActor`) and
+`dispatch/dispatcher.go` (`stampActorID`).

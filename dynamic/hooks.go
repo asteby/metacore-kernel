@@ -270,58 +270,58 @@ func (r *HookRegistry) registerManifestHook(addonKey, model, event string, m man
 	case "before_create":
 		r.registerOwned(owned, func() {
 			r.RegisterBeforeCreate(model, func(ctx context.Context, hc HookContext, input map[string]any) error {
-				payload, _ := json.Marshal(map[string]any{
+				payload, _ := json.Marshal(withHookActor(ctx, hc, map[string]any{
 					"event": event, "model": model,
 					"input": input,
-				})
+				}))
 				return invoker.Run(ctx, addonKey, orgIDFromUser(hc.User), event, m, payload)
 			})
 		})
 	case "after_create":
 		r.registerOwned(owned, func() {
 			r.RegisterAfterCreate(model, func(ctx context.Context, hc HookContext, record any) error {
-				payload, _ := json.Marshal(map[string]any{
+				payload, _ := json.Marshal(withHookActor(ctx, hc, map[string]any{
 					"event": event, "model": model,
 					"record": record,
-				})
+				}))
 				return invoker.Run(ctx, addonKey, orgIDFromUser(hc.User), event, m, payload)
 			})
 		})
 	case "before_update":
 		r.registerOwned(owned, func() {
 			r.RegisterBeforeUpdate(model, func(ctx context.Context, hc HookContext, id string, input map[string]any) error {
-				payload, _ := json.Marshal(map[string]any{
+				payload, _ := json.Marshal(withHookActor(ctx, hc, map[string]any{
 					"event": event, "model": model,
 					"id": id, "input": input,
-				})
+				}))
 				return invoker.Run(ctx, addonKey, orgIDFromUser(hc.User), event, m, payload)
 			})
 		})
 	case "after_update":
 		r.registerOwned(owned, func() {
 			r.RegisterAfterUpdate(model, func(ctx context.Context, hc HookContext, record any) error {
-				payload, _ := json.Marshal(map[string]any{
+				payload, _ := json.Marshal(withHookActor(ctx, hc, map[string]any{
 					"event": event, "model": model,
 					"record": record,
-				})
+				}))
 				return invoker.Run(ctx, addonKey, orgIDFromUser(hc.User), event, m, payload)
 			})
 		})
 	case "before_delete":
 		r.registerOwned(owned, func() {
 			r.RegisterBeforeDelete(model, func(ctx context.Context, hc HookContext, id string) error {
-				payload, _ := json.Marshal(map[string]any{
+				payload, _ := json.Marshal(withHookActor(ctx, hc, map[string]any{
 					"event": event, "model": model, "id": id,
-				})
+				}))
 				return invoker.Run(ctx, addonKey, orgIDFromUser(hc.User), event, m, payload)
 			})
 		})
 	case "after_delete":
 		r.registerOwned(owned, func() {
 			r.RegisterAfterDelete(model, func(ctx context.Context, hc HookContext, id string) error {
-				payload, _ := json.Marshal(map[string]any{
+				payload, _ := json.Marshal(withHookActor(ctx, hc, map[string]any{
 					"event": event, "model": model, "id": id,
-				})
+				}))
 				return invoker.Run(ctx, addonKey, orgIDFromUser(hc.User), event, m, payload)
 			})
 		})
@@ -421,4 +421,24 @@ func orgIDFromUser(u modelbase.AuthUser) uuid.UUID {
 		return uuid.Nil
 	}
 	return u.GetOrganizationID()
+}
+
+// withHookActor stamps the acting user onto a manifest hook envelope as
+// `actor_id` and `user_id` (the envelope has its own root; the row travels
+// under `input`/`record`, so the client can never set these keys). The value
+// is the ctx actor (WithActorID) or, failing that, the request user. With no
+// real actor — a scheduler, the system principal — neither key is written.
+func withHookActor(ctx context.Context, hc HookContext, env map[string]any) map[string]any {
+	actor := ActorIDFromContext(ctx)
+	if actor == "" && hc.User != nil {
+		if id := hc.User.GetID(); id != uuid.Nil {
+			actor = id.String()
+		}
+	}
+	if actor == "" || actor == SystemActorID.String() {
+		return env
+	}
+	env["actor_id"] = actor
+	env["user_id"] = actor
+	return env
 }

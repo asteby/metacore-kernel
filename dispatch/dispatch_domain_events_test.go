@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/asteby/metacore-kernel/dispatch"
+	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -291,5 +292,38 @@ func TestRetryBackoff_SpacesAttempts(t *testing.T) {
 	}
 	if h.rec.count() != 3 {
 		t.Fatalf("attempts = %d, want 3", h.rec.count())
+	}
+}
+
+// TestDomainEvent_GuestReceivesHostActor: a domain event emitted from a
+// delivery whose ctx carries the actor reaches the subscriber with that
+// actor_id in its payload, overriding whatever the emitter wrote.
+func TestDomainEvent_GuestReceivesHostActor(t *testing.T) {
+	h := newDomainHarness(t, "pos.order_created")
+	actor := uuid.NewString()
+	ctx := dynamic.WithActorID(context.Background(), actor)
+
+	payload := map[string]any{"order_id": "o-1", "actor_id": "emitter-said"}
+	if _, err := h.bus.PublishWithCount(ctx, "kernel", "pos.order_created", uuid.New(), payload); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	h.await(t, 1)
+	var got map[string]any
+	if err := json.Unmarshal(h.rec.payload(0), &got); err != nil {
+		t.Fatalf("payload not json: %v", err)
+	}
+	if got["actor_id"] != actor {
+		t.Fatalf("actor_id = %v, want host actor %s", got["actor_id"], actor)
+	}
+
+	// No ctx actor: nothing is invented.
+	if _, err := h.bus.PublishWithCount(context.Background(), "kernel", "pos.order_created", uuid.New(), map[string]any{"order_id": "o-2"}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	h.await(t, 1)
+	got = nil
+	_ = json.Unmarshal(h.rec.payload(1), &got)
+	if _, ok := got["actor_id"]; ok {
+		t.Fatalf("actor_id written without an actor: %v", got)
 	}
 }
