@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/asteby/metacore-kernel/modelbase"
+	"gorm.io/gorm"
 )
 
 // FacetsQuery is the input to Service.Facets.
@@ -14,7 +15,9 @@ type FacetsQuery struct {
 	// Model key (e.g. "github_issues"). Must resolve via the model resolver.
 	Model string
 	// Field is the column whose distinct values are being enumerated. It must
-	// exist on the model and pass safeColumn.
+	// exist on the model and pass safeColumn, OR be a jsonb bag path
+	// (`product_specs.dot`, `fiscal_data.rfc`) whose bag column is jsonb on
+	// the model and whose key segment is a safe identifier.
 	Field string
 	// Q optionally narrows the returned values with an ILIKE/unaccent match
 	// (same dialect mechanism Service.Options uses).
@@ -39,7 +42,7 @@ type FacetBucket struct {
 // the real repos / assignees / statuses present in the data rather than only
 // offering a "contains…" text match.
 //
-// The query is:
+// Plain columns:
 //
 //	SELECT <col> AS value, COUNT(*) AS count
 //	  FROM <table>
@@ -49,27 +52,25 @@ type FacetBucket struct {
 //	 ORDER BY count DESC, value ASC
 //	 LIMIT <n>
 //
-// The `<> ''` guard is applied only for text columns (a non-text column would
-// raise a type error on some dialects); non-text values are stringified in Go so
-// the {value,label} contract stays uniform. Table resolution mirrors
-// queryDynamicOptions (.Model(instance).Table(name)) so reflect-built addon
-// models resolve to their real table, and tenant scoping fires only when the
-// model carries an organization_id column (hasOrgColumn).
+// JSONB bag paths (`product_specs.dot`, UI-N05 / products_tires): the expression
+// is dialect-aware (`col->>'key'` on Postgres, `json_extract(col, '$.key')` on
+// SQLite). The `<> ''` empty-string guard always applies because both operators
+// yield text.
+//
+// Table resolution mirrors queryDynamicOptions (.Model(instance).Table(name))
+// so reflect-built addon models resolve to their real table, and tenant scoping
+// fires only when the model carries an organization_id column (hasOrgColumn).
 func (s *Service) Facets(ctx context.Context, user modelbase.AuthUser, q FacetsQuery) ([]FacetBucket, error) {
 	if q.Field == "" {
 		return nil, ErrFieldRequired
-	}
-	if !safeColumn.MatchString(q.Field) {
-		return nil, fmt.Errorf("%w: unsafe field name %q", ErrInvalidInput, q.Field)
 	}
 	instance, ok := s.lookupModel(ctx, q.Model)
 	if !ok {
 		return nil, ErrModelNotFound
 	}
-	// The column must be part of the model's structure. Mirrors the options
-	// "field not configured" semantics (mapped to 404 by the handler).
-	if _, ok := structColumnSet(instance)[q.Field]; !ok {
-		return nil, ErrOptionsFieldNotFound
+	expr, emptyGuard, err := resolveFacetExpr(s.db, instance, q.Field)
+	if err != nil {
+		return nil, err
 	}
 
 	// Pin the FROM table explicitly (like queryDynamicOptions) so reflect-built
@@ -94,12 +95,11 @@ func (s *Service) Facets(ctx context.Context, user modelbase.AuthUser, q FacetsQ
 	// hand — facet counts must match the list the chips filter.
 	db = scopeSoftDelete(db, instance)
 
-	// Exclude empty buckets: NULL always, and the empty string only for text
-	// columns (a `<> ''` predicate against e.g. an integer column errors on
-	// Postgres).
-	db = db.Where(fmt.Sprintf("%s IS NOT NULL", q.Field))
-	if columnIsText(instance, q.Field) {
-		db = db.Where(fmt.Sprintf("%s <> ''", q.Field))
+	// Exclude empty buckets: NULL always, and the empty string when the
+	// expression yields text (plain text columns + every jsonb ->> path).
+	db = db.Where(fmt.Sprintf("%s IS NOT NULL", expr))
+	if emptyGuard {
+		db = db.Where(fmt.Sprintf("%s <> ''", expr))
 	}
 
 	// Q: narrow the values with the configured SearchMatchClause so the same
@@ -107,7 +107,7 @@ func (s *Service) Facets(ctx context.Context, user modelbase.AuthUser, q FacetsQ
 	// Postgres) applies here. Escape % and _ exactly like queryDynamicOptions.
 	if q.Q != "" {
 		escaped := strings.NewReplacer("%", `\%`, "_", `\_`).Replace(q.Q)
-		frag, val := s.matchClause(q.Field, escaped)
+		frag, val := s.matchClause(expr, escaped)
 		if frag != "" {
 			db = db.Where(frag, val)
 		}
@@ -122,8 +122,8 @@ func (s *Service) Facets(ctx context.Context, user modelbase.AuthUser, q FacetsQ
 	}
 
 	db = db.
-		Select(fmt.Sprintf("%s AS value, COUNT(*) AS count", q.Field)).
-		Group(q.Field).
+		Select(fmt.Sprintf("%s AS value, COUNT(*) AS count", expr)).
+		Group(expr).
 		Order("count DESC, value ASC").
 		Limit(limit)
 
@@ -137,6 +137,52 @@ func (s *Service) Facets(ctx context.Context, user modelbase.AuthUser, q FacetsQ
 		out = append(out, FacetBucket{Value: r.Value, Label: r.Value, Count: r.Count})
 	}
 	return out, nil
+}
+
+// resolveFacetExpr maps a FacetsQuery.Field onto a SQL expression safe to
+// splice into SELECT/WHERE/GROUP BY. Plain columns must exist on the model.
+// Dotted paths (`bag.key`) require the bag to be a jsonb column and both
+// segments to pass safeColumn — anything else is ErrInvalidInput (400).
+func resolveFacetExpr(db *gorm.DB, instance any, field string) (expr string, emptyGuard bool, err error) {
+	if safeColumn.MatchString(field) {
+		if _, ok := structColumnSet(instance)[field]; !ok {
+			return "", false, ErrOptionsFieldNotFound
+		}
+		return field, columnIsText(instance, field), nil
+	}
+	bag, key, ok := splitFacetPath(field)
+	if !ok || !safeColumn.MatchString(bag) || !safeColumn.MatchString(key) {
+		return "", false, fmt.Errorf("%w: unsafe field name %q", ErrInvalidInput, field)
+	}
+	if _, exists := structColumnSet(instance)[bag]; !exists {
+		return "", false, ErrOptionsFieldNotFound
+	}
+	if !columnIsJSONB(instance, bag) {
+		return "", false, fmt.Errorf("%w: %q is not a jsonb bag", ErrInvalidInput, bag)
+	}
+	return jsonbTextExpr(db, bag, key), true, nil
+}
+
+// splitFacetPath splits "bag.key" on the first dot. Nested paths
+// (a.b.c) are rejected — extension bags are one level deep.
+func splitFacetPath(field string) (bag, key string, ok bool) {
+	i := strings.IndexByte(field, '.')
+	if i <= 0 || i == len(field)-1 {
+		return "", "", false
+	}
+	if strings.ContainsRune(field[i+1:], '.') {
+		return "", "", false
+	}
+	return field[:i], field[i+1:], true
+}
+
+// jsonbTextExpr returns a dialect-safe SQL expression that extracts a jsonb
+// object key as text. key must already pass safeColumn.
+func jsonbTextExpr(db *gorm.DB, col, key string) string {
+	if db != nil && db.Dialector != nil && db.Dialector.Name() == "sqlite" {
+		return fmt.Sprintf("json_extract(%s, '$.%s')", col, key)
+	}
+	return fmt.Sprintf("%s->>'%s'", col, key)
 }
 
 // facetRow is the scan target for the grouped facets query. Value is scanned as
@@ -153,12 +199,37 @@ type facetRow struct {
 // Column-based (json tag) so it is correct for reflect-built addon models whose
 // Go field names are derived from the column.
 func columnIsText(instance any, col string) bool {
+	ft, ok := columnFieldType(instance, col)
+	if !ok {
+		return false
+	}
+	for ft.Kind() == reflect.Ptr {
+		ft = ft.Elem()
+	}
+	return ft.Kind() == reflect.String
+}
+
+// columnIsJSONB reports whether the model's column is the jsonb bag type
+// (JSONBValue) used by reflect-built addon models and the fiscal_data /
+// product_specs extension bags.
+func columnIsJSONB(instance any, col string) bool {
+	ft, ok := columnFieldType(instance, col)
+	if !ok {
+		return false
+	}
+	for ft.Kind() == reflect.Ptr {
+		ft = ft.Elem()
+	}
+	return ft == reflect.TypeOf(JSONBValue{})
+}
+
+func columnFieldType(instance any, col string) (reflect.Type, bool) {
 	t := reflect.TypeOf(instance)
 	for t != nil && t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
 	if t == nil || t.Kind() != reflect.Struct {
-		return false
+		return nil, false
 	}
 	var walk func(reflect.Type) (reflect.Type, bool)
 	walk = func(t reflect.Type) (reflect.Type, bool) {
@@ -182,12 +253,5 @@ func columnIsText(instance any, col string) bool {
 		}
 		return nil, false
 	}
-	ft, ok := walk(t)
-	if !ok {
-		return false
-	}
-	for ft.Kind() == reflect.Ptr {
-		ft = ft.Elem()
-	}
-	return ft.Kind() == reflect.String
+	return walk(t)
 }
