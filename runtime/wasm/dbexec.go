@@ -360,8 +360,15 @@ func validateMutationOnly(sqlText string) error {
 		return fmt.Errorf("only INSERT/UPDATE/DELETE/MERGE allowed (got %q)", leading)
 	}
 
+	// `ON CONFLICT … DO NOTHING|UPDATE` (and MERGE's `THEN DO NOTHING`) is a
+	// conflict action, not the anonymous-code-block statement `DO $$…$$` the
+	// ban targets — that one is a top-level utility statement and cannot sit
+	// inside the single DML statement the leading-verb check already enforces.
+	// Banning the bare word killed every idempotent upsert
+	// (tire_warranty: 41 dead deliveries with "banned keyword: DO").
+	scan := dbExecConflictActionRe.ReplaceAllString(naked, " ")
 	for _, kw := range bannedDBExecKeywords {
-		if matchWholeWord(naked, kw) {
+		if matchWholeWord(scan, kw) {
 			return fmt.Errorf("banned keyword: %s", kw)
 		}
 	}
@@ -381,6 +388,10 @@ func validateMutationOnly(sqlText string) error {
 // in the list — it is a legitimate source for INSERT…SELECT and for CTE /
 // subqueries inside UPDATE / DELETE. SET is also excluded because UPDATE …
 // SET col = … is the canonical update form.
+// dbExecConflictActionRe matches the DML conflict actions that legitimately
+// contain the word DO.
+var dbExecConflictActionRe = regexp.MustCompile(`(?i)\bDO\s+(NOTHING|UPDATE)\b`)
+
 var bannedDBExecKeywords = []string{
 	"CREATE", "DROP", "ALTER", "TRUNCATE",
 	"GRANT", "REVOKE", "CALL", "DO",

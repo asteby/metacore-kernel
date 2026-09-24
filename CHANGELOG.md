@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`db_exec` accepts `INSERT … ON CONFLICT … DO NOTHING | DO UPDATE`.**
+  The banned-keyword scan matched the bare word `DO`, so every idempotent
+  upsert died as `invalid_sql: banned keyword: DO` (tire_warranty: 41 dead
+  deliveries). Conflict actions are now exempt; the `DO $$…$$` statement and
+  multi-statement payloads stay rejected.
+
 - **Dead event deliveries now say why they died.** Every wasm host import
   error carries `message_key` (`wasm.host.error.<code>`) next to `code` and
   `message`. The dispatcher unwraps a raw host envelope that a guest pasted

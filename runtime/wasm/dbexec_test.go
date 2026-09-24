@@ -242,6 +242,32 @@ func TestExecuteDBExec_LiteralWithKeyword(t *testing.T) {
 	}
 }
 
+// An idempotent upsert passes both the string layer and the AST layer and
+// reaches the driver (tire_warranty died 41 times on "banned keyword: DO").
+func TestExecuteDBExec_OnConflictDoUpsert(t *testing.T) {
+	tx, mock, cleanup := newMockGormTx(t)
+	defer cleanup()
+
+	mock.ExpectExec(`SET LOCAL search_path TO "addon_tickets", public`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`INSERT INTO tickets \(id, note\) VALUES \(\$1, \$2\) ON CONFLICT \(id\) DO UPDATE SET note = excluded.note`).
+		WithArgs(int64(1), "x").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	out := executeDBExec(context.Background(), tx, nil, "tickets", "",
+		permissiveEnforcer(),
+		"INSERT INTO tickets (id, note) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET note = excluded.note",
+		[]byte(`[1, "x"]`))
+
+	env := unmarshalExec(t, out)
+	if !env.Success {
+		t.Fatalf("expected success for ON CONFLICT DO UPDATE, got %s", out)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestExecuteDBExec_CapabilityDenied(t *testing.T) {
 	gdb, mock, cleanup := newMockGorm(t)
 	defer cleanup()
@@ -525,6 +551,11 @@ func TestValidateMutationOnly(t *testing.T) {
 		// inside extractMutationRelations enforces that the top-level
 		// statement after the WITH is a mutation.
 		"WITH x AS (SELECT 1) INSERT INTO tickets (note) SELECT note FROM staging",
+		// Conflict actions are DML, not the `DO $$…$$` utility statement.
+		"INSERT INTO tickets (id, note) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+		"insert into tickets (id, note) values ($1, $2) on conflict (id) do update set note = excluded.note",
+		"INSERT INTO tickets (id) VALUES ($1) ON CONFLICT ON CONSTRAINT tickets_pkey DO\n  NOTHING RETURNING id",
+		"MERGE INTO tickets USING staging ON tickets.id = staging.id WHEN MATCHED THEN DO NOTHING",
 	}
 	for _, s := range good {
 		if err := validateMutationOnly(s); err != nil {
@@ -544,6 +575,10 @@ func TestValidateMutationOnly(t *testing.T) {
 		"SAVEPOINT foo",
 		"DELETE FROM information_schema.tables",
 		"DELETE FROM pg_catalog.pg_class",
+		// The anonymous block and DO outside a conflict action stay banned.
+		"DO $$ BEGIN DELETE FROM tickets; END $$",
+		"INSERT INTO tickets (note) SELECT 1 WHERE 1 = 1 AND DO",
+		"INSERT INTO tickets (id) VALUES (1) ON CONFLICT DO NOTHING; DROP TABLE tickets",
 	}
 	// `WITH t AS (SELECT 1) SELECT * FROM t` now passes validateMutationOnly
 	// (the leading WITH is allowed because Postgres supports
