@@ -18,6 +18,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The guest now sees the actor in hook and domain-event payloads.**
+  The envelope of manifest CRUD hooks (`before_*` / `after_*`) now carries
+  `actor_id` and `user_id` at its root. The value is the ctx actor
+  (`WithActorID`), or else the request user. With no actor, or with the
+  system principal, neither key is written. The dispatcher now writes the
+  ctx actor into the top-level `actor_id` of a domain event (`event_emit`),
+  replacing the value the emitter wrote. Before this, the actor rode only on
+  the delivery ctx. A canonical event keeps the `actor_id` the host already
+  built. This matches ops#1661. See `docs/wasm-abi.md` § 21.
+
 - **`webhookin`: signatures in the real format of each provider, and an empty
   secret never authenticates.** `hmac-sha256` now accepts the digest as hex
   (`sha256=<hex>`) or as base64, and also reads `X-WC-Webhook-Signature`

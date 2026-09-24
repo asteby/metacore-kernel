@@ -31,3 +31,18 @@ func TestStampEventName(t *testing.T) {
 		t.Fatalf("array must pass through, got %s", got)
 	}
 }
+
+func TestStampActorID(t *testing.T) {
+	out := stampActorID([]byte(`{"order_id":"o-1","actor_id":"guest-said"}`), "host-actor")
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if m["actor_id"] != "host-actor" || m["order_id"] != "o-1" {
+		t.Fatalf("host actor must win and fields survive, got %v", m)
+	}
+	arr := []byte(`[1]`)
+	if got := stampActorID(arr, "a"); string(got) != string(arr) {
+		t.Fatalf("array must pass through, got %s", got)
+	}
+}

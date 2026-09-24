@@ -105,8 +105,18 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 	// it here. Without this fallback the NEXT hop's subscriber (workshop
 	// opening a WorkOrder off the pick) ran actorless and its rows audited as
 	// "Sistema"/N/A even though a real user started the chain.
-	if ce.ActorID == "" {
-		ce.ActorID = dynamic.ActorIDFromContext(ctx)
+	//
+	// The actor also has to reach the GUEST, not just the delivery ctx: a
+	// domain event is guest-authored, so the host's ctx actor wins over any
+	// actor_id the emitter wrote and is stamped into the payload the
+	// subscriber receives. A canonical event is host-built (publishCanonical)
+	// and already carries its actor, so it is only filled in when absent.
+	if actor := dynamic.ActorIDFromContext(ctx); actor != "" {
+		canonical := ce.ID != "" && ce.Model != ""
+		if !canonical || ce.ActorID == "" {
+			ce.ActorID = actor
+			raw = stampActorID(raw, actor)
+		}
 	}
 
 	// Model-key guard (see model_key_guard.go). A publisher that named the
@@ -624,6 +634,26 @@ func stampEventName(raw []byte, eventName string) []byte {
 		return raw
 	}
 	obj["event"] = nameJSON
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// stampActorID sets the top-level `actor_id` of a JSON-object payload,
+// replacing whatever was there. Non-object payloads are returned untouched
+// (the actor still rides on the delivery ctx).
+func stampActorID(raw []byte, actor string) []byte {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+		return raw
+	}
+	actorJSON, err := json.Marshal(actor)
+	if err != nil {
+		return raw
+	}
+	obj["actor_id"] = actorJSON
 	out, err := json.Marshal(obj)
 	if err != nil {
 		return raw
