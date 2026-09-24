@@ -1550,7 +1550,11 @@ data_mutate(reqPtr i32, reqLen i32) -> i64
   - Any other host-stamped column (`created_at`, `updated_at`, `deleted_at`,
     `id` outside create, anything in `inc`) is rejected with `invalid_request`.
 - **create** — the host stamps `id` (when absent), `organization_id`,
-  `created_at` and `updated_at`, then `INSERT … RETURNING *`. Column names
+  `created_at` and `updated_at` — plus `created_by_id` from the invocation
+  actor and `branch_id` from the caller's active branch
+  (`dynamic.WithBranchID`) when the table has those columns and the guest
+  left them empty (absent, `null` or `""`; a branch the guest names wins) —
+  then `INSERT … RETURNING *`. Column names
   must match `^[a-z_][a-z0-9_]{0,62}$`; unknown columns surface as
   `db_error` from the driver (only declared model columns exist — defense
   mirrors the host's seeding path).
@@ -2168,7 +2172,7 @@ did not declare is `forbidden` (loud on purpose); an unknown scope is
 
 | kind             | unlocks                                   |
 |------------------|-------------------------------------------|
-| `ctx:user`       | `user_id`, `user_email`                   |
+| `ctx:user`       | `user_id`, `user_email`, `branch_id`      |
 | `ctx:roles`      | `roles` (role keys of the acting user)    |
 | `ctx:org_config` | `org` (currency, tax, locale, timezone)   |
 
@@ -2185,6 +2189,7 @@ receives it in every invocation).
     "org_id": "<uuid>",
     "user_id": "<uuid>" | null,          // null: system-driven work (no actor on the ctx)
     "user_email": "ana@example.com",
+    "branch_id": "<uuid>" | null,        // caller's active branch; null when none
     "roles": ["admin", "warehouse"],     // sorted
     "org": { "currency_code": "MXN", "tax_rate": 16, "tax_included": true,
              "locale": "es-MX", "timezone": "America/Mexico_City" }
@@ -2199,7 +2204,9 @@ value). Errors: `forbidden`, `invalid_request`, `no_active_org`,
 
 `user_id` is the acting user already carried on the context
 (`dynamic.WithActorID`, the same value `data_mutate` stamps into
-`created_by_id`); the guest cannot choose it.
+`created_by_id`); the guest cannot choose it. `branch_id` is the active
+branch the host put on the context (`dynamic.WithBranchID`, or the user's
+`GetBranchID()` on an action invocation) — the same value a create stamps.
 
 ### 20.3 Embedder port
 
