@@ -222,6 +222,15 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 	// handler creates/updates (e.g. customers' collect_payment) stamped
 	// created_by_id as empty and the UI fell back to "Sistema".
 	ctx = WithActorID(ctx, user.GetID().String())
+	// Same for the active branch, when the host's user carries one (the
+	// optional GetBranchID sequence.go already honours) and the host did not
+	// already put it in ctx: a document the handler creates without naming a
+	// branch_id is born in the caller's branch.
+	if BranchIDFromContext(ctx) == "" {
+		if b, ok := user.(interface{ GetBranchID() uuid.UUID }); ok && b.GetBranchID() != uuid.Nil {
+			ctx = WithBranchID(ctx, b.GetBranchID().String())
+		}
+	}
 
 	if !runInTx {
 		req := ActionRequest{

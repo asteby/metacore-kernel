@@ -3,6 +3,7 @@ package wasm
 import (
 	"bytes"
 	"context"
+	"database/sql/driver"
 	"encoding/json"
 	"log"
 	"strings"
@@ -49,6 +50,16 @@ func stockWriteEnforcer() *security.Enforcer {
 	e := security.NewEnforcer(func(k string) *security.Capabilities {
 		return security.Compile(k, []manifest.Capability{
 			{Kind: "db:write", Target: "stock"},
+		})
+	})
+	e.SetMode(security.ModeEnforce)
+	return e
+}
+
+func salesOrderWriteEnforcer() *security.Enforcer {
+	e := security.NewEnforcer(func(k string) *security.Capabilities {
+		return security.Compile(k, []manifest.Capability{
+			{Kind: "db:write", Target: "sales_orders"},
 		})
 	})
 	e.SetMode(security.ModeEnforce)
@@ -200,6 +211,88 @@ func TestExecuteDataMutate_CreateStampsCreatedByFromActor(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations not met: %v", err)
+	}
+}
+
+// A create into a table with branch_id that the guest left empty (absent or
+// "") is born in the caller's active branch; a branch the guest names wins; a
+// table without the column is left alone.
+func TestExecuteDataMutate_CreateStampsActiveBranch(t *testing.T) {
+	branchID := uuid.NewString()
+	chosen := uuid.NewString()
+	cases := []struct {
+		name    string
+		data    string
+		columns []string
+		insert  string
+		args    func(orgID uuid.UUID, rowID string) []driver.Value
+	}{
+		{
+			name:    "absent",
+			data:    `{"customer_id": "c-1"}`,
+			columns: []string{"id", "organization_id", "branch_id", "customer_id"},
+			insert:  `INSERT INTO "sales_orders" \("branch_id", "created_at", "customer_id", "id", "organization_id", "updated_at"\)`,
+			args: func(orgID uuid.UUID, rowID string) []driver.Value {
+				return []driver.Value{branchID, sqlmock.AnyArg(), "c-1", rowID, orgID, sqlmock.AnyArg()}
+			},
+		},
+		{
+			name:    "blank string",
+			data:    `{"customer_id": "c-1", "branch_id": ""}`,
+			columns: []string{"id", "organization_id", "branch_id", "customer_id"},
+			insert:  `INSERT INTO "sales_orders" \("branch_id", "created_at", "customer_id", "id", "organization_id", "updated_at"\)`,
+			args: func(orgID uuid.UUID, rowID string) []driver.Value {
+				return []driver.Value{branchID, sqlmock.AnyArg(), "c-1", rowID, orgID, sqlmock.AnyArg()}
+			},
+		},
+		{
+			name:    "guest names one",
+			data:    `{"customer_id": "c-1", "branch_id": "` + chosen + `"}`,
+			columns: []string{"id", "organization_id", "branch_id", "customer_id"},
+			insert:  `INSERT INTO "sales_orders" \("branch_id", "created_at", "customer_id", "id", "organization_id", "updated_at"\)`,
+			args: func(orgID uuid.UUID, rowID string) []driver.Value {
+				return []driver.Value{chosen, sqlmock.AnyArg(), "c-1", rowID, orgID, sqlmock.AnyArg()}
+			},
+		},
+		{
+			name:    "no branch column",
+			data:    `{"customer_id": "c-1"}`,
+			columns: []string{"id", "organization_id", "customer_id"},
+			insert:  `INSERT INTO "sales_orders" \("created_at", "customer_id", "id", "organization_id", "updated_at"\)`,
+			args: func(orgID uuid.UUID, rowID string) []driver.Value {
+				return []driver.Value{sqlmock.AnyArg(), "c-1", rowID, orgID, sqlmock.AnyArg()}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gdb, mock, cleanup := newMockGorm(t)
+			defer cleanup()
+			orgID := uuid.New()
+			rowID := uuid.NewString()
+			bus, _, _ := captureBus(t, "customers.SalesOrder.created")
+
+			mock.ExpectBegin()
+			mock.ExpectQuery(`SELECT \* FROM "sales_orders" LIMIT 0`).
+				WillReturnRows(sqlmock.NewRows(tc.columns))
+			mock.ExpectQuery(tc.insert).
+				WithArgs(tc.args(orgID, rowID)...).
+				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(rowID))
+			mock.ExpectCommit()
+
+			inv := testInvocation(gdb, bus, orgID, salesOrderWriteEnforcer(), nil)
+			ctx := dynamic.WithBranchID(context.Background(), branchID)
+			out := executeDataMutate(ctx, inv, []byte(`{
+				"op": "create", "table": "sales_orders", "model": "SalesOrder",
+				"id": "`+rowID+`", "data": `+tc.data+`
+			}`))
+			if env := unmarshalMutate(t, out); !env.Success {
+				t.Fatalf("expected success, got %s", out)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("expectations not met: %v", err)
+			}
+		})
 	}
 }
 

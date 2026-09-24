@@ -66,6 +66,21 @@ func TestCtxGet_UserAndOrgConfig(t *testing.T) {
 	}
 }
 
+func TestCtxGet_UserScopeCarriesActiveBranch(t *testing.T) {
+	org, user, branch := uuid.New(), uuid.New(), uuid.New()
+	ctx := dynamic.WithBranchID(dynamic.WithActorID(context.Background(), user.String()), branch.String())
+	ok, data, _ := ctxDecode(t, executeCtxGet(ctx, ctxInv(org, "ctx:user"), nil))
+	if !ok || data["branch_id"] != branch.String() {
+		t.Fatalf("expected branch_id %s, got %v", branch, data)
+	}
+
+	// No branch in the invocation: the key is present and null, not invented.
+	ok, data, _ = ctxDecode(t, executeCtxGet(dynamic.WithActorID(context.Background(), user.String()), ctxInv(org, "ctx:user"), nil))
+	if v, present := data["branch_id"]; !ok || !present || v != nil {
+		t.Fatalf("expected branch_id null, got %v", data)
+	}
+}
+
 func TestCtxGet_NoCapabilityYieldsOnlyOrgID(t *testing.T) {
 	org := uuid.New()
 	ok, data, _ := ctxDecode(t, executeCtxGet(context.Background(), ctxInv(org), nil))

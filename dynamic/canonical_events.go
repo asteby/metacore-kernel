@@ -90,6 +90,29 @@ func ActorIDFromContext(ctx context.Context) string {
 	return v
 }
 
+// branchIDKey is the unexported typed key for the acting user's active branch
+// (the sucursal the host's branch switcher has selected). It rides next to the
+// actor so a create issued from a guest (data_mutate / data_batch) lands in the
+// same branch a plain CRUD create would, instead of a document with no branch
+// that breaks per-branch reports, stock and cash.
+type branchIDKey struct{}
+
+// WithBranchID returns a child context carrying the acting user's active branch
+// id. An empty id returns ctx unchanged.
+func WithBranchID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, branchIDKey{}, id)
+}
+
+// BranchIDFromContext extracts the branch id previously stored by WithBranchID.
+// It returns an empty string when no branch was set.
+func BranchIDFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(branchIDKey{}).(string)
+	return v
+}
+
 // publishCanonical builds the event name `<addonKey>.<model>.<action>` and
 // fans it out through the Bus. It is a no-op when no Bus was wired, keeping
 // pre-event apps unchanged. The producer addonKey passed to Bus.Publish is

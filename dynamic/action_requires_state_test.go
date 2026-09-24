@@ -258,3 +258,50 @@ func TestExecAction_RequiresState_HTTP409(t *testing.T) {
 		t.Fatalf("success = %v, want false", env["success"])
 	}
 }
+
+// branchUser is a host user that carries an active branch (the optional
+// GetBranchID the sequence scope already reads).
+type branchUser struct {
+	*fakeUser
+	branch uuid.UUID
+}
+
+func (u branchUser) GetBranchID() uuid.UUID { return u.branch }
+
+// TestExecAction_CarriesActiveBranch: the dispatched ctx carries the user's
+// active branch so data_mutate can stamp it on the rows the handler creates; a
+// branch the host already put in ctx wins, and a branch-less user adds none.
+func TestExecAction_CarriesActiveBranch(t *testing.T) {
+	fx, id := setupOrderFixture(t)
+	fx.registerAction("test_orders", &manifest.ActionDef{
+		Key:     "advance",
+		Trigger: &manifest.ActionTrigger{Type: "wasm", Export: "advance"},
+	})
+	var seen string
+	fx.wasm.fn = func(ctx context.Context, _ ActionRequest) (ActionResponse, error) {
+		seen = BranchIDFromContext(ctx)
+		return ActionResponse{Success: true}, nil
+	}
+
+	branch, hostBranch := uuid.New(), uuid.New()
+	user := branchUser{fakeUser: fx.user, branch: branch}
+	cases := []struct {
+		name string
+		ctx  context.Context
+		user modelbase.AuthUser
+		want string
+	}{
+		{"from user", context.Background(), user, branch.String()},
+		{"host ctx wins", WithBranchID(context.Background(), hostBranch.String()), user, hostBranch.String()},
+		{"no branch", context.Background(), fx.user, ""},
+	}
+	for _, tc := range cases {
+		seen = "unset"
+		if _, err := fx.svc.ExecAction(tc.ctx, "test_orders", tc.user, id, "advance", map[string]any{}); err != nil {
+			t.Fatalf("%s: exec: %v", tc.name, err)
+		}
+		if seen != tc.want {
+			t.Fatalf("%s: branch in ctx = %q, want %q", tc.name, seen, tc.want)
+		}
+	}
+}

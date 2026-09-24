@@ -149,6 +149,14 @@ func executeCtxGet(ctx context.Context, inv *invocation, reqJSON []byte) []byte 
 				data["user_id"] = userID.String()
 			}
 			data["user_email"] = hc.UserEmail
+			// The caller's active branch (host branch switcher), so a guest
+			// that needs it for a read or a derived write does not have to
+			// invent one; null when the invocation carries none.
+			if b, err := uuid.Parse(dynamic.BranchIDFromContext(ctx)); err == nil {
+				data["branch_id"] = b.String()
+			} else {
+				data["branch_id"] = nil
+			}
 		}
 		if want[ctxScopeRoles] {
 			roles := append([]string(nil), hc.Roles...)

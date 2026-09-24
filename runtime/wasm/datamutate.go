@@ -214,7 +214,7 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		rollback()
 		return fail(code, cErr.Error())
 	}
-	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now, dynamic.ActorIDFromContext(ctx))
+	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now, dynamic.ActorIDFromContext(ctx), dynamic.BranchIDFromContext(ctx))
 	if mErr != nil {
 		rollback()
 		return fail(code, mErr.Error())
@@ -345,8 +345,11 @@ type mutationResult struct {
 // the invocation context ("" for pure system work): a create stamps it into
 // created_by_id when the table has that column, so rows born from a
 // user-driven side effect (a transfer's destination stock row) show the human
-// behind the chain instead of a permanent "N/A".
-func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]any, orgID uuid.UUID, tbl string, now time.Time, actorID string) (*mutationResult, string, error) {
+// behind the chain instead of a permanent "N/A". `branchID` is the caller's
+// active branch (dynamic.BranchIDFromContext, "" when none): a create into a
+// table with a branch_id column that the guest left empty takes it, the same
+// stamp the host's CRUD create applies from the branch switcher.
+func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]any, orgID uuid.UUID, tbl string, now time.Time, actorID, branchID string) (*mutationResult, string, error) {
 	out := &mutationResult{rowID: req.ID}
 	switch req.Op {
 	case "create":
@@ -390,7 +393,13 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 				vals["created_by_id"] = actorID
 			}
 		}
+		if _, err := uuid.Parse(branchID); err == nil && columns["branch_id"] && blankValue(data["branch_id"]) {
+			vals["branch_id"] = branchID
+		}
 		for c, v := range data {
+			if _, stamped := vals[c]; stamped && c == "branch_id" {
+				continue
+			}
 			vals[c] = v
 		}
 		for c := range vals {
@@ -837,4 +846,18 @@ func computeErrCode(err error) string {
 		return "constraint_violation"
 	}
 	return "db_error"
+}
+
+// blankValue reports whether a guest-supplied value is absent for stamping
+// purposes: missing, JSON null or an empty/whitespace string. A guest that
+// copies an optional modal field verbatim sends "" for "not chosen", which
+// must not beat the host's active branch (nor reach a uuid column as "").
+func blankValue(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(t) == ""
+	}
+	return false
 }
