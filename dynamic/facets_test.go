@@ -2,6 +2,7 @@ package dynamic
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -189,5 +190,60 @@ func TestFacetsErrors(t *testing.T) {
 		Model: "not_registered", Field: "name",
 	}); err != ErrModelNotFound {
 		t.Fatalf("want ErrModelNotFound, got %v", err)
+	}
+}
+
+// TestFacetsJSONBBagPath: product_specs.dot-style extension bag paths
+// (UI-N05 / products_tires) return distinct jsonb key values.
+func TestFacetsJSONBBagPath(t *testing.T) {
+	db := setupTestDB(t)
+	svc := setupService(t, db)
+	user := newUser(uuid.New())
+
+	mk := func(dot string) {
+		t.Helper()
+		specs, err := json.Marshal(map[string]any{"dot": dot, "rim_diameter_in": 16})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.Create(context.Background(), "test_products", user, map[string]any{
+			"name":          "Tire " + dot,
+			"price":         1.0,
+			"product_specs": JSONBValue(specs),
+		}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+	}
+	mk("4823")
+	mk("4823")
+	mk("0124")
+
+	got, err := svc.Facets(context.Background(), user, FacetsQuery{
+		Model: "test_products",
+		Field: "product_specs.dot",
+	})
+	if err != nil {
+		t.Fatalf("facets jsonb path: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2 (%+v)", len(got), got)
+	}
+	if got[0].Value != "4823" || got[0].Count != 2 {
+		t.Fatalf("bucket[0] = %+v, want {4823,2}", got[0])
+	}
+	if got[1].Value != "0124" || got[1].Count != 1 {
+		t.Fatalf("bucket[1] = %+v, want {0124,1}", got[1])
+	}
+
+	// Nested path / injection rejected.
+	if _, err := svc.Facets(context.Background(), user, FacetsQuery{
+		Model: "test_products", Field: "product_specs.dot.extra",
+	}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("want ErrInvalidInput for nested path, got %v", err)
+	}
+	if _, err := svc.Facets(context.Background(), user, FacetsQuery{
+		Model: "test_products", Field: "name.drop",
+	}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("want ErrInvalidInput for non-jsonb bag, got %v", err)
 	}
 }

@@ -21,8 +21,9 @@ import (
 
 type TestProduct struct {
 	modelbase.BaseUUIDModel
-	Name  string  `json:"name" gorm:"size:255"`
-	Price float64 `json:"price"`
+	Name         string     `json:"name" gorm:"size:255"`
+	Price        float64    `json:"price"`
+	ProductSpecs JSONBValue `json:"product_specs" gorm:"type:jsonb"`
 }
 
 func (TestProduct) TableName() string { return "test_products" }
@@ -83,7 +84,8 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		updated_at DATETIME,
 		deleted_at DATETIME,
 		name TEXT,
-		price REAL
+		price REAL,
+		product_specs TEXT
 	)`)
 	return db
 }
