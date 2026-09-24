@@ -642,9 +642,9 @@ func validateDataMutateCol(col string) error {
 
 // decodeDataMutateCols converts the raw JSON column map into driver-friendly
 // Go values using the same scalar rules as db_exec args (docs/wasm-abi.md
-// § 9.6): numbers ride as int64/float64, objects must be one of the $uuid /
-// $ts / $bytes markers. Nested objects/arrays are rejected — guests that
-// target jsonb columns should pre-serialise to a string.
+// § 9.6): numbers ride as int64/float64 and the $uuid / $ts / $bytes markers
+// decode to typed values. Any other object or array is a jsonb document and is
+// bound as its JSON text.
 func decodeDataMutateCols(raw map[string]json.RawMessage) (map[string]any, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -657,6 +657,15 @@ func decodeDataMutateCols(raw map[string]json.RawMessage) (map[string]any, error
 		if err := dec.Decode(&v); err != nil {
 			return nil, fmt.Errorf("column %q: %w", col, err)
 		}
+		// A plain JSON object or array is a jsonb value: bind its JSON text
+		// (Postgres casts text to jsonb on insert/update). Only the typed
+		// markers ($uuid / $ts / $bytes) are decoded as scalars. Rejecting
+		// nested values dead-lettered every channel_orders import with
+		// `column "payload": unsupported object arg`.
+		if isJSONBValue(v) {
+			out[col] = string(rv)
+			continue
+		}
 		dv, err := decodeOneDBArg(v)
 		if err != nil {
 			return nil, fmt.Errorf("column %q: %w", col, err)
@@ -664,6 +673,23 @@ func decodeDataMutateCols(raw map[string]json.RawMessage) (map[string]any, error
 		out[col] = dv
 	}
 	return out, nil
+}
+
+// isJSONBValue reports whether a decoded data value is a JSON document to bind
+// verbatim: any array, or an object that is not one of the typed-arg markers.
+func isJSONBValue(v any) bool {
+	switch t := v.(type) {
+	case []any:
+		return true
+	case map[string]any:
+		for _, marker := range []string{"$uuid", "$ts", "$bytes"} {
+			if _, ok := t[marker]; ok && len(t) == 1 {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // quoteQualifiedTable quotes a resolver-produced physical table name. The
