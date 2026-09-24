@@ -566,11 +566,37 @@ func registerHostModule(ctx context.Context, h *Host) error {
 // before any syscall, sets the custom request headers (when provided), defaults
 // a JSON Content-Type for a body unless the caller set one, and returns the
 // {status, body} JSON envelope (capped at 8 MiB). headers may be nil.
+// connectorFetchHosts resolves the addon's "connector:<connector>.<credential>"
+// http:fetch grants to concrete hosts for the invocation's org (e.g. the
+// WooCommerce store_url the org configured). Each grant still requires the
+// addon to be allowed to read that connector. Resolution failures just drop the
+// grant: the fetch then falls back to the static host list and is refused.
+func connectorFetchHosts(ctx context.Context, inv *invocation) []string {
+	refs := inv.caps.ConnectorHostRefs()
+	if len(refs) == 0 || inv.connectors == nil || inv.orgID == uuid.Nil {
+		return nil
+	}
+	var hosts []string
+	for _, ref := range refs {
+		if inv.caps.CanReadConnector(ref.Connector) != nil {
+			continue
+		}
+		creds, err := inv.connectors.Get(ctx, inv.orgID, ref.Connector)
+		if err != nil {
+			continue
+		}
+		if h := security.HostFromCredential(creds[ref.Credential]); h != "" {
+			hosts = append(hosts, h)
+		}
+	}
+	return hosts
+}
+
 func doHTTP(ctx context.Context, mod api.Module, inv *invocation, url, method string, headers map[string]string, body []byte) uint64 {
 	if method == "" {
 		method = http.MethodGet
 	}
-	if err := inv.caps.CanFetch(url); err != nil {
+	if err := inv.caps.CanFetchHosts(url, connectorFetchHosts(ctx, inv)); err != nil {
 		return writeToGuest(ctx, mod, jsonError("forbidden", err.Error()))
 	}
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))

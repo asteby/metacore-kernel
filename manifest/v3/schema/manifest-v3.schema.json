@@ -768,7 +768,7 @@
         "target": {
           "type": "string",
           "minLength": 1,
-          "description": "Capability target. db:* expects 'schema.table' or 'schema.*'. http:fetch expects a URL prefix. event:* expects an event name. cron:register expects a cron expression. queue:* expects a queue name. secrets:read expects a secret key glob.",
+          "description": "Capability target. db:* expects 'schema.table' or 'schema.*'. http:fetch expects a host pattern, or 'connector:<connector>.<credential>' to allow only the host of that connector credential as configured by each org (e.g. 'connector:woocommerce.store_url'). event:* expects an event name. cron:register expects a cron expression. queue:* expects a queue name. secrets:read expects a secret key glob.",
           "examples": [
             "addon_inventory.*",
             "https://api.stripe.com/*",
