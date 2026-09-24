@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -71,13 +72,25 @@ var (
 	// ErrNoSecretResolver — the route requires verification but no SecretResolver
 	// is wired.
 	ErrNoSecretResolver = errors.New("webhookin: no secret resolver configured")
+	// ErrSecretNotConfigured — the route requires verification but the org has
+	// no (or an empty) signing secret. Returned joined with ErrSignatureInvalid
+	// so hosts that only map the older errors still answer 401: an HMAC keyed
+	// with "" is computable by anyone, so it must never authenticate.
+	ErrSecretNotConfigured = errors.New("webhookin: signing secret not configured")
 )
 
 // signatureHeaders are the headers a hmac-sha256 signature may arrive in, in
-// preference order. GitHub uses X-Hub-Signature-256; the others cover the common
-// generic conventions. The value may be bare hex or "sha256=<hex>".
+// preference order. GitHub uses X-Hub-Signature-256 (hex, "sha256=" prefix);
+// WooCommerce X-WC-Webhook-Signature and Shopify X-Shopify-Hmac-Sha256 (both
+// base64); the X-Signature* pair covers the common generic conventions.
+//
+// The digest may be encoded as hex (64 chars, optionally "sha256=<hex>") or as
+// standard base64 (44 chars). The two encodings of a 32-byte SHA-256 digest
+// never collide in length, so the format is detected unambiguously.
 var signatureHeaders = []string{
 	"X-Hub-Signature-256",
+	"X-WC-Webhook-Signature",
+	"X-Shopify-Hmac-Sha256",
 	"X-Signature-256",
 	"X-Signature",
 }
@@ -175,31 +188,47 @@ func verifySignature(ctx context.Context, route Route, orgID uuid.UUID, headers 
 	if err != nil {
 		return fmt.Errorf("webhookin: resolve secret_ref %q: %w", route.SecretRef, err)
 	}
+	if strings.TrimSpace(secret) == "" {
+		return fmt.Errorf("%w (%s): %w", ErrSecretNotConfigured, route.SecretRef, ErrSignatureInvalid)
+	}
 	provided := extractSignature(headers)
-	if provided == "" {
+	if len(provided) == 0 {
 		return ErrSignatureMissing
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
-	expected := hex.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal([]byte(expected), []byte(provided)) {
+	if !hmac.Equal(mac.Sum(nil), provided) {
 		return ErrSignatureInvalid
 	}
 	return nil
 }
 
-// extractSignature reads the first present signature header and normalises it to
-// bare lowercase hex (stripping a "sha256=" prefix and surrounding space).
-func extractSignature(headers http.Header) string {
+// extractSignature reads the first present signature header and decodes the
+// digest it carries: hex (optionally "sha256=<hex>") or standard base64. A
+// value that is neither decodes to a non-empty garbage slice so the caller
+// reports a mismatch (not a missing header).
+func extractSignature(headers http.Header) []byte {
 	for _, h := range signatureHeaders {
 		v := strings.TrimSpace(headers.Get(h))
 		if v == "" {
 			continue
 		}
-		v = strings.TrimPrefix(v, "sha256=")
-		return strings.ToLower(strings.TrimSpace(v))
+		if len(v) > 7 && strings.EqualFold(v[:7], "sha256=") {
+			v = strings.TrimSpace(v[7:])
+		}
+		if len(v) == hex.EncodedLen(sha256.Size) {
+			if d, err := hex.DecodeString(v); err == nil {
+				return d
+			}
+		}
+		if len(v) == base64.StdEncoding.EncodedLen(sha256.Size) {
+			if d, err := base64.StdEncoding.DecodeString(v); err == nil {
+				return d
+			}
+		}
+		return []byte{0}
 	}
-	return ""
+	return nil
 }
 
 // prefixOf returns the dispatch prefix of a `do` reference ("" when none).

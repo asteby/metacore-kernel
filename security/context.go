@@ -17,6 +17,11 @@ type Capabilities struct {
 	dbRead   []string // model globs: "orders", "addon_tickets.*"
 	dbWrite  []string
 	httpHost []string // host globs: "api.stripe.com", "*.slack.com"
+	// connHost are http:fetch grants whose host is not fixed in the manifest
+	// but comes from the org's connector configuration
+	// ("connector:<connector>.<credential>", e.g. a store_url). The runtime
+	// resolves them per invocation; see CanFetchHosts.
+	connHost []ConnectorHostRef
 	eventPub []string
 	eventSub []string
 	connRead []string        // connector keys: "github", "*" for any
@@ -33,6 +38,10 @@ func Compile(addonKey string, caps []manifest.Capability) *Capabilities {
 		case "db:write":
 			c.dbWrite = append(c.dbWrite, cap.Target)
 		case "http:fetch":
+			if ref, ok := ParseConnectorHostRef(cap.Target); ok {
+				c.connHost = append(c.connHost, ref)
+				continue
+			}
 			c.httpHost = append(c.httpHost, cap.Target)
 		case "event:emit":
 			c.eventPub = append(c.eventPub, cap.Target)
@@ -90,6 +99,84 @@ func (c *Capabilities) CanFetch(rawURL string) error {
 		return nil
 	}
 	return fmt.Errorf("addon %q lacks http:fetch %q", c.addonKey, u.Host)
+}
+
+// ConnectorHostPrefix marks an http:fetch target whose host is read from a
+// connector credential instead of being fixed in the manifest:
+//
+//	{ "kind": "http:fetch", "target": "connector:woocommerce.store_url" }
+//
+// grants egress to the host of the org's configured store_url (and only that
+// exact host). It lets a generic connector (WooCommerce, Shopify, a self-hosted
+// ERP…) talk to each tenant's own server without hardcoding any customer host.
+const ConnectorHostPrefix = "connector:"
+
+// ConnectorHostRef is a parsed "connector:<connector>.<credential>" target.
+type ConnectorHostRef struct {
+	Connector  string
+	Credential string
+}
+
+// ParseConnectorHostRef parses a "connector:<connector>.<credential>" http:fetch
+// target. ok is false for any other target (a plain host pattern).
+func ParseConnectorHostRef(target string) (ConnectorHostRef, bool) {
+	rest, found := strings.CutPrefix(strings.TrimSpace(target), ConnectorHostPrefix)
+	if !found {
+		return ConnectorHostRef{}, false
+	}
+	conn, cred, ok := strings.Cut(rest, ".")
+	if !ok || conn == "" || cred == "" || strings.ContainsAny(rest, "*/: ") {
+		return ConnectorHostRef{}, false
+	}
+	return ConnectorHostRef{Connector: conn, Credential: cred}, true
+}
+
+// ConnectorHostRefs returns the connector-derived http:fetch grants.
+func (c *Capabilities) ConnectorHostRefs() []ConnectorHostRef {
+	if c == nil {
+		return nil
+	}
+	return append([]ConnectorHostRef(nil), c.connHost...)
+}
+
+// HostFromCredential extracts the host[:port] a connector credential points at.
+// Accepts a full URL ("https://shop.example.com/") or a bare host
+// ("shop.example.com"). Returns "" when the value has no usable host.
+func HostFromCredential(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	if !strings.Contains(v, "://") {
+		v = "https://" + v
+	}
+	u, err := url.Parse(v)
+	if err != nil || u.Hostname() == "" || strings.Contains(u.Host, "*") {
+		return ""
+	}
+	return strings.ToLower(u.Host)
+}
+
+// CanFetchHosts is CanFetch widened with exact hosts resolved at runtime from
+// the connector-derived grants (ConnectorHostRefs). The scheme check and the
+// SSRF guard apply exactly as in CanFetch: a credential pointing at loopback or
+// a private range is still refused.
+func (c *Capabilities) CanFetchHosts(rawURL string, hosts []string) error {
+	err := c.CanFetch(rawURL)
+	if err == nil || len(hosts) == 0 {
+		return err
+	}
+	u, perr := url.Parse(rawURL)
+	if perr != nil || (u.Scheme != "https" && u.Scheme != "http") || isBlockedEgressHost(u.Hostname()) {
+		return err
+	}
+	got := strings.ToLower(u.Host)
+	for _, h := range hosts {
+		if h != "" && h == got {
+			return nil
+		}
+	}
+	return err
 }
 
 // matchHTTPHost is stricter than matchAny: a capability pattern must resolve

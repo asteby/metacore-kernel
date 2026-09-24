@@ -7,7 +7,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`http:fetch` target `connector:<connector>.<credential>`.** Grants egress
+  only to the exact host of that connector credential as configured by the
+  invoking org (e.g. `connector:woocommerce.store_url`). A generic connector no
+  longer has to hardcode a customer's host. The addon still needs
+  `connector:read` on the connector. Scheme checks and the SSRF guard apply
+  unchanged. `Validate` checks that the credential is declared.
+
 ### Fixed
+
+- **`webhookin`: signatures in the real format of each provider, and an empty
+  secret never authenticates.** `hmac-sha256` now accepts the digest as hex
+  (`sha256=<hex>`) or as base64, and also reads `X-WC-Webhook-Signature`
+  (WooCommerce) and `X-Shopify-Hmac-Sha256`. Before this, every real
+  WooCommerce delivery got 401. A route whose org has an empty signing secret
+  now fails with `ErrSecretNotConfigured`, joined with `ErrSignatureInvalid`
+  so existing hosts answer 401. Before this, an HMAC keyed with `""` was
+  accepted.
 
 - **`db_exec` accepts `INSERT … ON CONFLICT … DO NOTHING | DO UPDATE`.**
   The banned-keyword scan matched the bare word `DO`, so every idempotent
