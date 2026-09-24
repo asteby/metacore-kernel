@@ -1278,6 +1278,11 @@ type Reference struct {
 type ModelExtension struct {
 	TargetModel string   `json:"target_model"`
 	Columns     []Column `json:"columns"`
+	// JSONBagBag is the jsonb column on the target model that stores these
+	// extension fields (dotted form keys `<bag>.<column>`). Empty defaults to
+	// "fiscal_data" — the conventional fiscal extension bag. Tire catalog
+	// extensions (products_tires) set this to "product_specs".
+	JSONBagBag string `json:"jsonb_bag,omitempty"`
 }
 
 // Contributions is what this addon contributes to other modules' extension points.

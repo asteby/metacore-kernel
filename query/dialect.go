@@ -341,9 +341,24 @@ func parseWithDialect(values map[string][]string, decode ParseFilterValue) (Para
 	return p, nil
 }
 
-// jsonbColumn is the single JSONB column the ops dialect special-cases.
-// Matches the audited ops behaviour where only `fiscal_data` is treated as
-// a JSONB document; every other column is scalar. Hosts that need a
-// different JSONB column can build Params directly with an OpJSONBEq
-// Filter.
-const jsonbColumn = "fiscal_data"
+// jsonbPathColumns are the JSONB bags the ops dialect special-cases as
+// `f_<bag>.<key>` → OpJSONBEq. fiscal_data is the conventional fiscal
+// extension bag; product_specs is the tire-catalog bag (products_tires).
+// Every other dotted filter is treated as a relation. Hosts that need a
+// different bag can build Params directly with an OpJSONBEq Filter.
+var jsonbPathColumns = map[string]struct{}{
+	"fiscal_data":   {},
+	"product_specs": {},
+}
+
+func isJSONBPathColumn(col string) (bag, key string, ok bool) {
+	dot := strings.Index(col, ".")
+	if dot <= 0 || dot >= len(col)-1 {
+		return "", "", false
+	}
+	bag = col[:dot]
+	if _, known := jsonbPathColumns[bag]; !known {
+		return "", "", false
+	}
+	return bag, col[dot+1:], true
+}
