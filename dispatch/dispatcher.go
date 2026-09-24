@@ -50,6 +50,7 @@ type canonicalEvent struct {
 	Action        string `json:"action"`
 	AddonKey      string `json:"addon_key"`
 	ActorID       string `json:"actor_id"`
+	BranchID      string `json:"branch_id"`
 	CorrelationID string `json:"correlation_id"`
 }
 
@@ -116,6 +117,21 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 		if !canonical || ce.ActorID == "" {
 			ce.ActorID = actor
 			raw = stampActorID(raw, actor)
+		}
+	}
+
+	// Branch, with the opposite precedence to the actor: a branch the payload
+	// already names wins — the document's own branch on a canonical event, or
+	// one a domain-event emitter wrote on purpose — and only when it names
+	// none (or a non-uuid) is the emitting ctx's active branch filled in, into
+	// the payload AND the delivery ctx (enqueue). That way a subscriber's
+	// creates (data_mutate stamps branch_id from the ctx) land in the branch
+	// of the document or user that started the chain.
+	if id, err := uuid.Parse(ce.BranchID); err != nil || id == uuid.Nil {
+		ce.BranchID = ""
+		if b := dynamic.BranchIDFromContext(ctx); b != "" {
+			ce.BranchID = b
+			raw = stampString(raw, "branch_id", b)
 		}
 	}
 
@@ -227,6 +243,7 @@ func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName, oc
 		bg, cancel := context.WithTimeout(context.Background(), d.deliveryTimeout())
 		defer cancel()
 		bg = dynamic.WithActorID(bg, ce.ActorID)
+		bg = dynamic.WithBranchID(bg, ce.BranchID)
 		if ce.CorrelationID != "" {
 			bg = dynamic.WithCorrelationID(bg, ce.CorrelationID)
 		}
@@ -645,15 +662,21 @@ func stampEventName(raw []byte, eventName string) []byte {
 // replacing whatever was there. Non-object payloads are returned untouched
 // (the actor still rides on the delivery ctx).
 func stampActorID(raw []byte, actor string) []byte {
+	return stampString(raw, "actor_id", actor)
+}
+
+// stampString sets a top-level string key of a JSON-object payload, replacing
+// whatever was there. Non-object payloads are returned untouched.
+func stampString(raw []byte, key, value string) []byte {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
 		return raw
 	}
-	actorJSON, err := json.Marshal(actor)
+	valueJSON, err := json.Marshal(value)
 	if err != nil {
 		return raw
 	}
-	obj["actor_id"] = actorJSON
+	obj[key] = valueJSON
 	out, err := json.Marshal(obj)
 	if err != nil {
 		return raw

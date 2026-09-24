@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,11 +39,16 @@ type CanonicalEvent struct {
 	// occurrence (outbox relay) reuses the persisted payload bytes and
 	// therefore keeps its id, which is what lets the dispatch ledger dedup
 	// re-delivery without swallowing every update after the first.
-	OccurrenceID  string         `json:"occurrence_id,omitempty"`
-	Model         string         `json:"model"`
-	Action        string         `json:"action"` // created|updated|deleted
-	AddonKey      string         `json:"addon_key"`
-	ActorID       string         `json:"actor_id,omitempty"`
+	OccurrenceID string `json:"occurrence_id,omitempty"`
+	Model        string `json:"model"`
+	Action       string `json:"action"` // created|updated|deleted
+	AddonKey     string `json:"addon_key"`
+	ActorID      string `json:"actor_id,omitempty"`
+	// BranchID is the branch the event belongs to: the row's own branch_id
+	// when it has one (the document's branch), else the caller's active
+	// branch (WithBranchID). The dispatcher re-attaches it to the delivery
+	// ctx so a subscriber's creates are born in the same branch.
+	BranchID      string         `json:"branch_id,omitempty"`
 	CorrelationID string         `json:"correlation_id,omitempty"`
 	Before        map[string]any `json:"before,omitempty"`
 	After         map[string]any `json:"after,omitempty"`
@@ -113,6 +119,45 @@ func BranchIDFromContext(ctx context.Context) string {
 	return v
 }
 
+// EventBranchID resolves the branch a canonical event carries: the mutated
+// row's own branch_id (after, else before) — the document's branch wins over
+// whoever touched it — else the caller's active branch on ctx. It returns ""
+// when none of them is a uuid.
+func EventBranchID(ctx context.Context, before, after map[string]any) string {
+	for _, row := range []map[string]any{after, before} {
+		if id := uuidString(row["branch_id"]); id != "" {
+			return id
+		}
+	}
+	return uuidString(BranchIDFromContext(ctx))
+}
+
+// uuidString renders a branch_id value (string, uuid.UUID, *uuid.UUID, []byte)
+// as a canonical uuid string, "" for nil, blank, the zero uuid or non-uuids.
+func uuidString(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case *uuid.UUID:
+		if t == nil {
+			return ""
+		}
+		v = *t
+	case *string:
+		if t == nil {
+			return ""
+		}
+		v = *t
+	case []byte:
+		v = string(t)
+	}
+	id, err := uuid.Parse(strings.TrimSpace(fmt.Sprint(v)))
+	if err != nil || id == uuid.Nil {
+		return ""
+	}
+	return id.String()
+}
+
 // publishCanonical builds the event name `<addonKey>.<model>.<action>` and
 // fans it out through the Bus. It is a no-op when no Bus was wired, keeping
 // pre-event apps unchanged. The producer addonKey passed to Bus.Publish is
@@ -152,6 +197,7 @@ func (s *Service) publishCanonical(ctx context.Context, model, action string, us
 		Action:        action,
 		AddonKey:      addonKey,
 		ActorID:       user.GetID().String(),
+		BranchID:      EventBranchID(withUserBranch(ctx, user), before, after),
 		CorrelationID: CorrelationIDFromContext(ctx),
 		Before:        before,
 		After:         after,
@@ -183,4 +229,16 @@ func (s *Service) publishCanonical(ctx context.Context, model, action string, us
 	if perr == nil && outboxID != uuid.Nil {
 		s.markOutboxPublished(ctx, outboxID)
 	}
+}
+
+// withUserBranch adds the user's active branch (the optional GetBranchID the
+// sequence scope and ExecAction honour) to ctx when ctx carries none.
+func withUserBranch(ctx context.Context, user any) context.Context {
+	if BranchIDFromContext(ctx) != "" {
+		return ctx
+	}
+	if b, ok := user.(interface{ GetBranchID() uuid.UUID }); ok && b.GetBranchID() != uuid.Nil {
+		return WithBranchID(ctx, b.GetBranchID().String())
+	}
+	return ctx
 }

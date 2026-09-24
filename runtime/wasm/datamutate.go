@@ -282,6 +282,7 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		// chain, so the audit trail never shows an anonymous system actor for
 		// a user-driven side effect.
 		ActorID:       dynamic.ActorIDFromContext(ctx),
+		BranchID:      dynamic.EventBranchID(ctx, before, after),
 		AddonKey:      eventAddon,
 		CorrelationID: dynamic.CorrelationIDFromContext(ctx),
 		Before:        before,

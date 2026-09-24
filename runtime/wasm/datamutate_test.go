@@ -221,44 +221,54 @@ func TestExecuteDataMutate_CreateStampsActiveBranch(t *testing.T) {
 	branchID := uuid.NewString()
 	chosen := uuid.NewString()
 	cases := []struct {
-		name    string
-		data    string
-		columns []string
-		insert  string
-		args    func(orgID uuid.UUID, rowID string) []driver.Value
+		name        string
+		data        string
+		rowBranch   any // branch_id RETURNING hands back
+		eventBranch string
+		columns     []string
+		insert      string
+		args        func(orgID uuid.UUID, rowID string) []driver.Value
 	}{
 		{
-			name:    "absent",
-			data:    `{"customer_id": "c-1"}`,
-			columns: []string{"id", "organization_id", "branch_id", "customer_id"},
-			insert:  `INSERT INTO "sales_orders" \("branch_id", "created_at", "customer_id", "id", "organization_id", "updated_at"\)`,
+			name:        "absent",
+			data:        `{"customer_id": "c-1"}`,
+			rowBranch:   branchID,
+			eventBranch: branchID,
+			columns:     []string{"id", "organization_id", "branch_id", "customer_id"},
+			insert:      `INSERT INTO "sales_orders" \("branch_id", "created_at", "customer_id", "id", "organization_id", "updated_at"\)`,
 			args: func(orgID uuid.UUID, rowID string) []driver.Value {
 				return []driver.Value{branchID, sqlmock.AnyArg(), "c-1", rowID, orgID, sqlmock.AnyArg()}
 			},
 		},
 		{
-			name:    "blank string",
-			data:    `{"customer_id": "c-1", "branch_id": ""}`,
-			columns: []string{"id", "organization_id", "branch_id", "customer_id"},
-			insert:  `INSERT INTO "sales_orders" \("branch_id", "created_at", "customer_id", "id", "organization_id", "updated_at"\)`,
+			name:        "blank string",
+			data:        `{"customer_id": "c-1", "branch_id": ""}`,
+			rowBranch:   branchID,
+			eventBranch: branchID,
+			columns:     []string{"id", "organization_id", "branch_id", "customer_id"},
+			insert:      `INSERT INTO "sales_orders" \("branch_id", "created_at", "customer_id", "id", "organization_id", "updated_at"\)`,
 			args: func(orgID uuid.UUID, rowID string) []driver.Value {
 				return []driver.Value{branchID, sqlmock.AnyArg(), "c-1", rowID, orgID, sqlmock.AnyArg()}
 			},
 		},
 		{
-			name:    "guest names one",
-			data:    `{"customer_id": "c-1", "branch_id": "` + chosen + `"}`,
-			columns: []string{"id", "organization_id", "branch_id", "customer_id"},
-			insert:  `INSERT INTO "sales_orders" \("branch_id", "created_at", "customer_id", "id", "organization_id", "updated_at"\)`,
+			name:        "guest names one",
+			data:        `{"customer_id": "c-1", "branch_id": "` + chosen + `"}`,
+			rowBranch:   chosen,
+			eventBranch: chosen,
+			columns:     []string{"id", "organization_id", "branch_id", "customer_id"},
+			insert:      `INSERT INTO "sales_orders" \("branch_id", "created_at", "customer_id", "id", "organization_id", "updated_at"\)`,
 			args: func(orgID uuid.UUID, rowID string) []driver.Value {
 				return []driver.Value{chosen, sqlmock.AnyArg(), "c-1", rowID, orgID, sqlmock.AnyArg()}
 			},
 		},
 		{
-			name:    "no branch column",
-			data:    `{"customer_id": "c-1"}`,
-			columns: []string{"id", "organization_id", "customer_id"},
-			insert:  `INSERT INTO "sales_orders" \("created_at", "customer_id", "id", "organization_id", "updated_at"\)`,
+			name:        "no branch column",
+			data:        `{"customer_id": "c-1"}`,
+			rowBranch:   nil,
+			eventBranch: branchID,
+			columns:     []string{"id", "organization_id", "customer_id"},
+			insert:      `INSERT INTO "sales_orders" \("created_at", "customer_id", "id", "organization_id", "updated_at"\)`,
 			args: func(orgID uuid.UUID, rowID string) []driver.Value {
 				return []driver.Value{sqlmock.AnyArg(), "c-1", rowID, orgID, sqlmock.AnyArg()}
 			},
@@ -270,14 +280,14 @@ func TestExecuteDataMutate_CreateStampsActiveBranch(t *testing.T) {
 			defer cleanup()
 			orgID := uuid.New()
 			rowID := uuid.NewString()
-			bus, _, _ := captureBus(t, "customers.SalesOrder.created")
+			bus, getEvents, _ := captureBus(t, "inventory.SalesOrder.created")
 
 			mock.ExpectBegin()
 			mock.ExpectQuery(`SELECT \* FROM "sales_orders" LIMIT 0`).
 				WillReturnRows(sqlmock.NewRows(tc.columns))
 			mock.ExpectQuery(tc.insert).
 				WithArgs(tc.args(orgID, rowID)...).
-				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(rowID))
+				WillReturnRows(sqlmock.NewRows([]string{"id", "branch_id"}).AddRow(rowID, tc.rowBranch))
 			mock.ExpectCommit()
 
 			inv := testInvocation(gdb, bus, orgID, salesOrderWriteEnforcer(), nil)
@@ -291,6 +301,12 @@ func TestExecuteDataMutate_CreateStampsActiveBranch(t *testing.T) {
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatalf("expectations not met: %v", err)
+			}
+			// The canonical event carries the row's branch (what was written),
+			// else the active one, for the dispatcher to hand to subscribers.
+			evs := getEvents()
+			if len(evs) != 1 || evs[0].BranchID != tc.eventBranch {
+				t.Fatalf("event branch = %#v, want %s", evs, tc.eventBranch)
 			}
 		})
 	}

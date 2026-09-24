@@ -19,14 +19,22 @@ import (
 type recorder struct {
 	mu       sync.Mutex
 	payloads [][]byte
+	branches []string // dynamic.BranchIDFromContext of each delivery ctx
 	err      error
 }
 
-func (r *recorder) Handle(_ context.Context, _ uuid.UUID, payload []byte) error {
+func (r *recorder) Handle(ctx context.Context, _ uuid.UUID, payload []byte) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.payloads = append(r.payloads, append([]byte(nil), payload...))
+	r.branches = append(r.branches, dynamic.BranchIDFromContext(ctx))
 	return r.err
+}
+
+func (r *recorder) branch(i int) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.branches[i]
 }
 
 func (r *recorder) count() int {
@@ -325,5 +333,70 @@ func TestDomainEvent_GuestReceivesHostActor(t *testing.T) {
 	_ = json.Unmarshal(h.rec.payload(1), &got)
 	if _, ok := got["actor_id"]; ok {
 		t.Fatalf("actor_id written without an actor: %v", got)
+	}
+}
+
+// TestDomainEvent_BranchReachesSubscriber: a domain event emitted from a ctx
+// with an active branch reaches the subscriber with that branch_id in its
+// payload AND on its delivery ctx (so its data_mutate creates are born there);
+// a branch the emitter names explicitly wins; no branch anywhere invents none.
+func TestDomainEvent_BranchReachesSubscriber(t *testing.T) {
+	h := newDomainHarness(t, "pos.order_created")
+	active, explicit := uuid.NewString(), uuid.NewString()
+	ctx := dynamic.WithBranchID(context.Background(), active)
+
+	cases := []struct {
+		name    string
+		ctx     context.Context
+		payload map[string]any
+		want    string
+	}{
+		{"host fills", ctx, map[string]any{"order_id": "o-1"}, active},
+		{"blank is filled", ctx, map[string]any{"order_id": "o-2", "branch_id": ""}, active},
+		{"emitter wins", ctx, map[string]any{"order_id": "o-3", "branch_id": explicit}, explicit},
+		{"explicit without host", context.Background(), map[string]any{"order_id": "o-4", "branch_id": explicit}, explicit},
+		{"none", context.Background(), map[string]any{"order_id": "o-5"}, ""},
+	}
+	for i, tc := range cases {
+		if _, err := h.bus.PublishWithCount(tc.ctx, "kernel", "pos.order_created", uuid.New(), tc.payload); err != nil {
+			t.Fatalf("%s: publish: %v", tc.name, err)
+		}
+		h.await(t, 1)
+		var got map[string]any
+		if err := json.Unmarshal(h.rec.payload(i), &got); err != nil {
+			t.Fatalf("%s: payload not json: %v", tc.name, err)
+		}
+		if tc.want == "" {
+			if _, ok := got["branch_id"]; ok {
+				t.Fatalf("%s: branch_id written without a branch: %v", tc.name, got)
+			}
+		} else if got["branch_id"] != tc.want {
+			t.Fatalf("%s: payload branch_id = %v, want %s", tc.name, got["branch_id"], tc.want)
+		}
+		if b := h.rec.branch(i); b != tc.want {
+			t.Fatalf("%s: delivery ctx branch = %q, want %q", tc.name, b, tc.want)
+		}
+	}
+}
+
+// TestCanonicalEvent_DocumentBranchReachesSubscriber: a canonical event keeps
+// the branch its producer resolved (the document's own branch) over the
+// emitting ctx's active branch, and re-attaches it to the delivery ctx.
+func TestCanonicalEvent_DocumentBranchReachesSubscriber(t *testing.T) {
+	h := newDomainHarness(t, "customers.SalesOrder.created")
+	doc, active := uuid.NewString(), uuid.NewString()
+	ce := &dynamic.CanonicalEvent{
+		ID: uuid.NewString(), OccurrenceID: uuid.NewString(),
+		Model: "SalesOrder", Action: "created", AddonKey: "customers",
+		BranchID: doc,
+		After:    map[string]any{"branch_id": doc},
+	}
+	ctx := dynamic.WithBranchID(context.Background(), active)
+	if err := h.bus.Publish(ctx, "kernel", "customers.SalesOrder.created", uuid.New(), ce); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	h.await(t, 1)
+	if b := h.rec.branch(0); b != doc {
+		t.Fatalf("delivery ctx branch = %q, want document branch %s", b, doc)
 	}
 }
