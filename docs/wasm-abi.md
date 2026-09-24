@@ -1564,8 +1564,9 @@ data_mutate(reqPtr i32, reqLen i32) -> i64
   `deleted_at` is already non-null answers `not_found`.
 - Values follow the `db_query` argument rules (§ 9.6): JSON scalars ride
   natively, `{"$uuid": …}` / `{"$ts": …}` / `{"$bytes": …}` markers cover
-  the non-JSON-native Postgres types. Nested objects/arrays are rejected —
-  pre-serialise to a string for `jsonb` columns.
+  the non-JSON-native Postgres types. Any other JSON object or array is a
+  `jsonb` document and is bound as its JSON text (a pre-serialised string
+  keeps working).
 
 ### 14.3 Table resolution (CRITICAL — not the `db_exec` search_path)
 

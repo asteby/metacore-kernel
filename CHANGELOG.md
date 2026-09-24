@@ -27,6 +27,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   so existing hosts answer 401. Before this, an HMAC keyed with `""` was
   accepted.
 
+- **`data_mutate` binds nested JSON objects/arrays as `jsonb` text** instead
+  of rejecting the whole write with `unsupported object arg` (channel_orders
+  imports dead-lettered on their `payload`). The `$uuid` / `$ts` / `$bytes`
+  markers keep their typed decoding.
+
 - **`db_exec` accepts `INSERT … ON CONFLICT … DO NOTHING | DO UPDATE`.**
   The banned-keyword scan matched the bare word `DO`, so every idempotent
   upsert died as `invalid_sql: banned keyword: DO` (tire_warranty: 41 dead
