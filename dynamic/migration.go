@@ -49,6 +49,43 @@ func Checksum(sql string) string {
 // on-disk checksum diverges from what was recorded, Apply returns an error
 // instead of silently re-running mutated SQL.
 func Apply(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, files []File) error {
+	return ApplyWithOptions(db, addonKey, orgID, iso, files, ApplyOptions{})
+}
+
+// ApplyOptions lets the host tell the migration runner where the addon's
+// model tables really live.
+//
+// By default every migration runs with `search_path TO addon_<key>, public`:
+// bare names resolve to the addon schema first. That is right for hosts that
+// serve the addon's models from its own schema (the kernel's CreateTable
+// materialises them there). It is wrong for a host that materialises the
+// models in another schema — ops creates every declared model in `public` and
+// the runtime reads them unqualified — while `addon_<key>` still carries empty
+// twins of the same tables (kernel CreateTable, old migrations). There a bare
+// `ALTER TABLE stock …`, `CREATE INDEX … ON stock(…)` or `to_regclass('stock')`
+// resolves to the empty twin instead of the live table (inventory@017 "column
+// deleted_at does not exist", fiscal_mexico@006 xml_content, purchases@008
+// index on the empty table).
+type ApplyOptions struct {
+	// PrimarySchema is the schema the host serves this addon's model tables
+	// from (ops: "public"). Empty, or equal to the addon schema, keeps the
+	// default order.
+	PrimarySchema string
+	// ModelTables are the addon's model table names (manifest
+	// model_definitions[].table_name). PrimarySchema is only put first when at
+	// least one of them already exists there, i.e. the host has materialised
+	// the addon's models in it. On a first install, before the host created
+	// anything, the order stays the default one.
+	ModelTables []string
+}
+
+// ApplyWithOptions is Apply with a host-declared primary schema. The decision
+// is taken per migration, right before it runs, so a migration that creates a
+// model table is seen by the next one. Only the search_path of pending
+// migrations changes: already-applied files are skipped exactly as in Apply
+// (the ledger is untouched), and migrations that qualify their tables
+// (`public.stock`, loops over pg_namespace) resolve the same either way.
+func ApplyWithOptions(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, files []File, opts ApplyOptions) error {
 	if err := db.AutoMigrate(&Migration{}); err != nil {
 		return fmt.Errorf("migrate metacore_addon_migrations: %w", err)
 	}
@@ -88,8 +125,18 @@ func Apply(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, files [
 			return err
 		}
 		tx := db.Begin()
-		// Scope session search_path so bare table names land in the addon schema.
-		if err := tx.Exec(fmt.Sprintf(`SET LOCAL search_path TO %q, public`, schema)).Error; err != nil {
+		// Scope session search_path so bare table names resolve to the schema
+		// the addon's model tables really live in (see ApplyOptions).
+		path, err := migrationSearchPath(tx, schema, opts)
+		if err != nil {
+			tx.Rollback()
+			return fmt.Errorf("apply %s@%s: resolve search_path: %w", addonKey, f.Version, err)
+		}
+		if path[0] != schema {
+			log.Printf("dynamic: migration %s@%s runs with search_path %s (addon models live in %s)",
+				addonKey, f.Version, strings.Join(path, ", "), path[0])
+		}
+		if err := tx.Exec(`SET LOCAL search_path TO ` + quoteIdents(path)).Error; err != nil {
 			tx.Rollback()
 			return err
 		}
@@ -127,6 +174,46 @@ func Apply(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, files [
 		}
 	}
 	return nil
+}
+
+// migrationSearchPath returns the schemas, in order, a pending migration of
+// the addon runs with. Default: addon schema, public. When the host declared a
+// PrimarySchema and at least one of the addon's model tables exists there, that
+// schema goes first and the addon schema stays right after it, so tables that
+// only exist in the addon schema still resolve.
+func migrationSearchPath(tx *gorm.DB, addonSchema string, opts ApplyOptions) ([]string, error) {
+	path := []string{addonSchema, "public"}
+	primary := strings.TrimSpace(opts.PrimarySchema)
+	if primary == "" || primary == addonSchema || len(opts.ModelTables) == 0 {
+		return path, nil
+	}
+	var found bool
+	if err := tx.Raw(
+		`SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+		   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		  WHERE n.nspname = ? AND c.relname IN ? AND c.relkind IN ('r', 'p'))`,
+		primary, opts.ModelTables,
+	).Scan(&found).Error; err != nil {
+		return nil, err
+	}
+	if !found {
+		return path, nil
+	}
+	out := []string{primary, addonSchema}
+	if primary != "public" {
+		out = append(out, "public")
+	}
+	return out, nil
+}
+
+// quoteIdents renders schema names as a comma-separated list of quoted
+// Postgres identifiers.
+func quoteIdents(names []string) string {
+	q := make([]string, len(names))
+	for i, n := range names {
+		q[i] = `"` + strings.ReplaceAll(n, `"`, `""`) + `"`
+	}
+	return strings.Join(q, ", ")
 }
 
 func recordMigration(db *gorm.DB, addonKey, version, checksum string) error {

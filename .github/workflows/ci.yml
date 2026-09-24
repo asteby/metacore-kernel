@@ -21,3 +21,26 @@ jobs:
         with:
           files: coverage.out
         continue-on-error: true
+
+  # Addon migration runner against a real Postgres (search_path / schema
+  # resolution can't be exercised with sqlite or sqlmock). Scratch DB only.
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kernel_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_POSTGRES_DSN: host=localhost port=5432 user=postgres password=postgres dbname=kernel_test sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27'
+          cache: true
+      - run: go test -count=1 -v -run 'Postgres' ./dynamic/
