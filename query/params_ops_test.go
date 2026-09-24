@@ -50,6 +50,31 @@ func TestParseOpsFromValues_JSONBPath(t *testing.T) {
 	}
 }
 
+func TestParseOpsFromValues_ProductSpecsJSONBPath(t *testing.T) {
+	// QA N-17: f_product_specs.section_width_mm used to be promoted to a
+	// relation filter and 500'd. It must become OpJSONBEq on product_specs.
+	p, err := ParseOpsFromValues(map[string][]string{
+		"f_product_specs.section_width_mm": {"205"},
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	f, ok := p.Filters["product_specs"]
+	if !ok {
+		t.Fatalf("no product_specs filter; filters=%+v relations=%+v", p.Filters, p.RelationFilters)
+	}
+	if f.Op != OpJSONBEq {
+		t.Fatalf("op = %q, want jsonb_eq", f.Op)
+	}
+	jf := f.Value.(JSONBFilter)
+	if jf.Key != "section_width_mm" || jf.Val != "205" {
+		t.Errorf("jsonb = %+v", jf)
+	}
+	if len(p.RelationFilters) != 0 {
+		t.Errorf("product_specs path leaked into relation filters: %+v", p.RelationFilters)
+	}
+}
+
 func TestParseOpsFromValues_RelationFilter(t *testing.T) {
 	p, err := ParseOpsFromValues(map[string][]string{
 		"f_product_variant.name": {"ILIKE:abc"},

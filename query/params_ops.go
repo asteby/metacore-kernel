@@ -19,7 +19,8 @@ import (
 //
 //   - f_<col> values use the ops dialect (IN/NOT_IN/LIKE/ILIKE/GT/LT/GTE/
 //     LTE/RANGE/NULL/NOT_NULL/date-range). See ParseOpsFilterValue.
-//   - f_fiscal_data.<key>=v becomes a JSONB equality filter (OpJSONBEq).
+//   - f_fiscal_data.<key>=v / f_product_specs.<key>=v become JSONB equality
+//     filters (OpJSONBEq).
 //   - f_<rel>.<field> becomes a RelationFilter (same as ParseFromMap).
 //   - a value that arrives as a native string slice (len > 1, e.g. repeated
 //     query params or a JSON array) is treated as an IN filter directly.
@@ -92,14 +93,13 @@ func ParseOpsFromValues(values map[string][]string) (Params, error) {
 		}
 		raw := nonEmpty[0]
 
-		// JSONB path: f_fiscal_data.<key> → OpJSONBEq. Handled BEFORE the
-		// generic dot-promotion so a JSONB key with a dot is not mistaken
-		// for a relation. Bypasses isSafeIdent on the key (passed as a
-		// bound parameter, never interpolated).
-		if strings.HasPrefix(col, jsonbColumn+".") {
-			jsonKey := strings.TrimPrefix(col, jsonbColumn+".")
+		// JSONB path: f_<bag>.<key> → OpJSONBEq (fiscal_data, product_specs).
+		// Handled BEFORE the generic dot-promotion so a JSONB key is not
+		// mistaken for a relation (which used to 500 on product_specs.*).
+		// The key is a bound parameter, never interpolated.
+		if bag, jsonKey, ok := isJSONBPathColumn(col); ok {
 			if jsonKey != "" && raw != "" {
-				p.Filters[jsonbColumn] = Filter{
+				p.Filters[bag] = Filter{
 					Op:    OpJSONBEq,
 					Value: JSONBFilter{Key: jsonKey, Val: raw},
 				}
