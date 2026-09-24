@@ -276,6 +276,38 @@ type Installer struct {
 	// optional WASM loader, its default fails closed so an installation cannot
 	// claim enabled while its required sidecar is absent.
 	NativeRuntime NativeServiceRuntime
+
+	// MigrationSchema, when set, returns the schema the host serves an
+	// addon's model tables from (ops: "public", where it materialises every
+	// declared model). Install/Upgrade then run each pending migration with
+	// that schema first in the search_path — as long as the addon's model
+	// tables already exist there — so bare table names hit the live tables
+	// and not the empty addon_<key> twins. nil (default) keeps
+	// `addon_<key>, public`. Wired via WithMigrationSchema; see
+	// dynamic.ApplyOptions.
+	MigrationSchema func(addonKey string) string
+}
+
+// WithMigrationSchema declares where the host keeps each addon's model tables
+// so addon migrations resolve bare table names there first (see the
+// MigrationSchema field). Returns the receiver so it chains on construction.
+func (i *Installer) WithMigrationSchema(fn func(addonKey string) string) *Installer {
+	i.MigrationSchema = fn
+	return i
+}
+
+// migrationOptions builds the dynamic.ApplyOptions for a bundle's migrations.
+func migrationOptions(fn func(addonKey string) string, m manifest.Manifest) dynamic.ApplyOptions {
+	if fn == nil {
+		return dynamic.ApplyOptions{}
+	}
+	tables := make([]string, 0, len(m.ModelDefinitions))
+	for _, def := range m.ModelDefinitions {
+		if def.TableName != "" {
+			tables = append(tables, def.TableName)
+		}
+	}
+	return dynamic.ApplyOptions{PrimarySchema: fn(m.Key), ModelTables: tables}
 }
 
 // ErrSignatureRequired is returned by Install when the host has not configured
@@ -509,7 +541,7 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 			return nil, nil, err
 		}
 	}
-	if err := dynamic.Apply(i.DB, b.Manifest.Key, orgID, iso, b.Migrations); err != nil {
+	if err := dynamic.ApplyWithOptions(i.DB, b.Manifest.Key, orgID, iso, b.Migrations, migrationOptions(i.MigrationSchema, b.Manifest)); err != nil {
 		return nil, nil, err
 	}
 	// Install doubles as the marketplace "Actualizar" (upgrade) path — the
@@ -1054,10 +1086,7 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	// (addon_key, version) so previously-applied files are skipped — only
 	// new files declared in the upgrade bundle execute.
 	iso := dynamic.ParseIsolation(newBundle.Manifest.TenantIsolation)
-	applier := i.schemaApplier
-	if applier == nil {
-		applier = defaultSchemaApplier{}
-	}
+	applier := i.upgradeApplier()
 	migrationsApplied, err := countAppliedMigrations(i.DB, newBundle.Manifest.Key, newBundle.Migrations)
 	if err != nil {
 		return nil, fmt.Errorf("installer.Upgrade: count migrations: %w", err)
@@ -1457,9 +1486,20 @@ type schemaApplier interface {
 // a table the migrations themselves didn't (re)create (addon-pos 002 →
 // pos_sessions, addon-inventory 002 → fulfillments). The migrations become pure
 // additive alignment on top of the metadata-driven schema.
-type defaultSchemaApplier struct{}
+// upgradeApplier returns the injected test applier, or the production one
+// carrying the host's MigrationSchema.
+func (i *Installer) upgradeApplier() schemaApplier {
+	if i.schemaApplier != nil {
+		return i.schemaApplier
+	}
+	return defaultSchemaApplier{migrationSchema: i.MigrationSchema}
+}
 
-func (defaultSchemaApplier) ApplyForUpgrade(db *gorm.DB, orgID uuid.UUID, iso dynamic.Isolation, b *bundle.Bundle) error {
+type defaultSchemaApplier struct {
+	migrationSchema func(addonKey string) string
+}
+
+func (a defaultSchemaApplier) ApplyForUpgrade(db *gorm.DB, orgID uuid.UUID, iso dynamic.Isolation, b *bundle.Bundle) error {
 	if err := dynamic.EnsureSchema(db, b.Manifest.Key, orgID, iso); err != nil {
 		return fmt.Errorf("EnsureSchema: %w", err)
 	}
@@ -1471,7 +1511,7 @@ func (defaultSchemaApplier) ApplyForUpgrade(db *gorm.DB, orgID uuid.UUID, iso dy
 			return fmt.Errorf("SyncSchema %s: %w", def.ModelKey, err)
 		}
 	}
-	if err := dynamic.Apply(db, b.Manifest.Key, orgID, iso, b.Migrations); err != nil {
+	if err := dynamic.ApplyWithOptions(db, b.Manifest.Key, orgID, iso, b.Migrations, migrationOptions(a.migrationSchema, b.Manifest)); err != nil {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
 	return nil
