@@ -234,6 +234,7 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 			Model:         m.Model,
 			Action:        res.action,
 			ActorID:       dynamic.ActorIDFromContext(ctx),
+			BranchID:      dynamic.EventBranchID(ctx, res.before, res.after),
 			AddonKey:      eventAddon,
 			CorrelationID: dynamic.CorrelationIDFromContext(ctx),
 			Before:        res.before,

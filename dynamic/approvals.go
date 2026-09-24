@@ -1205,6 +1205,7 @@ func (s *Service) publishApprovalEvent(ctx context.Context, action string, req *
 		Action:        action,
 		AddonKey:      "kernel",
 		ActorID:       actorID,
+		BranchID:      EventBranchID(withUserBranch(ctx, actor), nil, nil),
 		CorrelationID: CorrelationIDFromContext(ctx),
 		After:         req.ToMap(false),
 	}

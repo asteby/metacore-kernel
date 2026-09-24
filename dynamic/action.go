@@ -226,11 +226,7 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 	// optional GetBranchID sequence.go already honours) and the host did not
 	// already put it in ctx: a document the handler creates without naming a
 	// branch_id is born in the caller's branch.
-	if BranchIDFromContext(ctx) == "" {
-		if b, ok := user.(interface{ GetBranchID() uuid.UUID }); ok && b.GetBranchID() != uuid.Nil {
-			ctx = WithBranchID(ctx, b.GetBranchID().String())
-		}
-	}
+	ctx = withUserBranch(ctx, user)
 
 	if !runInTx {
 		req := ActionRequest{

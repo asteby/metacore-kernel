@@ -2244,3 +2244,21 @@ guest wrote is never trusted.
 
 Implementation: `dynamic/hooks.go` (`withHookActor`) and
 `dispatch/dispatcher.go` (`stampActorID`).
+
+### 21.1 Branch in event payloads
+
+Events also carry `branch_id`, so a subscriber's writes land in the branch
+of the document or user that started the chain. Unlike the actor, a branch
+the payload already names wins:
+
+- **Canonical events.** `branch_id` is the mutated row's own `branch_id`
+  (`after`, else `before`), else the caller's active branch
+  (`dynamic.WithBranchID`, or the user's `GetBranchID()`). Helper:
+  `dynamic.EventBranchID`.
+- **Domain events** (`event_emit`). A top-level `branch_id` uuid the emitter
+  wrote is kept. When it is absent, blank or not a uuid, the dispatcher
+  writes the emitting invocation's active branch there (when it has one).
+- **Delivery.** The dispatcher puts the event's `branch_id` on the
+  subscriber's ctx (`dynamic.WithBranchID`). `data_mutate` / `data_batch`
+  then stamp it on creates the subscriber leaves without `branch_id`, and
+  `ctx_get` returns it.
