@@ -224,3 +224,94 @@ func TestCrossRecord_MissingParentSkippedWhenOptedIn(t *testing.T) {
 		t.Fatalf("rows = %d, want 2 (overpay rolled back)", got)
 	}
 }
+
+// rxSetupAlways swaps the session rule for its enforce:"always" variant: the
+// payment is frozen while its session is not open (QA LIVE-10: the lines of an
+// accepted quote could still be edited and deleted, moving its total away
+// from the sales order it had become).
+func rxSetupAlways(t *testing.T) (*Service, *gorm.DB, *fakeUser, string, string) {
+	t.Helper()
+	svc, db, user, open, _, order := rxSetup(t)
+	rules := make([]manifest.CrossRuleDef, len(rxRules))
+	copy(rules, rxRules)
+	rules[0].Enforce = CrossEnforceAlways
+	svc.constraints = func(_ context.Context, model string) (*ModelConstraints, bool) {
+		if model == "rx_payments" {
+			return &ModelConstraints{Rules: rules}, true
+		}
+		return nil, false
+	}
+	return svc, db, user, open, order
+}
+
+func TestCrossRecord_EnforceAlwaysFreezesUpdateAndDelete(t *testing.T) {
+	svc, db, user, open, order := rxSetupAlways(t)
+	ctx := context.Background()
+	p, err := svc.Create(ctx, "rx_payments", user, map[string]any{"session_id": open, "order_id": order, "amount": 100.0, "status": "completed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.MustParse(p["id"].(string))
+	// Parent still open: editing is fine.
+	if _, err := svc.Update(ctx, "rx_payments", user, id, map[string]any{"amount": 150.0}); err != nil {
+		t.Fatalf("edit while the parent is open must pass: %v", err)
+	}
+	db.Exec(`UPDATE rx_sessions SET state='closed' WHERE id = ?`, open)
+
+	// Same ref, different amount: the default rule would let it through.
+	_, err = svc.Update(ctx, "rx_payments", user, id, map[string]any{"amount": 300.0})
+	wantRuleKey(t, err, "pos.session_closed")
+	var amt float64
+	db.Table("rx_payments").Select("amount").Where("id = ?", id.String()).Scan(&amt)
+	if amt != 150 {
+		t.Fatalf("frozen row changed: amount = %v", amt)
+	}
+
+	err = svc.Delete(ctx, "rx_payments", user, id)
+	wantRuleKey(t, err, "pos.session_closed")
+	var n int64
+	db.Table("rx_payments").Where("id = ? AND deleted_at IS NULL", id.String()).Count(&n)
+	if n != 1 {
+		t.Fatal("frozen row was deleted")
+	}
+
+	// Parent reopened: the row is writable again.
+	db.Exec(`UPDATE rx_sessions SET state='open' WHERE id = ?`, open)
+	if err := svc.Delete(ctx, "rx_payments", user, id); err != nil {
+		t.Fatalf("delete while the parent is open must pass: %v", err)
+	}
+}
+
+// Without enforce the historical contract holds: an edit that keeps the ref and
+// a delete are never blocked by the parent's later state.
+func TestCrossRecord_DefaultEnforceLetsDeleteThrough(t *testing.T) {
+	svc, _, user, open, _, order := rxSetup(t)
+	ctx := context.Background()
+	p, err := svc.Create(ctx, "rx_payments", user, map[string]any{"session_id": open, "order_id": order, "amount": 10.0, "status": "completed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.db.Exec(`UPDATE rx_sessions SET state='closed' WHERE id = ?`, open)
+	if err := svc.Delete(ctx, "rx_payments", user, uuid.MustParse(p["id"].(string))); err != nil {
+		t.Fatalf("default ref_state must not block a delete: %v", err)
+	}
+}
+
+func TestCrossRecordCompute_EnforceAlwaysGuardsWasmDelete(t *testing.T) {
+	_, db, user, _, closed, order := rxSetup(t)
+	rules := make([]manifest.CrossRuleDef, len(rxRules))
+	copy(rules, rxRules)
+	rules[0].Enforce = CrossEnforceAlways
+	fn := CrossRecordCompute(
+		func(tbl string) []manifest.CrossRuleDef {
+			if tbl == "rx_payments" {
+				return rules
+			}
+			return nil
+		},
+		func(tbl string) string { return tbl },
+		func(model string) (string, error) { return model, nil },
+	)
+	row := map[string]any{"id": uuid.NewString(), "session_id": closed, "order_id": order, "amount": 1.0, "status": "completed"}
+	wantRuleKey(t, fn(context.Background(), db, user.GetOrganizationID(), "rx_payments", "deleted", row), "pos.session_closed")
+}

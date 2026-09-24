@@ -1219,6 +1219,11 @@
           "pattern": "^[a-z][a-z0-9_]*$",
           "description": "sum_lte only: numeric column of the PARENT that caps the sum."
         },
+        "enforce": {
+          "type": "string",
+          "enum": ["always"],
+          "description": "ref_state only. Default (absent): checked on create and when ref changes on update. always: checked on EVERY create, update and delete, so the row is frozen while its parent is outside require (e.g. the lines of an accepted quote)."
+        },
         "on_missing_parent": {
           "type": "string",
           "enum": ["reject", "skip"],

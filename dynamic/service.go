@@ -1097,6 +1097,19 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 	db := s.db.WithContext(ctx).Table(tableName)
 	db = s.scope.ScopeQuery(db, user)
 
+	// Cross-record rules that guard deletes (ref_state with enforce "always"):
+	// a row frozen by its parent's state cannot be removed either (the line of
+	// an accepted quote). Evaluated against the pre-delete row.
+	if mc := s.resolveConstraints(ctx, model); mc != nil && len(deleteGuardRules(mc.Rules)) > 0 {
+		row := map[string]any{}
+		loadDB := s.scope.ScopeQuery(s.db.WithContext(ctx).Table(tableName), user)
+		if err := loadDB.Where("id = ?", id).Take(&row).Error; err == nil {
+			if err := EvalCrossRecordDeleteRules(ctx, s.db, mc.Rules, tableName, user.GetOrganizationID(), row, s.parentTableFn(ctx)); err != nil {
+				return err
+			}
+		}
+	}
+
 	// Snapshot the row before the delete so the canonical event can carry
 	// `before` AND so we can route the deleted row's file/image assets to the
 	// FileDeleter. A miss here is tolerated: the delete itself drives the error

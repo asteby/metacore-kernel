@@ -28,6 +28,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Cross-record rules: `enforce: "always"` freezes a child row.** A
+  `ref_state` rule was only checked on create and when its `ref` changed, so
+  the lines of an ACCEPTED quote could still be edited or deleted and the
+  quote total drifted away from the sales order it had become (QA pitsline
+  LIVE-10). With `"enforce": "always"` the rule is also checked on every update
+  (even one that keeps the ref) and on delete — in `dynamic.Service` and on the
+  wasm `data_mutate` / `data_batch` path (`CrossRecordCompute`). Opt-in and
+  `ref_state` only; the default behaviour is unchanged. Hosts need no change
+  beyond bumping the kernel (ops already passes `CrossRuleDef` through).
+
 - **Capability contracts (`provides_capabilities[]` + handler `type: "capability"`).**
   A consumer requires a provider-neutral contract (`messaging.whatsapp.send`)
   instead of naming a connector; the host dispatches to whichever installed
