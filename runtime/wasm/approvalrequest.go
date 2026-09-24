@@ -151,7 +151,7 @@ func approvalRequestMeta(addonKey string, orgID uuid.UUID, start time.Time) map[
 func approvalRequestErr(addonKey, code, message string, orgID uuid.UUID, start time.Time) []byte {
 	b, _ := json.Marshal(map[string]any{
 		"success": false,
-		"error":   map[string]any{"code": code, "message": message},
+		"error":   hostErrorBody(code, message),
 		"meta":    approvalRequestMeta(addonKey, orgID, start),
 	})
 	return b

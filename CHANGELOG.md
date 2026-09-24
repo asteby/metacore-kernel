@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Dead event deliveries now say why they died.** Every wasm host import
+  error carries `message_key` (`wasm.host.error.<code>`) next to `code` and
+  `message`. The dispatcher unwraps a raw host envelope that a guest pasted
+  into its error message, appends the `message_key`, and a subscriber whose
+  module never loaded dead-letters with "never became ready within …" plus
+  the likely causes instead of a bare `addon "x" not loaded`.
+
 - **`data_mutate` no longer fails a whole write because the guest echoed
   its own `organization_id`.** A `data.organization_id` equal to the
   invocation org is dropped with a `WARN host_stamped_ignored` log (as

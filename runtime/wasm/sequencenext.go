@@ -92,7 +92,7 @@ func sequenceNextMeta(addonKey string, orgID uuid.UUID, start time.Time) map[str
 func sequenceNextErr(addonKey, code, message string, orgID uuid.UUID, start time.Time) []byte {
 	b, _ := json.Marshal(map[string]any{
 		"success": false,
-		"error":   map[string]any{"code": code, "message": message},
+		"error":   hostErrorBody(code, message),
 		"meta":    sequenceNextMeta(addonKey, orgID, start),
 	})
 	return b

@@ -71,11 +71,8 @@ func eventEmitErr(addonKey, code, message string, orgID uuid.UUID, start time.Ti
 	}
 	b, _ := json.Marshal(map[string]any{
 		"success": false,
-		"error": map[string]any{
-			"code":    code,
-			"message": message,
-		},
-		"meta": meta,
+		"error":   hostErrorBody(code, message),
+		"meta":    meta,
 	})
 	return b
 }
