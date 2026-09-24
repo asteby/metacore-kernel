@@ -1,8 +1,10 @@
 package wasm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"strings"
 	"sync"
 	"testing"
@@ -398,7 +400,8 @@ func TestExecuteDataMutate_OrgEnforcement(t *testing.T) {
 	}
 }
 
-func TestExecuteDataMutate_GuestSuppliedOrgIDRejected(t *testing.T) {
+// A different org in data is a cross-tenant attempt: refused before any SQL.
+func TestExecuteDataMutate_GuestSuppliedForeignOrgIDRejected(t *testing.T) {
 	gdb, mock, cleanup := newMockGorm(t)
 	defer cleanup()
 
@@ -410,11 +413,87 @@ func TestExecuteDataMutate_GuestSuppliedOrgIDRejected(t *testing.T) {
 	}`))
 
 	env := unmarshalMutate(t, out)
-	if env.Success || env.Error == nil || env.Error.Code != "invalid_request" {
-		t.Fatalf("expected invalid_request for guest organization_id, got %s", out)
+	if env.Success || env.Error == nil || env.Error.Code != "forbidden" {
+		t.Fatalf("expected forbidden for foreign organization_id, got %s", out)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("driver should be untouched: %v", err)
+	}
+}
+
+// A guest echoing its own org (and data.id) on create is not an error: both
+// are dropped and the host stamps them — the INSERT carries the invocation
+// org exactly once (addons#1735: caja's AR queue died on this).
+func TestExecuteDataMutate_GuestSuppliedOwnOrgIDIgnored(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+
+	orgID := uuid.New()
+	rowID := uuid.NewString()
+	bus, _, _ := captureBus(t, "inventory.Stock.created")
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
+	mock.ExpectQuery(`INSERT INTO "stock" \("created_at", "id", "organization_id", "product_id", "quantity", "updated_at"\) VALUES \(\$1, \$2, \$3, \$4, \$5, \$6\) RETURNING \*`).
+		WithArgs(sqlmock.AnyArg(), rowID, orgID, "prod-1", int64(5), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id", "product_id", "quantity"}).
+			AddRow(rowID, orgID.String(), "prod-1", int64(5)))
+	mock.ExpectCommit()
+
+	var logs bytes.Buffer
+	inv := testInvocation(gdb, bus, orgID, stockWriteEnforcer(), nil)
+	inv.logger = log.New(&logs, "", 0)
+	out := executeDataMutate(context.Background(), inv, []byte(`{
+		"op": "create", "table": "stock", "model": "Stock",
+		"data": {"id": "`+rowID+`", "organization_id": "`+orgID.String()+`", "product_id": "prod-1", "quantity": 5}
+	}`))
+
+	env := unmarshalMutate(t, out)
+	if !env.Success || env.Data == nil || env.Data.ID != rowID {
+		t.Fatalf("expected success with id %s, got %s", rowID, out)
+	}
+	for _, want := range []string{"host_stamped_ignored addon=inventory table=stock col=id", "host_stamped_ignored addon=inventory table=stock col=organization_id"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("missing WARN %q in logs:\n%s", want, logs.String())
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestStripGuestOrgID(t *testing.T) {
+	org := uuid.New()
+	mk := func(v string) *dataMutateRequest {
+		return &dataMutateRequest{Op: "update", Data: map[string]json.RawMessage{"organization_id": json.RawMessage(v), "note": json.RawMessage(`"x"`)}}
+	}
+	if ok, err := stripGuestOrgID(&dataMutateRequest{Data: map[string]json.RawMessage{"note": json.RawMessage(`"x"`)}}, org); ok || err != nil {
+		t.Fatalf("absent org: ok=%v err=%v", ok, err)
+	}
+	req := mk(`"` + strings.ToUpper(org.String()) + `"`)
+	if ok, err := stripGuestOrgID(req, org); !ok || err != nil {
+		t.Fatalf("same org (any case) must be stripped: ok=%v err=%v", ok, err)
+	}
+	if _, left := req.Data["organization_id"]; left {
+		t.Fatal("organization_id must be removed from data")
+	}
+	for name, v := range map[string]string{
+		"foreign":  `"` + uuid.NewString() + `"`,
+		"not uuid": `"acme"`,
+		"nil uuid": `"` + uuid.Nil.String() + `"`,
+		"number":   `1`,
+		"object":   `{"$uuid":"` + org.String() + `"}`,
+	} {
+		req := mk(v)
+		if ok, err := stripGuestOrgID(req, org); ok || err == nil {
+			t.Fatalf("%s: must be refused, ok=%v err=%v", name, ok, err)
+		}
+		if _, left := req.Data["organization_id"]; !left {
+			t.Fatalf("%s: refused value must stay so nothing downstream sees a stripped request", name)
+		}
+	}
+	if ok, err := stripGuestOrgID(mk(`"`+org.String()+`"`), uuid.Nil); ok || err == nil {
+		t.Fatalf("no bound org must refuse any guest org: ok=%v err=%v", ok, err)
 	}
 }
 

@@ -53,6 +53,9 @@ var dataMutateIdentRe = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 // dataMutateReservedCols are host-stamped columns a guest may never supply
 // through data/inc: `organization_id` is the tenant boundary, `id` rides on
 // the top-level request field, and the timestamps are stamped by the host.
+// Before validation, a create's data.id is lifted to the request and a
+// data.organization_id equal to the invocation org is dropped (see
+// liftGuestCreateID / stripGuestOrgID); what reaches here is rejected.
 var dataMutateReservedCols = map[string]bool{
 	"id":              true,
 	"organization_id": true,
@@ -110,7 +113,27 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 	// stamps id on the request field (and rejects it in data). Lift it so a
 	// create does not die as invalid_request after a marketplace upgrade —
 	// that failure used to be marked delivered and left no work order in prod.
-	liftGuestCreateID(&req)
+	if liftGuestCreateID(&req) && inv.logger != nil {
+		inv.logger.Printf("metacore.wasm data_mutate WARN host_stamped_ignored addon=%s table=%s col=id reason=lifted_to_request",
+			addonKey, req.Table)
+	}
+	// organization_id is the tenant boundary and is always stamped from the
+	// invocation. A guest echoing its OWN org is harmless: drop it with a
+	// warning instead of failing the whole write (that failure killed caja's
+	// AR queue, addons#1735). A DIFFERENT org is a cross-tenant attempt and is
+	// refused; the guest value is never used either way.
+	stripped, oErr := stripGuestOrgID(&req, orgID)
+	if oErr != nil {
+		if inv.logger != nil {
+			inv.logger.Printf("metacore.wasm data_mutate WARN cross_tenant_rejected addon=%s table=%s org=%s err=%v",
+				addonKey, req.Table, orgID, oErr)
+		}
+		return fail("forbidden", oErr.Error())
+	}
+	if stripped && inv.logger != nil {
+		inv.logger.Printf("metacore.wasm data_mutate WARN host_stamped_ignored addon=%s table=%s col=organization_id reason=matches_invocation_org",
+			addonKey, req.Table)
+	}
 	if err := validateDataMutateRequest(&req); err != nil {
 		return fail("invalid_request", err.Error())
 	}
@@ -562,23 +585,49 @@ func validateDataMutateRequest(req *dataMutateRequest) error {
 
 // liftGuestCreateID moves data.id onto the top-level request id on create.
 // The host still stamps the column; the guest may only propose the uuid.
-func liftGuestCreateID(req *dataMutateRequest) {
+// Reports whether data carried an id.
+func liftGuestCreateID(req *dataMutateRequest) bool {
 	if req == nil || req.Op != "create" || req.Data == nil {
-		return
+		return false
 	}
 	raw, ok := req.Data["id"]
 	if !ok {
-		return
+		return false
 	}
 	delete(req.Data, "id")
 	if strings.TrimSpace(req.ID) != "" {
-		return
+		return true
 	}
 	var id string
 	if err := json.Unmarshal(raw, &id); err != nil {
-		return
+		return true
 	}
 	req.ID = strings.TrimSpace(id)
+	return true
+}
+
+// stripGuestOrgID removes data.organization_id when it names the invocation's
+// org (reports true) and errors when it names any other org or is not a uuid
+// string. Without a bound org nothing can match, so any value is refused.
+// inc.organization_id is left for validateDataMutateCol to reject.
+func stripGuestOrgID(req *dataMutateRequest, orgID uuid.UUID) (bool, error) {
+	if req == nil || req.Data == nil {
+		return false, nil
+	}
+	raw, ok := req.Data["organization_id"]
+	if !ok {
+		return false, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return false, fmt.Errorf("data.organization_id must be the invocation org uuid")
+	}
+	guest, err := uuid.Parse(strings.TrimSpace(s))
+	if err != nil || orgID == uuid.Nil || guest != orgID {
+		return false, fmt.Errorf("data.organization_id does not match the invocation org (cross-tenant write refused)")
+	}
+	delete(req.Data, "organization_id")
+	return true, nil
 }
 
 func validateDataMutateCol(col string) error {
