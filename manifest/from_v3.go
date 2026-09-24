@@ -826,16 +826,24 @@ func mapModelTransitionHooks(in []v3.TransitionHook) []TransitionHookDef {
 // mapModelSeed folds a v3 model's seed block (declarative default data the
 // installer inserts on install, idempotent by a natural key column) onto the
 // host ModelDefinition.Seed so it survives the v3 → host conversion. The host
-// (ops executor) reads def.Seed to perform the seeding. Key and Rows copy
-// across verbatim; a nil v3 seed maps to a nil host seed (the common case).
+// (ops executor) reads def.Seed to perform the seeding. Key, When, Refs and
+// Rows copy across verbatim; a nil v3 seed maps to a nil host seed (the common case).
 func mapModelSeed(in *v3.Seed) *SeedDef {
 	if in == nil {
 		return nil
 	}
-	return &SeedDef{
+	out := &SeedDef{
 		Key:  in.Key,
+		When: in.When,
 		Rows: in.Rows,
 	}
+	if len(in.Refs) > 0 {
+		out.Refs = make(map[string]SeedRefDef, len(in.Refs))
+		for col, r := range in.Refs {
+			out.Refs[col] = SeedRefDef{Model: r.Model, Match: r.Match}
+		}
+	}
+	return out
 }
 
 // renderColumnDefault translates a v3 column default into a DDL-safe legacy

@@ -795,8 +795,42 @@ type Seed struct {
 	// Key is the column used for idempotency — the natural key the installer
 	// matches on to decide whether a row already exists (upsert/skip).
 	Key string `json:"key"`
+	// When selects the seeding policy. "" / "always" (the default) inserts each
+	// row whose Key value is missing for the org, on every install / upgrade /
+	// resync. "empty" seeds ONLY while the org has no live row at all in the
+	// model's table: it is the "starter record" policy — a default warehouse, a
+	// first cash register — that must not be added to an org that already
+	// configured its own records, nor re-created on every upgrade after the
+	// org renamed or replaced it. See SeedWhenAlways / SeedWhenEmpty.
+	When string `json:"when,omitempty"`
+	// Refs fills a column of every seeded row with the id of ANOTHER model's
+	// row, resolved per org at seed time (column name → lookup). It links a
+	// starter record to a record another addon seeded (e.g. the default
+	// warehouse to the main branch). A lookup that resolves to nothing — the
+	// referenced addon is not installed, or no row matches — leaves the column
+	// NULL and never fails the install. A row that sets the column explicitly
+	// keeps its own value.
+	Refs map[string]SeedRef `json:"refs,omitempty"`
 	// Rows are the default records, each an object of column name → value.
 	Rows []map[string]any `json:"rows"`
+}
+
+// Seed.When policies.
+const (
+	// SeedWhenAlways inserts every row whose natural key is missing (default).
+	SeedWhenAlways = "always"
+	// SeedWhenEmpty inserts the rows only while the org has no live row in the
+	// model's table.
+	SeedWhenEmpty = "empty"
+)
+
+// SeedRef is one Seed.Refs lookup: the id of the org's first live row (oldest
+// created_at) of Model whose columns equal every Match entry.
+type SeedRef struct {
+	// Model is the referenced model, "<addon>.<Model>" or a bare model key.
+	Model string `json:"model"`
+	// Match are column → value equalities on the referenced model's row.
+	Match map[string]any `json:"match"`
 }
 
 // ModelRelation is one inverse 1:N / N:M edge rooted at the owning Model. The

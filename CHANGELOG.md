@@ -28,6 +28,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`seed.when: "empty"` y `seed.refs` en el manifest v3.** Un seed ahora
+  puede declarar un registro inicial que solo se crea mientras la org no tiene
+  ninguno en esa tabla (`when: "empty"`; el default `always` no cambia). Así
+  no se agrega a orgs que ya configuraron los suyos ni vuelve a aparecer en
+  cada upgrade. `refs` llena una columna de cada fila sembrada con el id de una
+  fila de otro modelo, resuelta por org al sembrar (`{"model": "locations.Branch",
+  "match": {"code": "main"}}`). Si no se resuelve, queda NULL y nunca rompe la
+  instalación. Validado en el schema, en `v3.Validate` y en el validador legacy.
+  Lo consume el sembrador del host (ops `SeedForOrg`). Primer uso: el almacén
+  por defecto de inventory (QA pitsline LIVE-25).
+
 - **Cross-record rules: `enforce: "always"` freezes a child row.** A
   `ref_state` rule was only checked on create and when its `ref` changed, so
   the lines of an ACCEPTED quote could still be edited or deleted and the

@@ -1221,9 +1221,26 @@ type SeedDef struct {
 	// Key is the column used for idempotency (the natural key the installer
 	// matches on to decide whether a row already exists).
 	Key string `json:"key"`
+	// When is the seeding policy: "" / "always" inserts every row whose Key is
+	// missing; "empty" seeds only while the org has no live row in the table
+	// (see v3.SeedWhenEmpty).
+	When string `json:"when,omitempty"`
+	// Refs fills a column of every seeded row with the id of another model's
+	// row, resolved per org at seed time; unresolved → NULL (see v3.SeedRef).
+	Refs map[string]SeedRefDef `json:"refs,omitempty"`
 	// Rows are the default records, each an object of column name → value.
 	Rows []map[string]any `json:"rows"`
 }
+
+// SeedRefDef is the host projection of v3.SeedRef: the id of the org's first
+// live row of Model whose columns equal every Match entry.
+type SeedRefDef struct {
+	Model string         `json:"model"`
+	Match map[string]any `json:"match"`
+}
+
+// SeedOnlyWhenEmpty reports whether the seed uses the "empty" policy.
+func (s *SeedDef) SeedOnlyWhenEmpty() bool { return s != nil && s.When == "empty" }
 
 // RelationDef declares an inter-model relationship rooted at the owning
 // ModelDefinition. The kernel uses it to derive joins, eager-loading

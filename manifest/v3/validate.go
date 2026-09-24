@@ -1369,6 +1369,30 @@ func Validate(raw []byte) error {
 					errs = append(errs, fmt.Sprintf("%s.rows[%d] is an empty object", where, rri))
 				}
 			}
+			switch mod.Seed.When {
+			case "", SeedWhenAlways, SeedWhenEmpty:
+			default:
+				errs = append(errs, fmt.Sprintf("%s.when %q is not one of \"always\"|\"empty\"", where, mod.Seed.When))
+			}
+			for _, col := range sortedSeedRefCols(mod.Seed.Refs) {
+				ref := mod.Seed.Refs[col]
+				declared := false
+				for _, c := range mod.Columns {
+					if c.Name == col {
+						declared = true
+						break
+					}
+				}
+				if !declared {
+					errs = append(errs, fmt.Sprintf("%s.refs[%q] is not a declared column on the model", where, col))
+				}
+				if strings.TrimSpace(ref.Model) == "" {
+					errs = append(errs, fmt.Sprintf("%s.refs[%q].model is empty", where, col))
+				}
+				if len(ref.Match) == 0 {
+					errs = append(errs, fmt.Sprintf("%s.refs[%q].match is empty", where, col))
+				}
+			}
 		}
 		// Stage machine: stage_field must name a declared column; stage keys
 		// unique; transitions/hooks must reference declared stage keys (or "*"
@@ -1929,4 +1953,15 @@ func validateCapabilities(m *Manifest) []string {
 		}
 	}
 	return errs
+}
+
+// sortedSeedRefCols returns the Seed.Refs columns in a stable order so the
+// validator's error list is deterministic.
+func sortedSeedRefCols(refs map[string]SeedRef) []string {
+	cols := make([]string, 0, len(refs))
+	for col := range refs {
+		cols = append(cols, col)
+	}
+	sort.Strings(cols)
+	return cols
 }

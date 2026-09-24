@@ -2,6 +2,7 @@ package manifest_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/asteby/metacore-kernel/manifest"
@@ -115,5 +116,78 @@ func TestFromV3_NoSeedIsNil(t *testing.T) {
 	out := manifest.FromV3(m)
 	if out.ModelDefinitions[0].Seed != nil {
 		t.Fatalf("expected nil Seed, got %+v", out.ModelDefinitions[0].Seed)
+	}
+}
+
+// starterSeedManifestJSON is the "starter record" shape (QA pitsline LIVE-25):
+// a default warehouse seeded only while the org has none (when:"empty") and
+// linked to the main branch another addon seeded (refs).
+const starterSeedManifestJSON = `{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": { "key": "inventory", "name": "Inventory", "version": "0.1.0" },
+  "compatibility": { "requires": [{ "key": "kernel", "version": ">=3.0.0 <4.0.0" }] },
+  "models": [
+    {
+      "key": "Warehouse",
+      "table": "warehouses",
+      "columns": [
+        { "name": "id", "type": "uuid", "primary_key": true },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
+        { "name": "code", "type": "text", "not_null": true },
+        { "name": "name", "type": "text", "not_null": true },
+        { "name": "branch_id", "type": "uuid" }
+      ],
+      "seed": {
+        "key": "code",
+        "when": "empty",
+        "refs": { "branch_id": { "model": "locations.Branch", "match": { "code": "main" } } },
+        "rows": [ { "code": "ALM-01", "name": "Almacén principal" } ]
+      }
+    }
+  ]
+}`
+
+func TestFromV3_CarriesSeedWhenAndRefs(t *testing.T) {
+	m, err := v3.Parse([]byte(starterSeedManifestJSON))
+	if err != nil {
+		t.Fatalf("v3.Parse: %v", err)
+	}
+	def := manifest.FromV3(m).ModelDefinitions[0]
+	if def.Seed == nil || def.Seed.When != v3.SeedWhenEmpty || !def.Seed.SeedOnlyWhenEmpty() {
+		t.Fatalf("seed.when lost in FromV3: %+v", def.Seed)
+	}
+	ref, ok := def.Seed.Refs["branch_id"]
+	if !ok || ref.Model != "locations.Branch" || ref.Match["code"] != "main" {
+		t.Fatalf("seed.refs lost in FromV3: %+v", def.Seed.Refs)
+	}
+	// The host reads def.Seed as JSON.
+	raw, _ := json.Marshal(def.Seed)
+	var back manifest.SeedDef
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.When != "empty" || back.Refs["branch_id"].Match["code"] != "main" {
+		t.Fatalf("host seed JSON round-trip dropped when/refs: %s", raw)
+	}
+}
+
+func TestV3Parse_RejectsBadSeedWhenAndRefs(t *testing.T) {
+	cases := map[string][2]string{
+		"unknown when":      {`"when": "empty"`, `"when": "once"`},
+		"ref to undeclared": {`"branch_id": {`, `"nope": {`},
+		"ref without match": {`"match": { "code": "main" }`, `"match": {}`},
+		"ref without model": {`"model": "locations.Branch"`, `"model": ""`},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			bad := strings.Replace(starterSeedManifestJSON, c[0], c[1], 1)
+			if bad == starterSeedManifestJSON {
+				t.Fatalf("replacement %q did not apply", c[0])
+			}
+			if _, err := v3.Parse([]byte(bad)); err == nil {
+				t.Fatalf("v3.Parse accepted %s", name)
+			}
+		})
 	}
 }

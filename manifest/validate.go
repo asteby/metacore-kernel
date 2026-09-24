@@ -842,6 +842,29 @@ func validateSeed(seed *SeedDef, cols []ColumnDef) error {
 			return fmt.Errorf("seed.rows[%d]: empty object", i)
 		}
 	}
+	switch seed.When {
+	case "", "always", "empty":
+	default:
+		return fmt.Errorf("seed.when %q is not one of \"always\"|\"empty\"", seed.When)
+	}
+	for col, ref := range seed.Refs {
+		declared := false
+		for _, c := range cols {
+			if c.Name == col {
+				declared = true
+				break
+			}
+		}
+		if !declared {
+			return fmt.Errorf("seed.refs[%q] is not a declared column on the model", col)
+		}
+		if strings.TrimSpace(ref.Model) == "" {
+			return fmt.Errorf("seed.refs[%q].model required", col)
+		}
+		if len(ref.Match) == 0 {
+			return fmt.Errorf("seed.refs[%q].match required", col)
+		}
+	}
 	return nil
 }
 

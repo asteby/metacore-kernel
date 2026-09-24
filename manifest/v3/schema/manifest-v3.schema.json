@@ -970,6 +970,39 @@
           "type": "string",
           "description": "The column used for idempotency — must name a declared column on the owning model."
         },
+        "when": {
+          "type": "string",
+          "enum": [
+            "always",
+            "empty"
+          ],
+          "description": "Seeding policy. 'always' (default) inserts every row whose key value is missing for the org, on every install/upgrade/resync. 'empty' seeds only while the org has no live row in the model's table — for starter records (a default warehouse) that must not be added to an org that already has its own nor re-created after it was replaced."
+        },
+        "refs": {
+          "type": "object",
+          "description": "Column → lookup filled on every seeded row with the id of another model's row, resolved per org at seed time (first live row, oldest first, matching every 'match' equality). Unresolved (addon not installed / no match) leaves the column NULL; a row that sets the column keeps its own value.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "model",
+              "match"
+            ],
+            "properties": {
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Referenced model, '<addon>.<Model>' or a bare model key."
+              },
+              "match": {
+                "type": "object",
+                "minProperties": 1,
+                "description": "Column → value equalities on the referenced model's row.",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
         "rows": {
           "type": "array",
           "minItems": 1,
