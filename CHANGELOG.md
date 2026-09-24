@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A record whose legacy value breaks a newer column rule can be edited
+  again.** An edit form posts every field back, so once a column gained a
+  declarative `validation` (regex / min / max / custom) — e.g. an RFC pattern
+  over customers imported with `abc-010101` — renaming such a customer failed
+  422 on the tax_id nobody touched (QA pitsline LIVE-19). On UPDATE,
+  `dynamic.Service` now skips the ValidationRule for a value re-sent unchanged
+  from the persisted row (numbers compared numerically). Changing the value,
+  and every create, is validated as before; required / enum / ref / unique /
+  protected are unaffected.
+
 - **Events published while a wasm module is still loading are no longer
   lost.** After a restart the runtime reloads every addon module (1–2 min);
   deliveries in that window failed with `wasm: addon "x" not loaded`, spent

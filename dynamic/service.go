@@ -760,7 +760,7 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	// string values coerce would silently drop) and before hooks/guards/
 	// mapToStruct — a bad input is rejected 422 with a field map instead of a
 	// raw Postgres 500. A model with no wired validation schema is unaffected.
-	if err := s.validateWrite(ctx, model, tableName, user, input, nil); err != nil {
+	if err := s.validateWrite(ctx, model, tableName, user, input, nil, nil); err != nil {
 		return nil, err
 	}
 
@@ -943,7 +943,7 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		// before hooks/guards/mapToStruct; inside the lock when locking so the
 		// duplicate check is serialized with the write.
 		selfID := id
-		if err := s.validateWrite(ctx, model, tableName, user, input, &selfID); err != nil {
+		if err := s.validateWrite(ctx, model, tableName, user, input, &selfID, before); err != nil {
 			return err
 		}
 
