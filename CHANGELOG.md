@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`data_mutate` no longer fails a whole write because the guest echoed
+  its own `organization_id`.** A `data.organization_id` equal to the
+  invocation org is dropped with a `WARN host_stamped_ignored` log (as
+  `data.id` on create already was, now also logged); a different org, a
+  non-uuid or a call without a bound org is refused as `forbidden`
+  (cross-tenant). The host keeps stamping the org from the invocation. Caja's
+  AR-to-cash-desk queue died on this (addons#1735).
+
 - **A record whose legacy value breaks a newer column rule can be edited
   again.** An edit form posts every field back, so once a column gained a
   declarative `validation` (regex / min / max / custom) — e.g. an RFC pattern

@@ -1525,9 +1525,13 @@ data_mutate(reqPtr i32, reqLen i32) -> i64
 - `organization_id` NEVER comes from the guest: the host reads it from the
   invocation context (same rule as `event_emit`, § 12.6). Every operation is
   org-scoped by construction — `WHERE organization_id = ?` on update/delete,
-  stamp on create. A guest-supplied `organization_id` (or any other
-  host-stamped column: `id`, `created_at`, `updated_at`, `deleted_at`) inside
-  `data` / `inc` is rejected with `invalid_request`.
+  stamp on create. The guest value is never used:
+  - `data.organization_id` equal to the invocation org is dropped with a
+    `WARN host_stamped_ignored` log line; any other value (another org, not a
+    uuid string, no bound org) is refused with `forbidden` (cross-tenant).
+  - `data.id` on **create** is lifted to the request `id` (same WARN).
+  - Any other host-stamped column (`created_at`, `updated_at`, `deleted_at`,
+    `id` outside create, anything in `inc`) is rejected with `invalid_request`.
 - **create** — the host stamps `id` (when absent), `organization_id`,
   `created_at` and `updated_at`, then `INSERT … RETURNING *`. Column names
   must match `^[a-z_][a-z0-9_]{0,62}$`; unknown columns surface as
