@@ -112,7 +112,14 @@ func isNumeric(raw any) bool {
 // All failures are collected in one pass; the accumulated *ValidationError is
 // returned (nil when clean). DB round-trips (ref existence, unique) are skipped
 // for empty/absent values.
-func (s *Service) validateWrite(ctx context.Context, model, tableName string, user modelbase.AuthUser, input map[string]any, selfID *uuid.UUID) error {
+//
+// before is the persisted row on UPDATE (nil on CREATE). A value the caller
+// re-sends UNCHANGED is exempt from the declarative ValidationRule (regex / min
+// / max / custom): an edit form posts every field back, so a rule added after
+// the row was written (e.g. an RFC pattern over legacy data) would otherwise
+// make the whole record uneditable until someone fixed a field they never
+// touched. Changing the value — or any create — is still fully validated.
+func (s *Service) validateWrite(ctx context.Context, model, tableName string, user modelbase.AuthUser, input map[string]any, selfID *uuid.UUID, before map[string]any) error {
 	cols := s.resolveValidationSchema(ctx, model)
 	if cols == nil {
 		return nil
@@ -207,6 +214,10 @@ func (s *Service) validateWrite(ctx context.Context, model, tableName string, us
 
 		// Declarative ValidationRule (regex / min / max / custom) — Laravel-style
 		// additive checks the kernel used to author-validate but never execute.
+		// Grandfathered on update when the value is the one already persisted.
+		if isUpdate && unchangedFromPersisted(raw, before, name) {
+			continue
+		}
 		for _, iss := range s.checkSpec(raw, specFromColumn(col)) {
 			ve.add(name, iss.Code, iss.Params)
 		}
@@ -461,4 +472,30 @@ func valueToString(raw any) string {
 	default:
 		return strings.TrimSpace(fmt.Sprintf("%v", v))
 	}
+}
+
+// unchangedFromPersisted reports whether raw equals the persisted value of
+// column name in before. Numbers compare numerically ("12.50" == 12.5, since a
+// decimal column may round-trip as text); everything else by its trimmed
+// string form. A missing column or a nil before is never "unchanged".
+func unchangedFromPersisted(raw any, before map[string]any, name string) bool {
+	if before == nil {
+		return false
+	}
+	prev, ok := before[name]
+	if !ok {
+		return false
+	}
+	raw, prev = derefRaw(raw), derefRaw(prev)
+	if raw == nil || prev == nil {
+		return raw == nil && prev == nil
+	}
+	if isNumeric(raw) && isNumeric(prev) {
+		a, errA := strconv.ParseFloat(valueToString(raw), 64)
+		b, errB := strconv.ParseFloat(valueToString(prev), 64)
+		if errA == nil && errB == nil {
+			return a == b
+		}
+	}
+	return valueToString(raw) == valueToString(prev)
 }
