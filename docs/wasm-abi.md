@@ -440,10 +440,24 @@ Errors share the same outer shape:
 ```json
 {
   "success": false,
-  "error":   { "code": "forbidden", "message": "addon \"tickets\" lacks db:read \"billing.invoices\"" },
+  "error":   { "code": "forbidden", "message": "addon \"tickets\" lacks db:read \"billing.invoices\"", "message_key": "wasm.host.error.forbidden" },
   "meta":    { "schema": "addon_tickets", "durationMs": 1 }
 }
 ```
+
+Every host import (`db_query`, `db_exec`, `data_query`, `data_mutate`,
+`data_batch`, `sequence_next`, `ctx_get`, `event_emit`, `routing_resolve`,
+`approval_request`) returns this `error` object on failure: `code` is the
+stable machine code, `message` the concrete cause, and `message_key`
+(`wasm.host.error.<code>`) the i18n key. A guest handler that fails because
+of a host error should return that object (or at least its `code` and
+`message`) in its own `{success:false,error}` envelope instead of a generic
+code such as `order_create_failed`: the event dispatcher copies it into
+`event_deliveries.last_error` and the `dispatch.delivery_dead` log. The
+dispatcher also unwraps a host envelope a guest pasted verbatim into its
+message (`upsert x: {"error":{…}}` → `upsert x: host <code>: <message>`),
+appends `[message_key]` when present, and marks a delivery whose module never
+loaded as such instead of a bare "not loaded".
 
 Defined error codes:
 

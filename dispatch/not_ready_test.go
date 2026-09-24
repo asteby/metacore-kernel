@@ -2,6 +2,7 @@ package dispatch_test
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -73,6 +74,10 @@ func TestNotReadyWaitDisabledDeadLetters(t *testing.T) {
 	case r := <-h.barrier:
 		if r.Status != dispatch.StatusDead {
 			t.Fatalf("status = %s, want dead", r.Status)
+		}
+		// The ledger must say the module never came up, not just "not loaded".
+		if !strings.Contains(r.Err, `addon "customers" not loaded`) || !strings.Contains(r.Err, "never became ready") {
+			t.Fatalf("dead reason not legible: %q", r.Err)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("no terminal status")

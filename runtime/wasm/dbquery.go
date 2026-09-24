@@ -247,7 +247,7 @@ func isIntrospectionSchema(schema string) bool {
 func dbQueryErr(schema, code, message string, durationMs int64) []byte {
 	b, _ := json.Marshal(map[string]any{
 		"success": false,
-		"error":   map[string]any{"code": code, "message": message},
+		"error":   hostErrorBody(code, message),
 		"meta": map[string]any{
 			"schema":     schema,
 			"durationMs": durationMs,

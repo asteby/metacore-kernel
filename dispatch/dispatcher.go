@@ -326,6 +326,13 @@ func (d *Dispatcher) deliver(ctx context.Context, orgID uuid.UUID, eventName, id
 	msg := "exhausted retries"
 	if lastErr != nil {
 		msg = lastErr.Error()
+		// A module that never came up is not a transient failure of this
+		// event: say so, otherwise the ledger only reads "not loaded".
+		if isNotReady(lastErr) {
+			msg = fmt.Sprintf("%s: subscriber module never became ready within %s "+
+				"(bundle without backend.wasm, compile/instantiate failure or addon disabled; see the host boot log)",
+				msg, d.opts.notReadyWait)
+		}
 	}
 	d.markDead(id, msg)
 	d.logger.Error("dispatch.delivery_dead",
@@ -516,25 +523,59 @@ func guestEnvelopeError(raw []byte) string {
 	var e struct {
 		Success *bool `json:"success"`
 		Error   *struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
+			Code       string `json:"code"`
+			Message    string `json:"message"`
+			MessageKey string `json:"message_key"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &e); err != nil || e.Success == nil || *e.Success {
 		return ""
 	}
-	if e.Error != nil {
-		if e.Error.Code != "" && e.Error.Message != "" {
-			return e.Error.Code + ": " + e.Error.Message
-		}
-		if e.Error.Message != "" {
-			return e.Error.Message
-		}
-		if e.Error.Code != "" {
-			return e.Error.Code
-		}
+	if e.Error == nil {
+		return "success=false"
 	}
-	return "success=false"
+	msg := unwrapHostEnvelope(e.Error.Message)
+	out := e.Error.Code
+	switch {
+	case out != "" && msg != "":
+		out += ": " + msg
+	case msg != "":
+		out = msg
+	case out == "":
+		out = "success=false"
+	}
+	if e.Error.MessageKey != "" {
+		out += " [" + e.Error.MessageKey + "]"
+	}
+	return out
+}
+
+// unwrapHostEnvelope makes a guest message that embeds a raw host error
+// envelope (`upsert x: {"error":{"code":"db_error","message":"ERROR: …"},
+// "meta":{…},"success":false}` — guests often append the host response
+// verbatim) readable: the JSON is replaced by `host <code>: <message>`.
+// Anything that does not parse as such an envelope is returned unchanged.
+func unwrapHostEnvelope(msg string) string {
+	i := strings.Index(msg, `{"error"`)
+	if i < 0 {
+		return msg
+	}
+	var env struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	dec := json.NewDecoder(strings.NewReader(msg[i:]))
+	if err := dec.Decode(&env); err != nil || (env.Error.Code == "" && env.Error.Message == "") {
+		return msg
+	}
+	rest := strings.TrimSpace(msg[i+int(dec.InputOffset()):])
+	out := msg[:i] + "host " + env.Error.Code + ": " + env.Error.Message
+	if rest != "" {
+		out += " " + rest
+	}
+	return out
 }
 
 // eventMatches reuses the exact bus wildcard rule (exact, "*", trailing ".*")

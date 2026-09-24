@@ -681,8 +681,26 @@ func writeToGuest(ctx context.Context, mod api.Module, data []byte) uint64 {
 }
 
 func jsonError(code, msg string) []byte {
-	b, _ := json.Marshal(map[string]any{"error": code, "message": msg})
+	b, _ := json.Marshal(map[string]any{"error": code, "message": msg, "message_key": hostErrorMessageKey(code)})
 	return b
+}
+
+// hostErrorBody is the `error` object every host import returns on failure:
+// a stable machine `code`, the human `message` with the concrete cause, and a
+// `message_key` the guest can hand to the UI / its own error envelope for
+// translation. Guests should propagate the whole object instead of replacing
+// it with a generic code, so a dead delivery says why it died.
+func hostErrorBody(code, message string) map[string]any {
+	return map[string]any{"code": code, "message": message, "message_key": hostErrorMessageKey(code)}
+}
+
+// hostErrorMessageKey maps a host error code to its i18n key
+// (wasm.host.error.<code>); an empty code maps to wasm.host.error.unknown.
+func hostErrorMessageKey(code string) string {
+	if code == "" {
+		code = "unknown"
+	}
+	return "wasm.host.error." + code
 }
 
 // compile-time assurance that we only ever bind the runtime kind wazero
