@@ -61,6 +61,15 @@ type Params struct {
 	// relations at Apply time; unknown names are dropped. Parsed from
 	// `?with=customer,vehicle`.
 	Preloads []string
+
+	// SkipCount skips the COUNT(*) round-trip. Parsed from `count=0`
+	// (also false/no/off). List then reports this page only.
+	SkipCount bool
+
+	// Fields is an optional response projection (`fields=quantity,reserved`).
+	// Empty means every column. `id` is always kept. Unknown names are
+	// ignored at projection time; they are not interpolated into SQL.
+	Fields []string
 }
 
 // RelationFilter is one parsed `f_<relation>.<field>=<op>:<value>` directive.
@@ -223,6 +232,20 @@ func ParseFromMap(values map[string][]string) (Params, error) {
 
 	if v, ok := firstNonEmpty(values, "with"); ok {
 		p.Preloads = parseCSV(v)
+	}
+
+	if v, ok := firstNonEmpty(values, "count"); ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "0", "false", "no", "off":
+			p.SkipCount = true
+		}
+	}
+	if v, ok := firstNonEmpty(values, "fields"); ok {
+		for _, part := range parseCSV(v) {
+			if isSafeIdent(part) {
+				p.Fields = append(p.Fields, part)
+			}
+		}
 	}
 
 	if p.Page < 1 {
