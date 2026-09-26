@@ -80,6 +80,13 @@ func CreateTable(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, d
 	if err := createIndexes(db, schema, def, needsOrgColumn); err != nil {
 		return err
 	}
+	if needsOrgColumn && def.SoftDelete {
+		idx := fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %q ON %q.%q ("organization_id", "deleted_at")`,
+			"idx_"+def.TableName+"_org_deleted", schema, def.TableName)
+		if err := db.Exec(idx).Error; err != nil {
+			return fmt.Errorf("org deleted index %s.%s: %w", schema, def.TableName, err)
+		}
+	}
 	if iso == IsolationShared && needsOrgColumn {
 		if err := enableRLS(db, schema, def.TableName); err != nil {
 			return fmt.Errorf("enable RLS %s.%s: %w", schema, def.TableName, err)
@@ -106,6 +113,10 @@ func indexStatementsWithPrefix(schema string, def manifest.ModelDefinition, hasO
 	if hasOrg {
 		stmts = append(stmts, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %q ON %q.%q ("organization_id")`,
 			"idx_"+def.TableName+"_org", schema, def.TableName))
+		// Listings filter by org and sort by created_at. The single-column org
+		// index still sorts the page in memory.
+		stmts = append(stmts, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %q ON %q.%q ("organization_id", "created_at" DESC)`,
+			"idx_"+def.TableName+"_org_created", schema, def.TableName))
 	}
 	for _, c := range def.Columns {
 		if c.Index && !c.Unique {

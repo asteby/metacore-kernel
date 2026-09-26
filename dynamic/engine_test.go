@@ -157,7 +157,9 @@ func TestToDDL_SingleSchemaMode_MatchesOpsShape(t *testing.T) {
 	// managed indexes
 	if !strings.Contains(out, `"idx_github_issues_org"`) ||
 		!strings.Contains(out, `"idx_github_issues_deleted"`) ||
-		!strings.Contains(out, `"idx_github_issues_created_by"`) {
+		!strings.Contains(out, `"idx_github_issues_created_by"`) ||
+		!strings.Contains(out, `"idx_github_issues_org_created"`) ||
+		!strings.Contains(out, `"idx_github_issues_org_deleted"`) {
 		t.Errorf("expected managed indexes:\n%s", out)
 	}
 }

@@ -587,16 +587,19 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	}
 	db = builder.Apply(db, params)
 
-	total, err := builder.Count(s.db.WithContext(ctx).Table(tableName).Scopes(func(d *gorm.DB) *gorm.DB {
-		// Count must NOT carry the ORDER BY (applySort) — a COUNT(*) ordered by a
-		// non-grouped column 42803s. Apply only the WHERE-shaping clauses.
-		// scopeSoftDelete: Find's dest schema hides soft-deleted rows; a bare
-		// COUNT has no schema, and a total above the listable set makes clients
-		// page forever after the last row.
-		return s.scope.ScopeQuery(scopeSoftDelete(builder.ApplyForCount(d, params), instance), user)
-	}), params)
-	if err != nil {
-		return nil, query.PageMeta{}, fmt.Errorf("dynamic: count: %w", err)
+	var total int64
+	if !params.SkipCount {
+		total, err = builder.Count(s.db.WithContext(ctx).Table(tableName).Scopes(func(d *gorm.DB) *gorm.DB {
+			// Count must NOT carry the ORDER BY (applySort) — a COUNT(*) ordered by a
+			// non-grouped column 42803s. Apply only the WHERE-shaping clauses.
+			// scopeSoftDelete: Find's dest schema hides soft-deleted rows; a bare
+			// COUNT has no schema, and a total above the listable set makes clients
+			// page forever after the last row.
+			return s.scope.ScopeQuery(scopeSoftDelete(builder.ApplyForCount(d, params), instance), user)
+		}), params)
+		if err != nil {
+			return nil, query.PageMeta{}, fmt.Errorf("dynamic: count: %w", err)
+		}
 	}
 
 	db = builder.Paginate(db, params)
@@ -604,7 +607,15 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 		return nil, query.PageMeta{}, fmt.Errorf("dynamic: list: %w", err)
 	}
 
-	items := toMapSlice(results)
+	items := query.ProjectMaps(toMapSlice(results), params.Fields)
+	if params.SkipCount {
+		meta := builder.PageMeta(int64(len(items)), params)
+		if meta.PerPage > 0 && len(items) >= meta.PerPage {
+			meta.LastPage = meta.Page + 1
+			meta.Total = 0
+		}
+		return items, meta, nil
+	}
 	return items, builder.PageMeta(total, params), nil
 }
 

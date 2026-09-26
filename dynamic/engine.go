@@ -313,6 +313,10 @@ func ToDDL(def manifest.ModelDefinition, opts DDLOptions) ([]string, error) {
 	if softDelete {
 		stmts = append(stmts, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %q ON %q.%q ("deleted_at")`,
 			"idx_"+def.TableName+"_deleted", schema, def.TableName))
+		if needsOrgColumn {
+			stmts = append(stmts, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %q ON %q.%q ("organization_id", "deleted_at")`,
+				"idx_"+def.TableName+"_org_deleted", schema, def.TableName))
+		}
 	}
 	if opts.IncludeCreatedBy {
 		stmts = append(stmts, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %q ON %q.%q ("created_by_id")`,
