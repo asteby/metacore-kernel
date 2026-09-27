@@ -598,13 +598,36 @@ type Capability struct {
 
 // Model is a data model the addon owns.
 type Model struct {
-	Key         string           `json:"key"`
-	Table       string           `json:"table"`
-	Label       string           `json:"label,omitempty"`
-	Columns     []Column         `json:"columns"`
-	Indices     []Index          `json:"indices,omitempty"`
-	ForeignKeys []ForeignKey     `json:"foreign_keys,omitempty"`
-	Extensions  []ModelExtension `json:"extensions,omitempty"`
+	Key         string       `json:"key"`
+	Table       string       `json:"table"`
+	Label       string       `json:"label,omitempty"`
+	Columns     []Column     `json:"columns"`
+	Indices     []Index      `json:"indices,omitempty"`
+	ForeignKeys []ForeignKey `json:"foreign_keys,omitempty"`
+	// Extensions attaches columns to another addon's model through a jsonb bag
+	// on the target (see ModelExtension). Deprecated for anything that needs a
+	// type, an index or its own lifecycle: declare a model with Extends instead.
+	Extensions []ModelExtension `json:"extensions,omitempty"`
+
+	// Extends makes this model a 1:1 EXTENSION TABLE of another model,
+	// "<addon_key>.<ModelKey>" (e.g. "products.Product"). The installer creates
+	// the table with `id` as both primary key and foreign key to the target's id
+	// (ON DELETE CASCADE) plus the tenancy column, so the model declares neither;
+	// the dynamic service joins it on read and upserts it in the same
+	// transaction as the target on write, projecting each column as
+	// "<ThisModelKey>.<column>". The target's addon must list the target model
+	// in its extension_points.model_extensions_accepted. Unlike Extensions (a jsonb bag
+	// on the target) the columns are real: typed, indexable, validated by the
+	// kernel and dropped with this addon's schema on uninstall. Empty = an
+	// ordinary model. See CONTRACT-item-master.md §3.1.
+	Extends string `json:"extends,omitempty"`
+
+	// SearchKeys declares normalized search keys composed from this model's
+	// columns, e.g. a tire size "{section_width_mm}/{aspect_ratio}R{rim_diameter_in}".
+	// The installer materializes each as an indexed generated column and the
+	// list search resolves free text typed in any spacing/separator variant of
+	// the format to it ("205/55r16", "2055516", "205 55 16"). Optional.
+	SearchKeys []SearchKey `json:"search_keys,omitempty"`
 
 	// Relations declares the INVERSE edges of this model — the child records a
 	// detail page should be able to list under it (e.g. a Customer's vehicles,
@@ -1016,6 +1039,12 @@ type Column struct {
 	// Empty = always visible. Optional.
 	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`
 
+	// Searchable asks the installer for a btree index on this column and makes
+	// it a list filter / facet candidate. Meant for extension characteristics
+	// (a tire's rim diameter) that are searched by value. Scalar types only.
+	// Optional.
+	Searchable bool `json:"searchable,omitempty"`
+
 	// Section assigns this column to a form_layout section/step by its key: the
 	// SDK places the field's input inside the matching Model.FormLayout.Sections
 	// entry (a collapsible block in mode "sections", a wizard step in mode
@@ -1278,11 +1307,26 @@ type Reference struct {
 type ModelExtension struct {
 	TargetModel string   `json:"target_model"`
 	Columns     []Column `json:"columns"`
-	// JSONBagBag is the jsonb column on the target model that stores these
+	// JSONBag is the jsonb column on the target model that stores these
 	// extension fields (dotted form keys `<bag>.<column>`). Empty defaults to
 	// "fiscal_data" — the conventional fiscal extension bag. Tire catalog
-	// extensions (products_tires) set this to "product_specs".
-	JSONBagBag string `json:"jsonb_bag,omitempty"`
+	// extensions (products_tires) set this to "product_specs". Hosts read it
+	// from here instead of inferring the bag from column names.
+	JSONBag string `json:"jsonb_bag,omitempty"`
+}
+
+// SearchKey is a normalized search key composed from a model's columns.
+type SearchKey struct {
+	// Name is the generated column the installer adds (snake_case). It must not
+	// collide with a declared column.
+	Name string `json:"name"`
+	// Format composes the key from literal text and {column} placeholders, each
+	// a column declared on the same model: "{section_width_mm}/{aspect_ratio}R{rim_diameter_in}".
+	Format string `json:"format"`
+	// Match is how typed text is compared: "normalized" (default) folds case,
+	// whitespace and separators on both sides so "205 55 r16" finds
+	// "205/55R16"; "exact" compares the composed value as is.
+	Match string `json:"match,omitempty"`
 }
 
 // Contributions is what this addon contributes to other modules' extension points.

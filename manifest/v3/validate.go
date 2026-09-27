@@ -1273,19 +1273,24 @@ func Validate(raw []byte) error {
 	// (default organization_id). The schema already documents this; enforcing it
 	// at Validate blocks hub publish of addons that would otherwise install with
 	// OrgScoped=false and unscoped /api/data lists (cross-org leak).
+	rls := "organization_id"
+	if m.Tenancy != nil && m.Tenancy.RLSColumn != "" {
+		rls = m.Tenancy.RLSColumn
+	}
 	if m.Kind == KindAddon {
 		iso := "shared"
-		rls := "organization_id"
 		if m.Tenancy != nil {
 			if m.Tenancy.Isolation != "" {
 				iso = m.Tenancy.Isolation
 			}
-			if m.Tenancy.RLSColumn != "" {
-				rls = m.Tenancy.RLSColumn
-			}
 		}
 		if iso == "shared" {
 			for mi, mod := range m.Models {
+				// An extension table gets the tenancy column from the
+				// installer (validateExtends forbids declaring it).
+				if isExtends(mod) {
+					continue
+				}
 				if _, ok := colsByModel[mod.Key][rls]; !ok {
 					errs = append(errs, fmt.Sprintf(
 						"models[%d] (%s): tenancy.isolation=shared requires column %q on every model (host scopes list/read/write by it; omitting it unscopes /api/data across organizations)",
@@ -1497,6 +1502,11 @@ func Validate(raw []byte) error {
 	errs = append(errs, validateProvidesOptions(&m, colsByModel)...)
 	// Provided capability contracts + capability-typed handlers.
 	errs = append(errs, validateCapabilities(&m)...)
+	// Item-master primitives: 1:1 extension tables, searchable columns and
+	// normalized search keys (extends_validate.go).
+	errs = append(errs, validateExtends(&m, rls)...)
+	errs = append(errs, validateSearchable(&m)...)
+	errs = append(errs, validateSearchKeys(&m)...)
 
 	if m.Contributions != nil {
 		for ai, a := range m.Contributions.Actions {
