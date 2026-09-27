@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -66,6 +67,31 @@ func builtinInteger(value any) (string, map[string]any) {
 		}
 	}
 	return CodeInteger, map[string]any{"expected": "integer"}
+}
+
+// modelYearFloor is the earliest year builtinModelYear accepts.
+const modelYearFloor = 1900
+
+// builtinModelYear checks a model / manufacturing year: an integer from 1900
+// through next calendar year (a vehicle or product line can be sold as next
+// year's model). A static max would go stale; this bound moves with the clock.
+// Fails with min/max (kind=value) so the SDK reuses the bound messages.
+func builtinModelYear(value any) (string, map[string]any) {
+	if isEmpty(value) {
+		return "", nil
+	}
+	if code, params := builtinInteger(value); code != "" {
+		return code, params
+	}
+	f, _ := strconv.ParseFloat(strings.TrimSpace(valueToString(value)), 64)
+	y := int64(f)
+	if y < modelYearFloor {
+		return CodeMin, map[string]any{"kind": KindValue, "min": modelYearFloor}
+	}
+	if next := int64(time.Now().Year() + 1); y > next {
+		return CodeMax, map[string]any{"kind": KindValue, "max": next}
+	}
+	return "", nil
 }
 
 func isNumeric(raw any) bool {

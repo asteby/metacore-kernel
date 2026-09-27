@@ -9,6 +9,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Builtin validator `model_year`.** `validation: {"custom": "model_year"}`
+  accepts an integer year from 1900 through next calendar year and fails with
+  `min` / `max` (kind=value) otherwise. The upper bound follows the clock, so
+  a vehicle or equipment year is never capped by a stale static `max`.
+
 - **`http:fetch` target `connector:<connector>.<credential>`.** Grants egress
   only to the exact host of that connector credential as configured by the
   invoking org (e.g. `connector:woocommerce.store_url`). A generic connector no
@@ -17,6 +22,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   unchanged. `Validate` checks that the credential is declared.
 
 ### Fixed
+
+- **A protected column that changes nothing no longer fails the save.** An
+  edit form posts every field back, managed ones included, so re-sending the
+  persisted value of a `protected` column (e.g. `status` of a work order,
+  `state` of a return) made every edit fail with 422 `protected_field`. Now
+  `validateWrite` drops the column from the input when the value would leave
+  the row unchanged: on update, the persisted value (empty matches NULL); on
+  create, an empty value or the declared default. Changing the value is still
+  rejected with `protected_field`. `DeriveFormFields` also marks a
+  `protected` column `readonly`, so the create form no longer offers an input
+  that can never be saved.
 
 - **The guest now sees the actor in hook and domain-event payloads.**
   The envelope of manifest CRUD hooks (`before_*` / `after_*`) now carries

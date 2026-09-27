@@ -150,7 +150,17 @@ func (s *Service) validateWrite(ctx context.Context, model, tableName string, us
 		// data_mutate host import (an entirely separate path this generic
 		// gate never touches), so the action's own business gate stays the
 		// sole authority over the value.
+		//
+		// A form posts every field back, managed ones included, so a protected
+		// value that changes NOTHING (on update: the persisted value; on
+		// create: empty or the declared default) is dropped from the input
+		// instead of failing the whole save. Only an attempt to actually
+		// change the value is rejected.
 		if col.Protected && present {
+			if protectedNoop(raw, col, before, isUpdate) {
+				delete(input, name)
+				continue
+			}
 			ve.add(name, codeProtected, nil)
 			continue
 		}
@@ -472,6 +482,32 @@ func valueToString(raw any) string {
 	default:
 		return strings.TrimSpace(fmt.Sprintf("%v", v))
 	}
+}
+
+// protectedNoop reports whether a Protected column's incoming value would
+// leave the row as it is: on update, the value already persisted (an empty
+// value matches an empty/NULL one); on create, an empty value or the column's
+// declared default — the one the row is born with anyway.
+func protectedNoop(raw any, col manifest.ColumnDef, before map[string]any, isUpdate bool) bool {
+	if isUpdate {
+		if isEmptyValue(raw) {
+			prev, ok := before[col.Name]
+			return ok && isEmptyValue(prev)
+		}
+		return unchangedFromPersisted(raw, before, col.Name)
+	}
+	if isEmptyValue(raw) {
+		return true
+	}
+	def := col.Default
+	if def == nil {
+		return false
+	}
+	// A v3 string default reaches here as its quoted SQL literal ('draft').
+	if s, ok := def.(string); ok && len(s) >= 2 && strings.HasPrefix(s, "'") && strings.HasSuffix(s, "'") {
+		def = s[1 : len(s)-1]
+	}
+	return unchangedFromPersisted(raw, map[string]any{col.Name: def}, col.Name)
 }
 
 // unchangedFromPersisted reports whether raw equals the persisted value of

@@ -59,7 +59,7 @@ func valItemColumns() []manifest.ColumnDef {
 		}},
 		{Name: "qty", Type: "int"},
 		{Name: "category_id", Type: "uuid", Ref: "val_categories"},
-		{Name: "state", Type: "string", Protected: true},
+		{Name: "state", Type: "string", Protected: true, Default: "'draft'"},
 	}
 }
 
@@ -384,5 +384,49 @@ func TestValidate_MultiRefChecksEveryID(t *testing.T) {
 	// Scalar ref keeps working.
 	if ok, err := svc.refExists(ctx, user, "val_categories", a, false); err != nil || !ok {
 		t.Fatalf("scalar ref: ok=%v err=%v", ok, err)
+	}
+}
+
+// A form posts managed fields back: an unchanged protected value on update, or
+// the declared default on create, must not fail the save (PIT-014/021/029).
+func TestValidate_ProtectedNoopIsDropped(t *testing.T) {
+	svc := validationService(t, setupValidationDB(t))
+	user := newUser(uuid.New())
+	rec, err := svc.Create(context.Background(), "val_items", user, map[string]any{
+		"name": "Widget", "state": "draft",
+	})
+	if err != nil {
+		t.Fatalf("create with the protected default should pass: %v", err)
+	}
+	id, _ := uuid.Parse(rec["id"].(string))
+
+	if _, err := svc.Update(context.Background(), "val_items", user, id, map[string]any{
+		"name": "Widget Renamed", "state": rec["state"],
+	}); err != nil {
+		t.Fatalf("update re-sending the persisted protected value should pass: %v", err)
+	}
+	got, err := svc.Get(context.Background(), "val_items", user, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got["name"] != "Widget Renamed" {
+		t.Fatalf("editable column not saved: %v", got["name"])
+	}
+
+	_, err = svc.Update(context.Background(), "val_items", user, id, map[string]any{
+		"state": "approved",
+	})
+	if !hasCode(fieldCodes(t, err, "state"), codeProtected) {
+		t.Fatalf("changing a protected value must still fail, got %v", err)
+	}
+}
+
+func TestValidate_ProtectedEmptyOnCreateIsDropped(t *testing.T) {
+	svc := validationService(t, setupValidationDB(t))
+	user := newUser(uuid.New())
+	if _, err := svc.Create(context.Background(), "val_items", user, map[string]any{
+		"name": "Widget", "state": "",
+	}); err != nil {
+		t.Fatalf("empty protected value on create should pass: %v", err)
 	}
 }

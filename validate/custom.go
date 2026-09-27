@@ -14,12 +14,13 @@ type Resolver func(slug string) CustomFunc
 var (
 	builtinMu sync.RWMutex
 	builtins  = map[string]CustomFunc{
-		CodeEmail:   builtinEmail,
-		CodeUUID:    builtinUUID,
-		CodeURL:     builtinURL,
-		CodeNumeric: builtinNumeric,
-		CodeInteger: builtinInteger,
-		"int":       builtinInteger,
+		CodeEmail:    builtinEmail,
+		CodeUUID:     builtinUUID,
+		CodeURL:      builtinURL,
+		CodeNumeric:  builtinNumeric,
+		CodeInteger:  builtinInteger,
+		"int":        builtinInteger,
+		"model_year": builtinModelYear,
 	}
 )
 

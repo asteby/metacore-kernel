@@ -219,11 +219,15 @@ func TestDeriveFormFieldsCarriesReadonly(t *testing.T) {
 		Columns: []manifest.ColumnDef{
 			{Name: "title", Type: "text", Required: true},
 			{Name: "number", Type: "bigint", Readonly: true},
+			{Name: "state", Type: "text", Protected: true},
 		},
 	}
 	fields := DeriveFormFields(def)
-	if len(fields) != 2 {
-		t.Fatalf("expected 2 fields, got %d", len(fields))
+	if len(fields) != 3 {
+		t.Fatalf("expected 3 fields, got %d", len(fields))
+	}
+	if !fields[2].Readonly {
+		t.Errorf("protected state must be readonly: the write gate rejects any change")
 	}
 	if fields[0].Readonly {
 		t.Errorf("title must not be readonly")
