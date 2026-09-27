@@ -39,7 +39,9 @@ func ParseOpsFromValues(values map[string][]string) (Params, error) {
 			p.Page = n
 		}
 	}
-	if v, ok := firstNonEmpty(values, "per_page"); ok {
+	// `limit` is the page size POS/addon clients send; it used to be ignored
+	// and they got DefaultPerPage rows while asking for hundreds.
+	if v, ok := firstNonEmpty(values, "per_page", "limit"); ok {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			p.PerPage = n
 		}
