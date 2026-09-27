@@ -286,6 +286,21 @@ type Installer struct {
 	// `addon_<key>, public`. Wired via WithMigrationSchema; see
 	// dynamic.ApplyOptions.
 	MigrationSchema func(addonKey string) string
+
+	// ModelTarget, when set, locates the model an extension table (v3
+	// Model.extends) points at, so install emits the 1:1 FOREIGN KEY (id →
+	// target.id, ON DELETE CASCADE) and refuses a target whose addon does not
+	// accept extensions. Nil = extension tables without a physical FK. Wired
+	// via WithModelTarget.
+	ModelTarget dynamic.ModelTargetResolver
+}
+
+// WithModelTarget declares how the host locates a model another addon's
+// extension table points at (see the ModelTarget field). Returns the receiver
+// so it chains on construction.
+func (i *Installer) WithModelTarget(fn dynamic.ModelTargetResolver) *Installer {
+	i.ModelTarget = fn
+	return i
 }
 
 // WithMigrationSchema declares where the host keeps each addon's model tables
@@ -534,7 +549,7 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	// metadata-driven creation first, every ALTER lands on an existing table and
 	// the migrations are pure additive alignment on top.
 	for _, def := range b.Manifest.ModelDefinitions {
-		if err := dynamic.CreateTable(i.DB, b.Manifest.Key, orgID, iso, def); err != nil {
+		if err := dynamic.CreateTableWithOptions(i.DB, b.Manifest.Key, orgID, iso, def, dynamic.TableOptions{ResolveModelTarget: i.ModelTarget}); err != nil {
 			return nil, nil, err
 		}
 		if err := dynamic.SyncSchema(i.DB, b.Manifest.Key, orgID, iso, def); err != nil {
@@ -1492,11 +1507,12 @@ func (i *Installer) upgradeApplier() schemaApplier {
 	if i.schemaApplier != nil {
 		return i.schemaApplier
 	}
-	return defaultSchemaApplier{migrationSchema: i.MigrationSchema}
+	return defaultSchemaApplier{migrationSchema: i.MigrationSchema, modelTarget: i.ModelTarget}
 }
 
 type defaultSchemaApplier struct {
 	migrationSchema func(addonKey string) string
+	modelTarget     dynamic.ModelTargetResolver
 }
 
 func (a defaultSchemaApplier) ApplyForUpgrade(db *gorm.DB, orgID uuid.UUID, iso dynamic.Isolation, b *bundle.Bundle) error {
@@ -1504,7 +1520,7 @@ func (a defaultSchemaApplier) ApplyForUpgrade(db *gorm.DB, orgID uuid.UUID, iso 
 		return fmt.Errorf("EnsureSchema: %w", err)
 	}
 	for _, def := range b.Manifest.ModelDefinitions {
-		if err := dynamic.CreateTable(db, b.Manifest.Key, orgID, iso, def); err != nil {
+		if err := dynamic.CreateTableWithOptions(db, b.Manifest.Key, orgID, iso, def, dynamic.TableOptions{ResolveModelTarget: a.modelTarget}); err != nil {
 			return fmt.Errorf("CreateTable %s: %w", def.ModelKey, err)
 		}
 		if err := dynamic.SyncSchema(db, b.Manifest.Key, orgID, iso, def); err != nil {

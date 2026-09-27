@@ -53,6 +53,10 @@ func (SchemaEngine) ValidateType(t string) error {
 // the kernel can become the one source of truth for that host without a
 // migration. Nothing here changes the default install path — it is opt-in.
 type DDLOptions struct {
+	// ResolveModelTarget locates the model an extension table (def.Extends)
+	// points at so ToDDL can emit the 1:1 FOREIGN KEY. Nil = no physical FK.
+	ResolveModelTarget ModelTargetResolver
+
 	// Schema overrides the target schema. Empty → derive addon_<key> via
 	// SchemaName(AddonKey, OrgID, Isolation) (the historical behavior).
 	Schema string
@@ -201,7 +205,7 @@ func (opts DDLOptions) columnDDL(c manifest.ColumnDef) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if c.Generated != "" {
+	if c.Generated != "" || c.SearchKey != nil {
 		// Generated columns carry neither NOT NULL nor DEFAULT — delegate to the
 		// shared helper (its type override does not matter for these).
 		return columnDDL(c)
@@ -279,7 +283,12 @@ func ToDDL(def manifest.ModelDefinition, opts DDLOptions) ([]string, error) {
 	needsOrgColumn := opts.AlwaysOrgColumn || def.OrgScoped || opts.Isolation == IsolationShared
 	softDelete := opts.AlwaysSoftDelete || def.SoftDelete
 
-	cols := []string{`"id" uuid PRIMARY KEY DEFAULT gen_random_uuid()`}
+	target, hasTarget, err := resolveExtendsTarget(def, opts.ResolveModelTarget)
+	if err != nil {
+		return nil, err
+	}
+
+	cols := []string{idColumnDDL(def)}
 	if needsOrgColumn {
 		cols = append(cols, `"organization_id" uuid NOT NULL`)
 	}
@@ -324,6 +333,9 @@ func ToDDL(def manifest.ModelDefinition, opts DDLOptions) ([]string, error) {
 	}
 	if opts.Isolation == IsolationShared && needsOrgColumn && !opts.DisableRLS {
 		stmts = append(stmts, rlsStatements(schema, def.TableName)...)
+	}
+	if hasTarget {
+		stmts = append(stmts, extendsForeignKeyStatement(schema, def.TableName, target))
 	}
 	return stmts, nil
 }

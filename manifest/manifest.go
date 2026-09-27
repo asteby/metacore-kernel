@@ -965,12 +965,37 @@ type ModelExtension struct {
 	Actions []ActionDef `json:"actions,omitempty"`
 }
 
+// SearchKeyDef is a normalized search key: a sequence of literal and column
+// parts. Normalized keys keep only the column values, uppercased and without
+// anything that is not a letter or a digit ("205/55R16" is stored as
+// "2055516"), so a search typed with any separator matches once the typed text
+// gets the same treatment. Exact keys keep the literals as composed.
+type SearchKeyDef struct {
+	Parts []SearchKeyPart `json:"parts"`
+	// Match is "normalized" (default) or "exact".
+	Match string `json:"match,omitempty"`
+}
+
+// SearchKeyPart is either a Literal or a Column (with its declared Type, so
+// the DDL plane can render numbers without trailing zeros).
+type SearchKeyPart struct {
+	Literal string `json:"literal,omitempty"`
+	Column  string `json:"column,omitempty"`
+	Type    string `json:"type,omitempty"`
+}
+
 // ModelDefinition declares a new table the addon installs. The host creates
 // it in the addon's isolated schema (addon_{key}.{table}).
 type ModelDefinition struct {
-	TableName  string      `json:"table_name"`
-	ModelKey   string      `json:"model_key"`
-	Label      string      `json:"label"`
+	TableName string `json:"table_name"`
+	ModelKey  string `json:"model_key"`
+	Label     string `json:"label"`
+	// Extends carries v3 Model.extends ("<addon_key>.<ModelKey>"): this table is
+	// the 1:1 extension of that model. The DDL plane emits `id` WITHOUT a default
+	// (it is the target row's id) and, when the host resolves where the target
+	// table lives, a FOREIGN KEY to it with ON DELETE CASCADE. Empty = an
+	// ordinary model.
+	Extends    string      `json:"extends,omitempty"`
 	OrgScoped  bool        `json:"org_scoped,omitempty"`
 	SoftDelete bool        `json:"soft_delete,omitempty"`
 	Columns    []ColumnDef `json:"columns"`
@@ -1381,6 +1406,11 @@ type ColumnDef struct {
 	// sibling columns, validated with the strict computeexpr allowlist and
 	// incompatible with Default/Required. Empty = ordinary column.
 	Generated string `json:"generated,omitempty"`
+
+	// SearchKey marks a column the DDL plane emits as a STORED generated search
+	// key composed from sibling columns (v3 Model.search_keys). The column is
+	// derived by the v3 conversion, never authored. Nil = ordinary column.
+	SearchKey *SearchKeyDef `json:"search_key,omitempty"`
 
 	// Readonly carries the v3 Column.readonly flag through the v3 → host
 	// conversion onto modelbase.ColumnDef/FieldDef.Readonly, marking a
