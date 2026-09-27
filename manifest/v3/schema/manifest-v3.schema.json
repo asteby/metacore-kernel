@@ -850,9 +850,25 @@
         },
         "extensions": {
           "type": "array",
-          "description": "Columns this addon attaches to another addon's model. The target model must opt in via extension_points.model_extensions_accepted[].",
+          "description": "Columns this addon attaches to another addon's model. The target model must opt in via extension_points.model_extensions_accepted[]. Deprecated for columns that need a type, an index or their own lifecycle: declare a model with `extends` instead.",
           "items": {
             "$ref": "#/$defs/ModelExtension"
+          }
+        },
+        "extends": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.[A-Z][A-Za-z0-9]+$",
+          "description": "Makes this model a 1:1 extension table of '<addon_key>.<ModelKey>'. The installer adds `id` (primary key AND foreign key to the target's id, ON DELETE CASCADE) and the tenancy column, so the model must not declare them. Columns are served as '<ThisModelKey>.<column>' on the target. The target's addon must list the target model in extension_points.model_extensions_accepted.",
+          "examples": [
+            "products.Product",
+            "inventory.Lot"
+          ]
+        },
+        "search_keys": {
+          "type": "array",
+          "description": "Normalized search keys composed from this model's columns; each becomes an indexed generated column the list search resolves typed text against.",
+          "items": {
+            "$ref": "#/$defs/SearchKey"
           }
         },
         "relations": {
@@ -1194,6 +1210,10 @@
         },
         "visible_when": {
           "$ref": "#/$defs/VisibleWhen"
+        },
+        "searchable": {
+          "type": "boolean",
+          "description": "Index this column (btree) and offer it as a list filter/facet. Scalar column types only."
         },
         "section": {
           "type": "string",
@@ -1578,6 +1598,47 @@
           "items": {
             "$ref": "#/$defs/Column"
           }
+        },
+        "jsonb_bag": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]+$",
+          "description": "jsonb column on the target model that stores these fields (form keys '<bag>.<column>'). Empty = 'fiscal_data'.",
+          "examples": [
+            "fiscal_data",
+            "product_specs"
+          ]
+        }
+      }
+    },
+    "SearchKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "format"
+      ],
+      "description": "A normalized search key composed from the model's own columns.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]+$",
+          "description": "Generated column name; must not collide with a declared column."
+        },
+        "format": {
+          "type": "string",
+          "minLength": 3,
+          "description": "Literal text with {column} placeholders.",
+          "examples": [
+            "{section_width_mm}/{aspect_ratio}R{rim_diameter_in}"
+          ]
+        },
+        "match": {
+          "type": "string",
+          "enum": [
+            "normalized",
+            "exact"
+          ],
+          "description": "normalized (default) folds case, whitespace and separators on both sides; exact compares as composed."
         }
       }
     },
