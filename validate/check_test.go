@@ -2,6 +2,7 @@ package validate
 
 import (
 	"testing"
+	"time"
 )
 
 func TestParseRuleString_LaravelPipe(t *testing.T) {
@@ -119,5 +120,22 @@ func TestRegisterCustom(t *testing.T) {
 	got := Check("x", Spec{Custom: "test.always_fail"})
 	if len(got) != 1 || got[0].Code != "custom" {
 		t.Fatalf("got %#v", got)
+	}
+}
+
+func TestCheck_ModelYear(t *testing.T) {
+	spec := Spec{Type: "integer", Custom: "model_year"}
+	next := time.Now().Year() + 1
+	for _, ok := range []any{2020, float64(next), "1999", nil, ""} {
+		if got := Check(ok, spec); len(got) != 0 {
+			t.Fatalf("model_year %v: want pass, got %v", ok, got)
+		}
+	}
+	cases := map[any]string{next + 1: CodeMax, 1800: CodeMin}
+	for v, code := range cases {
+		got := Check(v, spec)
+		if len(got) != 1 || got[0].Code != code {
+			t.Fatalf("model_year %v: want %s, got %v", v, code, got)
+		}
 	}
 }
