@@ -27,8 +27,26 @@ func EnsureSchema(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation) 
 // Idempotent. In shared mode it also enables row-level security so any SQL
 // executed later under `SET app.current_org` is scoped automatically.
 func CreateTable(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, def manifest.ModelDefinition) error {
+	return CreateTableWithOptions(db, addonKey, orgID, iso, def, TableOptions{})
+}
+
+// TableOptions are the host-supplied inputs CreateTableWithOptions needs beyond
+// the model itself.
+type TableOptions struct {
+	// ResolveModelTarget locates the model an extension table (def.Extends)
+	// points at, so the 1:1 FOREIGN KEY can be emitted. Nil = no physical FK.
+	ResolveModelTarget ModelTargetResolver
+}
+
+// CreateTableWithOptions is CreateTable plus the Extends FOREIGN KEY when the
+// host resolves the target table.
+func CreateTableWithOptions(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, def manifest.ModelDefinition, opts TableOptions) error {
+	target, hasTarget, err := resolveExtendsTarget(def, opts.ResolveModelTarget)
+	if err != nil {
+		return err
+	}
 	schema := SchemaName(addonKey, orgID, iso)
-	cols := []string{`"id" uuid PRIMARY KEY DEFAULT gen_random_uuid()`}
+	cols := []string{idColumnDDL(def)}
 	// In shared mode org scoping is required for RLS. In per-tenant mode the
 	// schema itself is the boundary so the column is only added if the addon
 	// asks for it (rare — usually redundant once isolated).
@@ -90,6 +108,11 @@ func CreateTable(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, d
 	if iso == IsolationShared && needsOrgColumn {
 		if err := enableRLS(db, schema, def.TableName); err != nil {
 			return fmt.Errorf("enable RLS %s.%s: %w", schema, def.TableName, err)
+		}
+	}
+	if hasTarget {
+		if err := db.Exec(extendsForeignKeyStatement(schema, def.TableName, target)).Error; err != nil {
+			return fmt.Errorf("extends foreign key %s.%s → %s: %w", schema, def.TableName, def.Extends, err)
 		}
 	}
 	return nil
@@ -173,11 +196,9 @@ func columnDDL(c manifest.ColumnDef) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if c.Generated != "" {
-		sqlExpr, err := computeexpr.RenderSQL(c.Generated)
-		if err != nil {
-			return "", fmt.Errorf("generated column %q: %w", c.Name, err)
-		}
+	if sqlExpr, ok, err := generatedSQL(c); err != nil {
+		return "", err
+	} else if ok {
 		return fmt.Sprintf(`%q %s GENERATED ALWAYS AS (%s) STORED`, c.Name, pgType, sqlExpr), nil
 	}
 	line := fmt.Sprintf(`%q %s`, c.Name, pgType)
@@ -190,6 +211,27 @@ func columnDDL(c manifest.ColumnDef) (string, error) {
 	return line, nil
 }
 
+// generatedSQL renders a STORED generated column's expression: an authored
+// arithmetic Generated expr, or a derived search key. ok=false for an ordinary
+// column.
+func generatedSQL(c manifest.ColumnDef) (string, bool, error) {
+	switch {
+	case c.SearchKey != nil:
+		expr, err := searchKeySQL(c.SearchKey)
+		if err != nil {
+			return "", false, fmt.Errorf("search key column %q: %w", c.Name, err)
+		}
+		return expr, true, nil
+	case c.Generated != "":
+		expr, err := computeexpr.RenderSQL(c.Generated)
+		if err != nil {
+			return "", false, fmt.Errorf("generated column %q: %w", c.Name, err)
+		}
+		return expr, true, nil
+	}
+	return "", false, nil
+}
+
 // addColumnDDL builds the ALTER TABLE … ADD COLUMN IF NOT EXISTS statement for a
 // single column. A Generated column becomes a STORED generated column, which
 // Postgres computes for every existing row on ADD COLUMN.
@@ -198,11 +240,9 @@ func addColumnDDL(schema, table string, c manifest.ColumnDef) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if c.Generated != "" {
-		sqlExpr, err := computeexpr.RenderSQL(c.Generated)
-		if err != nil {
-			return "", fmt.Errorf("generated column %q: %w", c.Name, err)
-		}
+	if sqlExpr, ok, err := generatedSQL(c); err != nil {
+		return "", err
+	} else if ok {
 		return fmt.Sprintf(`ALTER TABLE %q.%q ADD COLUMN IF NOT EXISTS %q %s GENERATED ALWAYS AS (%s) STORED`,
 			schema, table, c.Name, pgType, sqlExpr), nil
 	}

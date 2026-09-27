@@ -450,6 +450,12 @@ func mapModels(in []v3.Model) []ModelDefinition {
 			TableName: m.Table,
 			ModelKey:  m.Key,
 			Label:     m.Label,
+			Extends:   m.Extends,
+		}
+		// An extension table carries the tenancy column implicitly (Validate
+		// forbids declaring it), so it is org-scoped like its target.
+		if m.Extends != "" {
+			def.OrgScoped = true
 		}
 		// Index of single-column index declarations so we can fold the
 		// unique/index hint back onto the matching ColumnDef.
@@ -624,6 +630,11 @@ func mapModels(in []v3.Model) []ModelDefinition {
 			if _, ok := indexCols[c.Name]; ok {
 				col.Index = true
 			}
+			// Searchable asks for a btree index (the filter/facet side is served
+			// metadata). A unique column already has its index.
+			if c.Searchable && !col.Unique {
+				col.Index = true
+			}
 			// Derive the column ref from a model-level foreign_keys entry when the
 			// author did not state one explicitly (an explicit c.Ref above wins).
 			if col.Ref == "" {
@@ -633,6 +644,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 			}
 			def.Columns = append(def.Columns, col)
 		}
+		def.Columns = append(def.Columns, mapSearchKeys(m)...)
 		def.Relations = mapModelRelations(m.Relations)
 		def.Seed = mapModelSeed(m.Seed)
 		def.Formulas = mapModelFormulas(m.Formulas)
@@ -652,6 +664,51 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		// Nil = a flat form (legacy). Pure UI.
 		def.FormLayout = mapFormLayout(m.FormLayout)
 		out = append(out, def)
+	}
+	return out
+}
+
+// mapSearchKeys turns each v3 SearchKey into an indexed, read-only generated
+// text column (SearchKeyDef) composed from the model's own columns. Unknown
+// placeholders are dropped here; Validate rejects them at publish.
+func mapSearchKeys(m v3.Model) []ColumnDef {
+	if len(m.SearchKeys) == 0 {
+		return nil
+	}
+	types := make(map[string]string, len(m.Columns))
+	for _, c := range m.Columns {
+		types[c.Name] = c.Type
+	}
+	var out []ColumnDef
+	for _, sk := range m.SearchKeys {
+		def := &SearchKeyDef{Match: sk.Match}
+		rest := sk.Format
+		for rest != "" {
+			open := strings.IndexByte(rest, '{')
+			if open < 0 {
+				def.Parts = append(def.Parts, SearchKeyPart{Literal: rest})
+				break
+			}
+			if open > 0 {
+				def.Parts = append(def.Parts, SearchKeyPart{Literal: rest[:open]})
+			}
+			close := strings.IndexByte(rest[open:], '}')
+			if close < 0 {
+				break
+			}
+			name := strings.TrimSpace(rest[open+1 : open+close])
+			if t, ok := types[name]; ok {
+				def.Parts = append(def.Parts, SearchKeyPart{Column: name, Type: t})
+			}
+			rest = rest[open+close+1:]
+		}
+		out = append(out, ColumnDef{
+			Name:      sk.Name,
+			Type:      "text",
+			Index:     true,
+			Readonly:  true,
+			SearchKey: def,
+		})
 	}
 	return out
 }
