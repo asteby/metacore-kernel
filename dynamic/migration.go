@@ -140,7 +140,7 @@ func ApplyWithOptions(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolati
 			tx.Rollback()
 			return err
 		}
-		if err := tx.Exec(f.SQL).Error; err != nil {
+		if err := execScript(tx, f.SQL); err != nil {
 			if !isBenignDDLConflict(err) {
 				tx.Rollback()
 				return fmt.Errorf("apply %s@%s: %w", addonKey, f.Version, err)
@@ -204,6 +204,27 @@ func migrationSearchPath(tx *gorm.DB, addonSchema string, opts ApplyOptions) ([]
 		out = append(out, "public")
 	}
 	return out, nil
+}
+
+// execScript runs a whole migration file on tx. A migration is a script
+// (several statements, DO $$ … $$ blocks, functions), so it must reach Postgres
+// through the simple query protocol. tx.Exec is not enough: a host that opened
+// GORM with PrepareStmt (ops does) wraps the connection in a statement cache
+// that PREPAREs every query, and Postgres refuses a prepared statement with
+// more than one command (SQLSTATE 42601 "cannot insert multiple commands into
+// a prepared statement"). Unwrapping the cache and executing without arguments
+// makes pgx use the simple protocol; splitting the file on ';' instead would
+// break dollar-quoted bodies.
+func execScript(tx *gorm.DB, script string) error {
+	pool := tx.Statement.ConnPool
+	switch p := pool.(type) {
+	case *gorm.PreparedStmtTX:
+		pool = p.Tx
+	case *gorm.PreparedStmtDB:
+		pool = p.ConnPool
+	}
+	_, err := pool.ExecContext(tx.Statement.Context, script)
+	return err
 }
 
 // quoteIdents renders schema names as a comma-separated list of quoted
