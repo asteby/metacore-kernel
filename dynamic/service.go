@@ -581,7 +581,8 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	// HasRelations themselves. Models that do not implement HasRelations
 	// get an empty relation set — the new query features are no-ops.
 	builder := query.New(tableMeta, s.listBuilderOpts()...).WithTableName(tableName).
-		WithRefSearch(s.refSearchFor(ctx, tableMeta, params.Search))
+		WithRefSearch(s.refSearchFor(ctx, tableMeta, params.Search)).
+		WithUUIDColumns(uuidColumnsOf(instance))
 	if rels, ok := instance.(modelbase.HasRelations); ok {
 		builder = builder.WithRelations(rels.DefineRelations())
 	}
@@ -663,7 +664,8 @@ func (s *Service) Aggregate(ctx context.Context, model string, user modelbase.Au
 	db = scopeSoftDelete(db, instance)
 
 	builder := query.New(tableMeta, s.listBuilderOpts()...).WithTableName(tableName).
-		WithRefSearch(s.refSearchFor(ctx, tableMeta, params.Search))
+		WithRefSearch(s.refSearchFor(ctx, tableMeta, params.Search)).
+		WithUUIDColumns(uuidColumnsOf(instance))
 	if rels, ok := instance.(modelbase.HasRelations); ok {
 		builder = builder.WithRelations(rels.DefineRelations())
 	}

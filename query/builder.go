@@ -67,6 +67,12 @@ type Builder struct {
 	// behaviour. Hosts wire a dialect-specific clause (e.g. Postgres
 	// `unaccent(<col>) ILIKE unaccent(?)`) without forking the kernel.
 	searchClause SearchClause
+
+	// uuidCols are physical uuid columns. On Postgres an `in:` against one of
+	// them binds a single uuid[] (`= ANY(?::uuid[])`) so the prepared
+	// statement text does not grow with the id list. Empty means every `in:`
+	// binds as text[].
+	uuidCols map[string]struct{}
 }
 
 // SearchClause builds the SQL fragment and bind value for ONE column of the
@@ -258,6 +264,13 @@ func (b *Builder) WithTableName(name string) *Builder {
 	if isSafeIdent(name) {
 		b.tableName = name
 	}
+	return b
+}
+
+// WithUUIDColumns marks columns whose storage type is uuid. The map is not
+// copied; the caller must not mutate it after this returns.
+func (b *Builder) WithUUIDColumns(cols map[string]struct{}) *Builder {
+	b.uuidCols = cols
 	return b
 }
 
@@ -498,14 +511,26 @@ func (b *Builder) defaultSort() (string, string) {
 // that uses placeholder binding for the value — we never interpolate
 // user-supplied strings into the SQL fragment.
 func (b *Builder) applyFilters(db *gorm.DB, params Params) *gorm.DB {
-	for col, f := range params.Filters {
+	if len(params.Filters) == 0 {
+		return db
+	}
+	// Stable column order so two lists that differ only by `in:` values emit
+	// the same SQL text and hit the same prepared statement.
+	cols := make([]string, 0, len(params.Filters))
+	for col := range params.Filters {
+		cols = append(cols, col)
+	}
+	sort.Strings(cols)
+	for _, col := range cols {
+		f := params.Filters[col]
 		if _, ok := b.allowed[col]; !ok {
 			continue
 		}
 		if !isSafeIdent(col) {
 			continue
 		}
-		db = applyOneFilter(db, col, f)
+		_, uuidCol := b.uuidCols[col]
+		db = applyOneFilterMode(db, col, f, uuidCol)
 	}
 	return db
 }
@@ -514,6 +539,12 @@ func (b *Builder) applyFilters(db *gorm.DB, params Params) *gorm.DB {
 // pair. It is a free function (not a method) so future call sites — e.g.
 // a debug tool or a dry-run planner — can reuse it without a Builder.
 func applyOneFilter(db *gorm.DB, col string, f Filter) *gorm.DB {
+	return applyOneFilterMode(db, col, f, false)
+}
+
+// applyOneFilterMode is applyOneFilter with the column's storage type.
+// uuidCol is only consulted for `in` / `not_in` on Postgres.
+func applyOneFilterMode(db *gorm.DB, col string, f Filter, uuidCol bool) *gorm.DB {
 	switch f.Op {
 	case OpEq:
 		v, ok := f.Value.(string)
@@ -538,7 +569,8 @@ func applyOneFilter(db *gorm.DB, col string, f Filter) *gorm.DB {
 		if !ok || len(vals) == 0 {
 			return db
 		}
-		return db.Where(fmt.Sprintf("%s IN ?", col), vals)
+		expr, arg := bindInList(db, col, vals, false, uuidCol)
+		return db.Where(expr, arg)
 	case OpGte:
 		v, ok := f.Value.(string)
 		if !ok || v == "" {
@@ -570,7 +602,8 @@ func applyOneFilter(db *gorm.DB, col string, f Filter) *gorm.DB {
 		if !ok || len(vals) == 0 {
 			return db
 		}
-		return db.Where(fmt.Sprintf("%s NOT IN ?", col), vals)
+		expr, arg := bindInList(db, col, vals, true, uuidCol)
+		return db.Where(expr, arg)
 	case OpLike:
 		v, ok := f.Value.(string)
 		if !ok || v == "" {

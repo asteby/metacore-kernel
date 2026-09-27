@@ -33,7 +33,8 @@ const (
 	// first-class operator; without it not-equal filters degraded to a
 	// literal exact-match on the whole "neq:<val>" token.
 	OpNeq FilterOp = "neq"
-	// OpNotIn is `<col> NOT IN ?`. Value: []string.
+	// OpNotIn is `<col> NOT IN ?` (SQLite) or `<col> <> ALL(?::text[])`
+	// (Postgres). Value: []string.
 	OpNotIn FilterOp = "not_in"
 	// OpLike is a CASE-SENSITIVE `<col> LIKE ? ESCAPE '\'` wrapped in
 	// %...%. Value: string. Distinct from OpIlike which is case- and
