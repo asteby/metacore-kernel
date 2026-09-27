@@ -173,7 +173,22 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 	// Q: label-column filter. Uses the configured SearchMatchClause so the
 	// same dialect override used for Service.Search (e.g. unaccent/ILIKE on
 	// Postgres) also applies to the options endpoint.
-	if q.Q != "" {
+	if q.Q != "" && fieldCfg.Label == "" && fieldCfg.LabelRef != "" {
+		// A dependent picker whose label comes from LabelRef (stock rows
+		// labelled by the product name): the text the user types is a NAME,
+		// so it must match the related model's label column, narrowing the
+		// source rows to the ids that match. Matching it against the value
+		// column instead (a uuid foreign id) never found a name and, under the
+		// Postgres unaccent clause, failed outright with 42883 — the transfer
+		// picker answered "Sin resultados" for an existing product.
+		sub, err := s.labelRefMatchIDs(ctx, fieldCfg, q.Q)
+		if err != nil {
+			return nil, err
+		}
+		if sub != nil && safeColumn.MatchString(fieldCfg.Value) {
+			db = db.Where(fmt.Sprintf("%s IN (?)", fieldCfg.Value), sub)
+		}
+	} else if q.Q != "" {
 		// Match against the label column; when none is declared (a dependent
 		// picker whose label comes from LabelRef, not a column on Source) match
 		// against the value column so q still narrows the candidate ids.
@@ -233,6 +248,31 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 	}
 
 	return projectOptions(resultsPtr.Elem(), fieldCfg), nil
+}
+
+// labelRefMatchIDs returns the subquery of LabelRef ids whose label column
+// matches q (same match clause as the options label filter), or nil when the
+// ref model has no usable label column. Not org-scoped on purpose: it only
+// narrows source rows the caller is already scoped to.
+func (s *Service) labelRefMatchIDs(ctx context.Context, fieldCfg FieldOptionsConfig, q string) (*gorm.DB, error) {
+	refInstance, ok := s.lookupModel(ctx, fieldCfg.LabelRef)
+	if !ok {
+		return nil, ErrSourceModelNotFound
+	}
+	tableName, err := s.tableNameFor(ctx, fieldCfg.LabelRef, refInstance)
+	if err != nil {
+		return nil, err
+	}
+	labelCol := deriveLabelColumn(refInstance)
+	if labelCol == "" || !safeColumn.MatchString(labelCol) {
+		return nil, nil
+	}
+	escaped := strings.NewReplacer("%", `\%`, "_", `\_`).Replace(q)
+	frag, val := s.matchClause(labelCol, escaped)
+	if frag == "" {
+		return nil, nil
+	}
+	return s.db.WithContext(ctx).Table(tableName).Select("id").Where(frag, val), nil
 }
 
 // enrichOptionsFromRef fills in option labels by resolving them from a RELATED

@@ -187,3 +187,52 @@ func strOf(v any) string {
 		return ""
 	}
 }
+
+// TestOptionsLabelRefSearchMatchesRelatedName: typing in a LabelRef picker
+// searches the RELATED label (product name), not the source's value column (a
+// uuid foreign id, which under Postgres unaccent failed with 42883 — the
+// Pitsline transfer picker answered "Sin resultados", QA PIT-015).
+func TestOptionsLabelRefSearchMatchesRelatedName(t *testing.T) {
+	db := setupTestDB(t)
+	setupStockTable(t, db)
+	modelbase.Register("test_products", func() modelbase.ModelDefiner { return &TestProduct{} })
+
+	wh := uuid.New()
+	mount := uuid.New()
+	other := uuid.New()
+	db.Exec(`INSERT INTO test_products (id, name, price) VALUES (?,?,?),(?,?,?)`,
+		mount.String(), "TEST Servicio Montaje", 10,
+		other.String(), "Llanta 205/55R16", 20)
+	db.Exec(`INSERT INTO test_stock (id, warehouse_id, product_id, quantity) VALUES (?,?,?,?),(?,?,?,?)`,
+		uuid.NewString(), wh.String(), mount.String(), 1,
+		uuid.NewString(), wh.String(), other.String(), 4)
+
+	svc := newOptionsService(t, db, optionsConfigFor(OptionsConfig{
+		Fields: map[string]FieldOptionsConfig{
+			"product_id": {
+				Type:        "dynamic",
+				Source:      "test_stock",
+				FilterBy:    "warehouse_id",
+				Value:       "product_id",
+				Description: "quantity",
+				LabelRef:    "test_products",
+			},
+		},
+	}), nil)
+
+	res, err := svc.Options(context.Background(), nil, OptionsQuery{
+		Model:       "test_stock",
+		Field:       "product_id",
+		FilterValue: wh.String(),
+		Q:           "Servicio Montaje",
+	})
+	if err != nil {
+		t.Fatalf("options: %v", err)
+	}
+	if len(res.Options) != 1 || strOf(res.Options[0].Value) != mount.String() {
+		t.Fatalf("q by related name: got %+v, want only the Montaje stock row", res.Options)
+	}
+	if strOf(res.Options[0].Label) != "TEST Servicio Montaje" {
+		t.Errorf("label = %v, want the product name", res.Options[0].Label)
+	}
+}
