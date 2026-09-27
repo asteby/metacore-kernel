@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Builtin validator `year.model`.** A dotted alias of `model_year`. Manifest
+  validation only accepts `<ns>.<symbol>` custom slugs, so a manifest could
+  not declare `model_year` (the hub preflight rejects it). Addons declare
+  `validation: {"custom": "year.model"}`.
+
 ### Added
 
 - **Builtin validator `model_year`.** `validation: {"custom": "model_year"}`

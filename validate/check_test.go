@@ -124,7 +124,13 @@ func TestRegisterCustom(t *testing.T) {
 }
 
 func TestCheck_ModelYear(t *testing.T) {
-	spec := Spec{Type: "integer", Custom: "model_year"}
+	for _, slug := range []string{"model_year", "year.model"} {
+		checkModelYear(t, Spec{Type: "integer", Custom: slug})
+	}
+}
+
+func checkModelYear(t *testing.T, spec Spec) {
+	t.Helper()
 	next := time.Now().Year() + 1
 	for _, ok := range []any{2020, float64(next), "1999", nil, ""} {
 		if got := Check(ok, spec); len(got) != 0 {

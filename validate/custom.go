@@ -21,6 +21,9 @@ var (
 		CodeInteger:  builtinInteger,
 		"int":        builtinInteger,
 		"model_year": builtinModelYear,
+		// Dotted alias: manifest validation only accepts "<ns>.<symbol>"
+		// custom slugs, so addons declare this one.
+		"year.model": builtinModelYear,
 	}
 )
 
