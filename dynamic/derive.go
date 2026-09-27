@@ -378,8 +378,9 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 			Scan: c.Scan,
 			// Readonly marks a system-generated field: the SDK hides it from the
 			// create form and disables it in edit (the value is written
-			// server-side, e.g. by an addon's outbound sync).
-			Readonly: c.Readonly,
+			// server-side, e.g. by an addon's outbound sync). A Protected column
+			// is read-only too: the generic write gate rejects any change to it.
+			Readonly: c.Readonly || c.Protected,
 			// VisibleWhen projects the conditional-visibility predicate onto the
 			// served form field so the SDK renders it only when the referenced
 			// sibling field's value matches. A hidden field never gates submit.

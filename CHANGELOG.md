@@ -30,7 +30,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `validateWrite` drops the column from the input when the value would leave
   the row unchanged: on update, the persisted value (empty matches NULL); on
   create, an empty value or the declared default. Changing the value is still
-  rejected with `protected_field`.
+  rejected with `protected_field`. `DeriveFormFields` also marks a
+  `protected` column `readonly`, so the create form no longer offers an input
+  that can never be saved.
 
 - **The guest now sees the actor in hook and domain-event payloads.**
   The envelope of manifest CRUD hooks (`before_*` / `after_*`) now carries
