@@ -61,6 +61,11 @@ type Builder struct {
 	refSearch map[string]RefSearch
 	refOrder  []string
 
+	// extensions are the model's 1:1 extension tables (extension_tables.go),
+	// keyed by extension model key; extOrder keeps SQL text stable.
+	extensions map[string]ExtensionTable
+	extOrder   []string
+
 	// searchClause, when non-nil, builds the per-column SQL fragment + bind
 	// value for the free-text search OR-clause. Set via WithSearchClause. nil
 	// means the default `<col> ILIKE ?` with `%term%` — i.e. exactly today's
@@ -288,6 +293,7 @@ func (b *Builder) WithUUIDColumns(cols map[string]struct{}) *Builder {
 func (b *Builder) Apply(db *gorm.DB, params Params) *gorm.DB {
 	db = b.applyPreloads(db, params)
 	db = b.applyRelationFilters(db, params)
+	db = b.applyExtensionFilters(db, params)
 	db = b.applyAggregations(db, params)
 	db = b.applyGroupBy(db, params)
 	db = b.applyFilters(db, params)
@@ -305,6 +311,7 @@ func (b *Builder) Apply(db *gorm.DB, params Params) *gorm.DB {
 // a filtered list should use this instead of Apply.
 func (b *Builder) ApplyForCount(db *gorm.DB, params Params) *gorm.DB {
 	db = b.applyRelationFilters(db, params)
+	db = b.applyExtensionFilters(db, params)
 	db = b.applyFilters(db, params)
 	db = b.applySearch(db, params)
 	return db
@@ -320,6 +327,7 @@ func (b *Builder) ApplyForCount(db *gorm.DB, params Params) *gorm.DB {
 // footer matches the body row-for-row (minus pagination).
 func (b *Builder) ApplyForAggregate(db *gorm.DB, params Params) *gorm.DB {
 	db = b.applyRelationFilters(db, params)
+	db = b.applyExtensionFilters(db, params)
 	db = b.applyAggregations(db, params)
 	db = b.applyGroupBy(db, params)
 	db = b.applyFilters(db, params)
@@ -684,7 +692,7 @@ func applyOneFilterMode(db *gorm.DB, col string, f Filter, uuidCol bool) *gorm.D
 // an error — matches the audited source behaviour).
 func (b *Builder) applySearch(db *gorm.DB, params Params) *gorm.DB {
 	term := strings.TrimSpace(params.Search)
-	if term == "" || (len(b.searchable) == 0 && len(b.refOrder) == 0) {
+	if term == "" || (len(b.searchable) == 0 && len(b.refOrder) == 0 && !b.hasExtensionSearch()) {
 		return db
 	}
 	if len(term) > MaxSearchTermLength {
@@ -744,6 +752,11 @@ func (b *Builder) applySearch(db *gorm.DB, params Params) *gorm.DB {
 				b.tableName, fk, rs.Table, strings.Join(inner, " OR ")))
 		}
 	}
+	// Extension search keys: "205/55r16" reaches the tire whose normalized
+	// size key is 2055516.
+	extConds, extArgs := b.extensionSearchConds(term)
+	conds = append(conds, extConds...)
+	args = append(args, extArgs...)
 	if len(conds) == 0 {
 		return db
 	}

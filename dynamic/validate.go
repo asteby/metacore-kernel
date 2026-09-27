@@ -124,6 +124,21 @@ func (s *Service) validateWrite(ctx context.Context, model, tableName string, us
 	if cols == nil {
 		return nil
 	}
+	ve, err := s.validateColumns(ctx, cols, tableName, user, input, selfID, before)
+	if err != nil {
+		return err
+	}
+	if ve.Empty() {
+		return nil
+	}
+	return ve
+}
+
+// validateColumns is the per-column body of validateWrite over an explicit
+// column set, so a 1:1 extension table's columns (extensions.go) go through the
+// exact same rules as the base model's. It returns the collected (possibly
+// empty) *ValidationError; err is only for a failed lookup query.
+func (s *Service) validateColumns(ctx context.Context, cols []manifest.ColumnDef, tableName string, user modelbase.AuthUser, input map[string]any, selfID *uuid.UUID, before map[string]any) (*ValidationError, error) {
 	isUpdate := selfID != nil
 	ve := &ValidationError{}
 
@@ -137,7 +152,7 @@ func (s *Service) validateWrite(ctx context.Context, model, tableName string, us
 		}
 		// Generated / sequence-stamped columns are populated server-side after
 		// this pass, so a caller is never required to supply them.
-		if col.Generated != "" || col.Sequence != "" {
+		if col.Generated != "" || col.Sequence != "" || col.SearchKey != nil {
 			continue
 		}
 
@@ -203,7 +218,7 @@ func (s *Service) validateWrite(ctx context.Context, model, tableName string, us
 		if col.Ref != "" {
 			exists, err := s.refExists(ctx, user, col.Ref, raw, !isUpdate && col.RejectDeletedRef)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if !exists {
 				ve.add(name, codeNotFound, map[string]any{"ref": col.Ref})
@@ -215,7 +230,7 @@ func (s *Service) validateWrite(ctx context.Context, model, tableName string, us
 		if col.Unique {
 			dup, err := s.valueExists(ctx, user, tableName, name, raw, selfID)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if dup {
 				ve.add(name, codeDuplicate, nil)
@@ -232,11 +247,7 @@ func (s *Service) validateWrite(ctx context.Context, model, tableName string, us
 			ve.add(name, iss.Code, iss.Params)
 		}
 	}
-
-	if ve.Empty() {
-		return nil
-	}
-	return ve
+	return ve, nil
 }
 
 func specFromColumn(col manifest.ColumnDef) validate.Spec {
