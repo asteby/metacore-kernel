@@ -3,6 +3,7 @@ package query
 import (
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -343,12 +344,28 @@ func parseWithDialect(values map[string][]string, decode ParseFilterValue) (Para
 
 // jsonbPathColumns are the JSONB bags the ops dialect special-cases as
 // `f_<bag>.<key>` → OpJSONBEq. fiscal_data is the conventional fiscal
-// extension bag; product_specs is the tire-catalog bag (products_tires).
-// Every other dotted filter is treated as a relation. Hosts that need a
-// different bag can build Params directly with an OpJSONBEq Filter.
-var jsonbPathColumns = map[string]struct{}{
-	"fiscal_data":   {},
-	"product_specs": {},
+// extension bag and product_specs the legacy tire-catalog bag; hosts register
+// any other bag a manifest declares (ModelExtension.jsonb_bag) with
+// RegisterJSONBBag instead of editing this list. Every other dotted filter is
+// treated as a relation (or an extension table, see ExtensionTable).
+var (
+	jsonbPathMu      sync.RWMutex
+	jsonbPathColumns = map[string]struct{}{
+		"fiscal_data":   {},
+		"product_specs": {},
+	}
+)
+
+// RegisterJSONBBag makes `f_<bag>.<key>` a JSONB equality filter. Hosts call it
+// for each jsonb_bag their installed manifests declare. Unsafe names are
+// ignored.
+func RegisterJSONBBag(bag string) {
+	if !isSafeIdent(bag) {
+		return
+	}
+	jsonbPathMu.Lock()
+	jsonbPathColumns[bag] = struct{}{}
+	jsonbPathMu.Unlock()
 }
 
 func isJSONBPathColumn(col string) (bag, key string, ok bool) {
@@ -357,7 +374,10 @@ func isJSONBPathColumn(col string) (bag, key string, ok bool) {
 		return "", "", false
 	}
 	bag = col[:dot]
-	if _, known := jsonbPathColumns[bag]; !known {
+	jsonbPathMu.RLock()
+	_, known := jsonbPathColumns[bag]
+	jsonbPathMu.RUnlock()
+	if !known {
 		return "", "", false
 	}
 	return bag, col[dot+1:], true

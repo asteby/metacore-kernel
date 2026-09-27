@@ -241,6 +241,15 @@ type Config struct {
 	// an unambiguous contract). See dynamic/relations.go.
 	RelationResolver RelationResolver
 
+	// ExtensionResolver returns the model's 1:1 extension tables (manifest v3
+	// Model.extends) installed and enabled for the request's organization —
+	// host-wired from the addon registry like RelationResolver. When set, List
+	// and Get serve each extension column as "<Key>.<column>", List filters by
+	// f_<Key>.<column> and searches the extensions' search keys, and
+	// Create/Update validate and upsert the "<Key>.*" input into the extension
+	// row. nil = no extensions (see extensions.go).
+	ExtensionResolver ExtensionResolver
+
 	// FileDeleter disposes of file/image assets a dynamic record referenced
 	// once that reference is removed — when the record is DELETED, or when a
 	// file/image column's value is REPLACED on update. The kernel detects which
@@ -339,6 +348,7 @@ type Service struct {
 	selfOptions       bool
 	fileDeleter       FileDeleter
 	relations         RelationResolver
+	extensions        ExtensionResolver
 
 	// Transactional-outbox state (outbox.go). outboxEnabled arms after the
 	// table migrates at New; outboxStop terminates the background relay.
@@ -423,6 +433,7 @@ func New(cfg Config) *Service {
 		selfOptions:       cfg.EnableSelfOptions,
 		fileDeleter:       cfg.FileDeleter,
 		relations:         cfg.RelationResolver,
+		extensions:        cfg.ExtensionResolver,
 
 		actorRolesResolver:        cfg.ActorRolesResolver,
 		approvalRequesterResolver: cfg.ApprovalRequesterResolver,
@@ -580,9 +591,11 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	// f_<relation>.<field> filters work without callers having to plumb
 	// HasRelations themselves. Models that do not implement HasRelations
 	// get an empty relation set — the new query features are no-ops.
+	exts := s.resolveExtensions(ctx, model)
 	builder := query.New(tableMeta, s.listBuilderOpts()...).WithTableName(tableName).
 		WithRefSearch(s.refSearchFor(ctx, tableMeta, params.Search)).
-		WithUUIDColumns(uuidColumnsOf(instance))
+		WithUUIDColumns(uuidColumnsOf(instance)).
+		WithExtensions(queryExtensions(exts))
 	if rels, ok := instance.(modelbase.HasRelations); ok {
 		builder = builder.WithRelations(rels.DefineRelations())
 	}
@@ -608,7 +621,11 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 		return nil, query.PageMeta{}, fmt.Errorf("dynamic: list: %w", err)
 	}
 
-	items := query.ProjectMaps(toMapSlice(results), params.Fields)
+	items := toMapSlice(results)
+	if err := s.mergeExtensions(ctx, exts, items); err != nil {
+		return nil, query.PageMeta{}, err
+	}
+	items = query.ProjectMaps(items, params.Fields)
 	if params.SkipCount {
 		meta := builder.PageMeta(int64(len(items)), params)
 		if meta.PerPage > 0 && len(items) >= meta.PerPage {
@@ -663,9 +680,11 @@ func (s *Service) Aggregate(ctx context.Context, model string, user modelbase.Au
 	// filter or totals include rows the list never shows.
 	db = scopeSoftDelete(db, instance)
 
+	exts := s.resolveExtensions(ctx, model)
 	builder := query.New(tableMeta, s.listBuilderOpts()...).WithTableName(tableName).
 		WithRefSearch(s.refSearchFor(ctx, tableMeta, params.Search)).
-		WithUUIDColumns(uuidColumnsOf(instance))
+		WithUUIDColumns(uuidColumnsOf(instance)).
+		WithExtensions(queryExtensions(exts))
 	if rels, ok := instance.(modelbase.HasRelations); ok {
 		builder = builder.WithRelations(rels.DefineRelations())
 	}
@@ -739,7 +758,11 @@ func (s *Service) Get(ctx context.Context, model string, user modelbase.AuthUser
 		}
 		return nil, err
 	}
-	return toMap(instance), nil
+	row := toMap(instance)
+	if err := s.mergeExtensions(ctx, s.resolveExtensions(ctx, model), []map[string]any{row}); err != nil {
+		return nil, err
+	}
+	return row, nil
 }
 
 // Create inserts a record from a map[string]any input.
@@ -765,6 +788,11 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	s.scope.InjectOnCreate(input, user)
 	input["created_by_id"] = user.GetID()
 
+	// 1:1 extension columns ("<Key>.<column>") leave the owner input here and
+	// are validated with it, then upserted once the owner row exists.
+	exts := s.resolveExtensions(ctx, model)
+	extIn := splitExtensionInput(exts, input)
+
 	// Normalize string-encoded typed fields (uuid/number/bool) so a form that
 	// sends everything as strings doesn't fail the unmarshal. See coerce.go.
 	// Structured pre-write validation: required / invalid_option / not_found /
@@ -773,7 +801,11 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	// string values coerce would silently drop) and before hooks/guards/
 	// mapToStruct — a bad input is rejected 422 with a field map instead of a
 	// raw Postgres 500. A model with no wired validation schema is unaffected.
-	if err := s.validateWrite(ctx, model, tableName, user, input, nil, nil); err != nil {
+	extVE, err := s.validateExtensionInput(ctx, user, exts, extIn, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := mergeValidation(s.validateWrite(ctx, model, tableName, user, input, nil, nil), extVE); err != nil {
 		return nil, err
 	}
 
@@ -855,6 +887,16 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 		}
 	}
 
+	// Extension rows: same post-insert boundary as the pivots above.
+	if len(extIn) > 0 {
+		if err := s.upsertExtensions(ctx, s.db, exts, extIn, idStr, user.GetOrganizationID()); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.mergeExtensions(ctx, exts, []map[string]any{after}); err != nil {
+		return nil, err
+	}
+
 	s.publishCanonical(ctx, model, "created", user, idStr, nil, after)
 
 	_ = s.hooks.runAfterCreate(ctx, hc, instance)
@@ -887,6 +929,9 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 
 	sm := s.resolveStageMachine(ctx, model)
 	var before, after map[string]any
+
+	exts := s.resolveExtensions(ctx, model)
+	extIn := splitExtensionInput(exts, input)
 
 	// Approval parking (approvals.go): the caller's original input is what a
 	// replay re-issues; pendingCE/pendingBefore carry the guard that asked for
@@ -956,7 +1001,17 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		// before hooks/guards/mapToStruct; inside the lock when locking so the
 		// duplicate check is serialized with the write.
 		selfID := id
-		if err := s.validateWrite(ctx, model, tableName, user, input, &selfID, before); err != nil {
+		var extVE *ValidationError
+		if len(extIn) > 0 {
+			extBefore, err := extensionBefore(ctx, s, exts, id)
+			if err != nil {
+				return err
+			}
+			if extVE, err = s.validateExtensionInput(ctx, user, exts, extIn, &selfID, extBefore); err != nil {
+				return err
+			}
+		}
+		if err := mergeValidation(s.validateWrite(ctx, model, tableName, user, input, &selfID, before), extVE); err != nil {
 			return err
 		}
 
@@ -1077,6 +1132,17 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		if err := s.syncPivotOnWrite(ctx, s.db, rels, id, input, false); err != nil {
 			return nil, err
 		}
+	}
+
+	// Extension rows: PATCH-style upsert of the "<Key>.*" columns sent, on
+	// the same post-commit boundary as the pivots above.
+	if len(extIn) > 0 {
+		if err := s.upsertExtensions(ctx, s.db, exts, extIn, id.String(), user.GetOrganizationID()); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.mergeExtensions(ctx, exts, []map[string]any{after}); err != nil {
+		return nil, err
 	}
 
 	s.publishCanonical(ctx, model, "updated", user, id.String(), before, after)

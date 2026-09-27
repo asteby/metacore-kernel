@@ -1,6 +1,7 @@
 package dynamic
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -160,5 +161,43 @@ func TestPostgresExtendsTable(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("delete of the target must cascade, %d rows left", n)
+	}
+}
+
+// TestPostgresExtensionUpsertAndRead exercises the Service's extension SQL
+// (upsert, PATCH, read back) against the table the DDL builds.
+func TestPostgresExtensionUpsertAndRead(t *testing.T) {
+	db, sfx := pgTestDB(t)
+	addon := "extrw_" + sfx
+	schema := SchemaName(addon, uuid.Nil, IsolationShared)
+	t.Cleanup(func() { _ = db.Exec(fmt.Sprintf(`DROP SCHEMA IF EXISTS %q CASCADE`, schema)).Error })
+	def := tireSpecDef()
+	def.TableName = "specs_" + sfx
+	if err := EnsureSchema(db, addon, uuid.Nil, IsolationShared); err != nil {
+		t.Fatal(err)
+	}
+	if err := CreateTableWithOptions(db, addon, uuid.Nil, IsolationShared, def, TableOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	ext := ExtensionTable{Key: "TireSpec", Table: schema + "." + def.TableName, Columns: def.Columns}
+	s := &Service{db: db}
+	ctx := context.Background()
+	id, org := uuid.New().String(), uuid.New()
+
+	if err := s.upsertExtensions(ctx, db, []ExtensionTable{ext}, map[string]map[string]any{"TireSpec": {
+		"section_width_mm": "205", "aspect_ratio": "55", "rim_diameter_in": "16.0",
+	}}, id, org); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.upsertExtensions(ctx, db, []ExtensionTable{ext}, map[string]map[string]any{"TireSpec": {"aspect_ratio": 60}}, id, org); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.loadExtensionRows(ctx, db, []ExtensionTable{ext}, []string{id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := rows["TireSpec"][id]
+	if row == nil || fmt.Sprint(row["aspect_ratio"]) != "60" || fmt.Sprint(row["section_width_mm"]) != "205" || row["size_key"] != "2056016" {
+		t.Fatalf("row = %v", row)
 	}
 }
