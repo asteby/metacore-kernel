@@ -103,3 +103,48 @@ func TestConnectorDynamicSelect_ParseAndProject(t *testing.T) {
 		t.Errorf("Backend.Exports %v missing options_source handle_connector_lookup_series", out.Backend.Exports)
 	}
 }
+
+// Retest PIT-035: the SAT wizard showed "Razon Social", "Environment" as a free
+// text input and no help — FromV3 dropped the credential's label, description
+// and static options on the way to what ops stores.
+func TestConnectorCredentials_ProjectLabelDescriptionOptions(t *testing.T) {
+	const js = `{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": { "key": "fiscal_mexico", "name": "Timbrado CFDI", "version": "0.6.0" },
+  "compatibility": { "requires": [ { "key": "kernel", "version": ">=0.1.0" } ] },
+  "connectors": [
+    {
+      "key": "factura_com",
+      "auth": "token",
+      "credentials": [
+        {
+          "key": "environment",
+          "type": "select",
+          "label": "fiscal_mexico.connector.field.environment",
+          "description": "fiscal_mexico.connector.help.environment",
+          "required": true,
+          "options": [
+            { "value": "sandbox", "label": "fiscal_mexico.connector.env.sandbox" },
+            { "value": "production", "label": "fiscal_mexico.connector.env.production" }
+          ]
+        }
+      ]
+    }
+  ]
+}`
+	m, err := v3.Parse([]byte(js))
+	if err != nil {
+		t.Fatalf("v3.Parse: %v", err)
+	}
+	cred := manifest.FromV3(m).Connectors[0].Credentials[0]
+	if cred.Label != "fiscal_mexico.connector.field.environment" {
+		t.Errorf("Label = %q", cred.Label)
+	}
+	if cred.Description != "fiscal_mexico.connector.help.environment" {
+		t.Errorf("Description = %q", cred.Description)
+	}
+	if len(cred.Options) != 2 || cred.Options[1].Value != "production" || cred.Options[1].Label != "fiscal_mexico.connector.env.production" {
+		t.Errorf("Options = %+v", cred.Options)
+	}
+}
