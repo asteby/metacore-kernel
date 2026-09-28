@@ -246,9 +246,16 @@ func mapCredentials(in []v3.Setting) []CredentialDef {
 	}
 	out := make([]CredentialDef, 0, len(in))
 	for _, s := range in {
+		var opts []Option
+		for _, o := range s.Options {
+			opts = append(opts, Option{Value: o.Value, Label: o.Label})
+		}
 		out = append(out, CredentialDef{
 			Key:           s.Key,
 			Type:          s.Type,
+			Label:         s.Label,
+			Description:   s.Description,
+			Options:       opts,
 			Default:       s.Default,
 			Required:      s.Required,
 			Validation:    s.Validation,

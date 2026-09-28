@@ -274,12 +274,19 @@ type ConnectorDef struct {
 // (derived from a "secret" credential type) signals the host to store it
 // encrypted. Mirrors the v3 Setting fields used by connector credentials.
 type CredentialDef struct {
-	Key        string      `json:"key"`
-	Type       string      `json:"type,omitempty"`
-	Default    interface{} `json:"default,omitempty"`
-	Required   bool        `json:"required,omitempty"`
-	Validation string      `json:"validation,omitempty"`
-	Secret     bool        `json:"secret,omitempty"`
+	Key  string `json:"key"`
+	Type string `json:"type,omitempty"`
+	// Label, Description and Options are what the connect form renders: i18n
+	// keys for the field and its help, and the choices of a static "select"
+	// (e.g. environment = Sandbox / Producción). Dropping them left the SAT
+	// wizard with humanized keys ("Razon Social") and a free-text environment.
+	Label       string      `json:"label,omitempty"`
+	Description string      `json:"description,omitempty"`
+	Options     []Option    `json:"options,omitempty"`
+	Default     interface{} `json:"default,omitempty"`
+	Required    bool        `json:"required,omitempty"`
+	Validation  string      `json:"validation,omitempty"`
+	Secret      bool        `json:"secret,omitempty"`
 	// OptionsSource names the WASM export the host invokes to fetch this
 	// credential's options at config time (type "dynamic_select"); "" = a plain
 	// input or a static "select".
