@@ -1003,6 +1003,9 @@ type ModelDefinition struct {
 	// single-column indices keep riding ColumnDef.Index/Unique; only entries with
 	// a Where are emitted from here (see IndexDef).
 	Indices []IndexDef `json:"indices,omitempty"`
+	// AttributeClasses carries v3 Model.attribute_classes (extension tables
+	// only): named sets of the table's columns a category can be assigned.
+	AttributeClasses []AttributeClassDef `json:"attribute_classes,omitempty"`
 	// Relations declares model-to-model edges the kernel uses to derive
 	// joins, eager loading, REST sub-resources and SDK metadata. The slice
 	// is optional — addons that only expose flat tables can omit it and
@@ -1533,6 +1536,22 @@ type VisibleWhenDef struct {
 	Field  string   `json:"field"`
 	Equals string   `json:"equals,omitempty"`
 	In     []string `json:"in,omitempty"`
+	// Class: visible when the record's category carries this attribute class.
+	Class string `json:"class,omitempty"`
+}
+
+// AttributeClassDef is the host carrier of a v3 AttributeClass.
+type AttributeClassDef struct {
+	Key      string                     `json:"key"`
+	Label    string                     `json:"label,omitempty"`
+	Sections []AttributeClassSectionDef `json:"sections"`
+}
+
+// AttributeClassSectionDef is one titled block of an AttributeClassDef.
+type AttributeClassSectionDef struct {
+	Key    string   `json:"key"`
+	Label  string   `json:"label,omitempty"`
+	Fields []string `json:"fields"`
 }
 
 // ConditionDef is the host projection of a v3 contribution Condition: a

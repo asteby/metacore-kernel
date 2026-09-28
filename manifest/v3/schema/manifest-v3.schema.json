@@ -864,6 +864,13 @@
             "inventory.Lot"
           ]
         },
+        "attribute_classes": {
+          "type": "array",
+          "description": "Named sets of this extension table's columns (classification). Which categories use a class is organization data. Only on a model with 'extends'.",
+          "items": {
+            "$ref": "#/$defs/AttributeClass"
+          }
+        },
         "search_keys": {
           "type": "array",
           "description": "Normalized search keys composed from this model's columns; each becomes an indexed generated column the list search resolves typed text against.",
@@ -1290,8 +1297,17 @@
     "VisibleWhen": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "field"
+      "anyOf": [
+        {
+          "required": [
+            "field"
+          ]
+        },
+        {
+          "required": [
+            "class"
+          ]
+        }
       ],
       "description": "CONDITIONAL VISIBILITY for a form field in the native create/edit modal: the SDK renders the owning field only when a SIBLING field's current value matches this predicate. Pure UI metadata (maps to ColumnDef/FieldDef.visible_when) — the DDL and write planes ignore it, and a hidden field's value never gates submit. Declare EITHER 'equals' (exact string match) OR 'in' (any-of); when both are present 'in' wins.",
       "properties": {
@@ -1309,6 +1325,11 @@
             "type": "string"
           },
           "description": "Show the owning field when the sibling value is one of these strings."
+        },
+        "class": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Show the owning field when the record's category carries this attribute class (models[].attribute_classes). Used instead of 'field'."
         }
       }
     },
@@ -1607,6 +1628,51 @@
             "fiscal_data",
             "product_specs"
           ]
+        }
+      }
+    },
+    "AttributeClass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "sections"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "label": {
+          "type": "string"
+        },
+        "sections": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "fields"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "label": {
+                "type": "string"
+              },
+              "fields": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
         }
       }
     },

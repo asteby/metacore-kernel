@@ -223,6 +223,9 @@ type VisibleWhen struct {
 	Equals string `json:"equals,omitempty"`
 	// In shows the owning field when the sibling value is one of these strings.
 	In []string `json:"in,omitempty"`
+	// Class shows the owning field when the record's category carries this
+	// attribute class (the host serves each category's classes). Used alone.
+	Class string `json:"class,omitempty"`
 }
 
 // ValidationRule mirrors `manifest.ValidationRule` but lives on the metadata

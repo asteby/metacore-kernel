@@ -163,3 +163,56 @@ func validateSearchKeys(m *Manifest) []string {
 	}
 	return errs
 }
+
+// validateAttributeClasses checks Model.attribute_classes and every
+// visible_when.class (CONTRACT-item-master.md §3.2): classes live on extension
+// tables, their keys are unique across the manifest, their sections name the
+// table's own columns, and a class a column is shown for exists.
+func validateAttributeClasses(m *Manifest) []string {
+	var errs []string
+	classes := map[string]string{} // class key → owning model key
+	for mi, mod := range m.Models {
+		if len(mod.AttributeClasses) > 0 && !isExtends(mod) {
+			errs = append(errs, fmt.Sprintf("models[%d] (%s).attribute_classes: only a model with extends declares attribute classes", mi, mod.Key))
+		}
+		cols := map[string]struct{}{}
+		for _, c := range mod.Columns {
+			cols[c.Name] = struct{}{}
+		}
+		for ci, cl := range mod.AttributeClasses {
+			where := fmt.Sprintf("models[%d] (%s).attribute_classes[%d]", mi, mod.Key, ci)
+			if owner, dup := classes[cl.Key]; dup {
+				errs = append(errs, fmt.Sprintf("%s: class %q is already declared on %s", where, cl.Key, owner))
+			}
+			classes[cl.Key] = mod.Key
+			seenSec := map[string]bool{}
+			for si, sec := range cl.Sections {
+				if seenSec[sec.Key] {
+					errs = append(errs, fmt.Sprintf("%s.sections[%d]: duplicate key %q", where, si, sec.Key))
+				}
+				seenSec[sec.Key] = true
+				for _, f := range sec.Fields {
+					if _, ok := cols[f]; !ok {
+						errs = append(errs, fmt.Sprintf("%s.sections[%d]: %q is not a column of %s", where, si, f, mod.Key))
+					}
+				}
+			}
+		}
+	}
+	for mi, mod := range m.Models {
+		for ci, c := range mod.Columns {
+			vw := c.VisibleWhen
+			if vw == nil || vw.Class == "" {
+				continue
+			}
+			where := fmt.Sprintf("models[%d] (%s).columns[%d].visible_when", mi, mod.Key, ci)
+			if vw.Field != "" || vw.Equals != "" || len(vw.In) > 0 {
+				errs = append(errs, fmt.Sprintf("%s: class is used alone, without field/equals/in", where))
+			}
+			if _, ok := classes[vw.Class]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.class %q is not declared in attribute_classes", where, vw.Class))
+			}
+		}
+	}
+	return errs
+}
