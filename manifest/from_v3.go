@@ -645,6 +645,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 			def.Columns = append(def.Columns, col)
 		}
 		def.Columns = append(def.Columns, mapSearchKeys(m)...)
+		def.AttributeClasses = mapAttributeClasses(m.AttributeClasses)
 		def.Relations = mapModelRelations(m.Relations)
 		def.Seed = mapModelSeed(m.Seed)
 		def.Formulas = mapModelFormulas(m.Formulas)
@@ -664,6 +665,22 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		// Nil = a flat form (legacy). Pure UI.
 		def.FormLayout = mapFormLayout(m.FormLayout)
 		out = append(out, def)
+	}
+	return out
+}
+
+// mapAttributeClasses carries v3 attribute classes onto the host carrier.
+func mapAttributeClasses(in []v3.AttributeClass) []AttributeClassDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]AttributeClassDef, 0, len(in))
+	for _, c := range in {
+		d := AttributeClassDef{Key: c.Key, Label: c.Label}
+		for _, s := range c.Sections {
+			d.Sections = append(d.Sections, AttributeClassSectionDef{Key: s.Key, Label: s.Label, Fields: append([]string(nil), s.Fields...)})
+		}
+		out = append(out, d)
 	}
 	return out
 }
@@ -1167,6 +1184,7 @@ func mapVisibleWhen(w *v3.VisibleWhen) *VisibleWhenDef {
 		Field:  w.Field,
 		Equals: w.Equals,
 		In:     w.In,
+		Class:  w.Class,
 	}
 }
 

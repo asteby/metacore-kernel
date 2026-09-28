@@ -629,6 +629,14 @@ type Model struct {
 	// the format to it ("205/55r16", "2055516", "205 55 16"). Optional.
 	SearchKeys []SearchKey `json:"search_keys,omitempty"`
 
+	// AttributeClasses groups an extension table's columns (its
+	// characteristics) into named classes, SAP-classification style: which
+	// categories use a class is organization data (the category's assigned
+	// classes), not manifest. A column shows on the form of a record whose
+	// category carries its class (VisibleWhen.Class), in the class's sections.
+	// Only valid on a model with Extends. Optional.
+	AttributeClasses []AttributeClass `json:"attribute_classes,omitempty"`
+
 	// Relations declares the INVERSE edges of this model — the child records a
 	// detail page should be able to list under it (e.g. a Customer's vehicles,
 	// addresses and attachments). Unlike ForeignKeys (which declare the physical
@@ -1113,11 +1121,16 @@ type Column struct {
 // the host contract so the block round-trips byte-for-byte.
 type VisibleWhen struct {
 	// Field is the sibling field key whose value drives visibility.
-	Field string `json:"field"`
+	Field string `json:"field,omitempty"`
 	// Equals shows the owning field when the sibling value == this string.
 	Equals string `json:"equals,omitempty"`
 	// In shows the owning field when the sibling value is one of these strings.
 	In []string `json:"in,omitempty"`
+	// Class shows the owning field when the record's category carries this
+	// attribute class (Model.AttributeClasses, assigned to categories as data
+	// by each organization). Used alone, without Field. See
+	// CONTRACT-item-master.md §3.2.
+	Class string `json:"class,omitempty"`
 }
 
 // FormLayout declares declarative GROUPING for the model's native create/edit
@@ -1313,6 +1326,22 @@ type ModelExtension struct {
 	// extensions (products_tires) set this to "product_specs". Hosts read it
 	// from here instead of inferring the bag from column names.
 	JSONBag string `json:"jsonb_bag,omitempty"`
+}
+
+// AttributeClass is a named set of an extension table's columns.
+type AttributeClass struct {
+	// Key identifies the class across addons ("tire"); categories store it.
+	Key   string `json:"key"`
+	Label string `json:"label,omitempty"`
+	// Sections order the class's columns into titled form blocks.
+	Sections []AttributeClassSection `json:"sections"`
+}
+
+// AttributeClassSection is one titled block of an AttributeClass.
+type AttributeClassSection struct {
+	Key    string   `json:"key"`
+	Label  string   `json:"label,omitempty"`
+	Fields []string `json:"fields"`
 }
 
 // SearchKey is a normalized search key composed from a model's columns.

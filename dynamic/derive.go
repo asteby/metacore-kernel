@@ -292,6 +292,7 @@ func toVisibleWhen(in *manifest.VisibleWhenDef) *modelbase.VisibleWhen {
 		Field:  in.Field,
 		Equals: in.Equals,
 		In:     in.In,
+		Class:  in.Class,
 	}
 }
 

@@ -42,3 +42,20 @@ func TestFromV3Extends(t *testing.T) {
 		t.Fatalf("parts = %+v", key.SearchKey.Parts)
 	}
 }
+
+func TestFromV3AttributeClasses(t *testing.T) {
+	m := &v3.Manifest{Models: []v3.Model{{
+		Key: "TireSpec", Table: "product_tire_specs", Extends: "products.Product",
+		Columns: []v3.Column{{Name: "section_width_mm", Type: "integer", VisibleWhen: &v3.VisibleWhen{Class: "tire"}}},
+		AttributeClasses: []v3.AttributeClass{{Key: "tire", Label: "Llanta", Sections: []v3.AttributeClassSection{
+			{Key: "medida", Fields: []string{"section_width_mm"}},
+		}}},
+	}}}
+	def := FromV3(m).ModelDefinitions[0]
+	if len(def.AttributeClasses) != 1 || def.AttributeClasses[0].Sections[0].Fields[0] != "section_width_mm" {
+		t.Fatalf("classes = %+v", def.AttributeClasses)
+	}
+	if def.Columns[0].VisibleWhen == nil || def.Columns[0].VisibleWhen.Class != "tire" {
+		t.Fatalf("visible_when.class lost: %+v", def.Columns[0].VisibleWhen)
+	}
+}

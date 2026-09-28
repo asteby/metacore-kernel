@@ -197,3 +197,67 @@ func TestModelExtension_JSONBag(t *testing.T) {
 		t.Fatalf("JSONBag = %q", got)
 	}
 }
+
+func tireClasses() []interface{} {
+	return []interface{}{map[string]interface{}{
+		"key": "tire",
+		"sections": []interface{}{
+			map[string]interface{}{"key": "medida", "fields": []interface{}{"section_width_mm", "aspect_ratio", "rim_diameter_in"}},
+			map[string]interface{}{"key": "indices", "fields": []interface{}{"speed_rating"}},
+		},
+	}}
+}
+
+func TestAttributeClasses_Valid(t *testing.T) {
+	mod := tireSpecModel()
+	mod["attribute_classes"] = tireClasses()
+	cols := mod["columns"].([]interface{})
+	cols[0].(map[string]interface{})["visible_when"] = map[string]interface{}{"class": "tire"}
+	raw := mustJSON(t, withModels(mod))
+	if err := Validate(raw); err != nil {
+		t.Fatalf("expected valid, got %v", err)
+	}
+	m, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Models[0].AttributeClasses[0].Key != "tire" || m.Models[0].Columns[0].VisibleWhen.Class != "tire" {
+		t.Fatalf("typed shape lost the classes: %+v", m.Models[0])
+	}
+}
+
+func TestAttributeClasses_Rejects(t *testing.T) {
+	onPlain := map[string]interface{}{
+		"key": "Plain", "table": "plains",
+		"columns": []interface{}{
+			map[string]interface{}{"name": "id", "type": "uuid", "primary_key": true},
+			map[string]interface{}{"name": "organization_id", "type": "uuid", "not_null": true},
+			map[string]interface{}{"name": "grade", "type": "text"},
+		},
+		"attribute_classes": []interface{}{map[string]interface{}{"key": "x", "sections": []interface{}{map[string]interface{}{"key": "s", "fields": []interface{}{"grade"}}}}},
+	}
+	if msg := validateErr(t, withModels(onPlain)); !strings.Contains(msg, "only a model with extends") {
+		t.Fatalf("got %q", msg)
+	}
+
+	mod := tireSpecModel()
+	classes := tireClasses()
+	classes[0].(map[string]interface{})["sections"].([]interface{})[0].(map[string]interface{})["fields"] = []interface{}{"nope"}
+	mod["attribute_classes"] = classes
+	if msg := validateErr(t, withModels(mod)); !strings.Contains(msg, `"nope" is not a column`) {
+		t.Fatalf("got %q", msg)
+	}
+
+	mod = tireSpecModel()
+	mod["columns"].([]interface{})[0].(map[string]interface{})["visible_when"] = map[string]interface{}{"class": "moto"}
+	if msg := validateErr(t, withModels(mod)); !strings.Contains(msg, `"moto" is not declared`) {
+		t.Fatalf("got %q", msg)
+	}
+
+	mod = tireSpecModel()
+	mod["attribute_classes"] = tireClasses()
+	mod["columns"].([]interface{})[0].(map[string]interface{})["visible_when"] = map[string]interface{}{"class": "tire", "field": "x", "equals": "y"}
+	if msg := validateErr(t, withModels(mod)); !strings.Contains(msg, "class is used alone") {
+		t.Fatalf("got %q", msg)
+	}
+}
