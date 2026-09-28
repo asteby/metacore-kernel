@@ -431,3 +431,28 @@ func (s *Service) WriteExtensions(ctx context.Context, in ExtensionInput, ownerI
 	}
 	return s.upsertExtensions(ctx, s.db, in.exts, in.values, ownerID.String(), orgID)
 }
+
+// extensionSearchConds is the options-picker twin of the list builder's
+// extension search: `"id" IN (SELECT id FROM <ext> WHERE <key> = ?)` per search
+// key, with the typed text normalized like the stored key.
+func extensionSearchConds(exts []ExtensionTable, term string) ([]string, []any) {
+	var conds []string
+	var args []any
+	for _, e := range exts {
+		for _, c := range e.Columns {
+			if c.SearchKey == nil || !safeIdentRe.MatchString(c.Name) {
+				continue
+			}
+			v := strings.TrimSpace(term)
+			if c.SearchKey.Match != "exact" {
+				v = NormalizeSearchKey(c.SearchKey, term)
+			}
+			if v == "" {
+				continue
+			}
+			conds = append(conds, fmt.Sprintf(`"id" IN (SELECT "id" FROM %s WHERE %q = ?)`, quotedTable(e.Table), c.Name))
+			args = append(args, v)
+		}
+	}
+	return conds, args
+}

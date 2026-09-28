@@ -202,8 +202,17 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 		if safeColumn.MatchString(labelCol) {
 			escaped := strings.NewReplacer("%", `\%`, "_", `\_`).Replace(q.Q)
 			frag, val := s.matchClause(labelCol, escaped)
+			conds, args := []string{}, []any{}
 			if frag != "" {
-				db = db.Where(frag, val)
+				conds, args = append(conds, "("+frag+")"), append(args, val)
+			}
+			// Extension search keys (v3 search_keys on a 1:1 extension of the
+			// source): the cashier types "205/55r16" in the product picker and
+			// reaches the tire whose normalized size key is 2055516.
+			extConds, extArgs := extensionSearchConds(s.resolveExtensions(ctx, fieldCfg.Source), q.Q)
+			conds, args = append(conds, extConds...), append(args, extArgs...)
+			if len(conds) > 0 {
+				db = db.Where(strings.Join(conds, " OR "), args...)
 			}
 		}
 	}
