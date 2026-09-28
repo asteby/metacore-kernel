@@ -270,3 +270,33 @@ func TestExtensions_OptionsSearchKey(t *testing.T) {
 		t.Fatalf("label search: %+v %v", res, err)
 	}
 }
+
+// Facets on "<Ext>.<col>" count the extension values of the caller's rows.
+func TestExtensions_Facets(t *testing.T) {
+	svc, _ := setupExtensionService(t)
+	ctx := context.Background()
+	user := newUser(uuid.New())
+	other := newUser(uuid.New())
+	for _, r := range []struct {
+		u   *fakeUser
+		rim int
+	}{{user, 16}, {user, 16}, {user, 15}, {other, 16}} {
+		if _, err := svc.Create(ctx, "test_products", r.u, map[string]any{"name": "x", "TireSpec.rim_diameter_in": r.rim}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	buckets, err := svc.Facets(ctx, user, FacetsQuery{Model: "test_products", Field: "TireSpec.rim_diameter_in"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, b := range buckets {
+		got[b.Value] = b.Count
+	}
+	if got["16"] != 2 || got["15"] != 1 || len(got) != 2 {
+		t.Fatalf("buckets = %+v", buckets)
+	}
+	if _, err := svc.Facets(ctx, user, FacetsQuery{Model: "test_products", Field: "TireSpec.nope"}); err == nil {
+		t.Fatal("undeclared extension column must not be a facet")
+	}
+}

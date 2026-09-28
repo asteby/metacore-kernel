@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/modelbase"
 	"gorm.io/gorm"
 )
@@ -68,32 +69,32 @@ func (s *Service) Facets(ctx context.Context, user modelbase.AuthUser, q FacetsQ
 	if !ok {
 		return nil, ErrModelNotFound
 	}
-	expr, emptyGuard, err := resolveFacetExpr(s.db, instance, q.Field)
-	if err != nil {
-		return nil, err
+	var (
+		db         *gorm.DB
+		expr       string
+		emptyGuard bool
+	)
+	if ext, col, ok := s.extensionFacetField(ctx, q.Model, q.Field); ok {
+		// "<Ext>.<col>" on a 1:1 extension table (v3 extends): count the
+		// extension rows of the owner rows the caller may see.
+		owners, err := s.facetOwnerScope(ctx, user, q.Model, instance)
+		if err != nil {
+			return nil, err
+		}
+		db = s.db.WithContext(ctx).Table(quotedTable(ext.Table)+" __ex").Where(`__ex."id" IN (?)`, owners.Select("id"))
+		expr = fmt.Sprintf(`__ex.%q`, col.Name)
+		emptyGuard = isTextColumnType(col.Type)
+	} else {
+		var err error
+		expr, emptyGuard, err = resolveFacetExpr(s.db, instance, q.Field)
+		if err != nil {
+			return nil, err
+		}
+		db, err = s.facetOwnerScope(ctx, user, q.Model, instance)
+		if err != nil {
+			return nil, err
+		}
 	}
-
-	// Pin the FROM table explicitly (like queryDynamicOptions) so reflect-built
-	// addon models (no TableName() method) hit the real table. We deliberately
-	// do NOT chain .Model(instance) here: options.go needs it because it scans
-	// INTO the model struct, but facets scans into facetRow — a .Model would make
-	// GORM map the projected value/count columns against the model's schema and
-	// fail. .Table alone resolves the FROM, which is all this query needs.
-	tableName, err := s.tableNameFor(ctx, q.Model, instance)
-	if err != nil {
-		return nil, err
-	}
-	db := s.db.WithContext(ctx).Table(tableName)
-
-	// Tenant scoping: only when the model actually carries an organization_id
-	// column. Column-based detection (hasOrgColumn) is correct for both compiled
-	// and reflect-built addon models.
-	if user != nil && hasOrgColumn(instance) {
-		db = s.scope.ScopeQuery(db, user)
-	}
-	// facetRow scans bypass the model schema, so add the soft-delete filter by
-	// hand — facet counts must match the list the chips filter.
-	db = scopeSoftDelete(db, instance)
 
 	// Exclude empty buckets: NULL always, and the empty string when the
 	// expression yields text (plain text columns + every jsonb ->> path).
@@ -137,6 +138,50 @@ func (s *Service) Facets(ctx context.Context, user modelbase.AuthUser, q FacetsQ
 		out = append(out, FacetBucket{Value: r.Value, Label: r.Value, Count: r.Count})
 	}
 	return out, nil
+}
+
+// facetOwnerScope is the owner model's table under the caller's org/branch
+// scope and without soft-deleted rows — the set the list the chips filter
+// shows. Table resolution mirrors queryDynamicOptions; tenant scoping fires
+// only when the model carries an organization_id column (hasOrgColumn). No
+// .Model(instance): facets scan into facetRow, not the model struct.
+func (s *Service) facetOwnerScope(ctx context.Context, user modelbase.AuthUser, model string, instance any) (*gorm.DB, error) {
+	tableName, err := s.tableNameFor(ctx, model, instance)
+	if err != nil {
+		return nil, err
+	}
+	db := s.db.WithContext(ctx).Table(tableName)
+	if user != nil && hasOrgColumn(instance) {
+		db = s.scope.ScopeQuery(db, user)
+	}
+	return scopeSoftDelete(db, instance), nil
+}
+
+// extensionFacetField resolves "<Ext>.<col>" against the model's extension
+// tables. ok=false for anything else (plain columns and jsonb bag paths).
+func (s *Service) extensionFacetField(ctx context.Context, model, field string) (ExtensionTable, manifest.ColumnDef, bool) {
+	key, name, ok := splitFacetPath(field)
+	if !ok {
+		return ExtensionTable{}, manifest.ColumnDef{}, false
+	}
+	for _, e := range s.resolveExtensions(ctx, model) {
+		if e.Key != key {
+			continue
+		}
+		for _, c := range e.Columns {
+			if c.Name == name && safeColumn.MatchString(name) {
+				return e, c, true
+			}
+		}
+	}
+	return ExtensionTable{}, manifest.ColumnDef{}, false
+}
+
+// isTextColumnType reports whether a declared column type yields text (the
+// empty-string guard applies).
+func isTextColumnType(t string) bool {
+	t = strings.ToLower(strings.TrimSpace(t))
+	return t == "text" || t == "string" || strings.HasPrefix(t, "varchar")
 }
 
 // resolveFacetExpr maps a FacetsQuery.Field onto a SQL expression safe to
