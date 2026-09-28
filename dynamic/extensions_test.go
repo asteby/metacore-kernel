@@ -234,3 +234,39 @@ func TestExtensions_HostWritePath(t *testing.T) {
 		t.Fatal("out-of-range extension value must fail validation")
 	}
 }
+
+// The product picker (/api/options) finds a tire by its size in any spelling:
+// that is the search a cashier uses, not the list's.
+func TestExtensions_OptionsSearchKey(t *testing.T) {
+	svc, db := setupExtensionService(t)
+	ctx := context.Background()
+	user := newUser(uuid.New())
+	out, err := svc.Create(ctx, "test_products", user, map[string]any{
+		"name": "Everland A", "TireSpec.section_width_mm": 205, "TireSpec.aspect_ratio": 55, "TireSpec.rim_diameter_in": 16,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Exec(`UPDATE product_tire_specs SET size_key = '2055516' WHERE id = ?`, out["id"])
+	if _, err := svc.Create(ctx, "test_products", user, map[string]any{"name": "Cubeta 205"}); err != nil {
+		t.Fatal(err)
+	}
+	svc.optsResolver = optionsConfigFor(OptionsConfig{Fields: map[string]FieldOptionsConfig{
+		"id": {Type: "dynamic", Source: "test_products", Value: "id", Label: "name"},
+	}})
+
+	for _, term := range []string{"205/55R16", "205 55 16"} {
+		res, err := svc.Options(ctx, user, OptionsQuery{Model: "test_products", Field: "id", Q: term})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Options) != 1 || res.Options[0].Label != "Everland A" {
+			t.Fatalf("q=%q → %+v", term, res.Options)
+		}
+	}
+	// The label search still works on its own.
+	res, err := svc.Options(ctx, user, OptionsQuery{Model: "test_products", Field: "id", Q: "Cubeta"})
+	if err != nil || len(res.Options) != 1 {
+		t.Fatalf("label search: %+v %v", res, err)
+	}
+}
