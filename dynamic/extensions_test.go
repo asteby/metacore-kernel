@@ -194,3 +194,43 @@ func itoaTest(n int) string {
 	}
 	return string(b)
 }
+
+// A host with its own owner write (ops' legacy update path) takes the
+// extension input out, writes the owner, then writes the extensions.
+func TestExtensions_HostWritePath(t *testing.T) {
+	svc, _ := setupExtensionService(t)
+	ctx := context.Background()
+	user := newUser(uuid.New())
+	owner, err := svc.Create(ctx, "test_products", user, map[string]any{"name": "sin ficha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := uuid.Parse(owner["id"].(string))
+
+	input := map[string]any{"name": "con ficha", "TireSpec.section_width_mm": "205"}
+	if !svc.HasExtensionInput(ctx, "test_products", input) {
+		t.Fatal("extension input not detected")
+	}
+	in, err := svc.TakeExtensionInput(ctx, "test_products", user, input, &id)
+	if err != nil || in.Empty() {
+		t.Fatalf("take: %v empty=%v", err, in.Empty())
+	}
+	if _, left := input["TireSpec.section_width_mm"]; left || input["name"] != "con ficha" {
+		t.Fatalf("owner input after take: %v", input)
+	}
+	if err := svc.WriteExtensions(ctx, in, id, user.orgID); err != nil {
+		t.Fatal(err)
+	}
+	rows := []map[string]any{{"id": id.String()}}
+	if err := svc.ServeExtensions(ctx, "test_products", rows); err != nil {
+		t.Fatal(err)
+	}
+	if toFloat(rows[0]["TireSpec.section_width_mm"]) != 205 {
+		t.Fatalf("served = %v", rows[0])
+	}
+
+	bad := map[string]any{"TireSpec.section_width_mm": "999"}
+	if _, err := svc.TakeExtensionInput(ctx, "test_products", user, bad, &id); err == nil {
+		t.Fatal("out-of-range extension value must fail validation")
+	}
+}

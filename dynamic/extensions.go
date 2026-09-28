@@ -359,3 +359,75 @@ func extensionBefore(ctx context.Context, s *Service, exts []ExtensionTable, id 
 	}
 	return out, nil
 }
+
+// ServeExtensions adds the model's extension columns ("<Key>.<column>") to rows
+// a host read through its OWN list/show path (one not delegated to List/Get).
+// A model without extensions is a no-op.
+func (s *Service) ServeExtensions(ctx context.Context, model string, rows []map[string]any) error {
+	return s.mergeExtensions(ctx, s.resolveExtensions(ctx, model), rows)
+}
+
+// HasExtensionInput reports whether input carries any "<Key>.<column>" (or
+// nested "<Key>") key of the model's extensions — a host routing writes uses it
+// to know the write needs WriteExtensions.
+func (s *Service) HasExtensionInput(ctx context.Context, model string, input map[string]any) bool {
+	for _, e := range s.resolveExtensions(ctx, model) {
+		if _, ok := input[e.Key]; ok {
+			return true
+		}
+		prefix := e.Key + "."
+		for k := range input {
+			if strings.HasPrefix(k, prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TakeExtensionInput removes the extension keys from input and validates them
+// against the extension columns, for a host whose OWN write path persists the
+// owner row (Create/Update do this themselves). ownerID is nil on create. The
+// returned value is opaque: hand it to WriteExtensions once the owner row is
+// written. A *ValidationError carries "<Key>.<column>" field names.
+func (s *Service) TakeExtensionInput(ctx context.Context, model string, user modelbase.AuthUser, input map[string]any, ownerID *uuid.UUID) (ExtensionInput, error) {
+	exts := s.resolveExtensions(ctx, model)
+	in := ExtensionInput{exts: exts, values: splitExtensionInput(exts, input)}
+	if len(in.values) == 0 {
+		return in, nil
+	}
+	var before map[string]map[string]any
+	if ownerID != nil {
+		b, err := extensionBefore(ctx, s, exts, *ownerID)
+		if err != nil {
+			return in, err
+		}
+		before = b
+	}
+	ve, err := s.validateExtensionInput(ctx, user, exts, in.values, ownerID, before)
+	if err != nil {
+		return in, err
+	}
+	if !ve.Empty() {
+		return in, ve
+	}
+	return in, nil
+}
+
+// ExtensionInput is the validated extension part of a write (TakeExtensionInput).
+type ExtensionInput struct {
+	exts   []ExtensionTable
+	values map[string]map[string]any
+}
+
+// Empty reports whether the write touched no extension.
+func (in ExtensionInput) Empty() bool { return len(in.values) == 0 }
+
+// WriteExtensions upserts the extension rows of ownerID (PATCH: only the
+// columns sent).
+func (s *Service) WriteExtensions(ctx context.Context, in ExtensionInput, ownerID uuid.UUID, orgID uuid.UUID) error {
+	if in.Empty() {
+		return nil
+	}
+	return s.upsertExtensions(ctx, s.db, in.exts, in.values, ownerID.String(), orgID)
+}
