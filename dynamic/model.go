@@ -246,8 +246,9 @@ func columnToField(c manifest.ColumnDef) (reflect.StructField, error) {
 	// permission ("->") keeps the column in SELECT/scan (so it still surfaces in
 	// list/detail/export) while omitting it from every write. Generated columns
 	// carry no NOT NULL / DEFAULT / index (validation forbids them), so we return
-	// here before those parts are appended.
-	if c.Generated != "" {
+	// here before those parts are appended. A search-key column (SearchKey) is
+	// a STORED generated column too.
+	if c.Generated != "" || c.SearchKey != nil {
 		gormParts = append(gormParts, "->")
 		tags = append(tags, fmt.Sprintf(`gorm:"%s"`, strings.Join(gormParts, ";")))
 		return reflect.StructField{

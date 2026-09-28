@@ -47,3 +47,18 @@ func TestColumnToField_OrdinaryIsWritable(t *testing.T) {
 		t.Fatalf("ordinary column must stay writable; got read-only gorm tag %q", field.Tag.Get("gorm"))
 	}
 }
+
+// A search-key column (v3 Model.search_keys) is a STORED generated column as
+// well: read-only in the reflect model, or every INSERT of the model fails.
+func TestColumnToField_SearchKeyIsReadOnly(t *testing.T) {
+	field, err := columnToField(manifest.ColumnDef{
+		Name: "size_key", Type: "text", Index: true,
+		SearchKey: &manifest.SearchKeyDef{Parts: []manifest.SearchKeyPart{{Column: "width", Type: "integer"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag := field.Tag.Get("gorm"); !strings.Contains(tag, "->") {
+		t.Fatalf("search key column must be read-only; gorm tag = %q", tag)
+	}
+}
