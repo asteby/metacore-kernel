@@ -39,7 +39,9 @@ These are technical communication primitives every web app eventually wants;
 they live in the kernel for consistency with how apps integrate:
 
 - `push` (Web Push VAPID), `ws` (WebSocket Hub), `webhooks` (outbound HMAC),
-  `notifications` (queue + workers + dedup + retry + ChannelHandler).
+  `notifications` (queue + workers + dedup + retry + ChannelHandler),
+  `outbox` (durable integration jobs: the engine is here; what an
+  "erp.post_order" job does is registered by the app).
 
 The **engine** is in the kernel; **domain handlers/templates/rules stay in the
 app**. The notifications service ships a queue; the app registers what an "email"
@@ -213,7 +215,8 @@ metacore-kernel/
 ├── hub/             # kernel-side Hub HTTP client (catalog/bundle contract)
 ├── config/          # org-scoped config getters (OrgCurrencyGetter) + Fiber-context helpers
 ├── database/        # GORM hooks (RegisterCurrencyDefaultCallback BeforeCreate)
-├── idempotency/     # idempotency-key middleware + store
+├── idempotency/     # idempotency-key middleware + store (in-memory, durable GormStore)
+├── outbox/          # durable background jobs (transactional enqueue, retries, dead-letter)
 ├── i18n/            # string-bundle loading + locale resolution
 ├── vector/          # pgvector helpers for embedding columns
 ├── log/             # builder-style logger (legacy; new code uses obs)

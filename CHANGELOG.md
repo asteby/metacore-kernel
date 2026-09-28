@@ -16,6 +16,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Durable idempotency store: `idempotency.NewGormStore`.** Table
+  `metacore_idempotency_keys` (Postgres; SQLite for tests), shared by every
+  replica, survives restarts, deletes expired keys every hour (`Cleanup`,
+  `Close`). It implements the new optional `idempotency.Locker` interface
+  (`Reserve` / `Release`), which the middleware detects by type assertion:
+  the key is claimed with a unique "pending" row before the handler runs,
+  so a concurrent duplicate never executes the handler. The duplicate waits
+  up to `Config.InFlightWait` and replays the first response, or gets 409
+  `idempotency_key_in_flight` with `Retry-After: 1` (immediately when the
+  wait is zero). A failed, panicking or non-2xx first request releases the
+  key; a dead replica's claim expires after `Config.LockTimeout` (1m). The
+  store fails closed (503) when unreachable. `Store` is unchanged, and
+  `InMemoryStore` keeps its behaviour. `host.AppConfig.IdempotencyDurable`
+  selects the durable store.
+
+- **New package `outbox`: durable background jobs for integrations.**
+  `outbox.New(db, cfg)`, `Register(kind, handler)`, `Enqueue` /
+  `EnqueueTx(tx, …)`. `EnqueueTx` commits the job atomically with the
+  business rows. Options: `WithDedupeKey`, `WithDelay`, `WithRunAt`,
+  `WithMaxAttempts`, `WithOrg`. `Start(ctx)` runs N workers. They claim
+  with `FOR UPDATE SKIP LOCKED`, so replicas never run the same job, and
+  hold a heartbeat-renewed lease. A token fences each claim, and stuck jobs
+  are recovered when their lease expires. A failure retries with
+  exponential backoff and jitter (`RetryAfter` overrides the delay). After
+  `MaxAttempts`, or on a `Permanent` error, the job is dead-lettered. Also
+  `Retry(id)`, `List(filter)`, `Get`, retention cleanup, graceful
+  `Shutdown` (a job interrupted by shutdown gets its attempt back), metric
+  `Hooks`, and an optional Fiber `Handler` (`GET /jobs`, `GET /jobs/:id`,
+  `POST /jobs/:id/retry`, org-scoped). Table `metacore_outbox_jobs` is
+  created by `outbox.Migrate` (idempotent, advisory-locked; `Schema`
+  returns the DDL). `host.AppConfig.EnableOutbox` builds `app.Outbox`. See
+  `docs/background-jobs.md`.
+
 - **Builtin validator `model_year`.** `validation: {"custom": "model_year"}`
   accepts an integer year from 1900 through next calendar year and fails with
   `min` / `max` (kind=value) otherwise. The upper bound follows the clock, so

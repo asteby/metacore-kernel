@@ -314,7 +314,8 @@ For a step-by-step walk-through see
 | `hub/`            | Kernel-side Hub HTTP client (browse → fetch → install catalog/bundle contract) |
 | `config/`         | Org-scoped config getters (`OrgCurrencyGetter`) + Fiber-context helpers       |
 | `database/`       | GORM helpers incl. the `RegisterCurrencyDefaultCallback` BeforeCreate hook    |
-| `idempotency/`    | Idempotency-key middleware + store for replay-safe mutations                  |
+| `idempotency/`    | Idempotency-key middleware; in-memory or durable (`GormStore`) store with in-flight locking |
+| `outbox/`         | Durable background jobs: transactional enqueue, SKIP LOCKED workers, retries, dead-letter |
 | `i18n/`           | String-bundle loading + locale resolution                                     |
 | `vector/`         | pgvector helpers for embedding columns                                        |
 | `metrics/`        | Prometheus registry, Fiber middleware, `/metrics` handler                    |
@@ -395,6 +396,7 @@ outside the ABI freeze and follow the kernel's normal embedding semver.
 | [`docs/dynamic-system.md`](./docs/dynamic-system.md)             | App teams using the dynamic CRUD framework            |
 | [`docs/dynamic-api.md`](./docs/dynamic-api.md)                   | Anyone calling the dynamic / metadata HTTP endpoints  |
 | [`docs/permissions.md`](./docs/permissions.md)                   | Auth / capability model — user gates and addon gates  |
+| [`docs/background-jobs.md`](./docs/background-jobs.md)           | App teams — durable idempotency keys and the outbox job queue |
 | [`docs/embedding-quickstart.md`](./docs/embedding-quickstart.md) | First-time hosts — 10-minute walkthrough              |
 | [`docs/CONSUMER_GUIDE.md`](./docs/CONSUMER_GUIDE.md)             | App teams embedding the kernel (long form)            |
 | [`docs/dev-setup.md`](./docs/dev-setup.md)                       | Contributors working on the kernel itself             |

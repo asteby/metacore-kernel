@@ -22,6 +22,7 @@ import (
 	"github.com/asteby/metacore-kernel/metrics"
 	"github.com/asteby/metacore-kernel/migrations"
 	"github.com/asteby/metacore-kernel/modelbase"
+	"github.com/asteby/metacore-kernel/outbox"
 	"github.com/asteby/metacore-kernel/permission"
 	"github.com/asteby/metacore-kernel/push"
 	"github.com/asteby/metacore-kernel/security"
@@ -130,6 +131,24 @@ type AppConfig struct {
 	// IdempotencyTTL is the replay window. Defaults to 24h (Stripe-aligned).
 	IdempotencyTTL time.Duration
 
+	// IdempotencyDurable, when IdempotencyStore is nil, backs the
+	// middleware with idempotency.GormStore (table
+	// metacore_idempotency_keys) instead of the in-memory LRU: shared by
+	// every replica, survives restarts, and a concurrent duplicate never
+	// runs the handler twice. Recommended for multi-replica deployments.
+	IdempotencyDurable bool
+
+	// EnableOutbox builds the durable job queue (`app.Outbox`) and creates
+	// its table `metacore_outbox_jobs` (independent of RunMigrations: the
+	// DDL is idempotent and dialect-aware). NewApp does not start the
+	// workers: register handlers, then call app.Outbox.Start(ctx). See
+	// package outbox.
+	EnableOutbox bool
+
+	// OutboxConfig tunes app.Outbox when EnableOutbox is true. Its Logger
+	// defaults to AppConfig.Logger.
+	OutboxConfig outbox.Config
+
 	// EventsEnforcer is the optional security.Enforcer the in-process
 	// events.Bus consults for `event:emit` / `event:subscribe` capability
 	// checks. nil disables enforcement — appropriate for tests and bring-up
@@ -212,6 +231,10 @@ type App struct {
 	// true. Apps can stick their own entries on top via Put — useful for
 	// custom POST routes that should also dedupe retries.
 	IdempotencyStore idempotency.Store
+
+	// Outbox is the durable background-job queue. Non-nil iff
+	// AppConfig.EnableOutbox was true; workers start on Outbox.Start.
+	Outbox *outbox.Service
 
 	idempotencyMW       fiber.Handler
 	authHandler         *auth.Handler
@@ -348,6 +371,13 @@ func NewApp(cfg AppConfig) *App {
 
 	if cfg.EnableIdempotencyKey {
 		store := cfg.IdempotencyStore
+		if store == nil && cfg.IdempotencyDurable {
+			gs, err := idempotency.NewGormStore(cfg.DB, idempotency.GormStoreOptions{Logger: cfg.Logger})
+			if err != nil {
+				panic("host: idempotency.NewGormStore: " + err.Error())
+			}
+			store = gs
+		}
 		if store == nil {
 			store = idempotency.NewInMemoryStore(0)
 		}
@@ -401,6 +431,18 @@ func NewApp(cfg AppConfig) *App {
 			}
 		}
 		a.webhooksHandler = webhooks.NewHandler(a.Webhooks, resolver)
+	}
+
+	if cfg.EnableOutbox {
+		ocfg := cfg.OutboxConfig
+		if ocfg.Logger == nil {
+			ocfg.Logger = cfg.Logger
+		}
+		ob, err := outbox.New(cfg.DB, ocfg)
+		if err != nil {
+			panic("host: outbox.New: " + err.Error())
+		}
+		a.Outbox = ob
 	}
 
 	if cfg.EnableMarketplace {
