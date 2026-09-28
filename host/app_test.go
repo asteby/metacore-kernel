@@ -9,6 +9,7 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
+	"github.com/asteby/metacore-kernel/idempotency"
 	"github.com/asteby/metacore-kernel/modelbase"
 )
 
@@ -156,5 +157,39 @@ func TestApp_AddonKeyForModelResolverFlowsThrough(t *testing.T) {
 
 	if hits != 1 {
 		t.Fatalf("subscriber hits = %d, want 1 — AddonKeyForModel did not flow into dynamic.Service", hits)
+	}
+}
+
+// TestApp_EnableOutboxAndDurableIdempotency confirms the opt-in flags build
+// app.Outbox (table migrated, workers not started) and back the idempotency
+// middleware with the durable GormStore.
+func TestApp_EnableOutboxAndDurableIdempotency(t *testing.T) {
+	db := setupHostTestDB(t)
+	app := NewApp(AppConfig{
+		DB:                   db,
+		JWTSecret:            []byte("test-secret-32-bytes-long-xxxxxx"),
+		EnableOutbox:         true,
+		EnableIdempotencyKey: true,
+		IdempotencyDurable:   true,
+	})
+	if app.Outbox == nil {
+		t.Fatal("app.Outbox is nil with EnableOutbox")
+	}
+	job, err := app.Outbox.Enqueue(context.Background(), "test.kind", map[string]int{"n": 1})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if got, err := app.Outbox.Get(context.Background(), job.ID); err != nil || got.Status != "pending" {
+		t.Fatalf("get = %+v, %v", got, err)
+	}
+	gs, ok := app.IdempotencyStore.(*idempotency.GormStore)
+	if !ok {
+		t.Fatalf("IdempotencyStore = %T, want *idempotency.GormStore", app.IdempotencyStore)
+	}
+	_ = gs.Close()
+
+	plain := NewApp(AppConfig{DB: setupHostTestDB(t), JWTSecret: []byte("test-secret-32-bytes-long-xxxxxx")})
+	if plain.Outbox != nil {
+		t.Fatal("app.Outbox must stay nil unless EnableOutbox")
 	}
 }

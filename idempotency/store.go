@@ -1,12 +1,3 @@
-// Package idempotency provides server-side replay caching for non-idempotent
-// HTTP endpoints. Clients send an `Idempotency-Key` header (Stripe-style)
-// and the kernel's middleware short-circuits duplicate requests with the
-// stored response — guarantees retries from a flaky network never produce
-// double-creates or double-imports.
-//
-// The package exposes a Store interface so apps can swap the default
-// in-memory LRU for a Redis or DB-backed store when they scale to multiple
-// replicas.
 package idempotency
 
 import (
