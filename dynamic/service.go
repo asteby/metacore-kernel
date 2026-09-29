@@ -1011,7 +1011,7 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 					merged[k] = v
 				}
 				if ApplyTransitionSets(sm, fromStage, toStage, merged) {
-					for _, h := range sm.matchingHooks(fromStage, toStage) {
+					for _, h := range sm.MatchingHooks(fromStage, toStage) {
 						for k := range h.Set {
 							input[k] = merged[k]
 						}
@@ -1100,7 +1100,7 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		// write (unchanged from the legacy path) and any (non-required) hooks fire
 		// best-effort post-commit. In the row-locking path we are ALREADY inside a
 		// transaction, so save + hooks run directly on execDB.
-		runHooksInTx := stageChanged && len(sm.matchingHooks(fromStage, toStage)) > 0
+		runHooksInTx := stageChanged && len(sm.MatchingHooks(fromStage, toStage)) > 0
 		if inTx {
 			if err := omitUnsentNullableText(ctx, execDB.Table(tableName), tableName, instance, input).Save(instance).Error; err != nil {
 				return fmt.Errorf("dynamic: update: %w", err)
