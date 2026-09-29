@@ -268,6 +268,16 @@ type Config struct {
 	// the single modelbase.AuthUser.GetRole() is used.
 	ActorRolesResolver ActorRolesResolver
 
+	// AccessPolicyResolver returns the declarative access policy of a model
+	// the host knows outside the Go registry (addon models). ok=false defers
+	// to modelbase.AccessPolicyFor: a policy registered with
+	// modelbase.SetAccessPolicy (host.WithAccess), else the model's own
+	// DefineAccess. A policy only NARROWS access — the capability check still
+	// runs — and roles are matched against the JWT role, the roles of a
+	// modelbase.RolesProvider principal and ActorRolesResolver. nil = Go
+	// registry only; models without a policy behave exactly as before.
+	AccessPolicyResolver AccessPolicyResolver
+
 	// ApprovalRequesterResolver loads the ORIGINAL requester of an approved
 	// request so the replayed mutation runs as that principal (created_by /
 	// actor attribution stays truthful). Optional: when nil (or it returns
@@ -349,6 +359,7 @@ type Service struct {
 	fileDeleter       FileDeleter
 	relations         RelationResolver
 	extensions        ExtensionResolver
+	accessPolicies    AccessPolicyResolver
 
 	// Transactional-outbox state (outbox.go). outboxEnabled arms after the
 	// table migrates at New; outboxStop terminates the background relay.
@@ -434,6 +445,7 @@ func New(cfg Config) *Service {
 		fileDeleter:       cfg.FileDeleter,
 		relations:         cfg.RelationResolver,
 		extensions:        cfg.ExtensionResolver,
+		accessPolicies:    cfg.AccessPolicyResolver,
 
 		actorRolesResolver:        cfg.ActorRolesResolver,
 		approvalRequesterResolver: cfg.ApprovalRequesterResolver,
@@ -573,7 +585,7 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	if err != nil {
 		return nil, query.PageMeta{}, err
 	}
-	if err := s.checkPerm(ctx, user, model, "read"); err != nil {
+	if err := s.authorize(ctx, user, model, instance, modelbase.AccessList); err != nil {
 		return nil, query.PageMeta{}, err
 	}
 
@@ -650,7 +662,7 @@ func (s *Service) Aggregate(ctx context.Context, model string, user modelbase.Au
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkPerm(ctx, user, model, "read"); err != nil {
+	if err := s.authorize(ctx, user, model, instance, modelbase.AccessList); err != nil {
 		return nil, err
 	}
 
@@ -741,7 +753,7 @@ func (s *Service) Get(ctx context.Context, model string, user modelbase.AuthUser
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkPerm(ctx, user, model, "read"); err != nil {
+	if err := s.authorize(ctx, user, model, instance, modelbase.AccessGet); err != nil {
 		return nil, err
 	}
 
@@ -767,16 +779,23 @@ func (s *Service) Get(ctx context.Context, model string, user modelbase.AuthUser
 
 // Create inserts a record from a map[string]any input.
 func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthUser, input map[string]any) (map[string]any, error) {
-	instance, _, err := s.resolveModel(ctx, model)
+	instance, tableMeta, err := s.resolveModel(ctx, model)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkPerm(ctx, user, model, "create"); err != nil {
+	if err := s.authorize(ctx, user, model, instance, modelbase.AccessCreate); err != nil {
 		return nil, err
 	}
 
 	tableName, err := s.tableNameFor(ctx, model, instance)
 	if err != nil {
+		return nil, err
+	}
+
+	// Singleton models hold one row per organization: a second create is a
+	// 409 carrying the existing id instead of a duplicate (or a unique-index
+	// 500). See access.go.
+	if err := s.guardSingletonCreate(ctx, model, user, tableName, instance, tableMeta); err != nil {
 		return nil, err
 	}
 
@@ -846,6 +865,12 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 		return nil, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
 
+	// The Go model's own validation (modelbase.Validatable / WriteValidator)
+	// sees the fully built instance, after hooks, guards and sequences.
+	if err := validateModel(ctx, instance, "create"); err != nil {
+		return nil, err
+	}
+
 	// .Table pins the INTO so reflect-built addon models (no TableName()
 	// method) insert into the right table instead of GORM's pluralized guess.
 	//
@@ -909,7 +934,7 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkPerm(ctx, user, model, "update"); err != nil {
+	if err := s.authorize(ctx, user, model, instance, modelbase.AccessUpdate); err != nil {
 		return nil, err
 	}
 
@@ -1063,6 +1088,12 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 			return fmt.Errorf("%w: %v", ErrInvalidInput, err)
 		}
 
+		// The Go model's own validation runs on the persisted row merged
+		// with the changes (inside the lock when locking).
+		if err := validateModel(ctx, instance, "update"); err != nil {
+			return err
+		}
+
 		// When the stage changed and the machine declares on_transition hooks, the
 		// save + hook dispatch run together in a transaction so a REQUIRED hook
 		// failure rolls back the whole transition. Otherwise the save is a plain
@@ -1159,7 +1190,7 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 	if err != nil {
 		return err
 	}
-	if err := s.checkPerm(ctx, user, model, "delete"); err != nil {
+	if err := s.authorize(ctx, user, model, instance, modelbase.AccessDelete); err != nil {
 		return err
 	}
 

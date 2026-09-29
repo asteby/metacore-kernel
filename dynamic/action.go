@@ -120,7 +120,8 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 	if s.actionResolver == nil {
 		return ActionResult{}, ErrNoActionResolver
 	}
-	if err := s.checkPerm(ctx, user, model, "update"); err != nil {
+	inst, _ := s.lookupModel(ctx, model)
+	if err := s.authorize(ctx, user, model, inst, modelbase.AccessUpdate); err != nil {
 		return ActionResult{}, err
 	}
 

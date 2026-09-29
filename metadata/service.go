@@ -194,6 +194,12 @@ func (s *Service) computeTable(ctx context.Context, modelKey string) (*modelbase
 	// short-circuit to a no-op.
 	deriveRefsFromDef(def, &table)
 
+	// Singleton models (one row per organization) tell the UI to render a
+	// settings form instead of a table.
+	if !table.Singleton && modelbase.IsSingletonModel(modelKey, def) {
+		table.Singleton = true
+	}
+
 	// Project the model's spreadsheet-import spec onto the served metadata so
 	// the SDK can show or hide the import action without a probe request. A
 	// model that declares nothing gets the spec derived from its own form

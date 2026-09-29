@@ -51,6 +51,13 @@ type TableMetadata struct {
 	// a spec nor have importable form fields; the SDK hides the import action
 	// in that case. See import.go.
 	Import *ImportSpec `json:"import,omitempty"`
+
+	// Singleton marks a model that holds at most one row per organization
+	// (settings, profile). The UI renders a settings form bound to
+	// GET/PUT /dynamic/:model/current instead of a table. Set by the metadata
+	// service for models implementing modelbase.Singleton or marked with
+	// modelbase.MarkSingleton; a model may also set it in DefineTable.
+	Singleton bool `json:"singleton,omitempty"`
 }
 
 // FormLayout is the served grouping spec for a model's create/edit form. Mode

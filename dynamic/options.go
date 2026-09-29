@@ -64,6 +64,11 @@ func (s *Service) Options(ctx context.Context, user modelbase.AuthUser, q Option
 	if !ok {
 		return nil, ErrModelNotFound
 	}
+	// A model AccessPolicy gates every enumeration of its rows (no policy =
+	// unchanged).
+	if err := s.checkAccess(ctx, user, q.Model, instance, modelbase.AccessList); err != nil {
+		return nil, err
+	}
 
 	cfg, err := s.optsResolver(ctx, q.Model, instance)
 	// A missing config is only fatal when the self-options fallback can't

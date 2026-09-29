@@ -16,6 +16,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Per-model access policies for the dynamic CRUD.** A model declares
+  `DefineAccess() modelbase.AccessPolicy` (or is registered with
+  `app.RegisterModel(key, f, host.WithAccess(p))`, or supplied by
+  `dynamic.Config.AccessPolicyResolver`). A policy has one rule for each of
+  list / get / create / update / delete, plus `Default`. A rule admits a
+  request when it is `Public` (any authenticated user), when the user holds
+  one of its `Roles` (case-insensitive, no super-role bypass), or when the
+  user has one of its `Capabilities`. Presets: `AccessPublicReadStaffWrite`,
+  `AccessStaffOnly`, `AccessReadOnly`. The policy only narrows: the
+  `<model>.<verb>` capability check still runs. It covers list, get,
+  aggregate, facets, export, options, search, create, import, update, row
+  actions and delete. A denial returns 403
+  `{code: "access_denied", model, action}` (`*dynamic.AccessDeniedError`).
+  `host.AppConfig.RoleResolver func(fiber.Ctx) []string` adds platform roles
+  that are not in the JWT (e.g. `store.admin`). It is lazy, runs once per
+  request, and is carried by `modelbase.WithRoles` / `RolesProvider`;
+  `dynamic.Config.ActorRolesResolver` is also consulted. `Service.Can`
+  answers without side effects. Models without a policy behave as before.
+  See `docs/access-policies.md`.
+
+- **Singleton models (one row per organization).** A model marks itself by
+  embedding `modelbase.SingletonModel`, or is registered with
+  `host.AsSingleton()` / `modelbase.MarkSingleton`, or sets
+  `TableMetadata.Singleton`. A second `POST /dynamic/:model` returns 409
+  `{code: "singleton_exists", data: {id}}` instead of a 500.
+  `GET /dynamic/:model/current` returns the org's row. If the row does not
+  exist and the caller may create it, the row is created from
+  `SingletonDefaults(ctx)`; otherwise the defaults are returned unsaved
+  (`meta.persisted: false`). `PUT /dynamic/:model/current` upserts. Served
+  metadata carries `singleton: true`, so UIs render a settings form.
+
+- **Per-field validation from Go code.** `dynamic.NewValidationError()`
+  with the exported, chainable `Add(field, code, params)`,
+  `AddMessage(field, msg)` and `Err()`. `FieldError` gains an optional
+  `message`. Models may implement `modelbase.Validatable`
+  (`Validate() map[string]string`) or `modelbase.WriteValidator`
+  (`ValidateWrite(ctx, op) error`); both run on the merged instance right
+  before the write. Hooks may return `modelbase.FieldErrors`. All of these
+  map to 422 `{errors: {field: [{code, message}]}}`.
+  `dynamic.MetadataValidationSchema(meta)` (enabled with
+  `host.AppConfig.ValidateModelMetadata`) enforces the `FieldDef` rules of
+  Go models server-side: `Required`, select `Options`, `number`, and
+  `Validation`, falling back to `ColumnDef.Validation`.
+  `dynamic.ChainValidationSchemas` composes resolvers. New rule helpers:
+  `modelbase.Range`, `MinValue`, `MaxValue`, `Pattern`, `WithPattern`,
+  `WithCustom`.
+
+- **Dynamic resolvers reachable from `host.AppConfig`.** New fields:
+  `Scoper`, `ValidationSchemaResolver`, `CustomValidatorResolver`,
+  `AccessPolicyResolver`, `ValidateModelMetadata`, and the escape hatch
+  `ConfigureDynamic func(*dynamic.Config)`.
+
 - **Durable idempotency store: `idempotency.NewGormStore`.** Table
   `metacore_idempotency_keys` (Postgres; SQLite for tests), shared by every
   replica, survives restarts, deletes expired keys every hour (`Cleanup`,

@@ -26,6 +26,7 @@ import (
 	"github.com/asteby/metacore-kernel/permission"
 	"github.com/asteby/metacore-kernel/push"
 	"github.com/asteby/metacore-kernel/security"
+	"github.com/asteby/metacore-kernel/validate"
 	"github.com/asteby/metacore-kernel/vector"
 	metacorews "github.com/asteby/metacore-kernel/ws"
 	"github.com/asteby/metacore-kernel/webhooks"
@@ -179,6 +180,45 @@ type AppConfig struct {
 	// declarative.
 	EnableLifecycleHooks bool
 
+	// RoleResolver maps the request's user to extra platform roles that are
+	// not stored in the JWT (e.g. "store.admin" for the emails in
+	// ADMIN_EMAILS, or for members of the house organization). Model access
+	// policies (modelbase.AccessPolicy) match rule roles against the JWT
+	// role plus these. It runs lazily, at most once per request, and only
+	// when a policy rule has to be matched. nil = JWT role only.
+	RoleResolver func(c fiber.Ctx) []string
+
+	// AccessPolicyResolver supplies access policies for models outside the
+	// Go registry (addon models). Go models declare theirs with
+	// DefineAccess or RegisterModel(..., host.WithAccess(p)).
+	AccessPolicyResolver dynamic.AccessPolicyResolver
+
+	// Scoper overrides the dynamic CRUD tenant scoper (default: WHERE
+	// organization_id = <user's org>).
+	Scoper dynamic.TenantScoper
+
+	// ValidationSchemaResolver supplies the declarative column rules the
+	// dynamic pre-write validation enforces (required, options, regex,
+	// min/max, custom → 422 with a per-field map). See
+	// dynamic.Config.ValidationSchemaResolver.
+	ValidationSchemaResolver dynamic.ValidationSchemaResolver
+
+	// ValidateModelMetadata also enforces, server-side, the rules Go models
+	// declare in their metadata (FieldDef.Required / Options / Validation,
+	// ColumnDef.Validation) through dynamic.MetadataValidationSchema. It is
+	// consulted after ValidationSchemaResolver. Off by default.
+	ValidateModelMetadata bool
+
+	// CustomValidatorResolver resolves named validators
+	// (ValidationRule.Custom, e.g. "rfc.tax_id"). Builtins always apply.
+	CustomValidatorResolver validate.Resolver
+
+	// ConfigureDynamic is the escape hatch: it receives the dynamic.Config
+	// NewApp built (after every field above is applied) and may set any
+	// other resolver (constraints, sequences, stage machines, …) before
+	// dynamic.New runs.
+	ConfigureDynamic func(*dynamic.Config)
+
 	// Overrides
 	MetadataCacheTTL time.Duration // default 5m
 	JWTExpiry        time.Duration // default 24h
@@ -330,14 +370,28 @@ func NewApp(cfg AppConfig) *App {
 		dynHooks = dynamic.NewHookRegistry()
 	}
 
-	dynSvc := dynamic.New(dynamic.Config{
-		DB:               cfg.DB,
-		Metadata:         metaSvc,
-		Permissions:      permSvc,
-		Hooks:            dynHooks,
-		Bus:              bus,
-		AddonKeyForModel: cfg.AddonKeyForModel,
-	})
+	dynCfg := dynamic.Config{
+		DB:                       cfg.DB,
+		Metadata:                 metaSvc,
+		Permissions:              permSvc,
+		Hooks:                    dynHooks,
+		Bus:                      bus,
+		AddonKeyForModel:         cfg.AddonKeyForModel,
+		Scoper:                   cfg.Scoper,
+		AccessPolicyResolver:     cfg.AccessPolicyResolver,
+		ValidationSchemaResolver: cfg.ValidationSchemaResolver,
+		CustomValidatorResolver:  cfg.CustomValidatorResolver,
+	}
+	if cfg.ValidateModelMetadata {
+		dynCfg.ValidationSchemaResolver = dynamic.ChainValidationSchemas(
+			cfg.ValidationSchemaResolver,
+			dynamic.MetadataValidationSchema(metaSvc),
+		)
+	}
+	if cfg.ConfigureDynamic != nil {
+		cfg.ConfigureDynamic(&dynCfg)
+	}
+	dynSvc := dynamic.New(dynCfg)
 
 	a := &App{
 		Config:       cfg,
@@ -406,6 +460,11 @@ func NewApp(cfg AppConfig) *App {
 		u.OrganizationID = orgID
 		u.Role = string(role)
 		u.Email = email
+		if cfg.RoleResolver != nil {
+			// Extra platform roles, resolved lazily: only a model access
+			// policy asks for them.
+			return modelbase.WithRoles(u, func() []string { return cfg.RoleResolver(c) })
+		}
 		return u
 	})
 
@@ -460,10 +519,32 @@ func NewApp(cfg AppConfig) *App {
 	return a
 }
 
+// ModelOption configures a model at registration (RegisterModel).
+type ModelOption func(key string)
+
+// WithAccess sets the model's access policy for the dynamic CRUD, overriding
+// its DefineAccess. See modelbase.AccessPolicy and the presets
+// modelbase.AccessPublicReadStaffWrite / AccessStaffOnly / AccessReadOnly.
+func WithAccess(p modelbase.AccessPolicy) ModelOption {
+	return func(key string) { modelbase.SetAccessPolicy(key, p) }
+}
+
+// AsSingleton marks the model as holding one row per organization (see
+// modelbase.Singleton), without changing its type.
+func AsSingleton() ModelOption {
+	return func(key string) { modelbase.MarkSingleton(key) }
+}
+
 // RegisterModel adds a domain model to the metadata registry. Call for every
-// model that should have dynamic CRUD endpoints.
-func (a *App) RegisterModel(key string, factory func() modelbase.ModelDefiner) *App {
+// model that should have dynamic CRUD endpoints. Options attach an access
+// policy (WithAccess) or the singleton flag (AsSingleton).
+func (a *App) RegisterModel(key string, factory func() modelbase.ModelDefiner, opts ...ModelOption) *App {
 	modelbase.Register(key, factory)
+	for _, o := range opts {
+		if o != nil {
+			o(key)
+		}
+	}
 	return a
 }
 

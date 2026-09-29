@@ -6,6 +6,10 @@ systems, when they fire, and how to wire them.
 
 For the dynamic CRUD framework that consumes these gates, see
 [`dynamic-system.md`](dynamic-system.md).
+Per-model access policies (who may list / get / create / update / delete a
+model through the dynamic CRUD, platform roles via `RoleResolver`), singleton
+models and Go-model field validation are covered in
+[`access-policies.md`](access-policies.md) ("Permisos y políticas de acceso").
 
 ---
 
