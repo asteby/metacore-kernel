@@ -886,6 +886,7 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 			}
 			return omitUnsentNullableText(ctx, tx.Table(tableName), tableName, instance, input).Create(instance).Error
 		}); err != nil {
+			err = uniqueIndexViolation(err, tableName, mc.Rules)
 			if errors.Is(err, ErrConstraintViolation) || errors.Is(err, ErrInvalidInput) {
 				return nil, err
 			}
@@ -1140,6 +1141,10 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 			// the pending request on the standalone handle and hand the caller
 			// the typed approval_required error.
 			return nil, s.openConstraintApproval(ctx, model, user, ApprovalOpUpdate, id.String(), orig, pendingBefore, pendingCE)
+		}
+		if hasRules {
+			// A writer that raced past the check hits the materialized index.
+			coreErr = uniqueIndexViolation(coreErr, tableName, mc.Rules)
 		}
 		return nil, coreErr
 	}

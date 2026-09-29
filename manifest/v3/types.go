@@ -2749,7 +2749,11 @@ type Route struct {
 //	            Where) has the same values in Columns. Validated on write, with
 //	            no DDL index, so installing it never fails on a tenant that
 //	            already holds duplicates; an edit that leaves Columns and Where
-//	            untouched is not re-checked. Ref/Parent are not used.
+//	            untouched is not re-checked. Ref/Parent are not used. The
+//	            installer then backs the rule with a partial UNIQUE index
+//	            (CONCURRENTLY) only when the table holds no duplicates; with
+//	            duplicates the upgrade still succeeds and the host lists them
+//	            (GET /dynamic/:model/unique-violations).
 //
 // SECURITY: nothing here is free-form SQL — columns are identifiers checked
 // against the manifest, values are bound parameters.

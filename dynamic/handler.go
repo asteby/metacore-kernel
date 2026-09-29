@@ -69,6 +69,7 @@ func (h *Handler) MountWith(opts MountOpts) func(r fiber.Router) {
 		g.Get("/:model", h.list)
 		g.Get("/:model/aggregate", h.aggregate)
 		g.Get("/:model/facets", h.facets)
+		g.Get("/:model/unique-violations", h.uniqueViolations)
 		g.Get("/:model/export", h.exportData)
 		g.Get("/:model/export/template", h.exportTemplate)
 		g.Post("/:model/import/validate", h.importValidate)
@@ -78,6 +79,7 @@ func (h *Handler) MountWith(opts MountOpts) func(r fiber.Router) {
 		// front-load any mutation middleware before the final handler.
 		registerMut(g.Post, "/:model", opts.MutationMiddleware, h.create)
 		registerMut(g.Post, "/:model/import", opts.MutationMiddleware, h.importData)
+		registerMut(g.Post, "/:model/unique-violations/materialize", opts.MutationMiddleware, h.materializeUnique)
 		registerMut(g.Post, "/:model/:id/action/:key", opts.MutationMiddleware, h.action)
 
 		// Singleton models (one row per organization): read-or-materialize
@@ -267,6 +269,38 @@ func (h *Handler) facets(c fiber.Ctx) error {
 			"field": q.Field,
 		},
 	})
+}
+
+// uniqueViolations reports the organization's duplicate groups per unique
+// rule of the model and whether each rule is backed by its index.
+func (h *Handler) uniqueViolations(c fiber.Ctx) error {
+	u := h.user(c)
+	if u == nil {
+		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
+	}
+	reports, err := h.service.UniqueViolations(c, c.Params("model"), u)
+	if err != nil {
+		return h.handleError(c, err)
+	}
+	var groups int64
+	for _, r := range reports {
+		groups += r.DuplicateGroups
+	}
+	return c.JSON(fiber.Map{"success": true, "data": reports, "meta": fiber.Map{"duplicate_groups": groups}})
+}
+
+// materializeUnique retries backing the model's unique rules with their
+// partial UNIQUE index (after the reported duplicates were resolved).
+func (h *Handler) materializeUnique(c fiber.Ctx) error {
+	u := h.user(c)
+	if u == nil {
+		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
+	}
+	statuses, err := h.service.MaterializeUniqueIndexes(c, c.Params("model"), u)
+	if err != nil {
+		return h.handleError(c, err)
+	}
+	return c.JSON(fiber.Map{"success": true, "data": statuses})
 }
 
 func (h *Handler) get(c fiber.Ctx) error {
