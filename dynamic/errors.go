@@ -66,6 +66,14 @@ var (
 	// wraps. The handler maps it to HTTP 422 Unprocessable Entity and serializes
 	// the concrete *ValidationError's per-field code map. See validate.go.
 	ErrValidation = errors.New("validation failed")
+
+	// ErrSingletonExists is the sentinel of SingletonExistsError: a second
+	// create on a singleton model. The handler maps it to 409 Conflict.
+	ErrSingletonExists = errors.New("singleton_exists")
+
+	// ErrNotSingleton is returned by the /current endpoints for a model that
+	// is not a singleton. The handler maps it to 404.
+	ErrNotSingleton = errors.New("model is not a singleton")
 )
 
 // FieldError is a single locale-agnostic validation failure on one column. The
@@ -75,7 +83,15 @@ var (
 type FieldError struct {
 	Code   string         `json:"code"`
 	Params map[string]any `json:"params,omitempty"`
+	// Message is an optional human message, set by app-authored validation
+	// (ValidationError.AddMessage, modelbase.Validatable, modelbase.FieldErrors).
+	// Declarative kernel checks leave it empty and the SDK localizes Code.
+	Message string `json:"message,omitempty"`
 }
+
+// CodeInvalid is the code of an app-authored field error that carries its own
+// Message (ValidationError.AddMessage).
+const CodeInvalid = "invalid"
 
 // ValidationError is the typed error a failed pre-write validation pass
 // produces. It wraps ErrValidation (so errors.Is / errors.As route it to 422)
@@ -100,14 +116,84 @@ func (e *ValidationError) Unwrap() error { return ErrValidation }
 // whether the write may proceed.
 func (e *ValidationError) Empty() bool { return e == nil || len(e.Fields) == 0 }
 
-// add accumulates one failure under a column, allocating the map lazily so a
-// clean pass never touches the heap.
-func (e *ValidationError) add(field, code string, params map[string]any) {
+// NewValidationError returns an empty accumulator for app-authored
+// validation (hooks, custom endpoints, Go models). Returned from a BeforeCreate
+// / BeforeUpdate hook it produces the same 422 `{errors: {...}}` body as the
+// kernel's declarative validation:
+//
+//	ve := dynamic.NewValidationError()
+//	if price <= 0 {
+//	    ve.AddMessage("price", "must be positive")
+//	}
+//	return ve.Err()
+func NewValidationError() *ValidationError { return &ValidationError{} }
+
+// Add accumulates one failure with a locale-agnostic code (see package
+// validate for the kernel's codes) under field. Chainable.
+func (e *ValidationError) Add(field, code string, params map[string]any) *ValidationError {
 	if e.Fields == nil {
 		e.Fields = make(map[string][]FieldError)
 	}
 	e.Fields[field] = append(e.Fields[field], FieldError{Code: code, Params: params})
+	return e
 }
+
+// AddMessage accumulates a failure carrying a ready-to-show message, under
+// the code CodeInvalid. Chainable.
+func (e *ValidationError) AddMessage(field, message string) *ValidationError {
+	if e.Fields == nil {
+		e.Fields = make(map[string][]FieldError)
+	}
+	e.Fields[field] = append(e.Fields[field], FieldError{Code: CodeInvalid, Message: message})
+	return e
+}
+
+// Err returns e as an error, or nil when it holds no failure — never a
+// non-nil error interface wrapping an empty accumulator.
+func (e *ValidationError) Err() error {
+	if e.Empty() {
+		return nil
+	}
+	return e
+}
+
+// add accumulates one failure under a column, allocating the map lazily so a
+// clean pass never touches the heap.
+func (e *ValidationError) add(field, code string, params map[string]any) {
+	e.Add(field, code, params)
+}
+
+// AccessDeniedError is the typed error a model AccessPolicy produces when the
+// principal does not satisfy the rule of the requested action. It wraps
+// ErrForbidden (403) and the handler serializes Model and Action so the
+// client can tell a policy denial from a missing capability.
+type AccessDeniedError struct {
+	Model  string
+	Action string
+}
+
+func (e *AccessDeniedError) Error() string {
+	return fmt.Sprintf("access denied: %s on %s is not allowed for this user", e.Action, e.Model)
+}
+
+// Unwrap ties the typed error to ErrForbidden.
+func (e *AccessDeniedError) Unwrap() error { return ErrForbidden }
+
+// SingletonExistsError is returned when a create targets a singleton model
+// (modelbase.Singleton) whose row already exists for the organization. It
+// wraps ErrSingletonExists (409) and carries the existing row id so the client
+// can switch to an update.
+type SingletonExistsError struct {
+	Model string
+	ID    string
+}
+
+func (e *SingletonExistsError) Error() string {
+	return fmt.Sprintf("%s: %s already has a row for this organization", ErrSingletonExists.Error(), e.Model)
+}
+
+// Unwrap ties the typed error to ErrSingletonExists.
+func (e *SingletonExistsError) Unwrap() error { return ErrSingletonExists }
 
 // ConstraintError is the typed error a failed declarative guard produces. It
 // wraps ErrConstraintViolation (so errors.Is routes it to 422) and carries the

@@ -69,6 +69,11 @@ func (s *Service) Facets(ctx context.Context, user modelbase.AuthUser, q FacetsQ
 	if !ok {
 		return nil, ErrModelNotFound
 	}
+	// A model AccessPolicy gates every enumeration of its rows (no policy =
+	// unchanged).
+	if err := s.checkAccess(ctx, user, q.Model, instance, modelbase.AccessList); err != nil {
+		return nil, err
+	}
 	var (
 		db         *gorm.DB
 		expr       string

@@ -36,6 +36,8 @@ func NewHandler(service *Service, resolver UserResolver) *Handler {
 //	PUT    /dynamic/:model/:id                   Update
 //	DELETE /dynamic/:model/:id                   Delete
 //	POST   /dynamic/:model/:id/action/:key       Dispatch a per-row action
+//	GET    /dynamic/:model/current               Singleton row of the org
+//	PUT    /dynamic/:model/current               Upsert the singleton row
 func (h *Handler) Mount(r fiber.Router, middleware ...fiber.Handler) {
 	h.MountWith(MountOpts{Middleware: middleware})(r)
 }
@@ -77,6 +79,11 @@ func (h *Handler) MountWith(opts MountOpts) func(r fiber.Router) {
 		registerMut(g.Post, "/:model", opts.MutationMiddleware, h.create)
 		registerMut(g.Post, "/:model/import", opts.MutationMiddleware, h.importData)
 		registerMut(g.Post, "/:model/:id/action/:key", opts.MutationMiddleware, h.action)
+
+		// Singleton models (one row per organization): read-or-materialize
+		// and upsert the org's row. Registered before /:model/:id.
+		g.Get("/:model/current", h.current)
+		g.Put("/:model/current", h.saveCurrent)
 
 		// Read paths after dynamic ones (matters for Fiber router order).
 		g.Get("/:model/:id", h.get)
@@ -278,6 +285,41 @@ func (h *Handler) get(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{"success": true, "data": record})
 }
 
+// current serves the organization's row of a singleton model, materializing
+// it from its defaults on first read when the caller may create it.
+// meta.persisted=false means the caller got unsaved defaults.
+func (h *Handler) current(c fiber.Ctx) error {
+	u := h.user(c)
+	if u == nil {
+		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
+	}
+	res, err := h.service.GetSingleton(c, c.Params("model"), u)
+	if err != nil {
+		return h.handleError(c, err)
+	}
+	return c.JSON(fiber.Map{"success": true, "data": res.Data, "meta": fiber.Map{"singleton": true, "persisted": res.Persisted}})
+}
+
+// saveCurrent upserts the organization's row of a singleton model.
+func (h *Handler) saveCurrent(c fiber.Ctx) error {
+	u := h.user(c)
+	if u == nil {
+		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
+	}
+	var input map[string]any
+	if err := c.Bind().Body(&input); err != nil {
+		return respondErr(c, fiber.StatusBadRequest, "invalid body")
+	}
+	if input == nil {
+		input = map[string]any{}
+	}
+	record, err := h.service.SaveSingleton(c, c.Params("model"), u, input)
+	if err != nil {
+		return h.handleError(c, err)
+	}
+	return c.JSON(fiber.Map{"success": true, "data": record})
+}
+
 func (h *Handler) create(c fiber.Ctx) error {
 	u := h.user(c)
 	if u == nil {
@@ -428,12 +470,41 @@ func (h *Handler) handleError(c fiber.Ctx, err error) error {
 	// SDK localizes. Must precede the flat respondErr cases so the field map is
 	// preserved instead of being flattened to a single message.
 	var ve *ValidationError
-	if errors.As(err, &ve) {
+	var fe modelbase.FieldErrors
+	if errors.As(err, &fe) {
+		ve = validationFromFieldErrors(fe)
+	}
+	if ve != nil || errors.As(err, &ve) {
 		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
 			"success": false,
 			"message": "validation.failed",
 			"errors":  ve.Fields,
 		})
+	}
+	// Model AccessPolicy denial: 403 with a machine-readable code, the model
+	// and the action, distinct from a missing capability.
+	var ade *AccessDeniedError
+	if errors.As(err, &ade) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"success": false,
+			"message": ade.Error(),
+			"code":    "access_denied",
+			"model":   ade.Model,
+			"action":  ade.Action,
+		})
+	}
+	// Second create on a singleton model: 409 with the existing row id.
+	var se *SingletonExistsError
+	if errors.As(err, &se) {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"success": false,
+			"message": se.Error(),
+			"code":    "singleton_exists",
+			"data":    fiber.Map{"id": se.ID},
+		})
+	}
+	if errors.Is(err, ErrNotSingleton) {
+		return respondErr(c, fiber.StatusNotFound, err.Error())
 	}
 	if errors.Is(err, ErrUnsupportedTriggerType) {
 		return respondErr(c, fiber.StatusNotImplemented, err.Error())
