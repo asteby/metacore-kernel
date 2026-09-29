@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Accept-Language reaches the metadata translator.** `i18n.FiberMiddleware`
+  stored the language only in `c.Context()`, while the metadata handlers pass
+  the `fiber.Ctx` itself to the service, so `LanguageFromContext` saw `""`:
+  every request was translated (and cached) with no language. The tag is now
+  stored in the request locals too, so both `c` and `c.Context()` carry it.
+  `host.App.Mount` installs the middleware unconditionally (the tag is inert
+  until a translator reads it).
+
 - **A Tier-2 formula writing an integer column rounds its result.** The
   arithmetic evaluator works in float64, so `unit_price_cents = unit_price *
   100` over 19.99 gave 1998.9999999999998 and the create failed with a 400
@@ -34,6 +42,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   on a tenant that already holds duplicates; an edit that leaves `columns` and
   `where` untouched is not re-checked. On Postgres, concurrent writers of the
   same tuple are serialized with a transaction advisory lock.
+- **i18n catalogs for model metadata.** `i18n.Catalog` is an in-memory
+  `Translator` built from `lang → key → text`, with a fallback chain
+  (`es-MX → es → <fallback langs>`, default `en`), simple `{name}`
+  interpolation (map or name/value pairs) and concurrent `Add`/`Merge`.
+  `i18n.Compose(translators...)` layers translators (first hit wins; a result
+  equal to the key or empty is a miss). Models declare their own messages with
+  `DefineTranslations() map[string]map[string]string`
+  (`modelbase.HasTranslations`) or are registered with
+  `host.WithTranslations(msgs)`; keys relative to the model (`table.title`,
+  `modal.fields.name`) expand to `models.<key>.…`, and `RegisterModel` merges
+  them into the app translator, wiring the metadata transformers on first
+  use. `app.AddTranslations(msgs)` adds app-wide messages and
+  `app.Translator()` exposes the effective translator
+  (`AppConfig.Translator` → catalogs → humanizer). The catalog falls back to
+  `I18nDefaultLanguage`, then `en`. `i18n.LoadCatalogFS(fsys, patterns...)`
+  loads `.json`/`.yaml`/`.yml` files (language from the file name, or a
+  multi-language document; nested objects flattened with dots).
+  `AppConfig.I18nHumanizeMissing` (and `i18n.HumanizeMissing` /
+  `i18n.Humanize`) turns untranslated keys into readable labels — Spanish
+  from a dictionary of common field names ("Código postal"), English
+  sentence case otherwise — so metadata never shows raw keys. See
+  `docs/i18n-catalogs.md`.
 
 - **Per-model access policies for the dynamic CRUD.** A model declares
   `DefineAccess() modelbase.AccessPolicy` (or is registered with

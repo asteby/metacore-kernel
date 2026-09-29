@@ -2,11 +2,15 @@
 // localized metadata (and any other server-rendered strings) implement
 // the Translator interface and inject it via host.AppConfig.
 //
-// The kernel intentionally ships no concrete implementation: bundles
-// vary across apps (some use go-i18n with JSON files, some hit a CMS,
-// some embed YAML). What the kernel provides is the wire-up — request
-// language extraction, ctx propagation, and a ready-made metadata
-// translator that walks the wire payload.
+// Bundles vary across apps (some use go-i18n with JSON files, some hit a
+// CMS, some embed YAML), so any Translator works. The kernel provides the
+// wire-up — request language extraction, ctx propagation, a ready-made
+// metadata translator that walks the wire payload — plus a simple bundle:
+// Catalog (in-memory, fallback chain, {name} interpolation), Compose to
+// layer translators, LoadCatalogFS for embedded JSON/YAML files, and
+// Humanize/HumanizeMissing for readable labels when a key is missing.
+// Models can ship their own messages (modelbase.HasTranslations,
+// host.WithTranslations); see docs/i18n-catalogs.md.
 //
 // Typical wiring inside a starter:
 //

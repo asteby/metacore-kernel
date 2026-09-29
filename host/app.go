@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -88,6 +89,13 @@ type AppConfig struct {
 	// translate. Defaults to "models." — set to "" to translate every
 	// string field (rare; usually you want the prefix guard).
 	I18nKeyPrefix string
+
+	// I18nHumanizeMissing turns a metadata key no translator knows into a
+	// readable label derived from the key ("models.branches.modal.fields.
+	// postal_code" → "Código postal" for Spanish requests, "Postal code"
+	// otherwise; see i18n.Humanize) instead of serving the raw key. It
+	// enables the metadata transformers even when Translator is nil.
+	I18nHumanizeMissing bool
 
 	// EnableVectorStore wires `app.VectorStore` (PGStore by default) and
 	// runs `CREATE EXTENSION IF NOT EXISTS vector` on boot. Requires the
@@ -276,6 +284,14 @@ type App struct {
 	// AppConfig.EnableOutbox was true; workers start on Outbox.Start.
 	Outbox *outbox.Service
 
+	// translations holds the model catalogs merged at RegisterModel
+	// (DefineTranslations / WithTranslations) and AddTranslations.
+	translations *i18n.Catalog
+	// translator is the effective translator: Config.Translator, then
+	// translations, then (I18nHumanizeMissing) the humanizer.
+	translator i18n.Translator
+	i18nOnce   sync.Once
+
 	idempotencyMW       fiber.Handler
 	authHandler         *auth.Handler
 	metaHandler         *metadata.Handler
@@ -335,19 +351,6 @@ func NewApp(cfg AppConfig) *App {
 
 	metaSvc := metadata.New(metadata.Config{CacheTTL: cfg.MetadataCacheTTL})
 
-	// Localized metadata: when a Translator is configured the kernel
-	// transparently rewrites every "models.*" string in TableMetadata /
-	// ModalMetadata before the response leaves the wire.
-	if cfg.Translator != nil {
-		prefix := cfg.I18nKeyPrefix
-		if t := metadata.NewLocalizedTableTransformer(cfg.Translator, prefix); t != nil {
-			metaSvc.WithTableTransformer(t)
-		}
-		if t := metadata.NewLocalizedModalTransformer(cfg.Translator, prefix); t != nil {
-			metaSvc.WithModalTransformer(t)
-		}
-	}
-
 	var permSvc *permission.Service
 	if cfg.PermissionStore != nil {
 		permSvc = permission.New(permission.Config{Store: cfg.PermissionStore})
@@ -402,6 +405,21 @@ func NewApp(cfg AppConfig) *App {
 		Bus:          bus,
 		HookRunner:   hookRunner,
 		DynamicHooks: dynHooks,
+	}
+
+	// Localized metadata: the effective translator layers the configured
+	// Translator over the model catalogs (DefineTranslations /
+	// WithTranslations) and, when I18nHumanizeMissing is on, a humanizer.
+	// The metadata transformers are wired as soon as any layer exists — now
+	// for Translator / I18nHumanizeMissing, on the first registered catalog
+	// otherwise — so apps without i18n keep their untouched metadata.
+	a.translations = i18n.NewCatalog(nil).WithFallback(i18nDefaultLanguage(cfg), i18n.DefaultFallbackLanguage)
+	a.translator = i18n.Compose(cfg.Translator, a.translations)
+	if cfg.I18nHumanizeMissing {
+		a.translator = i18n.HumanizeMissing(a.translator)
+	}
+	if cfg.Translator != nil || cfg.I18nHumanizeMissing {
+		a.wireI18n()
 	}
 
 	if cfg.EnableMetrics {
@@ -535,9 +553,19 @@ func AsSingleton() ModelOption {
 	return func(key string) { modelbase.MarkSingleton(key) }
 }
 
+// WithTranslations attaches a message catalog (lang → key → text) to the
+// model, on top of its DefineTranslations. Keys may be model-relative
+// ("table.title", "modal.fields.name" → "models.<key>.table.title", …) or
+// full "models.*" keys. RegisterModel merges them into the app translator.
+func WithTranslations(msgs map[string]map[string]string) ModelOption {
+	return func(key string) { modelbase.AddTranslations(key, msgs) }
+}
+
 // RegisterModel adds a domain model to the metadata registry. Call for every
 // model that should have dynamic CRUD endpoints. Options attach an access
-// policy (WithAccess) or the singleton flag (AsSingleton).
+// policy (WithAccess), the singleton flag (AsSingleton) or messages
+// (WithTranslations). The model's DefineTranslations and WithTranslations
+// messages are merged into the app translator (see Translator).
 func (a *App) RegisterModel(key string, factory func() modelbase.ModelDefiner, opts ...ModelOption) *App {
 	modelbase.Register(key, factory)
 	for _, o := range opts {
@@ -545,7 +573,66 @@ func (a *App) RegisterModel(key string, factory func() modelbase.ModelDefiner, o
 			o(key)
 		}
 	}
+	if factory != nil && key != "" {
+		for _, msgs := range modelbase.TranslationsFor(key, factory()) {
+			a.addTranslations(i18n.ScopeModelMessages(a.i18nPrefix(), key, msgs))
+		}
+	}
 	return a
+}
+
+// AddTranslations merges app-wide messages (lang → key → text, full keys)
+// into the app translator, e.g. a catalog loaded with i18n.LoadCatalogFS:
+//
+//	cat, _ := i18n.LoadCatalogFS(locales, "locales/*.json")
+//	app.AddTranslations(cat.Messages())
+//
+// The configured AppConfig.Translator still wins on the same key.
+func (a *App) AddTranslations(msgs map[string]map[string]string) *App {
+	a.addTranslations(msgs)
+	return a
+}
+
+func (a *App) addTranslations(msgs map[string]map[string]string) {
+	if len(msgs) == 0 {
+		return
+	}
+	a.translations.Merge(msgs)
+	a.wireI18n()
+	a.Metadata.InvalidateCache()
+}
+
+// Translator returns the app's effective translator: AppConfig.Translator
+// first, then the registered model/app catalogs, then — with
+// I18nHumanizeMissing — a humanized label. Handlers can use it for any
+// server-rendered string (with the request context carrying the language).
+func (a *App) Translator() i18n.Translator { return a.translator }
+
+// wireI18n installs the localized metadata transformers once.
+func (a *App) wireI18n() {
+	a.i18nOnce.Do(func() {
+		prefix := a.Config.I18nKeyPrefix
+		if t := metadata.NewLocalizedTableTransformer(a.translator, prefix); t != nil {
+			a.Metadata.WithTableTransformer(t)
+		}
+		if t := metadata.NewLocalizedModalTransformer(a.translator, prefix); t != nil {
+			a.Metadata.WithModalTransformer(t)
+		}
+	})
+}
+
+func (a *App) i18nPrefix() string {
+	if a.Config.I18nKeyPrefix != "" {
+		return a.Config.I18nKeyPrefix
+	}
+	return metadata.DefaultI18nKeyPrefix
+}
+
+func i18nDefaultLanguage(cfg AppConfig) string {
+	if cfg.I18nDefaultLanguage != "" {
+		return cfg.I18nDefaultLanguage
+	}
+	return "en"
 }
 
 // Mount wires every enabled handler onto the given base router. Apps usually
@@ -561,14 +648,10 @@ func (a *App) Mount(r fiber.Router) fiber.Router {
 
 	// Accept-Language extraction so metadata transformers (and any
 	// app-level handler that calls i18n.LanguageFromContext) get the
-	// caller's preferred language out of the box.
-	if a.Config.Translator != nil {
-		def := a.Config.I18nDefaultLanguage
-		if def == "" {
-			def = "en"
-		}
-		r.Use(i18n.FiberMiddleware(def))
-	}
+	// caller's preferred language out of the box. Always installed: model
+	// catalogs may be registered after Mount, and the tag is inert until a
+	// translator reads it.
+	r.Use(i18n.FiberMiddleware(i18nDefaultLanguage(a.Config)))
 
 	// Prometheus metrics — increments counters and observes latency.
 	if a.Metrics != nil {

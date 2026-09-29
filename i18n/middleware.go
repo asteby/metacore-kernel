@@ -9,7 +9,8 @@ import (
 // FiberMiddleware reads the `Accept-Language` header on the incoming
 // request, picks the highest-priority tag, and stores it in the user
 // context via WithLanguage. Downstream handlers and Service transformers
-// can pull the tag with LanguageFromContext.
+// can pull the tag with LanguageFromContext, from c itself or from
+// c.Context().
 //
 // `defaults` is the language used when the header is missing or empty.
 // Pass "es" or "en" depending on the app's primary language.
@@ -20,8 +21,11 @@ import (
 func FiberMiddleware(defaultLang string) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		lang := pickLanguage(c.Get("Accept-Language"), defaultLang)
-		ctx := WithLanguage(c, lang)
-		c.SetContext(ctx)
+		// Handlers pass either c itself (fiber.Ctx is a context.Context
+		// whose Value reads the request locals) or c.Context() to the
+		// services, so the tag is stored in both.
+		c.Locals(languageKey{}, lang)
+		c.SetContext(WithLanguage(c.Context(), lang))
 		return c.Next()
 	}
 }
