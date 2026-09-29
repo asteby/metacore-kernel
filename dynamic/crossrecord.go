@@ -164,7 +164,7 @@ func evalUniqueRule(ctx context.Context, tx *gorm.DB, r manifest.CrossRuleDef, o
 	values := make([]string, len(r.Columns))
 	for i, c := range r.Columns {
 		v := row[c]
-		if v == nil || strings.TrimSpace(crossStr(v)) == "" {
+		if v == nil || crossStr(v) == "" {
 			return nil
 		}
 		values[i] = crossStr(v)
@@ -194,19 +194,7 @@ func evalUniqueRule(ctx context.Context, tx *gorm.DB, r manifest.CrossRuleDef, o
 	if n == 0 {
 		return nil
 	}
-	field := r.Field
-	if field == "" {
-		field = r.Columns[len(r.Columns)-1]
-	}
-	return &UniqueViolationError{
-		ErrorKey: r.ErrorKey,
-		Columns:  r.Columns,
-		Field:    field,
-		Validation: NewValidationError().Add(field, codeDuplicate, map[string]any{
-			"error_key": r.ErrorKey,
-			"columns":   r.Columns,
-		}),
-	}
+	return newUniqueViolation(r)
 }
 
 // CrossEnforceAlways is the CrossRuleDef.Enforce value that makes a ref_state

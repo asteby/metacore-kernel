@@ -311,6 +311,31 @@ func (i *Installer) WithMigrationSchema(fn func(addonKey string) string) *Instal
 	return i
 }
 
+// materializeUniqueRules backs every `unique` rule of the manifest with its
+// partial UNIQUE index where the table holds no duplicates
+// (dynamic.MaterializeUniqueRules). Never fails the install/upgrade: a table
+// with duplicates keeps the rule enforced by the application check and the
+// duplicates are logged; the host's report endpoint lists them and retries.
+// Tables are looked up where the host serves them (MigrationSchema), falling
+// back to the addon's own schema.
+func (i *Installer) materializeUniqueRules(ctx context.Context, orgID uuid.UUID, iso dynamic.Isolation, m manifest.Manifest) {
+	schema := dynamic.SchemaName(m.Key, orgID, iso)
+	if i.MigrationSchema != nil {
+		if s := i.MigrationSchema(m.Key); s != "" {
+			schema = s
+		}
+	}
+	for _, def := range m.ModelDefinitions {
+		if len(def.Rules) == 0 || def.TableName == "" {
+			continue
+		}
+		for _, st := range dynamic.MaterializeUniqueRules(ctx, i.DB, schema+"."+def.TableName, def.Rules) {
+			slog.Info("installer.unique_rule", "addon", m.Key, "table", def.TableName, "rule", st.ErrorKey,
+				"index", st.Index, "enforcement", st.Enforcement, "duplicate_groups", st.BlockedGroups, "error", st.Error)
+		}
+	}
+}
+
 // migrationOptions builds the dynamic.ApplyOptions for a bundle's migrations.
 func migrationOptions(fn func(addonKey string) string, m manifest.Manifest) dynamic.ApplyOptions {
 	if fn == nil {
@@ -559,6 +584,7 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	if err := dynamic.ApplyWithOptions(i.DB, b.Manifest.Key, orgID, iso, b.Migrations, migrationOptions(i.MigrationSchema, b.Manifest)); err != nil {
 		return nil, nil, err
 	}
+	i.materializeUniqueRules(context.Background(), orgID, iso, b.Manifest)
 	// Install doubles as the marketplace "Actualizar" (upgrade) path — the
 	// embed re-runs Install with the NEW bundle rather than calling Upgrade.
 	// Refresh the in-memory lifecycle so its Manifest().Version reflects the
@@ -1109,6 +1135,7 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	if err := applier.ApplyForUpgrade(i.DB, orgID, iso, newBundle); err != nil {
 		return nil, fmt.Errorf("installer.Upgrade: apply schema: %w", err)
 	}
+	i.materializeUniqueRules(ctx, orgID, iso, newBundle.Manifest)
 
 	// Replace the lifecycle.Addon binding with the new manifest. Compiled
 	// addons that registered themselves before Install retain their custom

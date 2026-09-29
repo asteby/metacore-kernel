@@ -616,3 +616,25 @@ func TestUniqueRule_MapsTo422FieldError(t *testing.T) {
 		}
 	})
 }
+
+func TestUniqueViolations_Routes(t *testing.T) {
+	rules := []manifest.CrossRuleDef{{Kind: "unique", ErrorKey: "acc.title_taken", Columns: []string{"title"}}}
+	eachAccDialect(t, func(c *Config) {
+		c.ConstraintResolver = func(_ context.Context, model string) (*ModelConstraints, bool) {
+			return &ModelConstraints{Rules: rules}, model == "acc_open"
+		}
+	}, func(t *testing.T, fx *accFixture) {
+		who := accCaller{org: uuid.New(), role: "owner"}
+		st, env := fx.do(t, who, "GET", "/dynamic/acc_open/unique-violations", "")
+		if st != fiber.StatusOK {
+			t.Fatalf("report: %d %v", st, env)
+		}
+		data, _ := env["data"].([]any)
+		if len(data) != 1 || data[0].(map[string]any)["error_key"] != "acc.title_taken" {
+			t.Fatalf("report data: %v", env)
+		}
+		if st, env = fx.do(t, who, "POST", "/dynamic/acc_open/unique-violations/materialize", ""); st != fiber.StatusOK {
+			t.Fatalf("materialize: %d %v", st, env)
+		}
+	})
+}

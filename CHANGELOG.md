@@ -32,6 +32,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`unique` rules: partial UNIQUE index and duplicates report.** After
+  Install/Upgrade the installer backs each `unique` rule with
+  `uq_<table>_<hash>` — `CREATE UNIQUE INDEX CONCURRENTLY … (organization_id,
+  <columns>) WHERE deleted_at IS NULL AND <columns set> AND <where>` — only
+  when the table holds no duplicates. With duplicates the upgrade still
+  succeeds, the rule stays enforced by the pre-write check and the groups are
+  logged. An INVALID index left by an interrupted build is rebuilt; inside a
+  transaction it is built under a SAVEPOINT. `GET
+  /dynamic/:model/unique-violations` lists the organization's duplicate
+  groups (values, count, ids) and each rule's enforcement (`index`/`app`);
+  `POST /dynamic/:model/unique-violations/materialize` retries the index. A
+  23505 raised by the index maps to the rule's field error.
+
 - **Cross-record rule `unique`: composite uniqueness validated on write.** A
   v3 model declares `rules: [{kind: "unique", error_key, columns: ["branch_id",
   "code"], where: {active: true}, field?}]`. Create and Update (dynamic CRUD
