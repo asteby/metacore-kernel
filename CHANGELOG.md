@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A Tier-2 formula writing an integer column rounds its result.** The
+  arithmetic evaluator works in float64, so `unit_price_cents = unit_price *
+  100` over 19.99 gave 1998.9999999999998 and the create failed with a 400
+  (`cannot unmarshal number … into int64`). Formula targets declared `int`,
+  `integer`, `bigint` or `smallint` are now rounded half away from zero
+  before the write, and later formulas see the rounded value. Numeric targets
+  are unchanged.
+
 - **Builtin validator `year.model`.** A dotted alias of `model_year`. Manifest
   validation only accepts `<ns>.<symbol>` custom slugs, so a manifest could
   not declare `model_year` (the hub preflight rejects it). Addons declare
