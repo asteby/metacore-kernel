@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/asteby/metacore-kernel/manifest"
+	"github.com/asteby/metacore-kernel/metadata"
+	"github.com/asteby/metacore-kernel/modelbase"
 	"github.com/google/uuid"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -486,5 +488,108 @@ func TestApplyFormulas_Tier3NilKeepsTarget(t *testing.T) {
 	}
 	if input["price"] != 2835.0 {
 		t.Fatalf("price = %v, want the sent 2835", input["price"])
+	}
+}
+
+// QA 0927: a formula whose target is an integer column (money in minor units,
+// `unit_price_cents = unit_price * 100`) evaluates in float64, so 19.99 * 100
+// is 1998.9999999999998. Integer targets are rounded before the write.
+func centsManifest() manifest.Manifest {
+	return manifest.Manifest{
+		Key: "shop",
+		ModelDefinitions: []manifest.ModelDefinition{{
+			ModelKey:  "test_cents_lines",
+			TableName: "test_cents_lines",
+			Columns: []manifest.ColumnDef{
+				{Name: "quantity", Type: "numeric"},
+				{Name: "unit_price", Type: "numeric"},
+				{Name: "unit_price_cents", Type: "bigint"},
+				{Name: "total_cents", Type: "BIGINT"},
+				{Name: "total", Type: "numeric"},
+			},
+			Formulas: []manifest.Formula{
+				{Target: "unit_price_cents", Expr: "unit_price * 100"},
+				{Target: "total_cents", Expr: "quantity * unit_price_cents"},
+				{Target: "total", Expr: "quantity * unit_price"},
+			},
+		}},
+	}
+}
+
+func TestApplyFormulas_IntegerTargetRounded(t *testing.T) {
+	fb := BuildComputeBindings(centsManifest()).formulasByModel["test_cents_lines"]
+	input := map[string]any{"quantity": 3.0, "unit_price": 19.99}
+	if err := applyFormulas(context.Background(), nil, fb, input, nil); err != nil {
+		t.Fatalf("applyFormulas: %v", err)
+	}
+	if got := input["unit_price_cents"]; got != 1999.0 {
+		t.Errorf("unit_price_cents = %v, want 1999", got)
+	}
+	// The next formula sees the rounded value, not 1998.999…
+	if got := input["total_cents"]; got != 5997.0 {
+		t.Errorf("total_cents = %v, want 5997", got)
+	}
+	// A numeric target keeps the float result untouched.
+	if got := input["total"].(float64); got == 60 || got < 59.96 || got > 59.98 {
+		t.Errorf("total = %v, want ~59.97 unrounded", got)
+	}
+}
+
+type TestCentsLine struct {
+	modelbase.BaseUUIDModel
+	Quantity       float64 `json:"quantity"`
+	UnitPrice      float64 `json:"unit_price"`
+	UnitPriceCents int64   `json:"unit_price_cents"`
+	TotalCents     int64   `json:"total_cents"`
+	Total          float64 `json:"total"`
+}
+
+func (TestCentsLine) TableName() string { return "test_cents_lines" }
+func (TestCentsLine) DefineTable() modelbase.TableMetadata {
+	return modelbase.TableMetadata{Title: "Cents lines"}
+}
+func (TestCentsLine) DefineModal() modelbase.ModalMetadata {
+	return modelbase.ModalMetadata{Title: "Cents line"}
+}
+
+// Through Service.Create — the generic CRUD a subtable posts to. Without the
+// rounding the JSON decode into the int64 field fails and the create is a 400.
+func TestServiceCreate_FormulaIntoIntegerColumn(t *testing.T) {
+	db := setupTestDB(t)
+	db.Exec(`CREATE TABLE test_cents_lines (
+		id TEXT PRIMARY KEY, organization_id TEXT, created_by_id TEXT,
+		created_at DATETIME, updated_at DATETIME, deleted_at DATETIME,
+		quantity REAL, unit_price REAL, unit_price_cents INTEGER, total_cents INTEGER, total REAL )`)
+	modelbase.Register("test_cents_lines", func() modelbase.ModelDefiner { return &TestCentsLine{} })
+	reg := NewHookRegistry()
+	RegisterComputeHooks(reg, centsManifest())
+	svc := New(Config{DB: db, Metadata: metadata.New(metadata.Config{CacheTTL: -1}), Hooks: reg})
+
+	user := newUser(uuid.New())
+	out, err := svc.Create(context.Background(), "test_cents_lines", user, map[string]any{
+		"quantity": 3, "unit_price": 19.99,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id, _ := out["id"].(string)
+
+	var row TestCentsLine
+	if err := db.Table("test_cents_lines").Where("id = ?", id).Take(&row).Error; err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if row.UnitPriceCents != 1999 || row.TotalCents != 5997 {
+		t.Fatalf("stored cents = %d/%d, want 1999/5997", row.UnitPriceCents, row.TotalCents)
+	}
+
+	// Update path: a partial edit recomputes from the existing row.
+	if _, err := svc.Update(context.Background(), "test_cents_lines", user, uuid.MustParse(id), map[string]any{"unit_price": 0.29}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if err := db.Table("test_cents_lines").Where("id = ?", id).Take(&row).Error; err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if row.UnitPriceCents != 29 || row.TotalCents != 87 {
+		t.Fatalf("updated cents = %d/%d, want 29/87", row.UnitPriceCents, row.TotalCents)
 	}
 }

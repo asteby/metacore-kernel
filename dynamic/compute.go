@@ -25,8 +25,9 @@ package dynamic
 
 import (
 	"context"
-	"maps"
 	"fmt"
+	"maps"
+	"math"
 	"strings"
 
 	"github.com/asteby/metacore-kernel/manifest"
@@ -54,6 +55,12 @@ type formulaBinding struct {
 	model    string
 	table    string
 	formulas []manifest.Formula
+	// intTargets holds the formula targets declared as integer columns. The
+	// arithmetic evaluator works in float64, so `unit_price * 100` over 19.99
+	// yields 1998.9999999999998 — which an int/bigint column rejects outright
+	// (the JSON decode into the model struct fails, the create answers 400).
+	// Those targets are rounded half away from zero before the write.
+	intTargets map[string]struct{}
 }
 
 // FormulaInvoker executes one Tier-3 (wasm-backed) formula: it invokes the
@@ -120,10 +127,24 @@ func BuildComputeBindings(m manifest.Manifest) ComputeBindings {
 		// Tier-2: formulas fire on the model that owns them.
 		if len(md.Formulas) > 0 {
 			out.formulasByModel[md.ModelKey] = formulaBinding{
-				model:    md.ModelKey,
-				table:    tbl[md.ModelKey],
-				formulas: md.Formulas,
+				model:      md.ModelKey,
+				table:      tbl[md.ModelKey],
+				formulas:   md.Formulas,
+				intTargets: integerColumns(md.Columns),
 			}
+		}
+	}
+	return out
+}
+
+// integerColumns returns the names of the columns declared with an integer
+// type, the ones a formula result must be rounded for.
+func integerColumns(cols []manifest.ColumnDef) map[string]struct{} {
+	out := make(map[string]struct{})
+	for _, c := range cols {
+		switch strings.ToLower(strings.TrimSpace(c.Type)) {
+		case "int", "integer", "bigint", "smallint":
+			out[c.Name] = struct{}{}
 		}
 	}
 	return out
@@ -284,6 +305,9 @@ func applyFormulas(ctx context.Context, invoke FormulaInvoker, b formulaBinding,
 		val, err := computeexpr.Eval(f.Expr, env)
 		if err != nil {
 			return fmt.Errorf("formula %q expr %q: %w", f.Target, f.Expr, err)
+		}
+		if _, isInt := b.intTargets[f.Target]; isInt {
+			val = math.Round(val)
 		}
 		input[f.Target] = val
 		// Make the just-computed value visible to subsequent formulas.
