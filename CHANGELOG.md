@@ -32,6 +32,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Cross-record rule `unique`: composite uniqueness validated on write.** A
+  v3 model declares `rules: [{kind: "unique", error_key, columns: ["branch_id",
+  "code"], where: {active: true}, field?}]`. Create and Update (dynamic CRUD
+  and wasm `data_mutate`/`data_batch`) reject a row when another live row of
+  the same organization, matching `where`, holds the same values: 422 with
+  `errors.<field>: [{code: "duplicate", params: {error_key, columns}}]`, so
+  the form marks the field. No DDL index, so installing the rule never fails
+  on a tenant that already holds duplicates; an edit that leaves `columns` and
+  `where` untouched is not re-checked. On Postgres, concurrent writers of the
+  same tuple are serialized with a transaction advisory lock.
 - **i18n catalogs for model metadata.** `i18n.Catalog` is an in-memory
   `Translator` built from `lang → key → text`, with a fallback chain
   (`es-MX → es → <fallback langs>`, default `en`), simple `{name}`

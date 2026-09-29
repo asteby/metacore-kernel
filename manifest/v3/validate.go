@@ -1387,7 +1387,11 @@ func Validate(raw []byte) error {
 		}
 		// Cross-record rules (see CrossRule): shape per kind, columns declared.
 		for ri, r := range mod.Rules {
-			if err := ValidateCrossRule(r.Kind, r.ErrorKey, r.Ref, r.Parent, r.Require, r.Sum, r.Max, r.Where, ownCols); err != nil {
+			if r.Kind == "unique" {
+				if err := ValidateUniqueRule(r.ErrorKey, r.Columns, r.Field, r.Where, r.Ref, r.Parent, r.Require, r.Sum, r.Max, r.OnMissingParent, r.Enforce, ownCols); err != nil {
+					errs = append(errs, fmt.Sprintf("models[%d].rules[%d]: %v", mi, ri, err))
+				}
+			} else if err := ValidateCrossRule(r.Kind, r.ErrorKey, r.Ref, r.Parent, r.Require, r.Sum, r.Max, r.Where, ownCols); err != nil {
 				errs = append(errs, fmt.Sprintf("models[%d].rules[%d]: %v", mi, ri, err))
 			} else if err := ValidateOnMissingParent(r.OnMissingParent); err != nil {
 				errs = append(errs, fmt.Sprintf("models[%d].rules[%d]: %v", mi, ri, err))
@@ -1836,7 +1840,42 @@ func ValidateCrossRule(kind, errorKey, ref, parent string, require map[string]an
 			}
 		}
 	default:
-		return fmt.Errorf("kind %q is not one of ref_state|sum_lte", kind)
+		return fmt.Errorf("kind %q is not one of ref_state|sum_lte|unique", kind)
+	}
+	return nil
+}
+
+// ValidateUniqueRule checks a unique rule's shape: a non-empty error_key,
+// declared and distinct Columns, a Field among them, Where over declared
+// columns, and none of the parent-rule fields. Shared by the v3 and legacy
+// validators so both surfaces reject identically.
+func ValidateUniqueRule(errorKey string, columns []string, field string, where map[string]any, ref, parent string, require map[string]any, sum, max, onMissingParent, enforce string, ownCols map[string]struct{}) error {
+	if strings.TrimSpace(errorKey) == "" {
+		return fmt.Errorf("error_key required")
+	}
+	if len(columns) == 0 {
+		return fmt.Errorf("unique requires a non-empty columns")
+	}
+	seen := make(map[string]struct{}, len(columns))
+	for _, c := range columns {
+		if _, ok := ownCols[c]; !ok {
+			return fmt.Errorf("columns: %q is not a declared column", c)
+		}
+		if _, dup := seen[c]; dup {
+			return fmt.Errorf("columns: %q is listed twice", c)
+		}
+		seen[c] = struct{}{}
+	}
+	if _, ok := seen[field]; field != "" && !ok {
+		return fmt.Errorf("field %q is not one of columns", field)
+	}
+	for col := range where {
+		if _, ok := ownCols[col]; !ok {
+			return fmt.Errorf("where column %q is not a declared column", col)
+		}
+	}
+	if ref != "" || parent != "" || len(require) > 0 || sum != "" || max != "" || onMissingParent != "" || enforce != "" {
+		return fmt.Errorf("unique does not accept ref/parent/require/sum/max/on_missing_parent/enforce")
 	}
 	return nil
 }

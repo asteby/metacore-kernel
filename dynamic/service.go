@@ -886,8 +886,7 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 			}
 			return omitUnsentNullableText(ctx, tx.Table(tableName), tableName, instance, input).Create(instance).Error
 		}); err != nil {
-			var ce *ConstraintError
-			if errors.As(err, &ce) || errors.Is(err, ErrInvalidInput) {
+			if errors.Is(err, ErrConstraintViolation) || errors.Is(err, ErrInvalidInput) {
 				return nil, err
 			}
 			return nil, fmt.Errorf("dynamic: create: %w", err)
