@@ -1696,6 +1696,9 @@ type CrossRuleDef struct {
 	Sum      string         `json:"sum,omitempty"`
 	Max      string         `json:"max,omitempty"`
 	Where    map[string]any `json:"where,omitempty"`
+	// Columns / Field: unique rules only. See v3.CrossRule.
+	Columns []string `json:"columns,omitempty"`
+	Field   string   `json:"field,omitempty"`
 	// OnMissingParent: "" / "reject" (default, fail closed) or "skip".
 	OnMissingParent string `json:"onMissingParent,omitempty"`
 	// Enforce: "" (default: create + Ref change) or "always" (every create,

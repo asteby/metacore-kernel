@@ -49,3 +49,32 @@ func TestValidate_CrossRules(t *testing.T) {
 		}
 	}
 }
+
+func TestValidate_UniqueRules(t *testing.T) {
+	good := []interface{}{
+		map[string]interface{}{"kind": "unique", "error_key": "sales.line_duplicated", "columns": []interface{}{"sales_order_id", "quantity"},
+			"field": "quantity", "where": map[string]interface{}{"subtotal": []interface{}{1, 2}}},
+		map[string]interface{}{"kind": "unique", "error_key": "sales.line_duplicated2", "columns": []interface{}{"sales_order_id"}},
+	}
+	if err := Validate(withRules(good...)); err != nil {
+		t.Fatalf("valid unique rules rejected: %v", err)
+	}
+
+	bad := map[string]interface{}{
+		"no columns":           map[string]interface{}{"kind": "unique", "error_key": "k"},
+		"empty columns":        map[string]interface{}{"kind": "unique", "error_key": "k", "columns": []interface{}{}},
+		"undeclared column":    map[string]interface{}{"kind": "unique", "error_key": "k", "columns": []interface{}{"nope"}},
+		"repeated column":      map[string]interface{}{"kind": "unique", "error_key": "k", "columns": []interface{}{"quantity", "quantity"}},
+		"field not in columns": map[string]interface{}{"kind": "unique", "error_key": "k", "columns": []interface{}{"quantity"}, "field": "subtotal"},
+		"where undeclared":     map[string]interface{}{"kind": "unique", "error_key": "k", "columns": []interface{}{"quantity"}, "where": map[string]interface{}{"nope": true}},
+		"with parent":          map[string]interface{}{"kind": "unique", "error_key": "k", "columns": []interface{}{"quantity"}, "ref": "sales_order_id", "parent": "SalesOrder"},
+		"with enforce":         map[string]interface{}{"kind": "unique", "error_key": "k", "columns": []interface{}{"quantity"}, "enforce": "always"},
+		"missing error_key":    map[string]interface{}{"kind": "unique", "columns": []interface{}{"quantity"}},
+		"columns on ref_state": map[string]interface{}{"kind": "ref_state", "error_key": "k", "columns": []interface{}{"quantity"}},
+	}
+	for name, rule := range bad {
+		if err := Validate(withRules(rule)); err == nil {
+			t.Errorf("%s: expected rejection", name)
+		}
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/metadata"
 	"github.com/asteby/metacore-kernel/modelbase"
 	"github.com/asteby/metacore-kernel/permission"
@@ -589,4 +590,29 @@ func TestValidationErrorPublicAPI(t *testing.T) {
 	if !strings.Contains(string(raw), `"message":"bad"`) || strings.Contains(string(raw), `"message":""`) {
 		t.Fatalf("wire: %s", raw)
 	}
+}
+
+// A unique cross-record rule answers the create/edit form with the same 422
+// field map as the declarative validation, so the SDK marks the column.
+func TestUniqueRule_MapsTo422FieldError(t *testing.T) {
+	rules := []manifest.CrossRuleDef{{Kind: "unique", ErrorKey: "acc.title_taken", Columns: []string{"title"}}}
+	eachAccDialect(t, func(c *Config) {
+		c.ConstraintResolver = func(_ context.Context, model string) (*ModelConstraints, bool) {
+			return &ModelConstraints{Rules: rules}, model == "acc_open"
+		}
+	}, func(t *testing.T, fx *accFixture) {
+		who := accCaller{org: uuid.New(), role: "owner"}
+		if st, env := fx.do(t, who, "POST", "/dynamic/acc_open", `{"title":"Caja1"}`); st != fiber.StatusCreated {
+			t.Fatalf("first create: %d %v", st, env)
+		}
+		st, env := fx.do(t, who, "POST", "/dynamic/acc_open", `{"title":"Caja1"}`)
+		if st != fiber.StatusUnprocessableEntity {
+			t.Fatalf("duplicate create: %d %v, want 422", st, env)
+		}
+		fe := fieldErrs(t, env, "title")
+		params, _ := fe[0]["params"].(map[string]any)
+		if len(fe) != 1 || fe[0]["code"] != "duplicate" || params["error_key"] != "acc.title_taken" {
+			t.Fatalf("errors: %v", env["errors"])
+		}
+	})
 }

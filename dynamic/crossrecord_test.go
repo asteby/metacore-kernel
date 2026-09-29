@@ -315,3 +315,133 @@ func TestCrossRecordCompute_EnforceAlwaysGuardsWasmDelete(t *testing.T) {
 	row := map[string]any{"id": uuid.NewString(), "session_id": closed, "order_id": order, "amount": 1.0, "status": "completed"}
 	wantRuleKey(t, fn(context.Background(), db, user.GetOrganizationID(), "rx_payments", "deleted", row), "pos.session_closed")
 }
+
+type RxRegister struct {
+	modelbase.BaseUUIDModel
+	BranchID string `json:"branch_id"`
+	Code     string `json:"code"`
+	Name     string `json:"name"`
+	Active   bool   `json:"active"`
+}
+
+func (RxRegister) TableName() string                    { return "rx_registers" }
+func (RxRegister) DefineTable() modelbase.TableMetadata { return modelbase.TableMetadata{Title: "R"} }
+func (RxRegister) DefineModal() modelbase.ModalMetadata { return modelbase.ModalMetadata{Title: "R"} }
+
+var rxUniqueRules = []manifest.CrossRuleDef{
+	{Kind: "unique", ErrorKey: "pos.register_code_taken", Columns: []string{"branch_id", "code"}, Where: map[string]any{"active": true}},
+}
+
+// rxUniqueSetup holds two active duplicates that predate the rule ("legacy")
+// so the tests also cover a tenant installed before the rule existed.
+func rxUniqueSetup(t *testing.T) (*Service, *gorm.DB, *fakeUser, string, string) {
+	t.Helper()
+	db := setupTestDB(t)
+	if err := db.Exec(`CREATE TABLE rx_registers (id TEXT PRIMARY KEY, organization_id TEXT, created_at DATETIME, updated_at DATETIME, deleted_at DATETIME, created_by_id TEXT, branch_id TEXT, code TEXT, name TEXT, active BOOLEAN)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	org := uuid.New()
+	branch, legacy := uuid.NewString(), uuid.NewString()
+	db.Exec(`INSERT INTO rx_registers (id, organization_id, branch_id, code, name, active) VALUES (?, ?, ?, 'CJ1', 'Caja1', true), (?, ?, ?, 'CJ1', 'Caja1', true)`,
+		legacy, org.String(), branch, uuid.NewString(), org.String(), branch)
+	modelbase.Register("rx_registers", func() modelbase.ModelDefiner { return &RxRegister{} })
+	svc := New(Config{
+		DB:       db,
+		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
+		ConstraintResolver: func(_ context.Context, model string) (*ModelConstraints, bool) {
+			if model == "rx_registers" {
+				return &ModelConstraints{Rules: rxUniqueRules}, true
+			}
+			return nil, false
+		},
+	})
+	return svc, db, newUser(org), branch, legacy
+}
+
+func wantUnique(t *testing.T, err error) {
+	t.Helper()
+	var ue *UniqueViolationError
+	var ve *ValidationError
+	if !errors.Is(err, ErrConstraintViolation) || !errors.As(err, &ue) || ue.ErrorKey != "pos.register_code_taken" {
+		t.Fatalf("want unique violation, got %v", err)
+	}
+	if !errors.As(err, &ve) || len(ve.Fields["code"]) != 1 || ve.Fields["code"][0].Code != "duplicate" || ve.Fields["code"][0].Params["error_key"] != "pos.register_code_taken" {
+		t.Fatalf("want a duplicate field error on code, got %+v", ve)
+	}
+}
+
+func TestUniqueRule_CreateRejectsActiveDuplicateInSameBranch(t *testing.T) {
+	svc, db, user, branch, _ := rxUniqueSetup(t)
+	ctx := context.Background()
+	_, err := svc.Create(ctx, "rx_registers", user, map[string]any{"branch_id": branch, "code": "CJ1", "name": "Caja 3", "active": true})
+	wantUnique(t, err)
+	var n int64
+	db.Table("rx_registers").Count(&n)
+	if n != 2 {
+		t.Fatalf("rejected create must not insert, rows = %d", n)
+	}
+	// Same code in another branch, an inactive register, another code: all fine.
+	for _, in := range []map[string]any{
+		{"branch_id": uuid.NewString(), "code": "CJ1", "name": "Otra sucursal", "active": true},
+		{"branch_id": branch, "code": "CJ1", "name": "Inactiva", "active": false},
+		{"branch_id": branch, "code": "CJ2", "name": "Caja 2", "active": true},
+	} {
+		if _, err := svc.Create(ctx, "rx_registers", user, in); err != nil {
+			t.Fatalf("%v must pass: %v", in, err)
+		}
+	}
+	// Another organization does not see this one's codes.
+	if _, err := svc.Create(ctx, "rx_registers", newUser(uuid.New()), map[string]any{"branch_id": branch, "code": "CJ1", "active": true}); err != nil {
+		t.Fatalf("other org must pass: %v", err)
+	}
+}
+
+func TestUniqueRule_UpdateExcludesSelfAndGrandfathersLegacyDuplicates(t *testing.T) {
+	svc, db, user, branch, legacy := rxUniqueSetup(t)
+	ctx := context.Background()
+	id := uuid.MustParse(legacy)
+	// A legacy duplicate stays editable while code/branch/active do not change.
+	if _, err := svc.Update(ctx, "rx_registers", user, id, map[string]any{"name": "Caja1 (vieja)"}); err != nil {
+		t.Fatalf("unrelated edit of a legacy duplicate must pass: %v", err)
+	}
+	// Deactivating it resolves the duplicate…
+	if _, err := svc.Update(ctx, "rx_registers", user, id, map[string]any{"active": false}); err != nil {
+		t.Fatalf("deactivating must pass: %v", err)
+	}
+	// …and reactivating it collides again.
+	_, err := svc.Update(ctx, "rx_registers", user, id, map[string]any{"active": true})
+	wantUnique(t, err)
+	// Renaming the code of a lone register to its own code is not a conflict.
+	other, err := svc.Create(ctx, "rx_registers", user, map[string]any{"branch_id": branch, "code": "CJ9", "active": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oid := uuid.MustParse(other["id"].(string))
+	if _, err := svc.Update(ctx, "rx_registers", user, oid, map[string]any{"code": "CJ9", "name": "x"}); err != nil {
+		t.Fatalf("self must be excluded: %v", err)
+	}
+	_, err = svc.Update(ctx, "rx_registers", user, oid, map[string]any{"code": "CJ1"})
+	wantUnique(t, err)
+	// A soft-deleted register frees its code.
+	db.Exec(`UPDATE rx_registers SET deleted_at = CURRENT_TIMESTAMP WHERE code = 'CJ1' AND active = true`)
+	if _, err := svc.Update(ctx, "rx_registers", user, oid, map[string]any{"code": "CJ1"}); err != nil {
+		t.Fatalf("soft-deleted rows must not collide: %v", err)
+	}
+}
+
+func TestUniqueRule_WasmComputeRejectsDuplicate(t *testing.T) {
+	_, db, user, branch, _ := rxUniqueSetup(t)
+	fn := CrossRecordCompute(
+		func(string) []manifest.CrossRuleDef { return rxUniqueRules },
+		func(string) string { return "rx_registers" },
+		func(string) (string, error) { return "", errors.New("unused") },
+	)
+	row := map[string]any{"id": uuid.NewString(), "branch_id": branch, "code": "CJ1", "active": true}
+	if err := fn(context.Background(), db, user.GetOrganizationID(), "rx_registers", "created", row); !errors.Is(err, ErrConstraintViolation) {
+		t.Fatalf("want constraint violation, got %v", err)
+	}
+	row["code"] = "CJ7"
+	if err := fn(context.Background(), db, user.GetOrganizationID(), "rx_registers", "created", row); err != nil {
+		t.Fatal(err)
+	}
+}

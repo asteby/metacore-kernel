@@ -1336,13 +1336,20 @@
     "CrossRule": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "error_key", "ref", "parent"],
-      "description": "One declarative cross-record rule over the parent row referenced by this model's FK column.",
+      "required": ["kind", "error_key"],
+      "description": "One declarative cross-record rule: over the parent row referenced by this model's FK column (ref_state, sum_lte), or over this model's own rows (unique).",
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "unique"}}},
+          "then": {"required": ["columns"]},
+          "else": {"required": ["ref", "parent"]}
+        }
+      ],
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["ref_state", "sum_lte"],
-          "description": "ref_state: the parent row must match 'require' (checked on create and when the ref changes). sum_lte: sum(this.sum, per parent, rows matching 'where') must stay <= parent.max."
+          "enum": ["ref_state", "sum_lte", "unique"],
+          "description": "ref_state: the parent row must match 'require' (checked on create and when the ref changes). sum_lte: sum(this.sum, per parent, rows matching 'where') must stay <= parent.max. unique: no other live row of this model in the organization (matching 'where') has the same values in 'columns'; validated on write, no DDL index."
         },
         "error_key": {
           "type": "string",
@@ -1379,6 +1386,18 @@
           "pattern": "^[a-z][a-z0-9_]*$",
           "description": "sum_lte only: numeric column of the PARENT that caps the sum."
         },
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+          "description": "unique only: own columns whose combined values must be unique, e.g. [\"branch_id\", \"code\"]. A row with any of them empty is not checked (SQL NULL semantics)."
+        },
+        "field": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "unique only: the column the 422 field error is reported on (code 'duplicate', params.error_key). Must be one of 'columns'; defaults to the last one."
+        },
         "enforce": {
           "type": "string",
           "enum": ["always"],
@@ -1392,7 +1411,7 @@
         },
         "where": {
           "type": "object",
-          "description": "sum_lte only: own column -> scalar or list restricting which rows (siblings and the written row) count toward the sum, e.g. {\"status\": [\"completed\"]}.",
+          "description": "sum_lte and unique: own column -> scalar or list restricting which rows (siblings and the written row) take part, e.g. {\"status\": [\"completed\"]} or {\"active\": true}.",
           "additionalProperties": {
             "oneOf": [
               {"type": ["string", "number", "boolean"]},
