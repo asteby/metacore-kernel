@@ -568,6 +568,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// rides ColumnDef.Scan so DeriveFormFields carries it onto the
 				// served FieldDef and the SDK shows a scan-to-fill button.
 				Scan: c.Scan,
+				// Visibility rides through so table/form derivation scopes where
+				// the column renders (table / modal / list-only).
+				Visibility: c.Visibility,
 				// Readonly rides through so DeriveFormFields excludes the
 				// system-generated column from create and marks it read-only in edit.
 				Readonly: c.Readonly,
