@@ -87,6 +87,9 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			// VisibleWhen rides through onto the served column so a consumer that
 			// derives the modal from table metadata still sees the predicate.
 			VisibleWhen: toVisibleWhen(c.VisibleWhen),
+			// Visibility rides through so the SDK scopes the column to the
+			// table, the form, or API payloads only.
+			Visibility: c.Visibility,
 			// Section rides through onto the served column so a consumer that
 			// derives the modal from table metadata still sees the form grouping.
 			Section: c.Section,
@@ -316,6 +319,11 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 	out := make([]modelbase.FieldDef, 0, len(def.Columns))
 	for _, c := range def.Columns {
 		if _, managed := managedFormColumns[c.Name]; managed {
+			continue
+		}
+		// A column scoped to the table ("table") or to API payloads ("list")
+		// has no form input.
+		if c.Visibility == "table" || c.Visibility == "list" {
 			continue
 		}
 		// Resolve the form field type: an explicit Widget wins (the manifest

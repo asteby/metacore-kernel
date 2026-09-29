@@ -1062,6 +1062,18 @@ type Column struct {
 	// it. Empty = the implicit General block. Optional.
 	Section string `json:"section,omitempty"`
 
+	// Visibility scopes where the column is rendered, with the same closed set
+	// as the host ColumnDef.Visibility:
+	//   ""/"all" — everywhere (default);
+	//   "table"  — only the list/index table (left out of the create/edit form
+	//              and of embedded line subtables);
+	//   "modal"  — only the create/edit form;
+	//   "list"   — only API payloads: no table column, no form field.
+	// Pure UI-plane metadata: the value is still stored, read and written. Use
+	// "list" for an internal mirror (money in minor units next to its currency
+	// column) that the user never needs to see. Optional.
+	Visibility string `json:"visibility,omitempty"`
+
 	// Readonly marks a SYSTEM-GENERATED column: a value the addon/host populates
 	// (e.g. an id or number a remote API returns after a write), NOT something a
 	// user types. It is pure UI-plane metadata that the host projects onto

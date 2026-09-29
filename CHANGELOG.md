@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Manifest v3 `Column.visibility`.** A column declares where it renders,
+  with the closed set the legacy `ColumnDef.visibility` already used: `all`
+  (default), `table` (list table only), `modal` (create/edit form only) or
+  `list` (API payloads only). It rides `FromV3` onto the legacy column, then
+  onto the served `modelbase.ColumnDef.visibility` that the SDK's
+  column-visibility helpers read. `DeriveFormFields` drops `table` and `list`
+  columns. The value is still stored, read and written. Typical use: hide a
+  minor-units mirror (`total_cents`) that sits next to its currency column.
+
 ### Fixed
 
 - **Accept-Language reaches the metadata translator.** `i18n.FiberMiddleware`

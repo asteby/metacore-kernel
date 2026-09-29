@@ -148,6 +148,11 @@ type ColumnDef struct {
 	RelationPath   string                 `json:"relationPath,omitempty"`
 	SearchEndpoint string                 `json:"searchEndpoint,omitempty"`
 	Hidden         bool                   `json:"hidden,omitempty"`
+	// Visibility scopes where the column renders (see manifest/v3
+	// Column.visibility): "" / "all" everywhere, "table" list table only,
+	// "modal" form only, "list" API payloads only. The SDK reads it through
+	// its column-visibility helpers. Pure UI.
+	Visibility string `json:"visibility,omitempty"`
 	// Readonly marks a SYSTEM-GENERATED column (see manifest/v3 Column.readonly):
 	// the host projects it so form derivation excludes it from create and marks
 	// it read-only in edit. The column still renders in tables/detail. Pure UI.

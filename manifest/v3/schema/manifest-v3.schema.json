@@ -1222,6 +1222,11 @@
           "type": "boolean",
           "description": "Index this column (btree) and offer it as a list filter/facet. Scalar column types only."
         },
+        "visibility": {
+          "type": "string",
+          "enum": ["all", "table", "modal", "list"],
+          "description": "Where the column is rendered. 'all' (default) everywhere; 'table' only in the list table (not in the form nor in embedded line subtables); 'modal' only in the create/edit form; 'list' only in API payloads (no table column, no form field). Pure UI metadata: the value is still stored, read and written."
+        },
         "section": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
