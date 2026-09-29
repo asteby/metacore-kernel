@@ -359,6 +359,12 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
 		for ri, r := range md.Rules {
+			if r.Kind == "unique" {
+				if err := v3.ValidateUniqueRule(r.ErrorKey, r.Columns, r.Field, r.Where, r.Ref, r.Parent, r.Require, r.Sum, r.Max, r.OnMissingParent, r.Enforce, colsByModel[md.ModelKey]); err != nil {
+					return fmt.Errorf("manifest.model_definitions[%d].rules[%d]: %w", i, ri, err)
+				}
+				continue
+			}
 			if err := v3.ValidateCrossRule(r.Kind, r.ErrorKey, r.Ref, r.Parent, r.Require, r.Sum, r.Max, r.Where, colsByModel[md.ModelKey]); err != nil {
 				return fmt.Errorf("manifest.model_definitions[%d].rules[%d]: %w", i, ri, err)
 			}

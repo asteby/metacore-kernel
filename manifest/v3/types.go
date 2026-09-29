@@ -2745,6 +2745,11 @@ type Route struct {
 //	sum_lte   — sum(Sum over this model's rows sharing the same Ref and
 //	            matching Where) must stay <= parent.Max. The parent row is
 //	            locked FOR UPDATE first so concurrent writers serialize.
+//	unique    — no other live row of THIS model in the organization (matching
+//	            Where) has the same values in Columns. Validated on write, with
+//	            no DDL index, so installing it never fails on a tenant that
+//	            already holds duplicates; an edit that leaves Columns and Where
+//	            untouched is not re-checked. Ref/Parent are not used.
 //
 // SECURITY: nothing here is free-form SQL — columns are identifiers checked
 // against the manifest, values are bound parameters.
@@ -2757,6 +2762,12 @@ type CrossRule struct {
 	Sum      string         `json:"sum,omitempty"`
 	Max      string         `json:"max,omitempty"`
 	Where    map[string]any `json:"where,omitempty"`
+	// Columns are the own columns a unique rule keeps unique together (e.g.
+	// ["branch_id", "code"]). A row with any of them empty is not checked.
+	Columns []string `json:"columns,omitempty"`
+	// Field is the column a unique violation is reported on (a 422 field
+	// error with code "duplicate"); one of Columns, defaults to the last one.
+	Field string `json:"field,omitempty"`
 	// OnMissingParent decides what happens when the referenced parent row does
 	// not exist (yet): "reject" (default, fail closed) or "skip" (the rule is
 	// not applied for this write). Use "skip" only when the flow legitimately

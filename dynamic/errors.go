@@ -3,6 +3,7 @@ package dynamic
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/asteby/metacore-kernel/manifest"
 )
@@ -194,6 +195,30 @@ func (e *SingletonExistsError) Error() string {
 
 // Unwrap ties the typed error to ErrSingletonExists.
 func (e *SingletonExistsError) Unwrap() error { return ErrSingletonExists }
+
+// UniqueViolationError is the typed error a unique cross-record rule produces
+// when another live row already holds the same values. It is BOTH a
+// constraint violation (errors.Is ErrConstraintViolation, so the wasm path
+// reports constraint_violation and transactions roll back) and a field
+// validation failure (errors.As *ValidationError, so the handler answers 422
+// with {errors: {<Field>: [{code: "duplicate", params: {error_key, columns}}]}}
+// and the SDK marks the field).
+type UniqueViolationError struct {
+	ErrorKey string
+	Columns  []string
+	Field    string
+	// Validation is the per-field form of the violation (see above).
+	Validation *ValidationError
+}
+
+func (e *UniqueViolationError) Error() string {
+	return fmt.Sprintf("constraint violation (%s): unique(%s)", e.ErrorKey, strings.Join(e.Columns, ", "))
+}
+
+// Unwrap exposes both faces of the violation to errors.Is / errors.As.
+func (e *UniqueViolationError) Unwrap() []error {
+	return []error{ErrConstraintViolation, e.Validation}
+}
 
 // ConstraintError is the typed error a failed declarative guard produces. It
 // wraps ErrConstraintViolation (so errors.Is routes it to 422) and carries the

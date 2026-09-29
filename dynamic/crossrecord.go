@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -54,6 +55,9 @@ func sameCol(before, row map[string]any, cols ...string) bool {
 }
 
 func evalCrossRule(ctx context.Context, tx *gorm.DB, r manifest.CrossRuleDef, ownTable string, orgID uuid.UUID, row, before map[string]any, parentTable func(string) (string, error)) error {
+	if r.Kind == "unique" {
+		return evalUniqueRule(ctx, tx, r, ownTable, orgID, row, before)
+	}
 	if !crossIdent.MatchString(r.Ref) || !crossIdent.MatchString(r.Sum) && r.Sum != "" || !crossIdent.MatchString(r.Max) && r.Max != "" {
 		return fmt.Errorf("%w: cross rule %q: invalid identifier", ErrInvalidInput, r.ErrorKey)
 	}
@@ -134,6 +138,77 @@ func evalCrossRule(ctx context.Context, tx *gorm.DB, r manifest.CrossRuleDef, ow
 	return nil
 }
 
+// evalUniqueRule rejects the write when another live row of the same table and
+// organization, matching Where, holds the same values in Columns. The written
+// row is only checked when it matches Where itself (an inactive register never
+// collides) and has every column set (SQL NULL semantics). An update that
+// leaves Columns and Where untouched is not re-checked, so rows that were
+// already duplicated before the rule existed stay editable.
+//
+// There is no unique index behind the rule (it would fail to build on a
+// tenant that already holds duplicates), so on Postgres two concurrent writers
+// of the same values are serialized with a transaction-scoped advisory lock on
+// the (table, org, values) tuple.
+func evalUniqueRule(ctx context.Context, tx *gorm.DB, r manifest.CrossRuleDef, ownTable string, orgID uuid.UUID, row, before map[string]any) error {
+	for _, c := range append(append([]string{}, r.Columns...), keysOf(r.Where)...) {
+		if !crossIdent.MatchString(c) {
+			return fmt.Errorf("%w: cross rule %q: invalid identifier %q", ErrInvalidInput, r.ErrorKey, c)
+		}
+	}
+	if len(r.Columns) == 0 || !crossMatches(r.Where, row) {
+		return nil
+	}
+	if before != nil && sameCol(before, row, append(append([]string{}, r.Columns...), keysOf(r.Where)...)...) {
+		return nil
+	}
+	values := make([]string, len(r.Columns))
+	for i, c := range r.Columns {
+		v := row[c]
+		if v == nil || strings.TrimSpace(crossStr(v)) == "" {
+			return nil
+		}
+		values[i] = crossStr(v)
+	}
+
+	db := tx.WithContext(ctx)
+	if db.Dialector.Name() == "postgres" {
+		key := ownTable + "|" + orgID.String() + "|" + strings.Join(values, "\x1f")
+		if err := db.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", key).Error; err != nil {
+			return err
+		}
+	}
+	q := scopedTable(db, ownTable, orgID)
+	if id := fmt.Sprint(row["id"]); row["id"] != nil && id != "" {
+		q = q.Where("id <> ?", id)
+	}
+	for i, c := range r.Columns {
+		q = q.Where(c+" = ?", values[i])
+	}
+	for col, want := range r.Where {
+		q = q.Where(col+" IN ?", crossList(want))
+	}
+	var n int64
+	if err := q.Count(&n).Error; err != nil {
+		return err
+	}
+	if n == 0 {
+		return nil
+	}
+	field := r.Field
+	if field == "" {
+		field = r.Columns[len(r.Columns)-1]
+	}
+	return &UniqueViolationError{
+		ErrorKey: r.ErrorKey,
+		Columns:  r.Columns,
+		Field:    field,
+		Validation: NewValidationError().Add(field, codeDuplicate, map[string]any{
+			"error_key": r.ErrorKey,
+			"columns":   r.Columns,
+		}),
+	}
+}
+
 // CrossEnforceAlways is the CrossRuleDef.Enforce value that makes a ref_state
 // rule guard every write of the row — create, every update and delete — not
 // just the ones that set or change its Ref.
@@ -204,6 +279,12 @@ func crossAccepts(want, got any) bool {
 	for _, w := range crossList(want) {
 		if fmt.Sprint(w) == g {
 			return true
+		}
+		// A boolean column reads back as 1/0 or t/f depending on the driver.
+		if wb, ok := w.(bool); ok {
+			if gb, err := strconv.ParseBool(g); err == nil && gb == wb {
+				return true
+			}
 		}
 	}
 	return false
