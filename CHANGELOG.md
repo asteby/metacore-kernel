@@ -20,6 +20,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A decimal literal in a generated column or rollup expression keeps its
+  spelling in SQL.** `computeexpr.RenderSQL` re-emitted `100.0` as `100`, so a
+  peso mirror of a cents column (`total_amount_cents / 100.0`) did integer
+  division in Postgres and dropped the cents (990997 became 9909). Literals
+  are now emitted as written. Columns created before this fix keep their old
+  expression, and the owning addon must rebuild them.
+
 - **Accept-Language reaches the metadata translator.** `i18n.FiberMiddleware`
   stored the language only in `c.Context()`, while the metadata handlers pass
   the `fiber.Ctx` itself to the service, so `LanguageFromContext` saw `""`:

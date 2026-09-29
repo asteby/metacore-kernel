@@ -135,7 +135,13 @@ func lexArith(src string) ([]token, error) {
 
 type node interface{}
 
-type numNode struct{ val float64 }
+// numNode is a numeric literal. lit keeps the source spelling so RenderSQL
+// emits it verbatim: "100.0" must stay a numeric constant in SQL, or
+// `bigint_col / 100.0` becomes integer division (the value loses its cents).
+type numNode struct {
+	val float64
+	lit string
+}
 type identNode struct{ name string }
 type unaryNode struct {
 	op    byte // '-' or '+'
@@ -235,7 +241,7 @@ func (p *parser) parseFactor() (node, error) {
 	case tkNumber:
 		p.next()
 		v, _ := strconv.ParseFloat(t.text, 64)
-		return &numNode{val: v}, nil
+		return &numNode{val: v, lit: t.text}, nil
 	case tkIdent:
 		p.next()
 		return &identNode{name: t.text}, nil
@@ -344,6 +350,11 @@ func RenderSQL(src string) (string, error) {
 func renderNode(n node) string {
 	switch v := n.(type) {
 	case *numNode:
+		// The lexer only admits digits and at most one '.', so the source
+		// spelling is a safe SQL literal.
+		if v.lit != "" {
+			return v.lit
+		}
 		return strconv.FormatFloat(v.val, 'f', -1, 64)
 	case *identNode:
 		return `"` + v.name + `"`

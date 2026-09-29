@@ -143,3 +143,24 @@ func TestToFloat(t *testing.T) {
 		}
 	}
 }
+
+// QA 0927: `total_amount_cents / 100.0` was rendered as `/ 100`, so Postgres
+// did integer division on the bigint and the generated peso column dropped
+// the cents (990997 → 9909). The literal keeps its spelling.
+func TestRenderSQL_KeepsDecimalLiteral(t *testing.T) {
+	cases := map[string]string{
+		"total_amount_cents / 100.0": `("total_amount_cents" / 100.0)`,
+		"total_cents / 100":          `("total_cents" / 100)`,
+		"a * 0.5 + .25":              `(("a" * 0.5) + .25)`,
+		"-1.50 * b":                  `(-(1.50) * "b")`,
+	}
+	for src, want := range cases {
+		got, err := RenderSQL(src)
+		if err != nil {
+			t.Fatalf("RenderSQL(%q): %v", src, err)
+		}
+		if got != want {
+			t.Errorf("RenderSQL(%q) = %q, want %q", src, got, want)
+		}
+	}
+}
