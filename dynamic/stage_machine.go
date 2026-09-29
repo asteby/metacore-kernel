@@ -42,11 +42,23 @@ func (sm *StageMachine) active() bool {
 	return sm != nil && sm.Field != "" && len(sm.Stages) > 0
 }
 
-// allows reports whether moving from → to is one of the declared transitions.
-// A no-op move (from == to) is always allowed — it is not a transition.
-func (sm *StageMachine) allows(from, to string) bool {
+// Allows reports whether a record may move from → to under this machine. It is
+// the single rule every surface shares — the Update gate below, a host's legacy
+// update path, and the board that dims the lanes a card can't enter:
+//
+//   - a no-op move (from == to) is always allowed — it is not a transition;
+//   - a record with no stage yet, or whose stage is not one of the machine's
+//     stages (a value written before the machine existed), is being placed,
+//     not moved: any declared stage takes it. Otherwise such a record could
+//     never be given a stage, since a transition's `from` must be declared;
+//   - anything else must be one of the declared Transitions. A machine with
+//     stages but no transitions allows no moves between its stages.
+func (sm *StageMachine) Allows(from, to string) bool {
 	if from == to {
 		return true
+	}
+	if !sm.hasStage(from) {
+		return sm.hasStage(to)
 	}
 	for _, t := range sm.Transitions {
 		if t.From == from && t.To == to {
@@ -56,16 +68,42 @@ func (sm *StageMachine) allows(from, to string) bool {
 	return false
 }
 
-// matchingHooks returns the OnTransition hooks that fire for a from → to move,
-// in declaration order. "*" matches any stage on either side.
-func (sm *StageMachine) matchingHooks(from, to string) []manifest.TransitionHookDef {
+// hasStage reports whether key is one of the machine's stages.
+func (sm *StageMachine) hasStage(key string) bool {
+	if key == "" {
+		return false
+	}
+	for _, s := range sm.Stages {
+		if s.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// MatchingHooks returns the OnTransition hooks that fire for a from → to move,
+// in declaration order. "*" (or an empty bound) matches any stage on either
+// side.
+func (sm *StageMachine) MatchingHooks(from, to string) []manifest.TransitionHookDef {
 	var out []manifest.TransitionHookDef
 	for _, h := range sm.OnTransition {
-		if (h.From == "*" || h.From == "" || h.From == from) && (h.To == "*" || h.To == to) {
+		if stageBoundMatches(h.From, from) && stageBoundMatches(h.To, to) {
 			out = append(out, h)
 		}
 	}
 	return out
+}
+
+// stageBoundMatches reports whether a hook's from/to bound matches a stage.
+func stageBoundMatches(bound, stage string) bool {
+	return bound == "*" || bound == "" || bound == stage
+}
+
+// StageValue is the string form of a stage column value, as the machine
+// compares it: nil reads as "" (no stage), []byte and Stringer values as their
+// text. Hosts comparing stages outside the kernel use it to stay in step.
+func StageValue(v any) string {
+	return stringifyStatus(v)
 }
 
 // ApplyTransitionSets applies the declarative `set` blocks of every OnTransition
@@ -86,7 +124,7 @@ func ApplyTransitionSets(sm *StageMachine, from, to string, record map[string]an
 	if sm == nil || record == nil {
 		return false
 	}
-	for _, h := range sm.matchingHooks(from, to) {
+	for _, h := range sm.MatchingHooks(from, to) {
 		for key, val := range h.Set {
 			if applySetValue(record, key, val) {
 				changed = true
@@ -207,7 +245,7 @@ func (s *Service) checkTransition(sm *StageMachine, before map[string]any, input
 	if toStage == fromStage {
 		return fromStage, toStage, false, nil
 	}
-	if !sm.allows(fromStage, toStage) {
+	if !sm.Allows(fromStage, toStage) {
 		return fromStage, toStage, true, fmt.Errorf("%w: %q → %q is not a declared transition", ErrInvalidTransition, fromStage, toStage)
 	}
 	return fromStage, toStage, true, nil
@@ -223,7 +261,7 @@ func (s *Service) checkTransition(sm *StageMachine, before map[string]any, input
 // error is returned so the caller can roll back the transition. db is the handle
 // the hook runs against (the open transaction when the move runs in one).
 func (s *Service) runTransitionHooks(ctx context.Context, model string, user modelbase.AuthUser, db *gorm.DB, sm *StageMachine, from, to string, before, after map[string]any) error {
-	hooks := sm.matchingHooks(from, to)
+	hooks := sm.MatchingHooks(from, to)
 	if len(hooks) == 0 {
 		return nil
 	}

@@ -250,3 +250,84 @@ func TestDeriveTableColumns_StageStatus(t *testing.T) {
 		t.Errorf("done colour = %q, want green", stage.Options[1].Color)
 	}
 }
+
+// TestStageMachine_Allows pins the move rule the board and every update path
+// share: declared transitions only, except a no-op and a record that has no
+// declared stage yet (it is being placed, not moved).
+func TestStageMachine_Allows(t *testing.T) {
+	sm := &StageMachine{
+		Field: "status",
+		Stages: []manifest.StageDef{
+			{Key: "nuevo"}, {Key: "abierto"}, {Key: "cerrado"},
+		},
+		Transitions: []manifest.TransitionDef{
+			{From: "nuevo", To: "abierto"},
+			{From: "abierto", To: "cerrado"},
+		},
+	}
+	cases := []struct {
+		from, to string
+		want     bool
+	}{
+		{"nuevo", "abierto", true},
+		{"abierto", "nuevo", false},  // not declared
+		{"nuevo", "cerrado", false},  // not declared
+		{"abierto", "abierto", true}, // no-op
+		{"", "abierto", true},        // no stage yet: placing it
+		{"open", "cerrado", true},    // legacy value outside the machine
+		{"", "archivado", false},     // not a stage of the machine
+		{"nuevo", "archivado", false},
+	}
+	for _, c := range cases {
+		if got := sm.Allows(c.from, c.to); got != c.want {
+			t.Errorf("Allows(%q, %q) = %v, want %v", c.from, c.to, got, c.want)
+		}
+	}
+
+	// Stages without transitions: nothing moves between stages, a card with no
+	// stage can still be placed.
+	locked := &StageMachine{Field: "status", Stages: sm.Stages}
+	if locked.Allows("nuevo", "abierto") {
+		t.Error("a machine with no transitions allowed a move between stages")
+	}
+	if !locked.Allows("", "abierto") {
+		t.Error("a machine with no transitions refused to place a stage-less record")
+	}
+}
+
+// TestStageMachine_MatchingHooks_EmptyBoundIsWildcard asserts "" matches any
+// stage on BOTH sides, like "*" (it used to be a wildcard on `from` only).
+func TestStageMachine_MatchingHooks_EmptyBoundIsWildcard(t *testing.T) {
+	sm := &StageMachine{OnTransition: []manifest.TransitionHookDef{
+		{From: "*", To: "done", Do: "wasm:a"},
+		{From: "review", To: "", Do: "wasm:b"},
+		{From: "", To: "*", Do: "wasm:c"},
+		{From: "backlog", To: "done", Do: "wasm:d"},
+	}}
+	got := []string{}
+	for _, h := range sm.MatchingHooks("review", "done") {
+		got = append(got, h.Do)
+	}
+	if fmt.Sprint(got) != "[wasm:a wasm:b wasm:c]" {
+		t.Fatalf("MatchingHooks(review, done) = %v, want [wasm:a wasm:b wasm:c]", got)
+	}
+}
+
+// TestUpdate_StagelessRecordTakesAnyStage asserts a record created without a
+// stage can be given one: before, every such move was a 422 because a
+// transition's `from` must be a declared stage.
+func TestUpdate_StagelessRecordTakesAnyStage(t *testing.T) {
+	fx := setupStageFixture(t, nil)
+	fx.db.Exec(`UPDATE test_orders SET status = NULL WHERE id = ?`, fx.id.String())
+	after, err := fx.svc.Update(context.Background(), "test_orders", fx.user, fx.id, map[string]any{"status": "review"})
+	if err != nil {
+		t.Fatalf("placing a stage-less record rejected: %v", err)
+	}
+	if after["status"] != "review" {
+		t.Fatalf("status = %v, want review", after["status"])
+	}
+	// Once placed, the machine applies: review → backlog is not declared.
+	if _, err := fx.svc.Update(context.Background(), "test_orders", fx.user, fx.id, map[string]any{"status": "backlog"}); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("err = %v, want ErrInvalidTransition", err)
+	}
+}

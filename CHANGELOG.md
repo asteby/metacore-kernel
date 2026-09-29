@@ -25,6 +25,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   before the write, and later formulas see the rounded value. Numeric targets
   are unchanged.
 
+- **Stage machine: a record without a stage can be given one.** A record whose
+  stage is empty, or holds a value that is not one of the machine's stages (a
+  value written before the machine existed), is placed, not moved: any
+  declared stage takes it. Before, every such update was a 422, because a
+  transition's `from` must be a declared stage, so the record could never
+  get a stage.
+- **Stage hooks: an empty `to` matches any stage**, like `*` and like an empty
+  `from`. Hosts had to rewrite `""` to `"*"` to get "any stage".
 - **Builtin validator `year.model`.** A dotted alias of `model_year`. Manifest
   validation only accepts `<ns>.<symbol>` custom slugs, so a manifest could
   not declare `model_year` (the hub preflight rejects it). Addons declare
@@ -65,6 +73,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   sentence case otherwise — so metadata never shows raw keys. See
   `docs/i18n-catalogs.md`.
 
+- **`(*dynamic.StageMachine).Allows(from, to)`, `.MatchingHooks(from, to)` and
+  `dynamic.StageValue(v)`.** The move rule, the hook match and the stage
+  comparison the Update gate uses, exported so a host's own update path and
+  its board serve the same answer instead of keeping copies.
 - **Per-model access policies for the dynamic CRUD.** A model declares
   `DefineAccess() modelbase.AccessPolicy` (or is registered with
   `app.RegisterModel(key, f, host.WithAccess(p))`, or supplied by
