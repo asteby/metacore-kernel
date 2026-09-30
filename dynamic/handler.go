@@ -1,8 +1,10 @@
 package dynamic
 
 import (
+	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
@@ -399,7 +401,8 @@ func (h *Handler) delete(c fiber.Ctx) error {
 	if err != nil {
 		return respondErr(c, fiber.StatusBadRequest, ErrInvalidID.Error())
 	}
-	if err := h.service.Delete(c, c.Params("model"), u, id); err != nil {
+	ctx := WithReason(c, DeleteReason(c))
+	if err := h.service.Delete(ctx, c.Params("model"), u, id); err != nil {
 		return h.handleError(c, err)
 	}
 	return c.JSON(fiber.Map{"success": true})
@@ -577,4 +580,22 @@ func (h *Handler) handleError(c fiber.Ctx, err error) error {
 
 func respondErr(c fiber.Ctx, status int, msg string) error {
 	return c.Status(status).JSON(fiber.Map{"success": false, "message": msg})
+}
+
+// DeleteReason reads the operator's reason for a DELETE: `?reason=` first, else
+// the JSON body `{"reason": "..."}` (axios `delete(url, {data})`).
+func DeleteReason(c fiber.Ctx) string {
+	if r := strings.TrimSpace(c.Query(ReasonField)); r != "" {
+		return r
+	}
+	if len(c.Body()) == 0 {
+		return ""
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(c.Body(), &body); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(body.Reason)
 }

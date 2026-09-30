@@ -607,6 +607,64 @@ type SettingDef struct {
 	DefaultValue interface{} `json:"default_value,omitempty"`
 	Options      []Option    `json:"options,omitempty"`
 	Secret       bool        `json:"secret,omitempty"`
+	// Scope is "org" (default, "" = org) or "branch": each branch may override
+	// the org value. See ResolveSetting.
+	Scope string `json:"scope,omitempty"`
+}
+
+// ReasonRequiredDef is the legacy projection of v3 ReasonRequired.
+type ReasonRequiredDef struct {
+	Delete    bool     `json:"delete,omitempty"`
+	Actions   []string `json:"actions,omitempty"`
+	MinLength int      `json:"min_length,omitempty"`
+}
+
+// DefaultReasonMinLength is the trimmed length a reason must reach when the
+// policy declares no min_length.
+const DefaultReasonMinLength = 3
+
+// Min returns the effective minimum reason length.
+func (r *ReasonRequiredDef) Min() int {
+	if r == nil || r.MinLength <= 0 {
+		return DefaultReasonMinLength
+	}
+	return r.MinLength
+}
+
+// RequiresAction reports whether the action key demands a reason.
+func (r *ReasonRequiredDef) RequiresAction(key string) bool {
+	if r == nil {
+		return false
+	}
+	for _, a := range r.Actions {
+		if a == key {
+			return true
+		}
+	}
+	return false
+}
+
+// Setting scopes.
+const (
+	SettingScopeOrg    = "org"
+	SettingScopeBranch = "branch"
+)
+
+// ResolveSetting returns the effective value of one setting for a branch:
+// the branch override when the setting is branch-scoped and the branch has
+// one, else the org value, else the manifest default. branchValues may be nil
+// (no branch context — the org value applies). A nil/absent override never
+// shadows the org value, so clearing an override means deleting the key.
+func ResolveSetting(def SettingDef, orgValues, branchValues map[string]any) any {
+	if def.Scope == SettingScopeBranch {
+		if v, ok := branchValues[def.Key]; ok && v != nil {
+			return v
+		}
+	}
+	if v, ok := orgValues[def.Key]; ok && v != nil {
+		return v
+	}
+	return def.DefaultValue
 }
 
 // Option is a select-field choice.
@@ -1055,6 +1113,11 @@ type ModelDefinition struct {
 	// increment-then-check guard is race-free. Empty = no extra locking. See
 	// manifest/v3.Model and dynamic constraint evaluation.
 	Locking string `json:"locking,omitempty"`
+
+	// ReasonRequired is the host/runtime projection of v3 Model.reason_required
+	// (PER-4): the dynamic engine refuses a delete / the listed actions unless
+	// the request carries a reason (dynamic.ReasonPolicyResolver). Nil = none.
+	ReasonRequired *ReasonRequiredDef `json:"reason_required,omitempty"`
 
 	// Rules is the host/runtime projection of v3 Model.rules: cross-record
 	// guards over the parent row referenced by FK, evaluated inside the write

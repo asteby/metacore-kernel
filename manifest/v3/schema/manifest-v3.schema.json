@@ -925,6 +925,27 @@
           ],
           "description": "Row-locking strategy on Update. 'row' makes the kernel wrap Update in a transaction and load the target row with SELECT … FOR UPDATE before evaluating column constraints, so an increment-then-check guard is race-free. Omit for no extra locking."
         },
+        "reason_required": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Mandatory reason (PER-4): the kernel refuses to delete a row and/or run the listed actions unless the request states why. The reason is stamped on the canonical event so the activity log records who/what/when/why.",
+          "properties": {
+            "delete": {
+              "type": "boolean",
+              "description": "Require a reason on DELETE."
+            },
+            "actions": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Keys of actions targeting this model that require `reason` in their payload."
+            },
+            "min_length": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Minimum trimmed length of the reason (default 3)."
+            }
+          }
+        },
         "sequences": {
           "type": "array",
           "description": "Atomic folio counters the kernel maintains per org (or branch) for this model — invoice folios, remission numbers, tickets. A column binds to one via 'sequence' for auto-stamping on create; a wasm handler pulls one via the sequence_next host import.",
@@ -3680,6 +3701,12 @@
         "section": {
           "type": "string",
           "description": "Binds this setting to a form_layout section (by key), like a column's section — groups a connector's credentials into its wizard steps/sections."
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["org", "branch"],
+          "default": "org",
+          "description": "Level the value lives at. 'branch' lets each branch override the org value (effective value = branch override, else org value, else default)."
         },
         "options": {
           "type": "array",

@@ -52,6 +52,10 @@ type CanonicalEvent struct {
 	CorrelationID string         `json:"correlation_id,omitempty"`
 	Before        map[string]any `json:"before,omitempty"`
 	After         map[string]any `json:"after,omitempty"`
+	// Reason is the operator's stated motive for a destructive operation
+	// (delete, or an action listed in Model.reason_required — PER-4). Empty on
+	// every other event.
+	Reason string `json:"reason,omitempty"`
 }
 
 // correlationIDKey is an unexported typed key used to store a correlation ID
@@ -199,6 +203,7 @@ func (s *Service) publishCanonical(ctx context.Context, model, action string, us
 		ActorID:       user.GetID().String(),
 		BranchID:      EventBranchID(withUserBranch(ctx, user), before, after),
 		CorrelationID: CorrelationIDFromContext(ctx),
+		Reason:        ReasonFromContext(ctx),
 		Before:        before,
 		After:         after,
 	}

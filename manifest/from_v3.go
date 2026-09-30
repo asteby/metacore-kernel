@@ -668,6 +668,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		def.Transitions = mapModelTransitions(m.Transitions)
 		def.OnTransition = mapModelTransitionHooks(m.OnTransition)
 		def.Locking = m.Locking
+		if rr := m.ReasonRequired; rr != nil {
+			def.ReasonRequired = &ReasonRequiredDef{Delete: rr.Delete, Actions: rr.Actions, MinLength: rr.MinLength}
+		}
 		def.Rules = mapModelRules(m.Rules)
 		def.Sequences = mapModelSequences(m.Sequences)
 		// FormLayout rides through so the host projects the create/edit form
@@ -1043,6 +1046,7 @@ func mapSettings(in []v3.Setting) []SettingDef {
 			Label:        s.Label,
 			Type:         s.Type,
 			DefaultValue: s.Default,
+			Scope:        s.Scope,
 		}
 		for _, o := range s.Options {
 			def.Options = append(def.Options, Option{Value: o.Value, Label: o.Label})

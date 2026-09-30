@@ -705,6 +705,15 @@ type Model struct {
 	//            Constraints; harmless otherwise.
 	Locking string `json:"locking,omitempty"`
 
+	// ReasonRequired makes the kernel refuse a destructive operation on this
+	// model unless the caller states WHY (PER-4): soft-deleting a row and/or
+	// invoking the named actions (cancel, void, refund…). The reason travels in
+	// the request (`reason` query/body/header on DELETE, `reason` in an action
+	// payload) and is stamped on the canonical event (CanonicalEvent.Reason), so
+	// the activity log answers who removed/cancelled what, when, and why. Nil =
+	// no reason needed (the legacy behaviour). See ReasonRequired.
+	ReasonRequired *ReasonRequired `json:"reason_required,omitempty"`
+
 	// Rules declare CROSS-RECORD guards: predicates over the PARENT row this
 	// model references by FK (a payment over a closed session, payments summing
 	// past the order total). Evaluated inside the same transaction as the write
@@ -1221,6 +1230,18 @@ type FormAssist struct {
 	// Trigger: "button" (default) renders a call-to-action; "auto" runs the
 	// provider as soon as the step opens with every input filled.
 	Trigger string `json:"trigger,omitempty"`
+}
+
+// ReasonRequired is the model-level "mandatory reason" policy (PER-4).
+type ReasonRequired struct {
+	// Delete requires a reason on DELETE /dynamic/:model/:id.
+	Delete bool `json:"delete,omitempty"`
+	// Actions are the keys of actions targeting this model that require a
+	// reason in their payload (`reason`). Each must be a declared action whose
+	// target_model is this model.
+	Actions []string `json:"actions,omitempty"`
+	// MinLength is the minimum trimmed length of the reason (default 3).
+	MinLength int `json:"min_length,omitempty"`
 }
 
 // Sequence declares one atomic counter the kernel maintains for the owning
@@ -2521,6 +2542,12 @@ type Setting struct {
 	// Validation is an optional constraint hint (e.g. a regex or a named rule)
 	// the host applies when collecting the value. Used by connector credentials.
 	Validation string `json:"validation,omitempty"`
+	// Scope says at which level the value lives. "org" (default) is one value
+	// per organization. "branch" lets each branch override it: the effective
+	// value for a branch is its own override, else the org value, else Default
+	// (see manifest.ResolveSetting). Lets a chain run a strict stock policy in
+	// one store and a permissive one in another (POS-1).
+	Scope string `json:"scope,omitempty"`
 }
 
 // SettingOption is a value/label pair for select-typed settings.

@@ -1483,6 +1483,7 @@ func Validate(raw []byte) error {
 				errs = append(errs, fmt.Sprintf("%s.format %q: %v", where, sq.Format, err))
 			}
 		}
+		errs = append(errs, validateReasonRequired(&m, mi, mod)...)
 		// Static-option cascade guards + declarative Constraints on model columns.
 		for ci, c := range mod.Columns {
 			if c.Sequence != "" {
@@ -2041,6 +2042,39 @@ func validateCapabilities(m *Manifest) []string {
 		}
 		for i, s := range m.Contributions.Subscriptions {
 			check(fmt.Sprintf("contributions.subscriptions[%d]", i), s.Handler)
+		}
+	}
+	return errs
+}
+
+
+// validateReasonRequired checks Model.reason_required (PER-4): it must demand
+// something (delete and/or actions), every listed action must be declared with
+// this model as its target, and min_length must be positive.
+func validateReasonRequired(m *Manifest, mi int, mod Model) []string {
+	rr := mod.ReasonRequired
+	if rr == nil {
+		return nil
+	}
+	where := fmt.Sprintf("models[%d].reason_required", mi)
+	var errs []string
+	if !rr.Delete && len(rr.Actions) == 0 {
+		errs = append(errs, fmt.Sprintf("%s requires delete=true and/or a non-empty actions list", where))
+	}
+	if rr.MinLength < 0 {
+		errs = append(errs, fmt.Sprintf("%s.min_length must be >= 1", where))
+	}
+	declared := map[string]struct{}{}
+	if m.Contributions != nil {
+		for _, a := range m.Contributions.Actions {
+			if a.TargetModel == mod.Key {
+				declared[a.Key] = struct{}{}
+			}
+		}
+	}
+	for _, k := range rr.Actions {
+		if _, ok := declared[k]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.actions: %q is not an action targeting this model", where, k))
 		}
 	}
 	return errs
