@@ -176,6 +176,50 @@ func ApplyWithOptions(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolati
 	return nil
 }
 
+// replayAfterModelsMarker tags a migration whose effect depends on the host's
+// model tables existing (a trigger, a default or a generated helper on a
+// table the manifest materialises). Some hosts (ops) create those tables
+// AFTER the installer ran the migrations, so on a first install the migration
+// found nothing to attach to and the ledger recorded it as applied.
+var replayAfterModelsMarker = regexp.MustCompile(`(?im)^\s*--\s*metacore:\s*replay-after-models\b`)
+
+func declaresReplayAfterModels(sql string) bool { return replayAfterModelsMarker.MatchString(sql) }
+
+// ReplayAfterModels re-runs, outside the ledger, every migration that carries
+// the `-- metacore: replay-after-models` marker. Hosts call it once the addon's
+// model tables exist (after their own CreateTable / HotRegister step), on every
+// install, upgrade and boot re-register. The marked SQL MUST be idempotent
+// (CREATE OR REPLACE, DROP … IF EXISTS, ADD COLUMN IF NOT EXISTS): it runs many
+// times, each with the same search_path a first-time Apply would use now that
+// the model tables exist. The ledger is not touched, so the file's checksum
+// rules are unchanged. Unmarked migrations are never replayed.
+func ReplayAfterModels(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, files []File, opts ApplyOptions) error {
+	schema := SchemaName(addonKey, orgID, iso)
+	for _, f := range files {
+		if !declaresReplayAfterModels(f.SQL) {
+			continue
+		}
+		tx := db.Begin()
+		path, err := migrationSearchPath(tx, schema, opts)
+		if err != nil {
+			tx.Rollback()
+			return fmt.Errorf("replay %s@%s: resolve search_path: %w", addonKey, f.Version, err)
+		}
+		if err := tx.Exec(`SET LOCAL search_path TO ` + quoteIdents(path)).Error; err != nil {
+			tx.Rollback()
+			return err
+		}
+		if err := execScript(tx, f.SQL); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("replay %s@%s: %w", addonKey, f.Version, err)
+		}
+		if err := tx.Commit().Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // migrationSearchPath returns the schemas, in order, a pending migration of
 // the addon runs with. Default: addon schema, public. When the host declared a
 // PrimarySchema and at least one of the addon's model tables exists there, that
