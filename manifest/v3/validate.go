@@ -641,8 +641,8 @@ func validatePublicRoutes(m *Manifest) []string {
 // validatePublicRouteActions enforces the rules of PublicRoute.Actions: only on
 // kind html; every entry names a contributions.actions[] row action of the
 // route's model that declares requires_state (a public link must never fire an
-// action outside its window) and has no required fields (the public page has no
-// form); no action twice.
+// action outside its window) and declares only free-text fields (the public
+// page renders a text input per field); no action twice.
 func validatePublicRouteActions(where string, r PublicRoute, actions map[string]Action) []string {
 	if len(r.Actions) == 0 {
 		return nil
@@ -678,8 +678,11 @@ func validatePublicRouteActions(where string, r PublicRoute, actions map[string]
 			errs = append(errs, fmt.Sprintf("%s.action %q must declare requires_state so the public link cannot fire it in any state", aw, pa.Action))
 		}
 		for _, f := range a.Fields {
-			if f.Required {
-				errs = append(errs, fmt.Sprintf("%s.action %q has required field %q; a public action cannot collect a form", aw, pa.Action, f.Key))
+			// The public page renders a plain text input per declared field
+			// (a customer's reason / comment); anything richer (pickers, enums,
+			// numbers) has no public form.
+			if (f.Type != "" && f.Type != "string" && f.Type != "text") || f.Ref != "" || f.Options.Len() > 0 || f.Options.Dynamic != nil || f.OptionsSource != "" {
+				errs = append(errs, fmt.Sprintf("%s.action %q has field %q that is not free text; a public action only collects text fields", aw, pa.Action, f.Key))
 			}
 		}
 		if len(a.Steps) > 0 || a.Modal != "" {

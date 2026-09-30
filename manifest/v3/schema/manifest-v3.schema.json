@@ -2138,7 +2138,7 @@
         },
         "actions": {
           "type": "array",
-          "description": "Row actions of the model the token holder may run from the public page without a login (accept / reject a quote). Only valid on kind 'html'. Each action must target this model, declare requires_state and have no required fields. Served at POST /p/<orgRef>/<addon>/<key>/<token>/actions/<action>.",
+          "description": "Row actions of the model the token holder may run from the public page without a login (accept / reject a quote). Only valid on kind 'html'. Each action must target this model, declare requires_state and declare only free-text fields (rendered as text inputs). Served at POST /p/<orgRef>/<addon>/<key>/<token>/actions/<action>.",
           "items": {
             "$ref": "#/$defs/PublicRouteAction"
           }

@@ -1567,8 +1567,9 @@ type PublicRoute struct {
 
 // PublicRouteAction exposes one row action of the route's model on the public
 // page (PublicRoute.Actions). The action must be a contributions.actions[] row
-// action targeting the route's model with a non-empty requires_state and no
-// required fields (the public page has no form beyond an optional note).
+// action targeting the route's model with a non-empty requires_state whose
+// fields, if any, are free text (the page renders a text input per field; a
+// required field is enforced). No steps or modal.
 type PublicRouteAction struct {
 	// Action is the contributions.actions[] key. Required.
 	Action string `json:"action"`

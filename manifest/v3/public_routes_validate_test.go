@@ -226,7 +226,7 @@ func withPublicActions(actions []interface{}, act map[string]interface{}) map[st
 		map[string]interface{}{
 			"key": "reject", "target_model": "Quote", "requires_state": []interface{}{"sent"},
 			"handler": map[string]interface{}{"type": "wasm", "function": "handle_Quote_reject"},
-			"fields":  []interface{}{map[string]interface{}{"key": "reason", "type": "string", "label": "Reason"}},
+			"fields":  []interface{}{map[string]interface{}{"key": "reason", "type": "string", "label": "Reason", "required": true, "widget": "textarea"}},
 		},
 	}
 	if act != nil {
@@ -271,11 +271,16 @@ func TestPublicRoutes_ActionsRejections(t *testing.T) {
 			"key": "other", "target_model": "QuoteItem", "requires_state": []interface{}{"sent"},
 			"handler": map[string]interface{}{"type": "wasm", "function": "handle_QuoteItem_other"},
 		}, "targets model"},
-		{"required field", []interface{}{map[string]interface{}{"action": "ask"}}, map[string]interface{}{
+		{"non-text field", []interface{}{map[string]interface{}{"action": "ask"}}, map[string]interface{}{
 			"key": "ask", "target_model": "Quote", "requires_state": []interface{}{"sent"},
 			"handler": map[string]interface{}{"type": "wasm", "function": "handle_Quote_ask"},
-			"fields":  []interface{}{map[string]interface{}{"key": "why", "type": "string", "label": "Why", "required": true}},
-		}, "cannot collect a form"},
+			"fields":  []interface{}{map[string]interface{}{"key": "qty", "type": "number", "label": "Qty"}},
+		}, "only collects text fields"},
+		{"picker field", []interface{}{map[string]interface{}{"action": "ask"}}, map[string]interface{}{
+			"key": "ask", "target_model": "Quote", "requires_state": []interface{}{"sent"},
+			"handler": map[string]interface{}{"type": "wasm", "function": "handle_Quote_ask"},
+			"fields":  []interface{}{map[string]interface{}{"key": "who", "type": "string", "label": "Who", "ref": "Customer"}},
+		}, "only collects text fields"},
 		{"table placement", []interface{}{map[string]interface{}{"action": "bulk"}}, map[string]interface{}{
 			"key": "bulk", "target_model": "Quote", "placement": "table", "requires_state": []interface{}{"sent"},
 			"handler": map[string]interface{}{"type": "wasm", "function": "handle_Quote_bulk"},

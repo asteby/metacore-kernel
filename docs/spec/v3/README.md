@@ -349,8 +349,8 @@ POST /p/<orgRef>/<addon>/<key>/<token>/actions/<action>
 
 which runs the addon's own handler as the organization's system actor (there is
 no session). The action keeps its guards: it must declare `requires_state` (so a
-link can never fire it outside its window), it must have no required fields and
-no steps/modal (the page has no form), and the route's `enabled_when` and
+link can never fire it outside its window), it must declare only free-text fields (the page renders a text input per field and enforces
+`required`) and no steps/modal, and the route's `enabled_when` and
 `expires_column` gate the POST exactly like the GET.
 
 Column-level checks run for models the addon owns; for extended models they are

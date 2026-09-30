@@ -14,7 +14,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`{action, label?, confirm?, style?}`) that the token holder runs without a
   login: `POST /p/<orgRef>/<addon>/<key>/<token>/actions/<action>`. Validation
   requires the action to target the route's model, declare `requires_state`
-  and have no required fields, steps or modal. New `v3.PublicRouteAction`.
+  and declare only free-text fields, no steps or modal. New `v3.PublicRouteAction`.
   Hosts run the addon handler as the organization's system actor.
 
 - **Manifest v3 `compatibility.requires[].enables`.** An optional require
