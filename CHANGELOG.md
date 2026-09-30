@@ -21,6 +21,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   picks the source (e.g. «Recibir OC» picking its purchase order), and
   `$prefillFromRecord` names a one_to_many relation of the referenced model.
   Interpreted by the SDK action modal; the host only round-trips it.
+- **`dynamic.ReplayAfterModels` + `-- metacore: replay-after-models` migration marker.**
+  A migration whose effect needs the host's model table (a trigger, a default, a
+  sequence) ran on a first install before the host (ops) materialised the table
+  in `public`, found nothing to attach to, and the ledger recorded it as applied
+  (inventory@019 kardex balance trigger). Hosts now call `ReplayAfterModels`
+  once the model tables exist (install, upgrade, boot re-register); it re-runs,
+  outside the ledger and with the same `search_path` a first Apply would get,
+  only the migrations carrying the marker. The marked SQL must be idempotent.
 - **Manifest v3 `contributions.public_routes[].actions[]`.** A public route of
   kind `html` can expose declared one-click row actions of its model
   (`{action, label?, confirm?, style?}`) that the token holder runs without a
