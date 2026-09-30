@@ -10,6 +10,9 @@ package dynamic
 //	GET  /approvals/:id        one request (org-scoped, lazily expired)
 //	POST /approvals/:id/approve {reason?}  — role-gated; replays the mutation
 //	POST /approvals/:id/reject  {reason?}  — role-gated
+//	POST /approvals/:id/approve-pin {pin, reason?} — decide with a supervisor PIN
+//	POST /approvals/pin-grant   {policy, pin, reason, label?, model?, record_id?, context?}
+//	                            — inline PIN authorization + audit row (approvals_pin.go)
 //
 // Every response uses the kernel envelope {success, data, meta?}.
 
@@ -27,6 +30,8 @@ func (h *Handler) MountApprovals(r fiber.Router, middleware ...fiber.Handler) {
 	registerMut(r.Get, "/approvals", middleware, h.approvalsList)
 	registerMut(r.Get, "/approvals/count", middleware, h.approvalsCount)
 	registerMut(r.Get, "/approvals/:id", middleware, h.approvalsGet)
+	registerMut(r.Post, "/approvals/pin-grant", middleware, h.approvalsPINGrant)
+	registerMut(r.Post, "/approvals/:id/approve-pin", middleware, h.approvalsApprovePIN)
 	registerMut(r.Post, "/approvals/:id/approve", middleware, h.approvalsApprove)
 	registerMut(r.Post, "/approvals/:id/reject", middleware, h.approvalsReject)
 }
@@ -140,6 +145,56 @@ func (h *Handler) approvalsDecide(c fiber.Ctx, approve bool) error {
 	return c.JSON(fiber.Map{"success": true, "data": req.View(false)})
 }
 
+type approvalPINBody struct {
+	PIN      string         `json:"pin"`
+	Reason   string         `json:"reason"`
+	Policy   string         `json:"policy"`
+	Label    string         `json:"label"`
+	Addon    string         `json:"addon_key"`
+	Model    string         `json:"model"`
+	RecordID string         `json:"record_id"`
+	Context  map[string]any `json:"context"`
+}
+
+func (h *Handler) approvalsApprovePIN(c fiber.Ctx) error {
+	u := h.user(c)
+	if u == nil {
+		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
+	}
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return respondErr(c, fiber.StatusBadRequest, ErrInvalidID.Error())
+	}
+	var body approvalPINBody
+	if err := c.Bind().Body(&body); err != nil {
+		return respondErr(c, fiber.StatusBadRequest, "invalid body")
+	}
+	req, err := h.service.ApproveRequestWithPIN(c, u, id, body.PIN, body.Reason)
+	if err != nil {
+		return h.approvalError(c, err, req)
+	}
+	return c.JSON(fiber.Map{"success": true, "data": req.View(false)})
+}
+
+func (h *Handler) approvalsPINGrant(c fiber.Ctx) error {
+	u := h.user(c)
+	if u == nil {
+		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
+	}
+	var body approvalPINBody
+	if err := c.Bind().Body(&body); err != nil {
+		return respondErr(c, fiber.StatusBadRequest, "invalid body")
+	}
+	req, err := h.service.GrantPINApproval(c, u, PINGrantInput{
+		PolicyKey: body.Policy, Label: body.Label, Reason: body.Reason, PIN: body.PIN,
+		AddonKey: body.Addon, ModelKey: body.Model, RecordID: body.RecordID, Context: body.Context,
+	})
+	if err != nil {
+		return h.approvalError(c, err, nil)
+	}
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"success": true, "data": req.View(false)})
+}
+
 // approvalError maps approvals-specific failures onto the envelope. `req` (when
 // non-nil) rides in `data` so the client can render the request's real state
 // after a lost race (already decided / expired) or a failed replay.
@@ -161,6 +216,14 @@ func (h *Handler) approvalError(c fiber.Ctx, err error, req *ApprovalRequest) er
 		status, code = fiber.StatusConflict, "approval_expired"
 	case errors.Is(err, ErrApprovalNotPending):
 		status, code = fiber.StatusConflict, "approval_not_pending"
+	case errors.Is(err, ErrApprovalPINInvalid):
+		status, code = fiber.StatusForbidden, "approval_pin_invalid"
+	case errors.Is(err, ErrApprovalPINLocked):
+		status, code = fiber.StatusTooManyRequests, "approval_pin_locked"
+	case errors.Is(err, ErrApprovalPINUnavailable):
+		status, code = fiber.StatusNotImplemented, "approval_pin_unavailable"
+	case errors.Is(err, ErrInvalidInput):
+		status, code = fiber.StatusBadRequest, "invalid_input"
 	case errors.Is(err, ErrForbidden):
 		status, code = fiber.StatusForbidden, "forbidden"
 	case errors.Is(err, ErrRecordNotFound):

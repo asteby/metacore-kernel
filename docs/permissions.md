@@ -377,3 +377,19 @@ vertical-specific shells (e.g. fleet_manager), not duplicate addon roles.
 - [`embedding-quickstart.md`](embedding-quickstart.md) — wiring the store from main.go.
 - [`../manifest/manifest.go`](../manifest/manifest.go) — manifest type definitions.
 - [`../permission/service.go`](../permission/service.go), [`../security/enforcer.go`](../security/enforcer.go) — implementations.
+
+## Aprobación de supervisor con PIN (`approvals_pin.go`)
+
+El primitivo de aprobaciones (`dynamic/approvals.go`) es asíncrono: la mutación queda
+parada en la bandeja. En mostrador el cliente está esperando, así que el host puede
+cablear `Config.ApprovalPINVerifier` (el kernel nunca guarda PINs) y habilitar dos rutas
+síncronas bajo `/approvals`:
+
+| Ruta | Qué hace |
+|---|---|
+| `POST /approvals/pin-grant` `{policy, pin, reason, label?, model?, record_id?, context?}` | Autorización en línea de una política que el cliente ya aplica (vender sin stock, descuento > X%, precio bajo el piso, reembolso…). Verifica el PIN, guarda una fila de auditoría `kind=pin` (quién pidió, quién autorizó, motivo, contexto) y emite `approval.granted`. Devuelve el `id` para estamparlo en el documento. El motivo es siempre obligatorio. |
+| `POST /approvals/:id/approve-pin` `{pin, reason?}` | Decide una solicitud ya parada (flujo `approval_required`) como dueño del PIN: aplican el gate de rol, el motivo y el replay de siempre. |
+
+Errores: `approval_pin_invalid` (403, sin distinguir PIN desconocido de rol insuficiente),
+`approval_pin_locked` (429, 5 fallos en 5 min por org+solicitante), `approval_pin_unavailable`
+(501, sin verificador). El verificador debe devolver un aprobador de la MISMA org.

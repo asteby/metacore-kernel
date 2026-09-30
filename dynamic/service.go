@@ -290,6 +290,11 @@ type Config struct {
 	// Service.StartApprovalExpirer). 0 disables the goroutine — reads and
 	// decisions still expire lazily, so correctness never depends on it.
 	ApprovalExpiryInterval time.Duration
+
+	// ApprovalPINVerifier resolves a supervisor PIN to the approver principal so
+	// a cashier can get an approval on the spot (see approvals_pin.go). The host
+	// owns PIN storage; nil disables the PIN routes (501).
+	ApprovalPINVerifier ApprovalPINVerifier
 }
 
 // ActorRolesResolver returns the org role keys a user holds (lower-cased or
@@ -370,6 +375,8 @@ type Service struct {
 	// runs as, the per-op replay backends and the background expirer.
 	actorRolesResolver        ActorRolesResolver
 	approvalRequesterResolver ApprovalRequesterResolver
+	approvalPINVerifier       ApprovalPINVerifier
+	pinThrottles              map[string]*pinThrottle
 	approvalMu                sync.Mutex
 	approvalAppliers          map[string]ApprovalApplier
 	approvalExpireStop        chan struct{}
@@ -449,6 +456,7 @@ func New(cfg Config) *Service {
 
 		actorRolesResolver:        cfg.ActorRolesResolver,
 		approvalRequesterResolver: cfg.ApprovalRequesterResolver,
+		approvalPINVerifier:       cfg.ApprovalPINVerifier,
 	}
 
 	// Arm the transactional outbox (outbox.go) when events can actually fan
