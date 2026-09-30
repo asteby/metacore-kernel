@@ -826,3 +826,23 @@ func TestValidate_FormSectionAssist(t *testing.T) {
 		t.Fatal("unknown assist trigger must be rejected")
 	}
 }
+
+func TestValidate_PrefillFromRecord_FromField(t *testing.T) {
+	// A create-placed action seeds its grid from the document picked in a
+	// sibling ref field ($defs/PrefillFromRecord.fromField).
+	m := actionWithPrefill(t, map[string]interface{}{
+		"$prefillFromRecord": "items",
+		"fromField":          "purchase_order_id",
+		"map":                map[string]interface{}{"product_id": "product_variant_id"},
+	})
+	if err := Validate(mustJSON(t, m)); err != nil {
+		t.Fatalf("expected valid $prefillFromRecord + fromField default, got error: %v", err)
+	}
+	bad := actionWithPrefill(t, map[string]interface{}{
+		"$prefillFromRecord": "items",
+		"fromField":          42,
+	})
+	if err := Validate(mustJSON(t, bad)); err == nil {
+		t.Fatalf("fromField must be a string")
+	}
+}

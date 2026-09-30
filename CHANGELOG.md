@@ -14,6 +14,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   search and the options picker, so a partly typed «205/55» already finds
   «205/55R16» while the cashier is still typing. `normalized` (equality) stays the
   default. Schema enum, validator and both query paths updated.
+- **Manifest v3 `PrefillFromRecord.fromField`.** A line-items action field whose
+  `default` is a `$prefillFromRecord` directive can now name a sibling ref field
+  (`fromField`) as the source document. Row actions keep seeding from the record
+  they open on; a `create`-placed action (no record) seeds its grid when the user
+  picks the source (e.g. «Recibir OC» picking its purchase order), and
+  `$prefillFromRecord` names a one_to_many relation of the referenced model.
+  Interpreted by the SDK action modal; the host only round-trips it.
 - **Manifest v3 `contributions.public_routes[].actions[]`.** A public route of
   kind `html` can expose declared one-click row actions of its model
   (`{action, label?, confirm?, style?}`) that the token holder runs without a
