@@ -120,3 +120,25 @@ func TestExecAction_SupervisorPolicy(t *testing.T) {
 		t.Fatalf("bypass: %v", err)
 	}
 }
+
+// A refused reason must not burn the single-use grant: the client asks for the
+// reason and retries with the same authorization.
+func TestExecAction_RefusedReasonKeepsTheGrant(t *testing.T) {
+	fx, id := setupOrderFixture(t)
+	manager := &fakeUser{id: uuid.New(), orgID: fx.user.orgID, role: "manager"}
+	fx.svc.approvalPINVerifier = func(context.Context, uuid.UUID, string, string) (modelbase.AuthUser, error) { return manager, nil }
+	fx.svc.reasonPolicies = reasonPolicyFor(&manifest.ReasonRequiredDef{Actions: []string{"cancel"}})
+	fx.registerAction("test_orders", &manifest.ActionDef{
+		Key: "cancel", Trigger: &manifest.ActionTrigger{Type: "wasm", Export: "x"}, SupervisorPolicy: "cancel_cfdi",
+	})
+	fx.wasm.fn = func(context.Context, ActionRequest) (ActionResponse, error) { return ActionResponse{Success: true}, nil }
+	ctx := context.Background()
+	g := grantFor(t, fx.svc, fx.user, "cancel_cfdi", "")
+
+	if _, err := fx.svc.ExecAction(ctx, "test_orders", fx.user, id, "cancel", map[string]any{"approval_id": g}); err == nil {
+		t.Fatal("no reason must be refused")
+	}
+	if _, err := fx.svc.ExecAction(ctx, "test_orders", fx.user, id, "cancel", map[string]any{"approval_id": g, "reason": "error de captura"}); err != nil {
+		t.Fatalf("retry with the reason must reuse the grant: %v", err)
+	}
+}
