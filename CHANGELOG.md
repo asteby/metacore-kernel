@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Search key `match: "normalized_prefix"`.** Same folding as `normalized`, but the
+  typed text matches the START of the stored key (`LIKE 'term%'`) in both the list
+  search and the options picker, so a partly typed «205/55» already finds
+  «205/55R16» while the cashier is still typing. `normalized` (equality) stays the
+  default. Schema enum, validator and both query paths updated.
+- **Manifest v3 `PrefillFromRecord.fromField`.** A line-items action field whose
+  `default` is a `$prefillFromRecord` directive can now name a sibling ref field
+  (`fromField`) as the source document. Row actions keep seeding from the record
+  they open on; a `create`-placed action (no record) seeds its grid when the user
+  picks the source (e.g. «Recibir OC» picking its purchase order), and
+  `$prefillFromRecord` names a one_to_many relation of the referenced model.
+  Interpreted by the SDK action modal; the host only round-trips it.
 - **`dynamic.ReplayAfterModels` + `-- metacore: replay-after-models` migration marker.**
   A migration whose effect needs the host's model table (a trigger, a default, a
   sequence) ran on a first install before the host (ops) materialised the table

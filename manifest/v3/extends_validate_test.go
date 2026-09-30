@@ -144,6 +144,24 @@ func TestSearchable_ScalarOnly(t *testing.T) {
 	}
 }
 
+func TestSearchKeyMatchModes(t *testing.T) {
+	for _, match := range []string{"", "normalized", "normalized_prefix", "exact"} {
+		mod := tireSpecModel()
+		mod["search_keys"] = []interface{}{map[string]interface{}{"name": "size_key", "format": "{aspect_ratio}", "match": match}}
+		if match == "" {
+			delete(mod["search_keys"].([]interface{})[0].(map[string]interface{}), "match")
+		}
+		if err := Validate(mustJSON(t, withModels(mod))); err != nil {
+			t.Errorf("match %q must be valid: %v", match, err)
+		}
+	}
+	mod := tireSpecModel()
+	mod["search_keys"] = []interface{}{map[string]interface{}{"name": "size_key", "format": "{aspect_ratio}", "match": "fuzzy"}}
+	if err := Validate(mustJSON(t, withModels(mod))); err == nil {
+		t.Error("unknown match mode must be refused")
+	}
+}
+
 func TestSearchKeys(t *testing.T) {
 	cases := []struct {
 		name string

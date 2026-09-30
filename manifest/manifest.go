@@ -1042,7 +1042,7 @@ type ModelExtension struct {
 // gets the same treatment. Exact keys keep the literals as composed.
 type SearchKeyDef struct {
 	Parts []SearchKeyPart `json:"parts"`
-	// Match is "normalized" (default) or "exact".
+	// Match is "normalized" (default), "normalized_prefix" or "exact".
 	Match string `json:"match,omitempty"`
 }
 

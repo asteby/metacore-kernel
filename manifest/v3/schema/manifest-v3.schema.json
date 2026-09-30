@@ -1762,9 +1762,10 @@
           "type": "string",
           "enum": [
             "normalized",
+            "normalized_prefix",
             "exact"
           ],
-          "description": "normalized (default) folds case, whitespace and separators on both sides; exact compares as composed."
+          "description": "normalized (default) folds case, whitespace and separators on both sides; normalized_prefix folds the same way but matches the start of the key (a partly typed 205/55 finds 205/55R16); exact compares as composed."
         }
       }
     },
@@ -3142,6 +3143,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "fromField": {
+          "type": "string",
+          "description": "Key of a SIBLING action field (a ref select) whose selected value is the id of the document the rows are seeded from. Without it the rows come from the record the action was opened on (row actions); with it a create-placed action (no record) seeds its grid as soon as the user picks the source document, and '$prefillFromRecord' then names a one_to_many relation of the REFERENCED model. Clearing the selection empties the grid."
         }
       }
     },

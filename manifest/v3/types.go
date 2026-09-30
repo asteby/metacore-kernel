@@ -1396,7 +1396,9 @@ type SearchKey struct {
 	Format string `json:"format"`
 	// Match is how typed text is compared: "normalized" (default) folds case,
 	// whitespace and separators on both sides so "205 55 r16" finds
-	// "205/55R16"; "exact" compares the composed value as is.
+	// "205/55R16"; "normalized_prefix" is the same folding but matches the
+	// START of the key, so a partly typed "205/55" already finds "205/55R16";
+	// "exact" compares the composed value as is.
 	Match string `json:"match,omitempty"`
 }
 

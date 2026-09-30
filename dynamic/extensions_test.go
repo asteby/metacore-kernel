@@ -327,3 +327,44 @@ func TestExtensions_EchoedSearchKeyIsNoop(t *testing.T) {
 		t.Fatalf("changing size_key must be rejected, got %v", err)
 	}
 }
+
+// match: normalized_prefix — the picker finds the tire while the size is still
+// being typed ("205/55" → "205/55R16"), the default key still needs it whole.
+func TestExtensions_OptionsSearchKeyPrefix(t *testing.T) {
+	svc, db := setupExtensionService(t)
+	ctx := context.Background()
+	user := newUser(uuid.New())
+	out, err := svc.Create(ctx, "test_products", user, map[string]any{
+		"name": "Everland A", "TireSpec.section_width_mm": 205, "TireSpec.aspect_ratio": 55, "TireSpec.rim_diameter_in": 16,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Exec(`UPDATE product_tire_specs SET size_key = '2055516' WHERE id = ?`, out["id"])
+	svc.optsResolver = optionsConfigFor(OptionsConfig{Fields: map[string]FieldOptionsConfig{
+		"id": {Type: "dynamic", Source: "test_products", Value: "id", Label: "name"},
+	}})
+	countFor := func(term string) int {
+		res, err := svc.Options(ctx, user, OptionsQuery{Model: "test_products", Field: "id", Q: term})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(res.Options)
+	}
+	if n := countFor("205/55"); n != 0 {
+		t.Fatalf("equality key must not match a partial size, got %d", n)
+	}
+	svc.extensions = func(_ context.Context, model string) []ExtensionTable {
+		e := tireSpecExt()
+		e.Columns[4].SearchKey.Match = "normalized_prefix"
+		return []ExtensionTable{e}
+	}
+	for _, term := range []string{"205/55", "205 55 1", "2055516", "20"} {
+		if n := countFor(term); n != 1 {
+			t.Fatalf("prefix q=%q → %d options, want 1", term, n)
+		}
+	}
+	if n := countFor("225/55"); n != 0 {
+		t.Fatalf("a different size must not match, got %d", n)
+	}
+}
