@@ -1814,6 +1814,42 @@
         "enabled_when": {
           "type": "string",
           "description": "Optional predicate over the record that must hold for the route to serve it, e.g. \"status != 'draft'\" or \"status in ('sent','accepted') && total > 0\". Comparisons `<column> <op> <literal>` (== != < <= > >= in not_in) joined by && / ||, parentheses allowed."
+        },
+        "actions": {
+          "type": "array",
+          "description": "Row actions of the model the token holder may run from the public page without a login (accept / reject a quote). Only valid on kind 'html'. Each action must target this model, declare requires_state and have no required fields. Served at POST /p/<orgRef>/<addon>/<key>/<token>/actions/<action>.",
+          "items": {
+            "$ref": "#/$defs/PublicRouteAction"
+          }
+        }
+      }
+    },
+    "PublicRouteAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action"
+      ],
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": "contributions.actions[] key to expose.",
+          "pattern": "^[a-z][a-z0-9_.]*$"
+        },
+        "label": {
+          "type": "string",
+          "description": "Button text (i18n key or literal). Falls back to the action's label."
+        },
+        "confirm": {
+          "type": "string",
+          "description": "Confirmation shown before posting (i18n key or literal)."
+        },
+        "style": {
+          "type": "string",
+          "enum": [
+            "primary",
+            "danger"
+          ]
         }
       }
     },

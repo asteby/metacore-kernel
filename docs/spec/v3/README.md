@@ -261,6 +261,7 @@ release added:
 | v0.19.0 | `metadata.i18n` — marketplace catalog localizations keyed by locale (`{ "es": { name, description, features }, … }`). Distinct from the top-level `i18n` block (app string-bundle pointers); the flat `metadata.name`/`description`/`features` are the per-field fallback. |
 | v0.20.0 | `metadata.countries[]` — ISO 3166-1 alpha-2 codes the addon targets (empty = global). The hub filters the catalog by the user's country. |
 | v0.111.0 | `contributions.public_routes[]` — org-scoped, token-addressed public views of a record served by the host without a login (see [Public routes](#public-routes)). New `PublicRoute` type; `enabled_when` record predicates parsed by `v3.ParseRecordExpr`. |
+| unreleased | `contributions.public_routes[].actions[]` — a public page can run declared one-click row actions (accept / reject a quote) as the org system actor, gated by `requires_state`, `enabled_when` and `expires_column`. New `PublicRouteAction` type. |
 | v0.117.0 | Top-level `provides_options[]` — publish a model as a reusable option **catalog** any other addon consumes through `options_source` (see [Published option catalogs](#published-option-catalogs)). New `OptionCatalog` type. |
 | next | Top-level `provides_capabilities[]` + handler `type: "capability"` — provider-neutral capability contracts (see [Capability contracts](#capability-contracts)). New `ProvidedCapability` type; `Handler.capability` / `Handler.input`; kernel package `capability`. |
 
@@ -333,6 +334,24 @@ not hold for the record.
 | `relations`      | Allowlist of `models[].relations[].name` or ref column stems (`customer` for `customer_id`).          |
 | `expires_column` | Optional `date` / `timestamp` / `timestamptz` column; once in the past the host answers `410 Gone`.    |
 | `enabled_when`   | Optional predicate: comparisons `<column> <op> <literal>` (`== != < <= > >= in not_in`) joined by `&&` / `\|\|`, parentheses allowed. Parsed at validation time by `v3.ParseRecordExpr`; evaluated by the host on every request. |
+| `actions`        | Optional, `html` only. Row actions the token holder may run from the page without a login (see below). |
+
+### Public actions
+
+`actions[]` lets the holder of the link **act** on the record: accept or reject
+a quote, approve a work order. Each entry is `{action, label?, confirm?,
+style?}` and names a `contributions.actions[]` row action of the same model. The
+host renders one button per entry on the `html` page and serves
+
+```
+POST /p/<orgRef>/<addon>/<key>/<token>/actions/<action>
+```
+
+which runs the addon's own handler as the organization's system actor (there is
+no session). The action keeps its guards: it must declare `requires_state` (so a
+link can never fire it outside its window), it must have no required fields and
+no steps/modal (the page has no form), and the route's `enabled_when` and
+`expires_column` gate the POST exactly like the GET.
 
 Column-level checks run for models the addon owns; for extended models they are
 deferred to the host at serve time (their columns live in another manifest).

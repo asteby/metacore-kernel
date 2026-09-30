@@ -209,3 +209,100 @@ func TestPublicRoutes_ParseCarriesEveryField(t *testing.T) {
 		t.Fatalf("public route not parsed faithfully: %+v", r)
 	}
 }
+
+// withPublicActions extends withPublicRoutes with two one-click row actions of
+// Quote (accept, reject) and a route that exposes them.
+func withPublicActions(actions []interface{}, act map[string]interface{}) map[string]interface{} {
+	m := withPublicRoutes([]interface{}{
+		route(map[string]interface{}{
+			"key": "quote_page", "kind": "html", "actions": actions,
+		}),
+	})
+	acts := []interface{}{
+		map[string]interface{}{
+			"key": "accept", "target_model": "Quote", "requires_state": []interface{}{"sent"},
+			"handler": map[string]interface{}{"type": "wasm", "function": "handle_Quote_accept"},
+		},
+		map[string]interface{}{
+			"key": "reject", "target_model": "Quote", "requires_state": []interface{}{"sent"},
+			"handler": map[string]interface{}{"type": "wasm", "function": "handle_Quote_reject"},
+			"fields":  []interface{}{map[string]interface{}{"key": "reason", "type": "string", "label": "Reason"}},
+		},
+	}
+	if act != nil {
+		acts = append(acts, act)
+	}
+	m["contributions"].(map[string]interface{})["actions"] = acts
+	return m
+}
+
+func TestPublicRoutes_ActionsValid(t *testing.T) {
+	m := withPublicActions([]interface{}{
+		map[string]interface{}{"action": "accept", "label": "quotes.public.accept", "confirm": "quotes.public.accept_confirm"},
+		map[string]interface{}{"action": "reject", "style": "danger"},
+	}, nil)
+	if err := Validate(mustJSON(t, m)); err != nil {
+		t.Fatalf("expected valid, got: %v", err)
+	}
+	v, err := Parse(mustJSON(t, m))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.Contributions.PublicRoutes[0].Actions; len(got) != 2 || got[0].Action != "accept" || got[1].Style != "danger" {
+		t.Fatalf("actions not parsed: %+v", got)
+	}
+}
+
+func TestPublicRoutes_ActionsRejections(t *testing.T) {
+	cases := []struct {
+		name    string
+		actions []interface{}
+		extra   map[string]interface{}
+		want    string
+	}{
+		{"unknown action", []interface{}{map[string]interface{}{"action": "ghost"}}, nil, "not a contributions.actions[] key"},
+		{"duplicate", []interface{}{map[string]interface{}{"action": "accept"}, map[string]interface{}{"action": "accept"}}, nil, "listed twice"},
+		{"bad style", []interface{}{map[string]interface{}{"action": "accept", "style": "neon"}}, nil, ""},
+		{"no requires_state", []interface{}{map[string]interface{}{"action": "open"}}, map[string]interface{}{
+			"key": "open", "target_model": "Quote",
+			"handler": map[string]interface{}{"type": "wasm", "function": "handle_Quote_open"},
+		}, "must declare requires_state"},
+		{"other model", []interface{}{map[string]interface{}{"action": "other"}}, map[string]interface{}{
+			"key": "other", "target_model": "QuoteItem", "requires_state": []interface{}{"sent"},
+			"handler": map[string]interface{}{"type": "wasm", "function": "handle_QuoteItem_other"},
+		}, "targets model"},
+		{"required field", []interface{}{map[string]interface{}{"action": "ask"}}, map[string]interface{}{
+			"key": "ask", "target_model": "Quote", "requires_state": []interface{}{"sent"},
+			"handler": map[string]interface{}{"type": "wasm", "function": "handle_Quote_ask"},
+			"fields":  []interface{}{map[string]interface{}{"key": "why", "type": "string", "label": "Why", "required": true}},
+		}, "cannot collect a form"},
+		{"table placement", []interface{}{map[string]interface{}{"action": "bulk"}}, map[string]interface{}{
+			"key": "bulk", "target_model": "Quote", "placement": "table", "requires_state": []interface{}{"sent"},
+			"handler": map[string]interface{}{"type": "wasm", "function": "handle_Quote_bulk"},
+		}, "only row actions"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Validate(mustJSON(t, withPublicActions(c.actions, c.extra)))
+			if err == nil {
+				t.Fatal("expected a validation error")
+			}
+			if c.want != "" && !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("error %q does not mention %q", err, c.want)
+			}
+		})
+	}
+}
+
+func TestPublicRoutes_ActionsOnlyOnHTML(t *testing.T) {
+	m := withPublicActions(nil, nil)
+	routes := m["contributions"].(map[string]interface{})["public_routes"].([]interface{})
+	routes[0] = route(map[string]interface{}{
+		"key": "quote_json", "kind": "json", "columns": []interface{}{"folio"},
+		"actions": []interface{}{map[string]interface{}{"action": "accept"}},
+	})
+	err := Validate(mustJSON(t, m))
+	if err == nil || !strings.Contains(err.Error(), "only valid for kind html") {
+		t.Fatalf("want kind html error, got %v", err)
+	}
+}

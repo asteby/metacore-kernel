@@ -1550,6 +1550,37 @@ type PublicRoute struct {
 	// 'string' | number | true | false | null | ('a','b'), joined by && and ||
 	// (&& binds tighter). See ParseRecordExpr. Empty = always enabled.
 	EnabledWhen string `json:"enabled_when,omitempty"`
+	// Actions lets the holder of the token ACT on the record from the public
+	// page — accept or reject a quote, approve a work order — without a login.
+	// Only the listed row actions are reachable; the host renders one button per
+	// entry on the "html" kind and serves
+	//
+	//	POST /p/<orgRef>/<addon>/<key>/<token>/actions/<action>
+	//
+	// which runs the addon's own action handler as the organization's system
+	// actor (no user session). The action keeps its own guards: RequiresState is
+	// enforced (and mandatory here, so a link can never fire an action outside
+	// its window), and EnabledWhen / ExpiresColumn gate the POST like the GET.
+	// Optional; only valid on kind "html".
+	Actions []PublicRouteAction `json:"actions,omitempty"`
+}
+
+// PublicRouteAction exposes one row action of the route's model on the public
+// page (PublicRoute.Actions). The action must be a contributions.actions[] row
+// action targeting the route's model with a non-empty requires_state and no
+// required fields (the public page has no form beyond an optional note).
+type PublicRouteAction struct {
+	// Action is the contributions.actions[] key. Required.
+	Action string `json:"action"`
+	// Label is the button text: an i18n key or a literal. Falls back to the
+	// action's own label.
+	Label string `json:"label,omitempty"`
+	// Confirm is the confirmation the page asks before posting (i18n key or
+	// literal). Empty = no confirmation.
+	Confirm string `json:"confirm,omitempty"`
+	// Style is a hint for the button emphasis: "primary" (default) or
+	// "danger". Hosts that do not know a value use "primary".
+	Style string `json:"style,omitempty"`
 }
 
 // ConfigEntry points at where an addon's configuration lives: a declarative
