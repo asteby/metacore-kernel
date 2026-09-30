@@ -221,8 +221,15 @@ func (s *Service) validateExtensionInput(ctx context.Context, user modelbase.Aut
 			}
 		}
 		for _, c := range e.Columns {
-			if _, sent := sub[c.Name]; sent && !extColumnWritable(c) {
-				ve.add(e.Key+"."+c.Name, codeProtected, nil)
+			if raw, sent := sub[c.Name]; sent && !extColumnWritable(c) {
+				// A form posts every field back, the generated search key
+				// included: echoing the persisted (or an empty) value changes
+				// nothing, so it is dropped instead of failing the save (same
+				// rule as a protected owner column). Only an attempt to change
+				// it is rejected.
+				if !protectedNoop(raw, c, before[e.Key], selfID != nil) {
+					ve.add(e.Key+"."+c.Name, codeProtected, nil)
+				}
 				delete(sub, c.Name)
 			}
 		}
