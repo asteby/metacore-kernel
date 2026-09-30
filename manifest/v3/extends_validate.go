@@ -71,6 +71,7 @@ func validateExtends(m *Manifest, rls string) []string {
 			{mod.StageField != "" || len(mod.Stages) > 0 || len(mod.Transitions) > 0 || len(mod.OnTransition) > 0, "stage machine (stage_field/stages/transitions/on_transition)"},
 			{mod.Import != nil, "import"},
 			{mod.Locking != "", "locking"},
+			{mod.AppendOnly, "append_only"},
 		} {
 			if f.set {
 				errs = append(errs, fmt.Sprintf("%s: an extension table cannot declare %s — it has no rows of its own outside %s", where, f.name, target))

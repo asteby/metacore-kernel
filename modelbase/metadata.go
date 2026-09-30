@@ -58,6 +58,13 @@ type TableMetadata struct {
 	// service for models implementing modelbase.Singleton or marked with
 	// modelbase.MarkSingleton; a model may also set it in DefineTable.
 	Singleton bool `json:"singleton,omitempty"`
+
+	// AppendOnly marks the model as an append-only ledger (manifest
+	// Model.append_only): rows are created and read, never edited or deleted, so
+	// the SDK hides the edit and delete affordances. The server refuses the
+	// writes regardless (dynamic.ErrAppendOnly). Set by the host from the
+	// manifest; omitted for ordinary models.
+	AppendOnly bool `json:"append_only,omitempty"`
 }
 
 // FormLayout is the served grouping spec for a model's create/edit form. Mode

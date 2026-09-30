@@ -1617,6 +1617,12 @@ interpolation.
 (`Host.WithMutationGuard`, § 14.9) rejects the post-mutation row — the
 transaction is rolled back and no canonical event is published.
 
+`append_only` is returned, before any DB work, when an `update` (including the
+`inc` form) or `delete` targets a table the embedder reports as an append-only
+ledger (`Host.WithAppendOnly`, manifest `models[].append_only`). In a
+`data_batch` one such mutation refuses the whole batch. `create` is never
+affected.
+
 - `create`: `before` is `null`, `after` is the `RETURNING *` row.
 - `update`: `before` is the pre-update snapshot (SELECT inside the same
   transaction), `after` the `RETURNING *` row.

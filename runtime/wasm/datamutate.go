@@ -192,6 +192,9 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 	if inv.db == nil {
 		return fail("db_error", "host has no *gorm.DB configured")
 	}
+	if code, aErr := refuseAppendOnly(inv, &req); aErr != nil {
+		return fail(code, aErr.Error())
+	}
 
 	execCtx, cancel := context.WithTimeout(ctx, dataMutateDeadline)
 	defer cancel()

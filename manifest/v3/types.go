@@ -714,6 +714,14 @@ type Model struct {
 	// the activity log answers who removed/cancelled what, when, and why. Nil =
 	// no reason needed (the legacy behaviour). See ReasonRequired.
 	ReasonRequired *ReasonRequired `json:"reason_required,omitempty"`
+	// AppendOnly marks the model as an append-only ledger: rows may be created
+	// but never modified or removed. The kernel refuses every UPDATE and DELETE
+	// on it (REST, the wasm data_mutate / data_batch imports and their `inc`
+	// form) with the stable code "append_only", so a payment book, a stock or
+	// audit ledger cannot be rewritten after the fact — a mistake is fixed with
+	// a reversing row, not by editing history. Incompatible with a stage
+	// machine (a stage is a mutation by definition) and with model extensions.
+	AppendOnly bool `json:"append_only,omitempty"`
 
 	// Rules declare CROSS-RECORD guards: predicates over the PARENT row this
 	// model references by FK (a payment over a closed session, payments summing

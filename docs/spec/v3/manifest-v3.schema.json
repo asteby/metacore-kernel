@@ -780,6 +780,10 @@
             "$ref": "#/$defs/CrossRule"
           }
         },
+        "append_only": {
+          "type": "boolean",
+          "description": "Marks the model as an append-only ledger: rows can be created but never updated or deleted. The kernel refuses every UPDATE/DELETE (REST and the wasm data_mutate/data_batch imports) with code 'append_only'; a mistake is corrected with a reversing row. Incompatible with a stage machine."
+        },
         "locking": {
           "type": "string",
           "enum": [

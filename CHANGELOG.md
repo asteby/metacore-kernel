@@ -43,6 +43,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   confirmation, or the reason of a business refusal) instead of the generic
   copy. Needed by self-service forms such as a ticket's autofactura (RFC,
   régimen, uso CFDI). Dynamic sources, refs and non-text types stay rejected.
+- **Manifest v3 `models[].append_only` — append-only ledger primitive.** A
+  model flagged `append_only: true` accepts creates and reads but refuses every
+  UPDATE and DELETE with the stable code `append_only`: on the REST path
+  (`dynamic.Config.AppendOnlyResolver`, HTTP 409 + `code: "append_only"`, typed
+  `*dynamic.AppendOnlyError`) and on the wasm write tier
+  (`Host.WithAppendOnly`, covering `data_mutate`, `data_batch` and the `inc`
+  form). A payment book, stock or audit ledger can no longer be rewritten after
+  the fact; a mistake is fixed with a reversing row. Declaring it together with
+  a stage machine, or on an extension table, is a validation error.
+  `modelbase.TableMetadata.AppendOnly` lets the host tell the UI to hide the
+  edit/delete affordances. Declarative backfills and raw `db_exec` are not
+  covered: they are migration/system paths, not row writes by users.
+
 - **Manifest v3 `contributions.public_routes[].actions[]`.** A public route of
   kind `html` can expose declared one-click row actions of its model
   (`{action, label?, confirm?, style?}`) that the token holder runs without a

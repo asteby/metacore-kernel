@@ -97,6 +97,9 @@ type invocation struct {
 	// update AND delete it maintains the manifest-declared aggregates over the
 	// mutated table inside the same transaction. nil = no compute on this tier.
 	mutationCompute MutationComputeFn
+	// appendOnly is the embedder-injected append-only ledger lookup
+	// (Host.WithAppendOnly), keyed by LOGICAL table: update/delete → `append_only`.
+	appendOnly func(logicalTable string) bool
 	// approvalRequester is the embedder-injected dynamic.Service.RequestApproval
 	// (Host.WithApprovals) the `approval_request` import calls. nil = the
 	// import answers `approvals_unavailable`.
