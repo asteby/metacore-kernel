@@ -1191,6 +1191,7 @@ func Validate(raw []byte) error {
 			errs = append(errs, fmt.Sprintf("compatibility.requires[%d].key is empty", i))
 		}
 	}
+	errs = append(errs, validateRequiresEnables(&m)...)
 
 	if m.Lifecycle != nil {
 		for i, step := range m.Lifecycle.Upgrade {
