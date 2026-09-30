@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`Installer.MaterializeModels` / `WithModelMaterializer` — fresh-tenant install.** A
+  host that serves addon models from a schema other than `addon_<key>` (ops:
+  `public`, its own table shape) can now create them BEFORE the addon's SQL
+  migrations run, on Install and Upgrade. Before, on an empty tenant the
+  migrations found no `public.<table>`: pos@011 aborted (42P01), customers@024 /
+  products@007 (42703) and an unmarked trigger migration (inventory@019, kardex
+  `seq`/`balance_after`) attached to the empty `addon_<key>` twin. Hook must be
+  idempotent; an error aborts the install. Fixes #446 (ops wires it with
+  `CreateDynamicTable` + `SyncDynamicTableSchema`).
 - **Search key `match: "normalized_prefix"`.** Same folding as `normalized`, but the
   typed text matches the START of the stored key (`LIKE 'term%'`) in both the list
   search and the options picker, so a partly typed «205/55» already finds
