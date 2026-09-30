@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Manifest v3 `contributions.public_routes[].actions[]`.** A public route of
+  kind `html` can expose declared one-click row actions of its model
+  (`{action, label?, confirm?, style?}`) that the token holder runs without a
+  login: `POST /p/<orgRef>/<addon>/<key>/<token>/actions/<action>`. Validation
+  requires the action to target the route's model, declare `requires_state`
+  and declare only free-text fields, no steps or modal. New `v3.PublicRouteAction`.
+  Hosts run the addon handler as the organization's system actor.
+
 - **Manifest v3 `compatibility.requires[].enables`.** An optional require
   lists the capabilities of the declaring addon that only work while the
   required addon is installed, e.g. `"enables":

@@ -506,6 +506,10 @@ func validatePublicRoutes(m *Manifest) []string {
 	for _, d := range m.Contributions.Documents {
 		docs[d.Key] = d.Model
 	}
+	actions := make(map[string]Action, len(m.Contributions.Actions))
+	for _, a := range m.Contributions.Actions {
+		actions[a.Key] = a
+	}
 
 	var errs []string
 	seen := make(map[string]struct{}, len(m.Contributions.PublicRoutes))
@@ -628,6 +632,66 @@ func validatePublicRoutes(m *Manifest) []string {
 					}
 				}
 			}
+		}
+		errs = append(errs, validatePublicRouteActions(where, r, actions)...)
+	}
+	return errs
+}
+
+// validatePublicRouteActions enforces the rules of PublicRoute.Actions: only on
+// kind html; every entry names a contributions.actions[] row action of the
+// route's model that declares requires_state (a public link must never fire an
+// action outside its window) and declares only free-text fields (the public
+// page renders a text input per field); no action twice.
+func validatePublicRouteActions(where string, r PublicRoute, actions map[string]Action) []string {
+	if len(r.Actions) == 0 {
+		return nil
+	}
+	var errs []string
+	if r.Kind != "html" {
+		errs = append(errs, fmt.Sprintf("%s.actions is only valid for kind html (got %q)", where, r.Kind))
+	}
+	seen := make(map[string]struct{}, len(r.Actions))
+	for i, pa := range r.Actions {
+		aw := fmt.Sprintf("%s.actions[%d]", where, i)
+		if pa.Action == "" {
+			errs = append(errs, fmt.Sprintf("%s.action is required", aw))
+			continue
+		}
+		if _, dup := seen[pa.Action]; dup {
+			errs = append(errs, fmt.Sprintf("%s.action %q is listed twice", aw, pa.Action))
+			continue
+		}
+		seen[pa.Action] = struct{}{}
+		a, ok := actions[pa.Action]
+		if !ok {
+			errs = append(errs, fmt.Sprintf("%s.action %q is not a contributions.actions[] key of this addon", aw, pa.Action))
+			continue
+		}
+		if a.TargetModel != r.Model {
+			errs = append(errs, fmt.Sprintf("%s.action %q targets model %q, not %q", aw, pa.Action, a.TargetModel, r.Model))
+		}
+		if a.Placement != "" && a.Placement != "row" {
+			errs = append(errs, fmt.Sprintf("%s.action %q has placement %q; only row actions can be public", aw, pa.Action, a.Placement))
+		}
+		if len(a.RequiresState) == 0 {
+			errs = append(errs, fmt.Sprintf("%s.action %q must declare requires_state so the public link cannot fire it in any state", aw, pa.Action))
+		}
+		for _, f := range a.Fields {
+			// The public page renders a plain text input per declared field
+			// (a customer's reason / comment); anything richer (pickers, enums,
+			// numbers) has no public form.
+			if (f.Type != "" && f.Type != "string" && f.Type != "text") || f.Ref != "" || f.Options.Len() > 0 || f.Options.Dynamic != nil || f.OptionsSource != "" {
+				errs = append(errs, fmt.Sprintf("%s.action %q has field %q that is not free text; a public action only collects text fields", aw, pa.Action, f.Key))
+			}
+		}
+		if len(a.Steps) > 0 || a.Modal != "" {
+			errs = append(errs, fmt.Sprintf("%s.action %q uses steps/modal; a public action is a one-click action", aw, pa.Action))
+		}
+		switch pa.Style {
+		case "", "primary", "danger":
+		default:
+			errs = append(errs, fmt.Sprintf("%s.style %q is not one of primary|danger", aw, pa.Style))
 		}
 	}
 	return errs
