@@ -17,6 +17,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   once the model tables exist (install, upgrade, boot re-register); it re-runs,
   outside the ledger and with the same `search_path` a first Apply would get,
   only the migrations carrying the marker. The marked SQL must be idempotent.
+- **Inbound webhooks: `verify: "bearer"`.** A `webhooks[]` route can authenticate a
+  provider that sends a STATIC token instead of signing the body (factura.com's
+  autofacturación webhooks send `Authorization: Token <token>`): the receiver
+  accepts the `Bearer` and `Token` schemes, compares against the `secret_ref`
+  credential in constant time and never authenticates an empty secret. Weaker
+  than `hmac-sha256` (it does not bind the body) — TLS only.
 - **Public actions: static `select` fields and `show_message`.** A
   `public_routes[].actions[]` action may now collect a `select` field over a
   static `options` list next to free text (the page renders a dropdown and the

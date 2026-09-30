@@ -3574,9 +3574,9 @@
         "verify": {
           "type": "string",
           "enum": [
-            "hmac-sha256"
+            "hmac-sha256", "bearer"
           ],
-          "description": "Signature scheme. Omit for no verification."
+          "description": "Signature scheme. hmac-sha256 signs the body; bearer checks a static token sent as Authorization: Bearer|Token <secret> (for providers that cannot sign). Omit for no verification."
         },
         "secret_ref": {
           "type": "string",

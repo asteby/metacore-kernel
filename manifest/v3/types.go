@@ -329,7 +329,8 @@ type InboundWebhook struct {
 	// Path is the route mounted under the addon+org namespace (e.g.
 	// "/webhooks/github").
 	Path string `json:"path"`
-	// Verify is the signature scheme: "" (none) | "hmac-sha256".
+	// Verify is the signature scheme: "" (none) | "hmac-sha256" | "bearer"
+	// (a static token in Authorization: Bearer|Token <secret>).
 	Verify string `json:"verify,omitempty"`
 	// SecretRef resolves the signing secret as "<connector>.<credential>"
 	// (e.g. "github.webhook_secret"). Required when Verify is set.
