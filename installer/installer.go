@@ -287,12 +287,32 @@ type Installer struct {
 	// dynamic.ApplyOptions.
 	MigrationSchema func(addonKey string) string
 
+	// MaterializeModels, when set, is called on Install and Upgrade right
+	// before the addon's SQL migrations run, so a host that serves the model
+	// tables from a schema other than `addon_<key>` (ops: `public`, with its
+	// own table shape) creates them there FIRST. Without it, on a fresh tenant
+	// the migrations find no `public.<table>` (migrationSearchPath only
+	// prioritises the host schema once one of the addon's tables exists there):
+	// pos@011 fails 42P01, customers@024 / products@007 42703, and a trigger
+	// migration (inventory@019, kardex) attaches to the empty addon_<key> twin.
+	// Must be idempotent (CREATE IF NOT EXISTS + additive sync). An error
+	// aborts the install. Wired via WithModelMaterializer.
+	MaterializeModels func(db *gorm.DB, m manifest.Manifest) error
+
 	// ModelTarget, when set, locates the model an extension table (v3
 	// Model.extends) points at, so install emits the 1:1 FOREIGN KEY (id →
 	// target.id, ON DELETE CASCADE) and refuses a target whose addon does not
 	// accept extensions. Nil = extension tables without a physical FK. Wired
 	// via WithModelTarget.
 	ModelTarget dynamic.ModelTargetResolver
+}
+
+// WithModelMaterializer declares how the host creates the addon's model tables
+// in the schema it serves them from, before the addon's migrations run (see the
+// MaterializeModels field). Returns the receiver so it chains on construction.
+func (i *Installer) WithModelMaterializer(fn func(db *gorm.DB, m manifest.Manifest) error) *Installer {
+	i.MaterializeModels = fn
+	return i
 }
 
 // WithModelTarget declares how the host locates a model another addon's
@@ -579,6 +599,11 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 		}
 		if err := dynamic.SyncSchema(i.DB, b.Manifest.Key, orgID, iso, def); err != nil {
 			return nil, nil, err
+		}
+	}
+	if i.MaterializeModels != nil {
+		if err := i.MaterializeModels(i.DB, b.Manifest); err != nil {
+			return nil, nil, fmt.Errorf("materialize models: %w", err)
 		}
 	}
 	if err := dynamic.ApplyWithOptions(i.DB, b.Manifest.Key, orgID, iso, b.Migrations, migrationOptions(i.MigrationSchema, b.Manifest)); err != nil {
@@ -1534,12 +1559,13 @@ func (i *Installer) upgradeApplier() schemaApplier {
 	if i.schemaApplier != nil {
 		return i.schemaApplier
 	}
-	return defaultSchemaApplier{migrationSchema: i.MigrationSchema, modelTarget: i.ModelTarget}
+	return defaultSchemaApplier{migrationSchema: i.MigrationSchema, modelTarget: i.ModelTarget, materialize: i.MaterializeModels}
 }
 
 type defaultSchemaApplier struct {
 	migrationSchema func(addonKey string) string
 	modelTarget     dynamic.ModelTargetResolver
+	materialize     func(db *gorm.DB, m manifest.Manifest) error
 }
 
 func (a defaultSchemaApplier) ApplyForUpgrade(db *gorm.DB, orgID uuid.UUID, iso dynamic.Isolation, b *bundle.Bundle) error {
@@ -1552,6 +1578,11 @@ func (a defaultSchemaApplier) ApplyForUpgrade(db *gorm.DB, orgID uuid.UUID, iso 
 		}
 		if err := dynamic.SyncSchema(db, b.Manifest.Key, orgID, iso, def); err != nil {
 			return fmt.Errorf("SyncSchema %s: %w", def.ModelKey, err)
+		}
+	}
+	if a.materialize != nil {
+		if err := a.materialize(db, b.Manifest); err != nil {
+			return fmt.Errorf("materialize models: %w", err)
 		}
 	}
 	if err := dynamic.ApplyWithOptions(db, b.Manifest.Key, orgID, iso, b.Migrations, migrationOptions(a.migrationSchema, b.Manifest)); err != nil {
