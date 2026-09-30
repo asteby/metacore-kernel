@@ -275,12 +275,28 @@ func TestPublicRoutes_ActionsRejections(t *testing.T) {
 			"key": "ask", "target_model": "Quote", "requires_state": []interface{}{"sent"},
 			"handler": map[string]interface{}{"type": "wasm", "function": "handle_Quote_ask"},
 			"fields":  []interface{}{map[string]interface{}{"key": "qty", "type": "number", "label": "Qty"}},
-		}, "only collects text fields"},
+		}, "only collects free text or a static select"},
 		{"picker field", []interface{}{map[string]interface{}{"action": "ask"}}, map[string]interface{}{
 			"key": "ask", "target_model": "Quote", "requires_state": []interface{}{"sent"},
 			"handler": map[string]interface{}{"type": "wasm", "function": "handle_Quote_ask"},
 			"fields":  []interface{}{map[string]interface{}{"key": "who", "type": "string", "label": "Who", "ref": "Customer"}},
-		}, "only collects text fields"},
+		}, "not free text or a static select"},
+		{"select without options", []interface{}{map[string]interface{}{"action": "ask"}}, map[string]interface{}{
+			"key": "ask", "target_model": "Quote", "requires_state": []interface{}{"sent"},
+			"handler": map[string]interface{}{"type": "wasm", "function": "handle_Quote_ask"},
+			"fields":  []interface{}{map[string]interface{}{"key": "regimen", "type": "select", "label": "Regimen"}},
+		}, "without static options"},
+		{"options on a text field", []interface{}{map[string]interface{}{"action": "ask"}}, map[string]interface{}{
+			"key": "ask", "target_model": "Quote", "requires_state": []interface{}{"sent"},
+			"handler": map[string]interface{}{"type": "wasm", "function": "handle_Quote_ask"},
+			"fields": []interface{}{map[string]interface{}{"key": "regimen", "type": "string", "label": "Regimen",
+				"options": []interface{}{map[string]interface{}{"value": "601", "label": "601"}}}},
+		}, "declare it as type select"},
+		{"dynamic select", []interface{}{map[string]interface{}{"action": "ask"}}, map[string]interface{}{
+			"key": "ask", "target_model": "Quote", "requires_state": []interface{}{"sent"},
+			"handler": map[string]interface{}{"type": "wasm", "function": "handle_Quote_ask"},
+			"fields":  []interface{}{map[string]interface{}{"key": "regimen", "type": "select", "label": "Regimen", "options_source": "regimenes"}},
+		}, "not free text or a static select"},
 		{"table placement", []interface{}{map[string]interface{}{"action": "bulk"}}, map[string]interface{}{
 			"key": "bulk", "target_model": "Quote", "placement": "table", "requires_state": []interface{}{"sent"},
 			"handler": map[string]interface{}{"type": "wasm", "function": "handle_Quote_bulk"},
@@ -309,5 +325,34 @@ func TestPublicRoutes_ActionsOnlyOnHTML(t *testing.T) {
 	err := Validate(mustJSON(t, m))
 	if err == nil || !strings.Contains(err.Error(), "only valid for kind html") {
 		t.Fatalf("want kind html error, got %v", err)
+	}
+}
+
+// A public action may collect a static select (a fiscal régimen) next to free
+// text, and may opt into showing the handler's message on the result page.
+func TestPublicRoutes_ActionsStaticSelectAndShowMessage(t *testing.T) {
+	m := withPublicActions([]interface{}{
+		map[string]interface{}{"action": "invoice_me", "show_message": true},
+	}, map[string]interface{}{
+		"key": "invoice_me", "target_model": "Quote", "requires_state": []interface{}{"sent"},
+		"handler": map[string]interface{}{"type": "wasm", "function": "handle_Quote_invoice_me"},
+		"fields": []interface{}{
+			map[string]interface{}{"key": "rfc", "type": "string", "label": "RFC", "required": true},
+			map[string]interface{}{"key": "regimen", "type": "select", "label": "Regimen", "required": true,
+				"options": []interface{}{
+					map[string]interface{}{"value": "601", "label": "601 General"},
+					map[string]interface{}{"value": "612", "label": "612 PF"},
+				}},
+		},
+	})
+	if err := Validate(mustJSON(t, m)); err != nil {
+		t.Fatalf("expected valid, got: %v", err)
+	}
+	v, err := Parse(mustJSON(t, m))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.Contributions.PublicRoutes[0].Actions; len(got) != 1 || !got[0].ShowMessage {
+		t.Fatalf("show_message not parsed: %+v", got)
 	}
 }
