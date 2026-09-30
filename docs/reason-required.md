@@ -42,3 +42,20 @@ El kernel solo declara y resuelve; el almacenamiento de los overrides es del hos
 
 ## Cadena de bumps (primitivo nuevo de manifest)
 kernel → tag → `addons/tools/manifestcheck` + `addons/tools/addon-preflight` + `hub/backend` + `ops/backend` → addons.
+
+## `Action.supervisor_policy` — autorización de supervisor en acciones (POS-2 / PER-2)
+
+```json
+{ "key": "cancel_fiscal", "target_model": "Invoice", "supervisor_policy": "cancel_cfdi", "handler": {...} }
+```
+
+La acción exige la autorización en el momento de un supervisor para la política `general.approve_<policy>`
+(descuento, precio bajo el mínimo, reembolso, cancelar CFDI, ajuste de inventario…).
+
+- Quien **tiene la capacidad** (o es admin) ejecuta directo: `Config.SupervisorBypass`.
+- Quien no, obtiene una autorización con PIN (`POST /approvals/pin-grant`) y manda su id como `approval_id` en el payload.
+- `dynamic.ConsumePINGrant` canjea la autorización: de la misma org, `kind=pin` de esa política, pedida por el **mismo usuario**,
+  con menos de `PINGrantMaxAge` (15 min), del mismo registro si quedó anclada a uno, y **de un solo uso** (atómico).
+  Sin autorización canjeable: 403 `approval_grant_required`.
+- La metadata servida lleva `supervisorPolicy`: el SDK pide el PIN por sí solo antes de despachar.
+- Distinta de `Action.approval`, que estaciona la solicitud para una decisión asíncrona.

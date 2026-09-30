@@ -1581,6 +1581,9 @@ func Validate(raw []byte) error {
 
 	if m.Contributions != nil {
 		for ai, a := range m.Contributions.Actions {
+			if a.SupervisorPolicy != "" && !supervisorPolicyRe.MatchString(a.SupervisorPolicy) {
+				errs = append(errs, fmt.Sprintf("contributions.actions[%d].supervisor_policy %q must match ^[a-z][a-z0-9_]*$", ai, a.SupervisorPolicy))
+			}
 			if a.Idempotency != nil && strings.TrimSpace(a.Idempotency.KeyField) == "" {
 				errs = append(errs, fmt.Sprintf("contributions.actions[%d].idempotency requires a non-empty key_field", ai))
 			}
@@ -2079,3 +2082,5 @@ func validateReasonRequired(m *Manifest, mi int, mod Model) []string {
 	}
 	return errs
 }
+
+var supervisorPolicyRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)

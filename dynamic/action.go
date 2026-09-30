@@ -155,6 +155,15 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 		return ActionResult{}, err
 	}
 
+	// Supervisor gate (Action.supervisor_policy): the caller holds
+	// general.approve_<policy> or redeems a single-use PIN grant. Refused BEFORE
+	// anything is parked, reserved or dispatched.
+	if def.SupervisorPolicy != "" {
+		if err := s.RequireSupervisor(ctx, user, def.SupervisorPolicy, id.String(), payload); err != nil {
+			return ActionResult{}, err
+		}
+	}
+
 	// Mandatory reason (Model.reason_required.actions): refuse before anything
 	// is parked or dispatched; on success the audit event below carries it.
 	ctx, reasoned, rerr := s.requireActionReason(ctx, model, key, payload)

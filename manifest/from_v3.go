@@ -1087,19 +1087,20 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 		// of opening a generic confirmation that hides the broken custom flow.
 		confirm := a.Modal == "" && (a.Confirm || a.ConfirmMessage != "")
 		def := ActionDef{
-			Key:            a.Key,
-			Name:           a.Key,
-			Label:          a.Label,
-			Icon:           a.Icon,
-			Confirm:        confirm,
-			ConfirmMessage: a.ConfirmMessage,
-			Modal:          a.Modal,
-			Placement:      a.Placement,
-			ModalWidth:     a.ModalWidth,
-			RequiresState:  a.RequiresState,
-			Fields:         mapActionFields(a.Fields),
-			Steps:          mapActionSteps(a.Steps),
-			Condition:      mapCondition(a.Condition),
+			Key:              a.Key,
+			Name:             a.Key,
+			Label:            a.Label,
+			Icon:             a.Icon,
+			Confirm:          confirm,
+			ConfirmMessage:   a.ConfirmMessage,
+			Modal:            a.Modal,
+			Placement:        a.Placement,
+			ModalWidth:       a.ModalWidth,
+			RequiresState:    a.RequiresState,
+			SupervisorPolicy: a.SupervisorPolicy,
+			Fields:           mapActionFields(a.Fields),
+			Steps:            mapActionSteps(a.Steps),
+			Condition:        mapCondition(a.Condition),
 		}
 		def.Trigger = handlerToTrigger(a.Handler)
 		if a.Idempotency != nil {

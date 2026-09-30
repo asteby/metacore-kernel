@@ -543,6 +543,15 @@ func (h *Handler) handleError(c fiber.Ctx, err error) error {
 	if errors.Is(err, ErrNotSingleton) {
 		return respondErr(c, fiber.StatusNotFound, err.Error())
 	}
+	// supervisor_policy action without a redeemable grant: 403 the SDK answers by
+	// asking for a supervisor PIN.
+	if errors.Is(err, ErrApprovalGrantRequired) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"success": false,
+			"message": err.Error(),
+			"code":    "approval_grant_required",
+		})
+	}
 	if errors.Is(err, ErrUnsupportedTriggerType) {
 		return respondErr(c, fiber.StatusNotImplemented, err.Error())
 	}

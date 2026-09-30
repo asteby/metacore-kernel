@@ -186,6 +186,12 @@ type Config struct {
 	// model (back-compat).
 	ConstraintResolver ConstraintResolver
 
+	// SupervisorBypass reports whether the caller may authorize `policy` on
+	// their own (holds general.approve_<policy>, or is an admin) — such a caller
+	// runs a supervisor_policy action without presenting a PIN grant. nil = nobody
+	// bypasses: every caller must present a grant.
+	SupervisorBypass SupervisorBypass
+
 	// ReasonPolicyResolver returns the mandatory-reason policy (Model.reason_required,
 	// PER-4) for a model. When set, Delete and the listed actions are refused with
 	// a 422 field error on `reason` unless the request states one, and the reason
@@ -363,6 +369,7 @@ type Service struct {
 	stageMachines     StageMachineResolver
 	constraints       ConstraintResolver
 	reasonPolicies    ReasonPolicyResolver
+	supervisorBypass  SupervisorBypass
 	validationSchema  ValidationSchemaResolver
 	customValidators  validate.Resolver
 	sequences         SequenceResolver
@@ -452,6 +459,7 @@ func New(cfg Config) *Service {
 		stageMachines:     cfg.StageMachineResolver,
 		constraints:       cfg.ConstraintResolver,
 		reasonPolicies:    cfg.ReasonPolicyResolver,
+		supervisorBypass:  cfg.SupervisorBypass,
 		validationSchema:  cfg.ValidationSchemaResolver,
 		customValidators:  cfg.CustomValidatorResolver,
 		sequences:         cfg.SequenceResolver,

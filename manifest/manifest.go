@@ -740,15 +740,20 @@ type ToolInputParam struct {
 
 // ActionDef is a declarative action the UI can invoke on a model row.
 type ActionDef struct {
-	Key            string     `json:"key"`
-	Name           string     `json:"name"`
-	Label          string     `json:"label"`
-	Icon           string     `json:"icon,omitempty"`
-	Fields         []FieldDef `json:"fields,omitempty"`
-	RequiresState  []string   `json:"requiresState,omitempty"`
-	Confirm        bool       `json:"confirm,omitempty"`
-	ConfirmMessage string     `json:"confirmMessage,omitempty"`
-	Modal          string     `json:"modal,omitempty"` // slot name for a custom modal
+	Key           string     `json:"key"`
+	Name          string     `json:"name"`
+	Label         string     `json:"label"`
+	Icon          string     `json:"icon,omitempty"`
+	Fields        []FieldDef `json:"fields,omitempty"`
+	RequiresState []string   `json:"requiresState,omitempty"`
+	// SupervisorPolicy is the projection of v3 Action.supervisor_policy: the
+	// action needs a supervisor authorization of that policy (capability
+	// `general.approve_<policy>` or a single-use PIN grant id in
+	// payload.approval_id). See dynamic.ConsumePINGrant.
+	SupervisorPolicy string `json:"supervisorPolicy,omitempty"`
+	Confirm          bool   `json:"confirm,omitempty"`
+	ConfirmMessage   string `json:"confirmMessage,omitempty"`
+	Modal            string `json:"modal,omitempty"` // slot name for a custom modal
 	// Steps is the host/runtime projection of a v3 Action.steps wizard: one
 	// page per step, per-step validation, single submit with the union of all
 	// steps' values. Mutually exclusive with Fields. See manifest/v3.ActionStep.

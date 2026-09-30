@@ -63,6 +63,10 @@ var (
 // kernel then matches the approver's roles against the request's roles). It
 // returns ErrApprovalPINInvalid — or any error — when nobody eligible matches;
 // the approver MUST belong to orgID. See Config.ApprovalPINVerifier.
+// SupervisorBypass tells Service whether a caller may authorize `policy` alone.
+// See Config.SupervisorBypass.
+type SupervisorBypass func(ctx context.Context, user modelbase.AuthUser, policy string) bool
+
 type ApprovalPINVerifier func(ctx context.Context, orgID uuid.UUID, policyKey, pin string) (modelbase.AuthUser, error)
 
 // PINGrantInput is the body of GrantPINApproval.
@@ -223,4 +227,75 @@ func (s *Service) ApproveRequestWithPIN(ctx context.Context, requester modelbase
 		return nil, err
 	}
 	return s.ApproveRequest(ctx, approver, id, reason)
+}
+
+// PINGrantMaxAge is how long a PIN grant may wait before the action it
+// authorizes must be dispatched. The supervisor is standing at the till; a grant
+// found hours later is not an on-the-spot authorization.
+const PINGrantMaxAge = 15 * time.Minute
+
+// ErrApprovalGrantRequired: an action declares supervisor_policy and the caller
+// neither holds general.approve_<policy> nor presented a usable grant. HTTP 403
+// with code approval_grant_required.
+var ErrApprovalGrantRequired = fmt.Errorf("%w: a supervisor authorization is required", ErrForbidden)
+
+// ConsumePINGrant redeems a PIN grant for one supervised action. It succeeds
+// only for a grant that: exists in the caller's org, is kind=pin for `policy`,
+// was requested by THIS caller, is fresher than PINGrantMaxAge, has not been
+// used, and — when it was anchored to a record — belongs to `recordID`. The
+// redemption is atomic (a second use of the same id, or two racing requests,
+// fails), so one authorization pays for exactly one action.
+func (s *Service) ConsumePINGrant(ctx context.Context, user modelbase.AuthUser, grantID, policy, recordID string) error {
+	if user == nil {
+		return ErrForbidden
+	}
+	id, err := uuid.Parse(strings.TrimSpace(grantID))
+	if err != nil || strings.TrimSpace(policy) == "" {
+		return ErrApprovalGrantRequired
+	}
+	orgID := orgIDFromUser(user)
+	if orgID == uuid.Nil {
+		return ErrTenantScopeUnavailable
+	}
+	if err := s.ensureApprovalTable(); err != nil {
+		return err
+	}
+	var row ApprovalRequest
+	if err := s.db.WithContext(ctx).Where("id = ? AND organization_id = ?", id, orgID).First(&row).Error; err != nil {
+		return ErrApprovalGrantRequired
+	}
+	if row.Kind != ApprovalKindPIN || row.ConstraintKey != policy ||
+		row.Status != ApprovalStatusApplied || row.RequestedBy != user.GetID() ||
+		row.AppliedEventID != "" || row.DecidedAt == nil ||
+		time.Since(*row.DecidedAt) > PINGrantMaxAge {
+		return ErrApprovalGrantRequired
+	}
+	if row.RecordID != "" && recordID != "" && row.RecordID != recordID {
+		return ErrApprovalGrantRequired
+	}
+	// Atomic single use: only one caller flips the marker from '' to 'consumed'.
+	res := s.db.WithContext(ctx).Model(&ApprovalRequest{}).
+		Where("id = ? AND organization_id = ? AND (applied_event_id = '' OR applied_event_id IS NULL)", id, orgID).
+		Update("applied_event_id", "consumed")
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected != 1 {
+		return ErrApprovalGrantRequired
+	}
+	return nil
+}
+
+// RequireSupervisor enforces an action's supervisor_policy: nil when the caller
+// may authorize the policy themselves (Config.SupervisorBypass) or presents a
+// redeemable grant in payload.approval_id.
+func (s *Service) RequireSupervisor(ctx context.Context, user modelbase.AuthUser, policy, recordID string, payload map[string]any) error {
+	if policy == "" {
+		return nil
+	}
+	if s.supervisorBypass != nil && s.supervisorBypass(ctx, user, policy) {
+		return nil
+	}
+	grant, _ := payload["approval_id"].(string)
+	return s.ConsumePINGrant(ctx, user, grant, policy, recordID)
 }

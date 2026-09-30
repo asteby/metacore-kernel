@@ -443,7 +443,11 @@ type ActionDef struct {
 	// preserves it.
 	Steps         []ActionStepDef `json:"steps,omitempty"`
 	RequiresState []string        `json:"requiresState,omitempty"`
-	IsCollection  bool            `json:"isCollection,omitempty"`
+	// SupervisorPolicy mirrors manifest.ActionDef.SupervisorPolicy: the SDK asks
+	// for a supervisor PIN before dispatching, and the host verifies the grant
+	// (payload.approval_id) unless the caller holds general.approve_<policy>.
+	SupervisorPolicy string `json:"supervisorPolicy,omitempty"`
+	IsCollection     bool   `json:"isCollection,omitempty"`
 	// Trigger declares how the action dispatches (the served twin of
 	// manifest.ActionTrigger). JSON key `trigger` matches manifest.ActionDef.Trigger
 	// so the manifest→host JSON round-trip (KernelManifestToRecord) preserves it —

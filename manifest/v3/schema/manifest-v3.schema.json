@@ -2856,6 +2856,11 @@
           },
           "description": "Gates the action on the target record's `status` column: the action is only valid when the record's status is one of these values. Enforced by the kernel at dispatch. Empty/omitted means no state gate."
         },
+        "supervisor_policy": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Requires an on-the-spot supervisor authorization of this policy (`general.approve_<policy>`). A holder of the capability runs the action directly; anyone else sends the id of a single-use PIN grant (`approval_id` in the payload). The SDK prompts for the PIN by itself."
+        },
         "modal_width": {
           "type": [
             "string",
