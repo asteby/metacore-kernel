@@ -186,6 +186,18 @@ type Config struct {
 	// model (back-compat).
 	ConstraintResolver ConstraintResolver
 
+	// SupervisorBypass reports whether the caller may authorize `policy` on
+	// their own (holds general.approve_<policy>, or is an admin) — such a caller
+	// runs a supervisor_policy action without presenting a PIN grant. nil = nobody
+	// bypasses: every caller must present a grant.
+	SupervisorBypass SupervisorBypass
+
+	// ReasonPolicyResolver returns the mandatory-reason policy (Model.reason_required,
+	// PER-4) for a model. When set, Delete and the listed actions are refused with
+	// a 422 field error on `reason` unless the request states one, and the reason
+	// is stamped on the canonical event. nil disables the primitive (back-compat).
+	ReasonPolicyResolver ReasonPolicyResolver
+
 	// ValidationSchemaResolver returns the declarative column definitions the
 	// pre-write field-validation pass enforces for a model name — the host wires
 	// it from its addon registry / manifest, the same way as the resolvers
@@ -356,6 +368,8 @@ type Service struct {
 	actionDispatchers map[string]ActionDispatcher
 	stageMachines     StageMachineResolver
 	constraints       ConstraintResolver
+	reasonPolicies    ReasonPolicyResolver
+	supervisorBypass  SupervisorBypass
 	validationSchema  ValidationSchemaResolver
 	customValidators  validate.Resolver
 	sequences         SequenceResolver
@@ -444,6 +458,8 @@ func New(cfg Config) *Service {
 		actionDispatchers: dispatchers,
 		stageMachines:     cfg.StageMachineResolver,
 		constraints:       cfg.ConstraintResolver,
+		reasonPolicies:    cfg.ReasonPolicyResolver,
+		supervisorBypass:  cfg.SupervisorBypass,
 		validationSchema:  cfg.ValidationSchemaResolver,
 		customValidators:  cfg.CustomValidatorResolver,
 		sequences:         cfg.SequenceResolver,
@@ -1203,6 +1219,9 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 		return err
 	}
 	if err := s.authorize(ctx, user, model, instance, modelbase.AccessDelete); err != nil {
+		return err
+	}
+	if ctx, err = s.requireDeleteReason(ctx, model); err != nil {
 		return err
 	}
 

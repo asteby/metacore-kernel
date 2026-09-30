@@ -295,6 +295,11 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 	if _, err := semver.NewVersion(m.Version); err != nil {
 		return fmt.Errorf("manifest: version %q is not semver: %w", m.Version, err)
 	}
+	for i, st := range m.Settings {
+		if st.Scope != "" && st.Scope != SettingScopeOrg && st.Scope != SettingScopeBranch {
+			return fmt.Errorf("manifest: settings[%d].scope %q is not one of org|branch", i, st.Scope)
+		}
+	}
 	if err := m.checkKernelRange(kernelVersion); err != nil {
 		return err
 	}
@@ -1417,6 +1422,14 @@ func validateSequences(md ModelDefinition) error {
 func validateConstraints(md ModelDefinition, ownCols map[string]struct{}) error {
 	if md.Locking != "" && md.Locking != "row" {
 		return fmt.Errorf(`locking %q is not one of ""|"row"`, md.Locking)
+	}
+	if rr := md.ReasonRequired; rr != nil {
+		if !rr.Delete && len(rr.Actions) == 0 {
+			return fmt.Errorf("reason_required requires delete=true and/or a non-empty actions list")
+		}
+		if rr.MinLength < 0 {
+			return fmt.Errorf("reason_required.min_length must be >= 1")
+		}
 	}
 	for j, col := range md.Columns {
 		for k, con := range col.Constraints {

@@ -706,6 +706,15 @@ type Model struct {
 	//            Constraints; harmless otherwise.
 	Locking string `json:"locking,omitempty"`
 
+	// ReasonRequired makes the kernel refuse a destructive operation on this
+	// model unless the caller states WHY (PER-4): soft-deleting a row and/or
+	// invoking the named actions (cancel, void, refund…). The reason travels in
+	// the request (`reason` query/body/header on DELETE, `reason` in an action
+	// payload) and is stamped on the canonical event (CanonicalEvent.Reason), so
+	// the activity log answers who removed/cancelled what, when, and why. Nil =
+	// no reason needed (the legacy behaviour). See ReasonRequired.
+	ReasonRequired *ReasonRequired `json:"reason_required,omitempty"`
+
 	// Rules declare CROSS-RECORD guards: predicates over the PARENT row this
 	// model references by FK (a payment over a closed session, payments summing
 	// past the order total). Evaluated inside the same transaction as the write
@@ -1222,6 +1231,18 @@ type FormAssist struct {
 	// Trigger: "button" (default) renders a call-to-action; "auto" runs the
 	// provider as soon as the step opens with every input filled.
 	Trigger string `json:"trigger,omitempty"`
+}
+
+// ReasonRequired is the model-level "mandatory reason" policy (PER-4).
+type ReasonRequired struct {
+	// Delete requires a reason on DELETE /dynamic/:model/:id.
+	Delete bool `json:"delete,omitempty"`
+	// Actions are the keys of actions targeting this model that require a
+	// reason in their payload (`reason`). Each must be a declared action whose
+	// target_model is this model.
+	Actions []string `json:"actions,omitempty"`
+	// MinLength is the minimum trimmed length of the reason (default 3).
+	MinLength int `json:"min_length,omitempty"`
 }
 
 // Sequence declares one atomic counter the kernel maintains for the owning
@@ -1929,6 +1950,18 @@ type Action struct {
 	// action is always valid), so existing actions are unaffected.
 	RequiresState []string `json:"requires_state,omitempty"`
 
+	// SupervisorPolicy makes the action require an on-the-spot supervisor
+	// authorization of that policy (`general.approve_<policy>`: discount,
+	// refund, cancel_cfdi, inventory_adjust…). A caller holding the capability
+	// runs it directly; anyone else first obtains a PIN grant from a supervisor
+	// (POST /approvals/pin-grant) and sends its id as `approval_id` in the action
+	// payload. The grant is SINGLE-USE, must be for this policy and (when it was
+	// anchored to a record) this record, comes from the same caller and expires
+	// (dynamic.ConsumePINGrant). The SDK asks for the PIN by itself when the served
+	// action carries the policy. Empty = no supervisor gate. Distinct from
+	// Approval, which parks the request for an asynchronous decision.
+	SupervisorPolicy string `json:"supervisor_policy,omitempty"`
+
 	// ModalWidth lets an addon size the action's modal explicitly: a CSS length
 	// ("720px", "60rem") or a number (px). Empty = the host's default (compact
 	// for a flat field list, roomy for line-items). The SDK reads it as
@@ -2530,6 +2563,12 @@ type Setting struct {
 	// Validation is an optional constraint hint (e.g. a regex or a named rule)
 	// the host applies when collecting the value. Used by connector credentials.
 	Validation string `json:"validation,omitempty"`
+	// Scope says at which level the value lives. "org" (default) is one value
+	// per organization. "branch" lets each branch override it: the effective
+	// value for a branch is its own override, else the org value, else Default
+	// (see manifest.ResolveSetting). Lets a chain run a strict stock policy in
+	// one store and a permissive one in another (POS-1).
+	Scope string `json:"scope,omitempty"`
 }
 
 // SettingOption is a value/label pair for select-typed settings.

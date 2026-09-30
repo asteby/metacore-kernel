@@ -155,6 +155,22 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 		return ActionResult{}, err
 	}
 
+	// Supervisor gate (Action.supervisor_policy): the caller holds
+	// general.approve_<policy> or redeems a single-use PIN grant. Refused BEFORE
+	// anything is parked, reserved or dispatched.
+	if def.SupervisorPolicy != "" {
+		if err := s.RequireSupervisor(ctx, user, def.SupervisorPolicy, id.String(), payload); err != nil {
+			return ActionResult{}, err
+		}
+	}
+
+	// Mandatory reason (Model.reason_required.actions): refuse before anything
+	// is parked or dispatched; on success the audit event below carries it.
+	ctx, reasoned, rerr := s.requireActionReason(ctx, model, key, payload)
+	if rerr != nil {
+		return ActionResult{}, rerr
+	}
+
 	// Supervised action (approvals.go): when the manifest declares an approval
 	// policy — and `when` (if any) holds against the merged record ∪ payload —
 	// the invocation is NOT dispatched: it is stored as a pending
@@ -247,6 +263,7 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 		if err := s.persistIdempotent(ctx, orgID, model, key, idemKey, result); err != nil {
 			return ActionResult{}, err
 		}
+		s.publishReasonedAction(ctx, reasoned, result, model, key, user, id, row)
 		return result, nil
 	}
 
@@ -283,7 +300,18 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 	if err := s.persistIdempotent(ctx, orgID, model, key, idemKey, result); err != nil {
 		return ActionResult{}, err
 	}
+	s.publishReasonedAction(ctx, reasoned && !rolledBack, result, model, key, user, id, row)
 	return result, nil
+}
+
+// publishReasonedAction records, on the canonical event stream, that a
+// reason-required action (cancel, void…) ran and why. The event name is
+// `<addon>.<Model>.<action key>`; `before` is the row the action ran on.
+func (s *Service) publishReasonedAction(ctx context.Context, reasoned bool, result ActionResult, model, key string, user modelbase.AuthUser, id uuid.UUID, row map[string]any) {
+	if !reasoned || !result.Success {
+		return
+	}
+	s.publishCanonical(ctx, model, key, user, id.String(), row, nil)
 }
 
 // persistIdempotent stores a SUCCESSFUL action result for later replay, keyed by
