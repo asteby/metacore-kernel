@@ -60,3 +60,22 @@ func TestRegisterJSONBBag(t *testing.T) {
 		t.Fatal("unsafe bag must not register")
 	}
 }
+
+// A prefix key compares with LIKE 'term%': a partly typed size already finds
+// the tire; the default key keeps the equality.
+func TestApply_ExtensionSearchKeyPrefix(t *testing.T) {
+	b := New(refMeta()).WithTableName("products").WithExtensions([]ExtensionTable{{
+		Key: "TireSpec", Table: "addon_products_tires.product_tire_specs",
+		Columns:    map[string]struct{}{"size_key": {}},
+		SearchKeys: []ExtensionSearchKey{{Column: "size_key", Normalize: strings.ToUpper, Prefix: true}},
+	}})
+	sql := renderSQL(t, b.Apply(openDryDB(t).Model(&testRow{}), Params{Search: "205/55"}))
+	for _, want := range []string{"__ex.size_key LIKE ", "205/55%"} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("want %q in %q", want, sql)
+		}
+	}
+	if strings.Contains(sql, "__ex.size_key = ") {
+		t.Fatalf("prefix key must not use equality: %q", sql)
+	}
+}

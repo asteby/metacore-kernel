@@ -26,6 +26,9 @@ type ExtensionTable struct {
 type ExtensionSearchKey struct {
 	Column    string
 	Normalize func(term string) string
+	// Prefix compares with `LIKE '<term>%'` instead of equality, so a partly
+	// typed key ("205/55") already finds "205/55R16" (match: normalized_prefix).
+	Prefix bool
 }
 
 // WithExtensions registers the model's extension tables. Unsafe names are
@@ -68,7 +71,8 @@ func (b *Builder) applyExtensionFilters(db *gorm.DB, params Params) *gorm.DB {
 }
 
 // extensionSearchConds returns the OR-able search conditions contributed by
-// extension search keys: `owner.id IN (SELECT id FROM <ext> WHERE key = ?)`.
+// extension search keys: `owner.id IN (SELECT id FROM <ext> WHERE key = ?)`
+// (`key LIKE 'term%'` for a prefix key).
 func (b *Builder) extensionSearchConds(term string) ([]string, []any) {
 	var conds []string
 	var args []any
@@ -82,8 +86,12 @@ func (b *Builder) extensionSearchConds(term string) ([]string, []any) {
 			if v == "" {
 				continue
 			}
-			conds = append(conds, fmt.Sprintf("%s IN (SELECT __ex.id FROM %s __ex WHERE __ex.%s = ?)",
-				b.qualifyOwner("id"), ext.Table, sk.Column))
+			op := "= ?"
+			if sk.Prefix {
+				op, v = "LIKE ?", v+"%"
+			}
+			conds = append(conds, fmt.Sprintf("%s IN (SELECT __ex.id FROM %s __ex WHERE __ex.%s %s)",
+				b.qualifyOwner("id"), ext.Table, sk.Column, op))
 			args = append(args, v)
 		}
 	}

@@ -136,9 +136,9 @@ func validateSearchKeys(m *Manifest) []string {
 				errs = append(errs, fmt.Sprintf("%s: name %q collides with a declared column", where, sk.Name))
 			}
 			switch sk.Match {
-			case "", "normalized", "exact":
+			case "", "normalized", "normalized_prefix", "exact":
 			default:
-				errs = append(errs, fmt.Sprintf("%s.match %q must be normalized|exact", where, sk.Match))
+				errs = append(errs, fmt.Sprintf("%s.match %q must be normalized|normalized_prefix|exact", where, sk.Match))
 			}
 			ph := searchKeyPlaceholderRe.FindAllStringSubmatch(sk.Format, -1)
 			if len(ph) == 0 {

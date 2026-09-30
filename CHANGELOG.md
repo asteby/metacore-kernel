@@ -9,6 +9,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Search key `match: "normalized_prefix"`.** Same folding as `normalized`, but the
+  typed text matches the START of the stored key (`LIKE 'term%'`) in both the list
+  search and the options picker, so a partly typed «205/55» already finds
+  «205/55R16» while the cashier is still typing. `normalized` (equality) stays the
+  default. Schema enum, validator and both query paths updated.
 - **Manifest v3 `contributions.public_routes[].actions[]`.** A public route of
   kind `html` can expose declared one-click row actions of its model
   (`{action, label?, confirm?, style?}`) that the token holder runs without a

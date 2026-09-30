@@ -1741,9 +1741,10 @@
           "type": "string",
           "enum": [
             "normalized",
+            "normalized_prefix",
             "exact"
           ],
-          "description": "normalized (default) folds case, whitespace and separators on both sides; exact compares as composed."
+          "description": "normalized (default) folds case, whitespace and separators on both sides; normalized_prefix folds the same way but matches the start of the key (a partly typed 205/55 finds 205/55R16); exact compares as composed."
         }
       }
     },

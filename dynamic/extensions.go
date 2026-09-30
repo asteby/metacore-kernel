@@ -94,7 +94,7 @@ func queryExtensions(exts []ExtensionTable) []query.ExtensionTable {
 				if sk.Match == "exact" {
 					normalize = strings.TrimSpace
 				}
-				qe.SearchKeys = append(qe.SearchKeys, query.ExtensionSearchKey{Column: c.Name, Normalize: normalize})
+				qe.SearchKeys = append(qe.SearchKeys, query.ExtensionSearchKey{Column: c.Name, Normalize: normalize, Prefix: sk.Match == "normalized_prefix"})
 			}
 		}
 		out = append(out, qe)
@@ -455,6 +455,11 @@ func extensionSearchConds(exts []ExtensionTable, term string) ([]string, []any) 
 				v = NormalizeSearchKey(c.SearchKey, term)
 			}
 			if v == "" {
+				continue
+			}
+			if c.SearchKey.Match == "normalized_prefix" {
+				conds = append(conds, fmt.Sprintf(`"id" IN (SELECT "id" FROM %s WHERE %q LIKE ?)`, quotedTable(e.Table), c.Name))
+				args = append(args, v+"%")
 				continue
 			}
 			conds = append(conds, fmt.Sprintf(`"id" IN (SELECT "id" FROM %s WHERE %q = ?)`, quotedTable(e.Table), c.Name))
