@@ -700,6 +700,21 @@
         "reason": {
           "type": "string",
           "description": "Human-readable justification surfaced in the install UI."
+        },
+        "enables": {
+          "type": "array",
+          "description": "Capabilities of THIS addon that only work while the required addon is installed; the host hides or disables them when it is missing. Only valid with optional: true. 'action:<ModelKey>.<action_key>' must name a contributions.actions entry of this manifest; 'nav:<key>' and 'widget:<key>' are reserved.",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(action:[A-Za-z][A-Za-z0-9_]*\\.[a-z][a-z0-9_]*|(nav|widget):[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*)$"
+          },
+          "examples": [
+            [
+              "action:Device.connect_device",
+              "action:Device.create_and_connect"
+            ]
+          ]
         }
       }
     },

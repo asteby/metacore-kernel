@@ -581,6 +581,14 @@ type Requirement struct {
 	Version  string `json:"version"`
 	Optional bool   `json:"optional,omitempty"`
 	Reason   string `json:"reason,omitempty"`
+	// Enables lists the capabilities of THIS addon that only work while the
+	// required addon is installed, so the host can hide or disable them when
+	// it is missing instead of letting them fail at runtime. Valid only with
+	// Optional (a mandatory require already blocks the install). Each item is
+	// "action:<ModelKey>.<action_key>" (a contributions.actions entry of this
+	// manifest); "nav:<key>" and "widget:<key>" are reserved and accepted, not
+	// yet resolved. See ParseEnableRef and Manifest.OptionalRequirements.
+	Enables []string `json:"enables,omitempty"`
 }
 
 // Tenancy declares per-tenant data isolation strategy.

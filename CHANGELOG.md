@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Manifest v3 `compatibility.requires[].enables`.** An optional require
+  lists the capabilities of the declaring addon that only work while the
+  required addon is installed, e.g. `"enables":
+  ["action:Device.connect_device"]` on an optional `connector_whatsapp`. Items
+  are `action:<ModelKey>.<action_key>` (must name a `contributions.actions`
+  entry of the same manifest by `target_model` and `key`); `nav:<key>` and
+  `widget:<key>` are reserved and accepted. `enables` on a mandatory require is
+  a validation error. Hosts read it through
+  `(*v3.Manifest).OptionalRequirements() []v3.OptionalRequirement` and parse
+  items with `v3.ParseEnableRef`. Both the embedded schema and the Go
+  validator check it.
+
 - **Manifest v3 `Column.visibility`.** A column declares where it renders,
   with the closed set the legacy `ColumnDef.visibility` already used: `all`
   (default), `table` (list table only), `modal` (create/edit form only) or
