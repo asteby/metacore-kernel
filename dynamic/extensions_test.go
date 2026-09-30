@@ -300,3 +300,30 @@ func TestExtensions_Facets(t *testing.T) {
 		t.Fatal("undeclared extension column must not be a facet")
 	}
 }
+
+// PIT-039: the edit form posts every field back, the read-only search key
+// included. Echoing the persisted value must not fail the save; changing it must.
+func TestExtensions_EchoedSearchKeyIsNoop(t *testing.T) {
+	svc, db := setupExtensionService(t)
+	ctx := context.Background()
+	user := newUser(uuid.New())
+	owner, err := svc.Create(ctx, "test_products", user, map[string]any{
+		"name": "Llanta", "TireSpec.section_width_mm": 205, "TireSpec.aspect_ratio": 55, "TireSpec.rim_diameter_in": 16,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id, _ := uuid.Parse(owner["id"].(string))
+	db.Exec(`UPDATE product_tire_specs SET size_key = '2055516' WHERE id = ?`, id.String())
+
+	if _, err := svc.Update(ctx, "test_products", user, id, map[string]any{
+		"TireSpec.speed_rating": "V", "TireSpec.size_key": "2055516",
+	}); err != nil {
+		t.Fatalf("echoed size_key must be a no-op: %v", err)
+	}
+	_, err = svc.Update(ctx, "test_products", user, id, map[string]any{"TireSpec.size_key": "hack"})
+	var ve *ValidationError
+	if !errors.As(err, &ve) || len(ve.Fields["TireSpec.size_key"]) == 0 {
+		t.Fatalf("changing size_key must be rejected, got %v", err)
+	}
+}
