@@ -1851,6 +1851,46 @@ publishes nothing.
 
 Request/deadline/response mirror `data_mutate` (§ 14.6).
 
+### 15.8 Aggregates
+
+Paging rows to add them up hits the 200-row clamp, so a guest cannot answer
+"how much is overdue" or "how many open orders does this customer have" with
+the row form. An optional `aggregate` block turns the same request — same
+org scope, same `where`, same soft-delete filter, same `db:read` grant — into
+grouped aggregates:
+
+```jsonc
+{
+  "table": "invoices",
+  "where": { "amount_due": { "gt": 0 }, "due_date": { "lt": "2026-09-29" } },
+  "order_by": "overdue", "order_dir": "desc",
+  "limit": 50,
+  "aggregate": {
+    "group_by": ["customer_id"],                       // 0..3 plain columns
+    "select": [                                        // 1..8 aggregates
+      { "fn": "sum",   "col": "amount_due", "as": "overdue" },
+      { "fn": "count",                      "as": "n" },
+      { "fn": "min",   "col": "due_date",   "as": "oldest" }
+    ]
+  }
+}
+```
+
+- `fn` is one of `sum|count|min|max|avg`; `col` is required except for `count`
+  (row count). `sum` and `avg` come back as JSON numbers (cast to `float64`);
+  `sum` over an empty set is `null`.
+- `as` aliases must be identifiers and unique among the group columns and each
+  other. `order_by` must then be a `group_by` column or an alias.
+- Columns follow the same identifier rule as `where`; `organization_id` and
+  `deleted_at` cannot be grouped or aggregated.
+- The response is `{ "rows": [ { <group cols>, <aliases> } ], "truncated": bool }`:
+  one row per group, cut at `limit` (default 50, max 200) with `truncated: true`
+  when more groups exist — order by an output column to make the cut stable.
+  Without `group_by` the whole set folds into a single row.
+- There are no joins, expressions or `HAVING`: it stays a lookup primitive.
+  Guests on older kernels reject the unknown `aggregate` field silently (it is
+  ignored and rows come back) — check `truncated` presence to detect support.
+
 ### 15.7 Wiring
 
 Same host setup as `data_mutate` (§ 14.8) — `WithDB`, `WithEnforcer` and

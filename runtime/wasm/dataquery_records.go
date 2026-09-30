@@ -40,6 +40,10 @@ type dataQueryRequest struct {
 	// or "desc". Without OrderBy the row order is unspecified, as before.
 	OrderBy  string `json:"order_by"`
 	OrderDir string `json:"order_dir"`
+	// Aggregate switches the import from "return rows" to "return one row per
+	// group": grouped sum/count/min/max/avg over the same org-scoped, filtered
+	// set. See dataQueryAggregate and docs/wasm-abi.md § 15.7.
+	Aggregate *dataQueryAggregate `json:"aggregate"`
 }
 
 // dataQueryOps are the operators accepted in the object form of a where value,
@@ -260,6 +264,15 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 		}
 		orderSQL = " ORDER BY " + quoteIdent(req.OrderBy) + " " + dir
 	}
+	var agg *compiledAggregate
+	if req.Aggregate != nil {
+		var err error
+		agg, err = compileAggregate(req.Aggregate, req.OrderBy, req.OrderDir)
+		if err != nil {
+			return fail("invalid_request", err.Error())
+		}
+		orderSQL = agg.orderSQL
+	}
 
 	if inv.db == nil {
 		return fail("db_error", "host has no *gorm.DB configured")
@@ -332,6 +345,11 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 	}
 	stmt := fmt.Sprintf("SELECT * FROM %s WHERE %s%s LIMIT %d",
 		tbl, strings.Join(conds, " AND "), orderSQL, limit)
+	if agg != nil {
+		// One extra group tells the guest the result was cut at `limit`.
+		stmt = fmt.Sprintf("SELECT %s FROM %s WHERE %s%s%s LIMIT %d",
+			agg.selectSQL, tbl, strings.Join(conds, " AND "), agg.groupSQL, orderSQL, limit+1)
+	}
 
 	rows, err := work.Raw(stmt, args...).Rows()
 	if err != nil {
@@ -362,12 +380,18 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 		return fail("db_error", err.Error())
 	}
 
+	data := map[string]any{"rows": rowsOut}
+	if agg != nil {
+		truncated := len(rowsOut) > limit
+		if truncated {
+			rowsOut = rowsOut[:limit]
+		}
+		data = map[string]any{"rows": rowsOut, "truncated": truncated}
+	}
 	env, _ := json.Marshal(map[string]any{
 		"success": true,
-		"data": map[string]any{
-			"rows": rowsOut,
-		},
-		"meta": dataMutateMeta(addonKey, orgID, start),
+		"data":    data,
+		"meta":    dataMutateMeta(addonKey, orgID, start),
 	})
 	if len(env) > dataQueryMaxRespBytes {
 		return fail("db_error", "response exceeds size cap")

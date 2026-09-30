@@ -55,6 +55,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `modelbase.TableMetadata.AppendOnly` lets the host tell the UI to hide the
   edit/delete affordances. Declarative backfills and raw `db_exec` are not
   covered: they are migration/system paths, not row writes by users.
+- **`data_query` `aggregate` — grouped sum/count/min/max/avg for wasm guests.**
+  An optional `aggregate: {group_by, select}` block turns the org-scoped
+  logical-table read into one row per group (`{rows, truncated}`), so a handler
+  can ask for the overdue balance per customer without paging rows through the
+  200-row clamp. Same tenant scope, soft-delete filter and `db:read` grant as
+  the row form; identifiers are allowlisted and `fn` is a closed set. No new
+  host import: existing guests and the import policy are untouched. See
+  `docs/wasm-abi.md` § 15.8.
 
 - **Manifest v3 `contributions.public_routes[].actions[]`.** A public route of
   kind `html` can expose declared one-click row actions of its model
