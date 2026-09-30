@@ -164,3 +164,55 @@ func TestDispatchBareHexSignature(t *testing.T) {
 		t.Fatalf("want 1 dispatch, got %d", disp.calls)
 	}
 }
+
+func bearerRoute() Route {
+	return Route{Key: "autofactura", Path: "/webhooks/autofactura", Verify: "bearer", SecretRef: "factura_com.webhook_token", Do: "wasm:on_autofactura"}
+}
+
+func TestDispatchBearerToken(t *testing.T) {
+	body := []byte(`{"event":"autofacturacion.timbrado"}`)
+	ok := func(auth string) error {
+		disp := &captureDispatcher{}
+		r := New(map[string]Dispatcher{"wasm": disp}, staticSecrets{secret: "tok-123"})
+		_ = r.Register(bearerRoute())
+		h := http.Header{}
+		if auth != "" {
+			h.Set("Authorization", auth)
+		}
+		err := r.Dispatch(context.Background(), uuid.New(), "/webhooks/autofactura", h, body)
+		if err == nil && disp.calls != 1 {
+			t.Fatalf("accepted but dispatched %d times", disp.calls)
+		}
+		if err != nil && disp.calls != 0 {
+			t.Fatalf("rejected but dispatched %d times", disp.calls)
+		}
+		return err
+	}
+	if err := ok("Token tok-123"); err != nil {
+		t.Fatalf("Token scheme (factura.com): %v", err)
+	}
+	if err := ok("bearer tok-123"); err != nil {
+		t.Fatalf("Bearer scheme: %v", err)
+	}
+	if err := ok("Token nope"); !errors.Is(err, ErrSignatureInvalid) {
+		t.Fatalf("wrong token: %v", err)
+	}
+	if err := ok("Basic dG9rLTEyMw=="); !errors.Is(err, ErrSignatureInvalid) {
+		t.Fatalf("other scheme: %v", err)
+	}
+	if err := ok(""); !errors.Is(err, ErrSignatureMissing) {
+		t.Fatalf("no header: %v", err)
+	}
+}
+
+func TestDispatchBearerNeverAuthenticatesAnEmptySecret(t *testing.T) {
+	disp := &captureDispatcher{}
+	r := New(map[string]Dispatcher{"wasm": disp}, staticSecrets{secret: "  "})
+	_ = r.Register(bearerRoute())
+	h := http.Header{}
+	h.Set("Authorization", "Token ")
+	err := r.Dispatch(context.Background(), uuid.New(), "/webhooks/autofactura", h, []byte(`{}`))
+	if !errors.Is(err, ErrSignatureInvalid) || disp.calls != 0 {
+		t.Fatalf("an unset secret must never authenticate: %v calls=%d", err, disp.calls)
+	}
+}

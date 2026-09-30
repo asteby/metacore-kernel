@@ -329,7 +329,8 @@ type InboundWebhook struct {
 	// Path is the route mounted under the addon+org namespace (e.g.
 	// "/webhooks/github").
 	Path string `json:"path"`
-	// Verify is the signature scheme: "" (none) | "hmac-sha256".
+	// Verify is the signature scheme: "" (none) | "hmac-sha256" | "bearer"
+	// (a static token in Authorization: Bearer|Token <secret>).
 	Verify string `json:"verify,omitempty"`
 	// SecretRef resolves the signing secret as "<connector>.<credential>"
 	// (e.g. "github.webhook_secret"). Required when Verify is set.
@@ -1568,8 +1569,9 @@ type PublicRoute struct {
 // PublicRouteAction exposes one row action of the route's model on the public
 // page (PublicRoute.Actions). The action must be a contributions.actions[] row
 // action targeting the route's model with a non-empty requires_state whose
-// fields, if any, are free text (the page renders a text input per field; a
-// required field is enforced). No steps or modal.
+// fields, if any, are free text or a select over a static option list (the page
+// renders a text input / dropdown per field; a required field is enforced, and
+// a select value outside its options is refused). No steps or modal.
 type PublicRouteAction struct {
 	// Action is the contributions.actions[] key. Required.
 	Action string `json:"action"`
@@ -1582,6 +1584,13 @@ type PublicRouteAction struct {
 	// Style is a hint for the button emphasis: "primary" (default) or
 	// "danger". Hosts that do not know a value use "primary".
 	Style string `json:"style,omitempty"`
+	// ShowMessage lets the public page show the handler's own message — the
+	// confirmation on success and the reason of a business refusal ("el RFC no
+	// es válido") — instead of the generic "answer recorded / no longer
+	// possible" copy. The addon opts in because it takes responsibility for the
+	// text being safe to show to anyone holding the link; without it the host
+	// never echoes handler output to an anonymous visitor.
+	ShowMessage bool `json:"show_message,omitempty"`
 }
 
 // ConfigEntry points at where an addon's configuration lives: a declarative

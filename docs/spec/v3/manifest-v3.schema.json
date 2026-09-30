@@ -1817,7 +1817,7 @@
         },
         "actions": {
           "type": "array",
-          "description": "Row actions of the model the token holder may run from the public page without a login (accept / reject a quote). Only valid on kind 'html'. Each action must target this model, declare requires_state and declare only free-text fields (rendered as text inputs). Served at POST /p/<orgRef>/<addon>/<key>/<token>/actions/<action>.",
+          "description": "Row actions of the model the token holder may run from the public page without a login (accept / reject a quote). Only valid on kind 'html'. Each action must target this model, declare requires_state and declare only free-text fields (text inputs) or select fields over a static option list (dropdowns). Served at POST /p/<orgRef>/<addon>/<key>/<token>/actions/<action>.",
           "items": {
             "$ref": "#/$defs/PublicRouteAction"
           }
@@ -1850,6 +1850,10 @@
             "primary",
             "danger"
           ]
+        },
+        "show_message": {
+          "type": "boolean",
+          "description": "Show the handler's own message (the confirmation, or the reason of a business refusal) on the public result page instead of the generic copy. The addon opts in because it vouches the text is safe to show to anyone holding the link."
         }
       }
     },
@@ -3570,9 +3574,9 @@
         "verify": {
           "type": "string",
           "enum": [
-            "hmac-sha256"
+            "hmac-sha256", "bearer"
           ],
-          "description": "Signature scheme. Omit for no verification."
+          "description": "Signature scheme. hmac-sha256 signs the body; bearer checks a static token sent as Authorization: Bearer|Token <secret> (for providers that cannot sign). Omit for no verification."
         },
         "secret_ref": {
           "type": "string",

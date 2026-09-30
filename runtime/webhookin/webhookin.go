@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -47,7 +48,7 @@ type Route struct {
 	Key string
 	// Path is the route the host mounts (e.g. "/webhooks/github").
 	Path string
-	// Verify is the signature scheme: "" (none) | "hmac-sha256".
+	// Verify is the signature scheme: "" (none) | "hmac-sha256" | "bearer".
 	Verify string
 	// SecretRef resolves the signing secret as "<connector>.<credential>".
 	SecretRef string
@@ -176,9 +177,12 @@ func (r *Receiver) Dispatch(ctx context.Context, orgID uuid.UUID, path string, h
 }
 
 // verifySignature checks the request signature against the secret resolved from
-// the route's SecretRef. Only hmac-sha256 is implemented.
+// the route's SecretRef. hmac-sha256 (signed body) and bearer (static token in
+// the Authorization header) are implemented.
 func verifySignature(ctx context.Context, route Route, orgID uuid.UUID, headers http.Header, body []byte, secrets SecretResolver) error {
-	if route.Verify != "hmac-sha256" {
+	switch route.Verify {
+	case "hmac-sha256", "bearer":
+	default:
 		return fmt.Errorf("%w: %q", ErrUnsupportedVerify, route.Verify)
 	}
 	if secrets == nil {
@@ -191,6 +195,9 @@ func verifySignature(ctx context.Context, route Route, orgID uuid.UUID, headers 
 	if strings.TrimSpace(secret) == "" {
 		return fmt.Errorf("%w (%s): %w", ErrSecretNotConfigured, route.SecretRef, ErrSignatureInvalid)
 	}
+	if route.Verify == "bearer" {
+		return verifyBearer(headers, secret)
+	}
 	provided := extractSignature(headers)
 	if len(provided) == 0 {
 		return ErrSignatureMissing
@@ -198,6 +205,28 @@ func verifySignature(ctx context.Context, route Route, orgID uuid.UUID, headers 
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
 	if !hmac.Equal(mac.Sum(nil), provided) {
+		return ErrSignatureInvalid
+	}
+	return nil
+}
+
+// verifyBearer authenticates a provider that sends a STATIC token instead of
+// signing the body (factura.com's webhooks: `Authorization: Token <token>`).
+// It accepts the "Bearer" and "Token" schemes, compares in constant time, and
+// never authenticates an empty token. Weaker than a body HMAC — the token proves
+// who sent the request, not that the body was not altered in transit — so use it
+// only over TLS and only for providers that offer nothing better.
+func verifyBearer(headers http.Header, secret string) error {
+	auth := strings.TrimSpace(headers.Get("Authorization"))
+	if auth == "" {
+		return ErrSignatureMissing
+	}
+	scheme, token, found := strings.Cut(auth, " ")
+	if !found || (!strings.EqualFold(scheme, "Bearer") && !strings.EqualFold(scheme, "Token")) {
+		return ErrSignatureInvalid
+	}
+	token = strings.TrimSpace(token)
+	if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(strings.TrimSpace(secret))) != 1 {
 		return ErrSignatureInvalid
 	}
 	return nil

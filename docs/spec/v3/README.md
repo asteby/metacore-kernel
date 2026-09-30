@@ -261,7 +261,7 @@ release added:
 | v0.19.0 | `metadata.i18n` — marketplace catalog localizations keyed by locale (`{ "es": { name, description, features }, … }`). Distinct from the top-level `i18n` block (app string-bundle pointers); the flat `metadata.name`/`description`/`features` are the per-field fallback. |
 | v0.20.0 | `metadata.countries[]` — ISO 3166-1 alpha-2 codes the addon targets (empty = global). The hub filters the catalog by the user's country. |
 | v0.111.0 | `contributions.public_routes[]` — org-scoped, token-addressed public views of a record served by the host without a login (see [Public routes](#public-routes)). New `PublicRoute` type; `enabled_when` record predicates parsed by `v3.ParseRecordExpr`. |
-| unreleased | `contributions.public_routes[].actions[]` — a public page can run declared one-click row actions (accept / reject a quote) as the org system actor, gated by `requires_state`, `enabled_when` and `expires_column`. New `PublicRouteAction` type. |
+| unreleased | `contributions.public_routes[].actions[]` — a public page can run declared one-click row actions (accept / reject a quote) as the org system actor, gated by `requires_state`, `enabled_when` and `expires_column`. New `PublicRouteAction` type; fields may be a static `select`, and `show_message` surfaces the handler's message on the result page. |
 | v0.117.0 | Top-level `provides_options[]` — publish a model as a reusable option **catalog** any other addon consumes through `options_source` (see [Published option catalogs](#published-option-catalogs)). New `OptionCatalog` type. |
 | next | Top-level `provides_capabilities[]` + handler `type: "capability"` — provider-neutral capability contracts (see [Capability contracts](#capability-contracts)). New `ProvidedCapability` type; `Handler.capability` / `Handler.input`; kernel package `capability`. |
 
@@ -349,9 +349,18 @@ POST /p/<orgRef>/<addon>/<key>/<token>/actions/<action>
 
 which runs the addon's own handler as the organization's system actor (there is
 no session). The action keeps its guards: it must declare `requires_state` (so a
-link can never fire it outside its window), it must declare only free-text fields (the page renders a text input per field and enforces
-`required`) and no steps/modal, and the route's `enabled_when` and
+link can never fire it outside its window), it must declare only free-text fields or `select` fields over a static
+`options` list (the page renders a text input / dropdown per field, enforces
+`required` and refuses a select value outside its options) and no steps/modal, and the route's `enabled_when` and
 `expires_column` gate the POST exactly like the GET.
+
+By default the result page carries generic copy ("answer recorded" / "no longer
+possible") and never echoes handler output. An action entry with
+`show_message: true` opts in to showing the handler's own message instead — the
+confirmation on success and the reason of a business refusal (an invalid RFC, a
+régimen that does not fit the uso) — so a form-style action (self-invoicing a
+ticket) can tell the visitor what to fix. The addon vouches the text is safe for
+anyone holding the link.
 
 Column-level checks run for models the addon owns; for extended models they are
 deferred to the host at serve time (their columns live in another manifest).
