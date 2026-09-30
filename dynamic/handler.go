@@ -558,6 +558,13 @@ func (h *Handler) handleError(c fiber.Ctx, err error) error {
 	if errors.Is(err, ErrInvalidState) {
 		return respondErr(c, fiber.StatusConflict, err.Error())
 	}
+	if errors.Is(err, ErrAppendOnly) {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"success": false,
+			"message": err.Error(),
+			"code":    "append_only",
+		})
+	}
 	if errors.Is(err, ErrInvalidTransition) {
 		return respondErr(c, fiber.StatusUnprocessableEntity, err.Error())
 	}

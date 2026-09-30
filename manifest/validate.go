@@ -1431,6 +1431,9 @@ func validateConstraints(md ModelDefinition, ownCols map[string]struct{}) error 
 			return fmt.Errorf("reason_required.min_length must be >= 1")
 		}
 	}
+	if md.AppendOnly && (md.StageField != "" || len(md.Stages) > 0 || len(md.Transitions) > 0 || len(md.OnTransition) > 0) {
+		return fmt.Errorf("append_only cannot be combined with a stage machine (stage_field/stages/transitions/on_transition)")
+	}
 	for j, col := range md.Columns {
 		for k, con := range col.Constraints {
 			where := fmt.Sprintf("columns[%d].constraints[%d]", j, k)

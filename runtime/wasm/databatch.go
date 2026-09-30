@@ -125,6 +125,9 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 				return fail("forbidden", fmt.Sprintf("mutations[%d]: %s", i, err.Error()))
 			}
 		}
+		if code, aErr := refuseAppendOnly(inv, &m); aErr != nil {
+			return fail(code, appendOnlyBatchMsg(i, aErr))
+		}
 		physical := m.Table
 		if inv.resolveTable != nil {
 			physical = inv.resolveTable(m.Table)

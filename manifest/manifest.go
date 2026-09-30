@@ -1123,6 +1123,10 @@ type ModelDefinition struct {
 	// (PER-4): the dynamic engine refuses a delete / the listed actions unless
 	// the request carries a reason (dynamic.ReasonPolicyResolver). Nil = none.
 	ReasonRequired *ReasonRequiredDef `json:"reason_required,omitempty"`
+	// AppendOnly is the host/runtime projection of v3 Model.append_only: the
+	// model is an append-only ledger and every UPDATE/DELETE on it is refused
+	// (dynamic.Service and the wasm data_mutate / data_batch imports).
+	AppendOnly bool `json:"append_only,omitempty"`
 
 	// Rules is the host/runtime projection of v3 Model.rules: cross-record
 	// guards over the parent row referenced by FK, evaluated inside the write

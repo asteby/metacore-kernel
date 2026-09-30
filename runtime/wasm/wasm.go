@@ -74,6 +74,9 @@ type Host struct {
 	ctxProvider     ContextProviderFn
 	mutationGuard   func(ctx context.Context, logicalTable string, row map[string]any) error
 	mutationCompute MutationComputeFn
+	// appendOnly reports a LOGICAL table as an append-only ledger
+	// (Host.WithAppendOnly): update/delete on it is refused.
+	appendOnly func(logicalTable string) bool
 	// approvalRequester is the embedder-injected dynamic.Service.RequestApproval
 	// the `approval_request` import calls (Host.WithApprovals). nil = import
 	// answers `approvals_unavailable`.
@@ -505,6 +508,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		ctxProvider:       h.ctxProvider,
 		mutationGuard:     h.mutationGuard,
 		mutationCompute:   h.mutationCompute,
+		appendOnly:        h.appendOnly,
 		approvalRequester: h.approvalRequester,
 		connectors:        h.connectors,
 		logger:            h.logger,

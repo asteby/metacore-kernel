@@ -197,6 +197,12 @@ type Config struct {
 	// a 422 field error on `reason` unless the request states one, and the reason
 	// is stamped on the canonical event. nil disables the primitive (back-compat).
 	ReasonPolicyResolver ReasonPolicyResolver
+	// AppendOnlyResolver reports whether a model is an append-only ledger
+	// (manifest Model.append_only) — host-wired from the addon registry like the
+	// resolvers above. When it answers true, Service.Update and Service.Delete
+	// refuse with ErrAppendOnly (HTTP 409, code "append_only"); Create is
+	// unaffected. nil = every model stays writable (back-compat).
+	AppendOnlyResolver AppendOnlyResolver
 
 	// ValidationSchemaResolver returns the declarative column definitions the
 	// pre-write field-validation pass enforces for a model name — the host wires
@@ -370,6 +376,7 @@ type Service struct {
 	constraints       ConstraintResolver
 	reasonPolicies    ReasonPolicyResolver
 	supervisorBypass  SupervisorBypass
+	appendOnly        AppendOnlyResolver
 	validationSchema  ValidationSchemaResolver
 	customValidators  validate.Resolver
 	sequences         SequenceResolver
@@ -460,6 +467,7 @@ func New(cfg Config) *Service {
 		constraints:       cfg.ConstraintResolver,
 		reasonPolicies:    cfg.ReasonPolicyResolver,
 		supervisorBypass:  cfg.SupervisorBypass,
+		appendOnly:        cfg.AppendOnlyResolver,
 		validationSchema:  cfg.ValidationSchemaResolver,
 		customValidators:  cfg.CustomValidatorResolver,
 		sequences:         cfg.SequenceResolver,
@@ -961,6 +969,9 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	if err := s.authorize(ctx, user, model, instance, modelbase.AccessUpdate); err != nil {
 		return nil, err
 	}
+	if err := s.refuseIfAppendOnly(ctx, model, "update"); err != nil {
+		return nil, err
+	}
 
 	tableName, err := s.tableNameFor(ctx, model, instance)
 	if err != nil {
@@ -1222,6 +1233,9 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 		return err
 	}
 	if ctx, err = s.requireDeleteReason(ctx, model); err != nil {
+		return err
+	}
+	if err := s.refuseIfAppendOnly(ctx, model, "delete"); err != nil {
 		return err
 	}
 

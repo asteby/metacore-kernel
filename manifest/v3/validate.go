@@ -1464,6 +1464,10 @@ func Validate(raw []byte) error {
 		if mod.Locking != "" && mod.Locking != "row" {
 			errs = append(errs, fmt.Sprintf("models[%d].locking %q is not one of \"\"|\"row\"", mi, mod.Locking))
 		}
+		// Append-only ledger: a stage is a mutation, so the two cannot coexist.
+		if mod.AppendOnly && (mod.StageField != "" || len(mod.Stages) > 0 || len(mod.Transitions) > 0 || len(mod.OnTransition) > 0) {
+			errs = append(errs, fmt.Sprintf("models[%d]: append_only cannot be combined with a stage machine (stage_field/stages/transitions/on_transition)", mi))
+		}
 		// Cross-record rules (see CrossRule): shape per kind, columns declared.
 		for ri, r := range mod.Rules {
 			if r.Kind == "unique" {
