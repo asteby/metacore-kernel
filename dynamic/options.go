@@ -397,6 +397,9 @@ func optionNeedsLabel(o Option) bool {
 // favours the columns a user most expects to recognise a record by.
 var selfOptionsLabelPreference = []string{
 	"name", "title", "label", "display_name", "full_name",
+	// plate/vin: a Vehicle has no name column; without these the picker and
+	// any LabelRef fall back to the id ("Vehicle <uuid>").
+	"plate", "vin",
 	"code", "number", "reference", "slug", "email", "description",
 }
 

@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Self-options label a record by `plate` (then `vin`) when it has no name.**
+  A Vehicle picker and any `label_ref` onto that model used to fall through to
+  the id, so the cell read as the model plus a uuid. `plate` and `vin` now sit
+  in `selfOptionsLabelPreference` after the name-like columns and before `code`.
+
 ### Added
 
 - **`Installer.MaterializeModels` / `WithModelMaterializer` — fresh-tenant install.** A

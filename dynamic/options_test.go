@@ -326,6 +326,22 @@ func TestDeriveLabelColumn(t *testing.T) {
 	if got := deriveLabelColumn(&withCode{}); got != "code" {
 		t.Fatalf("withCode label = %q, want code", got)
 	}
+	// A vehicle has no name; the plate is what a person recognises.
+	type withPlate struct {
+		modelbase.BaseUUIDModel
+		Plate string `json:"plate"`
+		VIN   string `json:"vin"`
+	}
+	if got := deriveLabelColumn(&withPlate{}); got != "plate" {
+		t.Fatalf("withPlate label = %q, want plate", got)
+	}
+	type vinOnly struct {
+		modelbase.BaseUUIDModel
+		VIN string `json:"vin"`
+	}
+	if got := deriveLabelColumn(&vinOnly{}); got != "vin" {
+		t.Fatalf("vinOnly label = %q, want vin", got)
+	}
 }
 
 // TestSelfOptionsTenantScoped: the self-referential picker must NOT leak rows
