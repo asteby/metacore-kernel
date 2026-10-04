@@ -12,6 +12,7 @@ package installer
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"os"
 	"testing"
 
@@ -133,4 +134,40 @@ func TestInstall_FreshTenant_MaterializeModelsFirst(t *testing.T) {
 		t.Fatal("upgrade migration 003 not applied to the live table")
 	}
 	_ = key
+}
+
+// Upgrade pre-flight on real Postgres: a bundle whose 2nd new migration fails
+// must leave the installed version, the ledger and the live schema untouched
+// (the 1st new migration, which would have succeeded, is rehearsed and rolled
+// back), and report a typed *UpgradeError{Phase: migrations, Preflight: true}.
+func TestUpgrade_PreflightFailingMigration_LeavesInstallationIntact(t *testing.T) {
+	db, key, table, migs, m := freshInstallFixture(t)
+	org := uuid.New()
+	inst := freshInstaller(db).WithModelMaterializer(hostMaterializer)
+	if _, _, err := inst.Install(org, &bundle.Bundle{Manifest: m, Migrations: migs}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	b2 := &bundle.Bundle{Manifest: m, Migrations: append(append([]dynamic.File{}, migs...),
+		dynamic.File{Version: "003_ok", SQL: `ALTER TABLE public.` + table + ` ADD COLUMN IF NOT EXISTS more_id uuid;`},
+		dynamic.File{Version: "004_boom", SQL: `ALTER TABLE public.` + table + ` ADD COLUMN bad nosuchtype;`})}
+	b2.Manifest.Version = "1.1.0"
+	_, err := inst.Upgrade(t.Context(), org, b2)
+	var ue *UpgradeError
+	if !errors.As(err, &ue) || ue.Phase != UpgradePhaseMigrations || !ue.Preflight || ue.Addon != key || ue.Version != "1.1.0" {
+		t.Fatalf("want preflight migrations UpgradeError, got %#v / %v", ue, err)
+	}
+	var ver string
+	db.Raw(`SELECT version FROM public.metacore_installations WHERE organization_id = ? AND addon_key = ?`, org, key).Scan(&ver)
+	if ver != "1.0.0" {
+		t.Fatalf("installed version = %q, want 1.0.0", ver)
+	}
+	var n int64
+	db.Raw(`SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name=? AND column_name='more_id'`, table).Scan(&n)
+	if n != 0 {
+		t.Fatal("003_ok leaked out of the dry-run transaction")
+	}
+	db.Raw(`SELECT count(*) FROM public.metacore_addon_migrations WHERE addon_key = ? AND version IN ('003_ok','004_boom')`, key).Scan(&n)
+	if n != 0 {
+		t.Fatal("dry run wrote the migration ledger")
+	}
 }

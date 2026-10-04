@@ -1234,6 +1234,39 @@ func validateOptionWhen(where, containerDependsOn string, opts []FieldOption) []
 }
 
 func Validate(raw []byte) error {
+	_, err := ValidateWithOptions(raw, Options{Strict: true})
+	return err
+}
+
+// ValidateWithOptions is Validate with a compatibility window. With
+// Options.Strict every rule is a hard error (what Validate does; publish-time
+// callers such as the hub use it). Without Strict, rules registered in
+// legacyTolerated are downgraded to warnings — returned, not fatal — so a
+// manifest published before the rule existed still installs / upgrades.
+// Structural and schema errors are never downgraded.
+func ValidateWithOptions(raw []byte, opts Options) ([]string, error) {
+	var warnings []string
+	if err := validateDoc(raw, opts, &warnings); err != nil {
+		return warnings, err
+	}
+	return warnings, nil
+}
+
+// ParseWithOptions is Parse with a compatibility window (see
+// ValidateWithOptions). Warnings are returned alongside the typed manifest.
+func ParseWithOptions(raw []byte, opts Options) (*Manifest, []string, error) {
+	warnings, err := ValidateWithOptions(raw, opts)
+	if err != nil {
+		return nil, warnings, err
+	}
+	var m Manifest
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, warnings, fmt.Errorf("v3: decode: %w", err)
+	}
+	return &m, warnings, nil
+}
+
+func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	if len(raw) == 0 {
 		return errors.New("v3: manifest is empty")
 	}
@@ -1257,6 +1290,15 @@ func Validate(raw []byte) error {
 	}
 
 	var errs []string
+	// tolerate files a finding of a legacy-tolerated rule: a hard error in
+	// strict mode, a warning otherwise (see compat.go).
+	tolerate := func(rule, msg string) {
+		if opts.Strict {
+			errs = append(errs, msg)
+			return
+		}
+		*warnings = append(*warnings, fmt.Sprintf("[%s] %s", rule, msg))
+	}
 
 	if m.APIVersion != APIVersion {
 		errs = append(errs, fmt.Sprintf("apiVersion must be %q, got %q", APIVersion, m.APIVersion))
@@ -1623,7 +1665,7 @@ func Validate(raw []byte) error {
 					}
 					for _, s := range a.RequiresState {
 						if _, ok := known[s]; !ok {
-							errs = append(errs, fmt.Sprintf("contributions.actions[%d].requires_state %q is not a stage of model %q", ai, s, a.TargetModel))
+							tolerate(RuleRequiresStateInStages, fmt.Sprintf("contributions.actions[%d].requires_state %q is not a stage of model %q", ai, s, a.TargetModel))
 						}
 					}
 				}

@@ -7,6 +7,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Validation compatibility window + Upgrade pre-flight** (see
+  `docs/validation-compat-window.md`). Policy: tightening validation is a
+  warning for one minor release before it becomes a hard error. New
+  `v3.ValidateWithOptions` / `ParseWithOptions` (`Options{Strict}`) and
+  `bundle.ReadWithOptions`; `Validate` / `Parse` / `bundle.Read` stay strict.
+  The `requires_state` ⊂ stages rule from #453 is the first tolerated rule:
+  non-strict (install/upgrade) returns it as a warning in
+  `Bundle.ValidationWarnings`, strict (hub publish) still errors. Hosts that
+  install already-published bundles (ops) must read them non-strictly.
+- **`installer.Upgrade` pre-flight.** Schema + pending migrations are
+  rehearsed in a transaction that is always rolled back before anything is
+  touched; failures return a typed `*installer.UpgradeError` (addon, versions,
+  phase `fetch|validate|schema|migrations`, original error) with the installed
+  version intact. New `dynamic.DryRunMigrations`.
+
 ### Fixed
 
 - **Self-options label a record by `plate` (then `vin`) when it has no name.**

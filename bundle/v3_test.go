@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -193,5 +194,37 @@ func TestReadV3Bundle(t *testing.T) {
 	}
 	if len(b.Manifest.ModelDefinitions) == 0 {
 		t.Error("expected at least one ModelDefinition for a fixture with models")
+	}
+}
+
+// Read stays strict (publish contract); ReadWithOptions{Strict:false} lets an
+// already-published bundle through and surfaces the legacy-tolerated finding.
+func TestReadWithOptions_CompatWindow(t *testing.T) {
+	data := loadInventoryFixture(t)
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	models, _ := doc["models"].([]any)
+	if len(models) == 0 {
+		t.Skip("fixture has no models")
+	}
+	mod := models[0].(map[string]any)
+	mod["stage_field"] = "sku"
+	mod["stages"] = []any{map[string]any{"key": "draft", "label": "Draft"}}
+	doc["contributions"] = map[string]any{"actions": []any{map[string]any{
+		"key": "void_it", "target_model": mod["key"], "requires_state": []any{"void"},
+		"handler": map[string]any{"type": "wasm", "function": "Void"},
+	}}}
+	raw, _ := json.Marshal(doc)
+	if _, err := Read(packManifest(t, raw), 0); err == nil {
+		t.Skip("fixture shape did not trigger the rule (columns/handler differ); covered in manifest/v3")
+	}
+	b, err := ReadWithOptions(packManifest(t, raw), 0, ReadOptions{})
+	if err != nil {
+		t.Fatalf("non-strict read: %v", err)
+	}
+	if len(b.ValidationWarnings) != 1 {
+		t.Fatalf("warnings = %v", b.ValidationWarnings)
 	}
 }
