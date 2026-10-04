@@ -9,6 +9,8 @@ name: Auto Release
 #      (mismos pasos que release.yml, hechos inline para no depender de que un
 #      tag empujado por GITHUB_TOKEN dispare otro workflow — GitHub no re-dispara
 #      workflows por eventos del propio GITHUB_TOKEN).
+#   4. Lanza notify-consumers.yml con el secreto CONSUMER_BUMP_TOKEN, porque el
+#      tag de GITHUB_TOKEN tampoco lo dispara.
 #
 # release.yml (trigger por tag `v*`) se mantiene como fallback para tags
 # empujados a mano; con este workflow eso ya no hace falta.
@@ -76,6 +78,23 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "$NEW_TAG" -m "$NEW_TAG"
           git push origin "$NEW_TAG"
+
+      # 2b. El tag lo empuja GITHUB_TOKEN, asi que su evento `push: tags` NO
+      #     dispara notify-consumers.yml. Lo lanzamos explicitamente con
+      #     CONSUMER_BUMP_TOKEN (PAT / token de app con actions:write sobre este
+      #     repo). Sin el secreto se omite con warning para no romper el release.
+      #     El secreto lo debe crear el dueno del repo; nunca se imprime.
+      - name: Dispatch notify-consumers
+        if: steps.bump.outputs.new_tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.CONSUMER_BUMP_TOKEN }}
+          NEW_TAG: ${{ steps.bump.outputs.new_tag }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::CONSUMER_BUMP_TOKEN unset - notify-consumers not dispatched"
+            exit 0
+          fi
+          gh workflow run notify-consumers.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$NEW_TAG"
 
       - name: Notify Go proxy
         if: steps.bump.outputs.new_tag != ''
