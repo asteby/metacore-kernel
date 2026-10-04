@@ -59,6 +59,11 @@ type dataQueryPred struct {
 	col  string
 	op   string // "=", "IS NULL", ">", …, "IN"
 	vals []any
+	// extKey/extTable are set when the filter names "<Ext>.<column>". col is
+	// then the bare column on that extension table. Empty extTable = a column
+	// of the owner table.
+	extKey   string
+	extTable string
 }
 
 // decodeDataQueryScalar validates a scalar filter value.
@@ -228,6 +233,7 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 	// Decode + validate the filters. A scalar is equality (null compiles to
 	// `col IS NULL`; `= NULL` never matches in SQL); an object carries the
 	// operators of dataQueryOps plus `in`.
+	exts := extensionsFor(inv, req.Table, "")
 	whereCols := make([]string, 0, len(req.Where))
 	for col := range req.Where {
 		whereCols = append(whereCols, col)
@@ -235,6 +241,22 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 	sort.Strings(whereCols)
 	var preds []dataQueryPred
 	for _, col := range whereCols {
+		if _, bare, ok := extColumn(exts, col); ok {
+			ps, err := compileDataQueryWhere(bare, req.Where[col])
+			if err != nil {
+				return fail("invalid_request", err.Error())
+			}
+			e, _, _ := extColumn(exts, col)
+			for i := range ps {
+				ps[i].extKey = e.Key
+				ps[i].extTable = e.Table
+			}
+			preds = append(preds, ps...)
+			continue
+		}
+		if strings.Contains(col, ".") {
+			return fail("invalid_request", fmt.Sprintf("unknown extension column %q", col))
+		}
 		if !dataMutateIdentRe.MatchString(col) {
 			return fail("invalid_request", fmt.Sprintf("invalid where column %q", col))
 		}
@@ -249,8 +271,13 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 		preds = append(preds, ps...)
 	}
 	orderSQL := ""
+	orderExt := ""
+	orderExtCol := ""
 	if req.OrderBy != "" {
-		if !dataMutateIdentRe.MatchString(req.OrderBy) || dataQueryBlockedWhereCols[req.OrderBy] {
+		if e, bare, ok := extColumn(exts, req.OrderBy); ok {
+			orderExt = e.Table
+			orderExtCol = bare
+		} else if strings.Contains(req.OrderBy, ".") || !dataMutateIdentRe.MatchString(req.OrderBy) || dataQueryBlockedWhereCols[req.OrderBy] {
 			return fail("invalid_request", fmt.Sprintf("invalid order_by %q", req.OrderBy))
 		}
 		dir := strings.ToLower(req.OrderDir)
@@ -262,7 +289,11 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 		default:
 			return fail("invalid_request", "order_dir must be asc or desc")
 		}
-		orderSQL = " ORDER BY " + quoteIdent(req.OrderBy) + " " + dir
+		if orderExtCol != "" {
+			orderSQL = " ORDER BY eord." + quoteIdent(orderExtCol) + " " + dir
+		} else {
+			orderSQL = " ORDER BY " + quoteIdent(req.OrderBy) + " " + dir
+		}
 	}
 	var agg *compiledAggregate
 	if req.Aggregate != nil {
@@ -319,13 +350,33 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 	// then the guest filters sorted alphabetically, then the host-injected
 	// soft-delete filter. LIMIT is an int the host clamped — never guest
 	// text.
+	hasExt := orderExt != ""
+	for _, p := range preds {
+		if p.extTable != "" {
+			hasExt = true
+			break
+		}
+	}
+	from := tbl
+	join := ""
+	if hasExt {
+		from = tbl + " t"
+		if orderExt != "" {
+			qext, qerr := quoteQualifiedTable(orderExt)
+			if qerr != nil {
+				return fail("invalid_request", qerr.Error())
+			}
+			join = fmt.Sprintf(" LEFT JOIN %s eord ON eord.id = t.id", qext)
+		}
+	}
 	conds := append([]string{}, orgConds...)
 	args := []any{orgID}
 	n := 1
 	for _, p := range preds {
+		var frag string
 		switch p.op {
 		case "IS NULL":
-			conds = append(conds, fmt.Sprintf("%s IS NULL", quoteIdent(p.col)))
+			frag = fmt.Sprintf("%s IS NULL", quoteIdent(p.col))
 		case "IN":
 			ph := make([]string, 0, len(p.vals))
 			for _, v := range p.vals {
@@ -333,22 +384,33 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 				ph = append(ph, fmt.Sprintf("$%d", n))
 				args = append(args, v)
 			}
-			conds = append(conds, fmt.Sprintf("%s IN (%s)", quoteIdent(p.col), strings.Join(ph, ", ")))
+			frag = fmt.Sprintf("%s IN (%s)", quoteIdent(p.col), strings.Join(ph, ", "))
 		default:
 			n++
-			conds = append(conds, fmt.Sprintf("%s %s $%d", quoteIdent(p.col), p.op, n))
+			frag = fmt.Sprintf("%s %s $%d", quoteIdent(p.col), p.op, n)
 			args = append(args, p.vals[0])
 		}
+		if p.extTable != "" {
+			qext, qerr := quoteQualifiedTable(p.extTable)
+			if qerr != nil {
+				return fail("invalid_request", qerr.Error())
+			}
+			// The bare column was quoted inside frag. Qualify it onto the
+			// extension alias and correlate by the owner id.
+			frag = strings.Replace(frag, quoteIdent(p.col), "e."+quoteIdent(p.col), 1)
+			frag = fmt.Sprintf("EXISTS (SELECT 1 FROM %s e WHERE e.id = t.id AND %s)", qext, frag)
+		}
+		conds = append(conds, frag)
 	}
 	if softDelete {
 		conds = append(conds, "deleted_at IS NULL")
 	}
-	stmt := fmt.Sprintf("SELECT * FROM %s WHERE %s%s LIMIT %d",
-		tbl, strings.Join(conds, " AND "), orderSQL, limit)
+	stmt := fmt.Sprintf("SELECT * FROM %s%s WHERE %s%s LIMIT %d",
+		from, join, strings.Join(conds, " AND "), orderSQL, limit)
 	if agg != nil {
 		// One extra group tells the guest the result was cut at `limit`.
-		stmt = fmt.Sprintf("SELECT %s FROM %s WHERE %s%s%s LIMIT %d",
-			agg.selectSQL, tbl, strings.Join(conds, " AND "), agg.groupSQL, orderSQL, limit+1)
+		stmt = fmt.Sprintf("SELECT %s FROM %s%s WHERE %s%s%s LIMIT %d",
+			agg.selectSQL, from, join, strings.Join(conds, " AND "), agg.groupSQL, orderSQL, limit+1)
 	}
 
 	rows, err := work.Raw(stmt, args...).Rows()
@@ -378,6 +440,11 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 	}
 	if err := rows.Err(); err != nil {
 		return fail("db_error", err.Error())
+	}
+	if agg == nil {
+		if err := mergeQueriedExtensions(work, exts, rowsOut); err != nil {
+			return fail("db_error", err.Error())
+		}
 	}
 
 	data := map[string]any{"rows": rowsOut}

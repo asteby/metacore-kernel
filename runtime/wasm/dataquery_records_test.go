@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
@@ -343,5 +344,45 @@ func TestExecuteDataQueryRecords_RejectsBadOperators(t *testing.T) {
 		if env.Success {
 			t.Fatalf("expected invalid_request for %s", req)
 		}
+	}
+}
+
+func TestExecuteDataQueryRecords_ExtensionColumn(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+	orgID := uuid.New()
+
+	expectProbe(mock, `"products"`, "id", "organization_id", "name")
+	mock.ExpectQuery(`SELECT \* FROM "products" t WHERE organization_id = \$1 AND EXISTS \(SELECT 1 FROM "tire_specs" e WHERE e.id = t.id AND e."width" = \$2\) LIMIT 50`).
+		WithArgs(orgID, int64(205)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow("r1", "Pilot"))
+	mock.ExpectQuery(`SELECT \* FROM "tire_specs" WHERE "id" IN \(\$1\)`).
+		WithArgs("r1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "width"}).AddRow("r1", int64(205)))
+
+	inv := testInvocation(gdb, nil, orgID, nil, nil)
+	inv.extensions = func(table, model string) []dynamic.ExtensionTable {
+		if table != "products" {
+			return nil
+		}
+		return []dynamic.ExtensionTable{{
+			Key:     "TireSpec",
+			Table:   "tire_specs",
+			Columns: []manifest.ColumnDef{{Name: "width", Type: "integer"}},
+		}}
+	}
+	out := executeDataQueryRecords(context.Background(), inv, []byte(`{
+		"table": "products",
+		"where": {"TireSpec.width": 205}
+	}`))
+	env := unmarshalDataQuery(t, out)
+	if !env.Success || len(env.Data.Rows) != 1 {
+		t.Fatalf("expected one row, got %s", out)
+	}
+	if env.Data.Rows[0]["TireSpec.width"] != float64(205) {
+		t.Fatalf("row = %#v", env.Data.Rows[0])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -423,6 +423,7 @@ func validateRules(m *Manifest, colsByModel map[string]map[string]struct{}) []st
 		}
 
 		cols, isOwn := colsByModel[r.Model]
+		extCols := extensionReadableColumns(m)[r.Model]
 		_, isExt := extended[r.Model]
 		switch {
 		case r.Model == "":
@@ -438,7 +439,9 @@ func validateRules(m *Manifest, colsByModel map[string]map[string]struct{}) []st
 		} else if isOwn {
 			for _, f := range parsed.Fields() {
 				if _, ok := cols[f]; !ok {
-					errs = append(errs, fmt.Sprintf("%s.when references unknown column %q of model %q", where, f, r.Model))
+					if _, ext := extCols[f]; !ext {
+						errs = append(errs, fmt.Sprintf("%s.when references unknown column %q of model %q", where, f, r.Model))
+					}
 				}
 			}
 		}
@@ -529,6 +532,7 @@ func validatePublicRoutes(m *Manifest) []string {
 		}
 
 		cols, isOwn := own[r.Model]
+		extCols := extensionReadableColumns(m)[r.Model]
 		_, isExt := extended[r.Model]
 		switch {
 		case r.Model == "":
@@ -590,7 +594,9 @@ func validatePublicRoutes(m *Manifest) []string {
 			}
 			if isOwn {
 				if _, ok := cols[c]; !ok {
-					errs = append(errs, fmt.Sprintf("%s.columns[%s] is not a column of model %q", where, c, r.Model))
+					if _, ext := extCols[c]; !ext {
+						errs = append(errs, fmt.Sprintf("%s.columns[%s] is not a column of model %q", where, c, r.Model))
+					}
 				}
 			}
 		}
@@ -628,7 +634,9 @@ func validatePublicRoutes(m *Manifest) []string {
 			} else if isOwn {
 				for _, f := range expr.Fields() {
 					if _, ok := cols[f]; !ok {
-						errs = append(errs, fmt.Sprintf("%s.enabled_when references %q, not a column of model %q", where, f, r.Model))
+						if _, ext := extCols[f]; !ext {
+							errs = append(errs, fmt.Sprintf("%s.enabled_when references %q, not a column of model %q", where, f, r.Model))
+						}
 					}
 				}
 			}
@@ -1636,6 +1644,9 @@ func Validate(raw []byte) error {
 				if strings.TrimSpace(a.Approval.When) != "" {
 					env := map[string]struct{}{}
 					for k := range colsByModel[a.TargetModel] {
+						env[k] = struct{}{}
+					}
+					for k := range extensionReadableColumns(&m)[a.TargetModel] {
 						env[k] = struct{}{}
 					}
 					for _, f := range a.Fields {

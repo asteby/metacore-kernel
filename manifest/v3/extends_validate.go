@@ -81,6 +81,44 @@ func validateExtends(m *Manifest, rls string) []string {
 	return errs
 }
 
+// extensionReadableColumns maps a target model key to the "<ExtKey>.<column>"
+// names declared by models in this manifest that extend it. Those names are
+// part of the owner's row on the API (the REST dynamic service and the wasm
+// data_query / data_mutate imports), so a column check that asks "can this
+// record expose this field" accepts them. Physical checks — indexes,
+// stage_field, formula targets, the tenancy column — must keep using only
+// the model's own columns. A target in another addon is skipped: its key is
+// not a model this manifest can prove.
+func extensionReadableColumns(m *Manifest) map[string]map[string]struct{} {
+	out := map[string]map[string]struct{}{}
+	if m == nil {
+		return out
+	}
+	addon := m.Metadata.Key
+	for _, mod := range m.Models {
+		target := strings.TrimSpace(mod.Extends)
+		if target == "" {
+			continue
+		}
+		addonKey, modelKey, ok := strings.Cut(target, ".")
+		if !ok || addonKey != addon || modelKey == "" {
+			continue
+		}
+		set := out[modelKey]
+		if set == nil {
+			set = map[string]struct{}{}
+			out[modelKey] = set
+		}
+		for _, c := range mod.Columns {
+			if c.Name == "" {
+				continue
+			}
+			set[mod.Key+"."+c.Name] = struct{}{}
+		}
+	}
+	return out
+}
+
 // acceptsExtensions reports whether the manifest opens one of its own models to
 // extension. A target in ANOTHER addon is checked at install time, when both
 // manifests are known.

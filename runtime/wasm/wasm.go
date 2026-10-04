@@ -81,6 +81,9 @@ type Host struct {
 	// ModelKey (Host.WithStageMachine). data_mutate and data_batch refuse a
 	// write that is not a declared transition. nil = no machine on this tier.
 	stageMachine StageMachineFn
+	// extensions resolves 1:1 extension tables (Host.WithExtensions) so
+	// data_mutate / data_query can read and write "<Ext>.<column>".
+	extensions ExtensionFn
 	// approvalRequester is the embedder-injected dynamic.Service.RequestApproval
 	// the `approval_request` import calls (Host.WithApprovals). nil = import
 	// answers `approvals_unavailable`.
@@ -514,6 +517,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		mutationCompute:   h.mutationCompute,
 		appendOnly:        h.appendOnly,
 		stageMachine:      h.stageMachine,
+		extensions:        h.extensions,
 		approvalRequester: h.approvalRequester,
 		connectors:        h.connectors,
 		logger:            h.logger,

@@ -30,6 +30,7 @@ keep them in sync.
 | 1.5     | proposal | adds `data_query` host import; read-only sibling of `data_mutate`: ONE org-scoped, equality-filtered SELECT against a LOGICAL table resolved through the SAME `TableResolver` (NOT the addon-schema `search_path` of `db_query`, whose shadow schemas hold no live rows in embedding hosts). Soft-delete aware (`deleted_at IS NULL` auto-appended). Gated by `db:read <logical table>`. No events. |
 | 1.11    | proposal | adds `ctx_get` (read-only execution context: acting user id/email, role keys, the org's currency/tax/locale/timezone — the `env.user` / `env.company` of an Odoo module), each slice gated by a `ctx:user` / `ctx:roles` / `ctx:org_config` manifest capability, and makes `data_mutate` / `data_batch` **create** stamp the model's declared sequence-bound columns (folios) exactly like `POST /data` when the embedder wires `Host.WithSequenceStamp`. Additive: guests built against 1.0 – 1.10 keep working; a guest that already passes the folio (or mints it with `sequence_next`) is unaffected. See § 20 and § 14.10. |
 | 1.12    | proposal | when the embedder wires `Host.WithStageMachine`, `data_mutate` / `data_batch` refuse a create or update that is not a declared stage transition (`invalid_transition`), the same rule as `dynamic.Service` Create/Update. Incrementing the lifecycle column is refused. Unwired hosts keep the previous behaviour. See § 14.11. |
+| 1.13    | proposal | when the embedder wires `Host.WithExtensions`, `data_mutate` / `data_batch` / `data_query` accept `"<Ext>.<column>"` (and a nested object under the extension key) and read or write the 1:1 extension table instead of the owner table. Unwired hosts still reject a dotted column name. See § 14.12 and § 15.9. |
 | 1.10    | proposal | `http_fetch` / `http_request` responses whose body is **not valid UTF-8** now travel as `body_base64` (standard base64) with `body_is_base64: true` and an EMPTY `body`; UTF-8 bodies are unchanged. Fixes silent corruption of every binary response (PDF / ZIP / image / XLSX): `encoding/json` rewrites each invalid byte as U+FFFD, so guests received corrupt bytes with a 200 status and no error. See § 3.1. |
 | 1.6     | proposal | adds `http_request` (outbound HTTP with caller-supplied request headers as a JSON object — enables `Authorization`/`Accept` for authenticated third-party calls; same `http:fetch` capability + SSRF guard + 30 s timeout + 8 MiB cap as `http_fetch`, which is left unchanged and now delegates to the shared path with empty headers) and `connector_get` (resolves one org's credentials for a declared connector — the v3 `connectors` block — returning a JSON object; gated by `connector:read <key>` and tenant-scoped by the invocation `orgID`). Guests built against 1.0 – 1.5 keep working. |
 
@@ -1765,6 +1766,24 @@ the INSERT or UPDATE. A refused move rolls the transaction back and returns
 - Actions keep their own `requires_state` check, which reads this same
   `stage_field` when the dynamic service has a machine for the model.
 
+### 14.12 Extension columns (v1.13)
+
+A 1:1 extension (`Model.extends`) stores its columns in its own table, with
+`id` equal to the owner row. The REST dynamic service already accepts
+`"TireSpec.width"` and `{"TireSpec": {"width": 205}}`. With
+
+```go
+host.WithExtensions(func(logicalTable, model string) []dynamic.ExtensionTable {
+    return extensionsOf(logicalTable, model)
+})
+```
+
+`data_mutate` and `data_batch` do the same: those fields are removed from the
+owner INSERT/UPDATE and upserted into the extension table (`ON CONFLICT (id)`).
+The canonical event's `after` carries the prefixed fields. Search-key,
+generated and sequence columns of the extension are host-managed and rejected.
+Without `WithExtensions`, a dotted column name is `invalid_request`.
+
 ## 15. `data_query` — org-scoped logical-table read (v1.5)
 
 `data_query` is the read-only sibling of `data_mutate` (§ 14). It exists
@@ -1929,6 +1948,15 @@ Same host setup as `data_mutate` (§ 14.8) — `WithDB`, `WithEnforcer` and
 Implementation: `runtime/wasm/dataquery_records.go` (named to avoid
 colliding with `dbquery.go`); tests:
 `runtime/wasm/dataquery_records_test.go`.
+
+### 15.9 Extension columns (v1.13)
+
+With `Host.WithExtensions` (see § 14.12), a `where` or `order_by` of
+`"<Ext>.<column>"` is compiled against that extension table (an `EXISTS`
+predicate, or a `LEFT JOIN` when ordering). Each returned owner row also
+gains `"<Ext>.<column>"` for the extension's declared columns. Aggregates
+stay on the owner table. Without the hook a dotted filter is
+`invalid_request`.
 
 ## 16. `data_batch` — atomic multi-row mutation + canonical events (v1.7)
 

@@ -16,6 +16,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Extension columns on `data_query` / `data_mutate` / column checks.** `Host.WithExtensions`
+  routes `"<Ext>.<column>"` (and a nested object under the extension key) to the
+  1:1 extension table on wasm create/update, and `data_query` can filter on that
+  column and returns it under the same prefix as the REST dynamic service. A
+  dotted name with no wired extension is `invalid_request` and never reaches
+  SQL. The manifest column check accepts those prefixed fields on public-route
+  columns, `enabled_when`, rule `when` and approval `when` when the extension
+  is declared in the same manifest. Physical columns (indexes, `stage_field`,
+  formula targets) stay on the owner table. See #452.
 - **Single stage gate (`dynamic.GateTransition` / `GateWrite`, `Host.WithStageMachine`).**
   Create, Update, action `requires_state` and the wasm `data_mutate` /
   `data_batch` imports share one lifecycle rule. When a model declares a stage
