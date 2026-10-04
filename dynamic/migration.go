@@ -176,6 +176,60 @@ func ApplyWithOptions(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolati
 	return nil
 }
 
+// DryRunMigrations executes the pending migrations of files on tx exactly the
+// way ApplyWithOptions would (same search_path, same checksum refusal, same
+// benign "already exists" tolerance) but never writes the ledger. tx MUST be an
+// open transaction the caller rolls back: Postgres DDL is transactional, so
+// nothing is left behind and a failing file surfaces BEFORE the real Apply
+// touches the installation. Each file runs under a savepoint so a benign
+// conflict does not poison the transaction for the next file, and later files
+// see the effects of earlier ones just as in a real run. The ledger table is
+// read, never created: it exists whenever the addon has been installed.
+func DryRunMigrations(tx *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, files []File, opts ApplyOptions) error {
+	schema := SchemaName(addonKey, orgID, iso)
+	for i, f := range files {
+		got := Checksum(f.SQL)
+		var existing Migration
+		err := tx.Table("public.metacore_addon_migrations").
+			Where("addon_key = ? AND version = ?", addonKey, f.Version).
+			First(&existing).Error
+		if err == nil {
+			if existing.Checksum != got && !declaresInPlaceEdit(f.SQL) {
+				return fmt.Errorf(
+					"migration %s@%s checksum mismatch: recorded %s, file %s (refusing to re-apply mutated SQL)",
+					addonKey, f.Version, existing.Checksum, got)
+			}
+			continue
+		}
+		if !isNotFound(err) {
+			return err
+		}
+		sp := fmt.Sprintf("metacore_dryrun_%d", i)
+		if err := tx.SavePoint(sp).Error; err != nil {
+			return err
+		}
+		path, err := migrationSearchPath(tx, schema, opts)
+		if err != nil {
+			return fmt.Errorf("dry-run %s@%s: resolve search_path: %w", addonKey, f.Version, err)
+		}
+		if err := tx.Exec(`SET LOCAL search_path TO ` + quoteIdents(path)).Error; err != nil {
+			return err
+		}
+		if err := execScript(tx, f.SQL); err != nil {
+			if !isBenignDDLConflict(err) {
+				return fmt.Errorf("apply %s@%s: %w", addonKey, f.Version, err)
+			}
+			if rerr := tx.RollbackTo(sp).Error; rerr != nil {
+				return rerr
+			}
+		}
+		if err := tx.Exec(`SET LOCAL search_path TO public`).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // replayAfterModelsMarker tags a migration whose effect depends on the host's
 // model tables existing (a trigger, a default or a generated helper on a
 // table the manifest materialises). Some hosts (ops) create those tables

@@ -368,7 +368,7 @@ func extractRequires(b *bundle.Bundle) AddonKeyList {
 	if b == nil || len(b.RawManifest) == 0 {
 		return nil
 	}
-	m, err := v3.Parse(b.RawManifest)
+	m, _, err := v3.ParseWithOptions(b.RawManifest, v3.Options{})
 	if err != nil || m == nil {
 		return nil
 	}

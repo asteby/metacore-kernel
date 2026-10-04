@@ -43,21 +43,28 @@ import (
 // (which are deeply coupled to manifest.Manifest) keep working unchanged.
 // Otherwise the legacy unmarshal path is preserved verbatim.
 func parseManifest(data []byte, dst *manifest.Manifest) error {
+	_, err := parseManifestWith(data, dst, v3.Options{Strict: true})
+	return err
+}
+
+// parseManifestWith is parseManifest with a validation strictness and the
+// legacy-tolerated warnings it produced.
+func parseManifestWith(data []byte, dst *manifest.Manifest, opts v3.Options) ([]string, error) {
 	var probe struct {
 		APIVersion string `json:"apiVersion"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return err
+		return nil, err
 	}
 	if probe.APIVersion != "" {
-		m, err := v3.Parse(data)
+		m, warnings, err := v3.ParseWithOptions(data, opts)
 		if err != nil {
-			return err
+			return warnings, err
 		}
 		*dst = manifest.FromV3(m)
-		return nil
+		return warnings, nil
 	}
-	return json.Unmarshal(data, dst)
+	return nil, json.Unmarshal(data, dst)
 }
 
 // Bundle is the in-memory representation after reading a .tar.gz.
@@ -71,6 +78,10 @@ type Bundle struct {
 	// the v3-only surface (e.g. preset.Resolve to read preset.addons[]) parse
 	// these bytes with v3.Parse. Empty for in-memory bundles built via Write.
 	RawManifest []byte
+	// ValidationWarnings are findings of legacy-tolerated validation rules
+	// (see manifest/v3 compat.go) that ReadWithOptions downgraded because the
+	// bundle was read non-strictly. Always empty for Read (strict).
+	ValidationWarnings []string
 	Migrations []dynamic.File
 	// Frontend holds static files keyed by bundle-relative path
 	// (e.g. "frontend/remoteEntry.js"). Callers persist them where needed.
@@ -113,7 +124,25 @@ type Bundle struct {
 
 // Read decompresses a bundle stream and returns its parsed representation.
 // It enforces a max decompressed size to defend against zip-bomb inputs.
+//
+// Read validates the manifest STRICTLY (every rule is an error): it is the
+// publish-time contract. Hosts that install or upgrade an already-published
+// bundle should use ReadWithOptions with Strict=false so a validation rule
+// added after the bundle was published degrades to Bundle.ValidationWarnings
+// instead of blocking the install.
 func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
+	return ReadWithOptions(r, maxBytes, ReadOptions{Strict: true})
+}
+
+// ReadOptions configures ReadWithOptions.
+type ReadOptions struct {
+	// Strict validates the manifest with every rule as a hard error (publish).
+	// When false, legacy-tolerated rules become warnings (install / upgrade).
+	Strict bool
+}
+
+// ReadWithOptions is Read with a configurable validation strictness.
+func ReadWithOptions(r io.Reader, maxBytes int64, ropts ReadOptions) (*Bundle, error) {
 	if maxBytes <= 0 {
 		maxBytes = 64 << 20 // 64 MiB default
 	}
@@ -180,9 +209,11 @@ func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
 		b.EntryDigests[h.Name] = hex.EncodeToString(sum[:])
 		switch {
 		case h.Name == "manifest.json":
-			if err := parseManifest(data, &b.Manifest); err != nil {
+			warns, err := parseManifestWith(data, &b.Manifest, v3.Options{Strict: ropts.Strict})
+			if err != nil {
 				return nil, fmt.Errorf("bundle: manifest.json: %w", err)
 			}
+			b.ValidationWarnings = warns
 			// Preserve the verbatim bytes so v3-only consumers (preset/theme
 			// resolution) can re-parse the original document the legacy
 			// Manifest drops. Copy because `data` aliases a reused buffer.
@@ -256,7 +287,9 @@ func Read(r io.Reader, maxBytes int64) (*Bundle, error) {
 // `manifest.Manifest` (the v2 shape) drops the `i18n.bundles` block during
 // FromV3 — only the file PATHS know which locale maps to which file.
 func hydrateManifestI18n(m *manifest.Manifest, rawManifest []byte, locales map[string][]byte) {
-	parsed, err := v3.Parse(rawManifest)
+	// Non-strict: the document already passed Read's own validation; a
+	// legacy-tolerated finding must not silently drop the i18n catalog.
+	parsed, _, err := v3.ParseWithOptions(rawManifest, v3.Options{})
 	if err != nil || parsed == nil || parsed.I18n == nil || len(parsed.I18n.Bundles) == 0 {
 		return
 	}

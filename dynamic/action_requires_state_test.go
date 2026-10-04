@@ -363,3 +363,21 @@ func TestExecAction_CarriesActiveBranch(t *testing.T) {
 		}
 	}
 }
+
+// A published manifest whose action requires_state names a value that is not a
+// stage (the workshop case that #453's validator now flags) must keep working
+// at runtime: the gate never panics, the action is simply not eligible for a
+// record in a real stage, and it stays eligible for a record that carries the
+// legacy value.
+func TestCheckRequiresState_ValueOutsideStages_NotEligible(t *testing.T) {
+	allowed := []string{"reception"} // not a stage of the machine below
+	for _, stage := range []string{"draft", "posted", ""} {
+		err := checkRequiresState(map[string]any{"status": stage}, "status", allowed)
+		if !errors.Is(err, ErrInvalidState) {
+			t.Fatalf("stage %q: want ErrInvalidState, got %v", stage, err)
+		}
+	}
+	if err := checkRequiresState(map[string]any{"status": "reception"}, "status", allowed); err != nil {
+		t.Fatalf("legacy value still matches: %v", err)
+	}
+}

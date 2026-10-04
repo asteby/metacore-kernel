@@ -1096,13 +1096,22 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	if err := i.verifySignature(newBundle); err != nil {
 		return nil, err
 	}
+	// Validation / schema failures are typed (*UpgradeError) with the phase;
+	// the sentinel errors below (ErrNotInstalled, ErrCannotDowngrade, ...) stay
+	// bare. fromVersion is filled in once the installation row is loaded.
+	vfail := func(err error) error {
+		return upgradeFailure(newBundle.Manifest.Key, "", newBundle.Manifest.Version, UpgradePhaseValidate, false, err)
+	}
 	warnings, err := newBundle.Manifest.ValidateAdvisory(i.KernelVersion)
 	if err != nil {
-		return nil, err
+		return nil, vfail(err)
 	}
 	if err := newBundle.Manifest.CheckRuntime(i.RuntimeVersion); err != nil {
-		return nil, err
+		return nil, vfail(err)
 	}
+	// Findings of legacy-tolerated v3 rules the bundle reader downgraded
+	// (compat window): logged, never fatal on upgrade.
+	warnings = append(warnings, newBundle.ValidationWarnings...)
 	for _, w := range warnings {
 		slog.Warn("manifest.advisory",
 			"addon", newBundle.Manifest.Key,
@@ -1113,7 +1122,7 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	// introduce a compiled handler the host cannot resolve. Validated before
 	// the BEFORE upgrade hook fires / any schema work runs. Nil registry → warn.
 	if err := validateCompiledHandlers(newBundle, i.CompiledHandlers); err != nil {
-		return nil, err
+		return nil, vfail(err)
 	}
 
 	// Pre-flight: the installation row must exist; capture its current
@@ -1132,6 +1141,18 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	toVersion := newBundle.Manifest.Version
 	if err := guardUpgradeVersion(fromVersion, toVersion); err != nil {
 		return nil, err
+	}
+
+	// Dry-run pre-flight: rehearse the schema + migration work in a transaction
+	// that is always rolled back, BEFORE the BEFORE hook fires or anything is
+	// persisted. A failure leaves the installed version, the ledger and the
+	// schema exactly as they were and comes back as a typed *UpgradeError.
+	// (The real apply below is NOT atomic across migrations — each migration
+	// commits on its own — which is precisely why it is rehearsed first.)
+	if dr, ok := i.upgradeApplier().(upgradeDryRunner); ok {
+		if err := dr.DryRunForUpgrade(i.DB, orgID, dynamic.ParseIsolation(newBundle.Manifest.TenantIsolation), newBundle); err != nil {
+			return nil, upgradeFailure(newBundle.Manifest.Key, fromVersion, toVersion, UpgradePhaseSchema, true, err)
+		}
 	}
 
 	// Build the lifecycle payload once — the BEFORE hook reads it as-is;
@@ -1158,7 +1179,7 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 		return nil, fmt.Errorf("installer.Upgrade: count migrations: %w", err)
 	}
 	if err := applier.ApplyForUpgrade(i.DB, orgID, iso, newBundle); err != nil {
-		return nil, fmt.Errorf("installer.Upgrade: apply schema: %w", err)
+		return nil, upgradeFailure(newBundle.Manifest.Key, fromVersion, toVersion, UpgradePhaseSchema, false, err)
 	}
 	i.materializeUniqueRules(ctx, orgID, iso, newBundle.Manifest)
 
@@ -1569,6 +1590,18 @@ type defaultSchemaApplier struct {
 }
 
 func (a defaultSchemaApplier) ApplyForUpgrade(db *gorm.DB, orgID uuid.UUID, iso dynamic.Isolation, b *bundle.Bundle) error {
+	if err := a.applyModels(db, orgID, iso, b); err != nil {
+		return inPhase(UpgradePhaseSchema, err)
+	}
+	if err := dynamic.ApplyWithOptions(db, b.Manifest.Key, orgID, iso, b.Migrations, migrationOptions(a.migrationSchema, b.Manifest)); err != nil {
+		return inPhase(UpgradePhaseMigrations, fmt.Errorf("apply migrations: %w", err))
+	}
+	return nil
+}
+
+// applyModels is the schema half of an upgrade (everything before the SQL
+// migrations); shared by ApplyForUpgrade and the dry run.
+func (a defaultSchemaApplier) applyModels(db *gorm.DB, orgID uuid.UUID, iso dynamic.Isolation, b *bundle.Bundle) error {
 	if err := dynamic.EnsureSchema(db, b.Manifest.Key, orgID, iso); err != nil {
 		return fmt.Errorf("EnsureSchema: %w", err)
 	}
@@ -1584,9 +1617,6 @@ func (a defaultSchemaApplier) ApplyForUpgrade(db *gorm.DB, orgID uuid.UUID, iso 
 		if err := a.materialize(db, b.Manifest); err != nil {
 			return fmt.Errorf("materialize models: %w", err)
 		}
-	}
-	if err := dynamic.ApplyWithOptions(db, b.Manifest.Key, orgID, iso, b.Migrations, migrationOptions(a.migrationSchema, b.Manifest)); err != nil {
-		return fmt.Errorf("apply migrations: %w", err)
 	}
 	return nil
 }
