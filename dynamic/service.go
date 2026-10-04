@@ -386,6 +386,7 @@ type Service struct {
 	relations         RelationResolver
 	extensions        ExtensionResolver
 	accessPolicies    AccessPolicyResolver
+	colCache          liveColsCache // live table columns (tablecols.go)
 
 	// Transactional-outbox state (outbox.go). outboxEnabled arms after the
 	// table migrates at New; outboxStop terminates the background relay.
@@ -628,7 +629,7 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	if err != nil {
 		return nil, query.PageMeta{}, err
 	}
-	db := s.db.WithContext(ctx).Table(tableName)
+	db := s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance)
 	db = s.scope.ScopeQuery(db, user)
 
 	// Wire relations into the builder so ?with= preloads and
@@ -647,7 +648,7 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 
 	var total int64
 	if !params.SkipCount {
-		total, err = builder.Count(s.db.WithContext(ctx).Table(tableName).Scopes(func(d *gorm.DB) *gorm.DB {
+		total, err = builder.Count(s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance).Scopes(func(d *gorm.DB) *gorm.DB {
 			// Count must NOT carry the ORDER BY (applySort) — a COUNT(*) ordered by a
 			// non-grouped column 42803s. Apply only the WHERE-shaping clauses.
 			// scopeSoftDelete: Find's dest schema hides soft-deleted rows; a bare
@@ -718,7 +719,7 @@ func (s *Service) Aggregate(ctx context.Context, model string, user modelbase.Au
 	params.GroupBy = nil
 	params.SortBy = ""
 
-	db := s.db.WithContext(ctx).Table(tableName)
+	db := s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance)
 	db = s.scope.ScopeQuery(db, user)
 	// The footer scans into a map (no schema) — mirror Find's soft-delete
 	// filter or totals include rows the list never shows.
@@ -793,7 +794,7 @@ func (s *Service) Get(ctx context.Context, model string, user modelbase.AuthUser
 	if err != nil {
 		return nil, err
 	}
-	db := s.db.WithContext(ctx).Table(tableName)
+	db := s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance)
 	db = s.scope.ScopeQuery(db, user)
 
 	if err := db.First(instance, "id = ?", id).Error; err != nil {
@@ -927,7 +928,7 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 			if err := EvalCrossRecordRules(ctx, tx, mc.Rules, tableName, user.GetOrganizationID(), row, nil, s.parentTableFn(ctx)); err != nil {
 				return err
 			}
-			return omitUnsentNullableText(ctx, tx.Table(tableName), tableName, instance, input).Create(instance).Error
+			return s.writeDB(ctx, tx, tableName, instance, input).Create(instance).Error
 		}); err != nil {
 			err = uniqueIndexViolation(err, tableName, mc.Rules)
 			if errors.Is(err, ErrConstraintViolation) || errors.Is(err, ErrInvalidInput) {
@@ -935,7 +936,7 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 			}
 			return nil, fmt.Errorf("dynamic: create: %w", err)
 		}
-	} else if err := omitUnsentNullableText(ctx, s.db.WithContext(ctx).Table(tableName), tableName, instance, input).Create(instance).Error; err != nil {
+	} else if err := s.writeDB(ctx, s.db.WithContext(ctx), tableName, instance, input).Create(instance).Error; err != nil {
 		return nil, fmt.Errorf("dynamic: create: %w", err)
 	}
 
@@ -1020,7 +1021,7 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	// transition hooks then run directly on execDB rather than opening a nested
 	// transaction, and the FOR UPDATE lock is applied on load.
 	core := func(execDB *gorm.DB, inTx bool) error {
-		load := s.scope.ScopeQuery(execDB.WithContext(ctx).Table(tableName), user)
+		load := s.scope.ScopeQuery(s.tableDB(ctx, execDB.WithContext(ctx), tableName, instance), user)
 		if inTx && lockRows {
 			load = load.Clauses(clause.Locking{Strength: "UPDATE"})
 		}
@@ -1154,7 +1155,7 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		// transaction, so save + hooks run directly on execDB.
 		runHooksInTx := stageChanged && len(sm.MatchingHooks(fromStage, toStage)) > 0
 		if inTx {
-			if err := omitUnsentNullableText(ctx, execDB.Table(tableName), tableName, instance, input).Save(instance).Error; err != nil {
+			if err := s.writeDB(ctx, execDB, tableName, instance, input).Save(instance).Error; err != nil {
 				return fmt.Errorf("dynamic: update: %w", err)
 			}
 			after = toMap(instance)
@@ -1165,14 +1166,14 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		}
 		if runHooksInTx {
 			return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-				if err := omitUnsentNullableText(ctx, tx.Table(tableName), tableName, instance, input).Save(instance).Error; err != nil {
+				if err := s.writeDB(ctx, tx, tableName, instance, input).Save(instance).Error; err != nil {
 					return fmt.Errorf("dynamic: update: %w", err)
 				}
 				after = toMap(instance)
 				return s.runTransitionHooks(ctx, model, user, tx, sm, fromStage, toStage, before, after)
 			})
 		}
-		if err := omitUnsentNullableText(ctx, s.db.WithContext(ctx).Table(tableName), tableName, instance, input).Save(instance).Error; err != nil {
+		if err := s.writeDB(ctx, s.db.WithContext(ctx), tableName, instance, input).Save(instance).Error; err != nil {
 			return fmt.Errorf("dynamic: update: %w", err)
 		}
 		after = toMap(instance)
@@ -1271,7 +1272,7 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 	// an accepted quote). Evaluated against the pre-delete row.
 	if mc := s.resolveConstraints(ctx, model); mc != nil && len(deleteGuardRules(mc.Rules)) > 0 {
 		row := map[string]any{}
-		loadDB := s.scope.ScopeQuery(s.db.WithContext(ctx).Table(tableName), user)
+		loadDB := s.scope.ScopeQuery(s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance), user)
 		if err := loadDB.Where("id = ?", id).Take(&row).Error; err == nil {
 			if err := EvalCrossRecordDeleteRules(ctx, s.db, mc.Rules, tableName, user.GetOrganizationID(), row, s.parentTableFn(ctx)); err != nil {
 				return err
@@ -1287,7 +1288,7 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 	// bus OR a file deleter is wired — either consumer needs the pre-delete row.
 	var before map[string]any
 	if s.bus != nil || s.fileDeleter != nil {
-		loadDB := s.db.WithContext(ctx).Table(tableName)
+		loadDB := s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance)
 		loadDB = s.scope.ScopeQuery(loadDB, user)
 		if err := loadDB.First(instance, "id = ?", id).Error; err == nil {
 			before = toMap(instance)
@@ -1330,16 +1331,18 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 func (s *Service) softDelete(ctx context.Context, tableName string, instance any, user modelbase.AuthUser, id uuid.UUID) error {
 	cols := structColumnSet(instance)
 	_, hasBy := cols[ColDeletedByID]
+	// Only stamp deleted_by_id when the table really has it.
+	hasBy = hasBy && s.hasLiveColumn(ctx, tableName, ColDeletedByID)
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if hasBy {
 			// GORM adds `deleted_at IS NULL` for a gorm.DeletedAt model, so an
 			// already-deleted row keeps its original deleter.
-			q := s.scope.ScopeQuery(tx.Table(tableName), user)
+			q := s.scope.ScopeQuery(s.tableDB(ctx, tx, tableName, instance), user)
 			if err := q.Model(instance).Where("id = ?", id).UpdateColumn(ColDeletedByID, user.GetID()).Error; err != nil {
 				return err
 			}
 		}
-		q := s.scope.ScopeQuery(tx.Table(tableName), user)
+		q := s.scope.ScopeQuery(s.tableDB(ctx, tx, tableName, instance), user)
 		return q.Delete(instance, "id = ?", id).Error
 	})
 }
@@ -1367,14 +1370,17 @@ func (s *Service) Restore(ctx context.Context, model string, user modelbase.Auth
 	if _, ok := cols[ColDeletedAt]; !ok {
 		return nil, ErrRecordNotFound
 	}
+	if !s.hasLiveColumn(ctx, tableName, ColDeletedAt) {
+		return nil, ErrRecordNotFound // no tombstones without deleted_at
+	}
 	set := map[string]any{ColDeletedAt: nil}
-	if _, ok := cols[ColDeletedByID]; ok {
+	if _, ok := cols[ColDeletedByID]; ok && s.hasLiveColumn(ctx, tableName, ColDeletedByID) {
 		set[ColDeletedByID] = nil
 	}
-	if _, ok := cols[ColUpdatedByID]; ok {
+	if _, ok := cols[ColUpdatedByID]; ok && s.hasLiveColumn(ctx, tableName, ColUpdatedByID) {
 		set[ColUpdatedByID] = user.GetID()
 	}
-	if _, ok := cols[ColUpdatedAt]; ok {
+	if _, ok := cols[ColUpdatedAt]; ok && s.hasLiveColumn(ctx, tableName, ColUpdatedAt) {
 		set[ColUpdatedAt] = time.Now()
 	}
 	q := s.scope.ScopeQuery(s.db.WithContext(ctx).Table(tableName).Unscoped(), user)

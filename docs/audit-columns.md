@@ -78,6 +78,19 @@ on PostgreSQL 11+, and `created_at`/`updated_at` with the *stable* default
 blocks writes while it builds; schedule the first upgrade of a very large table
 off-peak (a `CONCURRENTLY` build cannot run inside the upgrade transaction).
 
+## Tables without the columns (graceful degradation)
+
+`Service` introspects the table's real columns (`information_schema`, current
+`search_path`) once per table and caches the set for one minute. A write omits
+every audit column the struct carries but the table lacks; `Delete` stamps
+`deleted_by_id` only if it exists, and on a table with no `deleted_at` at all it
+hard-deletes (the pre-standard behaviour) instead of failing. The cache is
+dropped by `EnsureAuditColumns`, `SyncSchema`/`CreateTable` and
+`dynamic.InvalidateTableColumns()` (for a host that alters columns with its own
+DDL; otherwise it is noticed within the TTL). When introspection is impossible
+(non-Postgres dialect, table not found) the original behaviour is kept. wasm
+`data_mutate`/`data_batch` already probed the table per write.
+
 ## Read side
 
 `TableMetadata.audit` (`modelbase.AuditMeta`) names, per record, the row key a UI
@@ -108,11 +121,12 @@ reusable.
 ## What changes for whom
 
 * **Hosts (ops/hub/pitsline):** nothing mandatory for the DDL; the redundant
-  options can be dropped. If a host builds the runtime struct with
-  `ToReflectType`/`BuildStructType` over tables it created itself, run
-  `EnsureAuditColumns` for each model at boot **before** serving writes (the
-  struct now includes `updated_by_id`/`deleted_by_id`; inserting into a table
-  without them fails with 42703). Compiled models embedding
+  options can be dropped. The runtime **degrades gracefully**: if a host builds
+  the runtime struct with `ToReflectType`/`BuildStructType` over a table it
+  created itself and that table lacks some audit columns, `Service` and wasm
+  `data_mutate` stamp/write only the columns the table really has (no 42703).
+  `EnsureAuditColumns` remains the way to bring a table to the standard; once it
+  ran, the missing columns start being stamped. Compiled models embedding
   `modelbase.BaseUUIDModel` are unchanged (no `updated_by_id`/`deleted_by_id`
   fields yet — add them with a host migration when adopting).
 * **Addons:** no need to declare these columns; migrations can assume them.

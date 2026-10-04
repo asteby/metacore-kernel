@@ -274,6 +274,7 @@ func enableRLS(db *gorm.DB, schema, table string) error {
 // SyncSchema adds columns the manifest declares but the table is missing.
 // DROP and RENAME are not performed here — those require an explicit migration.
 func SyncSchema(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, def manifest.ModelDefinition) error {
+	defer InvalidateTableColumns() // columns may change: drop cached sets
 	schema := SchemaName(addonKey, orgID, iso)
 	existing, err := columnsOf(db, schema, def.TableName)
 	if err != nil {
