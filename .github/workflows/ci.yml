@@ -50,4 +50,6 @@ jobs:
       # auditoría añadidas antes de las migraciones (caso customers@037) y las
       # reglas unique. Sin este paso un verde del job no prueba nada de eso.
       - run: go test -count=1 -v ./installer/
+      # data_mutate sobre tabla sin columnas de auditoría (legacy), Postgres real.
+      - run: go test -count=1 -v -run 'Postgres' ./runtime/wasm/
       - run: go test -count=1 -race -v -run '/Postgres' ./idempotency/ ./outbox/

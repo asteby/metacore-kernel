@@ -206,6 +206,8 @@ func hasColumn(existing map[string]struct{}, name string, whenNil bool) bool {
 // of kernel-added columns follows the table's own created_at (timestamp vs
 // timestamptz) so a host-managed `public` table stays homogeneous.
 func EnsureAuditColumns(db *gorm.DB, schema string, def manifest.ModelDefinition) error {
+	// The columns the runtime stamps are about to change: drop cached sets.
+	defer InvalidateTableColumns()
 	types, err := columnTypesOf(db, schema, def.TableName)
 	if err != nil {
 		return err

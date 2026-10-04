@@ -52,6 +52,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Audit columns no longer break writes on pre-existing tables** (regression in
+  v0.188.0: `dynamic: create: table … has no column named updated_by_id`,
+  SQLSTATE 42703). The runtime only stamps the audit columns present in the
+  table: `Service.Create/Update/Delete/Restore` introspect the table's columns
+  (Postgres and SQLite; cached per table, invalidated by `EnsureAuditColumns` / `SyncSchema` /
+  `dynamic.InvalidateTableColumns`) and omit the absent ones; a table with no
+  `deleted_at` is read unscoped and hard-deleted as before the standard. A host
+  no longer needs `EnsureAuditColumns` to avoid breaking its writes.
+
 - **Self-options label a record by `plate` (then `vin`) when it has no name.**
   A Vehicle picker and any `label_ref` onto that model used to fall through to
   the id, so the cell read as the model plus a uuid. `plate` and `vin` now sit
