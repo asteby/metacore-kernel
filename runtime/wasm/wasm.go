@@ -77,6 +77,10 @@ type Host struct {
 	// appendOnly reports a LOGICAL table as an append-only ledger
 	// (Host.WithAppendOnly): update/delete on it is refused.
 	appendOnly func(logicalTable string) bool
+	// stageMachine resolves the declarative lifecycle for a logical table /
+	// ModelKey (Host.WithStageMachine). data_mutate and data_batch refuse a
+	// write that is not a declared transition. nil = no machine on this tier.
+	stageMachine StageMachineFn
 	// approvalRequester is the embedder-injected dynamic.Service.RequestApproval
 	// the `approval_request` import calls (Host.WithApprovals). nil = import
 	// answers `approvals_unavailable`.
@@ -509,6 +513,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		mutationGuard:     h.mutationGuard,
 		mutationCompute:   h.mutationCompute,
 		appendOnly:        h.appendOnly,
+		stageMachine:      h.stageMachine,
 		approvalRequester: h.approvalRequester,
 		connectors:        h.connectors,
 		logger:            h.logger,

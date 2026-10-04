@@ -844,6 +844,13 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	exts := s.resolveExtensions(ctx, model)
 	extIn := splitExtensionInput(exts, input)
 
+	// The same lifecycle rule Update enforces: a create that names the stage
+	// column must land on a declared stage (an empty from is a placement, not
+	// a move). Models without a machine are unrestricted.
+	if err := GateWrite(s.resolveStageMachine(ctx, model), nil, input, nil); err != nil {
+		return nil, err
+	}
+
 	// Normalize string-encoded typed fields (uuid/number/bool) so a form that
 	// sends everything as strings doesn't fail the unmarshal. See coerce.go.
 	// Structured pre-write validation: required / invalid_option / not_found /

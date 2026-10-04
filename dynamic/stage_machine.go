@@ -232,12 +232,23 @@ func (s *Service) resolveStageMachine(ctx context.Context, model string) *StageM
 	return sm
 }
 
-// checkTransition validates a prospective stage move against the machine's
-// declared transitions. It returns the before/after stage values and whether the
-// stage actually changed. When the move changes the stage to a (from, to) pair
-// that is not whitelisted it returns ErrInvalidTransition (mapped to HTTP 422).
-func (s *Service) checkTransition(sm *StageMachine, before map[string]any, input map[string]any) (fromStage, toStage string, changed bool, err error) {
-	fromStage = stringifyStatus(before[sm.Field])
+// GateTransition is the single lifecycle rule every surface shares: Service
+// Create/Update, an action's requires_state (which reads the same field), and
+// the wasm data_mutate / data_batch imports. It returns the before/after stage
+// values and whether the stage actually changed. A move whose (from, to) pair
+// is not whitelisted returns ErrInvalidTransition (HTTP 422). A nil or inert
+// machine reports no change and no error — callers that have no machine leave
+// the column unrestricted.
+//
+// before may be nil on create (there is no current stage). input may omit the
+// field: that is not a transition.
+func GateTransition(sm *StageMachine, before, input map[string]any) (fromStage, toStage string, changed bool, err error) {
+	if !sm.active() {
+		return "", "", false, nil
+	}
+	if before != nil {
+		fromStage = stringifyStatus(before[sm.Field])
+	}
 	toStage = fromStage
 	if v, present := input[sm.Field]; present {
 		toStage = stringifyStatus(v)
@@ -249,6 +260,26 @@ func (s *Service) checkTransition(sm *StageMachine, before map[string]any, input
 		return fromStage, toStage, true, fmt.Errorf("%w: %q → %q is not a declared transition", ErrInvalidTransition, fromStage, toStage)
 	}
 	return fromStage, toStage, true, nil
+}
+
+// GateWrite applies GateTransition to a create or update payload. inc must not
+// touch the lifecycle column: a stage is a declared move, not a numeric delta.
+// before is nil on create. A nil or inert machine is a no-op.
+func GateWrite(sm *StageMachine, before, data, inc map[string]any) error {
+	if !sm.active() {
+		return nil
+	}
+	if _, ok := inc[sm.Field]; ok {
+		return fmt.Errorf("%w: %q is the lifecycle column and cannot be incremented", ErrInvalidTransition, sm.Field)
+	}
+	_, _, _, err := GateTransition(sm, before, data)
+	return err
+}
+
+// checkTransition validates a prospective stage move against the machine's
+// declared transitions. It is the Service.Update wrapper around GateTransition.
+func (s *Service) checkTransition(sm *StageMachine, before map[string]any, input map[string]any) (fromStage, toStage string, changed bool, err error) {
+	return GateTransition(sm, before, input)
 }
 
 // runTransitionHooks dispatches the OnTransition hooks that match a from → to

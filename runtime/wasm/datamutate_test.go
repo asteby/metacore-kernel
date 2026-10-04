@@ -913,3 +913,108 @@ func TestExecuteDataMutate_StampsDistinctOccurrenceIDPerPublication(t *testing.T
 		t.Fatalf("test is not exercising the same row: %q vs %q", first.ID, second.ID)
 	}
 }
+
+func orderStageMachine() StageMachineFn {
+	return func(_, model string) *dynamic.StageMachine {
+		if model != "Order" {
+			return nil
+		}
+		return &dynamic.StageMachine{
+			Field: "status",
+			Stages: []manifest.StageDef{
+				{Key: "draft"},
+				{Key: "posted"},
+			},
+			Transitions: []manifest.TransitionDef{{From: "draft", To: "posted"}},
+		}
+	}
+}
+
+func TestExecuteDataMutate_StageGate_RejectsUndeclaredMove(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+
+	orgID := uuid.New()
+	rowID := uuid.NewString()
+	bus, _, _ := captureBus(t, "inventory.Order.updated")
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "orders" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id", "status"}))
+	mock.ExpectQuery(`SELECT \* FROM "orders" WHERE id = \$1 AND organization_id = \$2`).
+		WithArgs(rowID, orgID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "status"}).AddRow(rowID, "draft"))
+	mock.ExpectRollback()
+
+	inv := testInvocation(gdb, bus, orgID, nil, nil)
+	inv.stageMachine = orderStageMachine()
+	out := executeDataMutate(context.Background(), inv, []byte(`{
+		"op": "update", "table": "orders", "model": "Order",
+		"id": "`+rowID+`",
+		"data": {"status": "void"}
+	}`))
+	env := unmarshalMutate(t, out)
+	if env.Success || env.Error == nil || env.Error.Code != "invalid_transition" {
+		t.Fatalf("expected invalid_transition, got %s", out)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecuteDataMutate_StageGate_AllowsDeclaredMove(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+
+	orgID := uuid.New()
+	rowID := uuid.NewString()
+	bus, _, _ := captureBus(t, "inventory.Order.updated")
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "orders" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id", "status"}))
+	mock.ExpectQuery(`SELECT \* FROM "orders" WHERE id = \$1 AND organization_id = \$2`).
+		WithArgs(rowID, orgID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "status"}).AddRow(rowID, "draft"))
+	mock.ExpectQuery(`UPDATE "orders" SET "status" = \$1, "updated_at" = \$2 WHERE id = \$3 AND organization_id = \$4 RETURNING \*`).
+		WithArgs("posted", sqlmock.AnyArg(), rowID, orgID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "status"}).AddRow(rowID, "posted"))
+	mock.ExpectCommit()
+
+	inv := testInvocation(gdb, bus, orgID, nil, nil)
+	inv.stageMachine = orderStageMachine()
+	out := executeDataMutate(context.Background(), inv, []byte(`{
+		"op": "update", "table": "orders", "model": "Order",
+		"id": "`+rowID+`",
+		"data": {"status": "posted"}
+	}`))
+	if env := unmarshalMutate(t, out); !env.Success {
+		t.Fatalf("declared transition should pass, got %s", out)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecuteDataMutate_StageGate_RejectsUndeclaredCreate(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+
+	orgID := uuid.New()
+	bus, _, _ := captureBus(t, "inventory.Order.created")
+
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+
+	inv := testInvocation(gdb, bus, orgID, nil, nil)
+	inv.stageMachine = orderStageMachine()
+	out := executeDataMutate(context.Background(), inv, []byte(`{
+		"op": "create", "table": "orders", "model": "Order",
+		"data": {"status": "void"}
+	}`))
+	env := unmarshalMutate(t, out)
+	if env.Success || env.Error == nil || env.Error.Code != "invalid_transition" {
+		t.Fatalf("expected invalid_transition, got %s", out)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -141,12 +141,18 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 	}
 
 	// State gate: when the action declares requires_state, the target record's
-	// `status` column must be one of the allowed values. Enforced before the
-	// trigger runs so a disallowed transition never reaches the dispatcher.
-	// Additive — when RequiresState is empty the action is always valid, so
-	// existing actions are unaffected.
+	// lifecycle column must be one of the allowed values. The column is the
+	// model's stage_field when a stage machine is declared, so the action and
+	// the write path share one field; otherwise status, then state. Enforced
+	// before the trigger runs so a disallowed state never reaches the
+	// dispatcher. Additive — when RequiresState is empty the action is always
+	// valid, so existing actions are unaffected.
 	if len(def.RequiresState) > 0 {
-		if err := checkRequiresState(row, def.RequiresState); err != nil {
+		field := ""
+		if sm := s.resolveStageMachine(ctx, model); sm != nil {
+			field = sm.Field
+		}
+		if err := checkRequiresState(row, field, def.RequiresState); err != nil {
 			return ActionResult{}, err
 		}
 	}
@@ -367,12 +373,13 @@ func buildResult(resp ActionResponse, kernelMeta map[string]any) ActionResult {
 }
 
 // checkRequiresState enforces an action's RequiresState gate against the loaded
-// record. It reads the record's lifecycle column — prefer `status` (workshop,
-// vehicles, …), fall back to `state` (purchases, transfers, …) — and returns
+// record. field is the model's stage_field when a stage machine declares one;
+// empty field keeps the historical lookup — prefer `status` (workshop,
+// vehicles, …), fall back to `state` (purchases, transfers, …). It returns
 // ErrInvalidState when that value is not one of the allowed states. allowed is
 // guaranteed non-empty by the caller.
-func checkRequiresState(row map[string]any, allowed []string) error {
-	status := rowLifecycleState(row)
+func checkRequiresState(row map[string]any, field string, allowed []string) error {
+	status := rowLifecycleState(row, field)
 	for _, s := range allowed {
 		if s == status {
 			return nil
@@ -382,9 +389,13 @@ func checkRequiresState(row map[string]any, allowed []string) error {
 }
 
 // rowLifecycleState returns the record's lifecycle value for RequiresState.
-// Empty `status` is treated as missing so a blank status does not hide a
-// populated `state` column.
-func rowLifecycleState(row map[string]any) string {
+// A declared stage field wins, including when it is blank: the machine's
+// column is the only one the gate may read. With no field, empty `status` is
+// treated as missing so a blank status does not hide a populated `state`.
+func rowLifecycleState(row map[string]any, field string) string {
+	if field != "" {
+		return stringifyStatus(row[field])
+	}
 	if s := stringifyStatus(row["status"]); s != "" {
 		return s
 	}
