@@ -81,8 +81,13 @@ func (s *Service) liveColumns(ctx context.Context, table string) map[string]stru
 		return e.cols
 	}
 	var cols map[string]struct{}
-	if s.db.Dialector != nil && s.db.Dialector.Name() == "postgres" {
-		cols = introspectColumns(ctx, s.db, table)
+	if s.db.Dialector != nil {
+		switch s.db.Dialector.Name() {
+		case "postgres":
+			cols = introspectColumns(ctx, s.db, table)
+		case "sqlite":
+			cols = introspectSQLiteColumns(ctx, s.db, table)
+		}
 	}
 	s.colCache.put(table, liveColsEntry{cols: cols, at: time.Now(), gen: gen})
 	return cols
@@ -168,4 +173,23 @@ func (s *Service) writeDB(ctx context.Context, db *gorm.DB, table string, instan
 		return q.Omit(omit...)
 	}
 	return q
+}
+
+// introspectSQLiteColumns reads the table's columns through the pragma_table_info
+// table-valued function; the table name is a bound parameter (never interpolated).
+// nil on failure, for a qualified name, or when the table does not exist.
+func introspectSQLiteColumns(ctx context.Context, db *gorm.DB, table string) map[string]struct{} {
+	table = strings.Trim(table, `"`+"`")
+	if table == "" || strings.ContainsAny(table, ".\x00") {
+		return nil
+	}
+	var rows []string
+	if err := db.WithContext(ctx).Raw(`SELECT name FROM pragma_table_info(?)`, table).Scan(&rows).Error; err != nil || len(rows) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(rows))
+	for _, r := range rows {
+		out[r] = struct{}{}
+	}
+	return out
 }

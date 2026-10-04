@@ -80,15 +80,15 @@ off-peak (a `CONCURRENTLY` build cannot run inside the upgrade transaction).
 
 ## Tables without the columns (graceful degradation)
 
-`Service` introspects the table's real columns (`information_schema`, current
-`search_path`) once per table and caches the set for one minute. A write omits
+`Service` introspects the table's real columns (Postgres `information_schema`, current
+`search_path`; SQLite `pragma_table_info`; other dialects: unknown) once per table and caches the set for one minute. A write omits
 every audit column the struct carries but the table lacks; `Delete` stamps
 `deleted_by_id` only if it exists, and on a table with no `deleted_at` at all it
 hard-deletes (the pre-standard behaviour) instead of failing. The cache is
 dropped by `EnsureAuditColumns`, `SyncSchema`/`CreateTable` and
 `dynamic.InvalidateTableColumns()` (for a host that alters columns with its own
 DDL; otherwise it is noticed within the TTL). When introspection is impossible
-(non-Postgres dialect, table not found) the original behaviour is kept. wasm
+(dialect other than Postgres/SQLite, table not found) the original behaviour is kept. wasm
 `data_mutate`/`data_batch` already probed the table per write.
 
 ## Read side
