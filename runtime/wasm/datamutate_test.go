@@ -783,7 +783,7 @@ func TestLiftGuestCreateIDMovesDataIDToRequest(t *testing.T) {
 	if string(req.Data["notes"]) != `"Sale SO-1"` {
 		t.Fatalf("notes = %s", req.Data["notes"])
 	}
-	if err := validateDataMutateRequest(req); err != nil {
+	if err := validateDataMutateRequest(req, nil); err != nil {
 		t.Fatalf("lifted create must validate: %v", err)
 	}
 }
@@ -911,6 +911,80 @@ func TestExecuteDataMutate_StampsDistinctOccurrenceIDPerPublication(t *testing.T
 	// La fila es la misma: lo que discrimina es la publicación, no el registro.
 	if first.ID != second.ID {
 		t.Fatalf("test is not exercising the same row: %q vs %q", first.ID, second.ID)
+	}
+}
+
+func tireExtensions() ExtensionFn {
+	return func(table, model string) []dynamic.ExtensionTable {
+		if table != "products" && model != "Product" {
+			return nil
+		}
+		return []dynamic.ExtensionTable{{
+			Key:     "TireSpec",
+			Table:   "tire_specs",
+			Columns: []manifest.ColumnDef{{Name: "width", Type: "integer"}},
+		}}
+	}
+}
+
+func TestExecuteDataMutate_ExtensionColumn_WritesExtensionTable(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+
+	orgID := uuid.New()
+	rowID := uuid.NewString()
+	bus, getEvents, _ := captureBus(t, "inventory.Product.created")
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "products" LIMIT 0`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id", "name"}))
+	mock.ExpectQuery(`INSERT INTO "products" \("created_at", "id", "name", "organization_id", "updated_at"\) VALUES \(\$1, \$2, \$3, \$4, \$5\) RETURNING \*`).
+		WithArgs(sqlmock.AnyArg(), rowID, "Pilot", orgID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow(rowID, "Pilot"))
+	mock.ExpectExec(`INSERT INTO "tire_specs"`).
+		WithArgs(rowID, orgID, int64(205)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	inv := testInvocation(gdb, bus, orgID, nil, nil)
+	inv.extensions = tireExtensions()
+	out := executeDataMutate(context.Background(), inv, []byte(`{
+		"op": "create", "table": "products", "model": "Product",
+		"id": "`+rowID+`",
+		"data": {"name": "Pilot", "TireSpec": {"width": 205}}
+	}`))
+	env := unmarshalMutate(t, out)
+	if !env.Success {
+		t.Fatalf("expected success, got %s", out)
+	}
+	if env.Data == nil || env.Data.After["TireSpec.width"] != float64(205) {
+		t.Fatalf("after should carry TireSpec.width, got %#v", env.Data)
+	}
+	evs := getEvents()
+	if len(evs) != 1 || evs[0].After["TireSpec.width"] != int64(205) {
+		t.Fatalf("canonical after = %#v", evs)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecuteDataMutate_ExtensionColumn_UnwiredIsInvalid(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+	orgID := uuid.New()
+	bus, _, _ := captureBus(t, "inventory.Product.created")
+	inv := testInvocation(gdb, bus, orgID, nil, nil)
+	out := executeDataMutate(context.Background(), inv, []byte(`{
+		"op": "create", "table": "products", "model": "Product",
+		"data": {"TireSpec.width": 205}
+	}`))
+	env := unmarshalMutate(t, out)
+	if env.Success || env.Error == nil || env.Error.Code != "invalid_request" {
+		t.Fatalf("expected invalid_request, got %s", out)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -104,6 +104,8 @@ type invocation struct {
 	// (Host.WithStageMachine). nil = data_mutate / data_batch do not gate
 	// stage moves.
 	stageMachine StageMachineFn
+	// extensions resolves 1:1 extension tables (Host.WithExtensions).
+	extensions ExtensionFn
 	// approvalRequester is the embedder-injected dynamic.Service.RequestApproval
 	// (Host.WithApprovals) the `approval_request` import calls. nil = the
 	// import answers `approvals_unavailable`.

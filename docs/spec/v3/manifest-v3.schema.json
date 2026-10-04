@@ -1790,10 +1790,10 @@
         },
         "columns": {
           "type": "array",
-          "description": "Allowlist of model columns the json/html renderings may expose. Nothing outside it is ever serialised; the token column is never allowed. Required for 'json'; for 'html' may be empty only when `document` is set.",
+          "description": "Allowlist of model columns the json/html renderings may expose. Nothing outside it is ever serialised; the token column is never allowed. A 1:1 extension column is named \"<ExtKey>.<column>\" (TireSpec.width). Required for 'json'; for 'html' may be empty only when `document` is set.",
           "items": {
             "type": "string",
-            "pattern": "^[a-z][a-z0-9_]*$"
+            "pattern": "^(?:[A-Z][A-Za-z0-9]+\\.)?[a-z][a-z0-9_]*$"
           },
           "uniqueItems": true
         },

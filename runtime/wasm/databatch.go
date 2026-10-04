@@ -117,7 +117,14 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 	prepared := make([]preparedMutation, len(req.Mutations))
 	for i := range req.Mutations {
 		m := req.Mutations[i]
-		if err := validateDataMutateRequest(&m); err != nil {
+		mExts := extensionsFor(inv, m.Table, m.Model)
+		if err := explodeExtensionObjects(mExts, m.Data); err != nil {
+			return fail("invalid_request", fmt.Sprintf("mutations[%d]: %s", i, err.Error()))
+		}
+		if err := explodeExtensionObjects(mExts, m.Inc); err != nil {
+			return fail("invalid_request", fmt.Sprintf("mutations[%d]: %s", i, err.Error()))
+		}
+		if err := validateDataMutateRequest(&m, mExts); err != nil {
 			return fail("invalid_request", fmt.Sprintf("mutations[%d]: %s", i, err.Error()))
 		}
 		if inv.enforcer != nil {
@@ -181,7 +188,7 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 			_ = work.Rollback()
 			return fail(code, fmt.Sprintf("mutations[%d]: %s", i, cErr.Error()))
 		}
-		res, code, mErr := applyMutation(work, p.req, p.data, p.inc, orgID, p.tbl, now, dynamic.ActorIDFromContext(ctx), dynamic.BranchIDFromContext(ctx), stageFor(inv, p.req.Table, p.req.Model))
+		res, code, mErr := applyMutation(work, p.req, p.data, p.inc, orgID, p.tbl, now, dynamic.ActorIDFromContext(ctx), dynamic.BranchIDFromContext(ctx), stageFor(inv, p.req.Table, p.req.Model), extensionsFor(inv, p.req.Table, p.req.Model))
 		if mErr != nil {
 			_ = work.Rollback()
 			return fail(code, fmt.Sprintf("mutations[%d]: %s", i, mErr.Error()))

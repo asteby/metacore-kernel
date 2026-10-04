@@ -134,7 +134,14 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		inv.logger.Printf("metacore.wasm data_mutate WARN host_stamped_ignored addon=%s table=%s col=organization_id reason=matches_invocation_org",
 			addonKey, req.Table)
 	}
-	if err := validateDataMutateRequest(&req); err != nil {
+	exts := extensionsFor(inv, req.Table, req.Model)
+	if err := explodeExtensionObjects(exts, req.Data); err != nil {
+		return fail("invalid_request", err.Error())
+	}
+	if err := explodeExtensionObjects(exts, req.Inc); err != nil {
+		return fail("invalid_request", err.Error())
+	}
+	if err := validateDataMutateRequest(&req, exts); err != nil {
 		return fail("invalid_request", err.Error())
 	}
 
@@ -217,7 +224,7 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		rollback()
 		return fail(code, cErr.Error())
 	}
-	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now, dynamic.ActorIDFromContext(ctx), dynamic.BranchIDFromContext(ctx), stageFor(inv, req.Table, req.Model))
+	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now, dynamic.ActorIDFromContext(ctx), dynamic.BranchIDFromContext(ctx), stageFor(inv, req.Table, req.Model), exts)
 	if mErr != nil {
 		rollback()
 		return fail(code, mErr.Error())
@@ -362,8 +369,12 @@ func stageFor(inv *invocation, table, model string) *dynamic.StageMachine {
 	return inv.stageMachine(table, model)
 }
 
-func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]any, orgID uuid.UUID, tbl string, now time.Time, actorID, branchID string, stage *dynamic.StageMachine) (*mutationResult, string, error) {
+func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]any, orgID uuid.UUID, tbl string, now time.Time, actorID, branchID string, stage *dynamic.StageMachine, exts []dynamic.ExtensionTable) (*mutationResult, string, error) {
 	out := &mutationResult{rowID: req.ID}
+	// "<Ext>.<col>" leaves the owner INSERT/UPDATE and is written to the
+	// extension table after the owner row exists. Validation already proved
+	// each prefixed name is a declared writable column.
+	extData, extInc := partitionExtensionCols(exts, data, inc)
 	switch req.Op {
 	case "create":
 		// Placement into the lifecycle: an undeclared initial stage is the
@@ -441,6 +452,10 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 		if after == nil {
 			return nil, "db_error", fmt.Errorf("INSERT returned no row")
 		}
+		if err := writeExtensions(work, exts, extData, extInc, out.rowID, orgID); err != nil {
+			return nil, "db_error", err
+		}
+		mergeExtensionFields(after, extData, extInc)
 		out.after = after
 
 	case "update":
@@ -503,6 +518,10 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 			return nil, "not_found",
 				fmt.Errorf("row %s vanished during update in %s", out.rowID, req.Table)
 		}
+		if err := writeExtensions(work, exts, extData, extInc, out.rowID, orgID); err != nil {
+			return nil, "db_error", err
+		}
+		mergeExtensionFields(after, extData, extInc)
 		out.after = after
 
 	case "delete":
@@ -565,7 +584,7 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 // op enum, identifier-shaped logical table, non-empty model, uuid ids, and
 // the data/inc field matrix per op. Reserved (host-stamped) columns are
 // rejected so the tenant boundary and the timestamps stay host-owned.
-func validateDataMutateRequest(req *dataMutateRequest) error {
+func validateDataMutateRequest(req *dataMutateRequest, exts []dynamic.ExtensionTable) error {
 	switch req.Op {
 	case "create", "update", "delete":
 	default:
@@ -603,12 +622,12 @@ func validateDataMutateRequest(req *dataMutateRequest) error {
 		}
 	}
 	for col := range req.Data {
-		if err := validateDataMutateCol(col); err != nil {
+		if err := validateDataMutateCol(col, exts); err != nil {
 			return err
 		}
 	}
 	for col := range req.Inc {
-		if err := validateDataMutateCol(col); err != nil {
+		if err := validateDataMutateCol(col, exts); err != nil {
 			return err
 		}
 	}
@@ -662,7 +681,16 @@ func stripGuestOrgID(req *dataMutateRequest, orgID uuid.UUID) (bool, error) {
 	return true, nil
 }
 
-func validateDataMutateCol(col string) error {
+func validateDataMutateCol(col string, exts []dynamic.ExtensionTable) error {
+	if _, _, ok := extColumn(exts, col); ok {
+		if !extColumnWritable(exts, col) {
+			return fmt.Errorf("column %q is host-managed", col)
+		}
+		return nil
+	}
+	if strings.Contains(col, ".") {
+		return fmt.Errorf("unknown extension column %q", col)
+	}
 	if !dataMutateIdentRe.MatchString(col) {
 		return fmt.Errorf("invalid column name %q", col)
 	}
