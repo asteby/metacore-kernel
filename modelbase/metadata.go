@@ -65,6 +65,27 @@ type TableMetadata struct {
 	// writes regardless (dynamic.ErrAppendOnly). Set by the host from the
 	// manifest; omitted for ordinary models.
 	AppendOnly bool `json:"append_only,omitempty"`
+
+	// Audit names the row keys that answer "when and who" for every change to a
+	// record of this model, so the SDK can render "Creado por / Modificado por /
+	// fecha" without the manifest declaring those columns. Each field holds the
+	// ROW KEY (the column name) a UI reads from a record returned by the dynamic
+	// API, and is empty when the model does not carry that column (an
+	// append_only ledger has no updated_*/deleted_*). The *_by values are user
+	// ids (dynamic.SystemActorID for unattended work); the UI resolves them to
+	// names. Read-only by contract: the kernel stamps them and discards client
+	// values. See docs/audit-columns.md.
+	Audit *AuditMeta `json:"audit,omitempty"`
+}
+
+// AuditMeta is the served description of a model's audit columns.
+type AuditMeta struct {
+	CreatedAt string `json:"created_at,omitempty"`
+	CreatedBy string `json:"created_by,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+	UpdatedBy string `json:"updated_by,omitempty"`
+	DeletedAt string `json:"deleted_at,omitempty"`
+	DeletedBy string `json:"deleted_by,omitempty"`
 }
 
 // FormLayout is the served grouping spec for a model's create/edit form. Mode

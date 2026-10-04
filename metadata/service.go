@@ -200,6 +200,13 @@ func (s *Service) computeTable(ctx context.Context, modelKey string) (*modelbase
 		table.Singleton = true
 	}
 
+	// Audit columns (when/who of every change): derived from the model's own
+	// fields so the SDK can show "Creado por / Modificado por" for any model,
+	// declared in the manifest or not. A model that already set Audit keeps it.
+	if table.Audit == nil {
+		table.Audit = modelbase.DeriveAuditMeta(def)
+	}
+
 	// Project the model's spreadsheet-import spec onto the served metadata so
 	// the SDK can show or hide the import action without a probe request. A
 	// model that declares nothing gets the spec derived from its own form

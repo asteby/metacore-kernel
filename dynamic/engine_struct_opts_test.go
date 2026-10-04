@@ -4,7 +4,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/asteby/metacore-kernel/manifest"
 	"gorm.io/gorm"
@@ -33,16 +32,17 @@ func TestBuildStructTypeWithOptions_ZeroValueUnchanged(t *testing.T) {
 	if got != want {
 		t.Fatalf("zero-value opts diverged:\n got=%v\nwant=%v", got, want)
 	}
-	// Default soft-delete field stays *time.Time, and there is no CreatedByID.
+	// Audit standard: the default struct soft-deletes through gorm.DeletedAt and
+	// carries CreatedByID.
 	f, ok := fieldByName(got, "DeletedAt")
 	if !ok {
 		t.Fatal("expected DeletedAt field on soft-delete def")
 	}
-	if f.Type != reflect.TypeOf(&time.Time{}) {
-		t.Fatalf("default DeletedAt = %v, want *time.Time", f.Type)
+	if f.Type != reflect.TypeOf(gorm.DeletedAt{}) {
+		t.Fatalf("default DeletedAt = %v, want gorm.DeletedAt", f.Type)
 	}
-	if _, ok := fieldByName(got, "CreatedByID"); ok {
-		t.Fatal("default struct must not carry CreatedByID")
+	if _, ok := fieldByName(got, "CreatedByID"); !ok {
+		t.Fatal("default struct must carry CreatedByID (audit standard)")
 	}
 }
 

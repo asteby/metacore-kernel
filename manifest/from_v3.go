@@ -672,6 +672,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 			def.ReasonRequired = &ReasonRequiredDef{Delete: rr.Delete, Actions: rr.Actions, MinLength: rr.MinLength}
 		}
 		def.AppendOnly = m.AppendOnly
+		def.NoAudit = m.Audit != nil && !*m.Audit
 		def.Rules = mapModelRules(m.Rules)
 		def.Sequences = mapModelSequences(m.Sequences)
 		// FormLayout rides through so the host projects the create/edit form

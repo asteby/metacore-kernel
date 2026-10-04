@@ -1128,6 +1128,13 @@ type ModelDefinition struct {
 	// (dynamic.Service and the wasm data_mutate / data_batch imports).
 	AppendOnly bool `json:"append_only,omitempty"`
 
+	// NoAudit is the host/runtime projection of v3 Model `audit: false`: the
+	// model opts out of the kernel audit-column standard (who-columns and the
+	// deleted_at tombstone) and keeps only created_at/updated_at. The zero value
+	// (false) is the standard: every model gets the six audit columns. See
+	// dynamic.AuditColumns and docs/audit-columns.md.
+	NoAudit bool `json:"no_audit,omitempty"`
+
 	// Rules is the host/runtime projection of v3 Model.rules: cross-record
 	// guards over the parent row referenced by FK, evaluated inside the write
 	// transaction (dynamic.EvalCrossRecordRules). Empty = none.

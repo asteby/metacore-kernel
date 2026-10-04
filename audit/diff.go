@@ -7,6 +7,10 @@ import "encoding/json"
 var changeSkipFields = map[string]bool{
 	"updated_at": true,
 	"deleted_at": true,
+	// The audit who-columns churn with every write; the actor of the change is
+	// already on the event itself.
+	"updated_by_id": true,
+	"deleted_by_id": true,
 }
 
 // mapToJSONString marshals a map to a *string for a JSONB column. Returns nil

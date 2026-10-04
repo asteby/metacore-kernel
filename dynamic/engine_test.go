@@ -56,7 +56,7 @@ func TestValidateType_WrapsAllowlist(t *testing.T) {
 
 // DEFAULT MODE: zero-value-ish options (shared isolation, addon schema) must
 // reproduce today's CreateTable shape — addon schema, timestamptz, org column,
-// RLS, NO created_by_id, deleted_at only via SoftDelete.
+// RLS, plus the audit-column standard (docs/audit-columns.md).
 func TestToDDL_DefaultMode_MatchesLegacyShape(t *testing.T) {
 	def := sampleDef()
 	stmts, err := ToDDL(def, DDLOptions{
@@ -77,8 +77,8 @@ func TestToDDL_DefaultMode_MatchesLegacyShape(t *testing.T) {
 	if !strings.Contains(out, `"created_at" timestamptz NOT NULL DEFAULT NOW()`) {
 		t.Errorf("expected timestamptz created_at:\n%s", out)
 	}
-	if strings.Contains(out, "created_by_id") {
-		t.Errorf("default mode must NOT emit created_by_id:\n%s", out)
+	if !strings.Contains(out, `"created_by_id" uuid`) {
+		t.Errorf("default mode emits the audit who-columns:\n%s", out)
 	}
 	if !strings.Contains(out, "ENABLE ROW LEVEL SECURITY") {
 		t.Errorf("default shared mode must enable RLS:\n%s", out)

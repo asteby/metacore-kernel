@@ -21,6 +21,9 @@ var managedFormColumns = map[string]struct{}{
 	"updated_at":      {},
 	"organization_id": {},
 	"deleted_at":      {},
+	"created_by_id":   {},
+	"updated_by_id":   {},
+	"deleted_by_id":   {},
 }
 
 // DeriveTableColumns builds default UI table columns from a model definition's

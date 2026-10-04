@@ -1518,6 +1518,16 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 		if mod.AppendOnly && (mod.StageField != "" || len(mod.Stages) > 0 || len(mod.Transitions) > 0 || len(mod.OnTransition) > 0) {
 			errs = append(errs, fmt.Sprintf("models[%d]: append_only cannot be combined with a stage machine (stage_field/stages/transitions/on_transition)", mi))
 		}
+		// Audit-column standard: a declared standard column must carry the
+		// standard type (the kernel adds the missing ones itself). A clash
+		// (e.g. deleted_at as text) would make the kernel's soft-delete and
+		// actor stamping write the wrong type, so it is flagged — as a warning
+		// first (compat window), an error for manifests being published.
+		for _, c := range mod.Columns {
+			if msg := auditColumnTypeProblem(c.Name, c.Type); msg != "" {
+				tolerate(RuleAuditColumnType, fmt.Sprintf("models[%d] (%s): column %q %s", mi, mod.Key, c.Name, msg))
+			}
+		}
 		// Cross-record rules (see CrossRule): shape per kind, columns declared.
 		for ri, r := range mod.Rules {
 			if r.Kind == "unique" {
@@ -2175,3 +2185,23 @@ func validateReasonRequired(m *Manifest, mi int, mod Model) []string {
 }
 
 var supervisorPolicyRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+
+// auditColumnTypeProblem reports why a column named like one of the kernel's
+// standard audit columns has an unusable type, or "" when the name is not an
+// audit column or the type is the expected one. created_at/updated_at/
+// deleted_at must be timestamp or timestamptz; the *_by_id columns must be uuid.
+func auditColumnTypeProblem(name, typ string) string {
+	t := strings.ToLower(strings.TrimSpace(typ))
+	switch name {
+	case "created_at", "updated_at", "deleted_at":
+		if t != "timestamp" && t != "timestamptz" && t != "timestamp with time zone" && t != "datetime" {
+			return fmt.Sprintf("is a kernel audit column and must be timestamp or timestamptz, got %q (omit it to let the kernel add it)", typ)
+		}
+	case "created_by_id", "updated_by_id", "deleted_by_id":
+		if t != "uuid" {
+			return fmt.Sprintf("is a kernel audit column and must be uuid, got %q (omit it to let the kernel add it)", typ)
+		}
+	}
+	return ""
+}

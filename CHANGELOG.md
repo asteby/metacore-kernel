@@ -9,6 +9,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Audit-column standard** (see `docs/audit-columns.md`). Every model now
+  answers "when and who" for each change, declared in the manifest or not:
+  `created_at`, `updated_at`, `deleted_at`, `created_by_id`, `updated_by_id`,
+  `deleted_by_id`. Added by default in `ToDDL` / `CreateTable` / the runtime
+  struct (`BuildStructType`), and on upgrade by `SyncSchema` + new
+  `dynamic.EnsureAuditColumns` / `SchemaEngine.AuditColumnsDDL`
+  (`ADD COLUMN IF NOT EXISTS` + indexes, before the migrations, also over the
+  host's primary schema, covered by the Upgrade pre-flight) so a migration may
+  assume `deleted_at` (the customers@037 `UPDATE OF deleted_at` trigger).
+  Opt-out: `append_only` keeps `created_at` + `created_by_id` only; new v3
+  `Model.audit: false` (`ModelDefinition.NoAudit`) keeps the historical
+  `created_at`/`updated_at` pair. A manifest-declared column wins; the v3
+  validator rejects a wrong type (`audit_column_type`, warning inside the
+  compat window, error for publish).
+  Runtime: `Service.Create/Update/Delete` stamp actor + dates from the
+  `AuthUser` and discard client-sent audit values; `Delete` is now a real soft
+  delete that records `deleted_at` + `deleted_by_id`; new `Service.Restore`;
+  wasm `data_mutate` / `data_batch` stamp the invocation actor, or
+  `dynamic.SystemActorID` for unattended work, and reject guest-supplied audit
+  columns. Served `TableMetadata.audit` (`modelbase.AuditMeta`) names the row
+  keys for "Creado por / Modificado por".
+  Changed behaviour to review: the default runtime struct now soft-deletes
+  (`gorm.DeletedAt`) instead of hard-deleting; `DDLOptions.IncludeCreatedBy` /
+  `AlwaysSoftDelete` and `StructOptions.SoftDeleteGorm` / `IncludeCreatedBy`
+  are redundant but still accepted. Hosts that register the new struct over an
+  existing table must run `EnsureAuditColumns` first (docs/audit-columns.md).
 - **Validation compatibility window + Upgrade pre-flight** (see
   `docs/validation-compat-window.md`). Policy: tightening validation is a
   warning for one minor release before it becomes a hard error. New
