@@ -43,6 +43,8 @@ var managedColumns = map[string]struct{}{
 	"deleted_at":      {},
 	"organization_id": {},
 	"created_by_id":   {},
+	"updated_by_id":   {},
+	"deleted_by_id":   {},
 }
 
 // numericTypes are the manifest column types whose value must coerce to a

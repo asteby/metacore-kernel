@@ -606,6 +606,9 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 			return nil, nil, fmt.Errorf("materialize models: %w", err)
 		}
 	}
+	if err := ensureAuditInPrimarySchema(i.DB, i.MigrationSchema, b.Manifest, orgID, iso); err != nil {
+		return nil, nil, err
+	}
 	if err := dynamic.ApplyWithOptions(i.DB, b.Manifest.Key, orgID, iso, b.Migrations, migrationOptions(i.MigrationSchema, b.Manifest)); err != nil {
 		return nil, nil, err
 	}
@@ -1616,6 +1619,28 @@ func (a defaultSchemaApplier) applyModels(db *gorm.DB, orgID uuid.UUID, iso dyna
 	if a.materialize != nil {
 		if err := a.materialize(db, b.Manifest); err != nil {
 			return fmt.Errorf("materialize models: %w", err)
+		}
+	}
+	return ensureAuditInPrimarySchema(db, a.migrationSchema, b.Manifest, orgID, iso)
+}
+
+// ensureAuditInPrimarySchema applies the audit-column standard to the tables a
+// host serves from its own schema (ops: public) when that differs from the
+// addon schema dynamic.SyncSchema already covered. It runs after the host
+// materialized its tables and BEFORE the SQL migrations, so a migration may
+// assume deleted_at / created_by_id on those tables (the customers@037 trigger
+// on invoices). A table absent from that schema is skipped.
+func ensureAuditInPrimarySchema(db *gorm.DB, migrationSchema func(addonKey string) string, m manifest.Manifest, orgID uuid.UUID, iso dynamic.Isolation) error {
+	if migrationSchema == nil {
+		return nil
+	}
+	primary := migrationSchema(m.Key)
+	if primary == "" || primary == dynamic.SchemaName(m.Key, orgID, iso) {
+		return nil
+	}
+	for _, def := range m.ModelDefinitions {
+		if err := dynamic.EnsureAuditColumns(db, primary, def); err != nil {
+			return fmt.Errorf("audit columns %s: %w", def.ModelKey, err)
 		}
 	}
 	return nil

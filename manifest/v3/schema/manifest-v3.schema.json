@@ -922,6 +922,10 @@
           "type": "boolean",
           "description": "Marks the model as an append-only ledger: rows can be created but never updated or deleted. The kernel refuses every UPDATE/DELETE (REST and the wasm data_mutate/data_batch imports) with code 'append_only'; a mistake is corrected with a reversing row. Incompatible with a stage machine."
         },
+        "audit": {
+          "type": "boolean",
+          "description": "Audit-column standard (docs/audit-columns.md). Default true: the kernel adds created_at, updated_at, deleted_at, created_by_id, updated_by_id and deleted_by_id to the table even when not declared. false opts a purely technical table out of the who-columns and the deleted_at tombstone (created_at/updated_at remain). Ignored for append_only models, which always get the ledger subset (created_at, created_by_id)."
+        },
         "locking": {
           "type": "string",
           "enum": [

@@ -26,11 +26,20 @@ const (
 	// must be stages of the target model's stage machine (kernel #453).
 	// Promote to a hard error everywhere one minor release after it ships.
 	RuleRequiresStateInStages = "requires_state_in_stages"
+
+	// RuleAuditColumnType: a model that declares one of the kernel's standard
+	// audit columns (created_at, updated_at, deleted_at, created_by_id,
+	// updated_by_id, deleted_by_id) must declare it with the standard type
+	// (timestamp/timestamptz for *_at, uuid for *_by_id). Introduced with the
+	// audit-column standard (docs/audit-columns.md). Promote to a hard error
+	// everywhere one minor release after it ships.
+	RuleAuditColumnType = "audit_column_type"
 )
 
 // legacyTolerated lists the rules currently inside their compatibility window.
 var legacyTolerated = []string{
 	RuleRequiresStateInStages,
+	RuleAuditColumnType,
 }
 
 // LegacyTolerated returns the rule ids currently inside their compatibility

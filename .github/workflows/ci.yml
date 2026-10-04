@@ -44,4 +44,10 @@ jobs:
           go-version: '1.27'
           cache: true
       - run: go test -count=1 -v -run 'Postgres' ./dynamic/
+      # El installer también tiene tests que necesitan Postgres real (gated por
+      # TEST_POSTGRES_DSN y que, sin esto, se SALTAN en silencio): el pre-flight de
+      # Upgrade (rollback sin tocar la versión instalada), las columnas de
+      # auditoría añadidas antes de las migraciones (caso customers@037) y las
+      # reglas unique. Sin este paso un verde del job no prueba nada de eso.
+      - run: go test -count=1 -v ./installer/
       - run: go test -count=1 -race -v -run '/Postgres' ./idempotency/ ./outbox/

@@ -167,33 +167,29 @@ func BuildStructTypeWithOptions(def manifest.ModelDefinition, opts StructOptions
 		}
 		fields = append(fields, rf)
 	}
-	fields = append(fields,
-		reflect.StructField{Name: "CreatedAt", Type: reflect.TypeOf(time.Time{}), Tag: `json:"created_at" gorm:"autoCreateTime"`},
-		reflect.StructField{Name: "UpdatedAt", Type: reflect.TypeOf(time.Time{}), Tag: `json:"updated_at" gorm:"autoUpdateTime"`},
-	)
-	switch {
-	case opts.SoftDeleteGorm:
-		// Real GORM soft-delete: gorm.DeletedAt makes GORM emit
-		// `WHERE deleted_at IS NULL` on reads and UPDATE deleted_at on Delete.
-		// Present unconditionally (a host whose base model always soft-deletes).
-		fields = append(fields, reflect.StructField{
-			Name: "DeletedAt",
-			Type: reflect.TypeOf(gorm.DeletedAt{}),
-			Tag:  `json:"deleted_at,omitempty" gorm:"index"`,
-		})
-	case def.SoftDelete:
-		fields = append(fields, reflect.StructField{
-			Name: "DeletedAt",
-			Type: reflect.TypeOf(&time.Time{}),
-			Tag:  `json:"deleted_at,omitempty" gorm:"index"`,
-		})
-	}
-	if opts.IncludeCreatedBy {
-		fields = append(fields, reflect.StructField{
-			Name: "CreatedByID",
-			Type: reflect.PtrTo(uuidType),
-			Tag:  `json:"created_by_id" gorm:"type:uuid;index"`,
-		})
+	// Audit-column standard (see audit.go): the kernel adds every standard
+	// column the manifest does not declare itself. deleted_at is ALWAYS a
+	// gorm.DeletedAt so GORM filters tombstoned rows on reads and
+	// Service.Delete soft-deletes instead of removing the row.
+	for _, c := range AuditColumns(def, opts.SoftDeleteGorm, opts.IncludeCreatedBy) {
+		switch c.Name {
+		case ColCreatedAt:
+			fields = append(fields, reflect.StructField{Name: "CreatedAt", Type: reflect.TypeOf(time.Time{}), Tag: `json:"created_at" gorm:"autoCreateTime"`})
+		case ColUpdatedAt:
+			fields = append(fields, reflect.StructField{Name: "UpdatedAt", Type: reflect.TypeOf(time.Time{}), Tag: `json:"updated_at" gorm:"autoUpdateTime"`})
+		case ColDeletedAt:
+			fields = append(fields, reflect.StructField{
+				Name: "DeletedAt",
+				Type: reflect.TypeOf(gorm.DeletedAt{}),
+				Tag:  `json:"deleted_at,omitempty" gorm:"index"`,
+			})
+		case ColCreatedByID:
+			fields = append(fields, reflect.StructField{Name: "CreatedByID", Type: reflect.PtrTo(uuidType), Tag: `json:"created_by_id" gorm:"type:uuid;index"`})
+		case ColUpdatedByID:
+			fields = append(fields, reflect.StructField{Name: "UpdatedByID", Type: reflect.PtrTo(uuidType), Tag: `json:"updated_by_id" gorm:"type:uuid"`})
+		case ColDeletedByID:
+			fields = append(fields, reflect.StructField{Name: "DeletedByID", Type: reflect.PtrTo(uuidType), Tag: `json:"deleted_by_id" gorm:"type:uuid"`})
+		}
 	}
 	return reflect.StructOf(fields), nil
 }

@@ -61,12 +61,10 @@ func CreateTableWithOptions(db *gorm.DB, addonKey string, orgID uuid.UUID, iso I
 		}
 		cols = append(cols, line)
 	}
-	cols = append(cols,
-		`"created_at" timestamptz NOT NULL DEFAULT NOW()`,
-		`"updated_at" timestamptz NOT NULL DEFAULT NOW()`,
-	)
-	if def.SoftDelete {
-		cols = append(cols, `"deleted_at" timestamptz`)
+	// Audit-column standard (audit.go): every standard column the manifest does
+	// not declare itself.
+	for _, c := range AuditColumns(def, false, false) {
+		cols = append(cols, c.ddl("timestamptz"))
 	}
 	stmt := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %q.%q (%s)`,
 		schema, def.TableName, strings.Join(cols, ", "))
@@ -97,13 +95,6 @@ func CreateTableWithOptions(db *gorm.DB, addonKey string, orgID uuid.UUID, iso I
 	}
 	if err := createIndexes(db, schema, def, needsOrgColumn); err != nil {
 		return err
-	}
-	if needsOrgColumn && def.SoftDelete {
-		idx := fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %q ON %q.%q ("organization_id", "deleted_at")`,
-			"idx_"+def.TableName+"_org_deleted", schema, def.TableName)
-		if err := db.Exec(idx).Error; err != nil {
-			return fmt.Errorf("org deleted index %s.%s: %w", schema, def.TableName, err)
-		}
 	}
 	if iso == IsolationShared && needsOrgColumn {
 		if err := enableRLS(db, schema, def.TableName); err != nil {
@@ -298,6 +289,21 @@ func SyncSchema(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, de
 		}
 		if err := db.Exec(stmt).Error; err != nil {
 			return fmt.Errorf("add column %s.%s.%s: %w", schema, def.TableName, c.Name, err)
+		}
+		existing[c.Name] = struct{}{}
+	}
+	// Audit-column standard: a table materialized before the standard (or by a
+	// manifest that never declared the columns) lacks some of them; add what is
+	// missing, with the audit indexes, BEFORE any migration runs so a migration
+	// may assume deleted_at / created_by_id (e.g. a `TRIGGER … UPDATE OF
+	// deleted_at`). Idempotent; ADD COLUMN without a rewriting default is
+	// catalog-only on PostgreSQL 11+. Skipped when the table does not exist.
+	if len(existing) > 0 {
+		hasOrg := hasColumn(existing, "organization_id", false)
+		for _, stmt := range auditColumnsDDL(schema, def, existing, "timestamptz", false, false, hasOrg) {
+			if err := db.Exec(stmt).Error; err != nil {
+				return fmt.Errorf("audit columns %s.%s: %w", schema, def.TableName, err)
+			}
 		}
 	}
 	return nil

@@ -834,10 +834,14 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	// Keep the caller's ORIGINAL input: when a guard parks this create for
 	// approval, the replay must issue the exact same call (scope injection,
 	// coercion, hooks and formulas all run again on approve).
+	// Audit columns are runtime-owned: whatever the client sent for them is
+	// discarded, then the actor is stamped (docs/audit-columns.md).
+	stripAuditInput(input)
 	orig := cloneMap(input)
 
 	s.scope.InjectOnCreate(input, user)
-	input["created_by_id"] = user.GetID()
+	input[ColCreatedByID] = user.GetID()
+	input[ColUpdatedByID] = user.GetID()
 
 	// 1:1 extension columns ("<Key>.<column>") leave the owner input here and
 	// are validated with it, then upserted once the owner row exists.
@@ -985,6 +989,9 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		return nil, err
 	}
 
+	// Audit columns are runtime-owned: discard what the client sent for them.
+	stripAuditInput(input)
+
 	// Declarative guards: when the model declares column Constraints AND
 	// Locking=="row", the load → evaluate → save must share ONE transaction so
 	// the SELECT … FOR UPDATE taken on load is still held at write time (an
@@ -1126,6 +1133,9 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 			}
 		}
 
+		// Who changed it: stamped after hooks/guards so nothing upstream can
+		// forge it. updated_at is maintained by GORM (autoUpdateTime).
+		input[ColUpdatedByID] = user.GetID()
 		if err := mapToStruct(input, instance); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidInput, err)
 		}
@@ -1256,9 +1266,6 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 		return err
 	}
 
-	db := s.db.WithContext(ctx).Table(tableName)
-	db = s.scope.ScopeQuery(db, user)
-
 	// Cross-record rules that guard deletes (ref_state with enforce "always"):
 	// a row frozen by its parent's state cannot be removed either (the line of
 	// an accepted quote). Evaluated against the pre-delete row.
@@ -1287,7 +1294,7 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 		}
 	}
 
-	if err := db.Delete(instance, "id = ?", id).Error; err != nil {
+	if err := s.softDelete(ctx, tableName, instance, user, id); err != nil {
 		return fmt.Errorf("dynamic: delete: %w", err)
 	}
 
@@ -1315,6 +1322,75 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 
 	_ = s.hooks.runAfterDelete(ctx, hc, id.String())
 	return nil
+}
+
+// softDelete tombstones the row: GORM's soft delete sets deleted_at, and when
+// the model carries deleted_by_id the acting user is stamped in the same
+// transaction. The caller's tenant scope applies to both statements.
+func (s *Service) softDelete(ctx context.Context, tableName string, instance any, user modelbase.AuthUser, id uuid.UUID) error {
+	cols := structColumnSet(instance)
+	_, hasBy := cols[ColDeletedByID]
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if hasBy {
+			// GORM adds `deleted_at IS NULL` for a gorm.DeletedAt model, so an
+			// already-deleted row keeps its original deleter.
+			q := s.scope.ScopeQuery(tx.Table(tableName), user)
+			if err := q.Model(instance).Where("id = ?", id).UpdateColumn(ColDeletedByID, user.GetID()).Error; err != nil {
+				return err
+			}
+		}
+		q := s.scope.ScopeQuery(tx.Table(tableName), user)
+		return q.Delete(instance, "id = ?", id).Error
+	})
+}
+
+// Restore undoes a soft delete: it clears deleted_at / deleted_by_id and stamps
+// updated_by_id / updated_at with the acting user. It needs the `update`
+// permission, refuses append-only models, and answers ErrRecordNotFound when no
+// tombstoned row with that id exists in the caller's tenant scope.
+func (s *Service) Restore(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID) (map[string]any, error) {
+	instance, _, err := s.resolveModel(ctx, model)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.authorize(ctx, user, model, instance, modelbase.AccessUpdate); err != nil {
+		return nil, err
+	}
+	if err := s.refuseIfAppendOnly(ctx, model, "update"); err != nil {
+		return nil, err
+	}
+	tableName, err := s.tableNameFor(ctx, model, instance)
+	if err != nil {
+		return nil, err
+	}
+	cols := structColumnSet(instance)
+	if _, ok := cols[ColDeletedAt]; !ok {
+		return nil, ErrRecordNotFound
+	}
+	set := map[string]any{ColDeletedAt: nil}
+	if _, ok := cols[ColDeletedByID]; ok {
+		set[ColDeletedByID] = nil
+	}
+	if _, ok := cols[ColUpdatedByID]; ok {
+		set[ColUpdatedByID] = user.GetID()
+	}
+	if _, ok := cols[ColUpdatedAt]; ok {
+		set[ColUpdatedAt] = time.Now()
+	}
+	q := s.scope.ScopeQuery(s.db.WithContext(ctx).Table(tableName).Unscoped(), user)
+	res := q.Where("id = ? AND deleted_at IS NOT NULL", id).Updates(set)
+	if res.Error != nil {
+		return nil, fmt.Errorf("dynamic: restore: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return nil, ErrRecordNotFound
+	}
+	row, err := s.Get(ctx, model, user, id)
+	if err != nil {
+		return nil, err
+	}
+	s.publishCanonical(ctx, model, "updated", user, id.String(), nil, row)
+	return row, nil
 }
 
 // --- internal -----------------------------------------------------------

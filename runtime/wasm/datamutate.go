@@ -62,6 +62,12 @@ var dataMutateReservedCols = map[string]bool{
 	"created_at":      true,
 	"updated_at":      true,
 	"deleted_at":      true,
+	// Audit who-columns (docs/audit-columns.md): stamped by the host from the
+	// invocation actor (dynamic.SystemActorID when there is none), never by the
+	// guest.
+	"created_by_id": true,
+	"updated_by_id": true,
+	"deleted_by_id": true,
 }
 
 // executeDataMutate is the inner pure-Go path the `metacore_host.data_mutate`
@@ -417,9 +423,21 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 			return nil, "db_error", err
 		}
 
-		if _, err := uuid.Parse(actorID); err == nil {
-			if _, supplied := data["created_by_id"]; !supplied && columns["created_by_id"] {
-				vals["created_by_id"] = actorID
+		// Audit columns: when/who of the creation, only for the columns the
+		// table has (an append-only ledger has no updated_*). The actor is the
+		// invocation's user, or dynamic.SystemActorID for unattended work
+		// (schedules, webhooks, connectors).
+		actor := dynamic.ActorOrSystem(actorID)
+		// An append-only ledger table has created_at but no updated_at (audit
+		// standard): drop the stamp instead of failing the INSERT. A probe that
+		// shows neither column is treated as "unknown" and keeps the legacy
+		// stamp.
+		if columns[dynamic.ColCreatedAt] && !columns[dynamic.ColUpdatedAt] {
+			delete(vals, dynamic.ColUpdatedAt)
+		}
+		for _, c := range []string{dynamic.ColCreatedByID, dynamic.ColUpdatedByID} {
+			if columns[c] {
+				vals[c] = actor
 			}
 		}
 		if _, err := uuid.Parse(branchID); err == nil && columns["branch_id"] && blankValue(data["branch_id"]) {
@@ -507,6 +525,11 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 		n++
 		sets = append(sets, fmt.Sprintf(`"updated_at" = $%d`, n))
 		args = append(args, now)
+		if columns[dynamic.ColUpdatedByID] {
+			n++
+			sets = append(sets, fmt.Sprintf(`"updated_by_id" = $%d`, n))
+			args = append(args, dynamic.ActorOrSystem(actorID))
+		}
 		stmt := fmt.Sprintf("UPDATE %s SET %s WHERE id = $%d AND %s RETURNING *",
 			tbl, strings.Join(sets, ", "), n+1, scope.predicate(fmt.Sprintf("$%d", n+2)))
 		args = append(args, out.rowID, orgID)
@@ -554,9 +577,25 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 				return nil, "not_found",
 					fmt.Errorf("row %s in %s is already deleted", out.rowID, req.Table)
 			}
+			// deleted_at + deleted_by_id (+ updated_*) in one statement; the
+			// who-columns only when the table has them.
+			actor := dynamic.ActorOrSystem(actorID)
+			sets := []string{`"deleted_at" = $1`, `"updated_at" = $2`}
+			args := []any{now, now}
+			add := func(col string, v any) {
+				args = append(args, v)
+				sets = append(sets, fmt.Sprintf(`%s = $%d`, quoteIdent(col), len(args)))
+			}
+			if columns[dynamic.ColDeletedByID] {
+				add(dynamic.ColDeletedByID, actor)
+			}
+			if columns[dynamic.ColUpdatedByID] {
+				add(dynamic.ColUpdatedByID, actor)
+			}
+			args = append(args, out.rowID, orgID)
 			res := work.Exec(fmt.Sprintf(
-				`UPDATE %s SET "deleted_at" = $1, "updated_at" = $2 WHERE id = $3 AND %s`,
-				tbl, scope.predicate("$4")), now, now, out.rowID, orgID)
+				`UPDATE %s SET %s WHERE id = $%d AND %s`,
+				tbl, strings.Join(sets, ", "), len(args)-1, scope.predicate(fmt.Sprintf("$%d", len(args)))), args...)
 			if res.Error != nil {
 				return nil, "db_error", res.Error
 			}

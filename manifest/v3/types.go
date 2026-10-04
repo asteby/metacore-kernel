@@ -723,6 +723,16 @@ type Model struct {
 	// machine (a stage is a mutation by definition) and with model extensions.
 	AppendOnly bool `json:"append_only,omitempty"`
 
+	// Audit controls the kernel's audit-column standard (created_at, updated_at,
+	// deleted_at, created_by_id, updated_by_id, deleted_by_id — docs/audit-columns.md).
+	// The kernel adds those columns to EVERY model whether or not the manifest
+	// declares them, so a migration may assume them. nil/true (the default) keeps
+	// the standard; `audit: false` opts a purely technical table (a cache, a join
+	// table nobody edits) out of the *who* columns and the soft-delete tombstone,
+	// leaving only the historical created_at/updated_at pair. An append_only
+	// model already gets the reduced ledger set (created_at, created_by_id).
+	Audit *bool `json:"audit,omitempty"`
+
 	// Rules declare CROSS-RECORD guards: predicates over the PARENT row this
 	// model references by FK (a payment over a closed session, payments summing
 	// past the order total). Evaluated inside the same transaction as the write

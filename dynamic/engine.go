@@ -46,7 +46,8 @@ func (SchemaEngine) ValidateType(t string) error {
 // value reproduces the kernel's historical behavior EXACTLY: tables land in the
 // addon_<key> schema (derived from AddonKey/OrgID/Isolation), timestamps are
 // timestamptz, the organization_id column and RLS follow the shared-isolation
-// rules, and no created_by_id column is emitted.
+// rules, and the six standard audit columns are emitted (created_at, updated_at,
+// deleted_at, created_by_id, updated_by_id, deleted_by_id — see AuditColumns).
 //
 // Setting the single-schema fields (see SingleSchemaDDLOptions) flips the engine
 // into the "public/no-RLS/created_by_id" shape the ops runtime emits today, so
@@ -73,6 +74,10 @@ type DDLOptions struct {
 
 	// IncludeCreatedBy adds a nullable created_by_id uuid column (+ index),
 	// matching the framework-managed creator-tracking column ops emits.
+	//
+	// REDUNDANT since the audit-column standard (docs/audit-columns.md): every
+	// model now gets created_by_id by default. Still accepted; it additionally
+	// forces the column for a model that opted out with `audit: false`.
 	IncludeCreatedBy bool
 
 	// TimestampWithoutZone emits created_at/updated_at/deleted_at as TIMESTAMP
@@ -87,6 +92,10 @@ type DDLOptions struct {
 	// AlwaysSoftDelete forces the deleted_at column (+ index) regardless of
 	// def.SoftDelete — matching ops, whose runtime struct always carries
 	// soft-delete.
+	//
+	// REDUNDANT since the audit-column standard (docs/audit-columns.md): every
+	// model now gets deleted_at by default. Still accepted; it additionally
+	// forces the column for `audit: false` / append_only models.
 	AlwaysSoftDelete bool
 
 	// --- ops-compat DDL divergences (dual-run ops#847) ---
@@ -281,7 +290,6 @@ func ToDDL(def manifest.ModelDefinition, opts DDLOptions) ([]string, error) {
 	}
 
 	needsOrgColumn := opts.AlwaysOrgColumn || def.OrgScoped || opts.Isolation == IsolationShared
-	softDelete := opts.AlwaysSoftDelete || def.SoftDelete
 
 	target, hasTarget, err := resolveExtendsTarget(def, opts.ResolveModelTarget)
 	if err != nil {
@@ -299,16 +307,13 @@ func ToDDL(def manifest.ModelDefinition, opts DDLOptions) ([]string, error) {
 		}
 		cols = append(cols, line)
 	}
-	cols = append(cols,
-		fmt.Sprintf(`"created_at" %s NOT NULL DEFAULT NOW()`, tsType),
-		fmt.Sprintf(`"updated_at" %s NOT NULL DEFAULT NOW()`, tsType),
-	)
-	if softDelete {
-		cols = append(cols, fmt.Sprintf(`"deleted_at" %s`, tsType))
+	// Audit-column standard: every standard column the manifest does not
+	// declare itself (see AuditColumns). IncludeCreatedBy / AlwaysSoftDelete
+	// are legacy switches that force their column on; they are redundant now.
+	for _, c := range AuditColumns(def, opts.AlwaysSoftDelete, opts.IncludeCreatedBy) {
+		cols = append(cols, c.ddl(tsType))
 	}
-	if opts.IncludeCreatedBy {
-		cols = append(cols, `"created_by_id" uuid`)
-	}
+	plan := AuditPlanFor(def, opts.AlwaysSoftDelete, opts.IncludeCreatedBy)
 
 	stmts := []string{
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %q.%q (%s)`,
@@ -319,18 +324,7 @@ func ToDDL(def manifest.ModelDefinition, opts DDLOptions) ([]string, error) {
 		uniquePrefix = "idx_"
 	}
 	stmts = append(stmts, indexStatementsWithPrefix(schema, def, needsOrgColumn, uniquePrefix)...)
-	if softDelete {
-		stmts = append(stmts, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %q ON %q.%q ("deleted_at")`,
-			"idx_"+def.TableName+"_deleted", schema, def.TableName))
-		if needsOrgColumn {
-			stmts = append(stmts, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %q ON %q.%q ("organization_id", "deleted_at")`,
-				"idx_"+def.TableName+"_org_deleted", schema, def.TableName))
-		}
-	}
-	if opts.IncludeCreatedBy {
-		stmts = append(stmts, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %q ON %q.%q ("created_by_id")`,
-			"idx_"+def.TableName+"_created_by", schema, def.TableName))
-	}
+	stmts = append(stmts, auditIndexStatements(schema, def, plan, needsOrgColumn)...)
 	if opts.Isolation == IsolationShared && needsOrgColumn && !opts.DisableRLS {
 		stmts = append(stmts, rlsStatements(schema, def.TableName)...)
 	}
