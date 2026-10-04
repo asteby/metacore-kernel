@@ -29,6 +29,7 @@ keep them in sync.
 | 1.4     | proposal | adds `data_mutate` host import; ONE org-scoped row mutation (`create` / `update` / `delete` with atomic `inc`) against a LOGICAL table resolved through the embedder-injected `TableResolver` (NOT the addon-schema `search_path`), followed by a post-commit `*dynamic.CanonicalEvent` on the host bus. Gated by `db:write <logical table>`. |
 | 1.5     | proposal | adds `data_query` host import; read-only sibling of `data_mutate`: ONE org-scoped, equality-filtered SELECT against a LOGICAL table resolved through the SAME `TableResolver` (NOT the addon-schema `search_path` of `db_query`, whose shadow schemas hold no live rows in embedding hosts). Soft-delete aware (`deleted_at IS NULL` auto-appended). Gated by `db:read <logical table>`. No events. |
 | 1.11    | proposal | adds `ctx_get` (read-only execution context: acting user id/email, role keys, the org's currency/tax/locale/timezone — the `env.user` / `env.company` of an Odoo module), each slice gated by a `ctx:user` / `ctx:roles` / `ctx:org_config` manifest capability, and makes `data_mutate` / `data_batch` **create** stamp the model's declared sequence-bound columns (folios) exactly like `POST /data` when the embedder wires `Host.WithSequenceStamp`. Additive: guests built against 1.0 – 1.10 keep working; a guest that already passes the folio (or mints it with `sequence_next`) is unaffected. See § 20 and § 14.10. |
+| 1.12    | proposal | when the embedder wires `Host.WithStageMachine`, `data_mutate` / `data_batch` refuse a create or update that is not a declared stage transition (`invalid_transition`), the same rule as `dynamic.Service` Create/Update. Incrementing the lifecycle column is refused. Unwired hosts keep the previous behaviour. See § 14.11. |
 | 1.10    | proposal | `http_fetch` / `http_request` responses whose body is **not valid UTF-8** now travel as `body_base64` (standard base64) with `body_is_base64: true` and an EMPTY `body`; UTF-8 bodies are unchanged. Fixes silent corruption of every binary response (PDF / ZIP / image / XLSX): `encoding/json` rewrites each invalid byte as U+FFFD, so guests received corrupt bytes with a 200 status and no error. See § 3.1. |
 | 1.6     | proposal | adds `http_request` (outbound HTTP with caller-supplied request headers as a JSON object — enables `Authorization`/`Accept` for authenticated third-party calls; same `http:fetch` capability + SSRF guard + 30 s timeout + 8 MiB cap as `http_fetch`, which is left unchanged and now delegates to the shared path with empty headers) and `connector_get` (resolves one org's credentials for a declared connector — the v3 `connectors` block — returning a JSON object; gated by `connector:read <key>` and tenant-scoped by the invocation `orgID`). Guests built against 1.0 – 1.5 keep working. |
 
@@ -1734,6 +1735,35 @@ takes). Rules:
   `SequenceResolver` sets it, so a guest passing the table name
   (`sales_orders`) and `POST /data` passing the model key (`SalesOrder`) share
   one series instead of issuing the same folio twice.
+
+### 14.11 Stage machine on the wasm write path (v1.12)
+
+`Service.Create` / `Service.Update` refuse a lifecycle move that
+`StageMachine.Allows` does not list (`dynamic.GateWrite`). `data_mutate` and
+`data_batch` bypass `Service`, so a guest could set `status` (or whichever
+column `stage_field` names) to any string. With
+
+```go
+host.WithStageMachine(func(logicalTable, model string) *dynamic.StageMachine {
+    return machines[model] // nil when the model has no machine
+})
+```
+
+every create and update runs that gate inside the write transaction, before
+the INSERT or UPDATE. A refused move rolls the transaction back and returns
+`invalid_transition`. Rules:
+
+- The lookup is keyed by the request's logical table and ModelKey. A nil
+  machine (or a host that never calls `WithStageMachine`) leaves the column
+  unrestricted.
+- A create whose payload names the lifecycle column must land on a declared
+  stage. Omitting the column is not a transition.
+- An update that does not mention the column is not a transition, even when
+  the row already has a stage.
+- `inc` on the lifecycle column is refused: a stage is a declared move, not
+  a numeric delta.
+- Actions keep their own `requires_state` check, which reads this same
+  `stage_field` when the dynamic service has a machine for the model.
 
 ## 15. `data_query` — org-scoped logical-table read (v1.5)
 

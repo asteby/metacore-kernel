@@ -51,8 +51,9 @@ var (
 	ErrInvalidTransition = errors.New("invalid stage transition")
 
 	// ErrInvalidState is returned when an action declares RequiresState and the
-	// target record's `status` column is not one of the allowed values. The
-	// action is gated on the record's lifecycle state, so dispatching it from a
+	// target record's lifecycle column is not one of the allowed values. That
+	// column is the model's stage_field when a stage machine declares one, and
+	// otherwise `status` (falling back to `state`). Dispatching from a
 	// disallowed state is rejected before the trigger runs. The handler maps it
 	// to HTTP 409 Conflict.
 	ErrInvalidState = errors.New("action not allowed in record's current state")

@@ -182,6 +182,54 @@ func TestExecAction_RequiresState(t *testing.T) {
 	}
 }
 
+// TestExecAction_RequiresState_UsesStageField asserts that, once the model
+// declares a stage machine, requires_state reads that field and not the
+// historical status column. Here status is "reception" (which would pass a
+// status-based gate of ["reception"]) but the machine field is reference,
+// whose value is not in the allowed set, so the action must not dispatch.
+func TestExecAction_RequiresState_UsesStageField(t *testing.T) {
+	fx, id := setupOrderFixture(t)
+	fx.svc.stageMachines = func(_ context.Context, model string) (*StageMachine, bool) {
+		if model != "test_orders" {
+			return nil, false
+		}
+		return &StageMachine{
+			Field:  "reference",
+			Stages: []manifest.StageDef{{Key: "ORD-1"}, {Key: "ORD-2"}},
+		}, true
+	}
+	fx.registerAction("test_orders", &manifest.ActionDef{
+		Key:           "advance",
+		Trigger:       &manifest.ActionTrigger{Type: "wasm", Export: "advance"},
+		RequiresState: []string{"ORD-2"},
+	})
+	fx.wasm.fn = func(_ context.Context, _ ActionRequest) (ActionResponse, error) {
+		t.Fatal("dispatcher must not run: reference is ORD-1, not ORD-2")
+		return ActionResponse{}, nil
+	}
+	_, err := fx.svc.ExecAction(context.Background(), "test_orders", fx.user, id, "advance", map[string]any{})
+	if !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("err = %v, want ErrInvalidState", err)
+	}
+
+	fx.registerAction("test_orders", &manifest.ActionDef{
+		Key:           "advance",
+		Trigger:       &manifest.ActionTrigger{Type: "wasm", Export: "advance"},
+		RequiresState: []string{"ORD-1"},
+	})
+	dispatched := false
+	fx.wasm.fn = func(_ context.Context, _ ActionRequest) (ActionResponse, error) {
+		dispatched = true
+		return ActionResponse{Success: true}, nil
+	}
+	if _, err := fx.svc.ExecAction(context.Background(), "test_orders", fx.user, id, "advance", map[string]any{}); err != nil {
+		t.Fatalf("reference ORD-1 should pass the stage-field gate: %v", err)
+	}
+	if !dispatched {
+		t.Fatal("dispatcher did not run")
+	}
+}
+
 func TestCheckRequiresState_StateColumnFallback(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -219,7 +267,7 @@ func TestCheckRequiresState_StateColumnFallback(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := checkRequiresState(tc.row, tc.allowed)
+			err := checkRequiresState(tc.row, "", tc.allowed)
 			if tc.wantErr {
 				if !errors.Is(err, ErrInvalidState) {
 					t.Fatalf("err = %v, want ErrInvalidState", err)
@@ -230,6 +278,16 @@ func TestCheckRequiresState_StateColumnFallback(t *testing.T) {
 				t.Fatalf("unexpected err: %v", err)
 			}
 		})
+	}
+}
+
+func TestCheckRequiresState_DeclaredFieldIgnoresStatus(t *testing.T) {
+	row := map[string]any{"status": "posted", "stage": "draft"}
+	if err := checkRequiresState(row, "stage", []string{"posted"}); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("stage field must win over status, got %v", err)
+	}
+	if err := checkRequiresState(row, "stage", []string{"draft"}); err != nil {
+		t.Fatalf("draft on the declared field should pass, got %v", err)
 	}
 }
 

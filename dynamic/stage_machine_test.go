@@ -331,3 +331,24 @@ func TestUpdate_StagelessRecordTakesAnyStage(t *testing.T) {
 		t.Fatalf("err = %v, want ErrInvalidTransition", err)
 	}
 }
+
+// TestCreate_UndeclaredStageRejected asserts the create path uses the same
+// gate as Update: placing a new row on a stage the machine does not declare
+// is ErrInvalidTransition and writes nothing.
+func TestCreate_UndeclaredStageRejected(t *testing.T) {
+	fx := setupStageFixture(t, nil)
+	before := int64(0)
+	fx.db.Raw(`SELECT COUNT(*) FROM test_orders`).Scan(&before)
+	_, err := fx.svc.Create(context.Background(), "test_orders", fx.user, map[string]any{
+		"reference": "ORD-2",
+		"status":    "nope",
+	})
+	if !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("err = %v, want ErrInvalidTransition", err)
+	}
+	after := int64(0)
+	fx.db.Raw(`SELECT COUNT(*) FROM test_orders`).Scan(&after)
+	if after != before {
+		t.Fatalf("row count = %d, want %d (rejected create must not persist)", after, before)
+	}
+}

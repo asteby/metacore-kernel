@@ -6,6 +6,23 @@ import (
 	"github.com/asteby/metacore-kernel/dynamic"
 )
 
+// StageMachineFn resolves the declarative stage machine for one logical
+// table. model is the guest's ModelKey (may be empty); logicalTable is the
+// unqualified name data_mutate addresses. Return nil when that table has no
+// machine — the write stays unrestricted, which is the pre-gate behaviour.
+type StageMachineFn func(logicalTable, model string) *dynamic.StageMachine
+
+// WithStageMachine wires the single lifecycle gate into data_mutate and
+// data_batch. A create or update that changes the machine's field to a pair
+// StageMachine.Allows rejects is rolled back with code invalid_transition —
+// the same rule dynamic.Service.Create/Update enforce. Incrementing the
+// lifecycle column is refused. When unset, wasm writes do not consult a
+// machine (legacy).
+func (h *Host) WithStageMachine(fn StageMachineFn) *Host {
+	h.stageMachine = fn
+	return h
+}
+
 // WithAppendOnly injects the embedder's append-only ledger lookup for the
 // `metacore_host.data_mutate` / `data_batch` imports. When the LOGICAL table of
 // an update or delete is reported append-only (manifest Model.append_only) the

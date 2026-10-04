@@ -1597,8 +1597,29 @@ func Validate(raw []byte) error {
 	errs = append(errs, validateSearchKeys(&m)...)
 	errs = append(errs, validateAttributeClasses(&m)...)
 
+	modelByKey := make(map[string]Model, len(m.Models))
+	for _, mod := range m.Models {
+		modelByKey[mod.Key] = mod
+	}
+
 	if m.Contributions != nil {
 		for ai, a := range m.Contributions.Actions {
+			// One declaration: when the target model has a stage machine, every
+			// requires_state value must be one of its stages. A model without
+			// stages keeps free-form requires_state (status/state fallback).
+			if len(a.RequiresState) > 0 {
+				if mod, ok := modelByKey[a.TargetModel]; ok && len(mod.Stages) > 0 {
+					known := make(map[string]struct{}, len(mod.Stages))
+					for _, st := range mod.Stages {
+						known[st.Key] = struct{}{}
+					}
+					for _, s := range a.RequiresState {
+						if _, ok := known[s]; !ok {
+							errs = append(errs, fmt.Sprintf("contributions.actions[%d].requires_state %q is not a stage of model %q", ai, s, a.TargetModel))
+						}
+					}
+				}
+			}
 			if a.SupervisorPolicy != "" && !supervisorPolicyRe.MatchString(a.SupervisorPolicy) {
 				errs = append(errs, fmt.Sprintf("contributions.actions[%d].supervisor_policy %q must match ^[a-z][a-z0-9_]*$", ai, a.SupervisorPolicy))
 			}
@@ -2067,7 +2088,6 @@ func validateCapabilities(m *Manifest) []string {
 	}
 	return errs
 }
-
 
 // validateReasonRequired checks Model.reason_required (PER-4): it must demand
 // something (delete and/or actions), every listed action must be declared with

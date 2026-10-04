@@ -100,6 +100,10 @@ type invocation struct {
 	// appendOnly is the embedder-injected append-only ledger lookup
 	// (Host.WithAppendOnly), keyed by LOGICAL table: update/delete → `append_only`.
 	appendOnly func(logicalTable string) bool
+	// stageMachine is the embedder-injected lifecycle lookup
+	// (Host.WithStageMachine). nil = data_mutate / data_batch do not gate
+	// stage moves.
+	stageMachine StageMachineFn
 	// approvalRequester is the embedder-injected dynamic.Service.RequestApproval
 	// (Host.WithApprovals) the `approval_request` import calls. nil = the
 	// import answers `approvals_unavailable`.

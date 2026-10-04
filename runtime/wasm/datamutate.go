@@ -217,7 +217,7 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		rollback()
 		return fail(code, cErr.Error())
 	}
-	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now, dynamic.ActorIDFromContext(ctx), dynamic.BranchIDFromContext(ctx))
+	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now, dynamic.ActorIDFromContext(ctx), dynamic.BranchIDFromContext(ctx), stageFor(inv, req.Table, req.Model))
 	if mErr != nil {
 		rollback()
 		return fail(code, mErr.Error())
@@ -353,10 +353,24 @@ type mutationResult struct {
 // active branch (dynamic.BranchIDFromContext, "" when none): a create into a
 // table with a branch_id column that the guest left empty takes it, the same
 // stamp the host's CRUD create applies from the branch switcher.
-func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]any, orgID uuid.UUID, tbl string, now time.Time, actorID, branchID string) (*mutationResult, string, error) {
+// stageFor resolves the invocation's stage machine for this write. A nil
+// resolver (host did not call WithStageMachine) leaves the write ungated.
+func stageFor(inv *invocation, table, model string) *dynamic.StageMachine {
+	if inv == nil || inv.stageMachine == nil {
+		return nil
+	}
+	return inv.stageMachine(table, model)
+}
+
+func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]any, orgID uuid.UUID, tbl string, now time.Time, actorID, branchID string, stage *dynamic.StageMachine) (*mutationResult, string, error) {
 	out := &mutationResult{rowID: req.ID}
 	switch req.Op {
 	case "create":
+		// Placement into the lifecycle: an undeclared initial stage is the
+		// same refusal Update would return. Runs before any INSERT.
+		if err := dynamic.GateWrite(stage, nil, data, nil); err != nil {
+			return nil, "invalid_transition", err
+		}
 		out.action = "created"
 		if out.rowID == "" {
 			out.rowID = uuid.NewString()
@@ -456,6 +470,11 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 				fmt.Errorf("row %s not found in %s for this organization", out.rowID, req.Table)
 		}
 		out.before = before
+		// Same transition list Service.Update enforces. A disallowed move
+		// never reaches the UPDATE.
+		if err := dynamic.GateWrite(stage, before, data, inc); err != nil {
+			return nil, "invalid_transition", err
+		}
 		sets := make([]string, 0, len(data)+len(inc)+1)
 		args := make([]any, 0, len(data)+len(inc)+3)
 		n := 0
@@ -788,7 +807,7 @@ func dataMutateMeta(addonKey string, orgID uuid.UUID, start time.Time) map[strin
 
 // dataMutateErr builds the failure envelope per docs/wasm-abi.md § 14.5.
 // `code` is one of: forbidden | not_found | invalid_request |
-// bus_unavailable | db_error | constraint_violation.
+// bus_unavailable | db_error | constraint_violation | invalid_transition.
 func dataMutateErr(addonKey, code, message string, orgID uuid.UUID, start time.Time) []byte {
 	b, _ := json.Marshal(map[string]any{
 		"success": false,

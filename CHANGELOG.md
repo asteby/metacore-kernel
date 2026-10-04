@@ -16,6 +16,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Single stage gate (`dynamic.GateTransition` / `GateWrite`, `Host.WithStageMachine`).**
+  Create, Update, action `requires_state` and the wasm `data_mutate` /
+  `data_batch` imports share one lifecycle rule. When a model declares a stage
+  machine, `requires_state` reads `stage_field` (not a hard-coded `status` /
+  `state`), a create cannot land on an undeclared stage, and a wasm write that
+  the machine does not allow rolls back with `invalid_transition`. A manifest
+  whose target model has stages rejects a `requires_state` value that is not
+  one of them. Hosts that do not wire `WithStageMachine`, and models without a
+  machine, keep the previous behaviour. See #451.
 - **`Installer.MaterializeModels` / `WithModelMaterializer` — fresh-tenant install.** A
   host that serves addon models from a schema other than `addon_<key>` (ops:
   `public`, its own table shape) can now create them BEFORE the addon's SQL
