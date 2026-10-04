@@ -512,33 +512,33 @@ func (h *Handler) handleError(c fiber.Ctx, err error) error {
 		ve = validationFromFieldErrors(fe)
 	}
 	if ve != nil || errors.As(err, &ve) {
-		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(withCorrelation(c, fiber.Map{
 			"success": false,
 			"message": "validation.failed",
 			"errors":  ve.Fields,
-		})
+		}))
 	}
 	// Model AccessPolicy denial: 403 with a machine-readable code, the model
 	// and the action, distinct from a missing capability.
 	var ade *AccessDeniedError
 	if errors.As(err, &ade) {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+		return c.Status(fiber.StatusForbidden).JSON(withCorrelation(c, fiber.Map{
 			"success": false,
 			"message": ade.Error(),
 			"code":    "access_denied",
 			"model":   ade.Model,
 			"action":  ade.Action,
-		})
+		}))
 	}
 	// Second create on a singleton model: 409 with the existing row id.
 	var se *SingletonExistsError
 	if errors.As(err, &se) {
-		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+		return c.Status(fiber.StatusConflict).JSON(withCorrelation(c, fiber.Map{
 			"success": false,
 			"message": se.Error(),
 			"code":    "singleton_exists",
 			"data":    fiber.Map{"id": se.ID},
-		})
+		}))
 	}
 	if errors.Is(err, ErrNotSingleton) {
 		return respondErr(c, fiber.StatusNotFound, err.Error())
@@ -546,11 +546,11 @@ func (h *Handler) handleError(c fiber.Ctx, err error) error {
 	// supervisor_policy action without a redeemable grant: 403 the SDK answers by
 	// asking for a supervisor PIN.
 	if errors.Is(err, ErrApprovalGrantRequired) {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+		return c.Status(fiber.StatusForbidden).JSON(withCorrelation(c, fiber.Map{
 			"success": false,
 			"message": err.Error(),
 			"code":    "approval_grant_required",
-		})
+		}))
 	}
 	if errors.Is(err, ErrUnsupportedTriggerType) {
 		return respondErr(c, fiber.StatusNotImplemented, err.Error())
@@ -559,11 +559,11 @@ func (h *Handler) handleError(c fiber.Ctx, err error) error {
 		return respondErr(c, fiber.StatusConflict, err.Error())
 	}
 	if errors.Is(err, ErrAppendOnly) {
-		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+		return c.Status(fiber.StatusConflict).JSON(withCorrelation(c, fiber.Map{
 			"success": false,
 			"message": err.Error(),
 			"code":    "append_only",
-		})
+		}))
 	}
 	if errors.Is(err, ErrInvalidTransition) {
 		return respondErr(c, fiber.StatusUnprocessableEntity, err.Error())
@@ -595,7 +595,31 @@ func (h *Handler) handleError(c fiber.Ctx, err error) error {
 }
 
 func respondErr(c fiber.Ctx, status int, msg string) error {
-	return c.Status(status).JSON(fiber.Map{"success": false, "message": msg})
+	return c.Status(status).JSON(withCorrelation(c, fiber.Map{"success": false, "message": msg}))
+}
+
+// correlationID is the id a client can join to the request log and to the
+// canonical event. The middleware stamps X-Request-ID onto the context; a
+// handler reached without that middleware still echoes a header the caller
+// already sent. An empty result omits the field — this helper does not mint
+// a new id.
+func correlationID(c fiber.Ctx) string {
+	if c.Context() != nil {
+		if id := strings.TrimSpace(CorrelationIDFromContext(c.Context())); id != "" {
+			return id
+		}
+	}
+	if id := strings.TrimSpace(c.Get("X-Request-ID")); id != "" {
+		return id
+	}
+	return strings.TrimSpace(c.Get("X-Correlation-ID"))
+}
+
+func withCorrelation(c fiber.Ctx, body fiber.Map) fiber.Map {
+	if id := correlationID(c); id != "" {
+		body["correlation_id"] = id
+	}
+	return body
 }
 
 // DeleteReason reads the operator's reason for a DELETE: `?reason=` first, else

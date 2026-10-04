@@ -31,6 +31,7 @@ keep them in sync.
 | 1.11    | proposal | adds `ctx_get` (read-only execution context: acting user id/email, role keys, the org's currency/tax/locale/timezone — the `env.user` / `env.company` of an Odoo module), each slice gated by a `ctx:user` / `ctx:roles` / `ctx:org_config` manifest capability, and makes `data_mutate` / `data_batch` **create** stamp the model's declared sequence-bound columns (folios) exactly like `POST /data` when the embedder wires `Host.WithSequenceStamp`. Additive: guests built against 1.0 – 1.10 keep working; a guest that already passes the folio (or mints it with `sequence_next`) is unaffected. See § 20 and § 14.10. |
 | 1.12    | proposal | when the embedder wires `Host.WithStageMachine`, `data_mutate` / `data_batch` refuse a create or update that is not a declared stage transition (`invalid_transition`), the same rule as `dynamic.Service` Create/Update. Incrementing the lifecycle column is refused. Unwired hosts keep the previous behaviour. See § 14.11. |
 | 1.13    | proposal | when the embedder wires `Host.WithExtensions`, `data_mutate` / `data_batch` / `data_query` accept `"<Ext>.<column>"` (and a nested object under the extension key) and read or write the 1:1 extension table instead of the owner table. Unwired hosts still reject a dotted column name. See § 14.12 and § 15.9. |
+| 1.14    | proposal | `data_mutate` / `data_query` / `data_batch` copy `dynamic.CorrelationIDFromContext` onto `meta.correlation_id` and, on failure, onto `error.correlation_id`. The field is absent when the invocation context has no id. `envelopeVersion` stays `1`. See § 14.13. |
 | 1.10    | proposal | `http_fetch` / `http_request` responses whose body is **not valid UTF-8** now travel as `body_base64` (standard base64) with `body_is_base64: true` and an EMPTY `body`; UTF-8 bodies are unchanged. Fixes silent corruption of every binary response (PDF / ZIP / image / XLSX): `encoding/json` rewrites each invalid byte as U+FFFD, so guests received corrupt bytes with a 200 status and no error. See § 3.1. |
 | 1.6     | proposal | adds `http_request` (outbound HTTP with caller-supplied request headers as a JSON object — enables `Authorization`/`Accept` for authenticated third-party calls; same `http:fetch` capability + SSRF guard + 30 s timeout + 8 MiB cap as `http_fetch`, which is left unchanged and now delegates to the shared path with empty headers) and `connector_get` (resolves one org's credentials for a declared connector — the v3 `connectors` block — returning a JSON object; gated by `connector:read <key>` and tenant-scoped by the invocation `orgID`). Guests built against 1.0 – 1.5 keep working. |
 
@@ -1783,6 +1784,16 @@ owner INSERT/UPDATE and upserted into the extension table (`ON CONFLICT (id)`).
 The canonical event's `after` carries the prefixed fields. Search-key,
 generated and sequence columns of the extension are host-managed and rejected.
 Without `WithExtensions`, a dotted column name is `invalid_request`.
+
+### 14.13 Correlation id (v1.14)
+
+When the invocation context carries a correlation id
+(`dynamic.WithCorrelationID`, normally the HTTP `X-Request-ID`), success and
+failure envelopes of `data_mutate`, `data_query` and `data_batch` include
+`meta.correlation_id`. A failure also sets `error.correlation_id` to the same
+value, next to `code`, `message` and `message_key`. An empty id omits both
+keys, so an envelope from a context that never had one stays the same shape.
+The host import does not generate an id.
 
 ## 15. `data_query` — org-scoped logical-table read (v1.5)
 

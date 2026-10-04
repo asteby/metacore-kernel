@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/asteby/metacore-kernel/dynamic"
 	kernellog "github.com/asteby/metacore-kernel/log"
 )
 
@@ -90,5 +91,23 @@ func TestHTTPMiddleware_InjectsLoggerIntoContext(t *testing.T) {
 
 	if ctxLogger == nil {
 		t.Fatal("expected logger in request context")
+	}
+}
+
+func TestHTTPMiddleware_StampsCorrelationID(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil))
+	var got string
+	handler := kernellog.HTTPMiddleware(logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = dynamic.CorrelationIDFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/ctx", nil)
+	req.Header.Set("X-Request-ID", "corr-http")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if got != "corr-http" {
+		t.Fatalf("CorrelationIDFromContext = %q, want corr-http", got)
 	}
 }

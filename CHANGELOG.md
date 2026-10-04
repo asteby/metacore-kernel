@@ -16,6 +16,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`correlation_id` on kernel errors.** HTTP middleware now keeps the request
+  context and stamps `X-Request-ID` with `dynamic.WithCorrelationID`, so a
+  dynamic CRUD error and the `data_mutate` / `data_query` / `data_batch`
+  envelopes (meta, and the error object on failure) carry the same id as the
+  request log and the canonical event. The field is omitted when no id was
+  supplied; the helpers do not mint one. See #455.
 - **Extension columns on `data_query` / `data_mutate` / column checks.** `Host.WithExtensions`
   routes `"<Ext>.<column>"` (and a nested object under the extension key) to the
   1:1 extension table on wasm create/update, and `data_query` can filter on that

@@ -151,6 +151,9 @@ func TestExecuteDataMutate_CreateStampsOrgIDTimestamps(t *testing.T) {
 	if env.Meta["envelopeVersion"] != float64(1) {
 		t.Fatalf("expected envelopeVersion 1, got %v", env.Meta["envelopeVersion"])
 	}
+	if env.Meta["correlation_id"] != "corr-123" {
+		t.Fatalf("expected meta.correlation_id corr-123, got %v", env.Meta["correlation_id"])
+	}
 
 	evs := getEvents()
 	if len(evs) != 1 {

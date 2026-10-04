@@ -64,8 +64,9 @@ type CanonicalEvent struct {
 type correlationIDKey struct{}
 
 // WithCorrelationID returns a child context carrying the given correlation ID.
-// The host (e.g. ops) should call this with the X-Request-ID from the
-// incoming HTTP request before passing the context to any Service method.
+// log.HTTPMiddleware and log.FiberMiddleware stamp the request's X-Request-ID
+// here. A host that invokes wasm outside those middlewares should do the same
+// before Invoke so error envelopes and canonical events share one id.
 func WithCorrelationID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, correlationIDKey{}, id)
 }

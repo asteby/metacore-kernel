@@ -12,6 +12,8 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
+
+	"github.com/asteby/metacore-kernel/dynamic"
 )
 
 const headerRequestID = "X-Request-ID"
@@ -48,8 +50,10 @@ func HTTPMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 			// Build a child logger for this request.
 			reqLogger := WithRequestID(logger, requestID)
 
-			// Inject into context so handlers can call FromContext(r.Context()).
-			ctx := WithLogger(r.Context(), reqLogger)
+			// Keep the incoming context (actor, branch, deadlines) and stamp the
+			// request id as the correlation id error envelopes and canonical
+			// events already know how to read.
+			ctx := dynamic.WithCorrelationID(WithLogger(r.Context(), reqLogger), requestID)
 			r = r.WithContext(ctx)
 
 			// Wrap the writer to capture the status code.
@@ -92,8 +96,15 @@ func FiberMiddleware(logger *slog.Logger) fiber.Handler {
 		c.Locals("logger", reqLogger)
 
 		// Store in the standard context so downstream service calls can use
-		// FromContext(c).
-		ctx := WithLogger(context.Background(), reqLogger)
+		// FromContext(c). Start from the request context: replacing it with
+		// context.Background() dropped anything the host had already attached
+		// and left CorrelationIDFromContext empty, so a 403 could not be
+		// joined to this request_id.
+		parent := c.Context()
+		if parent == nil {
+			parent = context.Background()
+		}
+		ctx := dynamic.WithCorrelationID(WithLogger(parent, reqLogger), requestID)
 		c.SetContext(ctx)
 
 		// Process the rest of the chain.

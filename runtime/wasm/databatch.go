@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/asteby/metacore-kernel/dynamic"
@@ -71,7 +72,7 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 		orgID = inv.orgID
 	}
 	fail := func(code, msg string) []byte {
-		return dataBatchErr(addonKey, code, msg, orgID, start)
+		return dataBatchErr(addonKey, code, msg, orgID, start, dynamic.CorrelationIDFromContext(ctx))
 	}
 
 	if inv == nil {
@@ -266,7 +267,7 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 	env, _ := json.Marshal(map[string]any{
 		"success": true,
 		"data":    map[string]any{"count": len(rows), "results": rows},
-		"meta":    dataBatchMeta(addonKey, orgID, start),
+		"meta":    dataBatchMeta(addonKey, orgID, start, dynamic.CorrelationIDFromContext(ctx)),
 	})
 	if len(env) > dataBatchMaxRespBytes {
 		// The batch is COMMITTED at this point — returning an error here would
@@ -277,7 +278,7 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 		for i, r := range rows {
 			slim[i] = dataBatchRow{ID: r.ID, Model: r.Model, Action: r.Action}
 		}
-		meta := dataBatchMeta(addonKey, orgID, start)
+		meta := dataBatchMeta(addonKey, orgID, start, dynamic.CorrelationIDFromContext(ctx))
 		meta["truncated"] = true
 		env, _ = json.Marshal(map[string]any{
 			"success": true,
@@ -288,7 +289,7 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 	return env
 }
 
-func dataBatchMeta(addonKey string, orgID uuid.UUID, start time.Time) map[string]any {
+func dataBatchMeta(addonKey string, orgID uuid.UUID, start time.Time, correlationID string) map[string]any {
 	meta := map[string]any{
 		"addon":           addonKey,
 		"durationMs":      time.Since(start).Milliseconds(),
@@ -297,17 +298,26 @@ func dataBatchMeta(addonKey string, orgID uuid.UUID, start time.Time) map[string
 	if orgID != uuid.Nil {
 		meta["orgId"] = orgID.String()
 	}
+	if id := strings.TrimSpace(correlationID); id != "" {
+		meta["correlation_id"] = id
+	}
 	return meta
 }
 
 // dataBatchErr builds the failure envelope. `code` is one of: forbidden |
 // not_found | invalid_request | bus_unavailable | db_error. On a per-row
 // failure the message is prefixed with the offending `mutations[i]` index.
-func dataBatchErr(addonKey, code, message string, orgID uuid.UUID, start time.Time) []byte {
+// correlationID is copied onto error and meta only when the caller already
+// has one; this helper does not mint an id.
+func dataBatchErr(addonKey, code, message string, orgID uuid.UUID, start time.Time, correlationID string) []byte {
+	errBody := hostErrorBody(code, message)
+	if id := strings.TrimSpace(correlationID); id != "" {
+		errBody["correlation_id"] = id
+	}
 	b, _ := json.Marshal(map[string]any{
 		"success": false,
-		"error":   hostErrorBody(code, message),
-		"meta":    dataBatchMeta(addonKey, orgID, start),
+		"error":   errBody,
+		"meta":    dataBatchMeta(addonKey, orgID, start, correlationID),
 	})
 	return b
 }
