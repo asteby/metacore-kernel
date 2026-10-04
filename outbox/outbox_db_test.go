@@ -357,9 +357,9 @@ func TestDB_DeadLetterAndRetry(t *testing.T) {
 		if n := jobStatus(t, s, perm.ID).Attempts; n != 5 {
 			t.Fatalf("WithMaxAttempts(5) job used %d attempts", n)
 		}
-		if dead.Load() != 3 {
-			t.Fatalf("OnDead fired %d times, want 3", dead.Load())
-		}
+		// Status is committed before OnDead runs, so a poll can see Dead
+		// while the hook is still in flight (SQLite, -race).
+		waitFor(t, "OnDead x3", func() bool { return dead.Load() == 3 })
 
 		// Done / running jobs cannot be retried; unknown ids are not found.
 		if _, err := s.Retry(context.Background(), uuid.New()); !errors.Is(err, ErrNotFound) {

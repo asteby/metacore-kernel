@@ -91,7 +91,7 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		orgID = inv.orgID
 	}
 	fail := func(code, msg string) []byte {
-		return dataMutateErr(addonKey, code, msg, orgID, start)
+		return dataMutateErr(addonKey, code, msg, orgID, start, dynamic.CorrelationIDFromContext(ctx))
 	}
 
 	if inv == nil {
@@ -316,7 +316,7 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 	env, _ := json.Marshal(map[string]any{
 		"success": true,
 		"data":    dataOut,
-		"meta":    dataMutateMeta(addonKey, orgID, start),
+		"meta":    dataMutateMeta(addonKey, orgID, start, dynamic.CorrelationIDFromContext(ctx)),
 	})
 	if len(env) > dataMutateMaxRespBytes {
 		return fail("db_error", "response exceeds size cap")
@@ -821,7 +821,7 @@ func sortedCols(m map[string]any) []string {
 	return out
 }
 
-func dataMutateMeta(addonKey string, orgID uuid.UUID, start time.Time) map[string]any {
+func dataMutateMeta(addonKey string, orgID uuid.UUID, start time.Time, correlationID string) map[string]any {
 	meta := map[string]any{
 		"addon":           addonKey,
 		"durationMs":      time.Since(start).Milliseconds(),
@@ -830,17 +830,26 @@ func dataMutateMeta(addonKey string, orgID uuid.UUID, start time.Time) map[strin
 	if orgID != uuid.Nil {
 		meta["orgId"] = orgID.String()
 	}
+	if id := strings.TrimSpace(correlationID); id != "" {
+		meta["correlation_id"] = id
+	}
 	return meta
 }
 
 // dataMutateErr builds the failure envelope per docs/wasm-abi.md § 14.5.
 // `code` is one of: forbidden | not_found | invalid_request |
 // bus_unavailable | db_error | constraint_violation | invalid_transition.
-func dataMutateErr(addonKey, code, message string, orgID uuid.UUID, start time.Time) []byte {
+// correlationID is copied onto error and meta only when the caller already
+// has one; this helper does not mint an id.
+func dataMutateErr(addonKey, code, message string, orgID uuid.UUID, start time.Time, correlationID string) []byte {
+	errBody := hostErrorBody(code, message)
+	if id := strings.TrimSpace(correlationID); id != "" {
+		errBody["correlation_id"] = id
+	}
 	b, _ := json.Marshal(map[string]any{
 		"success": false,
-		"error":   hostErrorBody(code, message),
-		"meta":    dataMutateMeta(addonKey, orgID, start),
+		"error":   errBody,
+		"meta":    dataMutateMeta(addonKey, orgID, start, correlationID),
 	})
 	return b
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -184,7 +185,7 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 		orgID = inv.orgID
 	}
 	fail := func(code, msg string) []byte {
-		return dataMutateErr(addonKey, code, msg, orgID, start)
+		return dataMutateErr(addonKey, code, msg, orgID, start, dynamic.CorrelationIDFromContext(ctx))
 	}
 
 	if inv == nil {
@@ -458,7 +459,7 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 	env, _ := json.Marshal(map[string]any{
 		"success": true,
 		"data":    data,
-		"meta":    dataMutateMeta(addonKey, orgID, start),
+		"meta":    dataMutateMeta(addonKey, orgID, start, dynamic.CorrelationIDFromContext(ctx)),
 	})
 	if len(env) > dataQueryMaxRespBytes {
 		return fail("db_error", "response exceeds size cap")
