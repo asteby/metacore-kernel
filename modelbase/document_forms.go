@@ -53,6 +53,65 @@ type DocumentFormType struct {
 	Endpoint string `json:"endpoint,omitempty"`
 	// SubmitLabel is the final button text. Empty = the SDK default.
 	SubmitLabel string `json:"submit_label,omitempty"`
+
+	// Layout is "wizard" (default, card → fields → lines) or "editor" (one
+	// screen with party card, lines, live totals and preview).
+	Layout string `json:"layout,omitempty"`
+	// Party is the counterparty card (customer / supplier) of the editor.
+	Party *DocumentFormParty `json:"party,omitempty"`
+	// Sources are the «Cargar desde…» documents whose lines are copied.
+	Sources []DocumentFormSource `json:"sources,omitempty"`
+	// Preview names the analyze-only row action that renders the preview.
+	Preview *DocumentFormPreview `json:"preview,omitempty"`
+	// SubmitAction saves through a create-placed model action instead of the
+	// generic create. Empty = the generic create (or Endpoint).
+	SubmitAction string `json:"submit_action,omitempty"`
+}
+
+// DocumentFormParty names the header field that picks the counterparty and
+// what the editor's party card shows.
+type DocumentFormParty struct {
+	Field    string            `json:"field"`
+	Model    string            `json:"model"`
+	Endpoint string            `json:"endpoint,omitempty"`
+	Summary  []string          `json:"summary,omitempty"`
+	Credit   map[string]string `json:"credit,omitempty"`
+}
+
+// DocumentFormSource is one «Cargar desde…» origin document.
+type DocumentFormSource struct {
+	Key           string            `json:"key"`
+	Label         string            `json:"label"`
+	Model         string            `json:"model"`
+	Lines         string            `json:"lines"`
+	Map           map[string]string `json:"map,omitempty"`
+	Header        map[string]string `json:"header,omitempty"`
+	LinkField     string            `json:"link_field,omitempty"`
+	OptionFilter  OptionFilter      `json:"option_filter,omitempty"`
+	RequiresAddon string            `json:"requires_addon,omitempty"`
+}
+
+// DocumentFormPreview is the row action called with analyze=true on the draft.
+type DocumentFormPreview struct {
+	Action        string `json:"action"`
+	RequiresAddon string `json:"requires_addon,omitempty"`
+	Label         string `json:"label,omitempty"`
+}
+
+// DocumentFormOpenDocuments feeds the payment allocator (lines.kind =
+// "allocation"): which open documents of the party can receive an amount.
+type DocumentFormOpenDocuments struct {
+	Model             string       `json:"model"`
+	PartyField        string       `json:"party_field"`
+	BalanceField      string       `json:"balance_field"`
+	NumberField       string       `json:"number_field"`
+	TotalField        string       `json:"total_field,omitempty"`
+	DueField          string       `json:"due_field,omitempty"`
+	IssuedField       string       `json:"issued_field,omitempty"`
+	MethodField       string       `json:"method_field,omitempty"`
+	LineDocumentField string       `json:"line_document_field"`
+	LineAmountField   string       `json:"line_amount_field"`
+	OptionFilter      OptionFilter `json:"option_filter,omitempty"`
 }
 
 // DocumentFormLines configures the line-items step of a document type.
@@ -68,11 +127,18 @@ type DocumentFormLines struct {
 	Required *bool `json:"required,omitempty"`
 	// Title is the step heading. Empty = the SDK default ("Renglones").
 	Title string `json:"title,omitempty"`
+	// DiscountMode is "percent" (default), "amount" or "both".
+	DiscountMode string `json:"discount_mode,omitempty"`
+	// Kind is sale (default) | purchase | credit | allocation | workorder.
+	Kind string `json:"kind,omitempty"`
+	// OpenDocuments configures the allocator when Kind = "allocation".
+	OpenDocuments *DocumentFormOpenDocuments `json:"open_documents,omitempty"`
 }
 
 // isZero reports whether the lines step carries no option at all.
 func (l DocumentFormLines) isZero() bool {
-	return l.Field == "" && len(l.Columns) == 0 && l.PriceSource == "" && l.Required == nil && l.Title == ""
+	return l.Field == "" && len(l.Columns) == 0 && l.PriceSource == "" && l.Required == nil && l.Title == "" &&
+		l.DiscountMode == "" && l.Kind == "" && l.OpenDocuments == nil
 }
 
 type documentFormLinesAlias DocumentFormLines

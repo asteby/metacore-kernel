@@ -3020,6 +3020,10 @@
             "$ref": "#/$defs/ActionField"
           }
         },
+        "default_from_record": {
+          "description": "Seed the field from a column of the record the action was opened on (string) or the first non-empty of a list. Read by the SDK (scalarDefaultFromRecord).",
+          "oneOf": [{"type": "string", "minLength": 1}, {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1}]
+        },
         "lock_rows": {
           "type": "boolean",
           "description": "Set on a type:'array' line-items field: its rows are fixed — the SDK hides add-row and delete-row controls, so the user can only edit existing rows' cells (e.g. a receive form prefilled from the ordered lines). Ignored on non-array fields."
@@ -3258,7 +3262,21 @@
             "columns": {"type": "array", "items": {"type": "string", "minLength": 1}, "description": "Optional line editor columns ('discount', 'tax', 'unit'...)."},
             "price_source": {"type": "string", "enum": ["sale", "cost"], "description": "'sale' (list price, default) or 'cost' (purchases)."},
             "required": {"type": "boolean", "description": "At least one line is needed to save. Default true."},
-            "title": {"type": "string", "description": "Step heading (literal or i18n key). Default 'Renglones'."}
+            "title": {"type": "string", "description": "Step heading (literal or i18n key). Default 'Renglones'."},
+            "discount_mode": {"type": "string", "enum": ["percent", "amount", "both"], "description": "How the line discount is captured; must match the line model's formula."},
+            "kind": {"type": "string", "enum": ["sale", "purchase", "credit", "allocation", "workorder"], "description": "What the grid captures. allocation = PaymentAllocator over open_documents."},
+            "open_documents": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["model", "party_field", "balance_field", "number_field", "line_document_field", "line_amount_field"],
+              "properties": {
+                "model": {"type": "string", "minLength": 1}, "party_field": {"type": "string"}, "balance_field": {"type": "string"},
+                "number_field": {"type": "string"}, "total_field": {"type": "string"}, "due_field": {"type": "string"},
+                "issued_field": {"type": "string"}, "method_field": {"type": "string"},
+                "line_document_field": {"type": "string"}, "line_amount_field": {"type": "string"},
+                "option_filter": {"$ref": "#/$defs/OptionFilter"}
+              }
+            }
           }
         }
       ]
@@ -3278,7 +3296,33 @@
         "defaults": {"type": "object", "description": "Fixed values that travel with this type's create payload."},
         "lines": {"$ref": "#/$defs/DocumentFormLines"},
         "endpoint": {"type": "string", "description": "Create endpoint override for this type. Default: the model's."},
-        "submit_label": {"type": "string", "description": "Final button text (literal or i18n key)."}
+        "submit_label": {"type": "string", "description": "Final button text (literal or i18n key)."},
+        "layout": {"type": "string", "enum": ["wizard", "editor"], "description": "wizard (default) or editor: one screen with party card, lines, live totals and preview."},
+        "party": {
+          "type": "object", "additionalProperties": false, "required": ["field", "model"],
+          "properties": {
+            "field": {"type": "string"}, "model": {"type": "string"}, "endpoint": {"type": "string"},
+            "summary": {"type": "array", "items": {"type": "string"}},
+            "credit": {"type": "object", "additionalProperties": {"type": "string"}}
+          }
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["key", "label", "model", "lines"],
+            "properties": {
+              "key": {"type": "string"}, "label": {"type": "string"}, "model": {"type": "string"}, "lines": {"type": "string"},
+              "map": {"type": "object", "additionalProperties": {"type": "string"}},
+              "header": {"type": "object", "additionalProperties": {"type": "string"}},
+              "link_field": {"type": "string"}, "option_filter": {"$ref": "#/$defs/OptionFilter"}, "requires_addon": {"type": "string"}
+            }
+          }
+        },
+        "preview": {
+          "type": "object", "additionalProperties": false, "required": ["action"],
+          "properties": {"action": {"type": "string"}, "requires_addon": {"type": "string"}, "label": {"type": "string"}}
+        },
+        "submit_action": {"type": "string", "description": "Save through this create-placed model action instead of the generic create."}
       }
     },
     "DocumentForms": {

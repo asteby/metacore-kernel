@@ -24,7 +24,9 @@ func testDocumentForms() *modelbase.DocumentForms {
 					OptionsConfig: &modelbase.FieldOptionsConfig{Type: "dynamic", Source: "invoices", ExtraColumns: []string{"status"}},
 					OptionFilter:  modelbase.OptionFilter{{Field: "status", NotIn: []any{"cancelada"}}},
 				}},
-				Lines: &modelbase.DocumentFormLines{Title: "docs.lines", Required: &req, Columns: []string{"tax"}},
+				Lines:   &modelbase.DocumentFormLines{Title: "docs.lines", Required: &req, Columns: []string{"tax"}},
+				Sources: []modelbase.DocumentFormSource{{Key: "quote", Label: "docs.source_quote", Model: "quotes", Lines: "items"}},
+				Preview: &modelbase.DocumentFormPreview{Action: "preview", Label: "docs.preview"},
 			},
 			{Key: "global", Label: "Global", Fields: []modelbase.FieldDef{}},
 		},
@@ -145,7 +147,8 @@ func (m mapTranslator) Translate(_ context.Context, key string, _ ...any) string
 // lines step, and never mutates the model's own (shared) definition.
 func TestGetTable_LocalizesDocumentForms(t *testing.T) {
 	key := registerDoc(t, func(k string) modelbase.ModelDefiner { return &docModel{fakeModel{key: k, title: "Docs"}} })
-	tr := mapTranslator{"docs.invoice": "Factura", "docs.invoice_field": "Factura pagada", "docs.lines": "Partidas"}
+	tr := mapTranslator{"docs.invoice": "Factura", "docs.invoice_field": "Factura pagada", "docs.lines": "Partidas",
+		"docs.source_quote": "Cotización", "docs.preview": "Vista previa"}
 	svc := New(Config{CacheTTL: -1}).WithTableTransformer(NewLocalizedTableTransformer(tr, "docs."))
 	meta, err := svc.GetTable(context.Background(), key)
 	if err != nil {
@@ -154,6 +157,9 @@ func TestGetTable_LocalizesDocumentForms(t *testing.T) {
 	ty := meta.DocumentForms.Types[0]
 	if ty.Label != "Factura" || ty.Fields[0].Label != "Factura pagada" || ty.Lines.Title != "Partidas" {
 		t.Fatalf("not localized: %+v / %+v / %+v", ty.Label, ty.Fields[0].Label, ty.Lines)
+	}
+	if ty.Sources[0].Label != "Cotización" || ty.Preview.Label != "Vista previa" {
+		t.Fatalf("editor labels not localized: %+v / %+v", ty.Sources, ty.Preview)
 	}
 	if got := (&docModel{}).DefineDocumentForms().Types[0].Label; got != "docs.invoice" {
 		t.Fatalf("model definition mutated: %q", got)
