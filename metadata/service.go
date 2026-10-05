@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"sync"
@@ -207,6 +208,18 @@ func (s *Service) computeTable(ctx context.Context, modelKey string) (*modelbase
 		table.Audit = modelbase.DeriveAuditMeta(def)
 	}
 
+	// Guided document create flow: a model implementing HasDocumentForms serves
+	// it as document_forms (the SDK then replaces the generic create modal with
+	// per-type cards). A model that already set DocumentForms in DefineTable —
+	// the host's addon definer does, via dynamic.DeriveDocumentForms — keeps it.
+	if table.DocumentForms == nil {
+		if hd, ok := def.(modelbase.HasDocumentForms); ok {
+			if df := cloneDocumentForms(hd.DefineDocumentForms()); df != nil && len(df.Types) > 0 {
+				table.DocumentForms = df
+			}
+		}
+	}
+
 	// Project the model's spreadsheet-import spec onto the served metadata so
 	// the SDK can show or hide the import action without a probe request. A
 	// model that declares nothing gets the spec derived from its own form
@@ -384,3 +397,21 @@ func (s *Service) langSuffix(ctx context.Context) string {
 
 func tableCacheKey(modelKey string) string { return "table:" + modelKey }
 func modalCacheKey(modelKey string) string { return "modal:" + modelKey }
+
+// cloneDocumentForms deep-copies a model-provided document flow so the
+// localizing transformers (which edit in place) never mutate state the model
+// keeps and serves again on the next language.
+func cloneDocumentForms(in *modelbase.DocumentForms) *modelbase.DocumentForms {
+	if in == nil {
+		return nil
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return nil
+	}
+	var out modelbase.DocumentForms
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return &out
+}

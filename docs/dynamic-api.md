@@ -355,6 +355,12 @@ Response `200 OK`:
 }
 ```
 
+When the field's `options` object declares `extra_columns` (e.g.
+`["status"]`), every option also carries those source columns as sibling keys
+(`{ "id": "…", "label": "FAC-1", "status": "vigente" }`) so the SDK's
+`option_filter` can hide options client-side. See
+[document-forms.md](document-forms.md#extra_columns-on-options).
+
 `type` is `"static"` when the field declares a hardcoded list and
 `"dynamic"` when it queries a related model. Static options never hit
 the database.

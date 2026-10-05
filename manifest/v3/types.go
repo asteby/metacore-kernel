@@ -687,6 +687,14 @@ type Model struct {
 	// (the legacy behaviour). See FormLayout.
 	FormLayout *FormLayout `json:"form_layout,omitempty"`
 
+	// DocumentForms declares the guided, per-document-type create flow the SDK
+	// renders instead of the generic create modal: one card per type (invoice,
+	// credit note, payment receipt...), the type's own fields and an optional
+	// line-items step. Pure UI metadata; the DDL and write planes ignore it.
+	// Nil = the generic create modal (the legacy behaviour). See DocumentForms
+	// and docs/document-forms.md.
+	DocumentForms *DocumentForms `json:"document_forms,omitempty"`
+
 	// Import declares the model's spreadsheet-import template: the columns of
 	// the generated file and the headers accepted when reading it back. Nil
 	// falls back to the spec the kernel derives from the model's importable
@@ -1027,6 +1035,11 @@ type Column struct {
 	// (json `depends_on`) so the SDK re-fetches the options whenever the
 	// depended-on field changes. Empty = no cascade (lists everything). Optional.
 	DependsOn string `json:"depends_on,omitempty"`
+	// OptionFilter hides options of this column's relation / dynamic picker
+	// (e.g. {"field":"status","not_in":["cancelada"]}). Evaluated by the SDK over
+	// the extra columns /options returns, so list them in the options object's
+	// extra_columns. Pure UI metadata; the DDL plane ignores it. Optional.
+	OptionFilter OptionFilter `json:"option_filter,omitempty"`
 	// OptionsSource declares a DYNAMIC select for the column: instead of a
 	// hardcoded Options list, it names a PROVIDER key (e.g.
 	// "registered_models", "installed_addons") the HOST registers and resolves
@@ -2079,6 +2092,10 @@ type ActionField struct {
 	// when the depended-on field changes. Empty = no cascade. Optional.
 	DependsOn string `json:"depends_on,omitempty"`
 
+	// OptionFilter hides options of this field's relation / dynamic picker (see
+	// Column.OptionFilter). The host projects it onto modelbase.FieldDef.OptionFilter.
+	OptionFilter OptionFilter `json:"option_filter,omitempty"`
+
 	// Scan opts this action field into CAMERA BARCODE SCANNING: the SDK shows a
 	// camera button that scans a barcode to FILL the field fast — a text/number
 	// input (e.g. a SKU) or a dynamic_select reference (scan feeds the picker's
@@ -2205,6 +2222,55 @@ type DynamicOptions struct {
 	Label       string `json:"label,omitempty"`
 	LabelRef    string `json:"label_ref,omitempty"`
 	Description string `json:"description,omitempty"`
+	// ExtraColumns lists additional scalar columns of Source that /options
+	// returns on every option (as sibling keys of id/value/label), so a picker's
+	// option_filter can test them client-side (e.g. ["status"] to hide cancelled
+	// invoices). Names are lowercase snake_case identifiers; each must be a
+	// column of Source when Source is an own model. Optional.
+	ExtraColumns []string `json:"extra_columns,omitempty"`
+}
+
+// OptionFilterRule hides options of a relation / dynamic picker. The SDK
+// evaluates it client-side over the extra columns /options returns (see
+// DynamicOptions.ExtraColumns). Field names the option property tested: an
+// extra column (e.g. "status") or id/value/label/name/description/color/icon.
+// Declare at least one of Equals / NotEquals / In / NotIn. Values are string,
+// number or boolean. Comparison is trimmed + case-insensitive; positive rules
+// need the property to exist, negative rules keep an option that lacks it.
+type OptionFilterRule struct {
+	Field     string `json:"field"`
+	Equals    any    `json:"equals,omitempty"`
+	NotEquals any    `json:"not_equals,omitempty"`
+	In        []any  `json:"in,omitempty"`
+	NotIn     []any  `json:"not_in,omitempty"`
+}
+
+// OptionFilter is one rule or a list of rules that must ALL pass (AND). The
+// manifest accepts either an object or an array; it is always served as an
+// array.
+type OptionFilter []OptionFilterRule
+
+// UnmarshalJSON accepts a single rule object or an array of rules.
+func (f *OptionFilter) UnmarshalJSON(data []byte) error {
+	t := bytesTrimSpace(data)
+	if len(t) == 0 || string(t) == "null" {
+		*f = nil
+		return nil
+	}
+	if t[0] == '{' {
+		var r OptionFilterRule
+		if err := json.Unmarshal(data, &r); err != nil {
+			return err
+		}
+		*f = OptionFilter{r}
+		return nil
+	}
+	var list []OptionFilterRule
+	if err := json.Unmarshal(data, &list); err != nil {
+		return err
+	}
+	*f = list
+	return nil
 }
 
 // FieldOptions carries a field/column `options` declaration that is EITHER a
@@ -2907,4 +2973,94 @@ type CrossRule struct {
 	//              accepted: none can be added, edited or removed (QA LIVE-10).
 	// Only valid on ref_state.
 	Enforce string `json:"enforce,omitempty"`
+}
+
+// DocumentForms is the guided create flow of a document-like model. Mirrors the
+// SDK's DocumentFormsManifest (runtime-react/src/types.ts) 1:1.
+type DocumentForms struct {
+	// TypeField is the model column that discriminates the document type (e.g.
+	// "type"); the SDK writes the picked type's value into it. Must be a column
+	// of the owning model. Empty = the type is not written.
+	TypeField string `json:"type_field,omitempty"`
+	// LinesField is the default payload field receiving the line items (a type's
+	// lines.field overrides it). Empty = "lines".
+	LinesField string `json:"lines_field,omitempty"`
+	// Types are the selectable document types, in display order. At least one.
+	Types []DocumentFormType `json:"types"`
+}
+
+// DocumentFormType is one selectable document type.
+type DocumentFormType struct {
+	// Key identifies the type within the model (lowercase snake_case, unique).
+	Key string `json:"key"`
+	// Label is the card title (literal or i18n key).
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+	Icon        string `json:"icon,omitempty"`
+	// Value is what the SDK writes into type_field (e.g. "E"). Empty = key.
+	Value string `json:"value,omitempty"`
+	// Fields are the type's header fields, same vocabulary as Action.Fields.
+	Fields []ActionField `json:"fields"`
+	// Defaults are fixed values that travel with this type's create payload.
+	Defaults map[string]any `json:"defaults,omitempty"`
+	// Lines gives the type a line-items step: `true` (all defaults) or an object.
+	// `false` / absent = no lines step.
+	Lines *DocumentFormLines `json:"lines,omitempty"`
+	// Endpoint overrides the create endpoint for this type. Empty = the model's.
+	Endpoint string `json:"endpoint,omitempty"`
+	// SubmitLabel is the final button text (literal or i18n key).
+	SubmitLabel string `json:"submit_label,omitempty"`
+}
+
+// DocumentFormLines configures the line-items step of a document type. In the
+// manifest it is `true` or an object; `false` disables it.
+type DocumentFormLines struct {
+	// Field is the payload field receiving the lines. Empty = DocumentForms.LinesField.
+	Field string `json:"field,omitempty"`
+	// Columns are optional editor columns ("discount", "tax", "unit"...).
+	Columns []string `json:"columns,omitempty"`
+	// PriceSource is "sale" (list price, default) or "cost" (purchases).
+	PriceSource string `json:"price_source,omitempty"`
+	// Required: at least one line is needed to save. Nil = true.
+	Required *bool `json:"required,omitempty"`
+	// Title is the step heading. Empty = the SDK default.
+	Title string `json:"title,omitempty"`
+
+	// off records an explicit `false` so Enabled() can tell it from `true`.
+	off bool
+}
+
+// Enabled reports whether the type has a line-items step (nil-safe).
+func (l *DocumentFormLines) Enabled() bool { return l != nil && !l.off }
+
+type documentFormLinesAlias DocumentFormLines
+
+// UnmarshalJSON accepts `true`, `false` or the object form.
+func (l *DocumentFormLines) UnmarshalJSON(data []byte) error {
+	switch t := string(bytesTrimSpace(data)); t {
+	case "true", "null":
+		*l = DocumentFormLines{}
+		return nil
+	case "false":
+		*l = DocumentFormLines{off: true}
+		return nil
+	}
+	var a documentFormLinesAlias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*l = DocumentFormLines(a)
+	return nil
+}
+
+// MarshalJSON re-emits `true` for an option-less step, `false` when disabled,
+// the object otherwise, so a manifest round-trips.
+func (l DocumentFormLines) MarshalJSON() ([]byte, error) {
+	if l.off {
+		return []byte("false"), nil
+	}
+	if l.Field == "" && len(l.Columns) == 0 && l.PriceSource == "" && l.Required == nil && l.Title == "" {
+		return []byte("true"), nil
+	}
+	return json.Marshal(documentFormLinesAlias(l))
 }

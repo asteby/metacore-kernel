@@ -44,6 +44,7 @@ func NewLocalizedTableTransformer(translator i18n.Translator, prefix string) Tab
 		for i := range meta.Actions {
 			t.translateAction(ctx, &meta.Actions[i])
 		}
+		t.translateDocumentForms(ctx, meta.DocumentForms)
 		return nil
 	}
 }
@@ -129,5 +130,25 @@ func (t translatorWalker) translateAction(ctx context.Context, a *modelbase.Acti
 	t.translateString(ctx, &a.ConfirmMessage)
 	for i := range a.Fields {
 		t.translateField(ctx, &a.Fields[i])
+	}
+}
+
+// translateDocumentForms localizes the card/field/step texts of a guided
+// document create flow (labels and descriptions that carry an i18n key).
+func (t translatorWalker) translateDocumentForms(ctx context.Context, df *modelbase.DocumentForms) {
+	if df == nil {
+		return
+	}
+	for i := range df.Types {
+		ty := &df.Types[i]
+		t.translateString(ctx, &ty.Label)
+		t.translateString(ctx, &ty.Description)
+		t.translateString(ctx, &ty.SubmitLabel)
+		if ty.Lines != nil {
+			t.translateString(ctx, &ty.Lines.Title)
+		}
+		for j := range ty.Fields {
+			t.translateField(ctx, &ty.Fields[j])
+		}
 	}
 }

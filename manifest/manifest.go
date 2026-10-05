@@ -959,6 +959,11 @@ type FieldDef struct {
 	// ActionField / served modelbase field so regex/min/max/custom survive the
 	// host round-trip. Nil = no extra rules (required still applies).
 	Validation *ValidationRule `json:"validation,omitempty"`
+
+	// OptionFilter forwards the v3 ActionField.option_filter so the SDK hides
+	// ineligible options of this field's relation / dynamic picker. JSON tag
+	// matches modelbase.FieldDef.OptionFilter. Empty = every option is listed.
+	OptionFilter v3.OptionFilter `json:"option_filter,omitempty"`
 }
 
 // FieldBalanceRule mirrors manifest/v3 FieldBalanceRule with identical JSON
@@ -988,6 +993,10 @@ type DynamicOptionsDef struct {
 	Label       string `json:"label,omitempty"`
 	LabelRef    string `json:"label_ref,omitempty"`
 	Description string `json:"description,omitempty"`
+	// ExtraColumns are additional Source columns /options returns on every
+	// option (sibling keys of id/value/label) for the field's option_filter.
+	// Lands on modelbase.FieldOptionsConfig.ExtraColumns.
+	ExtraColumns []string `json:"extra_columns,omitempty"`
 }
 
 // HookDef is one declared lifecycle hook entry. The kernel dispatches
@@ -1147,6 +1156,12 @@ type ModelDefinition struct {
 	// ignore it. Nil = a flat form (legacy). See manifest/v3.FormLayout.
 	FormLayout *FormLayoutDef `json:"form_layout,omitempty"`
 
+	// DocumentForms carries the v3 Model.document_forms (guided per-document-type
+	// create flow) through the v3 → host conversion so the host can serve it as
+	// TableMetadata.document_forms (see dynamic.DeriveDocumentForms). Pure UI
+	// metadata; the DDL/write planes ignore it. Nil = the generic create modal.
+	DocumentForms *DocumentFormsDef `json:"document_forms,omitempty"`
+
 	// Import carries the v3 Model.import (spreadsheet-import template) through
 	// the v3 → host conversion, so an addon-owned model declares its import
 	// columns the same way a compiled Go model does via
@@ -1179,6 +1194,33 @@ type ImportColumnDef struct {
 	Hint      string   `json:"hint,omitempty"`
 	Generator string   `json:"generator,omitempty"`
 	Transform string   `json:"transform,omitempty"`
+}
+
+// DocumentFormsDef is the legacy carrier for the v3 DocumentForms block. JSON
+// tags match the v3 contract and modelbase.DocumentForms so it round-trips onto
+// the served table metadata.
+type DocumentFormsDef struct {
+	TypeField  string                `json:"type_field,omitempty"`
+	LinesField string                `json:"lines_field,omitempty"`
+	Types      []DocumentFormTypeDef `json:"types"`
+}
+
+// DocumentFormTypeDef is the legacy carrier for one v3 DocumentFormType. Its
+// Fields are FieldDef (the action-field carrier), so the whole field vocabulary
+// of an action modal is available per document type.
+type DocumentFormTypeDef struct {
+	Key         string         `json:"key"`
+	Label       string         `json:"label"`
+	Description string         `json:"description,omitempty"`
+	Icon        string         `json:"icon,omitempty"`
+	Value       string         `json:"value,omitempty"`
+	Fields      []FieldDef     `json:"fields"`
+	Defaults    map[string]any `json:"defaults,omitempty"`
+	// Lines is the line-items step (nil = none; an option-less step serializes
+	// as `true`).
+	Lines       *v3.DocumentFormLines `json:"lines,omitempty"`
+	Endpoint    string                `json:"endpoint,omitempty"`
+	SubmitLabel string                `json:"submit_label,omitempty"`
 }
 
 // FormLayoutDef is the legacy carrier for the v3 FormLayout block. It rides the
@@ -1612,6 +1654,12 @@ type ColumnDef struct {
 	// form_layout section/step. Pure UI metadata; the DDL plane ignores it. Empty
 	// = the implicit "General" block.
 	Section string `json:"section,omitempty"`
+
+	// OptionFilter carries the v3 Column.option_filter (hide options of a
+	// relation / dynamic picker, evaluated by the SDK over the extra columns
+	// /options returns) through the v3 → host conversion onto the served
+	// modelbase.ColumnDef/FieldDef.OptionFilter. Pure UI metadata.
+	OptionFilter v3.OptionFilter `json:"option_filter,omitempty"`
 }
 
 // VisibleWhenDef is the legacy carrier for the v3 VisibleWhen block. It rides
