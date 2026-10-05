@@ -2070,6 +2070,11 @@ type ActionField struct {
 	Multiple       bool             `json:"multiple,omitempty"`
 	SearchEndpoint string           `json:"search_endpoint,omitempty"`
 	Validation     *FieldValidation `json:"validation,omitempty"`
+	// DefaultFromRecord siembra el campo con una columna (o la primera no vacía
+	// de una lista) del registro sobre el que se abrió la acción: el SDK ya lo
+	// lee (action-modal-dispatcher scalarDefaultFromRecord) pero el kernel lo
+	// tiraba al servir la metadata. Ej.: register_payment.invoice_id ← "id".
+	DefaultFromRecord any `json:"default_from_record,omitempty"`
 
 	// OptionsSource declares a DYNAMIC select for this action field: instead of
 	// a hardcoded Options list, it names a PROVIDER key (e.g. "connector_repos",
@@ -3010,6 +3015,64 @@ type DocumentFormType struct {
 	Endpoint string `json:"endpoint,omitempty"`
 	// SubmitLabel is the final button text (literal or i18n key).
 	SubmitLabel string `json:"submit_label,omitempty"`
+
+	// --- DocumentEditor (plan Pitsline 2026-10-05, patches 07/09) ---------
+	// Layout is "wizard" (default, today's flow) or "editor" (one screen).
+	Layout string `json:"layout,omitempty"`
+	// Party is the counterparty card (customer / supplier) of the editor.
+	Party *DocumentFormParty `json:"party,omitempty"`
+	// Sources are the «Cargar desde…» documents whose lines are copied.
+	Sources []DocumentFormSource `json:"sources,omitempty"`
+	// Preview names the analyze-only action that renders the pre-stamp preview.
+	Preview *DocumentFormPreview `json:"preview,omitempty"`
+	// SubmitAction saves through a create-placed model action instead of the
+	// generic create (e.g. Payment → collect_multi_payment_create).
+	SubmitAction string `json:"submit_action,omitempty"`
+}
+
+// DocumentFormParty: which header field picks the counterparty and what the
+// PartyCard shows. Extension columns (fiscal_data.*) are always appended.
+type DocumentFormParty struct {
+	Field    string            `json:"field"`
+	Model    string            `json:"model"`
+	Endpoint string            `json:"endpoint,omitempty"`
+	Summary  []string          `json:"summary,omitempty"`
+	Credit   map[string]string `json:"credit,omitempty"`
+}
+
+// DocumentFormSource is one «Cargar desde…» origin.
+type DocumentFormSource struct {
+	Key           string            `json:"key"`
+	Label         string            `json:"label"`
+	Model         string            `json:"model"`
+	Lines         string            `json:"lines"`
+	Map           map[string]string `json:"map,omitempty"`
+	Header        map[string]string `json:"header,omitempty"`
+	LinkField     string            `json:"link_field,omitempty"`
+	OptionFilter  json.RawMessage   `json:"option_filter,omitempty"`
+	RequiresAddon string            `json:"requires_addon,omitempty"`
+}
+
+// DocumentFormPreview: row action called with analyze=true on the draft.
+type DocumentFormPreview struct {
+	Action        string `json:"action"`
+	RequiresAddon string `json:"requires_addon,omitempty"`
+	Label         string `json:"label,omitempty"`
+}
+
+// DocumentFormOpenDocuments feeds PaymentAllocator (lines.kind = allocation).
+type DocumentFormOpenDocuments struct {
+	Model             string          `json:"model"`
+	PartyField        string          `json:"party_field"`
+	BalanceField      string          `json:"balance_field"`
+	NumberField       string          `json:"number_field"`
+	TotalField        string          `json:"total_field,omitempty"`
+	DueField          string          `json:"due_field,omitempty"`
+	IssuedField       string          `json:"issued_field,omitempty"`
+	MethodField       string          `json:"method_field,omitempty"`
+	LineDocumentField string          `json:"line_document_field"`
+	LineAmountField   string          `json:"line_amount_field"`
+	OptionFilter      json.RawMessage `json:"option_filter,omitempty"`
 }
 
 // DocumentFormLines configures the line-items step of a document type. In the
@@ -3025,6 +3088,13 @@ type DocumentFormLines struct {
 	Required *bool `json:"required,omitempty"`
 	// Title is the step heading. Empty = the SDK default.
 	Title string `json:"title,omitempty"`
+	// DiscountMode: "percent" (default), "amount" or "both". Must match the
+	// line model's formula (customers.InvoiceItem subtracts an AMOUNT).
+	DiscountMode string `json:"discount_mode,omitempty"`
+	// Kind: sale (default) | purchase | credit | allocation | workorder.
+	Kind string `json:"kind,omitempty"`
+	// OpenDocuments is required when Kind = allocation.
+	OpenDocuments *DocumentFormOpenDocuments `json:"open_documents,omitempty"`
 
 	// off records an explicit `false` so Enabled() can tell it from `true`.
 	off bool
@@ -3059,7 +3129,8 @@ func (l DocumentFormLines) MarshalJSON() ([]byte, error) {
 	if l.off {
 		return []byte("false"), nil
 	}
-	if l.Field == "" && len(l.Columns) == 0 && l.PriceSource == "" && l.Required == nil && l.Title == "" {
+	if l.Field == "" && len(l.Columns) == 0 && l.PriceSource == "" && l.Required == nil && l.Title == "" &&
+		l.DiscountMode == "" && l.Kind == "" && l.OpenDocuments == nil {
 		return []byte("true"), nil
 	}
 	return json.Marshal(documentFormLinesAlias(l))

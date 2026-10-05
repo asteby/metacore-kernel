@@ -1273,6 +1273,12 @@ func mapDocumentForms(df *v3.DocumentForms) *DocumentFormsDef {
 			Defaults:    t.Defaults,
 			Endpoint:    t.Endpoint,
 			SubmitLabel: t.SubmitLabel,
+			// DocumentEditor block — pure UI metadata, copied verbatim.
+			Layout:       t.Layout,
+			Party:        t.Party,
+			Sources:      t.Sources,
+			Preview:      t.Preview,
+			SubmitAction: t.SubmitAction,
 		}
 		if td.Fields == nil {
 			td.Fields = []FieldDef{}
@@ -1378,6 +1384,9 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 			DependsOn: f.DependsOn,
 			// OptionFilter forwards the option-hiding rules of this picker.
 			OptionFilter: f.OptionFilter,
+			// DefaultFromRecord forwards the record-seeding column(s) so the SDK
+			// prefills the field from the row the action was opened on.
+			DefaultFromRecord: f.DefaultFromRecord,
 			// OptionsSource forwards the host-registered dynamic options provider
 			// key (e.g. "connector_repos") so the host materialises the field's
 			// choices from its registry at metadata-serve time.

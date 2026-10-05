@@ -438,6 +438,12 @@ type FieldDef struct {
 	// ColumnDef.OptionFilter). Mirrors manifest/v3 ActionField.option_filter.
 	OptionFilter OptionFilter `json:"option_filter,omitempty"`
 
+	// DefaultFromRecord seeds the field from a column of the record the action
+	// was opened on (string), or the first non-empty of a list of columns.
+	// Mirrors manifest/v3 ActionField.default_from_record; read by the SDK
+	// (scalarDefaultFromRecord). Nil = no record seeding.
+	DefaultFromRecord any `json:"default_from_record,omitempty"`
+
 	// VisibleWhen declares CONDITIONAL VISIBILITY for this field in the
 	// create/edit modal: the SDK renders it only when the referenced sibling
 	// field's current value matches the condition (see VisibleWhen). Nil = the

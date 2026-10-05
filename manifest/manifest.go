@@ -964,6 +964,12 @@ type FieldDef struct {
 	// ineligible options of this field's relation / dynamic picker. JSON tag
 	// matches modelbase.FieldDef.OptionFilter. Empty = every option is listed.
 	OptionFilter v3.OptionFilter `json:"option_filter,omitempty"`
+
+	// DefaultFromRecord forwards the v3 ActionField.default_from_record (a
+	// column name, or a list whose first non-empty value wins) so the SDK seeds
+	// the field from the record the action was opened on. JSON tag matches
+	// modelbase.FieldDef.DefaultFromRecord. Nil = no record seeding.
+	DefaultFromRecord any `json:"default_from_record,omitempty"`
 }
 
 // FieldBalanceRule mirrors manifest/v3 FieldBalanceRule with identical JSON
@@ -1221,6 +1227,14 @@ type DocumentFormTypeDef struct {
 	Lines       *v3.DocumentFormLines `json:"lines,omitempty"`
 	Endpoint    string                `json:"endpoint,omitempty"`
 	SubmitLabel string                `json:"submit_label,omitempty"`
+
+	// DocumentEditor block (layout/party/sources/preview/submit_action) rides
+	// through with the v3 shapes so it reaches modelbase.DocumentFormType.
+	Layout       string                  `json:"layout,omitempty"`
+	Party        *v3.DocumentFormParty   `json:"party,omitempty"`
+	Sources      []v3.DocumentFormSource `json:"sources,omitempty"`
+	Preview      *v3.DocumentFormPreview `json:"preview,omitempty"`
+	SubmitAction string                  `json:"submit_action,omitempty"`
 }
 
 // FormLayoutDef is the legacy carrier for the v3 FormLayout block. It rides the

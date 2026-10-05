@@ -87,3 +87,39 @@ func TestOptionFilter_JSON(t *testing.T) {
 		t.Errorf("extra_columns = %s", cfg)
 	}
 }
+
+// A lines step carrying only the DocumentEditor options (kind/discount_mode/
+// open_documents) must serve as an object, never collapse to `true`, and the
+// editor block of the type rides along with snake_case keys.
+func TestDocumentForms_EditorWireShape(t *testing.T) {
+	ty := DocumentFormType{
+		Key: "payment", Label: "Cobro", Fields: []FieldDef{{Key: "invoice_id", Label: "Factura", Type: "text", DefaultFromRecord: "id"}},
+		Layout: "editor", SubmitAction: "collect_payment_create",
+		Party:   &DocumentFormParty{Field: "customer_id", Model: "Customer"},
+		Sources: []DocumentFormSource{{Key: "quote", Label: "Cotización", Model: "Quote", Lines: "items"}},
+		Preview: &DocumentFormPreview{Action: "preview_receipt"},
+		Lines:   &DocumentFormLines{Kind: "allocation"},
+	}
+	raw, err := json.Marshal(ty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back map[string]any
+	_ = json.Unmarshal(raw, &back)
+	if l, ok := back["lines"].(map[string]any); !ok || l["kind"] != "allocation" {
+		t.Errorf("lines = %v", back["lines"])
+	}
+	for _, k := range []string{"layout", "submit_action", "party", "sources", "preview"} {
+		if back[k] == nil {
+			t.Errorf("%s missing: %s", k, raw)
+		}
+	}
+	if back["fields"].([]any)[0].(map[string]any)["default_from_record"] != "id" {
+		t.Errorf("default_from_record missing: %s", raw)
+	}
+	// Without the editor block nothing new is emitted.
+	plain, _ := json.Marshal(DocumentFormType{Key: "x", Label: "X", Fields: []FieldDef{}, Lines: &DocumentFormLines{}})
+	if string(plain) != `{"key":"x","label":"X","fields":[],"lines":true}` {
+		t.Errorf("plain type = %s", plain)
+	}
+}

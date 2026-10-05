@@ -147,6 +147,12 @@ func (t translatorWalker) translateDocumentForms(ctx context.Context, df *modelb
 		if ty.Lines != nil {
 			t.translateString(ctx, &ty.Lines.Title)
 		}
+		for j := range ty.Sources {
+			t.translateString(ctx, &ty.Sources[j].Label)
+		}
+		if ty.Preview != nil {
+			t.translateString(ctx, &ty.Preview.Label)
+		}
 		for j := range ty.Fields {
 			t.translateField(ctx, &ty.Fields[j])
 		}
