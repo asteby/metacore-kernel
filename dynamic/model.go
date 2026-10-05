@@ -234,7 +234,11 @@ func columnToField(c manifest.ColumnDef) (reflect.StructField, error) {
 	}
 	name := exportName(c.Name)
 	tags := []string{fmt.Sprintf(`json:"%s"`, c.Name)}
-	gormParts := []string{"type:" + gormType}
+	// column:<name> pins the physical column to the manifest name. Without it
+	// GORM's NamingStrategy re-derives the column from the Go field name, and
+	// exportName is lossy for segments that start with a digit: aging_1_30 ->
+	// Aging130 -> "aging130" (SQLSTATE 42703 on INSERT; Pitsline customers 500).
+	gormParts := []string{"column:" + c.Name, "type:" + gormType}
 	// A Postgres STORED generated column is maintained by the database on every
 	// write, so it MUST be excluded from INSERT/UPDATE — otherwise GORM sends the
 	// field's zero value in the column list and Postgres rejects the write with
