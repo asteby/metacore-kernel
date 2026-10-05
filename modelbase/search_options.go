@@ -55,6 +55,16 @@ type FieldOptionsConfig struct {
 	// Empty = no enrichment (label stays whatever Label projected). Optional.
 	LabelRef string `json:"label_ref"`
 
+	// ExtraColumns names additional scalar columns of the Source row that
+	// Service.Options returns on EVERY option, as sibling keys of id/value/
+	// label (e.g. ["status"] adds `"status":"cancelada"`). They are what a
+	// field's option_filter tests client-side. Only plain identifiers are
+	// honoured (unsafe names are ignored), a name that collides with a
+	// reserved option key (id, value, label, name, description, image, color,
+	// icon) is ignored, and only string/number/bool values are returned.
+	// Empty = options carry no extra columns (retro-compatible). Optional.
+	ExtraColumns []string `json:"extra_columns,omitempty"`
+
 	// Static options — used when Type == "static".
 	Options []StaticOption `json:"options"`
 }

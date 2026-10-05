@@ -598,7 +598,66 @@ func projectOptions(results reflect.Value, cfg FieldOptionsConfig) []Option {
 		if v := fieldValue(item, "Color"); v != nil && v != "" {
 			opt.Color = v
 		}
+		opt.Extra = extraColumnValues(item, cfg.ExtraColumns)
 		out = append(out, opt)
+	}
+	return out
+}
+
+// extraColumnValues reads the FieldOptionsConfig.ExtraColumns of one source row
+// so an option can carry them (e.g. "status" for an option_filter). Unsafe
+// identifiers, names reserved by Option, and non-scalar or NULL values are
+// skipped; named string/number/bool types are unwrapped to their basic kind so
+// they serialize as plain JSON scalars. Nil when nothing was requested.
+func extraColumnValues(item reflect.Value, cols []string) map[string]any {
+	if len(cols) == 0 {
+		return nil
+	}
+	var out map[string]any
+	for _, c := range cols {
+		if !safeColumn.MatchString(c) || reservedOptionKeys[c] {
+			continue
+		}
+		v := fieldValue(item, c)
+		if v == nil {
+			continue
+		}
+		rv := reflect.ValueOf(v)
+		for rv.Kind() == reflect.Ptr {
+			if rv.IsNil() {
+				rv = reflect.Value{}
+				break
+			}
+			rv = rv.Elem()
+		}
+		if !rv.IsValid() {
+			continue
+		}
+		var sv any
+		switch rv.Kind() {
+		case reflect.String:
+			sv = rv.String()
+		case reflect.Bool:
+			sv = rv.Bool()
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			sv = rv.Int()
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			sv = rv.Uint()
+		case reflect.Float32, reflect.Float64:
+			sv = rv.Float()
+		default:
+			// uuid.UUID, time.Time, decimals...: serialize via their string form
+			// when they have one, otherwise skip (non-scalar).
+			if st, ok := v.(interface{ String() string }); ok {
+				sv = st.String()
+			} else {
+				continue
+			}
+		}
+		if out == nil {
+			out = make(map[string]any, len(cols))
+		}
+		out[c] = sv
 	}
 	return out
 }

@@ -9,6 +9,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`document_forms`, `option_filter` and `extra_columns`** (see
+  `docs/document-forms.md`). The runtime-react SDK 47.x already renders a guided
+  per-document-type create flow and hides relation-picker options client-side;
+  the kernel now declares, validates and serves both, opt-in and
+  retro-compatible. v3 `Model.document_forms` (types, per-type fields in the
+  action-field vocabulary, optional line-items step) is carried by
+  `FromV3` onto `ModelDefinition.DocumentForms`, projected by
+  `dynamic.DeriveDocumentForms` / `modelbase.HasDocumentForms` onto
+  `TableMetadata.document_forms` and localized by the table transformer.
+  `option_filter` (rule `{field, equals|not_equals|in|not_in}` or a list) is
+  accepted on columns and action fields and served on `ColumnDef` / `FieldDef`.
+  `options.extra_columns` makes `GET /options/:model` return extra scalar
+  source columns (e.g. `status`) on every option
+  (`FieldOptionsConfig.ExtraColumns`, `dynamic.Option.Extra`). JSON schema and
+  validators updated.
 - **Audit-column standard** (see `docs/audit-columns.md`). Every model now
   answers "when and who" for each change, declared in the manifest or not:
   `created_at`, `updated_at`, `deleted_at`, `created_by_id`, `updated_by_id`,

@@ -1,10 +1,12 @@
 package dynamic
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 
 	"github.com/asteby/metacore-kernel/manifest"
+	v3 "github.com/asteby/metacore-kernel/manifest/v3"
 	"github.com/asteby/metacore-kernel/modelbase"
 	kstrings "github.com/asteby/metacore-kernel/strings"
 )
@@ -99,6 +101,9 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			// Validation rides through so a consumer that derives the modal from
 			// table metadata still pre-flights regex/min/max/custom.
 			Validation: toModelbaseValidation(c.Validation),
+			// OptionFilter hides ineligible options of the relation picker; the
+			// SDK evaluates it over the extra columns /options returns.
+			OptionFilter: toOptionFilter(c.OptionFilter),
 		}
 		// Stage machine: when this column is the model's stage_field and the
 		// model declares stages, derive a `status` display + the option list
@@ -285,7 +290,60 @@ func toFieldOptionsConfig(in *manifest.DynamicOptionsDef) *modelbase.FieldOption
 		Label:       in.Label,
 		LabelRef:    in.LabelRef,
 		Description: in.Description,
+		// ExtraColumns makes /options return these Source columns on every
+		// option so the field's option_filter can test them client-side.
+		ExtraColumns: append([]string(nil), in.ExtraColumns...),
 	}
+}
+
+// toOptionFilter projects the manifest option_filter onto the served
+// modelbase.OptionFilter. Empty stays nil (the picker lists every option).
+func toOptionFilter(in v3.OptionFilter) modelbase.OptionFilter {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(modelbase.OptionFilter, 0, len(in))
+	for _, r := range in {
+		out = append(out, modelbase.OptionFilterRule{
+			Field:     r.Field,
+			Equals:    r.Equals,
+			NotEquals: r.NotEquals,
+			In:        append([]any(nil), r.In...),
+			NotIn:     append([]any(nil), r.NotIn...),
+		})
+	}
+	return out
+}
+
+// DeriveDocumentForms projects a model definition's guided document create flow
+// onto the served modelbase.DocumentForms (TableMetadata.document_forms). Nil
+// stays nil, so ordinary models keep their payload. Fields are projected by a
+// JSON round-trip: manifest.FieldDef and modelbase.FieldDef share their JSON
+// tags (the same contract that carries action fields to the SDK), so every
+// declared field property — pickers, line-items, option_filter — survives.
+// Hosts call it from their addon model definer's DefineTable, like
+// DeriveFormLayout.
+func DeriveDocumentForms(def manifest.ModelDefinition) *modelbase.DocumentForms {
+	if def.DocumentForms == nil {
+		return nil
+	}
+	raw, err := json.Marshal(def.DocumentForms)
+	if err != nil {
+		return nil
+	}
+	var out modelbase.DocumentForms
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	if len(out.Types) == 0 {
+		return nil
+	}
+	for i := range out.Types {
+		if out.Types[i].Fields == nil {
+			out.Types[i].Fields = []modelbase.FieldDef{}
+		}
+	}
+	return &out
 }
 
 // toVisibleWhen projects the legacy conditional-visibility carrier onto the
@@ -404,6 +462,8 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 			// Validation projects the write-time constraint so the SDK pre-flights
 			// the same regex/min/max/custom codes the kernel enforces on create.
 			Validation: toModelbaseValidation(c.Validation),
+			// OptionFilter hides ineligible options of the relation picker.
+			OptionFilter: toOptionFilter(c.OptionFilter),
 		})
 	}
 	return out

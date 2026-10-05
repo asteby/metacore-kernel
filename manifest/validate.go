@@ -363,6 +363,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 		if err := validateConstraints(md, colsByModel[md.ModelKey]); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
+		if err := validateDocumentForms(md.DocumentForms, colsByModel[md.ModelKey]); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
+		}
 		for ri, r := range md.Rules {
 			if r.Kind == "unique" {
 				if err := v3.ValidateUniqueRule(r.ErrorKey, r.Columns, r.Field, r.Where, r.Ref, r.Parent, r.Require, r.Sum, r.Max, r.OnMissingParent, r.Enforce, colsByModel[md.ModelKey]); err != nil {
@@ -1647,6 +1650,56 @@ func (m *Manifest) checkKernelRange(kernelVersion string) error {
 	}
 	if !constraint.Check(kv) {
 		return fmt.Errorf("manifest.kernel: host %s does not satisfy %s", kernelVersion, m.Kernel)
+	}
+	return nil
+}
+
+// validateDocumentForms enforces the structural contract of a model's guided
+// document create flow on the legacy plane (the v3 validator is richer; this
+// guards manifests that reach the host through v2): at least one type, unique
+// snake_case keys, a label per type, unique header-field keys, and a type_field
+// that names a column of the model. Nil is a no-op.
+func validateDocumentForms(df *DocumentFormsDef, cols map[string]struct{}) error {
+	if df == nil {
+		return nil
+	}
+	if df.TypeField != "" {
+		if _, ok := cols[df.TypeField]; !ok {
+			return fmt.Errorf("document_forms.type_field %q is not a column of the model", df.TypeField)
+		}
+	}
+	if len(df.Types) == 0 {
+		return fmt.Errorf("document_forms.types is empty")
+	}
+	seen := map[string]struct{}{}
+	for ti, t := range df.Types {
+		if !columnRe.MatchString(t.Key) {
+			return fmt.Errorf("document_forms.types[%d].key %q is invalid", ti, t.Key)
+		}
+		if _, dup := seen[t.Key]; dup {
+			return fmt.Errorf("document_forms.types[%d].key %q is duplicated", ti, t.Key)
+		}
+		seen[t.Key] = struct{}{}
+		if t.Label == "" {
+			return fmt.Errorf("document_forms.types[%d].label is empty", ti)
+		}
+		fk := map[string]struct{}{}
+		for fi, f := range t.Fields {
+			key := f.Key
+			if key == "" {
+				key = f.Name
+			}
+			if key == "" {
+				return fmt.Errorf("document_forms.types[%d].fields[%d].key is empty", ti, fi)
+			}
+			if _, dup := fk[key]; dup {
+				return fmt.Errorf("document_forms.types[%d].fields[%d].key %q is duplicated", ti, fi, key)
+			}
+			fk[key] = struct{}{}
+		}
+		if t.Lines != nil && t.Lines.PriceSource != "" && t.Lines.PriceSource != "sale" && t.Lines.PriceSource != "cost" {
+			return fmt.Errorf("document_forms.types[%d].lines.price_source %q is not one of sale|cost", ti, t.Lines.PriceSource)
+		}
 	}
 	return nil
 }

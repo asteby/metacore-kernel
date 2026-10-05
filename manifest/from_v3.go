@@ -564,6 +564,8 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// dependent picker (cascade filter_value). Rides the legacy
 				// ColumnDef so the SDK re-fetches on change.
 				DependsOn: c.DependsOn,
+				// OptionFilter hides ineligible options of this picker (SDK-side).
+				OptionFilter: c.OptionFilter,
 				// Scan opts the column's form input into camera barcode scanning;
 				// rides ColumnDef.Scan so DeriveFormFields carries it onto the
 				// served FieldDef and the SDK shows a scan-to-fill button.
@@ -627,6 +629,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 					Label:       d.Label,
 					LabelRef:    d.LabelRef,
 					Description: d.Description,
+					// ExtraColumns: scalar Source columns /options returns on each
+					// option so option_filter can test them.
+					ExtraColumns: append([]string(nil), d.ExtraColumns...),
 				}
 			}
 			// A base_path inside display_config is also projected onto the
@@ -679,6 +684,10 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		// grouping (collapsible sections or step wizard) onto the served metadata.
 		// Nil = a flat form (legacy). Pure UI.
 		def.FormLayout = mapFormLayout(m.FormLayout)
+		// DocumentForms rides through so the host serves the guided per-document
+		// create flow as table metadata (dynamic.DeriveDocumentForms). Nil = the
+		// generic create modal. Pure UI.
+		def.DocumentForms = mapDocumentForms(m.DocumentForms)
 		out = append(out, def)
 	}
 	return out
@@ -1244,6 +1253,39 @@ func mapImportSpec(in *v3.ImportSpec) *ImportSpecDef {
 	return out
 }
 
+// mapDocumentForms projects a v3 model's guided document create flow onto the
+// legacy carrier. Fields go through mapActionFields, so each type's fields get
+// the full action-field vocabulary (pickers, line-items, option_filter...). A
+// lines step disabled with `false` is dropped; Nil stays nil.
+func mapDocumentForms(df *v3.DocumentForms) *DocumentFormsDef {
+	if df == nil {
+		return nil
+	}
+	out := &DocumentFormsDef{TypeField: df.TypeField, LinesField: df.LinesField}
+	for _, t := range df.Types {
+		td := DocumentFormTypeDef{
+			Key:         t.Key,
+			Label:       t.Label,
+			Description: t.Description,
+			Icon:        t.Icon,
+			Value:       t.Value,
+			Fields:      mapActionFields(t.Fields),
+			Defaults:    t.Defaults,
+			Endpoint:    t.Endpoint,
+			SubmitLabel: t.SubmitLabel,
+		}
+		if td.Fields == nil {
+			td.Fields = []FieldDef{}
+		}
+		if t.Lines.Enabled() {
+			l := *t.Lines
+			td.Lines = &l
+		}
+		out.Types = append(out.Types, td)
+	}
+	return out
+}
+
 // mapFormLayout projects a v3 model's create/edit form grouping onto the legacy
 // carrier so the {mode, sections} block survives the v3 → host conversion and
 // lands on the served form metadata. Nil stays nil (a flat form). Section
@@ -1334,6 +1376,8 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 			// DependsOn forwards the cascade dependency so the SDK scopes +
 			// re-fetches this picker's options from the depended-on field's value.
 			DependsOn: f.DependsOn,
+			// OptionFilter forwards the option-hiding rules of this picker.
+			OptionFilter: f.OptionFilter,
 			// OptionsSource forwards the host-registered dynamic options provider
 			// key (e.g. "connector_repos") so the host materialises the field's
 			// choices from its registry at metadata-serve time.
@@ -1364,13 +1408,14 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 		}
 		if d := f.Options.Dynamic; d != nil {
 			fd.OptionsConfig = &DynamicOptionsDef{
-				Type:        "dynamic",
-				Source:      d.Source,
-				FilterBy:    d.FilterBy,
-				Value:       d.Value,
-				Label:       d.Label,
-				LabelRef:    d.LabelRef,
-				Description: d.Description,
+				Type:         "dynamic",
+				Source:       d.Source,
+				FilterBy:     d.FilterBy,
+				Value:        d.Value,
+				Label:        d.Label,
+				LabelRef:     d.LabelRef,
+				Description:  d.Description,
+				ExtraColumns: append([]string(nil), d.ExtraColumns...),
 			}
 		}
 		if f.Balance != nil {

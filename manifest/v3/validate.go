@@ -1510,6 +1510,8 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 		// (the schema pattern already enforces the shape). Mirrors the legacy
 		// validator so a manifest fails identically on both surfaces.
 		errs = append(errs, validateStageMachine(mi, mod, ownCols)...)
+		// Guided document create flow (document_forms): types, fields and lines.
+		errs = append(errs, validateDocumentForms(fmt.Sprintf("models[%d].document_forms", mi), mod.DocumentForms, ownCols, colsByModel)...)
 		// Row-locking strategy (guards): only ""/"row" are understood.
 		if mod.Locking != "" && mod.Locking != "row" {
 			errs = append(errs, fmt.Sprintf("models[%d].locking %q is not one of \"\"|\"row\"", mi, mod.Locking))
@@ -1581,6 +1583,9 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 				}
 				errs = append(errs, validateConstraintApproval(cw, con)...)
 			}
+			cwhere := fmt.Sprintf("models[%d].columns[%d]", mi, ci)
+			errs = append(errs, validateOptionFilter(cwhere, c.OptionFilter)...)
+			errs = append(errs, validateExtraColumns(cwhere, c.Options.Dynamic, colsByModel[c.Options.Dynamic.sourceOrEmpty()])...)
 			if c.Options.Len() == 0 {
 				continue
 			}
@@ -1738,6 +1743,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 				// Static-option cascade guards on action fields and their
 				// nested item_fields (line-items cells).
 				fw := fmt.Sprintf("contributions.actions[%d].fields[%d]", ai, fi)
+				errs = append(errs, validateActionFieldPickerMeta(fw, f, colsByModel)...)
 				if f.Options.Len() > 0 {
 					errs = append(errs, validateOptionWhen(fw, f.DependsOn, f.Options.Static)...)
 				}

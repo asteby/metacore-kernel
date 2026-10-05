@@ -961,6 +961,9 @@
             "$ref": "#/$defs/Sequence"
           }
         },
+        "document_forms": {
+          "$ref": "#/$defs/DocumentForms"
+        },
         "form_layout": {
           "$ref": "#/$defs/FormLayout"
         },
@@ -1217,6 +1220,9 @@
               "$ref": "#/$defs/DynamicOptions"
             }
           ]
+        },
+        "option_filter": {
+          "$ref": "#/$defs/OptionFilter"
         },
         "depends_on": {
           "type": "string",
@@ -2967,6 +2973,9 @@
             }
           ]
         },
+        "option_filter": {
+          "$ref": "#/$defs/OptionFilter"
+        },
         "depends_on": {
           "type": "string",
           "description": "Name of ANOTHER field in the same action form (a header field or a sibling item-field) whose current value supplies this picker's cascade filter_value (used with the 'options' object form). The host projects it onto FieldDef.depends_on so the SDK scopes + re-fetches the dynamic_select options when the depended-on field changes. Empty = no cascade."
@@ -3211,11 +3220,88 @@
         }
       }
     },
+    "OptionFilterRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field"],
+      "anyOf": [
+        {"required": ["equals"]},
+        {"required": ["not_equals"]},
+        {"required": ["in"]},
+        {"required": ["not_in"]}
+      ],
+      "description": "Hides options of a relation / dynamic picker. The SDK evaluates it client-side over the extra columns the /options endpoint returns (DynamicOptions.extra_columns) plus id/value/label/name/description/color/icon. Comparison is trimmed + case-insensitive; positive rules (equals, in) need the property to exist, negative rules (not_equals, not_in) keep an option that lacks it.",
+      "properties": {
+        "field": {"type": "string", "minLength": 1, "description": "Option property tested: an extra column (e.g. 'status') or id/value/label/name/description/color/icon."},
+        "equals": {"type": ["string", "number", "boolean"], "description": "Keep only options whose value equals this."},
+        "not_equals": {"type": ["string", "number", "boolean"], "description": "Hide options whose value equals this."},
+        "in": {"type": "array", "minItems": 1, "items": {"type": ["string", "number", "boolean"]}, "description": "Keep only options whose value is one of these."},
+        "not_in": {"type": "array", "minItems": 1, "items": {"type": ["string", "number", "boolean"]}, "description": "Hide options whose value is one of these."}
+      }
+    },
+    "OptionFilter": {
+      "description": "One OptionFilterRule, or a list of rules that must ALL pass (AND). Served to the SDK always as a list. Absent = the picker lists every option.",
+      "oneOf": [
+        {"$ref": "#/$defs/OptionFilterRule"},
+        {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/OptionFilterRule"}}
+      ]
+    },
+    "DocumentFormLines": {
+      "description": "Line-items step of a document type: true (all defaults), false (no lines step) or an options object.",
+      "oneOf": [
+        {"type": "boolean"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "field": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "description": "Payload field receiving the lines. Default: document_forms.lines_field, else 'lines'."},
+            "columns": {"type": "array", "items": {"type": "string", "minLength": 1}, "description": "Optional line editor columns ('discount', 'tax', 'unit'...)."},
+            "price_source": {"type": "string", "enum": ["sale", "cost"], "description": "'sale' (list price, default) or 'cost' (purchases)."},
+            "required": {"type": "boolean", "description": "At least one line is needed to save. Default true."},
+            "title": {"type": "string", "description": "Step heading (literal or i18n key). Default 'Renglones'."}
+          }
+        }
+      ]
+    },
+    "DocumentFormType": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "label", "fields"],
+      "description": "One selectable document type of a model's guided create flow (a card in the SDK).",
+      "properties": {
+        "key": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "description": "Identifier of the type within the model."},
+        "label": {"type": "string", "minLength": 1, "description": "Card title (literal or i18n key)."},
+        "description": {"type": "string"},
+        "icon": {"type": "string"},
+        "value": {"type": "string", "description": "Value the SDK writes into document_forms.type_field (e.g. 'E'). Default: key."},
+        "fields": {"type": "array", "items": {"$ref": "#/$defs/ActionField"}, "description": "Header fields of the type, same vocabulary as action fields."},
+        "defaults": {"type": "object", "description": "Fixed values that travel with this type's create payload."},
+        "lines": {"$ref": "#/$defs/DocumentFormLines"},
+        "endpoint": {"type": "string", "description": "Create endpoint override for this type. Default: the model's."},
+        "submit_label": {"type": "string", "description": "Final button text (literal or i18n key)."}
+      }
+    },
+    "DocumentForms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["types"],
+      "description": "Guided create flow of a document-like model: one card per document type, the type's own fields and an optional line-items step. Served as table metadata document_forms and rendered by the SDK instead of the generic create modal. Pure UI metadata; the write plane ignores it.",
+      "properties": {
+        "type_field": {"type": "string", "description": "Model column discriminating the document type; the SDK writes the picked type's value into it. Must be a column of the model."},
+        "lines_field": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "description": "Default payload field receiving the line items. Default 'lines'."},
+        "types": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/DocumentFormType"}}
+      }
+    },
     "DynamicOptions": {
       "type": "object",
       "additionalProperties": false,
       "description": "OBJECT form of a field/column 'options' block: a dependent-picker source declaration. Maps onto modelbase.FieldOptionsConfig so a dynamic_select scopes its candidates by a sibling field (depends_on) and resolves its label from a related model. Mutually exclusive with the static array form. Generic — the addon names its own tables; no domain model is baked into the kernel.",
       "properties": {
+        "extra_columns": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+          "description": "Additional scalar columns of 'source' that /api/options returns on every option (as sibling keys of id/value/label) so the field's option_filter can test them client-side, e.g. ['status']. Must not reuse id/value/label/name/description/image/color/icon."
+        },
         "source": {
           "type": "string",
           "description": "Real table the candidate rows come from (scope + computed columns). The host's OptionsConfigResolver queries it for /api/options."

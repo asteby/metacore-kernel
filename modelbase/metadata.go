@@ -76,6 +76,15 @@ type TableMetadata struct {
 	// names. Read-only by contract: the kernel stamps them and discards client
 	// values. See docs/audit-columns.md.
 	Audit *AuditMeta `json:"audit,omitempty"`
+
+	// DocumentForms declares the guided, per-document-type create flow (cards
+	// per type, fields per type, optional line-items step) the SDK renders
+	// instead of the generic create modal. Nil for ordinary models, so the field
+	// is omitted from their payload. Set by the model's DefineTable, by
+	// HasDocumentForms, or by the host from the manifest (see
+	// dynamic.DeriveDocumentForms). Pure UI metadata; the write plane ignores it.
+	// See docs/document-forms.md.
+	DocumentForms *DocumentForms `json:"document_forms,omitempty"`
 }
 
 // AuditMeta is the served description of a model's audit columns.
@@ -247,6 +256,11 @@ type ColumnDef struct {
 	// current organization's config — keeping fiscal/regional rules out of
 	// the kernel and out of the SDK.
 	Validation *ValidationRule `json:"validation,omitempty"`
+	// OptionFilter hides options of this column's relation / dynamic picker
+	// (e.g. cancelled invoices in a payments selector). The SDK applies it
+	// client-side over the extra columns the options endpoint returns, so the
+	// column's OptionsConfig must list them in ExtraColumns. Pure UI metadata.
+	OptionFilter OptionFilter `json:"option_filter,omitempty"`
 }
 
 // VisibleWhen is a single-sibling conditional-visibility predicate the SDK
@@ -419,6 +433,10 @@ type FieldDef struct {
 	LabelImage string `json:"label_image,omitempty"`
 	LabelIcon  string `json:"label_icon,omitempty"`
 	LabelColor string `json:"label_color,omitempty"`
+
+	// OptionFilter hides options of this field's relation / dynamic picker (see
+	// ColumnDef.OptionFilter). Mirrors manifest/v3 ActionField.option_filter.
+	OptionFilter OptionFilter `json:"option_filter,omitempty"`
 
 	// VisibleWhen declares CONDITIONAL VISIBILITY for this field in the
 	// create/edit modal: the SDK renders it only when the referenced sibling
