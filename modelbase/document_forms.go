@@ -66,6 +66,10 @@ type DocumentFormType struct {
 	// SubmitAction saves through a create-placed model action instead of the
 	// generic create. Empty = the generic create (or Endpoint).
 	SubmitAction string `json:"submit_action,omitempty"`
+	// CreateModel delegates the type's creation to another model's own create
+	// flow ("customers.Invoice"): the SDK's «Crear» navigates there with the
+	// create open instead of rendering a form. Empty = created here.
+	CreateModel string `json:"create_model,omitempty"`
 }
 
 // DocumentFormParty names the header field that picks the counterparty and

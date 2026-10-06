@@ -1236,6 +1236,9 @@ type DocumentFormTypeDef struct {
 	Sources      []v3.DocumentFormSource `json:"sources,omitempty"`
 	Preview      *v3.DocumentFormPreview `json:"preview,omitempty"`
 	SubmitAction string                  `json:"submit_action,omitempty"`
+	// CreateModel delegates the type's creation to another model's create flow
+	// (v3 DocumentFormType.CreateModel).
+	CreateModel string `json:"create_model,omitempty"`
 }
 
 // FormLayoutDef is the legacy carrier for the v3 FormLayout block. It rides the

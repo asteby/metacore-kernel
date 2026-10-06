@@ -84,6 +84,23 @@ The JSON schema (`manifest/v3/schema/manifest-v3.schema.json`,
 `docs/spec/v3/manifest-v3.schema.json`) defines `DocumentForms`,
 `DocumentFormType` and `DocumentFormLines`.
 
+### Create on another model (`create_model`)
+
+A listing whose rows are born in another addon (fiscal_mexico's
+`FiscalDocument` invoices are stamped from `customers.Invoice`) can still offer
+«Crear» on its filtered view by declaring a type that delegates the create:
+
+```json
+{ "key": "invoice", "label": "Factura", "value": "invoice", "fields": [],
+  "create_model": "customers.Invoice" }
+```
+
+The SDK scopes «Crear» to that type like any other (`type_field` + nav filter)
+and, instead of rendering a form, the host navigates to the target model's page
+with its own create open (its document form or record form). Model key,
+optionally addon-qualified. A delegated type declares `fields: []` and no
+`lines`, `endpoint`, `submit_action` or editor block (validation error).
+
 ### How the kernel serves it
 
 `GET /metadata/table/:model` returns `data.document_forms` when present.
