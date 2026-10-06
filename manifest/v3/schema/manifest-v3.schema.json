@@ -3322,7 +3322,12 @@
               "key": {"type": "string"}, "label": {"type": "string"}, "model": {"type": "string"}, "lines": {"type": "string"},
               "map": {"type": "object", "additionalProperties": {"type": "string"}},
               "header": {"type": "object", "additionalProperties": {"type": "string"}},
-              "link_field": {"type": "string"}, "option_filter": {"$ref": "#/$defs/OptionFilter"}, "requires_addon": {"type": "string"}
+              "link_field": {"type": "string"}, "option_filter": {"$ref": "#/$defs/OptionFilter"}, "requires_addon": {"type": "string"},
+              "qty_field": {"type": "string", "description": "Source line quantity column (default quantity)."},
+              "line_link_field": {"type": "string", "description": "Column of this document's line model holding the source line id: enables the pending quantity and the save check."},
+              "remaining_qty_field": {"type": "string", "description": "Source line column that already holds the pending quantity."},
+              "remaining_endpoint": {"type": "string", "description": "Addon endpoint serving the source lines with their pending quantity (?id=)."},
+              "exclude_states": {"type": "array", "items": {"type": "string"}, "description": "States of this document that do not consume the source (cancelled, void...)."}
             }
           }
         },

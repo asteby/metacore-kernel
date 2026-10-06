@@ -259,6 +259,13 @@ type Config struct {
 	// an unambiguous contract). See dynamic/relations.go.
 	RelationResolver RelationResolver
 
+	// DocumentLinesResolver returns the executable document_forms lines of a
+	// model (see DeriveDocumentLines). When set, Create/Update write the lines
+	// posted under a document type's lines field as rows of its one_to_many
+	// line model, and enforce the «crear desde» pending quantity of the type's
+	// sources. nil = the lines field is ignored, as before. See document_lines.go.
+	DocumentLinesResolver DocumentLinesResolver
+
 	// ExtensionResolver returns the model's 1:1 extension tables (manifest v3
 	// Model.extends) installed and enabled for the request's organization —
 	// host-wired from the addon registry like RelationResolver. When set, List
@@ -384,6 +391,7 @@ type Service struct {
 	selfOptions       bool
 	fileDeleter       FileDeleter
 	relations         RelationResolver
+	documentLines     DocumentLinesResolver
 	extensions        ExtensionResolver
 	accessPolicies    AccessPolicyResolver
 	colCache          liveColsCache // live table columns (tablecols.go)
@@ -476,6 +484,7 @@ func New(cfg Config) *Service {
 		selfOptions:       cfg.EnableSelfOptions,
 		fileDeleter:       cfg.FileDeleter,
 		relations:         cfg.RelationResolver,
+		documentLines:     cfg.DocumentLinesResolver,
 		extensions:        cfg.ExtensionResolver,
 		accessPolicies:    cfg.AccessPolicyResolver,
 
@@ -840,6 +849,14 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	stripAuditInput(input)
 	orig := cloneMap(input)
 
+	// Document lines (document_forms) are rows of the line model, not columns:
+	// out of the input here, checked against the source's pending quantity
+	// below and written once the document exists.
+	docLines, err := s.takeDocumentLines(ctx, model, input)
+	if err != nil {
+		return nil, err
+	}
+
 	s.scope.InjectOnCreate(input, user)
 	input[ColCreatedByID] = user.GetID()
 	input[ColUpdatedByID] = user.GetID()
@@ -869,6 +886,11 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 		return nil, err
 	}
 	if err := mergeValidation(s.validateWrite(ctx, model, tableName, user, input, nil, nil), extVE); err != nil {
+		return nil, err
+	}
+	// «Crear desde»: no line may take more than what its source line has
+	// pending (a rejected create burns no folio).
+	if err := s.checkDocumentLines(ctx, user, model, docLines, ""); err != nil {
 		return nil, err
 	}
 
@@ -962,6 +984,18 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 			return nil, err
 		}
 	}
+	// Document lines: same post-insert boundary. Written before the document's
+	// created event so its subscribers see the lines, and the document is
+	// re-read so the served totals include the line rollups.
+	if docLines != nil && len(docLines.rows) > 0 {
+		if written, err := s.writeDocumentLines(ctx, user, docLines, idStr); err != nil {
+			s.undoDocument(ctx, user, model, tableName, instance, idStr, docLines, written)
+			return nil, err
+		}
+		if err := s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance).First(instance, "id = ?", idStr).Error; err == nil {
+			after = toMap(instance)
+		}
+	}
 	if err := s.mergeExtensions(ctx, exts, []map[string]any{after}); err != nil {
 		return nil, err
 	}
@@ -1015,6 +1049,16 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	orig := cloneMap(input)
 	var pendingCE *ConstraintError
 	var pendingBefore map[string]any
+
+	// Document lines sent with the update replace the document's lines; the
+	// pending-quantity check leaves this document's own lines out.
+	docLines, err := s.takeDocumentLines(ctx, model, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.checkDocumentLines(ctx, user, model, docLines, id.String()); err != nil {
+		return nil, err
+	}
 
 	// core runs the load/evaluate/save against execDB. inTx reports whether it
 	// runs inside a caller-owned transaction (the row-locking path) — the save +
@@ -1227,6 +1271,16 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	if len(extIn) > 0 {
 		if err := s.upsertExtensions(ctx, s.db, exts, extIn, id.String(), user.GetOrganizationID()); err != nil {
 			return nil, err
+		}
+	}
+	// Document lines: replaced on the same boundary; the row is re-read so the
+	// served totals carry the line rollups.
+	if docLines != nil {
+		if err := s.replaceDocumentLines(ctx, user, docLines, id.String()); err != nil {
+			return nil, err
+		}
+		if err := s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance).First(instance, "id = ?", id).Error; err == nil {
+			after = toMap(instance)
 		}
 	}
 	if err := s.mergeExtensions(ctx, exts, []map[string]any{after}); err != nil {

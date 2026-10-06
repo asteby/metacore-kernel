@@ -100,6 +100,57 @@ Sources, in order:
 `metadata.NewLocalizedTableTransformer` translates the i18n keys of type labels,
 descriptions, submit labels, line step titles and field labels/options.
 
+## Crear desde
+
+A type's `sources[]` lists the documents it can be created from (the SDK's
+DocumentEditor «Cargar desde…» and the row action that opens the editor with a
+source preloaded). Each source copies the source lines (`lines`, a one_to_many
+relation of `model`) mapped by `map` (target key → source column), the header
+by `header`, and stores the source id in `link_field`.
+
+| Key | Meaning |
+|---|---|
+| `qty_field` | Source line quantity column (default `quantity`). |
+| `line_link_field` | Column of THIS document's line model that stores the source line id (e.g. `sales_order_item_id`). Turns on the pending quantity and the save check. |
+| `exclude_states` | States of this document that do not consume the source (`cancelled`, `void`…), read from its `stage_field` (or `state`/`status`). Needs `line_link_field`. |
+| `remaining_qty_field` | Source line column that already holds the pending quantity (kept by the source's addon). Wins over the computed one. |
+| `remaining_endpoint` | Addon-owned GET endpoint (`?id=<source id>`) serving the source lines with `remaining_quantity`; the SDK prefers it and the addon's handler validates the save (submit_action flows). |
+
+```json
+"sources": [{
+  "key": "sale", "label": "Venta", "model": "customers.SalesOrder", "lines": "items",
+  "map": { "product_id": "product_id", "unit_price": "unit_price", "discount": "discount" },
+  "header": { "customer_id": "customer_id" },
+  "link_field": "sales_order_id",
+  "line_link_field": "sales_order_item_id",
+  "exclude_states": ["cancelled", "void"]
+}]
+```
+
+Runtime (host wires `Config.DocumentLinesResolver` with
+`dynamic.DeriveDocumentLines(def, lookup)`):
+
+- **Lines are written.** The generic Create/Update take the type's lines field
+  (`lines.field` → `lines_field` → `lines`) out of the input and, when the model
+  declares a one_to_many relation with that name, create one row of its line
+  model per `kind: item` line (sections/notes are presentation only) through
+  the regular Create — formulas, rollups, hooks and events run. Update
+  replaces the lines when the field is sent. Before this, the lines were
+  silently dropped. If a line fails (e.g. its own validation), the document
+  and the lines already written are removed and the error is keyed
+  `<field>.<i>.<column>` (`i` = index in the posted array).
+- **Pending quantity.** `GET /dynamic/:model/source-lines?source=<key>&id=<source id>[&exclude=<doc id>]`
+  serves the source lines plus `source_line_id`, `source_quantity`,
+  `consumed_quantity` and `remaining_quantity` = source quantity − Σ quantity
+  of this model's live lines pointing at it (documents in `exclude_states`,
+  deleted documents and `exclude` don't count).
+- **Save check.** A Create/Update whose lines ask more than what is pending on
+  their source line (summed when a source line is split) answers 422 with
+  `errors["<field>.<i>.quantity"] = [{code: "exceeds_remaining", params:
+  {line, requested, remaining, source}, message: "Renglón 2: la cantidad 3
+  excede lo pendiente de «Venta» (2)…"}]`. Lines without `line_link_field`
+  (free lines) are not checked.
+
 ## `option_filter`
 
 Hides options of a relation / dynamic picker (for example cancelled invoices in

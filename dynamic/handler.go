@@ -74,6 +74,7 @@ func (h *Handler) MountWith(opts MountOpts) func(r fiber.Router) {
 		g.Get("/:model/unique-violations", h.uniqueViolations)
 		g.Get("/:model/export", h.exportData)
 		g.Get("/:model/export/template", h.exportTemplate)
+		g.Get("/:model/source-lines", h.sourceLines)
 		g.Post("/:model/import/validate", h.importValidate)
 
 		// Mutation paths — receive the extra middleware chain. Fiber v3
@@ -319,6 +320,21 @@ func (h *Handler) get(c fiber.Ctx) error {
 		return h.handleError(c, err)
 	}
 	return c.JSON(fiber.Map{"success": true, "data": record})
+}
+
+// sourceLines serves the lines of a «crear desde» source document with their
+// pending quantity: GET /dynamic/:model/source-lines?source=<key>&id=<source id>
+// [&exclude=<document being edited>]. See document_lines.go.
+func (h *Handler) sourceLines(c fiber.Ctx) error {
+	u := h.user(c)
+	if u == nil {
+		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
+	}
+	rows, err := h.service.SourceLines(c, c.Params("model"), u, c.Query("source"), c.Query("id"), c.Query("exclude"))
+	if err != nil {
+		return h.handleError(c, err)
+	}
+	return c.JSON(fiber.Map{"success": true, "data": rows})
 }
 
 // current serves the organization's row of a singleton model, materializing
