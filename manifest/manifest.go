@@ -759,6 +759,7 @@ type ActionDef struct {
 	// steps' values. Mutually exclusive with Fields. See manifest/v3.ActionStep.
 	Steps      []ActionStepDef `json:"steps,omitempty"`
 	Placement  string          `json:"placement,omitempty"`  // "row" (default), "table", or "create" — see v3.Action.Placement
+	Priority   string          `json:"priority,omitempty"`   // "primary", "secondary" or "" (auto) — see v3.Action.Priority
 	ModalWidth string          `json:"modalWidth,omitempty"` // explicit modal width (CSS length / px); SDK reads action.modalWidth
 
 	// Trigger declares how the action dispatches when invoked. Optional —
