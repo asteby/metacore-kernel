@@ -89,6 +89,19 @@ type DocumentFormSource struct {
 	LinkField     string            `json:"link_field,omitempty"`
 	OptionFilter  OptionFilter      `json:"option_filter,omitempty"`
 	RequiresAddon string            `json:"requires_addon,omitempty"`
+	// QtyField is the source line's quantity column. Empty = "quantity".
+	QtyField string `json:"qty_field,omitempty"`
+	// LineLinkField is the column of this document's line model holding the
+	// source line id; it turns on the pending-quantity read and the save check.
+	LineLinkField string `json:"line_link_field,omitempty"`
+	// RemainingQtyField is a source line column that already holds the
+	// pending quantity. Wins over the computed one.
+	RemainingQtyField string `json:"remaining_qty_field,omitempty"`
+	// RemainingEndpoint is an addon-owned endpoint serving the source lines
+	// with their pending quantity (`?id=`). The SDK prefers it.
+	RemainingEndpoint string `json:"remaining_endpoint,omitempty"`
+	// ExcludeStates are this document's states that do not consume the source.
+	ExcludeStates []string `json:"exclude_states,omitempty"`
 }
 
 // DocumentFormPreview is the row action called with analyze=true on the draft.

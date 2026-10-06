@@ -112,3 +112,50 @@ func TestValidateDocumentFormsRules(t *testing.T) {
 		}
 	}
 }
+
+// «Crear desde»: las columnas de cantidad pendiente del origen se validan al
+// publicar (un error de dedo dejaría el restante sin calcular en silencio).
+func TestValidateDocumentFormSources(t *testing.T) {
+	good := DocumentFormSource{
+		Key: "sale", Label: "Venta", Model: "customers.SalesOrder", Lines: "items",
+		LinkField: "sales_order_id", LineLinkField: "sales_order_item_id", QtyField: "quantity",
+		ExcludeStates: []string{"cancelled"},
+	}
+	if errs := validateDocumentFormSources("w", []DocumentFormSource{good}); len(errs) != 0 {
+		t.Fatalf("valid rejected: %v", errs)
+	}
+	cases := []struct {
+		name string
+		f    func(s *DocumentFormSource)
+		want string
+	}{
+		{"bad link", func(s *DocumentFormSource) { s.LineLinkField = "Sales Item" }, "line_link_field"},
+		{"bad remaining col", func(s *DocumentFormSource) { s.RemainingQtyField = "qty-left" }, "remaining_qty_field"},
+		{"relative endpoint", func(s *DocumentFormSource) { s.RemainingEndpoint = "data/x" }, "absolute path"},
+		{"exclude without link", func(s *DocumentFormSource) { s.LineLinkField = "" }, "needs line_link_field"},
+		{"no lines", func(s *DocumentFormSource) { s.Lines = "" }, "model and lines"},
+	}
+	for _, c := range cases {
+		s := good
+		c.f(&s)
+		errs := validateDocumentFormSources("w", []DocumentFormSource{s})
+		if len(errs) == 0 || !strings.Contains(strings.Join(errs, "|"), c.want) {
+			t.Errorf("%s: errs = %v, want %q", c.name, errs, c.want)
+		}
+	}
+	if errs := validateDocumentFormSources("w", []DocumentFormSource{good, good}); len(errs) == 0 {
+		t.Error("duplicated source key accepted")
+	}
+}
+
+// Los campos nuevos viajan en el round-trip JSON hasta la metadata servida.
+func TestDocumentFormSource_RemainingFieldsRoundTrip(t *testing.T) {
+	raw := `{"key":"sale","label":"Venta","model":"customers.SalesOrder","lines":"items","qty_field":"qty","line_link_field":"sales_order_item_id","remaining_qty_field":"pending","remaining_endpoint":"/x","exclude_states":["cancelled"]}`
+	var s DocumentFormSource
+	if err := json.Unmarshal([]byte(raw), &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.QtyField != "qty" || s.LineLinkField != "sales_order_item_id" || s.RemainingQtyField != "pending" || s.RemainingEndpoint != "/x" || len(s.ExcludeStates) != 1 {
+		t.Fatalf("fields lost: %+v", s)
+	}
+}

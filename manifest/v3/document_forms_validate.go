@@ -209,6 +209,7 @@ func validateDocumentForms(where string, df *DocumentForms, ownCols map[string]s
 				errs = append(errs, fmt.Sprintf("%s: the lines payload field %q collides with a header field of the same key", lw, target))
 			}
 		}
+		errs = append(errs, validateDocumentFormSources(tw, t.Sources)...)
 	}
 	return errs
 }
@@ -219,4 +220,45 @@ func (d *DynamicOptions) sourceOrEmpty() string {
 		return ""
 	}
 	return d.Source
+}
+
+// validateDocumentFormSources checks the «crear desde» origins of a type: keys
+// unique, the pending-quantity columns are identifiers, the addon endpoint is a
+// path and exclude_states only makes sense with line_link_field (the computed
+// pending quantity is the only one that reads this document's states).
+func validateDocumentFormSources(tw string, sources []DocumentFormSource) []string {
+	var errs []string
+	seen := map[string]struct{}{}
+	for si, src := range sources {
+		sw := fmt.Sprintf("%s.sources[%d]", tw, si)
+		if !documentFormKeyRe.MatchString(src.Key) {
+			errs = append(errs, fmt.Sprintf("%s.key %q is not a lowercase snake_case name", sw, src.Key))
+		} else if _, dup := seen[src.Key]; dup {
+			errs = append(errs, fmt.Sprintf("%s.key %q is duplicated", sw, src.Key))
+		}
+		seen[src.Key] = struct{}{}
+		if strings.TrimSpace(src.Model) == "" || strings.TrimSpace(src.Lines) == "" {
+			errs = append(errs, fmt.Sprintf("%s: model and lines are required", sw))
+		}
+		for name, col := range map[string]string{
+			"qty_field": src.QtyField, "line_link_field": src.LineLinkField,
+			"remaining_qty_field": src.RemainingQtyField, "link_field": src.LinkField,
+		} {
+			if col != "" && !documentFormKeyRe.MatchString(col) {
+				errs = append(errs, fmt.Sprintf("%s.%s %q is not a lowercase snake_case column", sw, name, col))
+			}
+		}
+		if src.RemainingEndpoint != "" && !strings.HasPrefix(src.RemainingEndpoint, "/") {
+			errs = append(errs, fmt.Sprintf("%s.remaining_endpoint %q must be an absolute path (/...)", sw, src.RemainingEndpoint))
+		}
+		if len(src.ExcludeStates) > 0 && src.LineLinkField == "" {
+			errs = append(errs, fmt.Sprintf("%s.exclude_states needs line_link_field (it filters the documents that consume the source)", sw))
+		}
+		for i, st := range src.ExcludeStates {
+			if strings.TrimSpace(st) == "" {
+				errs = append(errs, fmt.Sprintf("%s.exclude_states[%d] is empty", sw, i))
+			}
+		}
+	}
+	return errs
 }
