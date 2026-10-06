@@ -1,6 +1,7 @@
 package manifest_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/asteby/metacore-kernel/manifest"
@@ -208,5 +209,22 @@ func TestFromV3_Frontend(t *testing.T) {
 	}
 	if fe.Layout != "immersive" {
 		t.Errorf("Frontend.Layout = %q, want immersive", fe.Layout)
+	}
+}
+
+// priority rides from the v3 action onto the host ActionDef so the SDK can
+// split primary / secondary actions (row menu «Más…», document footer).
+func TestFromV3_ActionPriority(t *testing.T) {
+	raw := strings.Replace(richManifestJSON, `"placement": "create"`, `"placement": "create", "priority": "secondary"`, 1)
+	m, err := v3.Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("v3.Parse: %v", err)
+	}
+	got := map[string]string{}
+	for _, a := range manifest.FromV3(m).Actions["order"] {
+		got[a.Key] = a.Priority
+	}
+	if got["checkout"] != "secondary" || got["refund"] != "" {
+		t.Fatalf("priority not projected: %v", got)
 	}
 }

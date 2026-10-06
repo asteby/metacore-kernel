@@ -1950,6 +1950,19 @@ type Action struct {
 	// Hosts that don't understand a value fall back to "row".
 	Placement string `json:"placement,omitempty"`
 
+	// Priority ranks the action among the record's actions so the host keeps
+	// ONE prominent trigger and tucks the rest away:
+	//   "primary"   — the highlighted action of the row menu / document header
+	//                 (the host shows only one; the first declared wins).
+	//   "secondary" — share / print / email / send-to-chat style actions: the
+	//                 host moves them to the document's secondary bar (footer)
+	//                 and to a discreet «Más…» group in the row menu.
+	//   ""          — auto: the host classifies by convention (share, print,
+	//                 email, chat, download keys → secondary; the rest stay in
+	//                 the main menu).
+	// Hosts that don't understand it ignore it (no layout change).
+	Priority string `json:"priority,omitempty"`
+
 	// Fields declares a declarative form the host renders in the action modal
 	// before dispatching the handler. Optional — an action with no fields and
 	// no modal is a plain one-click action.

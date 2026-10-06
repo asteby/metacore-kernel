@@ -2842,6 +2842,14 @@
           ],
           "description": "Where the host surfaces the trigger: 'row' (per-row table action, default), 'table' (page toolbar button), or 'create' (toolbar button that replaces the generic create button for a custom create experience)."
         },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "primary",
+            "secondary"
+          ],
+          "description": "Rank among the record's actions: 'primary' is the single highlighted action of the row menu / document header; 'secondary' (share, print, email, send to chat) goes to the document's secondary bar and the row menu's «Más…» group. Omitted = classified by the host by convention."
+        },
         "fields": {
           "type": "array",
           "description": "Declarative form rendered in the action modal before dispatch.",

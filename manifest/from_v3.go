@@ -1106,6 +1106,7 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 			ConfirmMessage:   a.ConfirmMessage,
 			Modal:            a.Modal,
 			Placement:        a.Placement,
+			Priority:         a.Priority,
 			ModalWidth:       a.ModalWidth,
 			RequiresState:    a.RequiresState,
 			SupervisorPolicy: a.SupervisorPolicy,

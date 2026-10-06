@@ -480,6 +480,7 @@ type ActionDef struct {
 	Type           string      `json:"type,omitempty"`       // custom, link
 	LinkURL        string      `json:"linkUrl,omitempty"`    // URL pattern for type=link
 	Placement      string      `json:"placement,omitempty"`  // "row" (default), "table", or "create" — see manifest/v3.Action.Placement
+	Priority       string      `json:"priority,omitempty"`   // "primary", "secondary" or "" (auto) — see manifest/v3.Action.Priority. Must match manifest.ActionDef.Priority for the host→SDK round-trip.
 	ModalWidth     string      `json:"modalWidth,omitempty"` // explicit modal width (CSS length / px); SDK reads action.modalWidth. Must match manifest.ActionDef.ModalWidth so the host→SDK JSON round-trip preserves it.
 	Condition      interface{} `json:"condition,omitempty"`
 	Confirm        bool        `json:"confirm,omitempty"`
