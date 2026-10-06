@@ -17,6 +17,9 @@ var (
 	}
 )
 
+// createModelRe: a model key, optionally addon-qualified ("customers.Invoice").
+var createModelRe = regexp.MustCompile(`^([a-z][a-z0-9_]*\.)?[A-Za-z][A-Za-z0-9_]*$`)
+
 // kernelOwnedColumns are columns the kernel adds to every model, so a manifest
 // may name them without declaring them.
 var kernelOwnedColumns = map[string]bool{
@@ -210,6 +213,39 @@ func validateDocumentForms(where string, df *DocumentForms, ownCols map[string]s
 			}
 		}
 		errs = append(errs, validateDocumentFormSources(tw, t.Sources)...)
+		errs = append(errs, validateDocumentFormCreateModel(tw, t)...)
+	}
+	return errs
+}
+
+// validateDocumentFormCreateModel: a type delegated to another model's create
+// flow declares nothing that would be created HERE.
+func validateDocumentFormCreateModel(tw string, t DocumentFormType) []string {
+	if t.CreateModel == "" {
+		return nil
+	}
+	var errs []string
+	if !createModelRe.MatchString(t.CreateModel) {
+		errs = append(errs, fmt.Sprintf("%s.create_model %q is not a model key (Model or addon.Model)", tw, t.CreateModel))
+	}
+	var clash []string
+	if len(t.Fields) > 0 {
+		clash = append(clash, "fields")
+	}
+	if t.Lines.Enabled() {
+		clash = append(clash, "lines")
+	}
+	if t.Endpoint != "" {
+		clash = append(clash, "endpoint")
+	}
+	if t.SubmitAction != "" {
+		clash = append(clash, "submit_action")
+	}
+	if t.Layout != "" || t.Party != nil || len(t.Sources) > 0 || t.Preview != nil {
+		clash = append(clash, "the editor block (layout/party/sources/preview)")
+	}
+	if len(clash) > 0 {
+		errs = append(errs, fmt.Sprintf("%s.create_model delegates the create to %q: %s would never be used here", tw, t.CreateModel, strings.Join(clash, ", ")))
 	}
 	return errs
 }

@@ -3335,7 +3335,8 @@
           "type": "object", "additionalProperties": false, "required": ["action"],
           "properties": {"action": {"type": "string"}, "requires_addon": {"type": "string"}, "label": {"type": "string"}}
         },
-        "submit_action": {"type": "string", "description": "Save through this create-placed model action instead of the generic create."}
+        "submit_action": {"type": "string", "description": "Save through this create-placed model action instead of the generic create."},
+        "create_model": {"type": "string", "pattern": "^([a-z][a-z0-9_]*\\.)?[A-Za-z][A-Za-z0-9_]*$", "description": "Delegate this type's creation to another model's own create flow (model key, optionally addon-qualified, e.g. 'customers.Invoice'): 'Crear' opens that model's page with its create open. Declare fields: [] and no lines/endpoint/submit_action/editor block."}
       }
     },
     "DocumentForms": {

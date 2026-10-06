@@ -1280,6 +1280,7 @@ func mapDocumentForms(df *v3.DocumentForms) *DocumentFormsDef {
 			Sources:      t.Sources,
 			Preview:      t.Preview,
 			SubmitAction: t.SubmitAction,
+			CreateModel:  t.CreateModel,
 		}
 		if td.Fields == nil {
 			td.Fields = []FieldDef{}

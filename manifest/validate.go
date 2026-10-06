@@ -1700,6 +1700,9 @@ func validateDocumentForms(df *DocumentFormsDef, cols map[string]struct{}) error
 		if t.Lines != nil && t.Lines.PriceSource != "" && t.Lines.PriceSource != "sale" && t.Lines.PriceSource != "cost" {
 			return fmt.Errorf("document_forms.types[%d].lines.price_source %q is not one of sale|cost", ti, t.Lines.PriceSource)
 		}
+		if t.CreateModel != "" && (len(t.Fields) > 0 || t.Lines != nil || t.Endpoint != "" || t.SubmitAction != "") {
+			return fmt.Errorf("document_forms.types[%d].create_model %q delegates the create: fields/lines/endpoint/submit_action are not allowed", ti, t.CreateModel)
+		}
 	}
 	return nil
 }

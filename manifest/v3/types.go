@@ -3041,6 +3041,16 @@ type DocumentFormType struct {
 	// SubmitAction saves through a create-placed model action instead of the
 	// generic create (e.g. Payment → collect_multi_payment_create).
 	SubmitAction string `json:"submit_action,omitempty"`
+
+	// CreateModel delegates this type's creation to ANOTHER model's own create
+	// flow: «Crear» opens that model's page with its create (document form or
+	// record form) already open, instead of a form here. For a listing whose
+	// rows are born elsewhere — fiscal_mexico's FiscalDocument invoices are
+	// stamped from customers.Invoice — so the filtered view still offers
+	// «Crear» without duplicating the other addon's form. Model key, optionally
+	// addon-qualified ("customers.Invoice"). Excludes fields, lines, endpoint,
+	// submit_action and the editor block: nothing is created here.
+	CreateModel string `json:"create_model,omitempty"`
 }
 
 // DocumentFormParty: which header field picks the counterparty and what the
