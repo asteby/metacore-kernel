@@ -40,12 +40,14 @@ func dlDefs() map[string]manifest.ModelDefinition {
 			ModelKey: "DlInvoice", TableName: "dl_invoices", OrgScoped: true,
 			Columns: []manifest.ColumnDef{
 				{Name: "state", Type: "string"}, {Name: "kind", Type: "string"}, {Name: "order_id", Type: "uuid"},
+				{Name: "metodo", Type: "string"}, {Name: "forma", Type: "string"},
 			},
 			Relations: []manifest.RelationDef{{Name: "items", Kind: "one_to_many", Through: "DlInvoiceItem", ForeignKey: "invoice_id"}},
 			DocumentForms: &manifest.DocumentFormsDef{
 				TypeField: "kind", LinesField: "items",
 				Types: []manifest.DocumentFormTypeDef{{
 					Key: "invoice", Label: "Factura", Value: "I", Lines: &v3.DocumentFormLines{},
+					Fields: dlPaymentFields(),
 					Sources: []v3.DocumentFormSource{{
 						Key: "sale", Label: "Venta", Model: "DlOrder", Lines: "items",
 						LinkField: "order_id", LineLinkField: "order_item_id",

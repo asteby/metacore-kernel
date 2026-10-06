@@ -9,6 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **The server enforces static option `when` gates.** A select option gated
+  by a sibling field (`options[].when`, e.g. forma de pago «99» only
+  with método PPD and, with PPD, only «99») was filtered only by the SDK while
+  rendering. Now the kernel rejects with `invalid_option` (params `allowed` =
+  the options that apply) an option its `when` rules out for the current
+  sibling value: in action payloads (`validateActionPayload`) and in the
+  header of a `document_forms` type on Create/Update (dotted json-column keys
+  such as `fiscal_data.metodo_pago` are read flat or nested; an Update falls
+  back to the persisted row). `DocumentLinesType.Fields` carries the gated
+  fields, derived by `DeriveDocumentLines`.
+
 - **«Crear desde» para documentos con renglones en columna json** (see
   `docs/document-forms.md#crear-desde`). `DeriveDocumentLines` now derives a
   type whose lines field is a json/jsonb column of the model (no one_to_many
