@@ -342,6 +342,16 @@ func DeriveDocumentForms(def manifest.ModelDefinition) *modelbase.DocumentForms 
 		if out.Types[i].Fields == nil {
 			out.Types[i].Fields = []modelbase.FieldDef{}
 		}
+		// The manifest carrier spells a field's default `default`, the served
+		// FieldDef `defaultValue`: the JSON round trip above dropped it, so no
+		// document_forms field could declare one (a date `$today`, a select's
+		// preselected option). Same index: the round trip keeps field order.
+		src := def.DocumentForms.Types[i].Fields
+		for j := range out.Types[i].Fields {
+			if j < len(src) && out.Types[i].Fields[j].DefaultValue == nil && src[j].Default != nil {
+				out.Types[i].Fields[j].DefaultValue = src[j].Default
+			}
+		}
 	}
 	return &out
 }
