@@ -9,6 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`stages[].locked`: a record in a locked stage is read-only.** New opt-in
+  flag on a v3 stage (schema, `manifest.StageDef.Locked`, `FromV3`). With it,
+  `Service.Update` refuses (422 `record_locked`, per changed field) any change
+  to a row whose current stage is locked except the stage move itself, which
+  still has to be a declared transition; fields re-sent unchanged and audit
+  columns do not count. `Service.Delete` refuses deleting such a row.
+  `dynamic.CheckStageLock` / `CheckStageLockDelete` are exported so a host's
+  legacy update path enforces the same rule. Wasm `data_mutate` writes (the
+  addon's own actions) are not affected. Use case: a posted journal entry, a
+  stamped document. `is_final` alone keeps the record editable.
+
 - **«Crear desde» para documentos con renglones en columna json** (see
   `docs/document-forms.md#crear-desde`). `DeriveDocumentLines` now derives a
   type whose lines field is a json/jsonb column of the model (no one_to_many

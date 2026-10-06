@@ -2269,6 +2269,10 @@
         "is_final": {
           "type": "boolean",
           "description": "Marks a terminal stage (no outgoing transitions expected)."
+        },
+        "locked": {
+          "type": "boolean",
+          "description": "A record in this stage is read-only: an update may only move the stage along a declared transition, and a delete is rejected (422 record_locked). Opt-in; is_final alone keeps the record editable."
         }
       }
     },

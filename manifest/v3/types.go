@@ -790,6 +790,14 @@ type Stage struct {
 	Order int `json:"order,omitempty"`
 	// IsFinal marks a terminal stage (no outgoing transitions expected).
 	IsFinal bool `json:"is_final,omitempty"`
+	// Locked makes a record in this stage read-only: the kernel rejects an
+	// Update that changes any field other than the stage itself (which still
+	// has to follow a declared transition) and a Delete, with 422
+	// `record_locked`. For documents that must not change once issued — a
+	// posted journal entry, a stamped invoice. Writes from an action (wasm
+	// data_mutate) are not this gate's business. Opt-in: IsFinal alone keeps
+	// the record editable.
+	Locked bool `json:"locked,omitempty"`
 }
 
 // Transition is one allowed move between two stages of a stage machine. From

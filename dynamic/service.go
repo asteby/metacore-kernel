@@ -1081,6 +1081,12 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		// as `before`.
 		before = toMap(instance)
 
+		// A row in a `locked` stage (a posted journal entry) only accepts the
+		// stage move itself; everything else is refused 422 record_locked.
+		if err := CheckStageLock(sm, before, input); err != nil {
+			return err
+		}
+
 		// Stage machine: when the model declares one and this Update changes the
 		// stage_field, validate the move against the declared transitions BEFORE we
 		// persist anything (a disallowed move is rejected 422, never written).
@@ -1319,6 +1325,17 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 	hc := HookContext{Model: model, User: user, DB: s.db}
 	if err := s.hooks.runBeforeDelete(ctx, hc, id.String()); err != nil {
 		return err
+	}
+
+	// A row in a `locked` stage cannot be deleted (a posted journal entry).
+	if sm := s.resolveStageMachine(ctx, model); sm.active() {
+		row := map[string]any{}
+		loadDB := s.scope.ScopeQuery(s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance), user)
+		if err := loadDB.Where("id = ?", id).Take(&row).Error; err == nil {
+			if err := CheckStageLockDelete(sm, row); err != nil {
+				return err
+			}
+		}
 	}
 
 	// Cross-record rules that guard deletes (ref_state with enforce "always"):
