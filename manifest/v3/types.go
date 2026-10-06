@@ -3051,6 +3051,27 @@ type DocumentFormSource struct {
 	LinkField     string            `json:"link_field,omitempty"`
 	OptionFilter  json.RawMessage   `json:"option_filter,omitempty"`
 	RequiresAddon string            `json:"requires_addon,omitempty"`
+
+	// --- Cantidad pendiente (crear desde otro documento) -------------------
+	// QtyField is the source line's quantity column. Empty = "quantity".
+	QtyField string `json:"qty_field,omitempty"`
+	// LineLinkField is the column of THIS document's line model that stores
+	// the source line id (e.g. invoice_items.sales_order_item_id). With it the
+	// runtime serves the pending quantity per source line (source quantity −
+	// what live documents of this model already consumed) and rejects a save
+	// that exceeds it.
+	LineLinkField string `json:"line_link_field,omitempty"`
+	// RemainingQtyField is a source line column that already holds the pending
+	// quantity (kept by the source's addon). Wins over the computed one.
+	RemainingQtyField string `json:"remaining_qty_field,omitempty"`
+	// RemainingEndpoint is an addon-owned GET endpoint that serves the source
+	// lines with their pending quantity (`?id=<source id>`). The SDK reads it
+	// instead of the runtime's; the addon's own handler validates the save.
+	RemainingEndpoint string `json:"remaining_endpoint,omitempty"`
+	// ExcludeStates are states of THIS document that do not consume the
+	// source (e.g. cancelled, void). Read from the model's stage_field (or
+	// `state`).
+	ExcludeStates []string `json:"exclude_states,omitempty"`
 }
 
 // DocumentFormPreview: row action called with analyze=true on the draft.

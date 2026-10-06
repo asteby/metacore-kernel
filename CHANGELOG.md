@@ -9,6 +9,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **«Crear desde» con cantidad pendiente y renglones persistidos** (see
+  `docs/document-forms.md#crear-desde`). `document_forms.types[].sources[]`
+  gains `qty_field`, `line_link_field`, `remaining_qty_field`,
+  `remaining_endpoint` and `exclude_states` (schema + validation + served).
+  With the new `Config.DocumentLinesResolver` (host-wired, built by
+  `dynamic.DeriveDocumentLines`) the generic Create/Update write the lines a
+  document type posts under its lines field as rows of the one_to_many line
+  model (they used to be dropped), `GET /dynamic/:model/source-lines?source=&id=`
+  (`Service.SourceLines`) serves each source line with
+  `remaining_quantity` = source quantity − what live documents already
+  consumed, and a save over the pending quantity is rejected 422
+  (`exceeds_remaining`, message in Spanish) — no double invoicing by editing
+  the payload. Opt-in: no resolver = unchanged.
 - **`document_forms`, `option_filter` and `extra_columns`** (see
   `docs/document-forms.md`). The runtime-react SDK 47.x already renders a guided
   per-document-type create flow and hides relation-picker options client-side;
