@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Host.Navigation` resolves nav `condition` against the org's enabled
+  addons.** It called `navigation.Build` (no installed predicate), so a nav
+  group or item gated by `condition.addon_installed` was served to every org —
+  e.g. customers' «PPD sin complemento de pago» kept showing with
+  `fiscal_mexico` disabled. It now uses `navigation.BuildFor` with the set of
+  addons whose installation is `enabled`.
+
 ### Added
 
 - **«Crear desde» para documentos con renglones en columna json** (see
