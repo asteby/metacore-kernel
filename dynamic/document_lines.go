@@ -23,10 +23,19 @@ package dynamic
 //     whose quantity exceeds what is pending, so a double invoice cannot be
 //     forced by editing the payload. Update excludes the document's own lines.
 //
+// A document may also keep its lines in a json COLUMN of its own (a credit
+// note's `lines`, written by the addon's submit_action) instead of a line
+// model. Those lines are not rows to write — the field stays in the payload as
+// any other column — but they still consume their source: SourceLines reads
+// the live documents linked to the source (the source's `link_field`) and sums
+// the quantity of their json lines per `line_link_field`. The save check of
+// such documents is the addon's (its submit_action handler).
+//
 // Without a resolver (or for a model without document_forms) nothing changes.
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -55,6 +64,10 @@ type DocumentLinesType struct {
 	// LineModel / ForeignKey: the one_to_many relation named Field.
 	LineModel  string
 	ForeignKey string
+	// JSONColumn: the lines live in the document's own json column named
+	// Field (no line model). They are not written as rows; they only count
+	// as consumption of their sources.
+	JSONColumn bool
 	Sources    []DocumentLineSource
 }
 
@@ -72,6 +85,10 @@ type DocumentLineSource struct {
 	// LineLinkField is the column of this document's line model holding the
 	// source line id. Empty = no pending quantity and no save check.
 	LineLinkField string
+	// LinkField is the header column of this document holding the source
+	// document id (the manifest's `link_field`). Json-column lines find the
+	// documents that consume a source through it.
+	LinkField string
 	// RemainingQtyField, when set, is read from the source line instead of
 	// computing the consumption.
 	RemainingQtyField string
@@ -101,8 +118,11 @@ type DocumentLinesResolver func(ctx context.Context, model string) (*DocumentLin
 
 // DeriveDocumentLines builds the spec of def from its document_forms and
 // relations. lookup resolves another model of the registry by the name the
-// manifest uses (a source model). Types whose lines field is not a one_to_many
-// relation are skipped (their lines have nowhere to go). Nil when nothing applies.
+// manifest uses (a source model). A type whose lines field is a one_to_many
+// relation writes its lines as rows; one whose lines field is a json column of
+// the model keeps them there (JSONColumn) and only serves the pending quantity
+// of its sources. Any other type is skipped (its lines have nowhere to go).
+// Nil when nothing applies.
 func DeriveDocumentLines(def manifest.ModelDefinition, lookup func(model string) (manifest.ModelDefinition, bool)) *DocumentLinesSpec {
 	df := def.DocumentForms
 	if df == nil {
@@ -121,19 +141,22 @@ func DeriveDocumentLines(def manifest.ModelDefinition, lookup func(model string)
 		if field == "" {
 			field = "lines"
 		}
-		rel, ok := oneToMany(def.Relations, field)
-		if !ok {
-			continue
-		}
 		value := t.Value
 		if value == "" {
 			value = t.Key
 		}
-		dt := DocumentLinesType{Value: value, Field: field, LineModel: rel.Through, ForeignKey: rel.ForeignKey}
+		var dt DocumentLinesType
+		if rel, ok := oneToMany(def.Relations, field); ok {
+			dt = DocumentLinesType{Value: value, Field: field, LineModel: rel.Through, ForeignKey: rel.ForeignKey}
+		} else if jsonColumn(def.Columns, field) {
+			dt = DocumentLinesType{Value: value, Field: field, JSONColumn: true}
+		} else {
+			continue
+		}
 		for _, src := range t.Sources {
 			ls := DocumentLineSource{
 				Key: src.Key, Label: src.Label, Model: src.Model,
-				QtyField: src.QtyField, LineLinkField: src.LineLinkField,
+				QtyField: src.QtyField, LineLinkField: src.LineLinkField, LinkField: src.LinkField,
 				RemainingQtyField: src.RemainingQtyField,
 				ExcludeStates:     append([]string(nil), src.ExcludeStates...),
 				StateField:        stateField,
@@ -163,6 +186,17 @@ func oneToMany(rels []manifest.RelationDef, name string) (manifest.RelationDef, 
 		}
 	}
 	return manifest.RelationDef{}, false
+}
+
+// jsonColumn reports whether cols declare name as a json/jsonb column.
+func jsonColumn(cols []manifest.ColumnDef, name string) bool {
+	for _, c := range cols {
+		if c.Name == name {
+			t := strings.ToLower(strings.TrimSpace(c.Type))
+			return t == "json" || t == "jsonb"
+		}
+	}
+	return false
 }
 
 // stateColumnOf is the column a document's state is read from: the stage
@@ -241,7 +275,8 @@ func (s *Service) resolveDocumentLines(ctx context.Context, model string) *Docum
 func (s *Service) takeDocumentLines(ctx context.Context, model string, input map[string]any) (*documentLines, error) {
 	sp := s.resolveDocumentLines(ctx, model)
 	typ := sp.typeFor(input)
-	if typ == nil {
+	if typ == nil || typ.JSONColumn {
+		// Json-column lines are a column of the document: they stay in input.
 		return nil, nil
 	}
 	raw, ok := input[typ.Field]
@@ -312,12 +347,87 @@ func (s *Service) SourceLines(ctx context.Context, model string, user modelbase.
 	}
 	consumed := map[string]float64{}
 	if src.tracksRemaining() && src.RemainingQtyField == "" {
-		consumed, err = s.consumedBySource(ctx, user, model, typ, src, rowIDs(rows), excludeDocID)
+		if typ.JSONColumn {
+			consumed, err = s.consumedByJSONLines(ctx, user, model, typ, src, sourceID, excludeDocID)
+		} else {
+			consumed, err = s.consumedBySource(ctx, user, model, typ, src, rowIDs(rows), excludeDocID)
+		}
 		if err != nil {
 			return nil, err
 		}
 	}
 	return pendingLines(rows, consumed, *src), nil
+}
+
+// consumedByJSONLines sums, per source line, the quantity of the json lines of
+// this model's documents linked to sourceID (header column src.LinkField),
+// skipping the documents in an excluded state and excludeDocID. A source
+// without a safe link_field cannot be traced: nothing is consumed.
+func (s *Service) consumedByJSONLines(ctx context.Context, user modelbase.AuthUser, model string, typ *DocumentLinesType, src *DocumentLineSource, sourceID, excludeDocID string) (map[string]float64, error) {
+	if src.LinkField == "" || !isSafeIdent(src.LinkField) {
+		return map[string]float64{}, nil
+	}
+	docs, err := s.fetchRows(ctx, user, model, src.LinkField, []any{sourceID}, false)
+	if err != nil {
+		return nil, err
+	}
+	return sumJSONLines(docs, typ.Field, *src, excludeDocID), nil
+}
+
+// sumJSONLines adds the quantity of the json lines of docs per source line.
+func sumJSONLines(docs []map[string]any, field string, src DocumentLineSource, excludeDocID string) map[string]float64 {
+	skip := map[string]struct{}{}
+	for _, st := range src.ExcludeStates {
+		skip[st] = struct{}{}
+	}
+	out := map[string]float64{}
+	for _, d := range docs {
+		if excludeDocID != "" && fmt.Sprint(d["id"]) == excludeDocID {
+			continue
+		}
+		if src.StateField != "" && d[src.StateField] != nil {
+			if _, excluded := skip[fmt.Sprint(d[src.StateField])]; excluded {
+				continue
+			}
+		}
+		for _, l := range jsonLineRows(d[field]) {
+			link := linkValue(l, src.LineLinkField)
+			if link == "" {
+				continue
+			}
+			out[link] += toFloat(l["quantity"])
+		}
+	}
+	return out
+}
+
+// jsonLineRows decodes a json lines cell (array, JSON text or raw bytes) into
+// its objects. Anything unreadable is no lines.
+func jsonLineRows(v any) []map[string]any {
+	var raw []byte
+	switch t := v.(type) {
+	case nil:
+		return nil
+	case string:
+		raw = []byte(t)
+	case []byte:
+		raw = t
+	default:
+		b, err := json.Marshal(t)
+		if err != nil {
+			return nil
+		}
+		raw = b
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		// A json string holding the array (double-encoded) is still lines.
+		var inner string
+		if json.Unmarshal(raw, &inner) != nil || json.Unmarshal([]byte(inner), &rows) != nil {
+			return nil
+		}
+	}
+	return rows
 }
 
 // pendingLines annotates source line rows with their pending quantity.
@@ -379,6 +489,9 @@ func sumConsumed(lines []map[string]any, headerState map[string]string, src Docu
 func (s *Service) consumedBySource(ctx context.Context, user modelbase.AuthUser, model string, typ *DocumentLinesType, src *DocumentLineSource, sourceLineIDs []any, excludeDocID string) (map[string]float64, error) {
 	if len(sourceLineIDs) == 0 {
 		return map[string]float64{}, nil
+	}
+	if typ.JSONColumn {
+		return nil, fmt.Errorf("%w: %s keeps its lines in a json column; use consumedByJSONLines", ErrInvalidInput, model)
 	}
 	lines, err := s.fetchRows(ctx, user, typ.LineModel, src.LineLinkField, sourceLineIDs, false)
 	if err != nil {
