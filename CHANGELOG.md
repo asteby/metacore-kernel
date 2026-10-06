@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Host.Navigation` resolves nav `condition` against the org's enabled
+  addons.** It called `navigation.Build` (no installed predicate), so a nav
+  group or item gated by `condition.addon_installed` was served to every org —
+  e.g. customers' «PPD sin complemento de pago» kept showing with
+  `fiscal_mexico` disabled. It now uses `navigation.BuildFor` with the set of
+  addons whose installation is `enabled`.
+
 ### Added
 
 - **`stages[].locked`: a record in a locked stage is read-only.** New opt-in
@@ -19,6 +28,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   legacy update path enforces the same rule. Wasm `data_mutate` writes (the
   addon's own actions) are not affected. Use case: a posted journal entry, a
   stamped document. `is_final` alone keeps the record editable.
+
+- **The server enforces static option `when` gates.** A select option gated
+  by a sibling field (`options[].when`, e.g. forma de pago «99» only
+  with método PPD and, with PPD, only «99») was filtered only by the SDK while
+  rendering. Now the kernel rejects with `invalid_option` (params `allowed` =
+  the options that apply) an option its `when` rules out for the current
+  sibling value: in action payloads (`validateActionPayload`) and in the
+  header of a `document_forms` type on Create/Update (dotted json-column keys
+  such as `fiscal_data.metodo_pago` are read flat or nested; an Update falls
+  back to the persisted row). `DocumentLinesType.Fields` carries the gated
+  fields, derived by `DeriveDocumentLines`.
 
 - **«Crear desde» para documentos con renglones en columna json** (see
   `docs/document-forms.md#crear-desde`). `DeriveDocumentLines` now derives a

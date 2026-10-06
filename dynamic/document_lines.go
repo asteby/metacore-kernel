@@ -69,6 +69,9 @@ type DocumentLinesType struct {
 	// as consumption of their sources.
 	JSONColumn bool
 	Sources    []DocumentLineSource
+	// Fields are the header fields of the type whose static options carry a
+	// `when`: the save re-checks them (option_when.go).
+	Fields []manifest.FieldDef
 }
 
 // DocumentLineSource is one «crear desde» origin with its pending-quantity rule.
@@ -153,6 +156,7 @@ func DeriveDocumentLines(def manifest.ModelDefinition, lookup func(model string)
 		} else {
 			continue
 		}
+		dt.Fields = optionWhenFields(t.Fields)
 		for _, src := range t.Sources {
 			ls := DocumentLineSource{
 				Key: src.Key, Label: src.Label, Model: src.Model,
