@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **«Crear desde» para documentos con renglones en columna json** (see
+  `docs/document-forms.md#crear-desde`). `DeriveDocumentLines` now derives a
+  type whose lines field is a json/jsonb column of the model (no one_to_many
+  line model, e.g. a credit note written by its addon's `submit_action`):
+  the lines stay in the payload as a column and `SourceLines` computes the
+  pending quantity from the live documents linked by the source's
+  `link_field`, summing their json lines per `line_link_field`. Before, such
+  types were skipped and `source-lines` answered 404, so the editor preloaded
+  the whole source instead of what was left.
+
 - **«Crear desde» con cantidad pendiente y renglones persistidos** (see
   `docs/document-forms.md#crear-desde`). `document_forms.types[].sources[]`
   gains `qty_field`, `line_link_field`, `remaining_qty_field`,

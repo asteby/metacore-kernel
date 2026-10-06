@@ -167,6 +167,21 @@ Runtime (host wires `Config.DocumentLinesResolver` with
   {line, requested, remaining, source}, message: "Renglón 2: la cantidad 3
   excede lo pendiente de «Venta» (2)…"}]`. Lines without `line_link_field`
   (free lines) are not checked.
+- **Json-column lines.** A document that keeps its lines in a json column of
+  its own (a credit note's `lines`, written by the addon's `submit_action`)
+  has no line model: its lines field is left in the payload as a column, but
+  `source-lines` still serves the pending quantity. The consumption is read
+  from this model's live documents whose `link_field` holds the source id,
+  summing the `quantity` of their json lines per `line_link_field`
+  (`exclude_states` and `exclude` apply). The save check is the addon's.
+
+```json
+"sources": [{
+  "key": "invoice", "label": "Factura", "model": "customers.Invoice", "lines": "items",
+  "link_field": "invoice_id", "line_link_field": "invoice_item_id",
+  "exclude_states": ["cancelled"]
+}]
+```
 
 ## `option_filter`
 

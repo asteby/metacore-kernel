@@ -54,6 +54,25 @@ func dlDefs() map[string]manifest.ModelDefinition {
 				}},
 			},
 		},
+		// Nota de crédito: sus renglones viven en su propia columna json
+		// (los escribe la acción del addon), no en un modelo de renglones.
+		"DlCreditNote": {
+			ModelKey: "DlCreditNote", TableName: "dl_credit_notes", OrgScoped: true,
+			Columns: []manifest.ColumnDef{
+				{Name: "state", Type: "string"}, {Name: "order_id", Type: "uuid"}, {Name: "lines", Type: "json"},
+			},
+			DocumentForms: &manifest.DocumentFormsDef{
+				LinesField: "lines",
+				Types: []manifest.DocumentFormTypeDef{{
+					Key: "credit_note", Label: "Nota de crédito", Lines: &v3.DocumentFormLines{Kind: "credit"},
+					Sources: []v3.DocumentFormSource{{
+						Key: "sale", Label: "Venta", Model: "DlOrder", Lines: "items",
+						LinkField: "order_id", LineLinkField: "order_item_id",
+						ExcludeStates: []string{"cancelled"},
+					}},
+				}},
+			},
+		},
 		"DlInvoiceItem": {
 			ModelKey: "DlInvoiceItem", TableName: "dl_invoice_items", OrgScoped: true,
 			Columns: []manifest.ColumnDef{
@@ -400,5 +419,90 @@ func TestCreate_LineFailureUndoesTheDocument(t *testing.T) {
 	db.Table("dl_invoice_items").Where("invoice_id = ?", in["id"]).Count(&lines)
 	if docs != 0 || lines != 0 {
 		t.Fatalf("left behind: %d invoices, %d lines", docs, lines)
+	}
+}
+
+// Retest Pitsline r5: la nota de crédito precarga lo RESTANTE por acreditar de
+// la factura aunque sus renglones vivan en una columna json (no hay modelo de
+// renglones): el consumo se lee de las notas vivas enlazadas por link_field.
+func TestDeriveDocumentLines_JSONColumnLines(t *testing.T) {
+	defs := dlDefs()
+	lookup := func(m string) (manifest.ModelDefinition, bool) { d, ok := defs[m]; return d, ok }
+	sp := DeriveDocumentLines(defs["DlCreditNote"], lookup)
+	if sp == nil || len(sp.Types) != 1 {
+		t.Fatalf("spec = %+v", sp)
+	}
+	ty := sp.Types[0]
+	if !ty.JSONColumn || ty.LineModel != "" || ty.Field != "lines" {
+		t.Fatalf("type = %+v", ty)
+	}
+	src := ty.Sources[0]
+	if src.LinkField != "order_id" || src.LinesModel != "DlOrderItem" || !src.tracksRemaining() || src.StateField != "state" {
+		t.Fatalf("source = %+v", src)
+	}
+	// Una columna de texto con el nombre del campo no es una columna de renglones.
+	d := defs["DlCreditNote"]
+	d.Columns = []manifest.ColumnDef{{Name: "state", Type: "string"}, {Name: "lines", Type: "text"}}
+	if DeriveDocumentLines(d, lookup) != nil {
+		t.Fatal("a non-json lines column must not derive a spec")
+	}
+}
+
+func TestSumJSONLines_PerSourceLine(t *testing.T) {
+	src := DocumentLineSource{LineLinkField: "order_item_id", StateField: "state", ExcludeStates: []string{"cancelled"}}
+	docs := []map[string]any{
+		{"id": "n1", "state": "stamped", "lines": `[{"order_item_id":"a","quantity":2},{"order_item_id":"b","quantity":1}]`},
+		{"id": "n2", "state": "draft", "lines": []any{map[string]any{"order_item_id": "a", "quantity": "1"}}},
+		{"id": "n3", "state": "cancelled", "lines": `[{"order_item_id":"a","quantity":5}]`},
+		{"id": "n4", "state": "draft", "lines": `"[{\"order_item_id\":\"b\",\"quantity\":2}]"`}, // doble codificado
+		{"id": "n5", "state": "draft", "lines": `[{"quantity":9}]`},                                         // sin vínculo: no cuenta
+		{"id": "n6", "state": "draft", "lines": nil},
+	}
+	got := sumJSONLines(docs, "lines", src, "")
+	if got["a"] != 3 || got["b"] != 3 || len(got) != 2 {
+		t.Fatalf("consumed = %v", got)
+	}
+	if c := sumJSONLines(docs, "lines", src, "n1"); c["a"] != 1 || c["b"] != 2 {
+		t.Fatalf("consumed excluding n1 = %v", c)
+	}
+}
+
+func TestSourceLines_JSONColumnDocumentsConsume(t *testing.T) {
+	svc, db := newDocLinesService(t, true)
+	user := newUser(uuid.New())
+	ctx := context.Background()
+	order, item := seedOrder(t, svc, user)
+	other, _ := seedOrder(t, svc, user)
+
+	rows, err := svc.SourceLines(ctx, "DlCreditNote", user, "sale", order, "")
+	if err != nil || len(rows) != 1 || rows[0]["remaining_quantity"] != 5.0 {
+		t.Fatalf("before crediting: %v %v", rows, err)
+	}
+	note := func(orderID, state string, qty float64) string {
+		id := uuid.NewString()
+		lines := fmt.Sprintf(`[{"order_item_id":%q,"quantity":%v}]`, item, qty)
+		if _, err := svc.Create(ctx, "DlCreditNote", user, map[string]any{"id": id, "state": state, "order_id": orderID, "lines": lines}); err != nil {
+			t.Fatalf("credit note: %v", err)
+		}
+		return id
+	}
+	first := note(order, "stamped", 2)
+	note(order, "cancelled", 3) // una cancelada no consume
+	note(other, "draft", 1)     // otra venta: no es de este origen
+
+	// Las líneas json se quedan en la columna (no se escriben como filas).
+	var stored []map[string]any
+	db.Raw(`SELECT lines FROM dl_credit_notes WHERE id = ?`, first).Scan(&stored)
+	if len(stored) != 1 || !strings.Contains(fmt.Sprint(stored[0]["lines"]), item) {
+		t.Fatalf("json lines not kept on the document: %v", stored)
+	}
+
+	rows, err = svc.SourceLines(ctx, "DlCreditNote", user, "sale", order, "")
+	if err != nil || len(rows) != 1 || rows[0]["remaining_quantity"] != 3.0 || rows[0]["consumed_quantity"] != 2.0 {
+		t.Fatalf("after crediting 2: %v %v", rows, err)
+	}
+	rows, err = svc.SourceLines(ctx, "DlCreditNote", user, "sale", order, first)
+	if err != nil || rows[0]["remaining_quantity"] != 5.0 {
+		t.Fatalf("editing the first note: %v %v", rows, err)
 	}
 }
