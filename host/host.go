@@ -100,7 +100,9 @@ func (h *Host) Navigation(orgID uuid.UUID, core []navigation.Group) ([]navigatio
 		return nil, err
 	}
 	var contribs []navigation.Contribution
+	enabled := make(map[string]bool, len(installs))
 	for _, inst := range installs {
+		enabled[inst.AddonKey] = true
 		lc, ok := h.Lifecycles.Get(inst.AddonKey)
 		if !ok {
 			continue
@@ -110,7 +112,11 @@ func (h *Host) Navigation(orgID uuid.UUID, core []navigation.Group) ([]navigatio
 			Groups:   lc.Manifest().Navigation,
 		})
 	}
-	return navigation.Build(core, contribs), nil
+	// Las entradas con `condition` (addon_installed: fiscal_mexico en el menú
+	// de Facturas de customers, p. ej.) se resuelven contra los addons
+	// HABILITADOS de la org: con Build (installed nil) se servían siempre, y un
+	// addon apagado seguía dejando sus entradas en el menú de otro.
+	return navigation.BuildFor(core, contribs, func(key string) bool { return enabled[key] }), nil
 }
 
 // InstalledManifests returns manifests of every enabled addon for an org —
