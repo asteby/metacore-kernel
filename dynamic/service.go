@@ -888,6 +888,10 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	if err := mergeValidation(s.validateWrite(ctx, model, tableName, user, input, nil, nil), extVE); err != nil {
 		return nil, err
 	}
+	// document_forms: an option gated by a sibling (`when`) must apply.
+	if ve := s.checkDocumentFormFields(ctx, model, input, nil); ve != nil {
+		return nil, ve
+	}
 	// «Crear desde»: no line may take more than what its source line has
 	// pending (a rejected create burns no folio).
 	if err := s.checkDocumentLines(ctx, user, model, docLines, ""); err != nil {
@@ -1080,6 +1084,12 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		// can mutate `instance` — the canonical event needs the pre-mutation row
 		// as `before`.
 		before = toMap(instance)
+
+		// document_forms: an option gated by a sibling (`when`) must apply to
+		// the row as it will be (input over the persisted values).
+		if ve := s.checkDocumentFormFields(ctx, model, input, before); ve != nil {
+			return ve
+		}
 
 		// Stage machine: when the model declares one and this Update changes the
 		// stage_field, validate the move against the declared transitions BEFORE we

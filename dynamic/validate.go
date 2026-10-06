@@ -341,6 +341,9 @@ func validateFieldList(s *Service, ve *ValidationError, fields []manifest.FieldD
 		for _, iss := range s.checkSpec(raw, specFromField(f)) {
 			ve.add(path, iss.Code, iss.Params)
 		}
+		// An option of the catalog that its `when` rules out for the current
+		// sibling value (e.g. «99» with method PUE).
+		checkOptionWhen(ve, []manifest.FieldDef{f}, payload, nil, prefix)
 	}
 }
 
