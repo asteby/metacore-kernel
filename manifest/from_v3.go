@@ -888,6 +888,7 @@ func mapModelStages(in []v3.Stage) []StageDef {
 			Color:   s.Color,
 			Order:   s.Order,
 			IsFinal: s.IsFinal,
+			Locked:  s.Locked,
 		})
 	}
 	return out

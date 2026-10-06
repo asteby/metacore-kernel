@@ -354,3 +354,68 @@ func (s *Service) runTransitionHooks(ctx context.Context, model string, user mod
 	}
 	return nil
 }
+
+// CodeRecordLocked is the validation code of a write refused because the row
+// sits in a `locked` stage (manifest v3 Stage.Locked).
+const CodeRecordLocked = "record_locked"
+
+// LockedAt reports whether stage is declared `locked` on this machine.
+func (sm *StageMachine) LockedAt(stage string) bool {
+	if !sm.active() || stage == "" {
+		return false
+	}
+	for _, s := range sm.Stages {
+		if s.Key == stage {
+			return s.Locked
+		}
+	}
+	return false
+}
+
+// CheckStageLock refuses an update of a row whose CURRENT stage is `locked`
+// (a posted journal entry, a stamped document) unless the only change is the
+// stage itself — that move is then validated as a transition as usual. Fields
+// the caller re-sends unchanged (an edit form posts every field back) and the
+// runtime-owned audit columns do not count as changes. A nil machine or an
+// unlocked stage is a no-op. Exported so a host's legacy update path enforces
+// the same rule as Service.Update.
+func CheckStageLock(sm *StageMachine, before, input map[string]any) error {
+	if sm == nil || before == nil {
+		return nil
+	}
+	from := StageValue(before[sm.Field])
+	if !sm.LockedAt(from) {
+		return nil
+	}
+	ve := &ValidationError{}
+	for key, raw := range input {
+		if key == sm.Field || key == "id" {
+			continue
+		}
+		if _, managed := managedColumns[key]; managed {
+			continue
+		}
+		if unchangedFromPersisted(raw, before, key) {
+			continue
+		}
+		ve.add(key, CodeRecordLocked, map[string]any{"stage": from})
+	}
+	if ve.Empty() {
+		return nil
+	}
+	return ve
+}
+
+// CheckStageLockDelete refuses deleting a row whose current stage is `locked`.
+func CheckStageLockDelete(sm *StageMachine, before map[string]any) error {
+	if sm == nil || before == nil {
+		return nil
+	}
+	from := StageValue(before[sm.Field])
+	if !sm.LockedAt(from) {
+		return nil
+	}
+	ve := &ValidationError{}
+	ve.add(sm.Field, CodeRecordLocked, map[string]any{"stage": from})
+	return ve
+}

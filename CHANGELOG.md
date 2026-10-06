@@ -18,6 +18,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`stages[].locked`: a record in a locked stage is read-only.** New opt-in
+  flag on a v3 stage (schema, `manifest.StageDef.Locked`, `FromV3`). With it,
+  `Service.Update` refuses (422 `record_locked`, per changed field) any change
+  to a row whose current stage is locked except the stage move itself, which
+  still has to be a declared transition; fields re-sent unchanged and audit
+  columns do not count. `Service.Delete` refuses deleting such a row.
+  `dynamic.CheckStageLock` / `CheckStageLockDelete` are exported so a host's
+  legacy update path enforces the same rule. Wasm `data_mutate` writes (the
+  addon's own actions) are not affected. Use case: a posted journal entry, a
+  stamped document. `is_final` alone keeps the record editable.
+
 - **The server enforces static option `when` gates.** A select option gated
   by a sibling field (`options[].when`, e.g. forma de pago «99» only
   with método PPD and, with PPD, only «99») was filtered only by the SDK while

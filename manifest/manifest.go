@@ -1281,6 +1281,8 @@ type StageDef struct {
 	Color   string `json:"color,omitempty"`
 	Order   int    `json:"order,omitempty"`
 	IsFinal bool   `json:"isFinal,omitempty"`
+	// Locked: a record in this stage is read-only (v3 Stage.Locked).
+	Locked bool `json:"locked,omitempty"`
 }
 
 // TransitionDef is the host/runtime projection of a v3 Transition: one allowed
