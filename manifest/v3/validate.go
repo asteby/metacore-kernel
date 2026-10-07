@@ -1653,6 +1653,10 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 
 	// Published option catalogs (provides_options[]).
 	errs = append(errs, validateProvidesOptions(&m, colsByModel)...)
+	// Picker presentation (models[].option_display) and contributed metrics
+	// (option_metrics[]).
+	errs = append(errs, validateOptionDisplays(&m, colsByModel)...)
+	errs = append(errs, validateOptionMetrics(&m, colsByModel)...)
 	// Provided capability contracts + capability-typed handlers.
 	errs = append(errs, validateCapabilities(&m)...)
 	// Item-master primitives: 1:1 extension tables, searchable columns and

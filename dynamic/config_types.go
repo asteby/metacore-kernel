@@ -38,6 +38,10 @@ type Option struct {
 	Color       any `json:"color,omitempty"`
 	Icon        any `json:"icon,omitempty"`
 
+	// Display is the resolved option_display of the Source model (title,
+	// subtitle, image, trailing metrics, badges). Nil when none is declared.
+	Display *OptionDisplayValue `json:"display,omitempty"`
+
 	// Extra holds the additional scalar columns requested through
 	// FieldOptionsConfig.ExtraColumns. They are serialized as SIBLING keys of
 	// id/value/label (see MarshalJSON), never under "extra", because that is
@@ -88,5 +92,5 @@ func (o Option) MarshalJSON() ([]byte, error) {
 // with one of these names is ignored.
 var reservedOptionKeys = map[string]bool{
 	"id": true, "value": true, "label": true, "name": true, "description": true,
-	"image": true, "color": true, "icon": true,
+	"image": true, "color": true, "icon": true, "display": true,
 }

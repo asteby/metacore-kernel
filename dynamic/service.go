@@ -275,6 +275,14 @@ type Config struct {
 	// row. nil = no extensions (see extensions.go).
 	ExtensionResolver ExtensionResolver
 
+	// OptionDisplayResolver returns the declarative option display of a model
+	// (v3 models[].option_display) and the metrics contributed to it by the
+	// org's enabled addons (v3 option_metrics[]). When set, Service.Options
+	// stamps a resolved Display on every dynamic option of that Source —
+	// listing and ?ids= resolve mode alike — with one grouped query per
+	// referenced metric for the whole page. nil = plain options (unchanged).
+	OptionDisplayResolver OptionDisplayResolver
+
 	// FileDeleter disposes of file/image assets a dynamic record referenced
 	// once that reference is removed — when the record is DELETED, or when a
 	// file/image column's value is REPLACED on update. The kernel detects which
@@ -393,6 +401,7 @@ type Service struct {
 	relations         RelationResolver
 	documentLines     DocumentLinesResolver
 	extensions        ExtensionResolver
+	optionDisplays    OptionDisplayResolver
 	accessPolicies    AccessPolicyResolver
 	colCache          liveColsCache // live table columns (tablecols.go)
 
@@ -486,6 +495,7 @@ func New(cfg Config) *Service {
 		relations:         cfg.RelationResolver,
 		documentLines:     cfg.DocumentLinesResolver,
 		extensions:        cfg.ExtensionResolver,
+		optionDisplays:    cfg.OptionDisplayResolver,
 		accessPolicies:    cfg.AccessPolicyResolver,
 
 		actorRolesResolver:        cfg.ActorRolesResolver,

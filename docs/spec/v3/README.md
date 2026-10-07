@@ -266,6 +266,7 @@ release added:
 | unreleased | `data_query` `aggregate` (wasm ABI, no manifest change) — grouped `sum`/`count`/`min`/`max`/`avg` over an org-scoped logical table so a guest asks "how much is overdue" without paging rows (see `docs/wasm-abi.md` § 15.8). |
 | v0.117.0 | Top-level `provides_options[]` — publish a model as a reusable option **catalog** any other addon consumes through `options_source` (see [Published option catalogs](#published-option-catalogs)). New `OptionCatalog` type. |
 | next | Top-level `provides_capabilities[]` + handler `type: "capability"` — provider-neutral capability contracts (see [Capability contracts](#capability-contracts)). New `ProvidedCapability` type; `Handler.capability` / `Handler.input`; kernel package `capability`. |
+| unreleased | `models[].option_display` + top-level `option_metrics[]` — declarative picker presentation (title, subtitle, image, trailing metrics with format and tone, badges) and computed values other addons contribute to it (see [Option display](#option-display)). New `OptionDisplay` / `OptionTrailing` / `OptionTone` / `OptionDisplayCondition` / `OptionBadge` / `OptionMetric` types. |
 
 `metadata.i18n` and `metadata.countries` slot into the `metadata` block:
 
@@ -478,6 +479,79 @@ sees one manifest. The tie-break therefore lives in the host and is fixed:
 
 Deterministic and independent of install order. The host logs the shadowed
 catalog so the conflict is discoverable rather than silent.
+
+## Option display
+
+`models[].option_display` declares how the model's rows read as **picker
+options** everywhere: a form's `dynamic_select`, the document editor's product
+cell, any addon screen built on the SDK `RecordPicker`. The options endpoint
+resolves it server-side into each option's `display`, so the client only
+paints.
+
+```jsonc
+"option_display": {
+  "title": "name",                                  // column or "{a} · {b}" template
+  "subtitle": ["sku", "Medida {size_code}"],         // parts joined " · ", empty parts dropped
+  "image": "image",
+  "trailing": [
+    { "key": "price", "label": "Precio", "field": "unit_price", "format": "money" },
+    { "key": "stock", "label": "Disp.", "metric": "stock_available", "format": "number",
+      "when": { "field": "product_type", "op": "neq", "value": "service" },
+      "tones": [
+        { "when": { "op": "lte", "value": 0 }, "tone": "danger", "text": "Agotado", "dim": true },
+        { "when": { "op": "lte", "ref_metric": "stock_min" }, "tone": "warning" },
+        { "when": { "op": "gt", "value": 0 }, "tone": "success" }
+      ] }
+  ],
+  "badges": [
+    { "field": "product_type", "when": { "op": "eq", "value": "service" }, "text": "Servicio", "tone": "info" },
+    { "field": "status", "values": { "accepted": { "text": "Aceptada", "tone": "success" } } }
+  ]
+}
+```
+
+- **format**: `money` (with `currency_field`, else the org currency) ·
+  `number` · `integer` · `percent` · `date` · `relative_date` · `text`.
+- **tones**: evaluated in order against the item's value; the first match sets
+  `tone` (`success|warning|danger|info|neutral`), may replace the text
+  (`"Agotado"`), dim the row (`dim`, still selectable) or block it (`block`,
+  not selectable — a UI hint, not a write guard). A condition compares against
+  a literal (`value`), a column (`ref`) or a contributed metric (`ref_metric`).
+- **when** (trailing): shows the item only on rows where the condition holds
+  (`field` = column tested) — no stock column on a service.
+- **badges**: a column value mapped through `values`, or a fixed `text` gated
+  by `when` (`when.field` tests another column).
+
+### Contributed metrics: `option_metrics[]`
+
+A value computed by **another addon** is contributed, not hardcoded in the
+consumer. Inventory publishes the stock of a product:
+
+```jsonc
+"option_metrics": [{
+  "key": "stock_available", "target": "products.Product",
+  "model": "Stock", "foreign_key": "product_id",
+  "aggregate": "sum", "column": "available",
+  "scope": [
+    { "context": "warehouse_id", "column": "warehouse_id" },
+    { "context": "branch_id", "column": "warehouse_id",
+      "through": { "model": "Warehouse", "column": "branch_id" } }
+  ]
+}]
+```
+
+The products addon's display references `"metric": "stock_available"` and knows
+nothing about inventory's tables. Without inventory installed (or disabled for
+the org) the item is simply absent; nothing breaks.
+
+**Resolution.** One grouped `SELECT fk, AGG(col) … WHERE fk IN (<page ids>)
+GROUP BY fk` per referenced metric for the whole page (never per option),
+org-scoped, soft-delete aware, subject to the aggregated model's access policy;
+`sum`/`count` read 0 for an option with no rows. `scope` narrows by the
+request's context (`?ctx.warehouse_id=…`, or what the host injects such as the
+session branch); an absent context key leaves that scope out, a value that
+cannot match the column (bad uuid) omits the metric instead of widening it.
+`where` is equality-only (`null` = `IS NULL`).
 
 ## Validating a manifest
 

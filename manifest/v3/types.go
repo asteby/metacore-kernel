@@ -135,6 +135,14 @@ type Manifest struct {
 	// addon provides no capability (the default).
 	ProvidesCapabilities []ProvidedCapability `json:"provides_capabilities,omitempty"`
 
+	// OptionMetrics CONTRIBUTES computed values to the options of a model (own
+	// or another addon's), e.g. inventory's "stock_available" for
+	// products.Product. A target's option_display references them by key in
+	// trailing[].metric; the host serves a metric only while this addon is
+	// installed and enabled for the org, so the consumer degrades to "no
+	// metric" — never to an error — without it. See OptionMetric.
+	OptionMetrics []OptionMetric `json:"option_metrics,omitempty"`
+
 	Signature *Signature `json:"signature,omitempty"`
 }
 
@@ -686,6 +694,13 @@ type Model struct {
 	// Pure UI metadata; the DDL and write planes ignore it. Nil = a flat form
 	// (the legacy behaviour). See FormLayout.
 	FormLayout *FormLayout `json:"form_layout,omitempty"`
+
+	// OptionDisplay declares how this model's rows read as picker options:
+	// title, subtitle, image, right-aligned metrics with format and tone
+	// (own columns or values another addon contributes via option_metrics[])
+	// and badges. Resolved server-side by the options endpoint into each
+	// option's `display`. Nil = the plain option. See OptionDisplay.
+	OptionDisplay *OptionDisplay `json:"option_display,omitempty"`
 
 	// DocumentForms declares the guided, per-document-type create flow the SDK
 	// renders instead of the generic create modal: one card per type (invoice,

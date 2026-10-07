@@ -147,6 +147,13 @@
         "$ref": "#/$defs/ProvidedCapability"
       }
     },
+    "option_metrics": {
+      "type": "array",
+      "description": "Computed values this addon CONTRIBUTES to the options of a model (own or another addon's), e.g. inventory's 'stock_available' for products.Product = SUM(stock.available) by product_id. The target's option_display references them in trailing[].metric. Resolved by the options endpoint with one grouped query per page, scoped to the org, and served only while this addon is installed and enabled there.",
+      "items": {
+        "$ref": "#/$defs/OptionMetric"
+      }
+    },
     "provides_options": {
       "type": "array",
       "description": "Publishes models of this addon as reusable option CATALOGS. Any other addon feeds a select from one by naming its 'key' in a column's or action field's options_source, with no host code and no hardcoded options list. The host scopes every catalog to the invoking org and serves it only while the owning addon is installed and enabled there.",
@@ -249,6 +256,118 @@
     }
   ],
   "$defs": {
+    "OptionDisplay": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How the model's rows read as picker options. Resolved server-side by the options endpoint into each option's 'display' (title, subtitle, image, trailing metrics with format and tone, badges). Pure UI metadata; ignored by the DDL and write planes.",
+      "properties": {
+        "title": {"type": "string", "minLength": 1, "description": "Column name or template with {column} placeholders. Omitted = the option label."},
+        "subtitle": {"type": "array", "description": "Parts joined with ' · '. Each part is a column name or a template ('RFC {tax_id}'); a part whose placeholders resolve empty is dropped.", "items": {"type": "string", "minLength": 1}},
+        "image": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "description": "Column holding the option image url (32px avatar)."},
+        "trailing": {"type": "array", "items": {"$ref": "#/$defs/OptionTrailing"}},
+        "badges": {"type": "array", "items": {"$ref": "#/$defs/OptionBadge"}}
+      }
+    },
+    "OptionTrailing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key"],
+      "description": "One right-aligned metric of an option row: a column of the row ('field') or a value contributed by another addon ('metric', omitted when no installed addon provides it).",
+      "properties": {
+        "key": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "label": {"type": "string"},
+        "field": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "metric": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "format": {"enum": ["money", "number", "integer", "percent", "date", "relative_date", "text"]},
+        "currency_field": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "tones": {"type": "array", "items": {"$ref": "#/$defs/OptionTone"}},
+        "when": {"$ref": "#/$defs/OptionDisplayCondition", "description": "Shows the item only on rows where the condition holds ('field' = column tested; omitted = the item's own value)."}
+      }
+    },
+    "OptionTone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["when", "tone"],
+      "description": "Conditional style of a trailing metric; the first matching rule wins. 'text' replaces the value (e.g. 'Agotado'), 'dim' attenuates the row, 'block' makes it not selectable.",
+      "properties": {
+        "when": {"$ref": "#/$defs/OptionDisplayCondition"},
+        "tone": {"enum": ["success", "warning", "danger", "info", "neutral"]},
+        "text": {"type": "string"},
+        "dim": {"type": "boolean"},
+        "block": {"type": "boolean"}
+      }
+    },
+    "OptionDisplayCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op"],
+      "description": "Compares a value against a literal ('value'), a column ('ref') or a contributed metric ('ref_metric'). 'field' (badges only) names the column tested.",
+      "properties": {
+        "field": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "op": {"enum": ["lt", "lte", "gt", "gte", "eq", "neq", "empty", "not_empty"]},
+        "value": {"type": ["string", "number", "boolean"]},
+        "ref": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "ref_metric": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+      }
+    },
+    "OptionBadge": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A chip next to the option title: a column value (mapped through 'values') or a fixed 'text', optionally gated by 'when'.",
+      "properties": {
+        "field": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "when": {"$ref": "#/$defs/OptionDisplayCondition"},
+        "text": {"type": "string"},
+        "tone": {"enum": ["success", "warning", "danger", "info", "neutral"]},
+        "values": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "text": {"type": "string"},
+              "tone": {"enum": ["success", "warning", "danger", "info", "neutral"]}
+            }
+          }
+        }
+      }
+    },
+    "OptionMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "target", "model", "foreign_key", "aggregate"],
+      "description": "A computed value contributed to the options of 'target': aggregate(column) over this addon's 'model' rows whose 'foreign_key' is the option's id, optionally narrowed by equality 'where' and by the picker context ('scope').",
+      "properties": {
+        "key": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "target": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*\\.[A-Z][A-Za-z0-9]+$", "description": "'<addon>.<Model>' whose options receive the value."},
+        "model": {"type": "string", "minLength": 1, "description": "Key of one of this manifest's models[]."},
+        "foreign_key": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "aggregate": {"enum": ["sum", "count", "min", "max", "avg"]},
+        "column": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "where": {"type": "object", "description": "Equality predicates on the aggregated model; null = IS NULL."},
+        "scope": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["context", "column"],
+            "properties": {
+              "context": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+              "column": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+              "through": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["model", "column"],
+                "properties": {
+                  "model": {"type": "string", "minLength": 1},
+                  "column": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "ProvidedCapability": {
       "type": "object",
       "additionalProperties": false,
@@ -966,6 +1085,9 @@
         },
         "form_layout": {
           "$ref": "#/$defs/FormLayout"
+        },
+        "option_display": {
+          "$ref": "#/$defs/OptionDisplay"
         },
         "stage_field": {
           "type": "string",

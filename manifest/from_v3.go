@@ -170,6 +170,17 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.DesktopClients = mapDesktopClients(m.DesktopClients)
 	out.Backfills = mapBackfills(m.Backfills)
 	out.ProvidesOptions = mapProvidesOptions(m.ProvidesOptions, m.Models)
+	out.OptionMetrics = mapOptionMetrics(m.OptionMetrics, m.Models)
+	// Each metric also rides the definition of the model it aggregates, so a
+	// host that persists only ModelDefinitions (ops) keeps it across restarts
+	// and gates it by that model's addon like any other model feature.
+	for _, om := range out.OptionMetrics {
+		for i := range out.ModelDefinitions {
+			if out.ModelDefinitions[i].ModelKey == om.Model {
+				out.ModelDefinitions[i].OptionMetrics = append(out.ModelDefinitions[i].OptionMetrics, om)
+			}
+		}
+	}
 	out.ProvidesCapabilities = mapProvidesCapabilities(m.ProvidesCapabilities)
 	out.Documents = mapDocuments(m)
 	if m.Contributions != nil {
@@ -325,6 +336,34 @@ func mapProvidesOptions(in []v3.OptionCatalog, models []v3.Model) []OptionCatalo
 			OrderBy: c.OrderBy,
 			Extras:  append([]string(nil), c.Extras...),
 		})
+	}
+	return out
+}
+
+// mapOptionMetrics folds v3 option_metrics[] into their host projection,
+// resolving the aggregated model and every scope's through model to its table
+// from models[]. An unknown model cannot reach here (validation rejects it);
+// should it, the table stays empty and the host skips the metric.
+func mapOptionMetrics(in []v3.OptionMetric, models []v3.Model) []OptionMetricDef {
+	if len(in) == 0 {
+		return nil
+	}
+	tables := make(map[string]string, len(models))
+	for _, m := range models {
+		tables[m.Key] = m.Table
+	}
+	out := make([]OptionMetricDef, 0, len(in))
+	for _, om := range in {
+		def := OptionMetricDef{OptionMetric: om, Table: tables[om.Model]}
+		if len(om.Scope) > 0 {
+			def.ThroughTables = make([]string, len(om.Scope))
+			for i, sc := range om.Scope {
+				if sc.Through != nil {
+					def.ThroughTables[i] = tables[sc.Through.Model]
+				}
+			}
+		}
+		out = append(out, def)
 	}
 	return out
 }
@@ -688,6 +727,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		// create flow as table metadata (dynamic.DeriveDocumentForms). Nil = the
 		// generic create modal. Pure UI.
 		def.DocumentForms = mapDocumentForms(m.DocumentForms)
+		// OptionDisplay rides through verbatim (pure UI): the host hands it to
+		// dynamic.Service so the options endpoint serves each option's display.
+		def.OptionDisplay = m.OptionDisplay
 		out = append(out, def)
 	}
 	return out

@@ -40,6 +40,12 @@ type OptionsQuery struct {
 	// absent from the result. At most MaxOptionsIDs ids (ErrInvalidInput
 	// beyond that).
 	IDs []string
+	// Context carries the picker's context for the option display's
+	// contributed metrics (`?ctx.<key>=<value>`, see OptionContextFromQuery):
+	// e.g. warehouse_id of the document being edited, branch_id of the
+	// session. A metric scope whose context key is absent does not apply.
+	// Keys must match ^[a-z][a-z0-9_]*$; values are always bound parameters.
+	Context map[string]string
 }
 
 // OptionsResult is the output of Service.Options.
@@ -122,7 +128,7 @@ func (s *Service) Options(ctx context.Context, user modelbase.AuthUser, q Option
 		}
 		return &OptionsResult{Type: "static", Options: opts}, nil
 	case "dynamic":
-		items, err := s.queryDynamicOptions(ctx, user, fieldCfg, q)
+		items, rows, err := s.queryDynamicOptions(ctx, user, fieldCfg, q)
 		if err != nil {
 			return nil, err
 		}
@@ -131,6 +137,11 @@ func (s *Service) Options(ctx context.Context, user modelbase.AuthUser, q Option
 				return nil, err
 			}
 		}
+		// Declarative presentation of the source model (option_display): title,
+		// subtitle, image, trailing metrics (own columns + values other addons
+		// contribute, one grouped query per metric for the whole page) and
+		// badges. No display declared = options unchanged.
+		s.applyOptionDisplay(ctx, user, fieldCfg.Source, rows, items, q.Context)
 		if len(q.IDs) > 0 {
 			// Several source rows can share one value (a LabelRef ledger keyed
 			// by product_id): resolve mode answers one option per id.
@@ -252,13 +263,17 @@ func renderStatic(opts []StaticOption) []Option {
 	return out
 }
 
-func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUser, fieldCfg FieldOptionsConfig, q OptionsQuery) ([]Option, error) {
+// queryDynamicOptions returns the projected options AND the source rows they
+// were projected from (index-aligned), so the option display can read any
+// column of the row without a second query.
+func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUser, fieldCfg FieldOptionsConfig, q OptionsQuery) ([]Option, reflect.Value, error) {
+	none := reflect.Value{}
 	if fieldCfg.Source == "" {
-		return nil, fmt.Errorf("%w: source required for dynamic options", ErrInvalidInput)
+		return nil, none, fmt.Errorf("%w: source required for dynamic options", ErrInvalidInput)
 	}
 	sourceInstance, ok := s.lookupModel(ctx, fieldCfg.Source)
 	if !ok {
-		return nil, ErrSourceModelNotFound
+		return nil, none, ErrSourceModelNotFound
 	}
 
 	// Pin the FROM table the same way Service.Search does: .Model(instance)
@@ -268,7 +283,7 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 	// query for an addon model hits a non-existent table.
 	tableName, err := s.tableNameFor(ctx, fieldCfg.Source, sourceInstance)
 	if err != nil {
-		return nil, err
+		return nil, none, err
 	}
 	db := s.db.WithContext(ctx).Model(sourceInstance).Table(tableName)
 
@@ -282,7 +297,7 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 	// reflect-built models.
 	scoped, err := s.scopeOrDeny(db, sourceInstance, user)
 	if err != nil {
-		return nil, err
+		return nil, none, err
 	}
 	db = scoped
 
@@ -298,7 +313,7 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 			valueCol = "id"
 		}
 		if !safeColumn.MatchString(valueCol) {
-			return nil, ErrInvalidInput
+			return nil, none, ErrInvalidInput
 		}
 		ids := q.IDs
 		if columnIsUUID(sourceInstance, valueCol) {
@@ -312,16 +327,16 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 				}
 			}
 			if len(ids) == 0 {
-				return []Option{}, nil
+				return []Option{}, none, nil
 			}
 		}
 		db = db.Where(fmt.Sprintf("%s IN ?", valueCol), ids)
 		sliceType := reflect.SliceOf(reflect.TypeOf(sourceInstance))
 		resultsPtr := reflect.New(sliceType)
 		if err := db.Find(resultsPtr.Interface()).Error; err != nil {
-			return nil, fmt.Errorf("dynamic: options ids query: %w", err)
+			return nil, none, fmt.Errorf("dynamic: options ids query: %w", err)
 		}
-		return projectOptions(resultsPtr.Elem(), fieldCfg), nil
+		return projectOptions(resultsPtr.Elem(), fieldCfg), resultsPtr.Elem(), nil
 	}
 
 	// Q: label-column filter. Uses the configured SearchMatchClause so the
@@ -337,7 +352,7 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 		// picker answered "Sin resultados" for an existing product.
 		sub, err := s.labelRefMatchIDs(ctx, fieldCfg, q.Q)
 		if err != nil {
-			return nil, err
+			return nil, none, err
 		}
 		if sub != nil && safeColumn.MatchString(fieldCfg.Value) {
 			db = db.Where(fmt.Sprintf("%s IN (?)", fieldCfg.Value), sub)
@@ -407,10 +422,10 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 	sliceType := reflect.SliceOf(reflect.TypeOf(sourceInstance))
 	resultsPtr := reflect.New(sliceType)
 	if err := db.Find(resultsPtr.Interface()).Error; err != nil {
-		return nil, fmt.Errorf("dynamic: options query: %w", err)
+		return nil, none, fmt.Errorf("dynamic: options query: %w", err)
 	}
 
-	return projectOptions(resultsPtr.Elem(), fieldCfg), nil
+	return projectOptions(resultsPtr.Elem(), fieldCfg), resultsPtr.Elem(), nil
 }
 
 // labelRefMatchIDs returns the subquery of LabelRef ids whose label column
