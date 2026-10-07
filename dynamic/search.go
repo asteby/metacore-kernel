@@ -85,7 +85,9 @@ func (s *Service) Search(ctx context.Context, user modelbase.AuthUser, q SearchQ
 		for _, field := range cfg.SearchIn {
 			var col string
 			if strings.Contains(field, ".") {
-				finalAlias, finalField, joins := buildNestedJoins(tableName, field)
+				finalAlias, finalField, joins := buildNestedJoinsWith(tableName, field, func(table string) bool {
+					return safeColumn.MatchString(table) && db.Migrator().HasColumn(table, "deleted_at")
+				})
 				for _, j := range joins {
 					if _, seen := joinCache[j]; seen {
 						continue
@@ -147,6 +149,15 @@ func (s *Service) Search(ctx context.Context, user modelbase.AuthUser, q SearchQ
 // convention is: each relation name pluralises trivially to its table and is
 // linked via <parent>.<relation>_id = <alias>.id.
 func buildNestedJoins(rootTable, field string) (alias, column string, joins []string) {
+	return buildNestedJoinsWith(rootTable, field, nil)
+}
+
+// buildNestedJoinsWith is buildNestedJoins plus soft-delete awareness: when
+// hasSoftDelete reports that a joined table carries a deleted_at column, its
+// ON clause gets "AND <alias>.deleted_at IS NULL" so rows whose parent was
+// soft-deleted never match a nested search path. A nil hasSoftDelete keeps
+// the original join shape.
+func buildNestedJoinsWith(rootTable, field string, hasSoftDelete func(table string) bool) (alias, column string, joins []string) {
 	parts := strings.Split(field, ".")
 	if len(parts) < 2 {
 		return rootTable, field, nil
@@ -154,10 +165,12 @@ func buildNestedJoins(rootTable, field string) (alias, column string, joins []st
 	current := rootTable
 	for i, part := range parts[:len(parts)-1] {
 		a := fmt.Sprintf("search_%s_%d", part, i)
-		joins = append(joins, fmt.Sprintf(
-			"LEFT JOIN %ss AS %s ON %s.id = %s.%s_id",
-			part, a, a, current, part,
-		))
+		table := part + "s"
+		on := fmt.Sprintf("%s.id = %s.%s_id", a, current, part)
+		if hasSoftDelete != nil && hasSoftDelete(table) {
+			on += fmt.Sprintf(" AND %s.deleted_at IS NULL", a)
+		}
+		joins = append(joins, fmt.Sprintf("LEFT JOIN %s AS %s ON %s", table, a, on))
 		current = a
 	}
 	return current, parts[len(parts)-1], joins
