@@ -280,7 +280,8 @@
         "metric": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
         "format": {"enum": ["money", "number", "integer", "percent", "date", "relative_date", "text"]},
         "currency_field": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
-        "tones": {"type": "array", "items": {"$ref": "#/$defs/OptionTone"}}
+        "tones": {"type": "array", "items": {"$ref": "#/$defs/OptionTone"}},
+        "when": {"$ref": "#/$defs/OptionDisplayCondition", "description": "Shows the item only on rows where the condition holds ('field' = column tested; omitted = the item's own value)."}
       }
     },
     "OptionTone": {

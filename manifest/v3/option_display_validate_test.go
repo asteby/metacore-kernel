@@ -63,7 +63,8 @@ const validDisplay = `{
   "image": "image",
   "trailing": [
     {"key": "price", "label": "Precio", "field": "unit_price", "format": "money", "currency_field": "currency_code"},
-    {"key": "stock", "label": "Disp.", "metric": "stock_available", "format": "number", "tones": [
+    {"key": "stock", "label": "Disp.", "metric": "stock_available", "format": "number",
+     "when": {"field": "product_type", "op": "neq", "value": "service"}, "tones": [
       {"when": {"op": "lte", "value": 0}, "tone": "danger", "text": "Agotado", "dim": true},
       {"when": {"op": "lte", "ref": "min_stock"}, "tone": "warning"},
       {"when": {"op": "gt", "value": 0}, "tone": "success"}
@@ -104,26 +105,27 @@ func TestOptionDisplayParses(t *testing.T) {
 
 func TestOptionDisplayRejects(t *testing.T) {
 	cases := map[string]struct{ display, metrics, want string }{
-		"unknown title column":       {`{"title": "nope"}`, "", `title references "nope"`},
-		"template without column":    {`{"subtitle": ["just text"]}`, "", "names no column"},
-		"unknown placeholder":        {`{"subtitle": ["SKU {nope}"]}`, "", `references "nope"`},
-		"unknown image":              {`{"image": "nope"}`, "", `.image "nope"`},
-		"field and metric":           {`{"trailing": [{"key": "x", "field": "sku", "metric": "m"}]}`, "", "mutually exclusive"},
-		"neither field nor metric":   {`{"trailing": [{"key": "x"}]}`, "", "one of field / metric"},
-		"unknown trailing field":     {`{"trailing": [{"key": "x", "field": "nope"}]}`, "", `.field "nope"`},
-		"duplicate key":              {`{"trailing": [{"key": "x", "field": "sku"}, {"key": "x", "field": "name"}]}`, "", "is duplicated"},
-		"currency without money":     {`{"trailing": [{"key": "x", "field": "sku", "format": "number", "currency_field": "currency_code"}]}`, "", "only valid with format money"},
-		"tone two operands":          {`{"trailing": [{"key": "x", "field": "unit_price", "tones": [{"when": {"op": "lt", "value": 1, "ref": "min_stock"}, "tone": "danger"}]}]}`, "", "exactly one of value"},
-		"tone unknown ref":           {`{"trailing": [{"key": "x", "field": "unit_price", "tones": [{"when": {"op": "lt", "ref": "nope"}, "tone": "danger"}]}]}`, "", `.ref "nope"`},
-		"tone with field":            {`{"trailing": [{"key": "x", "field": "unit_price", "tones": [{"when": {"field": "sku", "op": "empty"}, "tone": "danger"}]}]}`, "", "only valid on a badge"},
-		"badge values without field": {`{"badges": [{"text": "x", "values": {"a": {"text": "A"}}}]}`, "", "values requires field"},
-		"metric unknown model":       {"", `[{"key": "s", "target": "products.Product", "model": "Nope", "foreign_key": "product_id", "aggregate": "sum", "column": "available"}]`, `.model "Nope"`},
-		"metric unknown fk":          {"", `[{"key": "s", "target": "products.Product", "model": "Stock", "foreign_key": "nope", "aggregate": "sum", "column": "available"}]`, `.foreign_key "nope"`},
-		"metric sum no column":       {"", `[{"key": "s", "target": "products.Product", "model": "Stock", "foreign_key": "product_id", "aggregate": "sum"}]`, ".column is empty"},
-		"metric own target":          {"", `[{"key": "s", "target": "inventory.Nope", "model": "Stock", "foreign_key": "product_id", "aggregate": "count"}]`, "is not a model of this addon"},
-		"metric where column":        {"", `[{"key": "s", "target": "products.Product", "model": "Stock", "foreign_key": "product_id", "aggregate": "count", "where": {"nope": 1}}]`, `where names "nope"`},
-		"metric scope through":       {"", `[{"key": "s", "target": "products.Product", "model": "Stock", "foreign_key": "product_id", "aggregate": "count", "scope": [{"context": "branch_id", "column": "warehouse_id", "through": {"model": "Warehouse", "column": "nope"}}]}]`, `through.column "nope"`},
-		"metric duplicate":           {"", `[{"key": "s", "target": "products.Product", "model": "Stock", "foreign_key": "product_id", "aggregate": "count"}, {"key": "s", "target": "products.Product", "model": "Stock", "foreign_key": "product_id", "aggregate": "count"}]`, "is duplicated"},
+		"unknown title column":        {`{"title": "nope"}`, "", `title references "nope"`},
+		"template without column":     {`{"subtitle": ["just text"]}`, "", "names no column"},
+		"unknown placeholder":         {`{"subtitle": ["SKU {nope}"]}`, "", `references "nope"`},
+		"unknown image":               {`{"image": "nope"}`, "", `.image "nope"`},
+		"field and metric":            {`{"trailing": [{"key": "x", "field": "sku", "metric": "m"}]}`, "", "mutually exclusive"},
+		"neither field nor metric":    {`{"trailing": [{"key": "x"}]}`, "", "one of field / metric"},
+		"unknown trailing field":      {`{"trailing": [{"key": "x", "field": "nope"}]}`, "", `.field "nope"`},
+		"duplicate key":               {`{"trailing": [{"key": "x", "field": "sku"}, {"key": "x", "field": "name"}]}`, "", "is duplicated"},
+		"currency without money":      {`{"trailing": [{"key": "x", "field": "sku", "format": "number", "currency_field": "currency_code"}]}`, "", "only valid with format money"},
+		"tone two operands":           {`{"trailing": [{"key": "x", "field": "unit_price", "tones": [{"when": {"op": "lt", "value": 1, "ref": "min_stock"}, "tone": "danger"}]}]}`, "", "exactly one of value"},
+		"tone unknown ref":            {`{"trailing": [{"key": "x", "field": "unit_price", "tones": [{"when": {"op": "lt", "ref": "nope"}, "tone": "danger"}]}]}`, "", `.ref "nope"`},
+		"tone with field":             {`{"trailing": [{"key": "x", "field": "unit_price", "tones": [{"when": {"field": "sku", "op": "empty"}, "tone": "danger"}]}]}`, "", "only valid on a badge"},
+		"trailing when unknown field": {`{"trailing": [{"key": "x", "field": "sku", "when": {"field": "nope", "op": "empty"}}]}`, "", `.when.field "nope"`},
+		"badge values without field":  {`{"badges": [{"text": "x", "values": {"a": {"text": "A"}}}]}`, "", "values requires field"},
+		"metric unknown model":        {"", `[{"key": "s", "target": "products.Product", "model": "Nope", "foreign_key": "product_id", "aggregate": "sum", "column": "available"}]`, `.model "Nope"`},
+		"metric unknown fk":           {"", `[{"key": "s", "target": "products.Product", "model": "Stock", "foreign_key": "nope", "aggregate": "sum", "column": "available"}]`, `.foreign_key "nope"`},
+		"metric sum no column":        {"", `[{"key": "s", "target": "products.Product", "model": "Stock", "foreign_key": "product_id", "aggregate": "sum"}]`, ".column is empty"},
+		"metric own target":           {"", `[{"key": "s", "target": "inventory.Nope", "model": "Stock", "foreign_key": "product_id", "aggregate": "count"}]`, "is not a model of this addon"},
+		"metric where column":         {"", `[{"key": "s", "target": "products.Product", "model": "Stock", "foreign_key": "product_id", "aggregate": "count", "where": {"nope": 1}}]`, `where names "nope"`},
+		"metric scope through":        {"", `[{"key": "s", "target": "products.Product", "model": "Stock", "foreign_key": "product_id", "aggregate": "count", "scope": [{"context": "branch_id", "column": "warehouse_id", "through": {"model": "Warehouse", "column": "nope"}}]}]`, `through.column "nope"`},
+		"metric duplicate":            {"", `[{"key": "s", "target": "products.Product", "model": "Stock", "foreign_key": "product_id", "aggregate": "count"}, {"key": "s", "target": "products.Product", "model": "Stock", "foreign_key": "product_id", "aggregate": "count"}]`, "is duplicated"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

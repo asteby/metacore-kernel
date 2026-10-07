@@ -74,11 +74,12 @@ func productDisplay() *v3.OptionDisplay {
 		Image:    "image",
 		Trailing: []v3.OptionTrailing{
 			{Key: "price", Label: "Precio", Field: "unit_price", Format: "money"},
-			{Key: "stock", Label: "Disp.", Metric: "stock_available", Format: "number", Tones: []v3.OptionTone{
-				{When: v3.OptionDisplayCondition{Op: "lte", Value: 0}, Tone: "danger", Text: "Agotado", Dim: true},
-				{When: v3.OptionDisplayCondition{Op: "lte", Ref: "min_stock"}, Tone: "warning"},
-				{When: v3.OptionDisplayCondition{Op: "gt", Value: 0}, Tone: "success"},
-			}},
+			{Key: "stock", Label: "Disp.", Metric: "stock_available", Format: "number",
+				When: &v3.OptionDisplayCondition{Field: "product_type", Op: "neq", Value: "service"}, Tones: []v3.OptionTone{
+					{When: v3.OptionDisplayCondition{Op: "lte", Value: 0}, Tone: "danger", Text: "Agotado", Dim: true},
+					{When: v3.OptionDisplayCondition{Op: "lte", Ref: "min_stock"}, Tone: "warning"},
+					{When: v3.OptionDisplayCondition{Op: "gt", Value: 0}, Tone: "success"},
+				}},
 			{Key: "lead", Metric: "lead_time_days", Format: "integer"},
 		},
 		Badges: []v3.OptionBadge{
@@ -236,6 +237,9 @@ func TestOptionDisplay_ResolvesColumnsMetricsTonesBadges(t *testing.T) {
 	}
 
 	svcOpt := opts[f.svcProduct.String()].Display
+	if _, ok := trailingByKey(svcOpt)["stock"]; ok {
+		t.Errorf("a service must not show stock (trailing when)")
+	}
 	if len(svcOpt.Badges) != 1 || svcOpt.Badges[0].Text != "Servicio" || svcOpt.Badges[0].Tone != "info" {
 		t.Errorf("badges = %+v", svcOpt.Badges)
 	}

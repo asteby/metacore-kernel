@@ -62,6 +62,10 @@ type OptionTrailing struct {
 	// Tones are evaluated in order against the item's value; the FIRST match
 	// sets the tone (and optionally replaces the text, dims or blocks the row).
 	Tones []OptionTone `json:"tones,omitempty"`
+	// When gates the item per row: shown only when the condition holds
+	// (`field` names the column tested; without it the item's own value is
+	// tested). E.g. no stock column for a service product. Nil = always.
+	When *OptionDisplayCondition `json:"when,omitempty"`
 }
 
 // OptionTone is one conditional style rule of a trailing metric.
@@ -244,7 +248,7 @@ func validateOptionDisplay(w string, d *OptionDisplay, cols map[string]struct{})
 			errs = append(errs, fmt.Sprintf("%s.field %q is not a column of the model", cw, c.Field))
 		}
 		if !needField && c.Field != "" {
-			errs = append(errs, fmt.Sprintf("%s.field is only valid on a badge condition (a tone tests its own value)", cw))
+			errs = append(errs, fmt.Sprintf("%s.field is only valid on a badge or trailing `when` (a tone tests its own value)", cw))
 		}
 		if c.Ref != "" && !hasCol(c.Ref) {
 			errs = append(errs, fmt.Sprintf("%s.ref %q is not a column of the model", cw, c.Ref))
@@ -315,6 +319,9 @@ func validateOptionDisplay(w string, d *OptionDisplay, cols map[string]struct{})
 			if !hasCol(t.CurrencyField) {
 				errs = append(errs, fmt.Sprintf("%s.currency_field %q is not a column of the model", tw, t.CurrencyField))
 			}
+		}
+		if t.When != nil {
+			checkCond(tw+".when", *t.When, true)
 		}
 		for j, tn := range t.Tones {
 			nw := fmt.Sprintf("%s.tones[%d]", tw, j)

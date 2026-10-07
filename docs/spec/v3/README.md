@@ -496,6 +496,7 @@ paints.
   "trailing": [
     { "key": "price", "label": "Precio", "field": "unit_price", "format": "money" },
     { "key": "stock", "label": "Disp.", "metric": "stock_available", "format": "number",
+      "when": { "field": "product_type", "op": "neq", "value": "service" },
       "tones": [
         { "when": { "op": "lte", "value": 0 }, "tone": "danger", "text": "Agotado", "dim": true },
         { "when": { "op": "lte", "ref_metric": "stock_min" }, "tone": "warning" },
@@ -516,6 +517,8 @@ paints.
   (`"Agotado"`), dim the row (`dim`, still selectable) or block it (`block`,
   not selectable — a UI hint, not a write guard). A condition compares against
   a literal (`value`), a column (`ref`) or a contributed metric (`ref_metric`).
+- **when** (trailing): shows the item only on rows where the condition holds
+  (`field` = column tested) — no stock column on a service.
 - **badges**: a column value mapped through `values`, or a fixed `text` gated
   by `when` (`when.field` tests another column).
 

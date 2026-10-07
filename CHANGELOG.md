@@ -14,7 +14,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `{a} · {b}` template), `subtitle` parts, `image`, right-aligned `trailing`
   metrics with `format` (money/number/integer/percent/date/relative_date/text)
   and ordered `tones` (`success|warning|danger|info|neutral`, optional
-  replacement `text` such as «Agotado», `dim`, `block`) and `badges` (column
+  replacement `text` such as «Agotado», `dim`, `block`), a per-row `when`
+  (no stock on a service) and `badges` (column
   value mapped through `values`, or text gated by `when`). Another addon
   CONTRIBUTES computed values through top-level `option_metrics[]` — an
   aggregate (`sum|count|min|max|avg`) over one of its models related by a

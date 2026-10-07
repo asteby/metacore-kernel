@@ -145,6 +145,9 @@ func (s *Service) applyOptionDisplay(ctx context.Context, user modelbase.AuthUse
 	}
 	for _, t := range d.Trailing {
 		need(t.Metric)
+		if t.When != nil {
+			need(t.When.RefMetric)
+		}
 		for _, tn := range t.Tones {
 			need(tn.When.RefMetric)
 		}
@@ -246,6 +249,16 @@ func (s *Service) applyOptionDisplay(ctx context.Context, user modelbase.AuthUse
 				val = v
 			} else {
 				val = col(t.Field)
+			}
+			if t.When != nil {
+				tested := val
+				if t.When.Field != "" {
+					tested = col(t.When.Field)
+				}
+				rhs, ok := refValue(*t.When)
+				if !ok || !evalOptionCondition(t.When.Op, tested, rhs) {
+					continue
+				}
 			}
 			item := OptionTrailingItem{Key: t.Key, Label: t.Label, Value: val, Format: t.Format}
 			if t.CurrencyField != "" {
