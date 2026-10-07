@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"github.com/asteby/metacore-kernel/modelbase"
@@ -29,6 +30,16 @@ type OptionsQuery struct {
 	Limit int
 	// Offset shifts the window for pagination.
 	Offset int
+	// IDs switches the call into RESOLVE mode: instead of enumerating a page of
+	// options it returns exactly the options whose value is in IDs (same label /
+	// image / extra_columns projection, same tenant scoping, access policy and
+	// soft-delete filtering as the listing) — the lookup a picker needs to show
+	// the label of an already-saved value without opening its popover. Q,
+	// Limit, Offset and ordering are ignored; FilterValue still applies when the
+	// caller sends it. Unknown, foreign-org or soft-deleted ids are simply
+	// absent from the result. At most MaxOptionsIDs ids (ErrInvalidInput
+	// beyond that).
+	IDs []string
 }
 
 // OptionsResult is the output of Service.Options.
@@ -44,6 +55,8 @@ const (
 	DefaultOptionsLimit = 50
 	// MaxOptionsLimit is the upper bound enforced regardless of the caller.
 	MaxOptionsLimit = 200
+	// MaxOptionsIDs bounds OptionsQuery.IDs (resolve mode).
+	MaxOptionsIDs = 100
 )
 
 // safeColumn matches identifiers we are willing to splice into SQL verbatim.
@@ -56,6 +69,10 @@ var safeColumn = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 func (s *Service) Options(ctx context.Context, user modelbase.AuthUser, q OptionsQuery) (*OptionsResult, error) {
 	if q.Field == "" {
 		return nil, ErrFieldRequired
+	}
+	q.IDs = normalizeOptionIDs(q.IDs)
+	if len(q.IDs) > MaxOptionsIDs {
+		return nil, ErrInvalidInput
 	}
 	if s.optsResolver == nil {
 		return nil, ErrNoOptionsConfig
@@ -99,7 +116,11 @@ func (s *Service) Options(ctx context.Context, user modelbase.AuthUser, q Option
 
 	switch fieldCfg.Type {
 	case "static":
-		return &OptionsResult{Type: "static", Options: renderStatic(fieldCfg.Options)}, nil
+		opts := renderStatic(fieldCfg.Options)
+		if len(q.IDs) > 0 {
+			opts = filterOptionsByIDs(opts, q.IDs)
+		}
+		return &OptionsResult{Type: "static", Options: opts}, nil
 	case "dynamic":
 		items, err := s.queryDynamicOptions(ctx, user, fieldCfg, q)
 		if err != nil {
@@ -110,10 +131,105 @@ func (s *Service) Options(ctx context.Context, user modelbase.AuthUser, q Option
 				return nil, err
 			}
 		}
+		if len(q.IDs) > 0 {
+			// Several source rows can share one value (a LabelRef ledger keyed
+			// by product_id): resolve mode answers one option per id.
+			items = filterOptionsByIDs(items, q.IDs)
+		}
 		return &OptionsResult{Type: "dynamic", Options: items}, nil
 	default:
 		return nil, fmt.Errorf("%w: unknown field type %q", ErrInvalidInput, fieldCfg.Type)
 	}
+}
+
+// normalizeOptionIDs trims, drops blanks and de-duplicates (order kept).
+func normalizeOptionIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+// filterOptionsByIDs keeps the options whose value is in ids, one per value.
+func filterOptionsByIDs(opts []Option, ids []string) []Option {
+	// Case-insensitive so an upper-case uuid still resolves (Postgres compares
+	// uuids by value; the projected value is canonical lower-case).
+	want := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		want[strings.ToLower(id)] = struct{}{}
+	}
+	out := make([]Option, 0, len(ids))
+	for _, o := range opts {
+		key := strings.ToLower(optionKey(o.Value))
+		if _, ok := want[key]; !ok {
+			continue
+		}
+		delete(want, key)
+		out = append(out, o)
+	}
+	return out
+}
+
+func optionKey(v any) string {
+	if st, ok := v.(fmt.Stringer); ok {
+		return st.String()
+	}
+	return fmt.Sprint(v)
+}
+
+// columnIsUUID reports whether the struct field backing col is a uuid.UUID
+// (or pointer to one).
+func columnIsUUID(instance any, col string) bool {
+	t := reflect.TypeOf(instance)
+	for t != nil && t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t == nil || t.Kind() != reflect.Struct {
+		return false
+	}
+	var find func(reflect.Type) (reflect.Type, bool)
+	find = func(t reflect.Type) (reflect.Type, bool) {
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			if f.Anonymous {
+				ft := f.Type
+				for ft.Kind() == reflect.Ptr {
+					ft = ft.Elem()
+				}
+				if ft.Kind() == reflect.Struct {
+					if got, ok := find(ft); ok {
+						return got, true
+					}
+				}
+				continue
+			}
+			if columnNameFromField(f) == col {
+				return f.Type, true
+			}
+		}
+		return nil, false
+	}
+	ft, ok := find(t)
+	if !ok {
+		return false
+	}
+	for ft.Kind() == reflect.Ptr {
+		ft = ft.Elem()
+	}
+	return ft == reflect.TypeOf(uuid.UUID{})
 }
 
 func renderStatic(opts []StaticOption) []Option {
@@ -173,6 +289,39 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 	// FilterBy: optional predicate driven by ?filter_value=.
 	if fieldCfg.FilterBy != "" && q.FilterValue != "" && safeColumn.MatchString(fieldCfg.FilterBy) {
 		db = db.Where(fmt.Sprintf("%s = ?", fieldCfg.FilterBy), q.FilterValue)
+	}
+
+	if len(q.IDs) > 0 {
+		// Resolve mode: exactly the requested values, no q / paging / order.
+		valueCol := fieldCfg.Value
+		if valueCol == "" {
+			valueCol = "id"
+		}
+		if !safeColumn.MatchString(valueCol) {
+			return nil, ErrInvalidInput
+		}
+		ids := q.IDs
+		if columnIsUUID(sourceInstance, valueCol) {
+			// A malformed id against a uuid column is a 22P02 on Postgres;
+			// it can never match, so drop it instead of failing the batch.
+			// Canonicalize the rest (case, hyphens) so text-stored uuids match.
+			ids = make([]string, 0, len(q.IDs))
+			for _, id := range q.IDs {
+				if u, err := uuid.Parse(id); err == nil {
+					ids = append(ids, u.String())
+				}
+			}
+			if len(ids) == 0 {
+				return []Option{}, nil
+			}
+		}
+		db = db.Where(fmt.Sprintf("%s IN ?", valueCol), ids)
+		sliceType := reflect.SliceOf(reflect.TypeOf(sourceInstance))
+		resultsPtr := reflect.New(sliceType)
+		if err := db.Find(resultsPtr.Interface()).Error; err != nil {
+			return nil, fmt.Errorf("dynamic: options ids query: %w", err)
+		}
+		return projectOptions(resultsPtr.Elem(), fieldCfg), nil
 	}
 
 	// Q: label-column filter. Uses the configured SearchMatchClause so the
