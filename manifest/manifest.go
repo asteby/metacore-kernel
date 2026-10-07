@@ -197,6 +197,13 @@ type Manifest struct {
 	// catalog never requires host code. See OptionCatalogDef.
 	ProvidesOptions []OptionCatalogDef `json:"provides_options,omitempty"`
 
+	// OptionMetrics is the host projection of v3 option_metrics[]: computed
+	// values this addon contributes to another model's options, with the
+	// aggregated model (and a scope's through model) resolved to its table.
+	// The host serves them to dynamic.Service (Config.OptionDisplayResolver)
+	// only while this addon is enabled for the org. See OptionMetricDef.
+	OptionMetrics []OptionMetricDef `json:"option_metrics,omitempty"`
+
 	// ProvidesCapabilities is the host projection of v3
 	// provides_capabilities[]: the capability contracts this addon implements.
 	ProvidesCapabilities []CapabilityProviderDef `json:"provides_capabilities,omitempty"`
@@ -337,6 +344,17 @@ type OptionCatalogDef struct {
 	Where   map[string]any `json:"where,omitempty"`
 	OrderBy string         `json:"order_by,omitempty"`
 	Extras  []string       `json:"extras,omitempty"`
+}
+
+// OptionMetricDef is the host projection of one v3.OptionMetric: the
+// declaration verbatim plus the physical tables of the aggregated model and of
+// every scope's through model (index-aligned with Metric.Scope; "" when the
+// scope has no through), resolved from the manifest's own models[] so the host
+// never re-derives them.
+type OptionMetricDef struct {
+	v3.OptionMetric
+	Table         string   `json:"table"`
+	ThroughTables []string `json:"through_tables,omitempty"`
 }
 
 // BackfillSourceDef is the host projection of v3.BackfillSource.
@@ -1168,6 +1186,11 @@ type ModelDefinition struct {
 	// TableMetadata.document_forms (see dynamic.DeriveDocumentForms). Pure UI
 	// metadata; the DDL/write planes ignore it. Nil = the generic create modal.
 	DocumentForms *DocumentFormsDef `json:"document_forms,omitempty"`
+
+	// OptionDisplay carries the v3 Model.option_display (how the model's rows
+	// read as picker options) so the host can hand it to dynamic.Service via
+	// Config.OptionDisplayResolver. Pure UI metadata. Nil = plain options.
+	OptionDisplay *v3.OptionDisplay `json:"option_display,omitempty"`
 
 	// Import carries the v3 Model.import (spreadsheet-import template) through
 	// the v3 → host conversion, so an addon-owned model declares its import

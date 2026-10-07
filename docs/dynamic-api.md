@@ -335,6 +335,7 @@ form generator.
 | `limit`        | Default 50, clamped to `MaxOptionsLimit` (200).             |
 | `offset`       | Default 0.                                                  |
 | `ids`          | Resolve mode: comma list or repeated. Returns exactly those values (scoped, no paging, `q` ignored). Max 100. |
+| `ctx.<key>`    | Picker context for the option display's contributed metrics (`ctx.warehouse_id=…`, also `ctx[key]=`). Max 16 keys. |
 
 ```bash
 curl -G \
@@ -361,6 +362,31 @@ When the field's `options` object declares `extra_columns` (e.g.
 (`{ "id": "…", "label": "FAC-1", "status": "vigente" }`) so the SDK's
 `option_filter` can hide options client-side. See
 [document-forms.md](document-forms.md#extra_columns-on-options).
+
+When the Source model declares an `option_display` (manifest v3, see
+[spec/v3 › Option display](spec/v3/README.md#option-display)) and the host
+wires `Config.OptionDisplayResolver`, every dynamic option — listing and
+`ids` resolve mode — also carries a resolved `display`:
+
+```json
+{ "id": "…", "label": "Llanta 205/55R16",
+  "display": {
+    "title": "Llanta 205/55R16", "subtitle": "MIC-2055516 · 205/55R16",
+    "image": "https://…/tire.png",
+    "trailing": [
+      { "key": "price", "label": "Precio", "value": 1899.5, "format": "money" },
+      { "key": "stock", "label": "Disp.", "value": 0, "format": "number", "tone": "danger", "text": "Agotado" }
+    ],
+    "badges": [], "tone": "danger", "dimmed": true } }
+```
+
+Contributed metrics (`option_metrics[]` of another addon, e.g. stock) are
+resolved with ONE grouped aggregate per metric for the whole page, scoped to
+the caller's organization, the aggregated model's access policy and soft
+delete, and narrowed by `ctx.*` when the metric declares a matching scope. A
+metric the org has no enabled provider for is omitted from `trailing`; a
+context value that cannot match its column (a malformed uuid) omits it too —
+never an error, never a number computed over the wrong scope.
 
 `type` is `"static"` when the field declares a hardcoded list and
 `"dynamic"` when it queries a related model. Static options never hit

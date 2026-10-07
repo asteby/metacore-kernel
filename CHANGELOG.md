@@ -9,6 +9,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Declarative option display: `models[].option_display` + `option_metrics[]`.**
+  A model declares how its rows read as picker options — `title` (column or
+  `{a} · {b}` template), `subtitle` parts, `image`, right-aligned `trailing`
+  metrics with `format` (money/number/integer/percent/date/relative_date/text)
+  and ordered `tones` (`success|warning|danger|info|neutral`, optional
+  replacement `text` such as «Agotado», `dim`, `block`) and `badges` (column
+  value mapped through `values`, or text gated by `when`). Another addon
+  CONTRIBUTES computed values through top-level `option_metrics[]` — an
+  aggregate (`sum|count|min|max|avg`) over one of its models related by a
+  foreign key, narrowed by equality `where` and by the picker context
+  (`scope`, directly or `through` another model: stock in the document's
+  warehouse or the session's branch). `Service.Options` resolves it into each
+  dynamic option's new `display` (listing and `?ids=` alike) with ONE grouped
+  query per referenced metric for the whole page, org-scoped, soft-delete
+  aware and gated by the aggregated model's access policy; an unprovided
+  metric or an unmatchable context value omits the item, never errors. New
+  `Config.OptionDisplayResolver` (host-wired, filters metrics to the org's
+  enabled addons), `OptionsQuery.Context` + `OptionContextFromQuery(c)`
+  (`?ctx.<key>=`), `manifest.ModelDefinition.OptionDisplay`,
+  `manifest.Manifest.OptionMetrics` (`OptionMetricDef` with resolved tables),
+  v3 types `OptionDisplay`, `OptionTrailing`, `OptionTone`,
+  `OptionDisplayCondition`, `OptionBadge`, `OptionMetric`, schema + validation
+  (every column referenced must exist on its model). No resolver wired = options
+  unchanged.
 - **Options endpoint resolve mode: `?ids=`.** `GET /options/:model?field=…&ids=a,b`
   (comma list, repeated `ids=`, or `ids[]=`) returns exactly the options whose
   value is in the list — same label / image / extra_columns projection

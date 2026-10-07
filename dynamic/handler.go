@@ -478,6 +478,7 @@ func (h *Handler) options(c fiber.Ctx) error {
 		}
 	}
 	q.IDs = OptionIDsFromQuery(c)
+	q.Context = OptionContextFromQuery(c)
 	res, err := h.service.Options(c, u, q)
 	if err != nil {
 		return h.handleError(c, err)
