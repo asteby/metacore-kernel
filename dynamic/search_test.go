@@ -129,3 +129,42 @@ func searchConfigFor(cfg SearchConfig) SearchConfigResolver {
 		return &cfg, nil
 	}
 }
+
+// A nested search path must not match through a soft-deleted parent row: the
+// LEFT JOIN has to carry the joined table's deleted_at IS NULL in its ON.
+func TestNestedJoinExcludesSoftDeletedParent(t *testing.T) {
+	db := setupTestDB(t)
+	for _, ddl := range []string{
+		`CREATE TABLE tickets (id INTEGER PRIMARY KEY, patient_id INTEGER)`,
+		`CREATE TABLE patients (id INTEGER PRIMARY KEY, name TEXT, deleted_at DATETIME)`,
+		`CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)`,
+		`INSERT INTO patients (id, name, deleted_at) VALUES (1, 'alive', NULL), (2, 'alive-ghost', '2024-01-01')`,
+		`INSERT INTO tickets (id, patient_id) VALUES (10, 1), (20, 2)`,
+	} {
+		if err := db.Exec(ddl).Error; err != nil {
+			t.Fatalf("ddl %q: %v", ddl, err)
+		}
+	}
+
+	hasDeletedAt := func(table string) bool {
+		return db.Migrator().HasColumn(table, "deleted_at")
+	}
+	alias, col, joins := buildNestedJoinsWith("tickets", "patient.name", hasDeletedAt)
+	q := db.Table("tickets").Select("tickets.id")
+	for _, j := range joins {
+		q = q.Joins(j)
+	}
+	var ids []int
+	if err := q.Where(alias+"."+col+" LIKE ?", "%alive%").Pluck("tickets.id", &ids).Error; err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != 10 {
+		t.Fatalf("ticket ids = %v, want [10] (soft-deleted patient must not match)", ids)
+	}
+
+	// A joined table without deleted_at keeps the original ON clause.
+	_, _, joins = buildNestedJoinsWith("patients", "user.name", hasDeletedAt)
+	if len(joins) != 1 || strings.Contains(joins[0], "deleted_at") {
+		t.Fatalf("join over table without deleted_at changed: %v", joins)
+	}
+}
