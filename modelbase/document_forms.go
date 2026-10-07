@@ -3,6 +3,8 @@ package modelbase
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"strings"
 )
 
 // This file holds the served shapes of two SDK-facing UI contracts that the
@@ -213,6 +215,69 @@ type OptionFilterRule struct {
 // OptionFilter is one rule or a list of rules that must ALL pass (AND). It is
 // always served as a list; it is accepted as either an object or a list.
 type OptionFilter []OptionFilterRule
+
+// Match reports whether a row (column -> value) passes every rule, with the
+// SDK's semantics (runtime-react option-filter.ts): trimmed, case-insensitive
+// comparison; a positive rule (Equals / In) needs the property to be present
+// and non-null, a negative rule (NotEquals / NotIn) keeps a row that lacks it.
+// The server uses it to re-check the document a client picked under the same
+// filter (a «crear desde» source), so a hidden option cannot be forced by
+// editing the payload. An empty filter matches every row.
+func (f OptionFilter) Match(row map[string]any) bool {
+	for _, r := range f {
+		if !r.match(row) {
+			return false
+		}
+	}
+	return true
+}
+
+func (r OptionFilterRule) match(row map[string]any) bool {
+	if r.Field == "" {
+		return true
+	}
+	raw, known := row[r.Field]
+	known = known && raw != nil
+	v := ""
+	if known {
+		v = normFilterValue(raw)
+	}
+	if r.Equals != nil && !(known && v == normFilterValue(r.Equals)) {
+		return false
+	}
+	if len(r.In) > 0 && !(known && containsFilterValue(r.In, v)) {
+		return false
+	}
+	if r.NotEquals != nil && known && v == normFilterValue(r.NotEquals) {
+		return false
+	}
+	if len(r.NotIn) > 0 && known && containsFilterValue(r.NotIn, v) {
+		return false
+	}
+	return true
+}
+
+func normFilterValue(v any) string {
+	switch t := v.(type) {
+	case []byte:
+		return strings.ToLower(strings.TrimSpace(string(t)))
+	case *string:
+		if t == nil {
+			return ""
+		}
+		return strings.ToLower(strings.TrimSpace(*t))
+	}
+	return strings.ToLower(strings.TrimSpace(fmt.Sprint(v)))
+}
+
+func containsFilterValue(list []any, v string) bool {
+	for _, x := range list {
+		if normFilterValue(x) == v {
+			return true
+		}
+	}
+	return false
+}
 
 // UnmarshalJSON accepts a single rule object or an array of rules.
 func (f *OptionFilter) UnmarshalJSON(data []byte) error {

@@ -26,7 +26,9 @@ func dlDefs() map[string]manifest.ModelDefinition {
 	return map[string]manifest.ModelDefinition{
 		"DlOrder": {
 			ModelKey: "DlOrder", TableName: "dl_orders", OrgScoped: true,
-			Columns:   []manifest.ColumnDef{{Name: "number", Type: "string"}},
+			Columns: []manifest.ColumnDef{
+				{Name: "number", Type: "string"}, {Name: "status", Type: "string"}, {Name: "converted_to", Type: "string"},
+			},
 			Relations: []manifest.RelationDef{{Name: "items", Kind: "one_to_many", Through: "DlOrderItem", ForeignKey: "order_id"}},
 		},
 		"DlOrderItem": {
@@ -52,6 +54,8 @@ func dlDefs() map[string]manifest.ModelDefinition {
 						Key: "sale", Label: "Venta", Model: "DlOrder", Lines: "items",
 						LinkField: "order_id", LineLinkField: "order_item_id",
 						ExcludeStates: []string{"cancelled"},
+						// Como la cotización de customers: ni cancelada ni ya convertida.
+						OptionFilter: []byte(`[{"field":"status","not_in":["cancelled"]},{"field":"converted_to","not_in":["order","layaway"]}]`),
 					}},
 				}},
 			},

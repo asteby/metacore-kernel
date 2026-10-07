@@ -123,3 +123,35 @@ func TestDocumentForms_EditorWireShape(t *testing.T) {
 		t.Errorf("plain type = %s", plain)
 	}
 }
+
+// OptionFilter.Match mirrors runtime-react option-filter.ts: positive rules
+// need the property, negative rules keep a row without it.
+func TestOptionFilterMatch(t *testing.T) {
+	var f OptionFilter
+	if err := json.Unmarshal([]byte(`[{"field":"status","in":["sent","accepted"]},{"field":"converted_to","not_in":["order","layaway"]}]`), &f); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		row  map[string]any
+		want bool
+	}{
+		{"sent, not converted", map[string]any{"status": "sent", "converted_to": nil}, true},
+		{"case and spaces", map[string]any{"status": " Accepted ", "converted_to": ""}, true},
+		{"converted", map[string]any{"status": "accepted", "converted_to": "order"}, false},
+		{"draft", map[string]any{"status": "draft"}, false},
+		{"positive rule needs the property", map[string]any{}, false},
+	}
+	for _, c := range cases {
+		if got := f.Match(c.row); got != c.want {
+			t.Errorf("%s: Match = %v, want %v", c.name, got, c.want)
+		}
+	}
+	eq := OptionFilter{{Field: "n", Equals: 1.0}, {Field: "b", NotEquals: true}}
+	if !eq.Match(map[string]any{"n": float64(1), "b": false}) || eq.Match(map[string]any{"n": 1.0, "b": "TRUE"}) {
+		t.Error("equals / not_equals over numbers and booleans")
+	}
+	if !(OptionFilter{}).Match(nil) {
+		t.Error("an empty filter matches every row")
+	}
+}

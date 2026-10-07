@@ -9,6 +9,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **«Crear desde»: the server re-checks the picked source against its
+  `option_filter`.** The source picker's filter ran only on the client, so a
+  payload could still link a document the picker hides — e.g. invoice a quote
+  already converted to a sale, then invoice the sale (two links the
+  pending-quantity check traces apart: the same goods billed twice).
+  `DocumentLineSource.OptionFilter` carries the rule and Create/Update (editor
+  path, payload with lines) reject 422 `source_not_eligible` /
+  `source_not_found` on the `link_field`; an unchanged link on Update is not
+  re-checked. New `modelbase.OptionFilter.Match` mirrors the SDK semantics.
+- **Self-listed `ref` pickers return the lifecycle column.** The zero-config
+  self-options entry now includes `status` / `state` (when the model has them)
+  as `ExtraColumns`, so a source `option_filter` with a positive rule on it no
+  longer empties the picker (the purchases «Cargar desde» orden de compra /
+  recepción pickers read empty).
+
 - **`Host.Navigation` resolves nav `condition` against the org's enabled
   addons.** It called `navigation.Build` (no installed predicate), so a nav
   group or item gated by `condition.addon_installed` was served to every org —
