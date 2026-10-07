@@ -502,13 +502,16 @@ func valueToString(raw any) string {
 
 // protectedNoop reports whether a Protected column's incoming value would
 // leave the row as it is: on update, the value already persisted (an empty
-// value matches an empty/NULL one); on create, an empty value or the column's
+// value matches an empty/NULL/absent one); on create, an empty value or the column's
 // declared default — the one the row is born with anyway.
 func protectedNoop(raw any, col manifest.ColumnDef, before map[string]any, isUpdate bool) bool {
 	if isUpdate {
 		if isEmptyValue(raw) {
+			// A missing value is empty too: an extension row that does not
+			// exist yet (a product with no tire data) has no persisted value,
+			// and echoing an empty one back must not fail the save.
 			prev, ok := before[col.Name]
-			return ok && isEmptyValue(prev)
+			return !ok || isEmptyValue(prev)
 		}
 		return unchangedFromPersisted(raw, before, col.Name)
 	}
