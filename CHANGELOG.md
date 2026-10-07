@@ -28,7 +28,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `Config.OptionDisplayResolver` (host-wired, filters metrics to the org's
   enabled addons), `OptionsQuery.Context` + `OptionContextFromQuery(c)`
   (`?ctx.<key>=`), `manifest.ModelDefinition.OptionDisplay`,
-  `manifest.Manifest.OptionMetrics` (`OptionMetricDef` with resolved tables),
+  `manifest.Manifest.OptionMetrics` (`OptionMetricDef` with resolved tables; also
+  copied onto the aggregated model's `ModelDefinition.OptionMetrics` so a host
+  persisting only model definitions keeps them),
   v3 types `OptionDisplay`, `OptionTrailing`, `OptionTone`,
   `OptionDisplayCondition`, `OptionBadge`, `OptionMetric`, schema + validation
   (every column referenced must exist on its model). No resolver wired = options

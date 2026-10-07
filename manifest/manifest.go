@@ -1191,6 +1191,11 @@ type ModelDefinition struct {
 	// read as picker options) so the host can hand it to dynamic.Service via
 	// Config.OptionDisplayResolver. Pure UI metadata. Nil = plain options.
 	OptionDisplay *v3.OptionDisplay `json:"option_display,omitempty"`
+	// OptionMetrics are the option_metrics[] of this addon that AGGREGATE this
+	// model (Metric.Model == ModelKey), copied here so a host persisting only
+	// model definitions keeps them. The same entries are in
+	// Manifest.OptionMetrics.
+	OptionMetrics []OptionMetricDef `json:"option_metrics,omitempty"`
 
 	// Import carries the v3 Model.import (spreadsheet-import template) through
 	// the v3 → host conversion, so an addon-owned model declares its import

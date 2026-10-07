@@ -171,6 +171,16 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.Backfills = mapBackfills(m.Backfills)
 	out.ProvidesOptions = mapProvidesOptions(m.ProvidesOptions, m.Models)
 	out.OptionMetrics = mapOptionMetrics(m.OptionMetrics, m.Models)
+	// Each metric also rides the definition of the model it aggregates, so a
+	// host that persists only ModelDefinitions (ops) keeps it across restarts
+	// and gates it by that model's addon like any other model feature.
+	for _, om := range out.OptionMetrics {
+		for i := range out.ModelDefinitions {
+			if out.ModelDefinitions[i].ModelKey == om.Model {
+				out.ModelDefinitions[i].OptionMetrics = append(out.ModelDefinitions[i].OptionMetrics, om)
+			}
+		}
+	}
 	out.ProvidesCapabilities = mapProvidesCapabilities(m.ProvidesCapabilities)
 	out.Documents = mapDocuments(m)
 	if m.Contributions != nil {

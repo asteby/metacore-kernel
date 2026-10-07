@@ -52,6 +52,15 @@ func TestFromV3ProjectsOptionDisplayAndMetrics(t *testing.T) {
 	if om.Table != "stock" || om.Key != "stock_available" || om.Target != "products.Product" {
 		t.Fatalf("metric not projected: %+v", om)
 	}
+	for _, d := range m.ModelDefinitions {
+		want := 0
+		if d.ModelKey == "Stock" {
+			want = 1
+		}
+		if len(d.OptionMetrics) != want {
+			t.Fatalf("%s carries %d metrics, want %d", d.ModelKey, len(d.OptionMetrics), want)
+		}
+	}
 	if len(om.ThroughTables) != 2 || om.ThroughTables[0] != "" || om.ThroughTables[1] != "warehouses" {
 		t.Fatalf("through tables = %v", om.ThroughTables)
 	}
