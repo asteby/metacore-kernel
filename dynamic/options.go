@@ -434,7 +434,28 @@ func (s *Service) selfOptionsConfig(model string, instance any, field string) (F
 		Source: model,
 		Value:  field,
 		Label:  label,
+		// The lifecycle column rides every self-listed option, so a picker's
+		// option_filter on it (a «crear desde» source offering only confirmed
+		// purchase orders) works with zero manifest config. Without it the
+		// positive rule (`in` / `equals`) found no property and hid EVERY
+		// option: the picker read empty.
+		ExtraColumns: selfOptionsExtraColumns(instance),
 	}, true
+}
+
+// selfOptionsLifecycleColumns are the lifecycle columns a self-listed option
+// carries when the model has them (see selfOptionsConfig).
+var selfOptionsLifecycleColumns = []string{"status", "state"}
+
+func selfOptionsExtraColumns(instance any) []string {
+	cols := structColumnSet(instance)
+	var out []string
+	for _, c := range selfOptionsLifecycleColumns {
+		if _, ok := cols[c]; ok {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // deriveLabelColumn picks the best display column for a self-referential

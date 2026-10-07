@@ -99,6 +99,11 @@ type DocumentLineSource struct {
 	// StateField is the column they are read from.
 	ExcludeStates []string
 	StateField    string
+	// OptionFilter is the source's option_filter: the rule its picker uses to
+	// offer only the documents one may create from (a sent quote not yet
+	// converted). Create/Update re-check the picked document (LinkField)
+	// against it, so a hidden source cannot be forced through the payload.
+	OptionFilter modelbase.OptionFilter
 }
 
 // tracksRemaining reports whether the runtime computes and enforces the
@@ -164,6 +169,12 @@ func DeriveDocumentLines(def manifest.ModelDefinition, lookup func(model string)
 				RemainingQtyField: src.RemainingQtyField,
 				ExcludeStates:     append([]string(nil), src.ExcludeStates...),
 				StateField:        stateField,
+			}
+			if len(src.OptionFilter) > 0 {
+				var f modelbase.OptionFilter
+				if json.Unmarshal(src.OptionFilter, &f) == nil {
+					ls.OptionFilter = f
+				}
 			}
 			if lookup != nil {
 				if sdef, ok := lookup(src.Model); ok {
@@ -570,6 +581,79 @@ func (s *Service) checkDocumentLines(ctx context.Context, user modelbase.AuthUse
 	return ve.Err()
 }
 
+// checkDocumentSources re-checks the source document a «crear desde» payload
+// links (the source's link_field in the header) against the source's
+// option_filter — the same rule its picker applied client-side. Without it a
+// document the picker hides (a quote already converted to a sale, a cancelled
+// work order) could still be posted by editing the payload, and its goods
+// invoiced twice through two links the pending-quantity check traces apart.
+//
+// It runs only on the editor's write path (the payload carries the lines,
+// dl != nil), like checkDocumentLines. On Update (excludeDocID != "") a link
+// that did not change is not re-checked: a source that stopped matching after
+// the document was born (the quote was converted later) must not lock its
+// edits. A source model the host cannot resolve (its addon is not installed)
+// is skipped. A linked id that does not exist in the caller's organization is
+// rejected.
+func (s *Service) checkDocumentSources(ctx context.Context, user modelbase.AuthUser, model string, dl *documentLines, input map[string]any, excludeDocID string) error {
+	if dl == nil || dl.typ == nil {
+		return nil
+	}
+	ve := NewValidationError()
+	var current map[string]any
+	loaded := false
+	for i := range dl.typ.Sources {
+		src := &dl.typ.Sources[i]
+		if len(src.OptionFilter) == 0 || !isSafeIdent(src.LinkField) {
+			continue
+		}
+		id := linkValue(input, src.LinkField)
+		if id == "" {
+			continue
+		}
+		if _, err := uuid.Parse(id); err != nil {
+			continue // a malformed id is the write validation's to report
+		}
+		if excludeDocID != "" {
+			if !loaded {
+				loaded = true
+				rows, err := s.fetchRows(ctx, user, model, "id", []any{excludeDocID}, false)
+				if err != nil {
+					return err
+				}
+				if len(rows) > 0 {
+					current = rows[0]
+				}
+			}
+			if current != nil && linkValue(current, src.LinkField) == id {
+				continue
+			}
+		}
+		if _, ok := s.lookupModel(ctx, src.Model); !ok {
+			continue
+		}
+		rows, err := s.fetchRows(ctx, user, src.Model, "id", []any{id}, false)
+		if err != nil {
+			return err
+		}
+		switch {
+		case len(rows) == 0:
+			ve.Fields = appendFieldError(ve.Fields, src.LinkField, FieldError{
+				Code:    "source_not_found",
+				Params:  map[string]any{"source": src.Label},
+				Message: "No se encontró el documento origen elegido" + sourceSuffix(*src) + ".",
+			})
+		case !src.OptionFilter.Match(rows[0]):
+			ve.Fields = appendFieldError(ve.Fields, src.LinkField, FieldError{
+				Code:    "source_not_eligible",
+				Params:  map[string]any{"source": src.Label},
+				Message: "El documento origen elegido" + sourceSuffix(*src) + " ya no se puede usar (por ejemplo, ya se convirtió, se canceló o cambió de estado). Elige otro.",
+			})
+		}
+	}
+	return ve.Err()
+}
+
 // addQuantityErrors compares the requested quantity per source line (a source
 // line may be split over several lines) with what is pending and records one
 // error per offending line, with a message ready to show.
@@ -619,6 +703,15 @@ func appendFieldError(m map[string][]FieldError, key string, fe FieldError) map[
 	}
 	m[key] = append(m[key], fe)
 	return m
+}
+
+// sourceSuffix names the source kind after "el documento origen elegido"
+// (" en «Cotización»"), or nothing when its label is an i18n key.
+func sourceSuffix(src DocumentLineSource) string {
+	if strings.TrimSpace(src.Label) != "" && !strings.Contains(src.Label, ".") {
+		return " en «" + src.Label + "»"
+	}
+	return ""
 }
 
 func sourceName(src DocumentLineSource) string {

@@ -214,6 +214,21 @@ case-insensitive; the current selection is never hidden by the SDK. A rule
 needs `field` and at least one operator (`in`/`not_in` non-empty), otherwise
 the manifest is rejected.
 
+**`document_forms.types[].sources[].option_filter` is also enforced by the
+server.** When the editor posts a document with its lines, `Service.Create` /
+`Update` load the source document named by the source's `link_field` and
+re-evaluate the filter on it (`modelbase.OptionFilter.Match`, same semantics as
+the SDK, over the full row). A source the picker would hide is rejected with
+422 `source_not_eligible` on the `link_field` (a missing id in the org:
+`source_not_found`). An Update whose `link_field` did not change is not
+re-checked, so a document stays editable after its source stops matching. A
+source model the host cannot resolve is skipped.
+
+**Self-listed pickers carry the lifecycle column.** A `ref` picker without a
+declared options entry (`EnableSelfOptions`) returns the model's `status` /
+`state` column on every option, so a positive rule on it (`in`, `equals`) does
+not hide every option. Any other column still needs `extra_columns`.
+
 ## `extra_columns` on `/options`
 
 The object form of `options` gains `extra_columns`: scalar columns of `source`

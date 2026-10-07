@@ -894,6 +894,9 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	}
 	// «Crear desde»: no line may take more than what its source line has
 	// pending (a rejected create burns no folio).
+	if err := s.checkDocumentSources(ctx, user, model, docLines, input, ""); err != nil {
+		return nil, err
+	}
 	if err := s.checkDocumentLines(ctx, user, model, docLines, ""); err != nil {
 		return nil, err
 	}
@@ -1058,6 +1061,9 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	// pending-quantity check leaves this document's own lines out.
 	docLines, err := s.takeDocumentLines(ctx, model, input)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.checkDocumentSources(ctx, user, model, docLines, input, id.String()); err != nil {
 		return nil, err
 	}
 	if err := s.checkDocumentLines(ctx, user, model, docLines, id.String()); err != nil {
