@@ -7,6 +7,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Options endpoint resolve mode: `?ids=`.** `GET /options/:model?field=…&ids=a,b`
+  (comma list, repeated `ids=`, or `ids[]=`) returns exactly the options whose
+  value is in the list — same label / image / extra_columns projection
+  (LabelRef enrichment included), same tenant scoping, access policy and
+  soft-delete filtering as the listing — ignoring `q`, `limit`, `offset` and
+  ordering (`filter_value` still applies if sent). Missing, foreign-org or
+  soft-deleted ids are simply absent; ids that cannot parse against a uuid value
+  column are dropped (no 22P02) and the rest are canonicalized; duplicates
+  collapse to one option per value. Capped at `MaxOptionsIDs` (100) — beyond
+  that, `ErrInvalidInput` / 400. Works for addon-qualified refs
+  (`quotes.Quote`) through the host's `ModelResolver`. New field
+  `OptionsQuery.IDs` and exported `OptionIDsFromQuery(c)` so hosts with their
+  own options handler (ops' `handlers/lookup.go`) parse it identically. It is
+  the lookup a picker needs to label an already-saved value without opening its
+  popover (SDK `RecordPicker`).
+
 ### Fixed
 
 - **«Crear desde»: the source `option_filter` re-check runs on every write, not

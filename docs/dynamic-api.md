@@ -325,7 +325,7 @@ endpoints return `501 Not Implemented`. See
 Render values for a `<select>` field. Used heavily by the runtime-react
 form generator.
 
-`GET /api/options/:model?field=<col>[&q=...&filter_value=...&limit=...&offset=...]`
+`GET /api/options/:model?field=<col>[&q=...&filter_value=...&limit=...&offset=...&ids=...]`
 
 | Param          | Notes                                                       |
 | -------------- | ----------------------------------------------------------- |
@@ -334,6 +334,7 @@ form generator.
 | `filter_value` | Optional, scoped through `FieldOptionsConfig.FilterBy`.     |
 | `limit`        | Default 50, clamped to `MaxOptionsLimit` (200).             |
 | `offset`       | Default 0.                                                  |
+| `ids`          | Resolve mode: comma list or repeated. Returns exactly those values (scoped, no paging, `q` ignored). Max 100. |
 
 ```bash
 curl -G \

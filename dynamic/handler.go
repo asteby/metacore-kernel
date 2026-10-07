@@ -477,6 +477,7 @@ func (h *Handler) options(c fiber.Ctx) error {
 			q.Offset = n
 		}
 	}
+	q.IDs = OptionIDsFromQuery(c)
 	res, err := h.service.Options(c, u, q)
 	if err != nil {
 		return h.handleError(c, err)
@@ -495,6 +496,25 @@ func (h *Handler) options(c fiber.Ctx) error {
 			"count": len(res.Options),
 		},
 	})
+}
+
+// OptionIDsFromQuery reads ?ids= as a comma list, repeated keys, or both
+// (`ids=a,b&ids=c` and `ids[]=a` included) for OptionsQuery.IDs. Exported so a
+// host with its own options handler (one that builds OptionsQuery itself)
+// parses the parameter exactly like the kernel route.
+func OptionIDsFromQuery(c fiber.Ctx) []string {
+	var out []string
+	args := c.Request().URI().QueryArgs()
+	for _, key := range []string{"ids", "ids[]"} {
+		for _, raw := range args.PeekMulti(key) {
+			for _, part := range strings.Split(string(raw), ",") {
+				if part = strings.TrimSpace(part); part != "" {
+					out = append(out, part)
+				}
+			}
+		}
+	}
+	return out
 }
 
 func (h *Handler) search(c fiber.Ctx) error {
