@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Editar un registro sin fila de extensión ya no falla con `protected_field`.**
+  El formulario reenvía la llave de búsqueda generada de una extensión (p. ej.
+  `size_key` de llantas) vacía; si el registro no tenía fila en esa extensión
+  (un producto que no es llanta), `protectedNoop` lo tomaba como un cambio y
+  rechazaba el guardado. Un valor vacío contra un valor ausente ahora es no-op;
+  cambiar o vaciar un valor persistido se sigue rechazando.
+
 ### Added
 
 - **Declarative option display: `models[].option_display` + `option_metrics[]`.**
