@@ -149,3 +149,96 @@ func TestSelfOptions_CarryTheLifecycleColumn(t *testing.T) {
 		t.Fatal("only the lifecycle column rides a self-listed option")
 	}
 }
+
+// Una alta por API sin renglones (solo la cabecera con el link_field, p. ej.
+// una factura con quote_id) también re-evalúa el origen: antes la revalidación
+// colgaba de que el payload trajera los renglones.
+func TestCreate_HeaderOnlyRejectsAHiddenSource(t *testing.T) {
+	svc, db := newDocLinesService(t, true)
+	user := newUser(uuid.New())
+	ctx := context.Background()
+	order, item := seedOrder(t, svc, user)
+	headerOnly := func(order string) map[string]any {
+		in := invoiceFrom(order, item, 1, "draft")
+		delete(in, "items")
+		return in
+	}
+
+	if _, err := svc.Create(ctx, "DlInvoice", user, headerOnly(order)); err != nil {
+		t.Fatalf("eligible source, header only: %v", err)
+	}
+	setOrder(t, svc, user, order, map[string]any{"converted_to": "order"})
+	in := headerOnly(order)
+	_, err := svc.Create(ctx, "DlInvoice", user, in)
+	if fe := sourceFieldError(t, err); fe.Code != "source_not_eligible" {
+		t.Fatalf("header-only create from a hidden source: %+v", fe)
+	}
+	var n int64
+	db.Table("dl_invoices").Where("id = ?", in["id"]).Count(&n)
+	if n != 0 {
+		t.Fatal("a header-only invoice from a hidden source must not be inserted")
+	}
+	if fe := sourceFieldError(t, func() error {
+		_, err := svc.Create(ctx, "DlInvoice", user, headerOnly(uuid.NewString()))
+		return err
+	}()); fe.Code != "source_not_found" {
+		t.Fatalf("header-only create from a missing source: %+v", fe)
+	}
+	// Sin link_field no hay nada que revisar.
+	plain := headerOnly(order)
+	delete(plain, "order_id")
+	if _, err := svc.Create(ctx, "DlInvoice", user, plain); err != nil {
+		t.Fatalf("create without a source: %v", err)
+	}
+}
+
+// Un PATCH de solo cabecera: el vínculo sin cambio no se re-evalúa aunque el
+// payload no reenvíe el tipo; cambiarlo a un origen escondido sí se rechaza.
+func TestUpdate_HeaderOnlyChecksAChangedSource(t *testing.T) {
+	svc, _ := newDocLinesService(t, true)
+	user := newUser(uuid.New())
+	ctx := context.Background()
+	order, item := seedOrder(t, svc, user)
+	out, err := svc.Create(ctx, "DlInvoice", user, invoiceFrom(order, item, 1, "draft"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.MustParse(fmt.Sprint(out["id"]))
+	setOrder(t, svc, user, order, map[string]any{"converted_to": "order"})
+
+	if _, err := svc.Update(ctx, "DlInvoice", user, id, map[string]any{"order_id": order, "state": "draft"}); err != nil {
+		t.Fatalf("header-only update with the unchanged source: %v", err)
+	}
+	other, _ := seedOrder(t, svc, user)
+	setOrder(t, svc, user, other, map[string]any{"status": "cancelled"})
+	_, err = svc.Update(ctx, "DlInvoice", user, id, map[string]any{"order_id": other})
+	if fe := sourceFieldError(t, err); fe.Code != "source_not_eligible" {
+		t.Fatalf("header-only switch to a hidden source: %+v", fe)
+	}
+}
+
+// CheckDocumentSources es la misma regla para la ruta legacy de un host: con
+// before == nil es un alta; con before, un vínculo sin cambio pasa.
+func TestCheckDocumentSources_Exported(t *testing.T) {
+	svc, _ := newDocLinesService(t, true)
+	user := newUser(uuid.New())
+	ctx := context.Background()
+	order, _ := seedOrder(t, svc, user)
+	setOrder(t, svc, user, order, map[string]any{"converted_to": "layaway"})
+
+	err := svc.CheckDocumentSources(ctx, user, "DlInvoice", map[string]any{"kind": "I", "order_id": order}, nil)
+	if fe := sourceFieldError(t, err); fe.Code != "source_not_eligible" {
+		t.Fatalf("create: %+v", fe)
+	}
+	before := map[string]any{"kind": "I", "order_id": order}
+	if err := svc.CheckDocumentSources(ctx, user, "DlInvoice", map[string]any{"order_id": order, "state": "posted"}, before); err != nil {
+		t.Fatalf("unchanged link: %v", err)
+	}
+	if err := svc.CheckDocumentSources(ctx, user, "DlInvoice", map[string]any{"state": "posted"}, before); err != nil {
+		t.Fatalf("no link posted: %v", err)
+	}
+	// Un modelo sin document_forms no se toca.
+	if err := svc.CheckDocumentSources(ctx, user, "DlOrder", map[string]any{"order_id": order}, nil); err != nil {
+		t.Fatalf("model without sources: %v", err)
+	}
+}

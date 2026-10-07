@@ -581,29 +581,68 @@ func (s *Service) checkDocumentLines(ctx context.Context, user modelbase.AuthUse
 	return ve.Err()
 }
 
-// checkDocumentSources re-checks the source document a «crear desde» payload
+// CheckDocumentSources re-checks the source document a «crear desde» write
 // links (the source's link_field in the header) against the source's
 // option_filter — the same rule its picker applied client-side. Without it a
 // document the picker hides (a quote already converted to a sale, a cancelled
 // work order) could still be posted by editing the payload, and its goods
 // invoiced twice through two links the pending-quantity check traces apart.
 //
-// It runs only on the editor's write path (the payload carries the lines,
-// dl != nil), like checkDocumentLines. On Update (excludeDocID != "") a link
-// that did not change is not re-checked: a source that stopped matching after
-// the document was born (the quote was converted later) must not lock its
-// edits. A source model the host cannot resolve (its addon is not installed)
-// is skipped. A linked id that does not exist in the caller's organization is
-// rejected.
-func (s *Service) checkDocumentSources(ctx context.Context, user modelbase.AuthUser, model string, dl *documentLines, input map[string]any, excludeDocID string) error {
-	if dl == nil || dl.typ == nil {
+// It runs on EVERY Create / Update of a model whose document_forms declare a
+// source with an option_filter, whenever the payload names that source's
+// link_field — with or without lines (a header-only API create such as an
+// invoice carrying only quote_id is checked too). before is the persisted row
+// on an update (nil on a create): a link that did not change is not
+// re-checked, so a source that stopped matching after the document was born
+// (the quote was converted later) does not lock its edits; it also supplies
+// the document type when the update does not resend the type field. A source
+// model the host cannot resolve (its addon is not installed) is skipped. A
+// linked id that does not exist in the caller's organization is rejected.
+//
+// Exported so a host's legacy write path (one that does not go through
+// Service.Create / Update) enforces the same rule. Writes from addon wasm
+// (data_mutate / data_batch) deliberately do not run it: see
+// docs/document-forms.md.
+func (s *Service) CheckDocumentSources(ctx context.Context, user modelbase.AuthUser, model string, input, before map[string]any) error {
+	return s.checkDocumentSources(ctx, user, model, input, before, "")
+}
+
+// checkDocumentSources is CheckDocumentSources for Service.Create / Update:
+// on an update (excludeDocID != "") without a before row it loads the
+// persisted row lazily, only when a link_field is posted.
+func (s *Service) checkDocumentSources(ctx context.Context, user modelbase.AuthUser, model string, input, before map[string]any, excludeDocID string) error {
+	sp := s.resolveDocumentLines(ctx, model)
+	if sp == nil || len(sp.Types) == 0 || len(input) == 0 {
+		return nil
+	}
+	if !hasFilteredSourceLink(sp, input) {
+		return nil
+	}
+	isUpdate := before != nil || excludeDocID != ""
+	if before == nil && excludeDocID != "" {
+		rows, err := s.fetchRows(ctx, user, model, "id", []any{excludeDocID}, false)
+		if err != nil {
+			return err
+		}
+		if len(rows) > 0 {
+			before = rows[0]
+		}
+	}
+	// The type the document is (or becomes): the posted type field, else the
+	// persisted one on an update, else the first type.
+	typeView := input
+	if sp.TypeField != "" && before != nil {
+		if v, ok := input[sp.TypeField]; !ok || v == nil {
+			typeView = map[string]any{sp.TypeField: before[sp.TypeField]}
+		}
+	}
+	typ := sp.typeFor(typeView)
+	if typ == nil {
 		return nil
 	}
 	ve := NewValidationError()
-	var current map[string]any
-	loaded := false
-	for i := range dl.typ.Sources {
-		src := &dl.typ.Sources[i]
+	for i := range typ.Sources {
+		src := &typ.Sources[i]
 		if len(src.OptionFilter) == 0 || !isSafeIdent(src.LinkField) {
 			continue
 		}
@@ -614,20 +653,8 @@ func (s *Service) checkDocumentSources(ctx context.Context, user modelbase.AuthU
 		if _, err := uuid.Parse(id); err != nil {
 			continue // a malformed id is the write validation's to report
 		}
-		if excludeDocID != "" {
-			if !loaded {
-				loaded = true
-				rows, err := s.fetchRows(ctx, user, model, "id", []any{excludeDocID}, false)
-				if err != nil {
-					return err
-				}
-				if len(rows) > 0 {
-					current = rows[0]
-				}
-			}
-			if current != nil && linkValue(current, src.LinkField) == id {
-				continue
-			}
+		if isUpdate && before != nil && linkValue(before, src.LinkField) == id {
+			continue
 		}
 		if _, ok := s.lookupModel(ctx, src.Model); !ok {
 			continue
@@ -652,6 +679,21 @@ func (s *Service) checkDocumentSources(ctx context.Context, user modelbase.AuthU
 		}
 	}
 	return ve.Err()
+}
+
+// hasFilteredSourceLink reports whether input names the link_field of any
+// source (of any type) that carries an option_filter — the cheap pre-check
+// that keeps every other write free of the extra reads.
+func hasFilteredSourceLink(sp *DocumentLinesSpec, input map[string]any) bool {
+	for i := range sp.Types {
+		for j := range sp.Types[i].Sources {
+			src := &sp.Types[i].Sources[j]
+			if len(src.OptionFilter) > 0 && src.LinkField != "" && linkValue(input, src.LinkField) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // addQuantityErrors compares the requested quantity per source line (a source
