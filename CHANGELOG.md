@@ -9,6 +9,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **«Crear desde»: the source `option_filter` re-check runs on every write, not
+  only the editor's.** It hung off the payload carrying the lines, so a
+  header-only API create (an invoice with just `quote_id`) or a PATCH that only
+  switched the `link_field` skipped it — and the ops host strips embedded lines
+  before `Service.Create`, so even the editor's payload could miss it. Now
+  `Service.Create` / `Update` check every source with an `option_filter` whose
+  `link_field` the payload names (Update: only when the link changes; a PATCH
+  without the type field uses the persisted type). New exported
+  `Service.CheckDocumentSources(ctx, user, model, input, before)` lets a host's
+  legacy write path apply the same rule (ops' legacy update for models with
+  `fiscal_data`). **Not applied to addon wasm writes** (`data_mutate` /
+  `data_batch`): they are the addon's own business logic, outside the UI
+  picker's contract — e.g. fiscal_mexico's supplier-CFDI import creates a
+  `draft` purchase order and, in the same batch, a supplier invoice linked to
+  it, which the purchases source filter (`state in [confirmed, partial,
+  received, closed]`) would reject. See docs/document-forms.md.
+
 - **«Crear desde»: the server re-checks the picked source against its
   `option_filter`.** The source picker's filter ran only on the client, so a
   payload could still link a document the picker hides — e.g. invoice a quote

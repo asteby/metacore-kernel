@@ -215,14 +215,28 @@ needs `field` and at least one operator (`in`/`not_in` non-empty), otherwise
 the manifest is rejected.
 
 **`document_forms.types[].sources[].option_filter` is also enforced by the
-server.** When the editor posts a document with its lines, `Service.Create` /
-`Update` load the source document named by the source's `link_field` and
-re-evaluate the filter on it (`modelbase.OptionFilter.Match`, same semantics as
-the SDK, over the full row). A source the picker would hide is rejected with
-422 `source_not_eligible` on the `link_field` (a missing id in the org:
-`source_not_found`). An Update whose `link_field` did not change is not
-re-checked, so a document stays editable after its source stops matching. A
-source model the host cannot resolve is skipped.
+server.** Every `Service.Create` / `Update` of the model whose payload names a
+source's `link_field` — with or without lines (a header-only API create such as
+an invoice carrying only `quote_id` is checked too) — loads the source document
+and re-evaluates the filter on it (`modelbase.OptionFilter.Match`, same
+semantics as the SDK, over the full row). A source the picker would hide is
+rejected with 422 `source_not_eligible` on the `link_field` (a missing id in
+the org: `source_not_found`). An Update whose `link_field` did not change is not
+re-checked, so a document stays editable after its source stops matching; an
+Update that does not resend the type field is checked against the persisted
+type. A source model the host cannot resolve is skipped. A host write path that
+does not go through `Service.Create` / `Update` calls
+`Service.CheckDocumentSources(ctx, user, model, input, before)` (`before` nil on
+a create, the persisted row on an update).
+
+**Addon wasm writes are not re-checked.** `data_mutate` / `data_batch` are the
+addon's own business logic (a quote converted to a sale, a document generated
+automatically), outside the picker's contract — the same reason they skip
+stage locks and UI validations. Applying the picker's filter there breaks
+legitimate flows: fiscal_mexico's supplier-CFDI import creates a `draft`
+purchase order and, in the same batch, the supplier invoice linked to it, which
+purchases' source filter (`state in [confirmed, partial, received, closed]`)
+would reject. An addon that needs the rule enforces it in its own handler.
 
 **Self-listed pickers carry the lifecycle column.** A `ref` picker without a
 declared options entry (`EnableSelfOptions`) returns the model's `status` /
