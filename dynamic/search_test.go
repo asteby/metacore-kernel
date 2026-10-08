@@ -168,3 +168,164 @@ func TestNestedJoinExcludesSoftDeletedParent(t *testing.T) {
 		t.Fatalf("join over table without deleted_at changed: %v", joins)
 	}
 }
+
+func searchNames(hits []Option) []string {
+	var out []string
+	for _, h := range hits {
+		s, _ := h.Label.(string)
+		out = append(out, s)
+	}
+	return out
+}
+
+func TestSearchBaseWhereRestrictsAndBindsArgs(t *testing.T) {
+	db := setupTestDB(t)
+	svc := newOptionsService(t, db, nil, searchConfigFor(SearchConfig{
+		SearchIn:  []string{"name"},
+		Value:     "id",
+		Label:     "name",
+		BaseWhere: "test_products.price >= ?",
+		BaseArgs:  []any{2.0},
+	}))
+	user := newUser(uuid.New())
+	createProduct(t, svc, user, "Cheap", 1)
+	createProduct(t, svc, user, "Mid", 2)
+	createProduct(t, svc, user, "Dear", 3)
+
+	hits, err := svc.Search(context.Background(), user, SearchQuery{Model: "test_products", Limit: 10})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("BaseWhere should leave 2 rows, got %v", searchNames(hits))
+	}
+	// BaseWhere must also hold when a text query is present.
+	hits, err = svc.Search(context.Background(), user, SearchQuery{Model: "test_products", Q: "cheap"})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("BaseWhere bypassed by Q: %v", searchNames(hits))
+	}
+}
+
+func TestSearchJoinsApplied(t *testing.T) {
+	db := setupTestDB(t)
+	if err := db.Exec(`CREATE TABLE vendors (id INTEGER PRIMARY KEY, name TEXT, deleted_at DATETIME)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	db.Exec(`INSERT INTO vendors (id, name) VALUES (1, 'acme')`)
+	svc := newOptionsService(t, db, nil, searchConfigFor(SearchConfig{
+		SearchIn:  []string{"name"},
+		Value:     "id",
+		Label:     "name",
+		Joins:     []string{"JOIN vendors ON vendors.name = test_products.name"},
+		BaseWhere: "vendors.deleted_at IS NULL",
+	}))
+	user := newUser(uuid.New())
+	createProduct(t, svc, user, "acme", 1)
+	createProduct(t, svc, user, "other", 2)
+	hits, err := svc.Search(context.Background(), user, SearchQuery{Model: "test_products"})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if got := searchNames(hits); len(got) != 1 || got[0] != "acme" {
+		t.Fatalf("join should keep only acme, got %v", got)
+	}
+}
+
+func TestSearchAllowFilters(t *testing.T) {
+	db := setupTestDB(t)
+	svc := newOptionsService(t, db, nil, searchConfigFor(SearchConfig{
+		SearchIn:     []string{"name"},
+		Value:        "id",
+		Label:        "name",
+		AllowFilters: []string{"name", "bad name; DROP TABLE test_products"},
+	}))
+	user := newUser(uuid.New())
+	createProduct(t, svc, user, "A", 1)
+	createProduct(t, svc, user, "B", 2)
+	ctx := context.Background()
+
+	// Allowed column filters by equality.
+	hits, err := svc.Search(ctx, user, SearchQuery{Model: "test_products", Filters: map[string]string{"name": "B"}})
+	if err != nil || len(hits) != 1 || searchNames(hits)[0] != "B" {
+		t.Fatalf("allowed filter: hits=%v err=%v", searchNames(hits), err)
+	}
+	// Column outside the list is ignored (all rows come back, no error).
+	hits, err = svc.Search(ctx, user, SearchQuery{Model: "test_products", Filters: map[string]string{"price": "2"}})
+	if err != nil || len(hits) != 2 {
+		t.Fatalf("non-listed filter must be ignored: hits=%v err=%v", searchNames(hits), err)
+	}
+	// Malicious identifier: neither listed-but-unsafe nor client-only keys reach SQL.
+	for _, k := range []string{"bad name; DROP TABLE test_products", "name; DROP TABLE test_products--", "1=1 OR name"} {
+		hits, err = svc.Search(ctx, user, SearchQuery{Model: "test_products", Filters: map[string]string{k: "x"}})
+		if err != nil || len(hits) != 2 {
+			t.Fatalf("malicious key %q: hits=%v err=%v", k, searchNames(hits), err)
+		}
+	}
+	// Quotes / injection in the VALUE are bound, not interpolated.
+	for _, v := range []string{"B' OR '1'='1", "x'; DROP TABLE test_products;--"} {
+		hits, err = svc.Search(ctx, user, SearchQuery{Model: "test_products", Filters: map[string]string{"name": v}})
+		if err != nil || len(hits) != 0 {
+			t.Fatalf("injection value %q: hits=%v err=%v", v, searchNames(hits), err)
+		}
+	}
+	if hits, _ = svc.Search(ctx, user, SearchQuery{Model: "test_products"}); len(hits) != 2 {
+		t.Fatalf("table damaged: %d rows", len(hits))
+	}
+}
+
+func TestSearchExtraFieldsAndOrderLimit(t *testing.T) {
+	db := setupTestDB(t)
+	svc := newOptionsService(t, db, nil, searchConfigFor(SearchConfig{
+		SearchIn:    []string{"name"},
+		Value:       "id",
+		Label:       "name",
+		ExtraFields: []string{"price", "bad;col", "id"},
+		OrderBy:     "price",
+		OrderDir:    "desc",
+	}))
+	user := newUser(uuid.New())
+	createProduct(t, svc, user, "A", 1)
+	createProduct(t, svc, user, "B", 2)
+	createProduct(t, svc, user, "C", 3)
+	hits, err := svc.Search(context.Background(), user, SearchQuery{Model: "test_products", Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := searchNames(hits); len(got) != 2 || got[0] != "C" || got[1] != "B" {
+		t.Fatalf("order/limit broken: %v", got)
+	}
+	if hits[0].Extra["price"] != 3.0 {
+		t.Fatalf("extra price missing: %v", hits[0].Extra)
+	}
+	if _, ok := hits[0].Extra["bad;col"]; ok {
+		t.Fatal("unsafe extra field leaked")
+	}
+	if _, ok := hits[0].Extra["id"]; ok {
+		t.Fatal("reserved key must be skipped")
+	}
+}
+
+func TestSearchOrderByNonPlainColumnIgnored(t *testing.T) {
+	for _, ob := range []string{"vendors.name", "price; DROP TABLE test_products", "p.price"} {
+		db := setupTestDB(t)
+		svc := newOptionsService(t, db, nil, searchConfigFor(SearchConfig{
+			SearchIn: []string{"name"},
+			Value:    "id",
+			Label:    "name",
+			OrderBy:  ob,
+		}))
+		user := newUser(uuid.New())
+		createProduct(t, svc, user, "A", 1)
+		createProduct(t, svc, user, "B", 2)
+		hits, err := svc.Search(context.Background(), user, SearchQuery{Model: "test_products", Limit: 10})
+		if err != nil {
+			t.Fatalf("OrderBy %q should be ignored, not fail: %v", ob, err)
+		}
+		if len(hits) != 2 {
+			t.Fatalf("OrderBy %q: want 2 hits, got %v", ob, searchNames(hits))
+		}
+	}
+}

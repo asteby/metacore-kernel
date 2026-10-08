@@ -96,3 +96,33 @@ func TestKVAliasesOptionDef(t *testing.T) {
 		t.Fatalf("KV and OptionDef JSON differ: %s vs %s", b1, b2)
 	}
 }
+
+func TestSearchConfigSQLFieldsNotSerialized(t *testing.T) {
+	cfg := modelbase.SearchConfig{
+		SearchIn:  []string{"name"},
+		BaseWhere: "x.id IN (SELECT id FROM y)",
+		BaseArgs:  []any{1},
+		Joins:     []string{"JOIN users ON users.id = x.user_id"},
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"baseWhere", "baseArgs", "joins", "BaseWhere", "BaseArgs", "Joins", "JOIN users"} {
+		if strings.Contains(string(b), k) {
+			t.Fatalf("%q leaked into JSON: %s", k, b)
+		}
+	}
+
+	var got modelbase.SearchConfig
+	in := `{"searchIn":["name"],"baseWhere":"1=1","baseArgs":[1],"joins":["JOIN z"],"BaseWhere":"1=1","Joins":["JOIN z"]}`
+	if err := json.Unmarshal([]byte(in), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.BaseWhere != "" || got.BaseArgs != nil || got.Joins != nil {
+		t.Fatalf("client JSON populated SQL fields: %+v", got)
+	}
+	if len(got.SearchIn) != 1 {
+		t.Fatalf("regular fields should still decode: %+v", got)
+	}
+}
