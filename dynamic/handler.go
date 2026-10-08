@@ -532,6 +532,12 @@ func (h *Handler) search(c fiber.Ctx) error {
 			q.Limit = n
 		}
 	}
+	// Pass the query params through; Service.Search applies only the ones the
+	// model lists in SearchConfig.AllowFilters.
+	q.Filters = map[string]string{}
+	c.Request().URI().QueryArgs().VisitAll(func(k, v []byte) {
+		q.Filters[string(k)] = string(v)
+	})
 	hits, err := h.service.Search(c, u, q)
 	if err != nil {
 		return h.handleError(c, err)

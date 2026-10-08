@@ -18,6 +18,10 @@ type SearchQuery struct {
 	Q string
 	// Limit caps the number of hits. Defaults to DefaultSearchLimit.
 	Limit int
+	// Filters carries the client's query params. Only keys listed in
+	// SearchConfig.AllowFilters are applied (equality, bound as a placeholder
+	// value); every other key is ignored. Nil = no client filters.
+	Filters map[string]string
 }
 
 const (
@@ -73,6 +77,25 @@ func (s *Service) Search(ctx context.Context, user modelbase.AuthUser, q SearchQ
 	}
 	db = scoped
 
+	// Compiled-model joins and fixed restriction (see SearchConfig.BaseWhere).
+	for _, j := range cfg.Joins {
+		db = db.Joins(j)
+	}
+	if cfg.BaseWhere != "" {
+		db = db.Where(cfg.BaseWhere, cfg.BaseArgs...)
+	}
+
+	// Allow-listed equality filters: the column must be in the model's list AND
+	// a safe identifier; the client value is always a bound placeholder.
+	for _, col := range cfg.AllowFilters {
+		if !safeColumn.MatchString(col) {
+			continue
+		}
+		if v, ok := q.Filters[col]; ok && v != "" {
+			db = db.Where(fmt.Sprintf("%s.%s = ?", tableName, col), v)
+		}
+	}
+
 	for _, rel := range cfg.Preload {
 		db = db.Preload(rel)
 	}
@@ -123,7 +146,8 @@ func (s *Service) Search(ctx context.Context, user modelbase.AuthUser, q SearchQ
 		orderDir = "asc"
 	}
 	if safeColumn.MatchString(orderBy) {
-		db = db.Order(fmt.Sprintf("%s %s", orderBy, orderDir))
+		// Qualified so a SearchConfig.Joins table with the same column is not ambiguous.
+		db = db.Order(fmt.Sprintf("%s.%s %s", tableName, orderBy, orderDir))
 	}
 
 	limit := q.Limit
@@ -208,6 +232,7 @@ func projectSearch(results reflect.Value, cfg SearchConfig) []Option {
 		if cfg.Icon != "" {
 			opt.Icon = fieldValue(item, cfg.Icon)
 		}
+		opt.Extra = extraColumnValues(item, cfg.ExtraFields)
 		out = append(out, opt)
 	}
 	return out

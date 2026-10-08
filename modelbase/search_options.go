@@ -15,6 +15,31 @@ type SearchConfig struct {
 	Preload     []string `json:"preload"`
 	OrderBy     string   `json:"orderBy"`
 	OrderDir    string   `json:"orderDir"`
+
+	// BaseWhere is a fixed SQL condition ANDed into every search (e.g. the
+	// anti-orphan guard "pharmacy_reviews.pharmacy_id IN (SELECT id FROM
+	// pharmacies WHERE deleted_at IS NULL)"). Use "?" placeholders and put the
+	// values in BaseArgs. SECURITY: it is raw SQL and MUST come from the
+	// compiled model definition only; never build it from client input.
+	// Empty = no extra restriction.
+	BaseWhere string `json:"baseWhere,omitempty"`
+	// BaseArgs are the placeholder values bound to BaseWhere, in order.
+	BaseArgs []any `json:"baseArgs,omitempty"`
+	// Joins are extra JOIN clauses applied to every search (e.g. "JOIN users
+	// ON users.id = doctors.user_id"). Same SECURITY rule as BaseWhere:
+	// compiled-model origin only, raw SQL, never client input.
+	Joins []string `json:"joins,omitempty"`
+	// AllowFilters is the allow-list of columns of the root table that the
+	// client may filter by equality through query params (?brand=Bayer). Each
+	// name must be a plain identifier; the client value is always bound as a
+	// placeholder. Params for columns outside the list are IGNORED (never an
+	// error, never reach SQL). Empty = no client filters.
+	AllowFilters []string `json:"allowFilters,omitempty"`
+	// ExtraFields names additional scalar columns of the row returned on every
+	// hit as sibling keys of id/value/label. Only plain identifiers with
+	// string/number/bool (or Stringer) values are returned; non-scalar values
+	// (relations) and names reserved by the hit shape are skipped.
+	ExtraFields []string `json:"extraFields,omitempty"`
 }
 
 // OptionsConfig declares per-field option sources for a model. Consumed by
