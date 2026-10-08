@@ -13,22 +13,28 @@ type SearchConfig struct {
 	Image       string   `json:"image"`
 	Icon        string   `json:"icon"`
 	Preload     []string `json:"preload"`
-	OrderBy     string   `json:"orderBy"`
-	OrderDir    string   `json:"orderDir"`
+	// OrderBy must be a plain column of the ROOT table. The search qualifies it
+	// with the root table name ("<table>.<orderBy>") so a Joins table with the
+	// same column is not ambiguous. Aliases, dotted/qualified names or
+	// expressions are not supported: a value that is not a plain identifier is
+	// ignored (no ORDER BY applied). Empty = "id".
+	OrderBy  string `json:"orderBy"`
+	OrderDir string `json:"orderDir"`
 
 	// BaseWhere is a fixed SQL condition ANDed into every search (e.g. the
 	// anti-orphan guard "pharmacy_reviews.pharmacy_id IN (SELECT id FROM
 	// pharmacies WHERE deleted_at IS NULL)"). Use "?" placeholders and put the
 	// values in BaseArgs. SECURITY: it is raw SQL and MUST come from the
 	// compiled model definition only; never build it from client input.
-	// Empty = no extra restriction.
-	BaseWhere string `json:"baseWhere,omitempty"`
+	// Empty = no extra restriction. Tagged json:"-": it is never serialized to
+	// the client nor deserialized from it.
+	BaseWhere string `json:"-"`
 	// BaseArgs are the placeholder values bound to BaseWhere, in order.
-	BaseArgs []any `json:"baseArgs,omitempty"`
+	BaseArgs []any `json:"-"`
 	// Joins are extra JOIN clauses applied to every search (e.g. "JOIN users
 	// ON users.id = doctors.user_id"). Same SECURITY rule as BaseWhere:
 	// compiled-model origin only, raw SQL, never client input.
-	Joins []string `json:"joins,omitempty"`
+	Joins []string `json:"-"`
 	// AllowFilters is the allow-list of columns of the root table that the
 	// client may filter by equality through query params (?brand=Bayer). Each
 	// name must be a plain identifier; the client value is always bound as a

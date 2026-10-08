@@ -307,3 +307,25 @@ func TestSearchExtraFieldsAndOrderLimit(t *testing.T) {
 		t.Fatal("reserved key must be skipped")
 	}
 }
+
+func TestSearchOrderByNonPlainColumnIgnored(t *testing.T) {
+	for _, ob := range []string{"vendors.name", "price; DROP TABLE test_products", "p.price"} {
+		db := setupTestDB(t)
+		svc := newOptionsService(t, db, nil, searchConfigFor(SearchConfig{
+			SearchIn: []string{"name"},
+			Value:    "id",
+			Label:    "name",
+			OrderBy:  ob,
+		}))
+		user := newUser(uuid.New())
+		createProduct(t, svc, user, "A", 1)
+		createProduct(t, svc, user, "B", 2)
+		hits, err := svc.Search(context.Background(), user, SearchQuery{Model: "test_products", Limit: 10})
+		if err != nil {
+			t.Fatalf("OrderBy %q should be ignored, not fail: %v", ob, err)
+		}
+		if len(hits) != 2 {
+			t.Fatalf("OrderBy %q: want 2 hits, got %v", ob, searchNames(hits))
+		}
+	}
+}
