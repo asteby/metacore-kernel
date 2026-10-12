@@ -34,6 +34,8 @@ const (
 	CategoryWorkflow      ToolCategory = "workflow"
 	CategoryContext       ToolCategory = "context"
 	CategoryData          ToolCategory = "data"
+	CategoryAction        ToolCategory = "action"
+	CategoryCreative      ToolCategory = "creative"
 )
 
 // ToolRegistry gestiona todas las herramientas disponibles
@@ -52,9 +54,50 @@ func NewToolRegistry() *ToolRegistry {
 
 // Register registra una herramienta
 func (r *ToolRegistry) Register(tool BaseTool) {
-	r.tools[tool.Name()] = tool
-	r.categories[ToolCategory(tool.Category())] = append(r.categories[ToolCategory(tool.Category())], tool.Name())
+	name, cat := tool.Name(), ToolCategory(tool.Category())
+	if prev, ok := r.tools[name]; ok && ToolCategory(prev.Category()) != cat {
+		r.dropFromCategory(ToolCategory(prev.Category()), name)
+	}
+	if _, ok := r.tools[name]; !ok || !r.inCategory(cat, name) {
+		r.categories[cat] = append(r.categories[cat], name)
+	}
+	r.tools[name] = tool
 	log.Printf("🔧 Tool registered: %s (category: %s)", tool.Name(), tool.Category())
+}
+
+func (r *ToolRegistry) inCategory(cat ToolCategory, name string) bool {
+	for _, n := range r.categories[cat] {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *ToolRegistry) dropFromCategory(cat ToolCategory, name string) {
+	names := r.categories[cat]
+	for i, n := range names {
+		if n == name {
+			r.categories[cat] = append(names[:i:i], names[i+1:]...)
+			break
+		}
+	}
+	if len(r.categories[cat]) == 0 {
+		delete(r.categories, cat)
+	}
+}
+
+// Clone returns an independent copy, so a turn can add per-conversation
+// tools without leaking them into the shared registry.
+func (r *ToolRegistry) Clone() *ToolRegistry {
+	c := NewToolRegistry()
+	for name, tool := range r.tools {
+		c.tools[name] = tool
+	}
+	for cat, names := range r.categories {
+		c.categories[cat] = append([]string(nil), names...)
+	}
+	return c
 }
 
 // Get obtiene una herramienta por nombre
@@ -86,9 +129,13 @@ func (r *ToolRegistry) ListByCategory(category ToolCategory) []BaseTool {
 
 // IsActionTool determina si es herramienta de acción
 func (r *ToolRegistry) IsActionTool(toolName string) bool {
+	// "creative" results (generate_image) carry a full base64 payload: they
+	// must never be dumped into chat text or fed back to the model.
 	actionCategories := map[ToolCategory]bool{
 		CategoryCommunication: true,
 		CategoryWorkflow:      true,
+		CategoryAction:        true,
+		CategoryCreative:      true,
 	}
 
 	tool, exists := r.tools[toolName]
@@ -161,6 +208,37 @@ func (r *ToolRegistry) ToLangChainFormat() []map[string]interface{} {
 		functions = append(functions, function)
 	}
 
+	return functions
+}
+
+// ToOpenAIFormat converts the tools to OpenAI function-calling format. It
+// accepts both a full JSON Schema ({type:object, properties}) and the custom
+// map of paramName -> schema (with a boolean "required" per parameter).
+func (r *ToolRegistry) ToOpenAIFormat() []map[string]interface{} {
+	functions := make([]map[string]interface{}, 0, len(r.tools))
+	for _, tool := range r.tools {
+		params := tool.Parameters()
+		var properties map[string]interface{}
+		var required []string
+		if p, ok := params["properties"].(map[string]interface{}); ok && params["type"] == "object" {
+			properties = p
+			if req, ok := params["required"].([]string); ok {
+				required = req
+			}
+		} else {
+			properties = params
+			required = getRequiredParams(params)
+		}
+		functions = append(functions, map[string]interface{}{
+			"name":        tool.Name(),
+			"description": tool.Description(),
+			"parameters": map[string]interface{}{
+				"type":       "object",
+				"properties": cleanProperties(properties),
+				"required":   required,
+			},
+		})
+	}
 	return functions
 }
 

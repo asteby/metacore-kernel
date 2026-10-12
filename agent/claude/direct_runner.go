@@ -22,7 +22,7 @@ import (
 	"github.com/asteby/metacore-kernel/agent/airuntime"
 )
 
-// Direct runner: ops talks to `claude -p` in-process instead of going through
+// Direct runner: the host talks to `claude -p` in-process instead of going through
 // the external aby-proxy. It is exposed as an http.RoundTripper that speaks the
 // same OpenAI chat-completions contract the proxy does, so the agent loop
 // (langchaingo openai client, see AIService.createLLM) is untouched.
@@ -36,7 +36,7 @@ import (
 const (
 	// RunnerProxy: HTTP to aby-proxy (or any OpenAI-compatible endpoint).
 	RunnerProxy = "proxy"
-	// RunnerDirect: `claude -p` executed by ops itself.
+	// RunnerDirect: `claude -p` executed by the host itself.
 	RunnerDirect = "direct"
 
 	abyProxyDirectValue = "direct" // ABY_PROXY_URL=direct forces the direct runner
