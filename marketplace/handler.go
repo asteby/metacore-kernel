@@ -22,7 +22,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -145,6 +148,84 @@ type Handler struct {
 	installer     *installer.Installer
 	httpc         *http.Client
 	updateChecker UpdateChecker
+	// bundleHosts is the allowlist of lowercase host[:port] origins a
+	// bundleURL may point at (SSRF guard, see validateBundleURL). Empty =
+	// no origin restriction beyond the scheme rule.
+	bundleHosts map[string]bool
+}
+
+// WithHubURL restricts bundle downloads to the origin (host[:port]) of the
+// given Hub/marketplace URL (typically MARKETPLACE_URL). Invalid or empty
+// values are ignored.
+func WithHubURL(raw string) HandlerOption {
+	return func(h *Handler) { h.allowBundleHost(raw) }
+}
+
+// WithBundleHostAllowlist adds extra permitted bundle origins (CDN, object
+// storage). Each entry is a bare host[:port] or a full URL.
+func WithBundleHostAllowlist(hosts ...string) HandlerOption {
+	return func(h *Handler) {
+		for _, x := range hosts {
+			h.allowBundleHost(x)
+		}
+	}
+}
+
+func (h *Handler) allowBundleHost(raw string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return
+	}
+	if h.bundleHosts == nil {
+		h.bundleHosts = map[string]bool{}
+	}
+	h.bundleHosts[strings.ToLower(u.Host)] = true
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// validateBundleURL is the SSRF guard for fetchBundle: only https is allowed
+// (http only for loopback hosts, for tests/dev), no userinfo, and when a Hub
+// origin or allowlist is configured the host must match one of them.
+// Loopback hosts are exempt from the origin check. Note: this validates the
+// URL, not the resolved IP; it does not defend against DNS rebinding of an
+// allowlisted name.
+func (h *Handler) validateBundleURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid bundle URL: %w", err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "https" && scheme != "http" {
+		return fmt.Errorf("bundle URL scheme %q not allowed", u.Scheme)
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("bundle URL has no host")
+	}
+	if u.User != nil {
+		return fmt.Errorf("bundle URL must not contain credentials")
+	}
+	loop := isLoopbackHost(u.Hostname())
+	if scheme == "http" && !loop {
+		return fmt.Errorf("bundle URL must use https")
+	}
+	if len(h.bundleHosts) > 0 && !loop && !h.bundleHosts[strings.ToLower(u.Host)] {
+		return fmt.Errorf("bundle URL host %q is not an allowed marketplace origin", u.Host)
+	}
+	return nil
 }
 
 // HandlerOption customises the handler.
@@ -177,6 +258,9 @@ func NewHandler(db *gorm.DB, opts ...HandlerOption) (*Handler, error) {
 		db:    db,
 		httpc: &http.Client{Timeout: 30 * time.Second},
 	}
+	// Default origin restriction: MARKETPLACE_URL, when set. Explicit options
+	// below add to it.
+	h.allowBundleHost(os.Getenv("MARKETPLACE_URL"))
 	for _, opt := range opts {
 		opt(h)
 	}
@@ -401,8 +485,27 @@ func extractRequires(b *bundle.Bundle) AddonKeyList {
 // Without this injection the bundle reaches the security gate as unsigned
 // and the install fails with "security: bundle has no signature" even
 // though the marketplace signed it correctly.
-func (h *Handler) fetchBundle(url, expectedKey string) (*bundle.Bundle, error) {
-	resp, err := h.httpc.Get(url)
+func (h *Handler) fetchBundle(bundleURL, expectedKey string) (*bundle.Bundle, error) {
+	if err := h.validateBundleURL(bundleURL); err != nil {
+		return nil, err
+	}
+	// Redirects must pass the same guard, otherwise an allowed origin could
+	// bounce the request to an internal address.
+	client := *h.httpc
+	prev := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := h.validateBundleURL(req.URL.String()); err != nil {
+			return fmt.Errorf("redirect blocked: %w", err)
+		}
+		if prev != nil {
+			return prev(req, via)
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		return nil
+	}
+	resp, err := client.Get(bundleURL)
 	if err != nil {
 		return nil, fmt.Errorf("download bundle: %w", err)
 	}

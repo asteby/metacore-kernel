@@ -118,6 +118,31 @@ type Module struct {
 	mu       sync.Mutex // serialises Invoke — wazero modules are not reentrant per memory
 }
 
+const (
+	pageBytes      = 64 * 1024
+	globalMemoryMB = 256
+	globalMemPages = globalMemoryMB * 1024 * 1024 / pageBytes
+)
+
+// memoryLimitPages resolves a manifest memory_limit_mb to a wasm page cap:
+// 0/negative = the global ceiling; anything above it is clamped to it.
+//
+// Per-addon enforcement design: wazero's WithMemoryLimitPages lives on
+// RuntimeConfig (one limit per runtime) and ModuleConfig has no equivalent.
+// A runtime per limit would force a recompile of every addon plus separate
+// WASI/host-module registration, so instead the one runtime keeps the global
+// 256 MiB hard ceiling and the per-addon limit is enforced by the host: Load
+// rejects a module whose declared minimum memory exceeds it, and invokeOnce
+// checks the instance's memory size after every call, evicting and failing
+// the call when it grew past the limit. Growth within a single call can reach
+// the global ceiling before being caught; the next-call eviction reclaims it.
+func memoryLimitPages(mb int) uint32 {
+	if mb <= 0 || mb >= globalMemoryMB {
+		return globalMemPages
+	}
+	return uint32(mb) * 1024 * 1024 / pageBytes
+}
+
 // NewHost constructs a runtime. One Host is expected per process.
 func NewHost(ctx context.Context, caps *security.Capabilities, logger *log.Logger) (*Host, error) {
 	if logger == nil {
@@ -128,7 +153,7 @@ func NewHost(ctx context.Context, caps *security.Capabilities, logger *log.Logge
 	// tuning below still applies via the guest's own memory declarations.
 	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().
 		WithCloseOnContextDone(true).
-		WithMemoryLimitPages(uint32(256*1024/64))) // 256 MiB hard ceiling
+		WithMemoryLimitPages(globalMemPages)) // 256 MiB hard ceiling
 	// Guests compiled with GOOS=wasip1 (standard Go toolchain) import
 	// wasi_snapshot_preview1.* for their runtime initialisation (memory
 	// management, clock, random). Without this the instantiator returns
@@ -389,6 +414,13 @@ func (h *Host) Load(ctx context.Context, addonKey string, wasmBytes []byte, spec
 	if err != nil {
 		return fmt.Errorf("wasm: compile %s: %w", addonKey, err)
 	}
+	limit := memoryLimitPages(spec.MemoryLimitMB)
+	for _, m := range cm.ExportedMemories() {
+		if min := m.Min(); min > limit {
+			_ = cm.Close(ctx)
+			return fmt.Errorf("wasm: %s declares %d initial memory pages, over its memory_limit_mb (%d pages)", addonKey, min, limit)
+		}
+	}
 	if prev, ok := h.compiled.Swap(addonKey, &compiledEntry{mod: cm, spec: spec, hash: sum}); ok {
 		if p, _ := prev.(*compiledEntry); p != nil {
 			_ = p.mod.Close(ctx)
@@ -549,6 +581,12 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		h.dropModuleIfCurrent(addonKey, installation, mod)
 		return nil, fmt.Errorf("wasm: call %s: %w", funcName, err)
 	}
+	if mem := mod.inst.Memory(); mem != nil {
+		if limit := memoryLimitPages(entry.spec.MemoryLimitMB); mem.Size() > limit*pageBytes {
+			h.dropModuleIfCurrent(addonKey, installation, mod)
+			return nil, fmt.Errorf("wasm: %s exceeded memory_limit_mb (%d pages > %d)", addonKey, mem.Size()/pageBytes, limit)
+		}
+	}
 	if len(results) != 1 {
 		return nil, fmt.Errorf("wasm: %s returned %d values, want 1 (packed ptr|len)", funcName, len(results))
 	}
@@ -621,12 +659,8 @@ func (h *Host) getOrInstantiate(ctx context.Context, addonKey string, installati
 			_ = mod.inst.Close(ctx)
 		}
 	}
-	// Module-level memory cap is enforced by the runtime's WithMemoryLimitPages
-	// ceiling plus the guest's own memory declaration; wazero's ModuleConfig
-	// does not expose a per-instance cap. We still record the MB value on the
-	// spec so operators can audit what each addon declared.
-	_ = entry.spec.MemoryLimitMB
-
+	// Per-addon memory_limit_mb is enforced in Load (declared minimum) and
+	// invokeOnce (post-call size check); see memoryLimitPages.
 	cfg := wazero.NewModuleConfig().
 		WithName(addonKey+"-"+installation.String()).
 		// RandSource is required by some toolchains' runtime init (e.g. Go's

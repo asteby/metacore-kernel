@@ -269,10 +269,19 @@ derived from `manifest.backend.entry`.
 
 ## 6. Memory & reentrancy rules
 
-- Each invocation runs in a **fresh module instance**. Globals do not
-  persist between calls.
-- The guest allocator may be a single-shot bump allocator; the host
-  tolerates that since each call gets a new instance.
+- The host **reuses one module instance per (addon, installation)**
+  (`getOrInstantiate` caches it). Globals, the guest heap and allocator state
+  **persist between calls** of the same installation; do not rely on a clean
+  slate and do not keep tenant-specific data in globals across installations
+  (each installation has its own instance, but a single one serves all of its
+  calls). Never treat guest memory as durable storage: the instance is
+  discarded and re-created after a trap, a timeout/cancel that closes the
+  module, a memory-limit eviction, an addon reload/upgrade, or a host restart.
+- Because the instance persists, a bump allocator that never frees will grow
+  across calls; free or reset in the guest. `memory_limit_mb` (0/absent =
+  256 MiB global ceiling, never higher) is checked after each call and the
+  instance is evicted and the call fails if memory grew past it; a module
+  whose declared initial memory exceeds it is rejected at load.
 - Callbacks into host imports are synchronous. The host serializes
   invocations per installation.
 

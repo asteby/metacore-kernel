@@ -7,6 +7,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+
+- **wasm: per-addon `memory_limit_mb` enforced** — rejected at `Load` when the
+  module's declared initial memory exceeds it, and checked after every
+  invocation (instance evicted, call fails). Capped by the 256 MiB global
+  ceiling; 0/absent = global ceiling. wazero's limit is per-runtime, so the
+  host check was chosen over a runtime-per-limit (avoids recompiles).
+- **marketplace: SSRF guard on `fetchBundle`** — `bundleURL` must be https
+  (http only for loopback), no credentials, and redirects are re-validated.
+  New options `WithHubURL` and `WithBundleHostAllowlist`; `MARKETPLACE_URL`
+  is honoured by default when set, restricting bundle origins to it.
+
+### Fixed
+
+- `docs/wasm-abi.md`: corrected "fresh module instance per invocation" — the
+  instance is reused per addon/installation, so guest state persists.
+
 ### Added
 
 - **`agent` runtime package (stage 1)** — reusable, host-agnostic pieces of the
