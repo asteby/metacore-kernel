@@ -19,7 +19,9 @@ type claudeDirectTransport struct {
 	token  string
 }
 
-func newClaudeDirectHTTPClient(rt airuntime.Runtime) *http.Client {
+// NewDirectHTTPClient returns an http.Client whose transport runs `claude -p`
+// in-process behind the OpenAI chat-completions contract (use with DirectBaseURL).
+func NewDirectHTTPClient(rt airuntime.Runtime) *http.Client {
 	return &http.Client{Transport: &claudeDirectTransport{
 		runner: DefaultClaudeDirectRunner(),
 		token:  strings.TrimSpace(rt.ProxyAPIKey),

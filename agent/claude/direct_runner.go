@@ -40,7 +40,12 @@ const (
 	RunnerDirect = "direct"
 
 	abyProxyDirectValue = "direct" // ABY_PROXY_URL=direct forces the direct runner
-	claudeDirectBaseURL = "http://claude-direct.invalid/v1"
+	// DirectBaseURL is the (never resolved) base URL an OpenAI-compatible client
+	// uses together with NewDirectHTTPClient.
+	DirectBaseURL = "http://claude-direct.invalid/v1"
+	// DirectToken is the placeholder bearer for the in-process runner (the
+	// real credential travels in the client's transport).
+	DirectToken = "claude-direct"
 )
 
 // ---- runner selection ----

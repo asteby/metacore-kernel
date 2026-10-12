@@ -219,7 +219,7 @@ func TestDirectLargePromptViaStdin(t *testing.T) {
 func chatThroughTransport(t *testing.T, r *ClaudeDirectRunner, body map[string]any) (int, map[string]any) {
 	t.Helper()
 	raw, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, claudeDirectBaseURL+"/chat/completions", bytes.NewReader(raw))
+	req := httptest.NewRequest(http.MethodPost, DirectBaseURL+"/chat/completions", bytes.NewReader(raw))
 	resp, err := (&claudeDirectTransport{runner: r, token: fakeToken}).RoundTrip(req)
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +281,7 @@ func TestDirectTransportErrorIsOpenAIShaped(t *testing.T) {
 func TestDirectTransportStreamSSE(t *testing.T) {
 	r, _ := newDirectTest(t, recordScript, 10*time.Second, 1)
 	raw, _ := json.Marshal(map[string]any{"stream": true, "messages": []any{map[string]any{"role": "user", "content": "hi"}}})
-	resp, err := (&claudeDirectTransport{runner: r}).RoundTrip(httptest.NewRequest(http.MethodPost, claudeDirectBaseURL+"/chat/completions", bytes.NewReader(raw)))
+	resp, err := (&claudeDirectTransport{runner: r}).RoundTrip(httptest.NewRequest(http.MethodPost, DirectBaseURL+"/chat/completions", bytes.NewReader(raw)))
 	if err != nil {
 		t.Fatal(err)
 	}

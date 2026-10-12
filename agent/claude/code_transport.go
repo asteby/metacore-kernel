@@ -43,7 +43,9 @@ func (t *claudeCodeRoundTripper) RoundTrip(req *http.Request) (*http.Response, e
 	return base.RoundTrip(req2)
 }
 
-func newClaudeCodeHTTPClient(timeout time.Duration) *http.Client {
+// NewCodeHTTPClient returns an http.Client that authenticates Anthropic requests
+// with the host Claude Code OAuth seat instead of x-api-key.
+func NewCodeHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout:   timeout,
 		Transport: &claudeCodeRoundTripper{},

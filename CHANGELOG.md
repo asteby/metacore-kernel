@@ -18,6 +18,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `ModuleGate`, `BrandProvider`). Also `vector.SearchResult`. New dependency:
   `github.com/Knetic/govaluate` (calculator tool).
 
+- **`agent` runtime (stage 2)** — the generic runtime that glues stage 1
+  together, still host-agnostic: `AgentOrchestrator` (tool loop, `Turn`),
+  `SmartOrchestrator` (`AgentDirectory`/`AgentRunner`), `CopilotService`
+  (prompt assembly, turn, proposals), `CRUDService`, `CapabilityRegistry`,
+  `DynamicTool` (`ToolDefinition`), attachments, `AIServiceAdapter`
+  (`ChatModel`), core tools (`final_answer`, `send_image`, `handoff_to_human`,
+  `send_audio`, `search_knowledge`, `get_conversation_context`). New ports in
+  `agent/contracts.go`: `ModelCatalog`, `SemanticIndex`, `ChatModel`,
+  `ConversationStore`, `ClockZone`, `NamedPermissionChecker`,
+  `DeclaredCapabilityProvider`; `ModuleGate` is now consumed by CRUD,
+  capabilities and the modules context. New packages: `agent/airuntime`
+  (per-org AI mode, `Runtime` on the context, fallback `PlanTools`/`PlanSimple`,
+  `ProviderStore`), `agent/claude` (direct `claude -p` runner with retry on the
+  degenerate envelope, transports, OAuth token, setup-token connect flow,
+  local CLI seats), `agent/convruntime` (bus driver), and `vector.Pipeline`
+  (polymorphic pgvector embeddings). `tools.ToolRegistry` gained `Clone` and
+  `ToOpenAIFormat`. See `agent/MIGRATION.md`. New dependencies:
+  `github.com/creack/pty` (darwin), `github.com/UserExistsError/conpty` (windows).
+
 ### Fixed
 
 - **Editar un registro sin fila de extensión ya no falla con `protected_field`.**
