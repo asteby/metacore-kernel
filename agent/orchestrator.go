@@ -733,9 +733,9 @@ func (o *AgentOrchestrator) buildMessageHistory(convCtx *contextmgr.Conversation
 	}
 	// Multimodal: attach local image bytes for Claude vision (Aby attachments).
 	if convCtx.Metadata != nil {
-		if paths, ok := convCtx.Metadata["aby_image_paths"].([]string); ok && len(paths) > 0 {
+		if paths, ok := convCtx.Metadata[MetaImagePaths].([]string); ok && len(paths) > 0 {
 			userMsg["images"] = paths
-			delete(convCtx.Metadata, "aby_image_paths")
+			delete(convCtx.Metadata, MetaImagePaths)
 		}
 	}
 

@@ -45,9 +45,17 @@ type ModuleGate interface {
 type Personality struct {
 	Name        string
 	Description string
-	// SystemPrompt is the host-authored persona preamble; the runtime appends
-	// its own rules after it.
+	// SystemPrompt is the host-authored base prompt (identity, domain rules);
+	// the runtime appends brand, tone, clock and capability clauses after it.
 	SystemPrompt string
+	// PlatformName is the commercial name the assistant may use for the
+	// product ("" or an internal codename means: say "el sistema").
+	PlatformName string
+	// InternalNames are product codenames that must never be offered as the
+	// platform name (white-label guard), compared case-insensitively.
+	InternalNames []string
+	// Addendum is the vertical's own tone/domain text appended after the base.
+	Addendum string
 }
 
 // BrandProvider resolves the assistant persona (name, mascot voice, extra
