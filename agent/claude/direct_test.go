@@ -408,13 +408,3 @@ func TestDirectEnvHostSeatWhenNoToken(t *testing.T) {
 // The CLI never exits on a rejected code: it prints "OAuth error … Press Enter
 // to retry". The connector must report invalid_code right away instead of
 // waiting out the token timeout (the 60 s 504 seen in production).
-const fakeToken = "sk-ant-oat01-FAKEFAKEFAKEFAKEFAKE_abc-123"
-
-func fakeClaudeScript(t *testing.T, body string) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), "fakeclaude")
-	if err := os.WriteFile(p, []byte("#!/bin/bash\n"+body), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}

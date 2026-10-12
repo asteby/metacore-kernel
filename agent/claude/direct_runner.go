@@ -715,9 +715,10 @@ func openAIToolCalls(v any) []map[string]any {
 	return out
 }
 
-// BinaryPath resolves the claude executable ("" when absent). Hosts that
-// install the CLI in a managed tools directory replace it at start-up
-// (it is read on every call, so assign it before serving traffic).
+// BinaryPath resolves the claude executable ("" when absent): CLAUDE_CODE_BIN,
+// then PATH, then the persistent tools dir (Docker volume / local data dir),
+// then the usual per-user install locations. Hosts with another layout
+// replace it at start-up (it is read on every call).
 var BinaryPath = func() string {
 	if b := os.Getenv("CLAUDE_CODE_BIN"); b != "" {
 		if p, err := exec.LookPath(b); err == nil {
@@ -728,5 +729,10 @@ var BinaryPath = func() string {
 	if p, err := exec.LookPath("claude"); err == nil {
 		return p
 	}
-	return ""
+	for _, p := range claudeToolCandidates() {
+		if fileExecutable(p) {
+			return p
+		}
+	}
+	return resolveLocalBin("claude")
 }

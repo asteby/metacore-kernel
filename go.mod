@@ -4,6 +4,8 @@ go 1.26.0
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/UserExistsError/conpty v0.1.4
+	github.com/creack/pty v1.1.24
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/gofiber/contrib/v3/websocket v1.2.7
 	github.com/gofiber/fiber/v3 v3.5.0
