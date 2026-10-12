@@ -464,7 +464,6 @@ func (t *DynamicTool) executeHTTP(ctx context.Context, params map[string]interfa
 		return nil, fmt.Errorf("error reading response: %v", err)
 	}
 
-
 	// 7. Parsear respuesta
 	var result interface{}
 	if err := json.Unmarshal(respBody, &result); err != nil {
