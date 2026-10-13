@@ -169,8 +169,8 @@ func orgIDFrom(ctx context.Context) uuid.UUID {
 // registerHostModule exposes the "metacore_host" imports every guest relies
 // on. We keep the surface deliberately narrow: one function per privileged
 // capability, each enforced by security.Capabilities.
-func registerHostModule(ctx context.Context, h *Host) error {
-	b := h.rt.NewHostModuleBuilder(importpolicy.HostModule)
+func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
+	b := rt.NewHostModuleBuilder(importpolicy.HostModule)
 
 	// log(msgPtr, msgLen) — noop-safe; logger is always non-nil.
 	b.NewFunctionBuilder().

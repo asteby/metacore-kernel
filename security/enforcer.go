@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"strings"
 	"sync/atomic"
 )
 
@@ -12,11 +13,12 @@ import (
 type Mode int
 
 const (
-	// ModeShadow logs violations but never blocks. This is the default
-	// during rollout so we can observe real traffic before flipping enforce.
+	// ModeShadow logs violations but never blocks. Opt-in escape hatch
+	// (METACORE_ENFORCE=shadow|0|false) for rollouts that need to observe
+	// real traffic before denying.
 	ModeShadow Mode = iota
 	// ModeEnforce returns errors on violations. Callers should map the error
-	// to a 403 response.
+	// to a 403 response. This is the default (D5).
 	ModeEnforce
 )
 
@@ -30,15 +32,16 @@ func (m Mode) String() string {
 	}
 }
 
-// ModeFromEnv reads METACORE_ENFORCE — "1", "true", "yes" flip to enforce;
-// anything else (including unset) stays in shadow.
+// ModeFromEnv reads METACORE_ENFORCE. The default is ModeEnforce (D5): unset,
+// empty, "1", "true", "yes" and any unrecognised value enforce, so a typo
+// fails closed. Only "shadow", "0", "false", "no", "off" (case-insensitive)
+// return to ModeShadow.
 func ModeFromEnv() Mode {
-	v := os.Getenv("METACORE_ENFORCE")
-	switch v {
-	case "1", "true", "TRUE", "yes", "YES":
-		return ModeEnforce
-	default:
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("METACORE_ENFORCE"))) {
+	case "shadow", "0", "false", "no", "off":
 		return ModeShadow
+	default:
+		return ModeEnforce
 	}
 }
 
@@ -57,8 +60,8 @@ type Enforcer struct {
 	OnViolation func(addonKey, kind, target, caller string, err error)
 }
 
-// NewEnforcer builds an Enforcer defaulting to shadow mode unless the
-// METACORE_ENFORCE env var is set.
+// NewEnforcer builds an Enforcer in ModeEnforce unless METACORE_ENFORCE
+// selects shadow (see ModeFromEnv).
 func NewEnforcer(lookup func(addonKey string) *Capabilities) *Enforcer {
 	e := &Enforcer{LookupCapabilities: lookup}
 	e.SetMode(ModeFromEnv())

@@ -204,9 +204,9 @@ off when diagnosing addon failures:
 - **Inspect host imports.** `capabilities.go` registers every host import.
   If the addon's `imported function not found` errors at instantiation time,
   the symbol name is missing from `registerHostModule`.
-- **Check the enforcer mode.** Locally the default is `ModeShadow`; turn on
-  `ModeEnforce` (`METACORE_ENFORCE=1`) when chasing capability bugs so they
-  surface as errors instead of warnings.
+- **Check the enforcer mode.** The default is `ModeEnforce`; use
+  `METACORE_ENFORCE=shadow` only to observe; leave it on enforce when chasing
+  capability bugs so they surface as errors instead of warnings.
 - **Memory and timeouts.** Defaults are 64 MiB / 10 s per invocation, with a
   global 256 MiB ceiling on the runtime config. Override per-addon via
   `manifest.BackendSpec`.

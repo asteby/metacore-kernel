@@ -249,11 +249,11 @@ specific features may vary.
 Every addon-issued operation that touches the host (DB read, event publish,
 HTTP call out) goes through `security.Enforcer`. The enforcer has two modes:
 
-- `ModeShadow` — log violations, never block. Default during rollout.
-- `ModeEnforce` — return an error on violations.
+- `ModeShadow` — log violations, never block. Opt-in only.
+- `ModeEnforce` — return an error on violations. **Default.**
 
-Operators flip the mode at runtime via the `METACORE_ENFORCE` environment
-variable (`1`, `true`, `yes` enable enforce). No redeploy required.
+`METACORE_ENFORCE=shadow|0|false` returns to shadow; anything else enforces.
+See [capabilities.md](capabilities.md).
 
 ```go
 enf := security.NewEnforcer(security.ModeFromEnv())

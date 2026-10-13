@@ -280,6 +280,8 @@ func (s *Service) attemptDelivery(ctx context.Context, w *Webhook, d *WebhookDel
 		s.persistFailure(ctx, w, d, 0, err.Error())
 		return
 	}
+	// Stable across retries of the same delivery so receivers can dedupe.
+	req.Header.Set("X-Metacore-Delivery", d.ID.String())
 
 	resp, err := s.client.Do(req)
 	if err != nil {

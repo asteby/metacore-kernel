@@ -200,3 +200,50 @@ func uleb(v uint32) []byte {
 }
 
 var _ = binary.LittleEndian // keep the import around if refactored
+
+// UnloadWASM / the installer's BackendRuntimeUnloader hook release instances
+// and the compiled module, after which the addon fails closed.
+func TestHost_UnloadWASM_AndLoaderUnloadAddon(t *testing.T) {
+	ctx := context.Background()
+	h := &Host{}
+	if err := h.EnableWASM(ctx, security.Compile("echo_addon", nil)); err != nil {
+		t.Fatalf("EnableWASM: %v", err)
+	}
+	defer h.WASM.Close(ctx)
+	b := &bundle.Bundle{
+		Manifest: manifest.Manifest{Key: "echo_addon", Backend: &manifest.BackendSpec{
+			Runtime: "wasm", Entry: "backend/backend.wasm", Exports: []string{"echo"}}},
+		Backend: map[string][]byte{"backend/backend.wasm": buildEchoModule()},
+	}
+	if err := h.LoadWASMFromBundle(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	in := uuid.New()
+	if _, err := h.InvokeWASM(ctx, in, "echo_addon", "echo", []byte("a"), nil); err != nil {
+		t.Fatal(err)
+	}
+	// One installation: addon stays loaded for the others.
+	if err := h.UnloadWASM(ctx, "echo_addon", in); err != nil {
+		t.Fatal(err)
+	}
+	if !h.WASM.IsCompiled("echo_addon") {
+		t.Fatal("per-installation unload must keep the compiled module")
+	}
+	// Whole addon via the installer-facing adapter.
+	var l interface {
+		UnloadAddon(context.Context, string) error
+	} = &wasmBackendLoader{host: h}
+	if err := l.UnloadAddon(ctx, "echo_addon"); err != nil {
+		t.Fatal(err)
+	}
+	if h.WASM.IsCompiled("echo_addon") {
+		t.Fatal("UnloadAddon must drop the compiled module")
+	}
+	if _, err := h.InvokeWASM(ctx, in, "echo_addon", "echo", []byte("a"), nil); err == nil {
+		t.Fatal("invoke after unload must fail closed")
+	}
+	// Runtime not enabled: no-op, no panic.
+	if err := (&Host{}).UnloadWASM(ctx, "x", uuid.Nil); err != nil {
+		t.Fatal(err)
+	}
+}

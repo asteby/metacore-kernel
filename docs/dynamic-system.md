@@ -411,10 +411,10 @@ Mode is global, atomic, and switchable at runtime:
 
 | Mode          | Behaviour                                        |
 | ------------- | ------------------------------------------------ |
-| `ModeShadow`  | Log violations, never block. Default.            |
-| `ModeEnforce` | Log AND return an error. Caller maps to 403.     |
+| `ModeShadow`  | Log violations, never block. Opt-in only.       |
+| `ModeEnforce` | Log AND return an error. Caller maps to 403. Default. |
 
-Operators flip via `METACORE_ENFORCE=1` (see
+Operators opt out via `METACORE_ENFORCE=shadow` (see
 [`security/enforcer.go`](../security/enforcer.go) `ModeFromEnv`). Every
 violation also calls `Enforcer.OnViolation` if set — wire it to a Prometheus
 counter for an audit feed.

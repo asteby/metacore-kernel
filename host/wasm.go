@@ -20,11 +20,15 @@ import (
 // caps is the policy the runtime applies to host imports (http_fetch,
 // env_get, log). Each invocation is additionally bounded by the spec's
 // timeout + memory limits declared in the manifest.
-func (h *Host) EnableWASM(ctx context.Context, caps *security.Capabilities) error {
+//
+// opts tune the runtime (wasm.WithCompileCacheDir, wasm.WithPoolSize,
+// wasm.WithAddonPoolSize, wasm.WithMetrics); WASM_COMPILE_CACHE_DIR and
+// WASM_POOL_SIZE are honoured when no option overrides them.
+func (h *Host) EnableWASM(ctx context.Context, caps *security.Capabilities, opts ...wasm.Option) error {
 	if h.WASM != nil {
 		return nil
 	}
-	wh, err := wasm.NewHost(ctx, caps, nil)
+	wh, err := wasm.NewHost(ctx, caps, nil, opts...)
 	if err != nil {
 		return fmt.Errorf("host: enable wasm: %w", err)
 	}
@@ -59,6 +63,27 @@ func (l *wasmBackendLoader) LoadFromBundle(ctx context.Context, b *bundle.Bundle
 		return fmt.Errorf("wasmBackendLoader: host is nil")
 	}
 	return l.host.LoadWASMFromBundle(ctx, b)
+}
+
+// UnloadAddon implements installer.BackendRuntimeUnloader: it drops every
+// instance of the addon and its compiled module from the wasm runtime. A
+// no-op when the runtime is not enabled.
+func (l *wasmBackendLoader) UnloadAddon(ctx context.Context, addonKey string) error {
+	if l == nil || l.host == nil || l.host.WASM == nil {
+		return nil
+	}
+	return l.host.WASM.UnloadAddon(ctx, addonKey)
+}
+
+// UnloadWASM releases the wasm instances of one installation (installation !=
+// uuid.Nil; the compiled module stays for the addon's other installations) or,
+// with uuid.Nil, the whole addon including its compiled module. The installer
+// should call it from Uninstall; see wasm.Host.Unload.
+func (h *Host) UnloadWASM(ctx context.Context, addonKey string, installation uuid.UUID) error {
+	if h.WASM == nil {
+		return nil
+	}
+	return h.WASM.Unload(ctx, addonKey, installation)
 }
 
 // ErrRuntimeNotImplemented is returned by LoadWASMFromBundle when the bundle

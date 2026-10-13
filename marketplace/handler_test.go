@@ -230,7 +230,7 @@ func TestInstall_FullMode_Bundle404(t *testing.T) {
 	os.Setenv("ALLOW_UNSIGNED_BUNDLES", origAllow)
 
 	app := fiber.New()
-	h, err := marketplace.NewHandler(db, marketplace.WithInstaller(inst))
+	h, err := marketplace.NewHandler(db, marketplace.WithInstaller(inst), marketplace.WithAllowLoopbackBundles())
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestInstall_FullMode_BundleKeyMismatch(t *testing.T) {
 	os.Setenv("ALLOW_UNSIGNED_BUNDLES", origAllow)
 
 	app := fiber.New()
-	h, err := marketplace.NewHandler(db, marketplace.WithInstaller(inst))
+	h, err := marketplace.NewHandler(db, marketplace.WithInstaller(inst), marketplace.WithAllowLoopbackBundles())
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
@@ -1193,7 +1193,7 @@ func TestInstall_FullMode_WithInstallerNoBundleURL(t *testing.T) {
 	os.Setenv("ALLOW_UNSIGNED_BUNDLES", origAllow)
 
 	app := fiber.New()
-	h, err := marketplace.NewHandler(db, marketplace.WithInstaller(inst))
+	h, err := marketplace.NewHandler(db, marketplace.WithInstaller(inst), marketplace.WithAllowLoopbackBundles())
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
@@ -1249,7 +1249,7 @@ func newTestAppWithInstaller(t *testing.T, db *gorm.DB) *fiber.App {
 	os.Setenv("ALLOW_UNSIGNED_BUNDLES", origAllow)
 
 	app := fiber.New()
-	h, err := marketplace.NewHandler(db, marketplace.WithInstaller(inst))
+	h, err := marketplace.NewHandler(db, marketplace.WithInstaller(inst), marketplace.WithAllowLoopbackBundles())
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}

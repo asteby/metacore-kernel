@@ -64,8 +64,8 @@ type Bridge struct {
 	// secretResolver feeds the dispatcher's signer lookup.
 	secretResolver SecretResolver
 
-	// enforcer gates capability checks. Defaults to shadow mode; hosts can
-	// flip it to enforce by toggling METACORE_ENFORCE in their wiring.
+	// enforcer gates capability checks. Defaults to enforce mode (D5); hosts
+	// can opt back into shadow with METACORE_ENFORCE=shadow.
 	enforcer *security.Enforcer
 }
 
@@ -146,8 +146,8 @@ func (b *Bridge) WebhookDispatcher() *security.WebhookDispatcher {
 }
 
 // Enforcer returns the shared capability enforcer. Hosts decide elsewhere
-// (env var, config flag) whether to flip from shadow to enforce mode by
-// calling enforcer.SetEnforce on the returned value.
+// (env var, config flag) whether to change the mode (default enforce; shadow
+// is opt-in) by calling enforcer.SetMode on the returned value.
 func (b *Bridge) Enforcer() *security.Enforcer {
 	if b.enforcer == nil {
 		b.enforcer = security.NewEnforcer(func(addonKey string) *security.Capabilities {

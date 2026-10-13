@@ -20,7 +20,7 @@ import (
 //	X-Metacore-Event      the event key (e.g. "order.created")
 //	X-Metacore-Timestamp  unix seconds
 //	X-Metacore-Signature  hex(hmac-sha256(secret, timestamp + "." + body))
-//	X-Metacore-Delivery   unique per attempt (guid-ish)
+//	X-Metacore-Delivery   delivery id, stable across retries (set by attemptDelivery)
 //
 // This matches the scheme documented in security/webhookdispatch.go; the
 // receiver verifies by recomputing the HMAC with the per-webhook secret.

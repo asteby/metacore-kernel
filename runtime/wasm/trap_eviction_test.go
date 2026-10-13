@@ -67,7 +67,7 @@ func TestHost_EvictsInstanceAfterGuestTrap(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unreachable") {
 		t.Fatalf("want unreachable trap, got %v", err)
 	}
-	if _, ok := h.modules.Load("testaddon|" + installation.String()); ok {
-		t.Fatal("poisoned instance still cached after a guest trap")
+	if idle, busy := h.poolStats("testaddon", installation); idle != 0 || busy != 0 {
+		t.Fatalf("poisoned instance still pooled after a guest trap (idle=%d busy=%d)", idle, busy)
 	}
 }

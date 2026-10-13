@@ -198,8 +198,8 @@ Two transports talk to the frontend at the same time:
 
 Every privileged operation an addon attempts (DB read, event publish, HTTP
 fetch, …) is brokered by the `security.Enforcer`. The enforcer can run in
-`shadow` mode (log only) during rollout and is flipped to `enforce` via the
-`METACORE_ENFORCE` environment variable without redeploys.
+`enforce` mode by default; `METACORE_ENFORCE=shadow` (log only) is the
+opt-out for rollouts.
 
 ## Embedding
 

@@ -7,7 +7,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Breaking
+
+- **security: capabilities enforce by default (D5)** — `security.ModeFromEnv` /
+  `NewEnforcer` now default to `ModeEnforce`. `METACORE_ENFORCE=shadow|0|false|no|off`
+  restores log-only shadow; any other value (including typos) enforces. Addons
+  with undeclared capability use will now be denied. See `docs/capabilities.md`.
+- **marketplace: bundle origin is mandatory and fail-closed (D5)** —
+  `NewHandler` with `WithInstaller` returns `ErrNoBundleOrigin` unless
+  `WithHubURL`/`MARKETPLACE_URL`, `WithBundleHostAllowlist` or
+  `WithAllowLoopbackBundles` is set. http:// and loopback hosts now require
+  the new `WithAllowLoopbackBundles()` option (tests/dev only); httptest-based
+  tests must opt in.
+
 ### Security
+
+- **marketplace: connect-time IP guard (anti DNS-rebinding)** — bundle downloads
+  use a dialer that validates the connected IP and refuses loopback, private,
+  link-local (incl. 169.254.169.254), CGNAT and multicast addresses even for
+  allowlisted hosts; redirects are re-validated; the default bundle client no
+  longer uses a forward proxy.
 
 - **wasm: per-addon `memory_limit_mb` enforced** — rejected at `Load` when the
   module's declared initial memory exceeds it, and checked after every
@@ -19,12 +38,77 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   New options `WithHubURL` and `WithBundleHostAllowlist`; `MARKETPLACE_URL`
   is honoured by default when set, restricting bundle origins to it.
 
+- **hub/installer: marketplace revocation list (C1)** — `hub.Client.NewRevocationChecker`
+  fetches `GET /v1/marketplace/revocations`, verifies the Ed25519 signature
+  against the central marketplace key (`installer.Installer.PublicKeys`, same
+  trust anchor as bundles), caches with ETag + TTL (optional on-disk copy,
+  re-verified on load) and rejects forged, unsigned and older (replayed) lists.
+  `Installer.Install`/`Upgrade` return `ErrRevoked` for a revoked
+  `addon@version` (`"*"` = all), `Enable` refuses a revoked installed version,
+  and `Installer.CheckRevocations(ctx)` disables installed addons whose version
+  was revoked (for a periodic host job). Fail-safe: with the hub down the last
+  valid list keeps being enforced; Install/Upgrade fail closed when no list was
+  ever obtained (opt out: `WithRevocationsFailOpenWhenUnknown`). Wire with
+  `inst.UseHubRevocations(hubClient)`.
+
+### Changed
+
+- **runtime/wasm: hard per-addon memory limit inside the call** — the host now
+  keeps one wazero runtime per distinct `memory_limit_mb` (lazily created,
+  sharing one compilation cache, so no extra compiles). `memory.grow` past the
+  limit fails mid-call and the guest traps (instance evicted) instead of
+  growing to the 256 MiB ceiling and being caught after the call. The
+  post-call size check and the wall-clock timeout remain as backstops.
+- **runtime/wasm: instance pool per (addon, installation)** — the single
+  mutex-serialised instance became a bounded pool (default size 1 = unchanged
+  semantics). A saturated pool now sheds load after one `timeout_ms` of
+  waiting; the guest budget starts only once an instance is acquired.
+  `Module.mu` is gone. Guest state is NOT shared across pool instances; see
+  `docs/wasm-abi.md` § 22 before setting a size above 1.
+- `wasm.NewHost` and `host.EnableWASM` take variadic `wasm.Option`s
+  (source compatible).
+
+- **installer: Install compensates on failure** — evaluated wrapping
+  schema+tables+migrations in one Postgres transaction and rejected it (the
+  migration ledger commits per migration, gorm cannot nest `Begin`, and hooks,
+  frontend files, WASM and native sidecars cannot join a SQL transaction).
+  Install now records a compensation per step and undoes them in reverse
+  order: native service, WASM backend (optional `BackendRuntimeUnloader`),
+  frontend dir (previous one restored from a backup on re-install), i18n,
+  manifest hooks, OnEnable (`OnDisable`), lifecycle registry, and finally the
+  installation row (`status=failed` + diagnostic on a fresh install; previous
+  row restored on re-install). Schema/tables/migrations are intentionally kept
+  (additive, idempotent, ledgered) so a retry resumes. Diagnostics live in a
+  best-effort `last_error` column (`Installer.LastInstallError`). See
+  `installer/compensation.go`.
+
 ### Fixed
+
+- webhooks: outbound requests now carry `X-Metacore-Delivery` (the delivery id, stable across retries) as documented, so receivers can dedupe.
 
 - `docs/wasm-abi.md`: corrected "fresh module instance per invocation" — the
   instance is reused per addon/installation, so guest state persists.
 
 ### Added
+
+- **runtime/wasm: persistent compilation cache** — `wasm.WithCompileCacheDir` /
+  `WASM_COMPILE_CACHE_DIR` (wazero `NewCompilationCacheWithDir`, dir created
+  0700, falls back to memory if unusable). Processes and replicas that mount
+  the same volume share compiled code: restart and scale-out stop recompiling.
+- **runtime/wasm: `Host.Unload(ctx, addonKey, installation)` / `UnloadAddon`** —
+  closes instances and (for `uuid.Nil`) removes the module from the compiled
+  map; `host.UnloadWASM` and the `BackendRuntimeUnloader` adapter on the wasm
+  loader expose it to the installer. `Installer.Uninstall` unloads the addon's WASM runtime when its last installation is removed.
+- **runtime/wasm: metrics** via `wasm.WithMetrics(*metrics.Registry)`:
+  `wasm_invocations_total`, `wasm_invocation_duration_seconds`,
+  `wasm_pool_wait_seconds`, `wasm_instance_evictions_total{reason}`,
+  `wasm_compilations_total`, `wasm_compile_duration_seconds`,
+  `wasm_instantiations_total`, `wasm_instances`.
+- Options `wasm.WithPoolSize`, `wasm.WithAddonPoolSize`, env `WASM_POOL_SIZE`.
+- Tests (`go test -race ./runtime/...`) for pool bounds, concurrent invoke,
+  Unload/Load races, hard memory limit, cache persistence; benchmarks
+  `BenchmarkLoad` (cold vs persistent cache) and `BenchmarkInvoke` (cold
+  instance vs warm pooled).
 
 - **`agent` runtime package (stage 1)** — reusable, host-agnostic pieces of the
   copilot extracted from ops/gobiernos-ops: `agent/contextmgr`, `agent/tools`

@@ -6,8 +6,10 @@
 // Design:
 //
 //   - Compilation is a once-per-addon cost; CompiledModule caches live on Host.
-//   - Instantiation is once per (addon, installation); each installation has
-//     its own mutable linear memory, so settings/state bleed is impossible.
+//   - Instantiation is per (addon, installation) through a bounded pool
+//     (default size 1); every instance has its own mutable linear memory, so
+//     settings/state bleed across installations is impossible and guest state
+//     is never shared between pool instances (docs/wasm-abi.md § 22).
 //   - Invocation is a plain function call with the ABI documented in abi.go:
 //     guest exports `alloc(size i32) i32` + `<fn>(ptr i32, len i32) i64`;
 //     the i64 return packs (ptr<<32)|len of a result buffer in guest memory.
@@ -19,13 +21,14 @@ package wasm
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/asteby/metacore-kernel/connectors"
@@ -35,7 +38,6 @@ import (
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
 	"github.com/tetratelabs/wazero"
-	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 	"github.com/tetratelabs/wazero/sys"
 	"gorm.io/gorm"
@@ -55,7 +57,14 @@ const (
 // caches. Safe for concurrent use: caches are sync.Maps and wazero's
 // runtime API is concurrency-safe.
 type Host struct {
+	// rt is the runtime for the global memory ceiling (256 MiB); runtimes
+	// with a tighter per-addon limit live in runtimes (see runtimeFor).
 	rt            wazero.Runtime
+	cache         wazero.CompilationCache
+	runtimes      sync.Map // uint32 memory-limit pages -> *runtimeSlot
+	poolSize      int
+	poolSizeFn    func(addonKey string) int
+	metrics       *hostMetrics
 	caps          *security.Capabilities
 	addonCaps     func(addonKey string) *security.Capabilities
 	bus           *events.Bus
@@ -91,31 +100,23 @@ type Host struct {
 	connectors        *connectors.Resolver
 	logger            *log.Logger
 	compiled          sync.Map // addonKey -> *compiledEntry
-	modules           sync.Map // instanceKey(addonKey, installation) -> *Module
-	// instMu single-flights getOrInstantiate per instance key. Two concurrent
-	// deliveries that both miss the module cache used to race
-	// InstantiateModule with the SAME wazero module name — wazero rejects the
-	// loser with "has already been instantiated", and since a Go guest's init
-	// takes seconds, all the fast retries collided with the still-in-flight
-	// winner too: the delivery died and only the healer recovered it.
-	instMu sync.Map // instanceKey -> *sync.Mutex
+	// modules holds one *instPool per instanceKey(addonKey, installation).
+	// The pool's admission semaphore also single-flights instantiation: every
+	// instance gets a unique wazero module name, so concurrent cold starts no
+	// longer collide on "has already been instantiated".
+	modules sync.Map
 }
 
 type compiledEntry struct {
-	mod  wazero.CompiledModule
-	spec *manifest.BackendSpec
+	mod wazero.CompiledModule
+	// rt is the runtime mod was compiled on; instances MUST be created there.
+	rt    wazero.Runtime
+	pages uint32 // memory limit of rt
+	spec  atomic.Pointer[manifest.BackendSpec]
 	// hash of the wasm bytes last compiled for this addonKey. Load skips
 	// CompileModule when the payload is unchanged (healer / re-hydrate paths
 	// used to recompile identical modules on every boot).
 	hash [32]byte
-}
-
-// Module is an instantiated wasm module bound to one installation.
-type Module struct {
-	inst     api.Module
-	spec     *manifest.BackendSpec
-	settings map[string]string
-	mu       sync.Mutex // serialises Invoke — wazero modules are not reentrant per memory
 }
 
 const (
@@ -127,15 +128,16 @@ const (
 // memoryLimitPages resolves a manifest memory_limit_mb to a wasm page cap:
 // 0/negative = the global ceiling; anything above it is clamped to it.
 //
-// Per-addon enforcement design: wazero's WithMemoryLimitPages lives on
-// RuntimeConfig (one limit per runtime) and ModuleConfig has no equivalent.
-// A runtime per limit would force a recompile of every addon plus separate
-// WASI/host-module registration, so instead the one runtime keeps the global
-// 256 MiB hard ceiling and the per-addon limit is enforced by the host: Load
-// rejects a module whose declared minimum memory exceeds it, and invokeOnce
-// checks the instance's memory size after every call, evicting and failing
-// the call when it grew past the limit. Growth within a single call can reach
-// the global ceiling before being caught; the next-call eviction reclaims it.
+// Per-addon enforcement design (hard, inside the call): wazero's
+// WithMemoryLimitPages lives on RuntimeConfig, so the Host keeps one runtime
+// PER distinct limit (runtimeFor), created lazily and all sharing ONE
+// compilation cache — a module compiled for a 16-page runtime reuses the same
+// native code on a 1024-page one, so extra runtimes cost no recompile. A guest
+// whose memory.grow would pass its limit gets -1 from the engine mid-call
+// (Go guests then die with out-of-memory, which traps and evicts the
+// instance). invokeOnce still checks the size after the call as a backstop,
+// and the wall-clock timeout (guestDeadline + WithCloseOnContextDone) is the
+// second barrier against a guest that thrashes instead of growing.
 func memoryLimitPages(mb int) uint32 {
 	if mb <= 0 || mb >= globalMemoryMB {
 		return globalMemPages
@@ -143,30 +145,82 @@ func memoryLimitPages(mb int) uint32 {
 	return uint32(mb) * 1024 * 1024 / pageBytes
 }
 
+// runtimeSlot lazily builds one runtime (single-flight via once).
+type runtimeSlot struct {
+	once sync.Once
+	rt   wazero.Runtime
+	err  error
+}
+
+// runtimeFor returns the runtime whose hard memory ceiling is `pages`,
+// creating it (WASI + host module registered) on first use. Distinct limits
+// are few (manifest MB integers <= 256), so the map stays tiny.
+func (h *Host) runtimeFor(pages uint32) (wazero.Runtime, error) {
+	v, _ := h.runtimes.LoadOrStore(pages, &runtimeSlot{})
+	slot := v.(*runtimeSlot)
+	slot.once.Do(func() {
+		ctx := context.Background()
+		cfg := wazero.NewRuntimeConfig().
+			WithCloseOnContextDone(true).
+			WithMemoryLimitPages(pages)
+		if h.cache != nil {
+			cfg = cfg.WithCompilationCache(h.cache)
+		}
+		rt := wazero.NewRuntimeWithConfig(ctx, cfg)
+		// Guests compiled with GOOS=wasip1 (standard Go toolchain) import
+		// wasi_snapshot_preview1.* for their runtime initialisation (memory
+		// management, clock, random).
+		wasi_snapshot_preview1.MustInstantiate(ctx, rt)
+		if err := registerHostModule(ctx, h, rt); err != nil {
+			_ = rt.Close(ctx)
+			slot.err = fmt.Errorf("wasm: register host module: %w", err)
+			return
+		}
+		slot.rt = rt
+	})
+	return slot.rt, slot.err
+}
+
 // NewHost constructs a runtime. One Host is expected per process.
-func NewHost(ctx context.Context, caps *security.Capabilities, logger *log.Logger) (*Host, error) {
+//
+// Options (or WASM_COMPILE_CACHE_DIR / WASM_POOL_SIZE) configure the
+// persistent compilation cache and the per-installation instance pool.
+func NewHost(ctx context.Context, caps *security.Capabilities, logger *log.Logger, opts ...Option) (*Host, error) {
 	if logger == nil {
 		logger = log.Default()
 	}
-	// Memory caps in wazero live on the RuntimeConfig — the runtime refuses
-	// to grow any module past this global ceiling. Module-level (per-addon)
-	// tuning below still applies via the guest's own memory declarations.
-	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().
-		WithCloseOnContextDone(true).
-		WithMemoryLimitPages(globalMemPages)) // 256 MiB hard ceiling
-	// Guests compiled with GOOS=wasip1 (standard Go toolchain) import
-	// wasi_snapshot_preview1.* for their runtime initialisation (memory
-	// management, clock, random). Without this the instantiator returns
-	// "module[wasi_snapshot_preview1] not instantiated" and the addon
-	// never loads. MustInstantiate panics only if the runtime is already
-	// closed — safe to call unconditionally at boot.
-	wasi_snapshot_preview1.MustInstantiate(ctx, rt)
-	h := &Host{rt: rt, caps: caps, logger: logger}
-	if err := registerHostModule(ctx, h); err != nil {
-		_ = rt.Close(ctx)
-		return nil, fmt.Errorf("wasm: register host module: %w", err)
+	cfg := resolveConfig(logger, opts)
+	h := &Host{caps: caps, logger: logger, poolSize: cfg.poolSize, poolSizeFn: cfg.poolSizeFn,
+		metrics: newHostMetrics(cfg.metrics)}
+	h.cache = newCompileCache(cfg.cacheDir, logger)
+	// The global-ceiling runtime doubles as the default (h.rt).
+	rt, err := h.runtimeFor(globalMemPages)
+	if err != nil {
+		if h.cache != nil {
+			_ = h.cache.Close(ctx)
+		}
+		return nil, err
 	}
+	h.rt = rt
 	return h, nil
+}
+
+// newCompileCache builds the cache shared by every runtime of the Host:
+// on-disk when dir is set (shared across processes/replicas on one volume),
+// in-memory otherwise (still needed so per-limit runtimes share compiles).
+// A directory that cannot be created degrades to memory with a log line —
+// the cache is an optimisation, never a boot blocker.
+func newCompileCache(dir string, logger *log.Logger) wazero.CompilationCache {
+	if dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			logger.Printf("wasm: compile cache dir unusable, falling back to memory: %v", err)
+		} else if c, err := wazero.NewCompilationCacheWithDir(dir); err != nil {
+			logger.Printf("wasm: compile cache dir unusable, falling back to memory: %v", err)
+		} else {
+			return c
+		}
+	}
+	return wazero.NewCompilationCache()
 }
 
 // WithBus binds an events.Bus to the host so guests can publish through the
@@ -402,41 +456,146 @@ func (h *Host) Load(ctx context.Context, addonKey string, wasmBytes []byte, spec
 		return fmt.Errorf("wasm: backend spec must have runtime=wasm")
 	}
 	sum := sha256.Sum256(wasmBytes)
+	limit := memoryLimitPages(spec.MemoryLimitMB)
 	if prev, ok := h.compiled.Load(addonKey); ok {
-		if p, _ := prev.(*compiledEntry); p != nil && p.hash == sum {
-			// Same artifact — refresh the spec pointer only (exports/limits
-			// may have been edited without a binary change).
-			p.spec = spec
+		if p, _ := prev.(*compiledEntry); p != nil && p.hash == sum && p.pages == limit {
+			// Same artifact and limit — refresh the spec pointer only
+			// (exports/timeouts may have been edited without a binary change).
+			p.spec.Store(spec)
 			return nil
 		}
 	}
-	cm, err := h.rt.CompileModule(ctx, wasmBytes)
+	rt, err := h.runtimeFor(limit)
 	if err != nil {
-		return fmt.Errorf("wasm: compile %s: %w", addonKey, err)
+		return err
 	}
-	limit := memoryLimitPages(spec.MemoryLimitMB)
+	start := time.Now()
+	cm, err := rt.CompileModule(ctx, wasmBytes)
+	if err != nil {
+		return fmt.Errorf("wasm: compile %s: %w", addonKey, h.diagnoseCompile(ctx, addonKey, wasmBytes, limit, err))
+	}
+	h.metrics.compiled(addonKey, time.Since(start))
 	for _, m := range cm.ExportedMemories() {
 		if min := m.Min(); min > limit {
 			_ = cm.Close(ctx)
 			return fmt.Errorf("wasm: %s declares %d initial memory pages, over its memory_limit_mb (%d pages)", addonKey, min, limit)
 		}
 	}
-	if prev, ok := h.compiled.Swap(addonKey, &compiledEntry{mod: cm, spec: spec, hash: sum}); ok {
+	entry := &compiledEntry{mod: cm, rt: rt, pages: limit, hash: sum}
+	entry.spec.Store(spec)
+	if prev, ok := h.compiled.Swap(addonKey, entry); ok {
+		// Drop stale installation instances — they point to the old compile.
+		h.closePools(addonKey, uuid.Nil, evictReplaced)
 		if p, _ := prev.(*compiledEntry); p != nil {
 			_ = p.mod.Close(ctx)
 		}
-		// Drop stale installation instances — they point to the old compile.
-		h.modules.Range(func(k, v any) bool {
-			if sk, _ := k.(string); len(sk) > len(addonKey) && sk[:len(addonKey)+1] == addonKey+"|" {
-				if m, _ := v.(*Module); m != nil {
-					_ = m.inst.Close(ctx)
-				}
-				h.modules.Delete(k)
-			}
-			return true
-		})
 	}
 	return nil
+}
+
+// diagnoseCompile turns the engine's rejection of a module whose declared
+// memory exceeds a tight per-addon runtime limit into the memory_limit_mb
+// error operators know. Failure path only; the probe compiles on the global
+// runtime (cache-shared, so cheap when the bytes were valid).
+func (h *Host) diagnoseCompile(ctx context.Context, addonKey string, wasmBytes []byte, limit uint32, orig error) error {
+	if limit == globalMemPages {
+		return orig
+	}
+	probe, err := h.rt.CompileModule(ctx, wasmBytes)
+	if err != nil {
+		return orig
+	}
+	defer probe.Close(ctx)
+	for _, m := range probe.ExportedMemories() {
+		if min := m.Min(); min > limit {
+			return fmt.Errorf("%s declares %d initial memory pages, over its memory_limit_mb (%d pages)", addonKey, min, limit)
+		}
+	}
+	return orig
+}
+
+// closePools closes the instance pools of addonKey (installation == uuid.Nil
+// means all of its installations).
+func (h *Host) closePools(addonKey string, installation uuid.UUID, reason string) int {
+	n := 0
+	prefix := addonKey + "|"
+	h.modules.Range(func(k, v any) bool {
+		sk, _ := k.(string)
+		if !strings.HasPrefix(sk, prefix) {
+			return true
+		}
+		if installation != uuid.Nil && sk != instanceKey(addonKey, installation) {
+			return true
+		}
+		if h.modules.CompareAndDelete(k, v) {
+			v.(*instPool).close(reason)
+			n++
+		}
+		return true
+	})
+	return n
+}
+
+func instanceKey(addonKey string, installation uuid.UUID) string {
+	return addonKey + "|" + installation.String()
+}
+
+// Unload releases what the host holds for an addon.
+//
+//   - installation != uuid.Nil: closes that installation's instances (idle ones
+//     now, busy ones as their call returns). The compiled module stays, since
+//     other installations of the same addon share it. Call this when ONE
+//     installation is uninstalled.
+//   - installation == uuid.Nil: closes every installation's instances AND
+//     removes the addon from the compiled map (its CompiledModule is closed).
+//     Later Invokes fail with AddonNotLoadedError until Load runs again. Call
+//     this when the addon's last installation goes away (or on a failed fresh
+//     install, see installer.BackendRuntimeUnloader).
+//
+// Idempotent; unknown addons are a no-op. In-flight calls finish on the
+// instance they hold and then discard it.
+func (h *Host) Unload(ctx context.Context, addonKey string, installation uuid.UUID) error {
+	h.closePools(addonKey, installation, evictUnload)
+	if installation == uuid.Nil {
+		if prev, ok := h.compiled.LoadAndDelete(addonKey); ok {
+			if p, _ := prev.(*compiledEntry); p != nil {
+				return p.mod.Close(ctx)
+			}
+		}
+	}
+	return nil
+}
+
+// UnloadAddon is Unload for the whole addon (all installations).
+func (h *Host) UnloadAddon(ctx context.Context, addonKey string) error {
+	return h.Unload(ctx, addonKey, uuid.Nil)
+}
+
+// poolFor returns the live pool for the installation, creating it (or
+// replacing one bound to a superseded compile) as needed.
+func (h *Host) poolFor(addonKey string, installation uuid.UUID, entry *compiledEntry) *instPool {
+	key := instanceKey(addonKey, installation)
+	for {
+		if v, ok := h.modules.Load(key); ok {
+			p := v.(*instPool)
+			if p.entry == entry {
+				return p
+			}
+			// Stale: bound to a replaced compile.
+			if h.modules.CompareAndDelete(key, v) {
+				p.close(evictReplaced)
+			}
+			continue
+		}
+		np := newInstPool(h, addonKey, installation, entry, h.sizeFor(addonKey))
+		if actual, loaded := h.modules.LoadOrStore(key, np); loaded {
+			if actual.(*instPool).entry == entry {
+				return actual.(*instPool)
+			}
+			continue
+		}
+		return np
+	}
 }
 
 // Invoke calls a single exported function on behalf of installationID. It
@@ -477,7 +636,10 @@ func (h *Host) InvokeForInTx(ctx context.Context, tx *gorm.DB, orgID, installati
 	return h.invokeImpl(ctx, tx, orgID, installation, addonKey, funcName, payload, settings)
 }
 
-func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) ([]byte, error) {
+func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) (out []byte, err error) {
+	start := time.Now()
+	defer func() { h.metrics.invoked(addonKey, err, time.Since(start)) }()
+
 	ce, ok := h.compiled.Load(addonKey)
 	if !ok {
 		return nil, &AddonNotLoadedError{AddonKey: addonKey}
@@ -486,23 +648,30 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 
 	// Enforce the declared export whitelist. Even if a module ships extra
 	// symbols, only the ones in BackendSpec.Exports are dispatchable.
-	if !containsString(entry.spec.Exports, funcName) {
+	if !containsString(entry.spec.Load().Exports, funcName) {
 		return nil, fmt.Errorf("wasm: function %q not in backend.exports", funcName)
 	}
 
-	// One retry: a prior timeout/cancel closes the wazero instance (see
-	// sys.ExitError) but used to leave the dead Module in h.modules. The next
-	// UI action then failed instantly with "module closed with context
-	// deadline exceeded" until process restart. Evict + reinstantiate once.
+	// One retry: an instance closed under us (unload race, or a prior
+	// timeout/cancel closing the wazero instance, see sys.ExitError) is
+	// discarded by the pool; run once more on a fresh/other instance.
 	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < 3; attempt++ {
 		out, err := h.invokeOnce(ctx, tx, orgID, installation, addonKey, funcName, payload, settings, entry)
 		if err == nil {
 			return out, nil
 		}
 		lastErr = err
+		if errors.Is(err, errStaleEntry) || errors.Is(err, errPoolClosed) {
+			// Load/Unload raced us: re-resolve (gone => not loaded).
+			ce, ok := h.compiled.Load(addonKey)
+			if !ok {
+				return nil, &AddonNotLoadedError{AddonKey: addonKey}
+			}
+			entry = ce.(*compiledEntry)
+			continue
+		}
 		if attempt == 0 && isClosedModuleErr(err) {
-			h.dropModule(addonKey, installation)
 			continue
 		}
 		return nil, err
@@ -511,15 +680,38 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 }
 
 func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string, entry *compiledEntry) ([]byte, error) {
-	mod, err := h.getOrInstantiate(ctx, addonKey, installation, entry)
-	if err != nil {
-		return nil, err
+	spec := entry.spec.Load()
+	timeout := defaultTimeout
+	if spec.TimeoutMs > 0 {
+		timeout = time.Duration(spec.TimeoutMs) * time.Millisecond
 	}
 
-	timeout := defaultTimeout
-	if entry.spec.TimeoutMs > 0 {
-		timeout = time.Duration(entry.spec.TimeoutMs) * time.Millisecond
+	// Wait for a free instance, bounded by the caller's ctx and by one
+	// timeout budget (a saturated pool must shed load, not queue forever).
+	// The guest budget below starts only AFTER the instance is ours.
+	pool := h.poolFor(addonKey, installation, entry)
+	waitStart := time.Now()
+	waitCtx, waitCancel := context.WithTimeout(ctx, timeout)
+	mod, err := pool.acquire(waitCtx)
+	waitCancel()
+	h.metrics.waited(addonKey, time.Since(waitStart))
+	if err != nil {
+		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("wasm: %s: all %d pooled instances busy for %s", addonKey, pool.size, timeout)
+		}
+		return nil, err
 	}
+	evicted := false
+	defer func() {
+		if !evicted {
+			pool.release(mod)
+		}
+	}()
+	evict := func(reason string) {
+		evicted = true
+		pool.evict(mod, reason)
+	}
+
 	// Outbound HTTP waits do not count against the budget (see
 	// guestDeadline); maxGuestHTTPWait bounds the extension.
 	callCtx, deadline, cancel := withGuestDeadline(ctx, timeout, timeout+maxGuestHTTPWait)
@@ -555,9 +747,6 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		logger:            h.logger,
 	})
 
-	mod.mu.Lock()
-	defer mod.mu.Unlock()
-
 	if mod.inst.IsClosed() {
 		return nil, fmt.Errorf("wasm: module closed")
 	}
@@ -578,12 +767,12 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		// again cascades into "unreachable" / "invalid table access" on
 		// unrelated exports until restart. Evict so the next Invoke gets a
 		// fresh reactor; the failed call itself is NOT retried (not idempotent).
-		h.dropModuleIfCurrent(addonKey, installation, mod)
+		evict(evictTrap)
 		return nil, fmt.Errorf("wasm: call %s: %w", funcName, err)
 	}
 	if mem := mod.inst.Memory(); mem != nil {
-		if limit := memoryLimitPages(entry.spec.MemoryLimitMB); mem.Size() > limit*pageBytes {
-			h.dropModuleIfCurrent(addonKey, installation, mod)
+		if limit := entry.pages; mem.Size() > limit*pageBytes {
+			evict(evictMemory)
 			return nil, fmt.Errorf("wasm: %s exceeded memory_limit_mb (%d pages > %d)", addonKey, mem.Size()/pageBytes, limit)
 		}
 	}
@@ -601,7 +790,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 }
 
 // isClosedModuleErr reports whether err means the cached wazero instance was
-// closed (timeout/cancel/exit) and is safe to drop + retry on a fresh module.
+// closed (timeout/cancel/exit) and is safe to retry on a fresh module.
 func isClosedModuleErr(err error) bool {
 	if err == nil {
 		return false
@@ -612,82 +801,6 @@ func isClosedModuleErr(err error) bool {
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "module closed")
-}
-
-// dropModule removes a poisoned instance from the cache so the next
-// getOrInstantiate builds a fresh reactor. Safe if the key is already gone.
-func (h *Host) dropModule(addonKey string, installation uuid.UUID) {
-	key := addonKey + "|" + installation.String()
-	if v, ok := h.modules.LoadAndDelete(key); ok {
-		if m, _ := v.(*Module); m != nil && m.inst != nil {
-			_ = m.inst.Close(context.Background())
-		}
-	}
-}
-
-// dropModuleIfCurrent evicts mod only when it is still the cached instance for
-// the key, so a concurrent re-instantiation is never torn down by a stale caller.
-func (h *Host) dropModuleIfCurrent(addonKey string, installation uuid.UUID, mod *Module) {
-	key := addonKey + "|" + installation.String()
-	if v, ok := h.modules.Load(key); ok && v.(*Module) == mod {
-		h.modules.CompareAndDelete(key, v)
-		if mod.inst != nil {
-			_ = mod.inst.Close(context.Background())
-		}
-	}
-}
-
-func (h *Host) getOrInstantiate(ctx context.Context, addonKey string, installation uuid.UUID, entry *compiledEntry) (*Module, error) {
-	key := addonKey + "|" + installation.String()
-	// Single-flight per instance key: only one goroutine instantiates; the
-	// rest wait and hit the cache. See instMu on Host for the failure mode
-	// this prevents (wazero name collision → dead deliveries).
-	muAny, _ := h.instMu.LoadOrStore(key, &sync.Mutex{})
-	mu := muAny.(*sync.Mutex)
-	mu.Lock()
-	defer mu.Unlock()
-	if v, ok := h.modules.Load(key); ok {
-		mod := v.(*Module)
-		// A prior Invoke whose callCtx timed out / was cancelled closes the
-		// wazero Module in place. Serving it again yields instant
-		// "module closed with context deadline exceeded" on alloc.
-		if mod.inst != nil && !mod.inst.IsClosed() {
-			return mod, nil
-		}
-		h.modules.Delete(key)
-		if mod.inst != nil {
-			_ = mod.inst.Close(ctx)
-		}
-	}
-	// Per-addon memory_limit_mb is enforced in Load (declared minimum) and
-	// invokeOnce (post-call size check); see memoryLimitPages.
-	cfg := wazero.NewModuleConfig().
-		WithName(addonKey+"-"+installation.String()).
-		// RandSource is required by some toolchains' runtime init (e.g. Go's
-		// runtime.fastrand). SysNanotime/Walltime give guests a monotonic +
-		// wall clock without stdin/stdout; we still omit stdio on purpose.
-		WithRandSource(rand.Reader).
-		WithSysNanotime().
-		WithSysWalltime().
-		// Addon guests are WASI REACTORS (GOOS=wasip1 -buildmode=c-shared):
-		// they export `_initialize`, not `_start`. wazero's default start list
-		// is just "_start", so reactors were instantiated WITHOUT running the
-		// Go runtime init — the first host call into `alloc` then died with
-		// "out of bounds memory access" (no heap). List both: wazero invokes
-		// whichever the module actually exports.
-		WithStartFunctions("_initialize", "_start")
-
-	inst, err := h.rt.InstantiateModule(ctx, entry.mod, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("wasm: instantiate %s/%s: %w", addonKey, installation, err)
-	}
-	mod := &Module{inst: inst, spec: entry.spec}
-	if actual, loaded := h.modules.LoadOrStore(key, mod); loaded {
-		// Racing caller beat us to it — dispose ours and use theirs.
-		_ = inst.Close(ctx)
-		return actual.(*Module), nil
-	}
-	return mod, nil
 }
 
 // Close tears down every instance and the wazero runtime. Call once on
@@ -722,13 +835,28 @@ func (h *Host) CompiledKeys() []string {
 }
 
 func (h *Host) Close(ctx context.Context) error {
-	h.modules.Range(func(_, v any) bool {
-		if m, _ := v.(*Module); m != nil {
-			_ = m.inst.Close(ctx)
+	h.modules.Range(func(k, v any) bool {
+		if p, _ := v.(*instPool); p != nil {
+			p.close(evictHostClose)
+		}
+		h.modules.Delete(k)
+		return true
+	})
+	var first error
+	h.runtimes.Range(func(_, v any) bool {
+		if slot, _ := v.(*runtimeSlot); slot != nil && slot.rt != nil {
+			if err := slot.rt.Close(ctx); err != nil && first == nil {
+				first = err
+			}
 		}
 		return true
 	})
-	return h.rt.Close(ctx)
+	if h.cache != nil {
+		if err := h.cache.Close(ctx); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 func containsString(ss []string, s string) bool {

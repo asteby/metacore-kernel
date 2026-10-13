@@ -305,6 +305,21 @@ type Installer struct {
 	// accept extensions. Nil = extension tables without a physical FK. Wired
 	// via WithModelTarget.
 	ModelTarget dynamic.ModelTargetResolver
+
+	// Revocations, when set, makes Install/Upgrade/Enable refuse revoked
+	// addon versions and enables CheckRevocations. See revocations.go.
+	Revocations RevocationSource
+	// RevocationsFailOpenWhenUnknown lets Install/Upgrade proceed when no
+	// verified revocation list has ever been obtained. Default false: fail closed.
+	RevocationsFailOpenWhenUnknown bool
+
+	// installFailpoint is a test seam: called after each Install step with the
+	// step name; a non-nil return aborts the install at that point so the
+	// compensation of every step can be exercised.
+	installFailpoint func(step string) error
+	// rollbackObserver (test seam) receives the compensation names run by a
+	// failed Install, in execution order.
+	rollbackObserver func(undone []string)
 }
 
 // WithModelMaterializer declares how the host creates the addon's model tables
@@ -540,6 +555,9 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	if err := i.verifySignature(b); err != nil {
 		return nil, nil, err
 	}
+	if err := i.checkNotRevoked(context.Background(), b.Manifest.Key, b.Manifest.Version, true); err != nil {
+		return nil, nil, err
+	}
 	warnings, err := b.Manifest.ValidateAdvisory(i.KernelVersion)
 	if err != nil {
 		return nil, nil, err
@@ -576,6 +594,23 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	if err := ensureInstallationUniqueIndex(i.DB); err != nil {
 		return nil, nil, fmt.Errorf("ensure installation unique index: %w", err)
 	}
+	ensureLastErrorColumn(i.DB)
+	t := i.beginInstallTxn(orgID, b)
+	inst, secret, err := i.installSteps(orgID, b, t)
+	if err != nil {
+		if rbErr := t.rollback(err); rbErr != nil {
+			err = fmt.Errorf("%w (compensation incomplete: %v)", err, rbErr)
+		}
+		return nil, nil, err
+	}
+	t.commit()
+	return inst, secret, nil
+}
+
+// installSteps is the body of Install. Every side-effecting step registers its
+// compensation on t (see compensation.go) and passes through t.check so tests
+// can inject a failure after it.
+func (i *Installer) installSteps(orgID uuid.UUID, b *bundle.Bundle, t *installTxn) (*Installation, []byte, error) {
 	// Snapshot the previous manifest hash BEFORE we run the rest of Install
 	// so a post-persist comparison can distinguish "fresh install"
 	// (OldHash="") from "hash unchanged" from "hot-swap".
@@ -583,6 +618,9 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	newHash := manifestHashFromBundle(b)
 	iso := dynamic.ParseIsolation(b.Manifest.TenantIsolation)
 	if err := dynamic.EnsureSchema(i.DB, b.Manifest.Key, orgID, iso); err != nil {
+		return nil, nil, err
+	}
+	if err := t.check("schema"); err != nil {
 		return nil, nil, err
 	}
 	// Materialise the model_definitions tables (the manifest is the schema
@@ -606,6 +644,9 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 			return nil, nil, fmt.Errorf("materialize models: %w", err)
 		}
 	}
+	if err := t.check("models"); err != nil {
+		return nil, nil, err
+	}
 	if err := ensureAuditInPrimarySchema(i.DB, i.MigrationSchema, b.Manifest, orgID, iso); err != nil {
 		return nil, nil, err
 	}
@@ -613,6 +654,9 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 		return nil, nil, err
 	}
 	i.materializeUniqueRules(context.Background(), orgID, iso, b.Manifest)
+	if err := t.check("migrations"); err != nil {
+		return nil, nil, err
+	}
 	// Install doubles as the marketplace "Actualizar" (upgrade) path — the
 	// embed re-runs Install with the NEW bundle rather than calling Upgrade.
 	// Refresh the in-memory lifecycle so its Manifest().Version reflects the
@@ -622,9 +666,20 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	// badge stuck on the old version after an upgrade (addon_manifests + the
 	// host registries updated, but this lifecycle didn't).
 	refreshDeclarativeLifecycle(i.Lifecycles, b.Manifest)
+	t.add("lifecycle_registry", func() error {
+		if t.prevOK {
+			i.Lifecycles.Register(b.Manifest.Key, t.prevLC)
+		} else {
+			i.Lifecycles.Unregister(b.Manifest.Key)
+		}
+		return nil
+	})
 	lc, _ := i.Lifecycles.Get(b.Manifest.Key)
 	if err := lc.OnInstall(i.DB, orgID); err != nil {
 		return nil, nil, fmt.Errorf("OnInstall: %w", err)
+	}
+	if err := t.check("lifecycle_install"); err != nil {
+		return nil, nil, err
 	}
 	if err := i.runLifecycleHooks(context.Background(), b.Manifest, orgID, lifecycle.HookEventInstall); err != nil {
 		return nil, nil, fmt.Errorf("lifecycle hook install: %w", err)
@@ -632,13 +687,30 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	if err := lc.OnEnable(i.DB, orgID); err != nil {
 		return nil, nil, fmt.Errorf("OnEnable: %w", err)
 	}
+	if t.fresh {
+		t.add("lifecycle_enable", func() error {
+			if err := lc.OnDisable(i.DB, orgID); err != nil {
+				return err
+			}
+			return i.runLifecycleHooks(context.Background(), b.Manifest, orgID, lifecycle.HookEventDisable)
+		})
+	}
 	if err := i.runLifecycleHooks(context.Background(), b.Manifest, orgID, lifecycle.HookEventEnable); err != nil {
 		return nil, nil, fmt.Errorf("lifecycle hook enable: %w", err)
+	}
+	if err := t.check("lifecycle_enable"); err != nil {
+		return nil, nil, err
 	}
 	// Wire the manifest's CRUD hooks (before_*/after_*) into the dynamic
 	// engine's HookRegistry. Idempotent — the registry first removes any
 	// previous registration for this addon before re-adding the new shape,
 	// so reinstalls don't double-fire.
+	if i.DynamicHooks != nil {
+		t.add("hooks", func() error {
+			restoreHooks(i, b.Manifest.Key, t.prevLC, t.prevOK)
+			return nil
+		})
+	}
 	if i.DynamicHooks != nil && i.HookRunner != nil {
 		i.DynamicHooks.RegisterManifestHooks(b.Manifest.Key, b.Manifest, i.HookRunner)
 	}
@@ -649,6 +721,9 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	// at fire time.
 	if i.DynamicHooks != nil {
 		dynamic.RegisterComputeHooks(i.DynamicHooks, b.Manifest)
+	}
+	if err := t.check("hooks"); err != nil {
+		return nil, nil, err
 	}
 	secret, err := newSecret()
 	if err != nil {
@@ -681,10 +756,21 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	// bundle, keeping telemetry/rollback consistent with the lifecycle) while
 	// PRESERVING the install-time secret, per-org settings, id and created_at
 	// (those columns are intentionally absent from DoUpdates).
+	updateCols := []string{"version", "manifest_hash", "status", "source", "enabled_at"}
+	if t.prev != nil && t.prev.Status == "failed" {
+		// The previous row is a placeholder written by a failed install: it
+		// carries no usable secret, so adopt the one minted now.
+		updateCols = append(updateCols, "secret_hash", "secret_enc")
+	}
+	t.persists = true
 	if err := i.DB.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "organization_id"}, {Name: "addon_key"}},
-		DoUpdates: clause.AssignmentColumns([]string{"version", "manifest_hash", "status", "source", "enabled_at"}),
+		DoUpdates: clause.AssignmentColumns(updateCols),
 	}).Create(inst).Error; err != nil {
+		return nil, nil, err
+	}
+	i.setLastError(orgID, b.Manifest.Key, "")
+	if err := t.check("persist"); err != nil {
 		return nil, nil, err
 	}
 	// Persist any i18n catalog the manifest declares so consumers (frontend
@@ -698,14 +784,41 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 		slog.Warn("installer.i18n_register_failed",
 			"addon_key", b.Manifest.Key,
 			"err", err.Error())
+	} else if t.fresh {
+		t.add("i18n", func() error { return removeI18n(i, b.Manifest.Key) })
+	}
+	if err := t.check("i18n"); err != nil {
+		return nil, nil, err
 	}
 	// Materialize federation artifacts to disk so the host's static route can
 	// serve them. Non-federation bundles (no frontend, or "script" format) are
 	// a no-op. An empty FrontendBasePath opts the host out entirely.
 	if b.Manifest.Frontend != nil && b.Manifest.Frontend.Format == "federation" {
+		bak, err := stageFrontendBackup(i.FrontendBasePath, b.Manifest.Key)
+		if err != nil {
+			return nil, nil, err
+		}
+		if i.FrontendBasePath != "" {
+			t.add("frontend", func() error {
+				dir := FrontendDir(i.FrontendBasePath, b.Manifest.Key)
+				if err := os.RemoveAll(dir); err != nil {
+					return err
+				}
+				if bak != "" {
+					return os.Rename(bak, dir)
+				}
+				return nil
+			})
+			if bak != "" {
+				t.onCommit(func() { _ = os.RemoveAll(bak) })
+			}
+		}
 		if err := WriteFrontend(i.FrontendBasePath, b.Manifest.Key, b.Frontend); err != nil {
 			return nil, nil, fmt.Errorf("WriteFrontend: %w", err)
 		}
+	}
+	if err := t.check("frontend"); err != nil {
+		return nil, nil, err
 	}
 	// Materialise the addon's in-process backend runtime when the manifest
 	// declares one (WASM today; "binary" reserved). The loader reads the
@@ -722,6 +835,19 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 		if err := loader.LoadFromBundle(context.Background(), b); err != nil {
 			return nil, nil, fmt.Errorf("LoadBackendRuntime: %w", err)
 		}
+		if u, ok := loader.(BackendRuntimeUnloader); ok && t.fresh {
+			t.add("backend_runtime", func() error {
+				// The compiled module is per addon, shared by every org:
+				// never unload it from under another org's installation.
+				if i.otherInstallations(orgID, b.Manifest.Key) > 0 {
+					return nil
+				}
+				return u.UnloadAddon(context.Background(), b.Manifest.Key)
+			})
+		}
+	}
+	if err := t.check("backend"); err != nil {
+		return nil, nil, err
 	}
 	if b.Manifest.NativeService != nil {
 		var persisted Installation
@@ -742,6 +868,14 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 			return nil, nil, fmt.Errorf("LoadNativeService: %w", err)
 		}
 		*inst = persisted
+		if t.fresh {
+			t.add("native_service", func() error {
+				return runtime.Remove(context.Background(), b.Manifest, persisted)
+			})
+		}
+	}
+	if err := t.check("native"); err != nil {
+		return nil, nil, err
 	}
 	// Broadcast the manifest-hash change (or first-install signal). Errors
 	// are logged but never fail the install — the WebSocket fan-out is a
@@ -886,6 +1020,16 @@ func (i *Installer) RotateSecret(orgID uuid.UUID, addonKey string) ([]byte, erro
 
 // Enable marks an existing installation as enabled and fires OnEnable.
 func (i *Installer) Enable(orgID uuid.UUID, addonKey string) error {
+	// A revoked version must never be (re-)enabled. The installed version is
+	// the one on the row; an unknown row falls through to the existing flow.
+	if i.Revocations != nil {
+		var cur Installation
+		if err := i.DB.Where("organization_id = ? AND addon_key = ?", orgID, addonKey).Take(&cur).Error; err == nil {
+			if err := i.checkNotRevoked(context.Background(), addonKey, cur.Version, false); err != nil {
+				return err
+			}
+		}
+	}
 	lc, ok := i.Lifecycles.Get(addonKey)
 	if !ok {
 		return fmt.Errorf("addon %q not registered", addonKey)
@@ -990,6 +1134,13 @@ func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool)
 		return err
 	}
 	i.Interceptors.UnregisterAddon(addonKey)
+	// Release the addon's in-process backend runtime once its last
+	// installation is gone (the compiled module is shared across orgs).
+	if u, ok := i.BackendRuntime.(BackendRuntimeUnloader); ok && i.otherInstallations(orgID, addonKey) == 0 {
+		if err := u.UnloadAddon(context.Background(), addonKey); err != nil {
+			slog.Warn("installer.backend_unload_failed", "addon_key", addonKey, "err", err.Error())
+		}
+	}
 	// Drop any manifest-driven CRUD hooks the installer projected at
 	// Install time. Safe to call even when the addon never registered any
 	// (UnregisterAddon is a no-op for unknown keys).
@@ -1097,6 +1248,9 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 		return nil, fmt.Errorf("installer.Upgrade: bundle is required")
 	}
 	if err := i.verifySignature(newBundle); err != nil {
+		return nil, err
+	}
+	if err := i.checkNotRevoked(ctx, newBundle.Manifest.Key, newBundle.Manifest.Version, true); err != nil {
 		return nil, err
 	}
 	// Validation / schema failures are typed (*UpgradeError) with the phase;

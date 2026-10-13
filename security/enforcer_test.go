@@ -73,3 +73,49 @@ func TestEnforcer_AllowedCapabilityNoLog(t *testing.T) {
 		t.Errorf("no log expected on allowed call, got %q", buf.String())
 	}
 }
+
+func TestModeFromEnv_DefaultsToEnforce(t *testing.T) {
+	cases := map[string]security.Mode{
+		"":        security.ModeEnforce, // unset/empty => enforce (D5)
+		"1":       security.ModeEnforce,
+		"true":    security.ModeEnforce,
+		"enforce": security.ModeEnforce,
+		"typo":    security.ModeEnforce, // unknown values fail closed
+		"shadow":  security.ModeShadow,
+		"SHADOW":  security.ModeShadow,
+		" 0 ":     security.ModeShadow,
+		"false":   security.ModeShadow,
+		"off":     security.ModeShadow,
+	}
+	for v, want := range cases {
+		t.Setenv("METACORE_ENFORCE", v)
+		if got := security.ModeFromEnv(); got != want {
+			t.Errorf("METACORE_ENFORCE=%q: got %s want %s", v, got, want)
+		}
+	}
+}
+
+func TestNewEnforcer_DefaultBlocksViolation(t *testing.T) {
+	t.Setenv("METACORE_ENFORCE", "")
+	caps := buildCaps(t)
+	e := security.NewEnforcer(func(string) *security.Capabilities { return caps })
+	e.Logger = log.New(&bytes.Buffer{}, "", 0)
+	if e.Mode() != security.ModeEnforce {
+		t.Fatalf("default mode = %s, want enforce", e.Mode())
+	}
+	if err := e.CheckCapability("billing", "db:write", "orders"); err == nil {
+		t.Fatal("default enforcer must deny an undeclared capability")
+	}
+	// Unknown addon is also denied by default.
+	e2 := security.NewEnforcer(func(string) *security.Capabilities { return nil })
+	e2.Logger = log.New(&bytes.Buffer{}, "", 0)
+	if err := e2.CheckCapability("ghost", "db:read", "x"); err == nil {
+		t.Fatal("unknown addon must be denied by default")
+	}
+	t.Setenv("METACORE_ENFORCE", "shadow")
+	e3 := security.NewEnforcer(func(string) *security.Capabilities { return caps })
+	e3.Logger = log.New(&bytes.Buffer{}, "", 0)
+	if err := e3.CheckCapability("billing", "db:write", "orders"); err != nil {
+		t.Fatalf("shadow must not block: %v", err)
+	}
+}

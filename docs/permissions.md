@@ -269,21 +269,22 @@ atomic and switchable at runtime:
 
 | Mode          | Behaviour                                                |
 | ------------- | -------------------------------------------------------- |
-| `ModeShadow`  | Log violation, return `nil`. Default during rollout.     |
+| `ModeShadow`  | Log violation, return `nil`. Opt-in only (`METACORE_ENFORCE=shadow`); the default is `ModeEnforce`.     |
 | `ModeEnforce` | Log AND return the violation error. Caller maps to 403.  |
 
 Operators flip via the `METACORE_ENFORCE` env var:
 
 ```bash
-# Shadow (default)
+# Enforce (default): unset, "1", "true", ...
 unset METACORE_ENFORCE
 
-# Enforce
-export METACORE_ENFORCE=1
+# Shadow (opt-out, log only)
+export METACORE_ENFORCE=shadow   # or 0 / false / no / off
 ```
 
-`security.ModeFromEnv()` returns `ModeEnforce` when the value is
-`1`, `true`, `TRUE`, `yes`, or `YES`. Anything else is shadow.
+`security.ModeFromEnv()` returns `ModeShadow` only for `shadow`, `0`, `false`,
+`no` or `off` (case-insensitive). Anything else, including unset and typos,
+is enforce (fail-closed). See [capabilities.md](capabilities.md).
 
 ```go
 enf := security.NewEnforcer(func(addonKey string) *security.Capabilities {

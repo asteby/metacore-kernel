@@ -43,12 +43,7 @@ func TestHost_ReinstantiatesAfterModuleClosed(t *testing.T) {
 		t.Fatalf("Invoke (warm): %v", err)
 	}
 
-	key := "testaddon|" + installation.String()
-	v, ok := h.modules.Load(key)
-	if !ok {
-		t.Fatal("expected cached module after warm Invoke")
-	}
-	mod := v.(*Module)
+	mod := h.anyModule(t, "testaddon", installation)
 	if err := mod.inst.Close(ctx); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -484,7 +479,7 @@ func TestHost_LoadSkipsRecompileOnSameBytes(t *testing.T) {
 	if first != second {
 		t.Fatal("identical wasm bytes must reuse CompiledModule (no recompile)")
 	}
-	if ce2.(*compiledEntry).spec != spec2 {
+	if ce2.(*compiledEntry).spec.Load() != spec2 {
 		t.Fatal("second Load should refresh BackendSpec pointer")
 	}
 }

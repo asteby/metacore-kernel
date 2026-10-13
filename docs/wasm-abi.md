@@ -279,11 +279,13 @@ derived from `manifest.backend.entry`.
   module, a memory-limit eviction, an addon reload/upgrade, or a host restart.
 - Because the instance persists, a bump allocator that never frees will grow
   across calls; free or reset in the guest. `memory_limit_mb` (0/absent =
-  256 MiB global ceiling, never higher) is checked after each call and the
-  instance is evicted and the call fails if memory grew past it; a module
-  whose declared initial memory exceeds it is rejected at load.
-- Callbacks into host imports are synchronous. The host serializes
-  invocations per installation.
+  256 MiB global ceiling, never higher) is a HARD limit enforced inside the
+  call: `memory.grow` past it fails (the guest traps / OOMs, the instance is
+  evicted); a post-call size check remains as backstop and a module whose
+  declared initial memory exceeds it is rejected at load. See § 22.3.
+- Callbacks into host imports are synchronous. With the default pool size (1)
+  the host serializes invocations per installation; with a larger pool (§ 22)
+  invocations of one installation may run in parallel on distinct instances.
 
 ## 7. Error surface
 
@@ -808,7 +810,8 @@ session) is load-bearing for two reasons:
   inherits the filter without the guest having to pass `org_id` itself.
 
 The host **never** spawns goroutines that touch `inv.tx` — wazero already
-serialises wasm calls per module (`Module.mu`, `wasm.go:151`), so the
+never shares an instance between two concurrent calls (pool slot exclusivity,
+`runtime/wasm/pool.go`), so the
 single-writer contract of `*gorm.DB` is preserved.
 
 ### 10.7 Auto-rollback contract
@@ -853,7 +856,9 @@ committed or rolled back` as a no-op.
 
 ### 10.8 Side-effect ordering
 
-`db_exec` is synchronous and serialised per module instance. Within a
+`db_exec` is synchronous and serialised per module instance (one call owns an
+instance at a time; with pool size > 1 other calls run on OTHER instances, in
+their own transactions). Within a
 single guest call:
 
 1. Statements execute in the order the guest calls `db_exec`.
@@ -1321,8 +1326,8 @@ Consequences:
 
 ### 12.8 Side-effect ordering
 
-`event_emit` is synchronous and serialised per module instance — wazero
-already serialises calls per module via `Module.mu` (`wasm.go:151`), so:
+`event_emit` is synchronous and serialised per module instance — a call owns
+its pool instance exclusively (§ 22; no two calls ever share one), so:
 
 1. Statements within a single guest call execute in the order the guest
    issues `event_emit`. There is no batching, no async dispatch.
@@ -2386,3 +2391,78 @@ the payload already names wins:
   subscriber's ctx (`dynamic.WithBranchID`). `data_mutate` / `data_batch`
   then stamp it on creates the subscriber leaves without `branch_id`, and
   `ctx_get` returns it.
+
+## 22. Runtime operations: compile cache, instance pool, unload, memory (v1.14)
+
+Host-side behaviour; guests are unchanged. Implementation: `runtime/wasm`
+(`options.go`, `pool.go`, `metrics.go`, `wasm.go`).
+
+### 22.1 Persistent compilation cache
+
+Compiling a Go guest takes seconds. `wasm.WithCompileCacheDir(dir)` or the
+env `WASM_COMPILE_CACHE_DIR` stores wazero's compiled native code on disk
+(`wazero.NewCompilationCacheWithDir`). Every process / replica that mounts the
+same directory reuses it, so a restart or a scale-out loads instead of
+recompiling (`BenchmarkLoad`: cold vs `warm_persistent_cache`). The cache is
+keyed by the wasm bytes' content and the engine version, so upgrades never
+serve stale code. One cache is shared by all runtimes of the Host (§ 22.3).
+
+- The directory is created `0700`. Its content is executed as native code:
+  only the service account may write it (treat the volume like the binary).
+- An unusable directory logs a warning and degrades to the in-memory cache;
+  it never blocks boot.
+- `wasm_compile_duration_seconds` shows hits (ms) vs cold compiles (s).
+
+### 22.2 Instance pool per (addon, installation)
+
+`wasm.WithPoolSize(n)` / `WASM_POOL_SIZE` (default **1**, max 64) and
+`wasm.WithAddonPoolSize(fn)` bound the instances per installation. Size 1 keeps
+the historical semantics: one instance, calls serialised.
+
+With size > 1, concurrent calls run on distinct instances up to the bound;
+excess callers wait up to one `timeout_ms` for a free instance and then fail
+(`all N pooled instances busy`) — the guest budget starts only after the
+instance is acquired. Instances are created on demand and returned after the
+call; trapped, timed-out or over-memory instances are discarded.
+
+**Guest state is NOT shared across pool instances**: each has its own linear
+memory, Go heap and globals. A call may land on any instance, so consecutive
+calls of one caller may see different state. Use size > 1 only when handlers
+are stateless between calls (or keep state in the database). Keep 1 for
+guests that cache in memory, hold counters, or rely on call ordering. Memory
+cost is `size x` the instance footprint (bounded by `memory_limit_mb`), plus
+`size` cold starts per installation.
+
+### 22.3 Hard memory limit
+
+wazero fixes `WithMemoryLimitPages` per runtime, so the Host keeps a runtime
+per distinct `memory_limit_mb` (map limit-pages -> runtime, created lazily,
+all sharing the compilation cache, so no extra compilation). The limit is
+enforced inside the call by the engine: a refused `memory.grow` makes the guest
+trap (Go guests: out-of-memory), the instance is evicted and the call fails.
+The post-call size check stays as a backstop; the wall-clock `timeout_ms`
+(outbound HTTP waits excluded, hard-capped) is the second barrier against a
+guest that burns CPU without growing. Mapping in the error envelope is
+unchanged (`memory_exhausted` / `timeout`).
+
+### 22.4 Unload
+
+`Host.Unload(ctx, addonKey, installation)`:
+
+- installation != `uuid.Nil`: closes that installation's instances; the
+  compiled module stays (other installations share it).
+- `uuid.Nil` (or `UnloadAddon`): closes all instances and removes the addon
+  from the compiled map; later calls fail closed with `AddonNotLoadedError`
+  until `Load` runs again.
+
+In-flight calls finish and then discard their instance. Idempotent. Embedders
+reach it as `kernelhost.UnloadWASM`; the host's loader also implements
+`installer.BackendRuntimeUnloader.UnloadAddon`.
+
+### 22.5 Metrics
+
+Registered with `wasm.WithMetrics(*metrics.Registry)` (label `addon`):
+`wasm_invocations_total{result}`, `wasm_invocation_duration_seconds`,
+`wasm_pool_wait_seconds`, `wasm_instance_evictions_total{reason=trap|memory_limit|closed|unload|replaced|host_close}`,
+`wasm_compilations_total`, `wasm_compile_duration_seconds`,
+`wasm_instantiations_total`, `wasm_instances`.
