@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 
 	"github.com/asteby/metacore-kernel/agent/contextmgr"
 )
@@ -106,12 +107,16 @@ func (r *ToolRegistry) Get(name string) (BaseTool, bool) {
 	return tool, ok
 }
 
-// List retorna todas las herramientas
+// List retorna todas las herramientas, ordenadas por nombre. El orden es
+// estable a propósito: la lista de herramientas encabeza cada petición al
+// modelo y un orden aleatorio (iteración de map) cambia el prefijo en cada
+// llamada, lo que invalida la caché de prompt del proveedor.
 func (r *ToolRegistry) List() []BaseTool {
 	tools := make([]BaseTool, 0, len(r.tools))
 	for _, tool := range r.tools {
 		tools = append(tools, tool)
 	}
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name() < tools[j].Name() })
 	return tools
 }
 
@@ -195,7 +200,7 @@ func (r *ToolRegistry) Describe() map[string]interface{} {
 func (r *ToolRegistry) ToLangChainFormat() []map[string]interface{} {
 	functions := make([]map[string]interface{}, 0, len(r.tools))
 
-	for _, tool := range r.tools {
+	for _, tool := range r.List() {
 		function := map[string]interface{}{
 			"name":        tool.Name(),
 			"description": tool.Description(),
@@ -216,7 +221,7 @@ func (r *ToolRegistry) ToLangChainFormat() []map[string]interface{} {
 // map of paramName -> schema (with a boolean "required" per parameter).
 func (r *ToolRegistry) ToOpenAIFormat() []map[string]interface{} {
 	functions := make([]map[string]interface{}, 0, len(r.tools))
-	for _, tool := range r.tools {
+	for _, tool := range r.List() {
 		params := tool.Parameters()
 		var properties map[string]interface{}
 		var required []string
@@ -229,14 +234,21 @@ func (r *ToolRegistry) ToOpenAIFormat() []map[string]interface{} {
 			properties = params
 			required = getRequiredParams(params)
 		}
+		required = append([]string(nil), required...)
+		sort.Strings(required)
+		schema := map[string]interface{}{
+			"type":       "object",
+			"properties": cleanProperties(properties),
+			"required":   required,
+		}
+		// A strict schema (additionalProperties: false) survives the conversion.
+		if ap, ok := params["additionalProperties"]; ok && params["type"] == "object" {
+			schema["additionalProperties"] = ap
+		}
 		functions = append(functions, map[string]interface{}{
 			"name":        tool.Name(),
 			"description": tool.Description(),
-			"parameters": map[string]interface{}{
-				"type":       "object",
-				"properties": cleanProperties(properties),
-				"required":   required,
-			},
+			"parameters":  schema,
 		})
 	}
 	return functions

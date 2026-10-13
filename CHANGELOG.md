@@ -7,6 +7,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **agent: política de ejecución de herramientas en el bucle del orquestador** —
+  las llamadas de un mismo turno a herramientas de solo lectura (categorías
+  data/knowledge/context o `tools.ParallelSafe`) corren en paralelo
+  (`MaxParallelTools`, 4 por defecto) y conservan el orden de resultados; las de
+  acción siguen secuenciales. Cada llamada tiene timeout (`ToolTimeout`, 30 s, o
+  `tools.TimeoutHinter`), recuperación de panics y reintentos con backoff
+  exponencial solo para errores transitorios (`tools.Transient` /
+  `tools.IsTransient`, `ToolRetries`=1). Los resultados se envían al modelo en
+  JSON compacto con tope (`MaxToolResultBytes`, 24 KB) y aviso explícito de
+  truncado. `MaxTurnDuration` (150 s) fuerza la respuesta sin herramientas al
+  agotarse. Trazas por llamada (`ToolTrace`: duración, intentos, bytes, error,
+  truncado) en `Metadata["tool_trace"]`, `TurnStats` en `Metadata["turn_stats"]`
+  y gancho `OnToolTrace` para auditoría del host. `tools.ProgressLabeler` permite
+  a cada herramienta emitir su propia línea de progreso.
+
+### Changed
+
+- **agent: orden estable de herramientas y parámetros** — `ToolRegistry.List`,
+  `ToOpenAIFormat`/`ToLangChainFormat` y `AppendToolsSection` salen ordenados
+  por nombre (antes, orden de iteración de map: el prefijo del prompt cambiaba
+  en cada llamada e invalidaba la caché de prompt del proveedor). Un esquema
+  con `additionalProperties` lo conserva al convertirse.
+- **agent: progreso sin relleno** — se elimina el «Pensando… (paso N)» de cada
+  iteración; tras ejecutar herramientas se emite «Analizando resultados…».
+  `final_answer` ya no aparece como paso en el rastro de actividad.
+- **agent: narración diferida** — una respuesta corta que termina en «:» o
+  empieza con «ahora traigo…/enseguida…» se trata como intención, no como
+  respuesta final.
+
 ### Breaking
 
 - **security: capabilities enforce by default (D5)** — `security.ModeFromEnv` /

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -78,6 +79,39 @@ type OrchestratorConfig struct {
 	Catalog ModelCatalog
 	// MaxIterations bounds the reasoning loop (default 12).
 	MaxIterations int
+
+	// Tool execution policy. Zero takes the default (Default* constants);
+	// a negative value disables the limit.
+	//
+	// ToolTimeout bounds each call (a tool may override it with
+	// tools.TimeoutHinter). ToolRetries is how many extra attempts a call gets
+	// when its error is transient (tools.Transient / tools.IsTransient), with
+	// exponential backoff. MaxParallelTools bounds the concurrent calls of one
+	// model turn (only tools.IsParallelSafe tools run concurrently).
+	// MaxToolResultBytes caps what one result feeds back to the model; the cut
+	// carries an explicit notice. MaxTurnDuration is the wall-clock budget of a
+	// turn: once spent, the loop stops offering tools and asks for the answer
+	// with what it has.
+	ToolTimeout        time.Duration
+	ToolRetries        int
+	MaxParallelTools   int
+	MaxToolResultBytes int
+	MaxTurnDuration    time.Duration
+
+	// OnToolTrace receives every finished tool call (duration, attempts,
+	// result size, error) so the host can audit it. Optional; it runs on the
+	// loop goroutine, so keep it fast (enqueue, don't write synchronously).
+	OnToolTrace func(ctx context.Context, convCtx *contextmgr.ConversationContext, tr ToolTrace)
+}
+
+// toolPolicy is the execution policy copied from OrchestratorConfig.
+type toolPolicy struct {
+	ToolTimeout        time.Duration
+	ToolRetries        int
+	MaxParallelTools   int
+	MaxToolResultBytes int
+	MaxTurnDuration    time.Duration
+	OnToolTrace        func(ctx context.Context, convCtx *contextmgr.ConversationContext, tr ToolTrace)
 }
 
 // AgentOrchestrator runs the autonomous tool-using loop: it feeds the model
@@ -93,6 +127,7 @@ type AgentOrchestrator struct {
 	models         ModelRegistry
 	maxIterations  int
 	streamCallback StreamCallback
+	policy         toolPolicy
 }
 
 // NewAgentOrchestrator builds an orchestrator from cfg.
@@ -112,6 +147,14 @@ func NewAgentOrchestrator(cfg OrchestratorConfig) *AgentOrchestrator {
 		catalog:       cfg.Catalog,
 		models:        cfg.Models,
 		maxIterations: max,
+		policy: toolPolicy{
+			ToolTimeout:        cfg.ToolTimeout,
+			ToolRetries:        cfg.ToolRetries,
+			MaxParallelTools:   cfg.MaxParallelTools,
+			MaxToolResultBytes: cfg.MaxToolResultBytes,
+			MaxTurnDuration:    cfg.MaxTurnDuration,
+			OnToolTrace:        cfg.OnToolTrace,
+		},
 	}
 	if cfg.Models != nil {
 		o.embeds = NewEmbedBuilder(cfg.Models)
@@ -226,7 +269,13 @@ func AppendToolsSection(prompt string, registry *tools.ToolRegistry) string {
 		} else {
 			properties = params
 		}
-		for paramName, paramSchema := range properties {
+		names := make([]string, 0, len(properties))
+		for name := range properties {
+			names = append(names, name)
+		}
+		sort.Strings(names) // stable prompt prefix (provider prompt caching)
+		for _, paramName := range names {
+			paramSchema := properties[paramName]
 			schema, ok := paramSchema.(map[string]interface{})
 			if !ok {
 				continue
@@ -310,12 +359,42 @@ func (o *AgentOrchestrator) agentLoop(ctx context.Context, messages []map[string
 	// error right after it is reported with the tool instead of hiding it.
 	var lastToolFailure *tools.ToolResult
 
+	turnStart := time.Now()
+	stats := TurnStats{}
+	var traces []ToolTrace
+	defer func() {
+		stats.DurationMS = time.Since(turnStart).Milliseconds()
+		response.Metadata["turn_stats"] = stats
+		if len(traces) > 0 {
+			response.Metadata["tool_trace"] = traces
+		}
+	}()
+	budget := o.maxTurnDuration()
+
 	for iteration := 0; iteration < maxIter; iteration++ {
 		log.Printf("🔄 Agent iteration %d/%d", iteration+1, maxIter)
-		o.emitActivity(convCtx.ConversationID, "thinking", "",
-			fmt.Sprintf("cog|Pensando… (paso %d)", iteration+1), true)
+		stats.Iterations = iteration + 1
+		// Progress is streamed only when something real happens: the first
+		// "thinking" and, after tools ran, the synthesis. No "paso N" filler.
+		if iteration > 0 && hasToolRoleMessages(messages) {
+			o.emitActivity(convCtx.ConversationID, "thinking", "", "sparkles|Analizando resultados…", true)
+		}
+
+		// Wall-clock budget: once spent, answer with what the tools returned.
+		if budget > 0 && toolDefs != nil && !stats.BudgetForced && time.Since(turnStart) > budget && hasToolRoleMessages(messages) {
+			log.Printf("⏱️ Agent: turn budget (%v) spent, forcing the final answer", budget)
+			stats.BudgetForced = true
+			messages = append(messages, map[string]interface{}{
+				"role": "user",
+				"content": "[sistema] Se agotó el tiempo de este turno. Responde AHORA al usuario con lo que ya obtuviste de las herramientas " +
+					"y di con claridad qué quedó pendiente. NO uses herramientas.",
+			})
+			toolDefs = nil
+			maxIter++
+		}
 
 		// Llamar al LLM con tools
+		stats.LLMCalls++
 		aiResp, err := o.aiService.GenerateChatWithTools(ctx, messages, systemPrompt, toolDefs)
 		if err != nil {
 			if lastToolFailure != nil {
@@ -430,6 +509,7 @@ func (o *AgentOrchestrator) agentLoop(ctx context.Context, messages []map[string
 						time.Sleep(delay)
 
 						// Reintentar llamada al LLM
+						stats.LLMCalls++
 						retryResp, retryErr := o.aiService.GenerateChatWithTools(ctx, messages, systemPrompt, toolDefs)
 						if retryErr != nil {
 							log.Printf("⚠️ Retry %d error: %v", retryCount, retryErr)
@@ -488,12 +568,15 @@ func (o *AgentOrchestrator) agentLoop(ctx context.Context, messages []map[string
 
 		// Emit tool call events for real-time streaming to frontend
 		for _, tc := range aiResp.ToolCalls {
-			label := o.describeToolCall(tc.ToolName, tc.Parameters)
-			o.emitActivity(convCtx.ConversationID, "tool_call", tc.ToolName, label, true)
+			if tc.ToolName == "final_answer" {
+				continue // not a step the user waits on
+			}
+			o.emitActivity(convCtx.ConversationID, "tool_call", tc.ToolName, o.progressLabel(registry, tc), true)
 		}
 
-		// Ejecutar tool calls
-		toolResults := o.executeToolCalls(ctx, aiResp.ToolCalls, convCtx, registry)
+		// Ejecutar tool calls (independientes en paralelo, con timeout y reintentos)
+		toolResults, turnTraces := o.runToolCalls(ctx, aiResp.ToolCalls, convCtx, registry, iteration+1)
+		stats.ToolCalls += len(toolResults)
 
 		// Procesar resultados
 		shouldContinue := true
@@ -510,8 +593,10 @@ func (o *AgentOrchestrator) agentLoop(ctx context.Context, messages []map[string
 					break
 				}
 			}
-			o.emitActivity(convCtx.ConversationID, "tool_result", result.ToolName,
-				o.toolResultLabel(result.ToolName, params, result.Success), result.Success)
+			if result.ToolName != "final_answer" {
+				o.emitActivity(convCtx.ConversationID, "tool_result", result.ToolName,
+					o.toolResultLabel(result.ToolName, params, result.Success), result.Success)
+			}
 
 			if result.Success {
 				response.Embeds = append(response.Embeds, o.embedsFromToolResult(result.ToolName, result.Result, params)...)
@@ -652,8 +737,23 @@ func (o *AgentOrchestrator) agentLoop(ctx context.Context, messages []map[string
 					formattedResult = fmt.Sprintf("Error en %s: %s", result.ToolName, result.Error)
 				}
 			} else {
-				// Para herramientas informativas, usar formato completo
-				formattedResult = result.FormatForLLM()
+				// Herramientas informativas: JSON compacto con tope de tamaño;
+				// el recorte lleva aviso explícito para el modelo.
+				var cut bool
+				formattedResult, cut = result.FormatForLLMLimit(o.maxResultBytes())
+				if cut {
+					log.Printf("✂️ Tool %s result truncated to %d bytes", result.ToolName, o.maxResultBytes())
+				}
+				for ti := range turnTraces {
+					if turnTraces[ti].CallID == result.ToolCallID && turnTraces[ti].Tool == result.ToolName {
+						turnTraces[ti].Truncated = cut
+					}
+				}
+			}
+			for ti := range turnTraces {
+				if turnTraces[ti].CallID == result.ToolCallID && turnTraces[ti].Tool == result.ToolName {
+					turnTraces[ti].ResultBytes = len(formattedResult)
+				}
 			}
 			log.Printf("📥 Tool Output for %s: %s", result.ToolName, truncateLog(formattedResult, 200))
 
@@ -664,6 +764,15 @@ func (o *AgentOrchestrator) agentLoop(ctx context.Context, messages []map[string
 				"name":         result.ToolName,
 				"content":      formattedResult,
 			})
+		}
+		for _, tr := range turnTraces {
+			if tr.Tool == "final_answer" {
+				continue // the answer itself, not a lookup
+			}
+			if o.policy.OnToolTrace != nil {
+				o.policy.OnToolTrace(ctx, convCtx, tr)
+			}
+			traces = append(traces, tr)
 		}
 
 		if !shouldContinue {
@@ -1541,6 +1650,12 @@ func isDeferredNarration(msg string) bool {
 	if strings.HasSuffix(strings.TrimRight(m, " *_)\"'»"), "?") {
 		return false
 	}
+	// A short reply that ends announcing what comes next ("Ahora traigo el
+	// resumen de Manzanillo:") delivers nothing: the content it introduces
+	// never came.
+	if strings.HasSuffix(strings.TrimRight(m, " *_"), ":") && len([]rune(m)) <= narrationHeadRunes && !strings.Contains(m, "\n") {
+		return true
+	}
 	m = narrationHead(m)
 	needles := []string{
 		"voy a ", "ahora voy", "ahora revis", "déjame ", "dejame ", "primero ",
@@ -1559,6 +1674,7 @@ func isDeferredNarration(msg string) bool {
 		"estoy creando", "paso a crear", "paso a registrar",
 		"ahora registro", "ahora actualizo", "ahora elimino", "ahora borro",
 		"ahora busco", "ahora consulto", "ahora listo", "ahora obtengo",
+		"ahora traigo", "ahora te traigo", "ahora reviso", "ahora comparo", "enseguida ",
 	}
 	for _, n := range needles {
 		if strings.Contains(m, n) {
