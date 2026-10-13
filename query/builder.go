@@ -502,9 +502,21 @@ func (b *Builder) applySort(db *gorm.DB, params Params) *gorm.DB {
 	return db.Order(col + " " + order)
 }
 
-// defaultSort picks the newest-first timestamp column for unspecified sorts.
-// Returns ("", "") when the model has no recognised timestamp column.
+// defaultSort picks the model-declared default (TableMetadata.DefaultSortBy,
+// when it is an allowed column) or else the newest-first timestamp column for
+// unspecified sorts. Returns ("", "") when neither applies.
 func (b *Builder) defaultSort() (string, string) {
+	if b.meta != nil {
+		if col := strings.TrimSpace(b.meta.DefaultSortBy); col != "" && isSafeIdent(col) {
+			if _, ok := b.allowed[col]; ok {
+				order := strings.ToLower(strings.TrimSpace(b.meta.DefaultSortOrder))
+				if order != "asc" {
+					order = "desc"
+				}
+				return col, order
+			}
+		}
+	}
 	for _, cand := range []string{"created_at", "occurred_at", "updated_at"} {
 		if _, ok := b.allowed[cand]; ok {
 			return cand, "desc"

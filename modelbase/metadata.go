@@ -20,7 +20,15 @@ type TableMetadata struct {
 	EnableCRUDActions bool        `json:"enableCRUDActions,omitempty"`
 	PerPageOptions    []int       `json:"perPageOptions,omitempty"`
 	DefaultPerPage    int         `json:"defaultPerPage,omitempty"`
-	SearchPlaceholder string      `json:"searchPlaceholder,omitempty"`
+	// DefaultSortBy / DefaultSortOrder declare the list order used when the
+	// request names no (valid) sortBy — e.g. runs by started_at, events by
+	// occurred_at, when created_at is not the meaningful clock. The column must
+	// be a declared column; the order is "asc" or "desc" (default "desc").
+	// Empty keeps the kernel default (newest first on created_at →
+	// occurred_at → updated_at). Honored by query.Builder.
+	DefaultSortBy     string `json:"defaultSortBy,omitempty"`
+	DefaultSortOrder  string `json:"defaultSortOrder,omitempty"`
+	SearchPlaceholder string `json:"searchPlaceholder,omitempty"`
 
 	// SearchRefs names foreign-key columns (ColumnDef.Ref set) the free-text
 	// search reaches THROUGH: a term matches a row when it matches the

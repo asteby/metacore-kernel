@@ -105,6 +105,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `Opts`, `Col`, `DateCol`, `StatusCol`, `SelectCol`, `Text`, `Area`,
   `Select`, `Date`, `Number`, `Bool`, `MapUpdate`, `Validation`. Opt-in: no
   effect until `Install` is called. Upstreamed from gobiernos-ops `core/metakit`.
+- **modelbase/query: declared default list order** —
+  `TableMetadata.DefaultSortBy` / `DefaultSortOrder` (JSON `defaultSortBy` /
+  `defaultSortOrder`, omitempty) set the order `query.Builder` applies when the
+  request names no valid `sortBy` (e.g. runs by `started_at`). Only allowed,
+  safe columns are honored; otherwise the newest-first fallback stays.
 - **runtime/wasm: persistent compilation cache** — `wasm.WithCompileCacheDir` /
   `WASM_COMPILE_CACHE_DIR` (wazero `NewCompilationCacheWithDir`, dir created
   0700, falls back to memory if unusable). Processes and replicas that mount
