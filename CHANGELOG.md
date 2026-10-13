@@ -91,6 +91,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **dates: lenient `Date` / `Time` column types** — accept `YYYY-MM-DD`,
+  `YYYY-MM-DDTHH:MM[:SS]` and RFC 3339 on JSON decode and DB scan; serialize
+  as `YYYY-MM-DD` / RFC 3339 UTC; zero ⇄ JSON null ⇄ SQL NULL. Lets compiled
+  models take the SDK form's bare dates through `/api/data/:model` without
+  "invalid request body". Upstreamed from gobiernos-ops `core/dates`.
 - **runtime/wasm: persistent compilation cache** — `wasm.WithCompileCacheDir` /
   `WASM_COMPILE_CACHE_DIR` (wazero `NewCompilationCacheWithDir`, dir created
   0700, falls back to memory if unusable). Processes and replicas that mount
