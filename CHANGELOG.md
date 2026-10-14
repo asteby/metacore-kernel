@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **agent/claude: no enviar temperature/top_p a Claude 5.x** — langchaingo
+  serializa `temperature` siempre (y `top_p` si no es cero) y los modelos Claude
+  de generación ≥5 responden 400 (`'temperature' is deprecated`). Nuevo
+  `ModelAcceptsSampling` (regla por familia ≥5, con registro por capacidad vía
+  `SetModelSamplingSupport`), `StripUnsupportedSampling` y el RoundTripper
+  `NewSamplingSanitizer`, que retira `temperature`/`top_p`/`top_k` del cuerpo
+  JSON. `NewCodeHTTPClient` lo aplica automáticamente.
+
 ### Added
 
 - **agent: política de ejecución de herramientas en el bucle del orquestador** —
