@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -189,8 +191,47 @@ type IngressProxy struct {
 type ingressCtxKey struct{}
 
 type ingressReqState struct {
-	id    string
+	id string
+
+	mu    sync.Mutex
 	timer *time.Timer
+}
+
+// arm starts the response-header timer once. It runs when the request body has
+// been fully sent (or immediately when there is none), so a slow upload of a
+// large body is not charged against the time the sidecar takes to answer.
+func (s *ingressReqState) arm(d time.Duration, cancel func(error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.timer != nil {
+		return
+	}
+	s.timer = time.AfterFunc(d, func() { cancel(errIngressTimeout) })
+}
+
+// stop disarms the timer and reports whether it had already fired.
+func (s *ingressReqState) stop() (fired bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.timer == nil {
+		return false
+	}
+	return !s.timer.Stop()
+}
+
+// armOnDone calls onDone once the wrapped body reaches EOF or fails.
+type armOnDone struct {
+	io.ReadCloser
+	once   sync.Once
+	onDone func()
+}
+
+func (b *armOnDone) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil {
+		b.once.Do(b.onDone)
+	}
+	return n, err
 }
 
 var errIngressTimeout = errors.New("native ingress: upstream response header timeout")
@@ -251,7 +292,12 @@ func NewIngressProxy(socketPath string, ingress Ingress, opts IngressProxyOption
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			if st, ok := resp.Request.Context().Value(ingressCtxKey{}).(*ingressReqState); ok {
-				st.timer.Stop()
+				// The timer fired between the sidecar answering and now: the
+				// request context is already cancelled, so answer 504 instead of
+				// cutting the response off after its headers.
+				if st.stop() {
+					return errIngressTimeout
+				}
 				resp.Header.Set(HeaderRequestID, st.id)
 			}
 			return nil
@@ -292,14 +338,16 @@ func (p *IngressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ingressError(w, id, http.StatusRequestEntityTooLarge)
 		return
 	}
-	if r.Body != nil && r.Body != http.NoBody {
-		r.Body = http.MaxBytesReader(w, r.Body, p.cfg.MaxBodyBytes)
-	}
 	ctx, cancel := context.WithCancelCause(r.Context())
 	defer cancel(nil)
 	st := &ingressReqState{id: id}
-	st.timer = time.AfterFunc(p.cfg.Timeout, func() { cancel(errIngressTimeout) })
-	defer st.timer.Stop()
+	defer st.stop()
+	arm := func() { st.arm(p.cfg.Timeout, cancel) }
+	if r.Body != nil && r.Body != http.NoBody && r.ContentLength != 0 {
+		r.Body = &armOnDone{ReadCloser: http.MaxBytesReader(w, r.Body, p.cfg.MaxBodyBytes), onDone: arm}
+	} else {
+		arm()
+	}
 	ctx = context.WithValue(ctx, ingressCtxKey{}, st)
 	p.rp.ServeHTTP(w, r.WithContext(ctx))
 }

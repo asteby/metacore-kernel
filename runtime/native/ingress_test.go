@@ -3,6 +3,7 @@ package native
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -370,5 +371,69 @@ func TestNewIngressProxyRejectsInvalid(t *testing.T) {
 	}
 	if _, err := NewIngressProxy("", Ingress{Kind: "http"}, IngressProxyOptions{}); err == nil {
 		t.Fatal("missing socket must be rejected")
+	}
+}
+
+// slowReader hands out its payload in small chunks with a pause between them,
+// like a client on a slow link uploading a large body.
+type slowReader struct {
+	chunks int
+	pause  time.Duration
+	sent   int
+}
+
+func (r *slowReader) Read(p []byte) (int, error) {
+	if r.sent >= r.chunks {
+		return 0, io.EOF
+	}
+	time.Sleep(r.pause)
+	r.sent++
+	n := copy(p, []byte("0123456789"))
+	return n, nil
+}
+
+// The response-header timeout is measured from the end of the upload: a slow
+// body that takes longer than the timeout to send must not get a false 504 as
+// long as the sidecar answers quickly once it has the whole body.
+func TestIngressProxyTimeoutStartsAfterUpload(t *testing.T) {
+	sock := startUnixUpstream(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := io.Copy(io.Discard, r.Body)
+		fmt.Fprintf(w, "got %d", n)
+	}))
+	front := newTestProxy(t, sock, Ingress{Kind: "http", Timeout: "150ms"}, IngressProxyOptions{})
+	// 8 chunks x 40ms = ~320ms of upload, more than twice the 150ms timeout.
+	req, err := http.NewRequest(http.MethodPost, front.URL+"/upload", &slowReader{chunks: 8, pause: 40 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != "got 80" {
+		t.Fatalf("slow upload got %d %q, want 200 \"got 80\"", resp.StatusCode, body)
+	}
+}
+
+// A sidecar that takes longer than the timeout to answer AFTER the full body
+// arrived still gets the 504.
+func TestIngressProxyTimeoutAfterUpload504(t *testing.T) {
+	sock := startUnixUpstream(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	front := newTestProxy(t, sock, Ingress{Kind: "http", Timeout: "100ms"}, IngressProxyOptions{})
+	resp, err := http.Post(front.URL+"/slow", "text/plain", strings.NewReader("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusGatewayTimeout {
+		t.Fatalf("status %d, want 504", resp.StatusCode)
 	}
 }
