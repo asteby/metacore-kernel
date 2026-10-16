@@ -1,0 +1,586 @@
+package capability
+
+import "time"
+
+// Well-known commerce and fiscal capability keys. The storefront core
+// (cart, checkout, order) only ever names these keys; which addon answers
+// (mercadopago, stripe, skydropx, envia, region_mx, factura_com …) is an
+// install + per-market selection decision. Money is ALWAYS a decimal string
+// next to an ISO 4217 currency. The reference with every field lives in
+// docs/capabilities-commerce.md.
+const (
+	CommercePaymentsSession   = "commerce.payments.session"
+	CommercePaymentsConfirm   = "commerce.payments.confirm"
+	CommercePaymentsRefund    = "commerce.payments.refund"
+	CommercePaymentsStatus    = "commerce.payments.status"
+	CommerceTaxCalculate      = "commerce.tax.calculate"
+	CommerceTaxCommit         = "commerce.tax.commit"
+	CommerceTaxReverse        = "commerce.tax.reverse"
+	CommerceShippingRates     = "commerce.shipping.rates"
+	CommerceShippingLabel     = "commerce.shipping.label"
+	CommerceShippingTrack     = "commerce.shipping.track"
+	CommerceShippingCancel    = "commerce.shipping.cancel"
+	CommerceFulfillmentCreate = "commerce.fulfillment.create"
+	CommerceFulfillmentCancel = "commerce.fulfillment.cancel"
+	CommerceSearchQuery       = "commerce.search.query"
+	CommerceDiscountsEvaluate = "commerce.discounts.evaluate"
+	FiscalInvoiceCreate       = "fiscal.invoice.create"
+	FiscalInvoiceCancel       = "fiscal.invoice.cancel"
+)
+
+// Normalized status vocabularies shared by providers.
+var (
+	// PaymentStatuses is the normalized payment lifecycle.
+	PaymentStatuses = []string{"pending", "requires_action", "authorized", "paid", "failed", "cancelled", "expired", "refunded", "partially_refunded"}
+	// TrackingStatuses is the normalized parcel lifecycle every carrier
+	// status is mapped onto.
+	TrackingStatuses = []string{"created", "picked_up", "in_transit", "out_for_delivery", "delivered", "exception", "returned", "cancelled"}
+)
+
+// Default per-provider deadlines. Fan-out queries are tighter: a slow carrier
+// must never hold the checkout.
+const (
+	DefaultQueryTimeout  = 8 * time.Second
+	ShippingRatesTimeout = 4 * time.Second
+	SearchTimeout        = 2 * time.Second
+	DiscountsTimeout     = 2 * time.Second
+)
+
+func req(name string, t FieldType, doc string) Field {
+	return Field{Name: name, Type: t, Required: true, Doc: doc}
+}
+
+func opt(name string, t FieldType, doc string) Field {
+	return Field{Name: name, Type: t, Doc: doc}
+}
+
+func enum(f Field, values []string) Field { f.Enum = values; return f }
+
+func obj(f Field, s *Schema) Field { f.Of = s; return f }
+
+func list(f Field, s *Schema) Field { f.Type = TypeArray; f.Of = s; return f }
+
+func strs(f Field) Field { f.Type = TypeArray; f.Elem = TypeString; return f }
+
+func schema(fields ...Field) *Schema { return &Schema{Fields: fields} }
+
+// Shared shapes. Addresses are region-neutral: region packs (region_mx) add
+// validation (CP → estado/municipio/colonia) on top, never new required keys.
+var (
+	// AddressSchema is a postal address / contact point.
+	AddressSchema = &Schema{Open: false, Fields: []Field{
+		opt("name", TypeString, "contact name"),
+		opt("company", TypeString, "company name"),
+		opt("line1", TypeString, "street and number"),
+		opt("line2", TypeString, "interior, suite"),
+		opt("neighborhood", TypeString, "colonia / district"),
+		opt("city", TypeString, "city / municipio"),
+		opt("state", TypeString, "state / province (code or name)"),
+		req("postal_code", TypeString, "postal code"),
+		req("country", TypeCountry, "ISO 3166-1 alpha-2"),
+		opt("phone", TypeString, "E.164 preferred"),
+		opt("email", TypeString, "contact email"),
+		opt("reference", TypeString, "delivery reference / between streets"),
+	}}
+
+	// BuyerSchema is the paying customer.
+	BuyerSchema = schema(
+		opt("id", TypeString, "customer id in OPS"),
+		opt("email", TypeString, ""),
+		opt("name", TypeString, ""),
+		opt("phone", TypeString, ""),
+		opt("tax_id", TypeString, "RFC / VAT id"),
+	)
+
+	// LineSchema is an order/cart line as payments and tax see it.
+	LineSchema = schema(
+		req("id", TypeString, "line id, echoed back in per-line outputs"),
+		opt("sku", TypeString, ""),
+		opt("title", TypeString, ""),
+		req("quantity", TypeInteger, ""),
+		req("unit_price", TypeDecimal, "unit price in the request currency"),
+		opt("discount", TypeDecimal, "line discount amount (total, not per unit)"),
+		opt("tax_code", TypeString, "provider/fiscal product tax code"),
+		opt("product_ref", TypeString, "product/variant id"),
+	)
+
+	// ParcelSchema is one package to ship. Dimensions in cm, weight in kg,
+	// both as decimal strings.
+	ParcelSchema = schema(
+		req("weight_kg", TypeDecimal, ""),
+		opt("length_cm", TypeDecimal, ""),
+		opt("width_cm", TypeDecimal, ""),
+		opt("height_cm", TypeDecimal, ""),
+		opt("quantity", TypeInteger, "identical parcels (default 1)"),
+		opt("content", TypeString, "content description (customs/carrier)"),
+	)
+
+	// ShipItemSchema is a line handed to a carrier or a warehouse.
+	ShipItemSchema = schema(
+		req("sku", TypeString, ""),
+		req("quantity", TypeInteger, ""),
+		opt("title", TypeString, ""),
+		opt("id", TypeString, "order line id"),
+		opt("unit_price", TypeDecimal, ""),
+		opt("product_code", TypeString, "fiscal product key (SAT ClaveProdServ, carta porte)"),
+	)
+
+	// TrackingEventSchema is one normalized carrier scan.
+	TrackingEventSchema = schema(
+		req("at", TypeString, "RFC 3339 timestamp"),
+		enum(req("status", TypeString, ""), TrackingStatuses),
+		opt("description", TypeString, "carrier wording"),
+		opt("location", TypeString, ""),
+	)
+
+	// TaxLineSchema is one computed tax component.
+	TaxLineSchema = schema(
+		req("name", TypeString, "e.g. IVA, State tax"),
+		req("rate", TypeDecimal, "0.16"),
+		req("amount", TypeDecimal, ""),
+		opt("jurisdiction", TypeString, ""),
+	)
+)
+
+func init() {
+	for _, c := range commerceContracts() {
+		mustRegister(c)
+	}
+}
+
+func commerceContracts() []Contract {
+	cs := commerceContractList()
+	// commerce.payments.status answers exactly what confirm answers.
+	var confirm *Schema
+	for _, c := range cs {
+		if c.Key == CommercePaymentsConfirm {
+			confirm = c.Output
+		}
+	}
+	for i := range cs {
+		if cs[i].Key == CommercePaymentsStatus {
+			cs[i].Output = confirm
+		}
+	}
+	return cs
+}
+
+func commerceContractList() []Contract {
+	return []Contract{
+		// ---------------------------------------------------------- payments
+		{
+			Key: CommercePaymentsSession, Kind: KindQuery, Cardinality: One,
+			Doc: "create a payment session (checkout/preference/intent) for an order",
+			Input: schema(
+				req("order_ref", TypeString, "order id/number in OPS (external_reference)"),
+				req("amount", TypeDecimal, "total to charge"),
+				req("currency", TypeCurrency, ""),
+				req("return_url", TypeString, "where the buyer lands after paying"),
+				opt("cancel_url", TypeString, ""),
+				opt("notify_url", TypeString, "webhook URL the host exposes for commerce.payments.confirm"),
+				obj(opt("buyer", TypeObject, ""), BuyerSchema),
+				strs(opt("methods", TypeArray, "allowed method families: card / msi / oxxo / spei / wallet / bnpl / bank_transfer / cash")),
+				opt("method_hint", TypeString, "preselected method family"),
+				obj(opt("breakdown", TypeObject, "amount components (all decimals)"), schema(
+					opt("subtotal", TypeDecimal, ""),
+					opt("shipping", TypeDecimal, ""),
+					opt("discount", TypeDecimal, ""),
+					opt("tax", TypeDecimal, ""),
+				)),
+				obj(opt("shipping_address", TypeObject, ""), AddressSchema),
+				opt("market", TypeString, "market code the order was placed in"),
+				list(opt("lines", TypeArray, ""), LineSchema),
+				opt("description", TypeString, "statement / title"),
+				opt("installments", TypeInteger, "max interest-free installments (MSI)"),
+				opt("expires_at", TypeString, "RFC 3339"),
+				opt("idempotency_key", TypeString, ""),
+				opt("metadata", TypeObject, ""),
+			),
+			Output: schema(
+				req("session_id", TypeString, "provider session/preference/intent id"),
+				enum(req("status", TypeString, ""), []string{"created", "pending", "requires_action", "authorized", "paid", "failed"}),
+				enum(opt("action_type", TypeString, "what the storefront does next"), []string{"redirect", "embed", "voucher", "none"}),
+				opt("redirect_url", TypeString, "hosted checkout URL"),
+				opt("client_secret", TypeString, "token for an embedded (iframe) widget"),
+				opt("embed_url", TypeString, "isolated iframe URL"),
+				opt("expires_at", TypeString, "RFC 3339"),
+				opt("provider_ref", TypeString, "payment id when known already"),
+				obj(opt("instructions", TypeObject, "offline payment instructions (OXXO reference, SPEI CLABE, barcode_url, deadline)"), &Schema{Open: true}),
+				opt("test_mode", TypeBoolean, "session created against the provider sandbox"),
+			),
+		},
+		{
+			Key: CommercePaymentsConfirm, Kind: KindQuery, Cardinality: One,
+			Doc: "verify and normalize a provider webhook/notification into a payment status",
+			Input: schema(
+				req("payload", TypeAny, "webhook body (decoded JSON, or the raw string)"),
+				opt("headers", TypeObject, "request headers, lowercase keys (signature verification)"),
+				opt("query", TypeObject, "query-string parameters"),
+				opt("raw_body", TypeString, "exact body bytes as text, when the signature covers them"),
+			),
+			Output: schema(
+				req("order_ref", TypeString, "the order_ref sent to commerce.payments.session"),
+				enum(req("status", TypeString, ""), PaymentStatuses),
+				req("amount", TypeDecimal, "amount of this status (paid/refunded)"),
+				req("currency", TypeCurrency, ""),
+				req("provider_ref", TypeString, "provider payment id"),
+				opt("event_id", TypeString, "provider event id (dedupe on provider+event_id)"),
+				enum(opt("kind", TypeString, "default payment"), []string{"payment", "refund", "dispute"}),
+				opt("method", TypeString, "card / msi / oxxo / spei / wallet / bnpl / bank_transfer / cash"),
+				opt("installments", TypeInteger, ""),
+				opt("paid_at", TypeString, "RFC 3339"),
+				opt("occurred_at", TypeString, "RFC 3339"),
+				opt("amount_refunded", TypeDecimal, ""),
+				opt("fee", TypeDecimal, "provider fee"),
+				opt("net_amount", TypeDecimal, "amount minus fee"),
+				opt("test_mode", TypeBoolean, "event from the provider sandbox"),
+			),
+		},
+		{
+			Key: CommercePaymentsStatus, Kind: KindQuery, Cardinality: One,
+			Doc: "poll a payment's normalized status (return-URL fallback, reconciliation); same output as confirm",
+			Input: schema(
+				opt("provider_ref", TypeString, "provider payment/order id"),
+				opt("order_ref", TypeString, "lookup by external reference when provider_ref is unknown"),
+				opt("session_id", TypeString, ""),
+			),
+		},
+		{
+			Key: CommercePaymentsRefund, Kind: KindQuery, Cardinality: One,
+			Doc: "refund (fully or partially) a captured payment",
+			Input: schema(
+				req("provider_ref", TypeString, "provider payment id"),
+				req("amount", TypeDecimal, ""),
+				req("currency", TypeCurrency, ""),
+				opt("order_ref", TypeString, ""),
+				opt("reason", TypeString, ""),
+				opt("idempotency_key", TypeString, ""),
+			),
+			Output: schema(
+				req("refund_id", TypeString, ""),
+				enum(req("status", TypeString, "manual_required: cash/BNPL refunds the merchant settles by hand"), []string{"pending", "succeeded", "failed", "manual_required"}),
+				req("amount", TypeDecimal, ""),
+				req("currency", TypeCurrency, ""),
+				opt("instructions", TypeString, "what the merchant must do when manual_required"),
+			),
+		},
+		// --------------------------------------------------------------- tax
+		{
+			Key: CommerceTaxCalculate, Kind: KindQuery, Cardinality: One,
+			Doc: "compute taxes for cart lines and shipping",
+			Input: schema(
+				req("currency", TypeCurrency, ""),
+				list(req("lines", TypeArray, ""), LineSchema),
+				obj(opt("ship_to", TypeObject, ""), AddressSchema),
+				obj(opt("ship_from", TypeObject, ""), AddressSchema),
+				opt("shipping_amount", TypeDecimal, "shipping charged to the buyer"),
+				opt("prices_include_tax", TypeBoolean, "unit prices already include tax"),
+				obj(opt("customer", TypeObject, ""), BuyerSchema),
+				opt("order_ref", TypeString, ""),
+			),
+			Output: schema(
+				req("currency", TypeCurrency, ""),
+				req("tax_included", TypeBoolean, "true when line prices already contain the tax"),
+				req("total_tax", TypeDecimal, ""),
+				list(req("lines", TypeArray, ""), schema(
+					req("id", TypeString, "input line id"),
+					req("tax", TypeDecimal, "tax amount of the line"),
+					opt("taxable_amount", TypeDecimal, ""),
+					list(opt("breakdown", TypeArray, ""), TaxLineSchema),
+				)),
+				opt("shipping_tax", TypeDecimal, ""),
+				opt("calculation_id", TypeString, "provider calculation id, passed to commerce.tax.commit"),
+			),
+		},
+		{
+			Key: CommerceTaxCommit, Kind: KindQuery, Cardinality: One,
+			Doc: "record the taxes of a paid order with the provider (no-op for stateless providers)",
+			Input: schema(
+				req("order_ref", TypeString, ""),
+				opt("calculation_id", TypeString, ""),
+				opt("currency", TypeCurrency, ""),
+				list(opt("lines", TypeArray, ""), LineSchema),
+				opt("total_tax", TypeDecimal, ""),
+				obj(opt("ship_to", TypeObject, ""), AddressSchema),
+				opt("paid_at", TypeString, "RFC 3339"),
+			),
+			Output: schema(
+				enum(req("status", TypeString, ""), []string{"committed", "skipped"}),
+				opt("transaction_id", TypeString, ""),
+			),
+		},
+		{
+			Key: CommerceTaxReverse, Kind: KindQuery, Cardinality: One,
+			Doc: "reverse (fully or partially) a committed tax transaction after a refund/return",
+			Input: schema(
+				req("order_ref", TypeString, ""),
+				opt("transaction_id", TypeString, ""),
+				list(opt("lines", TypeArray, "partial reversal; absent = full"), LineSchema),
+				opt("amount", TypeDecimal, ""),
+				opt("currency", TypeCurrency, ""),
+				opt("reason", TypeString, ""),
+			),
+			Output: schema(
+				enum(req("status", TypeString, ""), []string{"reversed", "skipped"}),
+				opt("transaction_id", TypeString, ""),
+			),
+		},
+		// ---------------------------------------------------------- shipping
+		{
+			Key: CommerceShippingRates, Kind: KindQuery, Cardinality: All, Timeout: ShippingRatesTimeout,
+			Doc: "quote delivery options; every eligible carrier addon answers in parallel",
+			Input: schema(
+				obj(req("origin", TypeObject, ""), AddressSchema),
+				obj(req("destination", TypeObject, ""), AddressSchema),
+				list(req("parcels", TypeArray, ""), ParcelSchema),
+				req("currency", TypeCurrency, "currency of declared_value and of the wanted rates"),
+				opt("declared_value", TypeDecimal, "insured / declared value"),
+				opt("cod_amount", TypeDecimal, "cash on delivery to collect"),
+				list(opt("items", TypeArray, ""), ShipItemSchema),
+				opt("order_ref", TypeString, "cart/order id"),
+			),
+			Output: schema(
+				list(req("rates", TypeArray, ""), schema(
+					req("id", TypeString, "opaque rate id, passed to commerce.shipping.label"),
+					req("carrier", TypeString, "e.g. fedex, estafeta, dhl, local"),
+					req("service", TypeString, "human service name"),
+					req("cost", TypeDecimal, "price to the buyer"),
+					req("currency", TypeCurrency, ""),
+					opt("service_code", TypeString, ""),
+					opt("eta_days_min", TypeInteger, ""),
+					opt("eta_days_max", TypeInteger, ""),
+					opt("pickup", TypeBoolean, "store/branch pickup option"),
+					enum(opt("delivery_type", TypeString, ""), []string{"door", "branch", "same_day", "on_demand", "pickup"}),
+					opt("taxes_included", TypeBoolean, "cost already includes VAT/IVA"),
+					opt("expires_at", TypeString, "RFC 3339"),
+				)),
+			),
+		},
+		{
+			Key: CommerceShippingLabel, Kind: KindQuery, Cardinality: One,
+			Doc: "buy a label for a quoted rate",
+			Input: schema(
+				req("rate_id", TypeString, "id of a commerce.shipping.rates rate from this provider"),
+				req("order_ref", TypeString, ""),
+				obj(opt("origin", TypeObject, ""), AddressSchema),
+				obj(opt("destination", TypeObject, ""), AddressSchema),
+				list(opt("parcels", TypeArray, ""), ParcelSchema),
+				list(opt("items", TypeArray, ""), ShipItemSchema),
+				opt("declared_value", TypeDecimal, ""),
+				opt("currency", TypeCurrency, ""),
+				enum(opt("label_format", TypeString, ""), []string{"pdf", "zpl", "png"}),
+				opt("label_size", TypeString, "4x6 / letter"),
+				opt("cod_amount", TypeDecimal, ""),
+				opt("idempotency_key", TypeString, "stable per shipment; a duplicate label costs money"),
+			),
+			Output: schema(
+				enum(req("label_status", TypeString, "label_pending resolves by webhook/poll; tracking_number and label_url are set once created"), []string{"created", "label_pending"}),
+				req("carrier", TypeString, ""),
+				opt("tracking_number", TypeString, ""),
+				opt("label_url", TypeString, ""),
+				opt("shipment_id", TypeString, ""),
+				opt("label_format", TypeString, ""),
+				opt("tracking_url", TypeString, ""),
+				opt("cost", TypeDecimal, ""),
+				opt("currency", TypeCurrency, ""),
+				enum(opt("status", TypeString, "tracking status"), TrackingStatuses),
+			),
+		},
+		{
+			Key: CommerceShippingCancel, Kind: KindQuery, Cardinality: One,
+			Doc: "void a label / cancel a shipment not yet picked up",
+			Input: schema(
+				req("shipment_id", TypeString, ""),
+				opt("tracking_number", TypeString, ""),
+				opt("order_ref", TypeString, ""),
+				opt("reason", TypeString, ""),
+			),
+			Output: schema(
+				enum(req("status", TypeString, ""), []string{"cancelled", "rejected"}),
+				opt("refund_amount", TypeDecimal, "label cost credited back"),
+				opt("currency", TypeCurrency, ""),
+				opt("message", TypeString, "why it could not be cancelled"),
+			),
+		},
+		{
+			Key: CommerceShippingTrack, Kind: KindQuery, Cardinality: One,
+			Doc: "normalized tracking of a shipment",
+			Input: schema(
+				req("tracking_number", TypeString, ""),
+				opt("carrier", TypeString, ""),
+				opt("shipment_id", TypeString, ""),
+			),
+			Output: schema(
+				enum(req("status", TypeString, ""), TrackingStatuses),
+				opt("carrier", TypeString, ""),
+				opt("tracking_url", TypeString, ""),
+				opt("eta", TypeString, "RFC 3339 date"),
+				opt("delivered_at", TypeString, "RFC 3339"),
+				list(opt("events", TypeArray, "newest first"), TrackingEventSchema),
+			),
+		},
+		// ------------------------------------------------------- fulfillment
+		{
+			Key: CommerceFulfillmentCreate, Kind: KindQuery, Cardinality: One,
+			Doc: "send an order to a warehouse / 3PL for picking and shipping",
+			Input: schema(
+				req("order_ref", TypeString, ""),
+				list(req("items", TypeArray, ""), ShipItemSchema),
+				obj(req("destination", TypeObject, ""), AddressSchema),
+				opt("service_level", TypeString, "standard / express / … or a rate id"),
+				opt("carrier", TypeString, ""),
+				opt("warehouse", TypeString, "provider warehouse code"),
+				obj(opt("buyer", TypeObject, ""), BuyerSchema),
+				opt("declared_value", TypeDecimal, ""),
+				opt("currency", TypeCurrency, ""),
+				opt("notes", TypeString, ""),
+				opt("idempotency_key", TypeString, ""),
+			),
+			Output: schema(
+				req("fulfillment_id", TypeString, ""),
+				enum(req("status", TypeString, ""), []string{"accepted", "on_hold", "rejected"}),
+				opt("warehouse", TypeString, ""),
+				opt("tracking_number", TypeString, ""),
+				opt("carrier", TypeString, ""),
+				opt("tracking_url", TypeString, ""),
+				opt("message", TypeString, "reason when on_hold/rejected"),
+			),
+		},
+		{
+			Key: CommerceFulfillmentCancel, Kind: KindQuery, Cardinality: One,
+			Doc: "cancel a fulfillment that has not shipped",
+			Input: schema(
+				req("fulfillment_id", TypeString, ""),
+				opt("order_ref", TypeString, ""),
+				opt("reason", TypeString, ""),
+			),
+			Output: schema(
+				enum(req("status", TypeString, ""), []string{"cancelled", "rejected"}),
+				opt("message", TypeString, "why it could not be cancelled"),
+			),
+		},
+		// ------------------------------------------------------------ search
+		{
+			Key: CommerceSearchQuery, Kind: KindQuery, Cardinality: One, Timeout: SearchTimeout,
+			Doc: "product search / suggestions (hot path: providers should answer from an index, not per-keystroke WASM)",
+			Input: schema(
+				opt("q", TypeString, "free text; empty = browse"),
+				opt("filters", TypeObject, "facet -> value(s)"),
+				opt("sort", TypeString, "relevance / price_asc / price_desc / newest / …"),
+				opt("limit", TypeInteger, ""),
+				opt("cursor", TypeString, ""),
+				opt("locale", TypeString, ""),
+				opt("collection", TypeString, "restrict to a collection/category handle"),
+				opt("suggest", TypeBoolean, "type-ahead mode"),
+			),
+			Output: schema(
+				list(req("hits", TypeArray, ""), schema(
+					req("id", TypeString, "product id"),
+					opt("handle", TypeString, ""),
+					opt("title", TypeString, ""),
+					opt("variant_id", TypeString, ""),
+					opt("score", TypeNumber, ""),
+					opt("highlight", TypeObject, "field -> highlighted snippet"),
+				)),
+				opt("total_hits", TypeInteger, "total matches (may be an estimate)"),
+				opt("next_cursor", TypeString, ""),
+				list(opt("facets", TypeArray, ""), schema(
+					req("field", TypeString, ""),
+					list(req("values", TypeArray, ""), schema(
+						req("value", TypeString, ""),
+						req("count", TypeInteger, ""),
+					)),
+				)),
+				strs(opt("suggestions", TypeArray, "query completions")),
+			),
+		},
+		{
+			Key: CommerceDiscountsEvaluate, Kind: KindQuery, Cardinality: All, Timeout: DiscountsTimeout,
+			Doc: "every discount engine proposes adjustments for a cart",
+			Input: schema(
+				req("currency", TypeCurrency, ""),
+				list(req("lines", TypeArray, ""), LineSchema),
+				strs(opt("codes", TypeArray, "coupon codes entered by the buyer")),
+				obj(opt("buyer", TypeObject, ""), BuyerSchema),
+				opt("subtotal", TypeDecimal, ""),
+			),
+			Output: schema(
+				list(req("discounts", TypeArray, ""), schema(
+					req("id", TypeString, ""),
+					req("title", TypeString, ""),
+					req("amount", TypeDecimal, "total discount"),
+					req("currency", TypeCurrency, ""),
+					opt("code", TypeString, "coupon code that produced it"),
+					opt("line_id", TypeString, "line it applies to; absent = order level"),
+					opt("combinable", TypeBoolean, ""),
+				)),
+				list(opt("rejected_codes", TypeArray, ""), schema(
+					req("code", TypeString, ""),
+					opt("reason", TypeString, ""),
+				)),
+			),
+		},
+		// ------------------------------------------------------------ fiscal
+		{
+			Key: FiscalInvoiceCreate, Kind: KindQuery, Cardinality: One,
+			Doc: "issue a fiscal invoice for an order (CFDI 4.0 in MX via the fiscal_mexico family)",
+			Input: schema(
+				req("order_ref", TypeString, ""),
+				req("currency", TypeCurrency, ""),
+				obj(req("customer", TypeObject, ""), &Schema{Fields: []Field{
+					req("tax_id", TypeString, "RFC / VAT id"),
+					req("name", TypeString, "legal name"),
+					opt("email", TypeString, ""),
+					opt("postal_code", TypeString, "fiscal domicile postal code"),
+					opt("tax_regime", TypeString, "e.g. SAT régimen fiscal"),
+					opt("use", TypeString, "e.g. SAT uso CFDI"),
+					opt("country", TypeCountry, ""),
+				}}),
+				list(req("lines", TypeArray, ""), schema(
+					req("id", TypeString, ""),
+					req("description", TypeString, ""),
+					req("quantity", TypeDecimal, "decimal: fiscal quantities can be fractional"),
+					req("unit_price", TypeDecimal, "before tax"),
+					opt("discount", TypeDecimal, ""),
+					opt("product_code", TypeString, "fiscal product key (SAT ClaveProdServ)"),
+					opt("unit_code", TypeString, "fiscal unit key (SAT ClaveUnidad)"),
+					opt("sku", TypeString, ""),
+					list(opt("taxes", TypeArray, ""), TaxLineSchema),
+				)),
+				opt("payment_form", TypeString, "e.g. SAT forma de pago (04, 03, 01)"),
+				opt("payment_method", TypeString, "e.g. PUE / PPD"),
+				opt("series", TypeString, ""),
+				opt("subtotal", TypeDecimal, ""),
+				opt("total", TypeDecimal, ""),
+				opt("issued_at", TypeString, "RFC 3339"),
+				opt("notes", TypeString, ""),
+				opt("idempotency_key", TypeString, ""),
+			),
+			Output: schema(
+				req("invoice_id", TypeString, "provider id"),
+				enum(req("status", TypeString, ""), []string{"issued", "pending", "failed"}),
+				opt("fiscal_uuid", TypeString, "folio fiscal (CFDI UUID)"),
+				opt("series", TypeString, ""),
+				opt("folio", TypeString, ""),
+				opt("total", TypeDecimal, ""),
+				opt("currency", TypeCurrency, ""),
+				opt("pdf_url", TypeString, ""),
+				opt("xml_url", TypeString, ""),
+				opt("message", TypeString, "authority/provider message when failed"),
+			),
+		},
+		{
+			Key: FiscalInvoiceCancel, Kind: KindQuery, Cardinality: One,
+			Doc: "cancel an issued fiscal invoice",
+			Input: schema(
+				req("invoice_id", TypeString, ""),
+				opt("reason", TypeString, "e.g. SAT motivo 01 / 02 / 03 / 04"),
+				opt("substitution_id", TypeString, "replacing invoice fiscal_uuid (motivo 01)"),
+			),
+			Output: schema(
+				enum(req("status", TypeString, ""), []string{"cancelled", "pending", "rejected"}),
+				opt("message", TypeString, ""),
+			),
+		},
+	}
+}

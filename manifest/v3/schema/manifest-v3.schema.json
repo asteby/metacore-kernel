@@ -388,6 +388,12 @@
         "description": {
           "type": "string"
         },
+        "countries": {
+          "type": "array",
+          "description": "Optional ISO 3166-1 alpha-2 countries this provider serves (e.g. ['MX'] for a CFDI provider). Empty = any. The host resolves capabilities per (organization, market, capability) and skips providers that do not serve the market's countries unless the org selected them for that market explicitly.",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Z]{2}$"}
+        },
         "handler": {
           "type": "object",
           "additionalProperties": false,

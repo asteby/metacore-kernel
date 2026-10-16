@@ -1844,10 +1844,11 @@ func mapProvidesCapabilities(in []v3.ProvidedCapability) []CapabilityProviderDef
 	out := make([]CapabilityProviderDef, 0, len(in))
 	for _, pc := range in {
 		out = append(out, CapabilityProviderDef{
-			Key:     pc.Key,
-			Label:   pc.Label,
-			Trigger: handlerToTrigger(pc.Handler),
-			Input:   copyStringMap(pc.Input),
+			Key:       pc.Key,
+			Label:     pc.Label,
+			Trigger:   handlerToTrigger(pc.Handler),
+			Input:     copyStringMap(pc.Input),
+			Countries: append([]string(nil), pc.Countries...),
 		})
 	}
 	return out

@@ -460,3 +460,65 @@ func TestGateway_DefaultHeadersIncludeCustomerTokenAndIdempotencyKey(t *testing.
 		t.Fatalf("headers = %v", d.req.Headers)
 	}
 }
+
+func TestGateway_MarketResolution(t *testing.T) {
+	d := &recorder{}
+	shopOrg := uuid.MustParse("33333333-3333-3333-3333-333333333333")
+	gw := newTestGateway(t, d,
+		WithDomainResolver(DomainResolverFunc(func(_ context.Context, domain string) (uuid.UUID, error) {
+			switch domain {
+			case "godsnutrition.mx", "godsnutrition.com", "boom.example":
+				return shopOrg, nil
+			}
+			return uuid.Nil, nil
+		})),
+		WithMarketResolver(MarketResolverFunc(func(_ context.Context, org uuid.UUID, domain string) (string, error) {
+			switch {
+			case org == shopOrg && domain == "godsnutrition.mx":
+				return "mx", nil
+			case org == shopOrg && domain == "godsnutrition.com":
+				return "us", nil
+			case domain == "boom.example":
+				return "", errors.New("registry down")
+			}
+			return "", nil
+		})))
+	ctx := context.Background()
+	platform := Principal{Kind: AuthToken, Scopes: []string{"*"}, TokenID: uuid.New()}
+
+	for domain, want := range map[string]string{"godsnutrition.mx": "mx", "GodsNutrition.com": "us"} {
+		in := get("/storefront/products/x", platform)
+		in.Domain = domain
+		if _, err := gw.Handle(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+		if d.req.Market != want || d.req.Org != shopOrg {
+			t.Fatalf("%s: market = %q org = %s, want %q", domain, d.req.Market, d.req.Org, want)
+		}
+	}
+
+	// A principal bound to a market keeps it.
+	bound := platform
+	bound.Market = "us"
+	in := get("/storefront/products/x", bound)
+	in.Domain = "godsnutrition.mx"
+	if _, err := gw.Handle(ctx, in); err != nil || d.req.Market != "us" {
+		t.Fatalf("bound market re-scoped: %q %v", d.req.Market, err)
+	}
+
+	// No domain: organization level, market absent from the JSON envelope.
+	in = get("/storefront/products/x", tokenPrincipal("catalog:read"))
+	if _, err := gw.Handle(ctx, in); err != nil || d.req.Market != "" {
+		t.Fatalf("org-level market: %q %v", d.req.Market, err)
+	}
+	raw, _ := json.Marshal(d.req)
+	if strings.Contains(string(raw), `"market"`) {
+		t.Fatalf("empty market must be omitted: %s", raw)
+	}
+
+	in = get("/storefront/products/x", platform)
+	in.Domain = "boom.example"
+	if _, err := gw.Handle(ctx, in); err == nil {
+		t.Fatal("market resolver error must fail the request")
+	}
+}

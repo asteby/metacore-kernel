@@ -49,17 +49,39 @@ func TestCapabilityProviderAndConsumerParse(t *testing.T) {
 
 func TestCapabilityValidationRejectsBadDeclarations(t *testing.T) {
 	cases := map[string]struct{ extra, want string }{
-		"provider handler type": {`"provides_capabilities": [{"key": "messaging.whatsapp.send", "handler": {"type": "connector"}}]`, "handler"},
+		"provider handler type":                 {`"provides_capabilities": [{"key": "messaging.whatsapp.send", "handler": {"type": "connector"}}]`, "handler"},
 		"provider reads unknown contract field": {`"provides_capabilities": [{"key": "messaging.whatsapp.send", "handler": {"type": "wasm", "function": "send"}, "input": {"phone": "payload.phone"}}]`, `not a field of capability`},
-		"duplicated provider key": {`"provides_capabilities": [{"key": "messaging.whatsapp.send", "handler": {"type": "wasm", "function": "a"}}, {"key": "messaging.whatsapp.send", "handler": {"type": "wasm", "function": "b"}}]`, "duplicated"},
-		"consumer maps a non-contract field": {`"contributions": {"actions": [{"key": "a", "label": "A", "handler": {"type": "capability", "capability": "messaging.whatsapp.send", "input": {"phone": "record.phone"}}}]}`, `"phone" is not a field`},
-		"consumer mixes connector": {`"contributions": {"actions": [{"key": "a", "label": "A", "handler": {"type": "capability", "capability": "messaging.whatsapp.send", "connector": "link"}}]}`, "cannot declare"},
-		"capability outside type": {`"contributions": {"actions": [{"key": "a", "label": "A", "handler": {"type": "wasm", "function": "a", "capability": "messaging.whatsapp.send"}}]}`, "only allowed when type=capability"},
+		"duplicated provider key":               {`"provides_capabilities": [{"key": "messaging.whatsapp.send", "handler": {"type": "wasm", "function": "a"}}, {"key": "messaging.whatsapp.send", "handler": {"type": "wasm", "function": "b"}}]`, "duplicated"},
+		"consumer maps a non-contract field":    {`"contributions": {"actions": [{"key": "a", "label": "A", "handler": {"type": "capability", "capability": "messaging.whatsapp.send", "input": {"phone": "record.phone"}}}]}`, `"phone" is not a field`},
+		"consumer mixes connector":              {`"contributions": {"actions": [{"key": "a", "label": "A", "handler": {"type": "capability", "capability": "messaging.whatsapp.send", "connector": "link"}}]}`, "cannot declare"},
+		"lower-case country":                    {`"provides_capabilities": [{"key": "fiscal.invoice.create", "handler": {"type": "wasm", "function": "a"}, "countries": ["mx"]}]`, "countries"},
+		"duplicated country":                    {`"provides_capabilities": [{"key": "fiscal.invoice.create", "handler": {"type": "wasm", "function": "a"}, "countries": ["MX", "MX"]}]`, "countries"},
+		"provider reads unknown commerce field": {`"provides_capabilities": [{"key": "commerce.shipping.rates", "handler": {"type": "wasm", "function": "a"}, "input": {"cp": "payload.zip"}}]`, `not a field of capability`},
+		"capability outside type":               {`"contributions": {"actions": [{"key": "a", "label": "A", "handler": {"type": "wasm", "function": "a", "capability": "messaging.whatsapp.send"}}]}`, "only allowed when type=capability"},
 	}
 	for name, tc := range cases {
 		_, err := Parse(capabilityManifest("xaddon", tc.extra))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: want error containing %q, got %v", name, tc.want, err)
 		}
+	}
+}
+
+// A commerce query provider declares the countries it serves; a consumer
+// maps contract fields of a query contract like any other.
+func TestCapabilityQueryProviderWithCountries(t *testing.T) {
+	m, err := Parse(capabilityManifest("factura_com", `"provides_capabilities": [{
+        "key": "fiscal.invoice.create", "label": "Factura.com (CFDI 4.0)",
+        "handler": {"type": "wasm", "function": "invoice_create"},
+        "input": {"rfc": "payload.customer"},
+        "countries": ["MX"]
+      }],
+      "contributions": {"actions": [{"key": "quote", "label": "Cotizar", "handler": {"type": "capability",
+        "capability": "commerce.shipping.rates", "input": {"destination": "payload.address", "currency": "const:MXN"}}}]}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := m.ProvidesCapabilities[0].Countries; len(got) != 1 || got[0] != "MX" {
+		t.Fatalf("countries = %v", got)
 	}
 }

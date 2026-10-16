@@ -14,8 +14,9 @@ func TestFromV3ProjectsCapabilities(t *testing.T) {
 		Metadata: v3.Metadata{Key: "connector_whatsapp", Name: "WA", Version: "1.0.0"},
 		ProvidesCapabilities: []v3.ProvidedCapability{{
 			Key: "messaging.whatsapp.send", Label: "WhatsApp (QR)",
-			Handler: v3.Handler{Type: "native", Operation: "whatsapp_message_send"},
-			Input:   map[string]string{"message": "payload.message"},
+			Handler:   v3.Handler{Type: "native", Operation: "whatsapp_message_send"},
+			Input:     map[string]string{"message": "payload.message"},
+			Countries: []string{"MX"},
 		}},
 		Contributions: &v3.Contributions{Actions: []v3.Action{{
 			Key: "send_whatsapp", Label: "Send", TargetModel: "leads",
@@ -26,6 +27,9 @@ func TestFromV3ProjectsCapabilities(t *testing.T) {
 		t.Fatalf("want 1 provided capability, got %d", len(m.ProvidesCapabilities))
 	}
 	pc := m.ProvidesCapabilities[0]
+	if len(pc.Countries) != 1 || pc.Countries[0] != "MX" {
+		t.Fatalf("provider countries lost: %+v", pc)
+	}
 	if pc.Trigger == nil || pc.Trigger.Type != "native" || pc.Trigger.Operation != "whatsapp_message_send" || pc.Input["message"] != "payload.message" {
 		t.Fatalf("provider projection lost its target: %+v", pc)
 	}

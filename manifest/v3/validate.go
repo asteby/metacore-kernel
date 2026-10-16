@@ -2148,6 +2148,16 @@ func validateCapabilities(m *Manifest) []string {
 		for _, e := range capability.ValidateInput(pc.Input, nil) {
 			errs = append(errs, w+"."+e)
 		}
+		seenCountry := map[string]struct{}{}
+		for j, cc := range pc.Countries {
+			if !capability.ValidCountry(cc) {
+				errs = append(errs, fmt.Sprintf("%s.countries[%d] %q must be an upper-case ISO 3166-1 alpha-2 code (e.g. MX)", w, j, cc))
+			}
+			if _, dup := seenCountry[cc]; dup {
+				errs = append(errs, fmt.Sprintf("%s.countries[%d] %q is duplicated", w, j, cc))
+			}
+			seenCountry[cc] = struct{}{}
+		}
 		if c, known := capability.Lookup(pc.Key); known {
 			for target, expr := range pc.Input {
 				if f, ok := strings.CutPrefix(expr, "payload."); ok && !c.Has(f) {

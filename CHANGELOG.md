@@ -70,6 +70,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   "sin salud no hay tráfico". Esquema v3, proyección `FromV3` y RFC 002
   (sección "Ingress plane") actualizados.
 
+- **capability: consultas con respuesta, fan-out y contratos de comercio** —
+  un contrato puede ser `Kind: query` con esquema de salida (`Output`) y
+  cardinalidad `one` (el proveedor elegido) o `all` (todos en paralelo, con
+  tiempo límite por proveedor y resultados parciales; un proveedor caído,
+  lento, que entra en pánico o que responde fuera de contrato nunca tumba la
+  llamada). API neutral al host: `Querier`, `Engine` (`ProviderSource` +
+  `Select` + `Executor` + `Invoker`), `QueryResult` con `Outputs()`,
+  `Failed()`, `One()` y sobre JSON `{results, errors}`. Validación tipada
+  (`Schema`, `Field`: string, decimal, currency, country, integer, number,
+  boolean, object, array, enums) de entradas (abiertas) y salidas (cerradas,
+  extensiones `x_`). Dinero siempre como cadena decimal + moneda. Nuevos
+  contratos: `commerce.payments.session|confirm|status|refund`,
+  `commerce.tax.calculate|commit|reverse`,
+  `commerce.shipping.rates|label|cancel|track`,
+  `commerce.fulfillment.create|cancel`, `commerce.search.query`,
+  `commerce.discounts.evaluate`, `fiscal.invoice.create|cancel`. Referencia en
+  `docs/capabilities-commerce.md`.
+- **capability: resolución por mercado** — `Select` resuelve
+  `(organización, mercado, capacidad) → addon`: proveedor elegido para el
+  mercado, luego el por omisión de la organización entre los que atienden los
+  países del mercado, luego el único elegible. `SelectionFromSettings` lee
+  `_capability_defaults` y el nuevo `_capability_markets` de la instalación.
+- **manifest: `provides_capabilities[].countries`** — un proveedor declara
+  opcionalmente los países ISO que atiende (p. ej. `["MX"]` para CFDI); se
+  valida (alfa-2 en mayúsculas, sin duplicados) y se proyecta a
+  `CapabilityProviderDef.Countries`.
+- **runtime/apiroute: mercado en la petición** — `Principal.Market` y
+  `Request.Market` (`"market"` en el sobre, omitido si está vacío). Con
+  `WithMarketResolver` el gateway resuelve el mercado del dominio una vez
+  conocida la organización; un principal que ya trae mercado no se re-escopa.
+
 - **host: cableado opcional de tokens de API y gateway de addons** —
   `AppConfig.EnableAPITokens` (+ `APITokenOptions`) construye `app.APITokens`,
   crea `metacore_api_tokens` y monta la administración en `/api-tokens` tras

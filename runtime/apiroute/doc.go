@@ -41,6 +41,12 @@
 // domain (X-Storefront-Domain, else Host) through a host-implemented
 // DomainResolver (WithDomainResolver). Unresolved → ErrOrgUnresolved.
 //
+// Market (H13): a principal may carry Principal.Market (a token bound to a
+// market); otherwise a host-implemented MarketResolver (WithMarketResolver)
+// maps the domain to one of the organization's markets. It reaches the
+// handler as Request.Market ("" = organization level) and scopes capability
+// resolution to (organization, market, capability).
+//
 // A WASM dispatcher marshals the Request, invokes the export named after
 // "wasm:" for Request.Addon, and returns DecodeResponse(out).
 //

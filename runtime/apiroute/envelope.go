@@ -83,6 +83,10 @@ type Request struct {
 	Auth RequestAuth `json:"auth"`
 	// Org is the organization the request acts on.
 	Org uuid.UUID `json:"org"`
+	// Market is the organization's market the request acts in ("mx", "us");
+	// absent = organization level. Handlers pass it on to capability
+	// queries and use it to pick prices/currency.
+	Market string `json:"market,omitempty"`
 }
 
 // Encode serializes the envelope for a handler backend without HTML escaping

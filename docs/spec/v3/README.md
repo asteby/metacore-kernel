@@ -409,6 +409,17 @@ required contract field, and answers a typed "no provider installed" error
 when none is. For a well-known contract the validator rejects mappings to
 fields the contract does not have.
 
+**Queries and markets.** A contract may be a *query* (it declares an output
+schema and the consumer gets the provider's normalized output back) with
+cardinality `one` (the selected provider) or `all` (parallel fan-out with a
+per-provider deadline and partial results). A provider may restrict itself to
+countries with `"countries": ["MX"]`. Resolution is
+`(organization, market, capability) → addon`: a provider the org selected for
+the market, else the org default among providers serving the market's
+countries, else the only one. See `capability.Select` and
+[`docs/capabilities-commerce.md`](../../capabilities-commerce.md) for the
+commerce/fiscal contracts.
+
 ## Published option catalogs
 
 `provides_options[]` is the **producer** half of the `options_source`

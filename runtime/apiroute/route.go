@@ -120,6 +120,13 @@ type Principal struct {
 	UserID uuid.UUID
 	// CustomerID is the end customer (Kind customer). Opaque to the kernel.
 	CustomerID string
+	// Market is the organization's market the request acts in (H13: "mx",
+	// "us"), resolved by the host from the credential (a token bound to a
+	// market) or from the request's domain through the Gateway's
+	// MarketResolver. "" = organization level. Capabilities are resolved per
+	// (organization, market, capability), falling back to the org-level
+	// selection (capability.Select).
+	Market string
 }
 
 // HasScope reports whether the principal holds scope, honouring the "*" and

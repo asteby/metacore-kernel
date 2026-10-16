@@ -884,6 +884,9 @@ type CapabilityProviderDef struct {
 	Label   string            `json:"label,omitempty"`
 	Trigger *ActionTrigger    `json:"trigger"`
 	Input   map[string]string `json:"input,omitempty"`
+	// Countries the provider serves (ISO 3166-1 alpha-2); empty = any.
+	// Hosts copy it to capability.Provider.Countries.
+	Countries []string `json:"countries,omitempty"`
 }
 
 // SubscriptionDef is the legacy/host projection of a v3

@@ -10,6 +10,18 @@
 // WhatsApp over a local Baileys sidecar is then an install decision, not a
 // change to every addon that sends a message.
 //
+// A contract is either an ACTION (fire the provider, the consumer does not
+// read a result — the original messaging.whatsapp.send model) or a QUERY: it
+// declares an Output schema and the consumer gets the provider's normalized
+// output back. A query's Cardinality is "one" (the provider selected for the
+// org/market) or "all" (fan-out to every eligible provider in parallel, each
+// under its own deadline, with partial results). See Executor, Select and
+// docs/capabilities-commerce.md.
+//
+// Providers are resolved per (organization, market, capability): a provider
+// explicitly selected for the market wins, then the org-level default, then
+// the only eligible provider (see Select).
+//
 // Both sides map inputs with the same tiny expression language (see Resolve):
 //
 //	record.<column>   a column of the acted-on row
@@ -22,15 +34,91 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
-// Contract is the input shape of a well-known capability. Hosts and validators
-// use it to reject mappings to fields the contract does not have; a capability
-// key outside Contracts is still valid (open set) but is not field-checked.
+// Kind tells whether a contract returns a result to its consumer.
+type Kind string
+
+const (
+	// KindAction runs the provider; the consumer reads no output ("" too).
+	KindAction Kind = "action"
+	// KindQuery runs the provider(s) and returns their outputs, validated
+	// against Contract.Output.
+	KindQuery Kind = "query"
+)
+
+// Cardinality is how many providers a query reaches.
+type Cardinality string
+
+const (
+	// One reaches the provider selected for the org/market ("" too).
+	One Cardinality = "one"
+	// All fans out to every eligible provider in parallel and merges what
+	// arrived in time (shipping rates, discounts).
+	All Cardinality = "all"
+)
+
+// Contract is the shape of a well-known capability. Hosts and validators use
+// it to reject mappings to fields the contract does not have; a capability key
+// outside Contracts is still valid (open set) but is not field-checked.
+//
+// Required/Optional are the input field names (kept for the mapping
+// validators); Input, when set, carries their types and is the source those
+// lists are derived from. Output is mandatory for a KindQuery contract.
 type Contract struct {
 	Key      string
 	Required []string
 	Optional []string
+
+	// Kind is KindAction ("") or KindQuery.
+	Kind Kind
+	// Cardinality of a query: One ("") or All.
+	Cardinality Cardinality
+	// Timeout is the per-provider deadline of a query; 0 = the Executor's.
+	Timeout time.Duration
+	// Input types the input fields (nil = untyped, names only).
+	Input *Schema
+	// Output is the normalized result shape of a query.
+	Output *Schema
+	// Doc is a one-line description.
+	Doc string
+}
+
+// IsQuery reports whether the contract returns outputs.
+func (c Contract) IsQuery() bool { return c.Kind == KindQuery }
+
+// Fanout reports whether a query reaches every eligible provider.
+func (c Contract) Fanout() bool { return c.Cardinality == All }
+
+// CheckInput validates a resolved contract input: required fields present
+// (non-blank) and, when the contract types its input, every declared field of
+// the right type. Undeclared fields pass through untouched (open input).
+func (c Contract) CheckInput(input map[string]any) []string {
+	var errs []string
+	for _, f := range MissingRequired(c, input) {
+		errs = append(errs, f+": required")
+	}
+	if c.Input != nil {
+		for _, e := range c.Input.ValidateOpen(input) {
+			if !strings.HasSuffix(e, ": required") {
+				errs = append(errs, e)
+			}
+		}
+	}
+	return errs
+}
+
+// ValidateOutput checks one provider output against the contract's Output
+// schema (nil Output accepts any JSON object).
+func (c Contract) ValidateOutput(raw []byte) []string {
+	if c.Output == nil {
+		if _, err := decodeObject(raw); err != nil {
+			return []string{err.Error()}
+		}
+		return nil
+	}
+	return c.Output.ValidateJSON(raw)
 }
 
 // Fields returns every field of the contract, required first.
@@ -53,10 +141,12 @@ func (c Contract) Has(field string) bool {
 // device/session when the provider manages several (providers default it).
 const MessagingWhatsAppSend = "messaging.whatsapp.send"
 
-// Contracts is the registry of well-known capability contracts.
+// Contracts is the registry of well-known capability contracts. Commerce and
+// fiscal query contracts are registered from commerce.go.
 var Contracts = map[string]Contract{
 	MessagingWhatsAppSend: {
 		Key:      MessagingWhatsAppSend,
+		Kind:     KindAction,
 		Required: []string{"to"},
 		Optional: []string{"message", "media_url", "media_type", "device_id"},
 	},
@@ -66,6 +156,57 @@ var Contracts = map[string]Contract{
 func Lookup(key string) (Contract, bool) {
 	c, ok := Contracts[key]
 	return c, ok
+}
+
+// Keys lists the well-known contract keys, sorted.
+func Keys() []string {
+	out := make([]string, 0, len(Contracts))
+	for k := range Contracts {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Register adds a well-known contract (used by this package's init and by
+// hosts that ship their own vetted contracts). It derives Required/Optional
+// from Input and rejects malformed keys, duplicates and queries without an
+// Output schema.
+func Register(c Contract) error {
+	if !ValidKey(c.Key) {
+		return fmt.Errorf("capability: invalid contract key %q", c.Key)
+	}
+	if _, dup := Contracts[c.Key]; dup {
+		return fmt.Errorf("capability: contract %q already registered", c.Key)
+	}
+	switch c.Kind {
+	case "", KindAction:
+		if c.Output != nil || c.Cardinality == All {
+			return fmt.Errorf("capability: action contract %q cannot declare output or cardinality all", c.Key)
+		}
+	case KindQuery:
+		if c.Output == nil {
+			return fmt.Errorf("capability: query contract %q needs an Output schema", c.Key)
+		}
+	default:
+		return fmt.Errorf("capability: contract %q has unknown kind %q", c.Key, c.Kind)
+	}
+	switch c.Cardinality {
+	case "", One, All:
+	default:
+		return fmt.Errorf("capability: contract %q has unknown cardinality %q", c.Key, c.Cardinality)
+	}
+	if c.Input != nil {
+		c.Required, c.Optional = c.Input.Required(), c.Input.Optional()
+	}
+	Contracts[c.Key] = c
+	return nil
+}
+
+func mustRegister(c Contract) {
+	if err := Register(c); err != nil {
+		panic(err)
+	}
 }
 
 var (

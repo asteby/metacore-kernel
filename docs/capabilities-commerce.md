@@ -1,0 +1,722 @@
+# Contratos de capacidad de comercio y fiscal
+
+Referencia de los contratos bien conocidos del paquete `capability` del kernel
+para comercio (`commerce.*`) y facturación (`fiscal.*`). El núcleo de comercio
+(carrito, checkout, pedidos) solo nombra estas llaves; qué addon contesta
+(`mercadopago`, `stripe`, `skydropx`, `envia`, `emissary`, `region_mx`,
+`stripe_tax`, `factura_com`…) es una decisión de instalación y de selección por
+mercado (PLAN-HEADLESS H12/H13).
+
+> Las tablas de "Formas compartidas" y "Contratos" se generan del registro
+> `capability.Contracts`; si cambian los contratos en Go, regenérelas.
+
+## Modelo
+
+| Concepto | Regla |
+|---|---|
+| **Tipo** | `action` (dispara al proveedor, sin salida para el consumidor; p. ej. `messaging.whatsapp.send`) o `query` (declara `Output`; el consumidor recibe la salida normalizada). Todos los contratos de esta página son `query`. |
+| **Cardinalidad** | `one`: el proveedor seleccionado. `all`: fan-out en paralelo a todos los proveedores elegibles, cada uno con su tiempo límite; devuelve resultados parciales y una lista de errores por proveedor. Nunca falla toda la llamada porque un proveedor falló. |
+| **Tiempo límite** | Por proveedor: `Provider.Timeout` > `Contract.Timeout` > `Executor.Timeout` > 8 s. `commerce.shipping.rates` 4 s, `commerce.search.query` y `commerce.discounts.evaluate` 2 s. |
+| **Dinero** | Siempre cadena decimal (`"1499.00"`, regex `^-?(0\|[1-9][0-9]*)(\.[0-9]+)?$`) junto a una moneda ISO 4217 (`"MXN"`). Nunca flotantes ni unidades menores. |
+| **Países** | ISO 3166-1 alfa-2 en mayúsculas (`"MX"`). |
+| **Entrada** | Abierta: campos no declarados pasan tal cual (el mapeo del proveedor puede leerlos); los declarados se validan por tipo y los requeridos deben venir y no estar vacíos. |
+| **Salida** | Cerrada: tipos, enums y requeridos se validan; campos desconocidos se rechazan salvo extensiones con prefijo `x_` (p. ej. `x_init_point`). Una salida inválida cuenta como error de ese proveedor (`invalid_output`) y no se entrega. |
+| **Estados normalizados** | Pago: `pending, requires_action, authorized, paid, failed, cancelled, expired, refunded, partially_refunded`. Rastreo: `created, picked_up, in_transit, out_for_delivery, delivered, exception, returned, cancelled`. |
+
+## Resolución por mercado: `(organización, mercado, capacidad) → addon`
+
+El host pasa a `capability.Select` los proveedores instalados y habilitados en
+la organización (`[]capability.Provider`) y el mercado de la petición
+(`capability.Market{Code, Countries}`, que viene de `apiroute.Request.Market`).
+
+Cardinalidad `one`:
+
+1. el proveedor que la organización eligió para ese mercado (`Provider.Markets` contiene el código);
+2. si no hay, el proveedor por omisión de la organización (`Provider.Default`) entre los que atienden los países del mercado;
+3. si no hay, el único proveedor que atiende el mercado;
+4. si no: `ErrAmbiguousProvider` (varios) o `ErrNoProvider` (ninguno).
+
+Cardinalidad `all`: todos los que atienden los países del mercado; si la
+organización eligió explícitamente proveedores para ese mercado, solo esos.
+
+Sin mercado (`Market{}`) se usa la selección a nivel organización y no se
+filtra por país.
+
+Un addon declara opcionalmente los países que atiende en su manifiesto:
+
+```jsonc
+"provides_capabilities": [{
+  "key": "fiscal.invoice.create",
+  "label": "Factura.com (CFDI 4.0)",
+  "handler": {"type": "wasm", "function": "invoice_create"},
+  "countries": ["MX"]
+}]
+```
+
+El host guarda la selección en los ajustes de la instalación:
+`_capability_defaults: ["commerce.payments.session"]` (ya existía en OPS) y
+`_capability_markets: {"commerce.payments.session": ["mx"]}`;
+`capability.SelectionFromSettings` los lee.
+
+Casos reales:
+
+| Organización / mercado | Pagos | Impuestos | Envío / fulfillment | Fiscal |
+|---|---|---|---|---|
+| Gods Nutrition `mx` | `mercadopago` | `region_mx` | `emissary` (3PL) | CFDI vía `fiscal_mexico` |
+| Gods Nutrition `us` | `stripe` | `stripe_tax` | 3PL por definir | — |
+| Protekauto (MX) | `mercadopago` | `region_mx` | `skydropx` (+ `shipping_flat` por omisión) | `factura_com` vía `fiscal_mexico` |
+
+## API Go (host-neutral)
+
+```go
+// Consumidor: cualquier servicio del host.
+var q capability.Querier = &capability.Engine{
+    Source: myProviderSource, // manifiestos + ajustes de instalación → []Provider
+    Invoke: myInvoker,        // despacha Call.Payload al export wasm / operación native
+    Executor: capability.Executor{MaxParallel: 8},
+}
+res, err := q.Query(ctx, capability.Query{
+    Org: orgID, Market: capability.Market{Code: "mx", Countries: []string{"MX"}},
+    Capability: capability.CommerceShippingRates, Input: input,
+})
+// err != nil solo antes de invocar: contrato no-query, entrada inválida,
+// sin proveedor o ambiguo.
+for _, r := range res.Outputs() { /* r.Provider, r.Output (json válido) */ }
+for _, r := range res.Failed()  { /* r.ErrorCode(): timeout | invalid_output | panic | canceled | provider_error */ }
+out, err := res.One() // cardinalidad one
+```
+
+Sobre JSON para consumidores (`json.Marshal(res)` o `res.Envelope()`):
+
+```json
+{"capability":"commerce.shipping.rates","market":"mx",
+ "results":[{"provider":"skydropx","output":{"rates":[…]}}],
+ "errors":[{"provider":"envia","code":"timeout","message":"…"}]}
+```
+
+`Executor.Run` aplica el mapeo propio del proveedor
+(`provides_capabilities[].input`) a la entrada del contrato antes de invocar,
+corre una goroutine por proveedor con `context.WithTimeout`, aísla pánicos,
+deja de esperar al vencer el plazo aunque el invocador lo ignore y valida cada
+salida contra `Contract.Output`.
+
+Reglas de H12 que siguen vigentes: nada de WASM por pulsación en rutas
+calientes (`commerce.search.query` debe servirse de un índice que el host
+consulta); siempre hay un proveedor por omisión instalado (`search_basic`,
+`shipping_flat`, `manual`).
+
+## Formas compartidas
+
+### Address
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `name` | string |  | contact name |
+| `company` | string |  | company name |
+| `line1` | string |  | street and number |
+| `line2` | string |  | interior, suite |
+| `neighborhood` | string |  | colonia / district |
+| `city` | string |  | city / municipio |
+| `state` | string |  | state / province (code or name) |
+| `postal_code` | string | sí | postal code |
+| `country` | country | sí | ISO 3166-1 alpha-2 |
+| `phone` | string |  | E.164 preferred |
+| `email` | string |  | contact email |
+| `reference` | string |  | delivery reference / between streets |
+
+### Buyer
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `id` | string |  | customer id in OPS |
+| `email` | string |  |  |
+| `name` | string |  |  |
+| `phone` | string |  |  |
+| `tax_id` | string |  | RFC / VAT id |
+
+### Line
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `id` | string | sí | line id, echoed back in per-line outputs |
+| `sku` | string |  |  |
+| `title` | string |  |  |
+| `quantity` | integer | sí |  |
+| `unit_price` | decimal | sí | unit price in the request currency |
+| `discount` | decimal |  | line discount amount (total, not per unit) |
+| `tax_code` | string |  | provider/fiscal product tax code |
+| `product_ref` | string |  | product/variant id |
+
+### Parcel
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `weight_kg` | decimal | sí |  |
+| `length_cm` | decimal |  |  |
+| `width_cm` | decimal |  |  |
+| `height_cm` | decimal |  |  |
+| `quantity` | integer |  | identical parcels (default 1) |
+| `content` | string |  | content description (customs/carrier) |
+
+### ShipItem
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `sku` | string | sí |  |
+| `quantity` | integer | sí |  |
+| `title` | string |  |  |
+| `id` | string |  | order line id |
+| `unit_price` | decimal |  |  |
+| `product_code` | string |  | fiscal product key (SAT ClaveProdServ, carta porte) |
+
+### TaxLine
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `name` | string | sí | e.g. IVA, State tax |
+| `rate` | decimal | sí | 0.16 |
+| `amount` | decimal | sí |  |
+| `jurisdiction` | string |  |  |
+
+### TrackingEvent
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `at` | string | sí | RFC 3339 timestamp |
+| `status` | string: created \| picked_up \| in_transit \| out_for_delivery \| delivered \| exception \| returned \| cancelled | sí |  |
+| `description` | string |  | carrier wording |
+| `location` | string |  |  |
+
+## Contratos
+
+### `commerce.discounts.evaluate`
+
+every discount engine proposes adjustments for a cart. Consulta · cardinalidad **all** · tiempo límite por proveedor **2s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `currency` | currency | sí |  |
+| `lines` | array<Line> | sí |  |
+| `codes` | array<string> |  | coupon codes entered by the buyer |
+| `buyer` | Buyer |  |  |
+| `subtotal` | decimal |  |  |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `discounts` | array<object> | sí |  |
+| `discounts[].id` | string | sí |  |
+| `discounts[].title` | string | sí |  |
+| `discounts[].amount` | decimal | sí | total discount |
+| `discounts[].currency` | currency | sí |  |
+| `discounts[].code` | string |  | coupon code that produced it |
+| `discounts[].line_id` | string |  | line it applies to; absent = order level |
+| `discounts[].combinable` | boolean |  |  |
+| `rejected_codes` | array<object> |  |  |
+| `rejected_codes[].code` | string | sí |  |
+| `rejected_codes[].reason` | string |  |  |
+
+### `commerce.fulfillment.cancel`
+
+cancel a fulfillment that has not shipped. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `fulfillment_id` | string | sí |  |
+| `order_ref` | string |  |  |
+| `reason` | string |  |  |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `status` | string: cancelled \| rejected | sí |  |
+| `message` | string |  | why it could not be cancelled |
+
+### `commerce.fulfillment.create`
+
+send an order to a warehouse / 3PL for picking and shipping. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `order_ref` | string | sí |  |
+| `items` | array<ShipItem> | sí |  |
+| `destination` | Address | sí |  |
+| `service_level` | string |  | standard / express / … or a rate id |
+| `carrier` | string |  |  |
+| `warehouse` | string |  | provider warehouse code |
+| `buyer` | Buyer |  |  |
+| `declared_value` | decimal |  |  |
+| `currency` | currency |  |  |
+| `notes` | string |  |  |
+| `idempotency_key` | string |  |  |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `fulfillment_id` | string | sí |  |
+| `status` | string: accepted \| on_hold \| rejected | sí |  |
+| `warehouse` | string |  |  |
+| `tracking_number` | string |  |  |
+| `carrier` | string |  |  |
+| `tracking_url` | string |  |  |
+| `message` | string |  | reason when on_hold/rejected |
+
+### `commerce.payments.confirm`
+
+verify and normalize a provider webhook/notification into a payment status. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `payload` | any | sí | webhook body (decoded JSON, or the raw string) |
+| `headers` | object |  | request headers, lowercase keys (signature verification) |
+| `query` | object |  | query-string parameters |
+| `raw_body` | string |  | exact body bytes as text, when the signature covers them |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `order_ref` | string | sí | the order_ref sent to commerce.payments.session |
+| `status` | string: pending \| requires_action \| authorized \| paid \| failed \| cancelled \| expired \| refunded \| partially_refunded | sí |  |
+| `amount` | decimal | sí | amount of this status (paid/refunded) |
+| `currency` | currency | sí |  |
+| `provider_ref` | string | sí | provider payment id |
+| `event_id` | string |  | provider event id (dedupe on provider+event_id) |
+| `kind` | string: payment \| refund \| dispute |  | default payment |
+| `method` | string |  | card / msi / oxxo / spei / wallet / bnpl / bank_transfer / cash |
+| `installments` | integer |  |  |
+| `paid_at` | string |  | RFC 3339 |
+| `occurred_at` | string |  | RFC 3339 |
+| `amount_refunded` | decimal |  |  |
+| `fee` | decimal |  | provider fee |
+| `net_amount` | decimal |  | amount minus fee |
+| `test_mode` | boolean |  | event from the provider sandbox |
+
+### `commerce.payments.refund`
+
+refund (fully or partially) a captured payment. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `provider_ref` | string | sí | provider payment id |
+| `amount` | decimal | sí |  |
+| `currency` | currency | sí |  |
+| `order_ref` | string |  |  |
+| `reason` | string |  |  |
+| `idempotency_key` | string |  |  |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `refund_id` | string | sí |  |
+| `status` | string: pending \| succeeded \| failed \| manual_required | sí | manual_required: cash/BNPL refunds the merchant settles by hand |
+| `amount` | decimal | sí |  |
+| `currency` | currency | sí |  |
+| `instructions` | string |  | what the merchant must do when manual_required |
+
+### `commerce.payments.session`
+
+create a payment session (checkout/preference/intent) for an order. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `order_ref` | string | sí | order id/number in OPS (external_reference) |
+| `amount` | decimal | sí | total to charge |
+| `currency` | currency | sí |  |
+| `return_url` | string | sí | where the buyer lands after paying |
+| `cancel_url` | string |  |  |
+| `notify_url` | string |  | webhook URL the host exposes for commerce.payments.confirm |
+| `buyer` | Buyer |  |  |
+| `methods` | array<string> |  | allowed method families: card / msi / oxxo / spei / wallet / bnpl / bank_transfer / cash |
+| `method_hint` | string |  | preselected method family |
+| `breakdown` | object |  | amount components (all decimals) |
+| `breakdown.subtotal` | decimal |  |  |
+| `breakdown.shipping` | decimal |  |  |
+| `breakdown.discount` | decimal |  |  |
+| `breakdown.tax` | decimal |  |  |
+| `shipping_address` | Address |  |  |
+| `market` | string |  | market code the order was placed in |
+| `lines` | array<Line> |  |  |
+| `description` | string |  | statement / title |
+| `installments` | integer |  | max interest-free installments (MSI) |
+| `expires_at` | string |  | RFC 3339 |
+| `idempotency_key` | string |  |  |
+| `metadata` | object |  |  |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `session_id` | string | sí | provider session/preference/intent id |
+| `status` | string: created \| pending \| requires_action \| authorized \| paid \| failed | sí |  |
+| `action_type` | string: redirect \| embed \| voucher \| none |  | what the storefront does next |
+| `redirect_url` | string |  | hosted checkout URL |
+| `client_secret` | string |  | token for an embedded (iframe) widget |
+| `embed_url` | string |  | isolated iframe URL |
+| `expires_at` | string |  | RFC 3339 |
+| `provider_ref` | string |  | payment id when known already |
+| `instructions` | object |  | offline payment instructions (OXXO reference, SPEI CLABE, barcode_url, deadline) |
+| `test_mode` | boolean |  | session created against the provider sandbox |
+
+### `commerce.payments.status`
+
+poll a payment's normalized status (return-URL fallback, reconciliation); same output as confirm. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `provider_ref` | string |  | provider payment/order id |
+| `order_ref` | string |  | lookup by external reference when provider_ref is unknown |
+| `session_id` | string |  |  |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `order_ref` | string | sí | the order_ref sent to commerce.payments.session |
+| `status` | string: pending \| requires_action \| authorized \| paid \| failed \| cancelled \| expired \| refunded \| partially_refunded | sí |  |
+| `amount` | decimal | sí | amount of this status (paid/refunded) |
+| `currency` | currency | sí |  |
+| `provider_ref` | string | sí | provider payment id |
+| `event_id` | string |  | provider event id (dedupe on provider+event_id) |
+| `kind` | string: payment \| refund \| dispute |  | default payment |
+| `method` | string |  | card / msi / oxxo / spei / wallet / bnpl / bank_transfer / cash |
+| `installments` | integer |  |  |
+| `paid_at` | string |  | RFC 3339 |
+| `occurred_at` | string |  | RFC 3339 |
+| `amount_refunded` | decimal |  |  |
+| `fee` | decimal |  | provider fee |
+| `net_amount` | decimal |  | amount minus fee |
+| `test_mode` | boolean |  | event from the provider sandbox |
+
+### `commerce.search.query`
+
+product search / suggestions (hot path: providers should answer from an index, not per-keystroke WASM). Consulta · cardinalidad **one** · tiempo límite por proveedor **2s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `q` | string |  | free text; empty = browse |
+| `filters` | object |  | facet -> value(s) |
+| `sort` | string |  | relevance / price_asc / price_desc / newest / … |
+| `limit` | integer |  |  |
+| `cursor` | string |  |  |
+| `locale` | string |  |  |
+| `collection` | string |  | restrict to a collection/category handle |
+| `suggest` | boolean |  | type-ahead mode |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `hits` | array<object> | sí |  |
+| `hits[].id` | string | sí | product id |
+| `hits[].handle` | string |  |  |
+| `hits[].title` | string |  |  |
+| `hits[].variant_id` | string |  |  |
+| `hits[].score` | number |  |  |
+| `hits[].highlight` | object |  | field -> highlighted snippet |
+| `total_hits` | integer |  | total matches (may be an estimate) |
+| `next_cursor` | string |  |  |
+| `facets` | array<object> |  |  |
+| `facets[].field` | string | sí |  |
+| `facets[].values` | array<object> | sí |  |
+| `facets[].values[].value` | string | sí |  |
+| `facets[].values[].count` | integer | sí |  |
+| `suggestions` | array<string> |  | query completions |
+
+### `commerce.shipping.cancel`
+
+void a label / cancel a shipment not yet picked up. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `shipment_id` | string | sí |  |
+| `tracking_number` | string |  |  |
+| `order_ref` | string |  |  |
+| `reason` | string |  |  |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `status` | string: cancelled \| rejected | sí |  |
+| `refund_amount` | decimal |  | label cost credited back |
+| `currency` | currency |  |  |
+| `message` | string |  | why it could not be cancelled |
+
+### `commerce.shipping.label`
+
+buy a label for a quoted rate. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `rate_id` | string | sí | id of a commerce.shipping.rates rate from this provider |
+| `order_ref` | string | sí |  |
+| `origin` | Address |  |  |
+| `destination` | Address |  |  |
+| `parcels` | array<Parcel> |  |  |
+| `items` | array<ShipItem> |  |  |
+| `declared_value` | decimal |  |  |
+| `currency` | currency |  |  |
+| `label_format` | string: pdf \| zpl \| png |  |  |
+| `label_size` | string |  | 4x6 / letter |
+| `cod_amount` | decimal |  |  |
+| `idempotency_key` | string |  | stable per shipment; a duplicate label costs money |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `label_status` | string: created \| label_pending | sí | label_pending resolves by webhook/poll; tracking_number and label_url are set once created |
+| `carrier` | string | sí |  |
+| `tracking_number` | string |  |  |
+| `label_url` | string |  |  |
+| `shipment_id` | string |  |  |
+| `label_format` | string |  |  |
+| `tracking_url` | string |  |  |
+| `cost` | decimal |  |  |
+| `currency` | currency |  |  |
+| `status` | string: created \| picked_up \| in_transit \| out_for_delivery \| delivered \| exception \| returned \| cancelled |  | tracking status |
+
+### `commerce.shipping.rates`
+
+quote delivery options; every eligible carrier addon answers in parallel. Consulta · cardinalidad **all** · tiempo límite por proveedor **4s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `origin` | Address | sí |  |
+| `destination` | Address | sí |  |
+| `parcels` | array<Parcel> | sí |  |
+| `currency` | currency | sí | currency of declared_value and of the wanted rates |
+| `declared_value` | decimal |  | insured / declared value |
+| `cod_amount` | decimal |  | cash on delivery to collect |
+| `items` | array<ShipItem> |  |  |
+| `order_ref` | string |  | cart/order id |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `rates` | array<object> | sí |  |
+| `rates[].id` | string | sí | opaque rate id, passed to commerce.shipping.label |
+| `rates[].carrier` | string | sí | e.g. fedex, estafeta, dhl, local |
+| `rates[].service` | string | sí | human service name |
+| `rates[].cost` | decimal | sí | price to the buyer |
+| `rates[].currency` | currency | sí |  |
+| `rates[].service_code` | string |  |  |
+| `rates[].eta_days_min` | integer |  |  |
+| `rates[].eta_days_max` | integer |  |  |
+| `rates[].pickup` | boolean |  | store/branch pickup option |
+| `rates[].delivery_type` | string: door \| branch \| same_day \| on_demand \| pickup |  |  |
+| `rates[].taxes_included` | boolean |  | cost already includes VAT/IVA |
+| `rates[].expires_at` | string |  | RFC 3339 |
+
+### `commerce.shipping.track`
+
+normalized tracking of a shipment. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `tracking_number` | string | sí |  |
+| `carrier` | string |  |  |
+| `shipment_id` | string |  |  |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `status` | string: created \| picked_up \| in_transit \| out_for_delivery \| delivered \| exception \| returned \| cancelled | sí |  |
+| `carrier` | string |  |  |
+| `tracking_url` | string |  |  |
+| `eta` | string |  | RFC 3339 date |
+| `delivered_at` | string |  | RFC 3339 |
+| `events` | array<TrackingEvent> |  | newest first |
+
+### `commerce.tax.calculate`
+
+compute taxes for cart lines and shipping. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `currency` | currency | sí |  |
+| `lines` | array<Line> | sí |  |
+| `ship_to` | Address |  |  |
+| `ship_from` | Address |  |  |
+| `shipping_amount` | decimal |  | shipping charged to the buyer |
+| `prices_include_tax` | boolean |  | unit prices already include tax |
+| `customer` | Buyer |  |  |
+| `order_ref` | string |  |  |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `currency` | currency | sí |  |
+| `tax_included` | boolean | sí | true when line prices already contain the tax |
+| `total_tax` | decimal | sí |  |
+| `lines` | array<object> | sí |  |
+| `lines[].id` | string | sí | input line id |
+| `lines[].tax` | decimal | sí | tax amount of the line |
+| `lines[].taxable_amount` | decimal |  |  |
+| `lines[].breakdown` | array<TaxLine> |  |  |
+| `shipping_tax` | decimal |  |  |
+| `calculation_id` | string |  | provider calculation id, passed to commerce.tax.commit |
+
+### `commerce.tax.commit`
+
+record the taxes of a paid order with the provider (no-op for stateless providers). Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `order_ref` | string | sí |  |
+| `calculation_id` | string |  |  |
+| `currency` | currency |  |  |
+| `lines` | array<Line> |  |  |
+| `total_tax` | decimal |  |  |
+| `ship_to` | Address |  |  |
+| `paid_at` | string |  | RFC 3339 |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `status` | string: committed \| skipped | sí |  |
+| `transaction_id` | string |  |  |
+
+### `commerce.tax.reverse`
+
+reverse (fully or partially) a committed tax transaction after a refund/return. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `order_ref` | string | sí |  |
+| `transaction_id` | string |  |  |
+| `lines` | array<Line> |  | partial reversal; absent = full |
+| `amount` | decimal |  |  |
+| `currency` | currency |  |  |
+| `reason` | string |  |  |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `status` | string: reversed \| skipped | sí |  |
+| `transaction_id` | string |  |  |
+
+### `fiscal.invoice.cancel`
+
+cancel an issued fiscal invoice. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `invoice_id` | string | sí |  |
+| `reason` | string |  | e.g. SAT motivo 01 / 02 / 03 / 04 |
+| `substitution_id` | string |  | replacing invoice fiscal_uuid (motivo 01) |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `status` | string: cancelled \| pending \| rejected | sí |  |
+| `message` | string |  |  |
+
+### `fiscal.invoice.create`
+
+issue a fiscal invoice for an order (CFDI 4.0 in MX via the fiscal_mexico family). Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `order_ref` | string | sí |  |
+| `currency` | currency | sí |  |
+| `customer` | object | sí |  |
+| `customer.tax_id` | string | sí | RFC / VAT id |
+| `customer.name` | string | sí | legal name |
+| `customer.email` | string |  |  |
+| `customer.postal_code` | string |  | fiscal domicile postal code |
+| `customer.tax_regime` | string |  | e.g. SAT régimen fiscal |
+| `customer.use` | string |  | e.g. SAT uso CFDI |
+| `customer.country` | country |  |  |
+| `lines` | array<object> | sí |  |
+| `lines[].id` | string | sí |  |
+| `lines[].description` | string | sí |  |
+| `lines[].quantity` | decimal | sí | decimal: fiscal quantities can be fractional |
+| `lines[].unit_price` | decimal | sí | before tax |
+| `lines[].discount` | decimal |  |  |
+| `lines[].product_code` | string |  | fiscal product key (SAT ClaveProdServ) |
+| `lines[].unit_code` | string |  | fiscal unit key (SAT ClaveUnidad) |
+| `lines[].sku` | string |  |  |
+| `lines[].taxes` | array<TaxLine> |  |  |
+| `payment_form` | string |  | e.g. SAT forma de pago (04, 03, 01) |
+| `payment_method` | string |  | e.g. PUE / PPD |
+| `series` | string |  |  |
+| `subtotal` | decimal |  |  |
+| `total` | decimal |  |  |
+| `issued_at` | string |  | RFC 3339 |
+| `notes` | string |  |  |
+| `idempotency_key` | string |  |  |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `invoice_id` | string | sí | provider id |
+| `status` | string: issued \| pending \| failed | sí |  |
+| `fiscal_uuid` | string |  | folio fiscal (CFDI UUID) |
+| `series` | string |  |  |
+| `folio` | string |  |  |
+| `total` | decimal |  |  |
+| `currency` | currency |  |  |
+| `pdf_url` | string |  |  |
+| `xml_url` | string |  |  |
+| `message` | string |  | authority/provider message when failed |
+
+## Pendiente / decisiones abiertas
+
+- `commerce.payments.confirm` devuelve una sola actualización normalizada. Los
+  webhooks de temas ajenos los rechaza el proveedor con error; la forma del
+  acuse por proveedor (Kueski/Aplazo/Openpay) y varias actualizaciones por
+  webhook quedan para el contrato de webhooks entrantes (K3).
+- `commerce.shipping.label` con `label_status = created` debe traer
+  `tracking_number` y `label_url`; hoy es convención documentada, no se valida
+  condicionalmente.
+- Sin contrato aún: `commerce.shipping.pickup`, `commerce.fulfillment.inventory.sync`,
+  `marketing.events`, `marketing.feed`.
+- Función de host WASM para que un addon invitado llame `Querier.Query`
+  (`capability_query`): pendiente en `runtime/wasm`.

@@ -51,6 +51,24 @@ func (f DomainResolverFunc) ResolveDomain(ctx context.Context, domain string) (u
 	return f(ctx, domain)
 }
 
+// MarketResolver maps a request domain of an organization to one of its
+// markets (H13: godsnutrition.mx → "mx", godsnutrition.com → "us"). The host
+// implements it over its market/domain registry (and may also honour a path
+// prefix such as /us before calling Handle). Return "" for "no market": the
+// request then runs at organization level and capability resolution falls
+// back to the org-level provider selection.
+type MarketResolver interface {
+	ResolveMarket(ctx context.Context, orgID uuid.UUID, domain string) (string, error)
+}
+
+// MarketResolverFunc adapts a function to MarketResolver.
+type MarketResolverFunc func(ctx context.Context, orgID uuid.UUID, domain string) (string, error)
+
+// ResolveMarket implements MarketResolver.
+func (f MarketResolverFunc) ResolveMarket(ctx context.Context, orgID uuid.UUID, domain string) (string, error) {
+	return f(ctx, orgID, domain)
+}
+
 // Inbound is a transport-neutral HTTP request handed to Gateway.Handle.
 type Inbound struct {
 	// Method is the HTTP method.
@@ -82,6 +100,7 @@ type Gateway struct {
 	enabled    AddonEnabledFunc
 	reqHeaders map[string]struct{}
 	domains    DomainResolver
+	markets    MarketResolver
 	log        *slog.Logger
 }
 
@@ -111,6 +130,13 @@ func WithAddonEnabled(f AddonEnabledFunc) Option {
 // that already carries an organization is never re-scoped by the domain.
 func WithDomainResolver(d DomainResolver) Option {
 	return func(g *Gateway) { g.domains = d }
+}
+
+// WithMarketResolver lets Handle fill a missing Principal.Market from
+// Inbound.Domain once the organization is known. A principal that already
+// carries a market (a token bound to one) is never re-scoped by the domain.
+func WithMarketResolver(m MarketResolver) Option {
+	return func(g *Gateway) { g.markets = m }
 }
 
 // WithRequestHeaders adds request headers (case-insensitive) to the
@@ -194,6 +220,16 @@ func (g *Gateway) Handle(ctx context.Context, in Inbound) (Response, error) {
 		}
 		p.OrgID = org
 		in.Principal = p
+	}
+	if p.Market == "" && g.markets != nil {
+		if domain := strings.ToLower(strings.TrimSpace(in.Domain)); domain != "" {
+			market, err := g.markets.ResolveMarket(ctx, p.OrgID, domain)
+			if err != nil {
+				return Response{}, fmt.Errorf("apiroute: market of domain %q: %w", domain, err)
+			}
+			p.Market = strings.TrimSpace(market)
+			in.Principal = p
+		}
 	}
 	if g.enabled != nil {
 		on, err := g.enabled(ctx, p.OrgID, route.Addon)
@@ -300,6 +336,7 @@ func (g *Gateway) buildRequest(route Route, params map[string]string, in Inbound
 		RawBody: encodeRawBody(in.Body),
 		Auth:    auth,
 		Org:     p.OrgID,
+		Market:  p.Market,
 	}
 }
 

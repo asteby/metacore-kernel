@@ -151,12 +151,18 @@ type Manifest struct {
 // Input maps the provider handler's payload fields from the contract input
 // (payload.<contract field>) or constants; unmapped contract fields are passed
 // through under their own names.
+//
+// Countries optionally restricts the provider to markets selling in those
+// ISO 3166-1 alpha-2 countries (a CFDI provider declares ["MX"]); empty =
+// any country. The host resolves a capability per (org, market, capability):
+// see capability.Select.
 type ProvidedCapability struct {
 	Key         string            `json:"key"`
 	Label       string            `json:"label,omitempty"`
 	Description string            `json:"description,omitempty"`
 	Handler     Handler           `json:"handler"`
 	Input       map[string]string `json:"input,omitempty"`
+	Countries   []string          `json:"countries,omitempty"`
 }
 
 // Runtime declares addon-owned executable services. The wrapper is
