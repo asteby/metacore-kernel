@@ -2,9 +2,11 @@ package manifest
 
 import (
 	"fmt"
+	"regexp"
 	"runtime/debug"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -217,15 +219,50 @@ func HostRuntimeVersion() string {
 	return ""
 }
 
-// normalizeModuleVersion strips the "v" and rejects pseudo / devel versions
-// that are not a real release ("(devel)", "").
+// normalizeModuleVersion strips the "v", rejects devel versions ("(devel)",
+// "") and maps a Go pseudo-version to the release it is built on top of, so a
+// host pinned to an untagged kernel commit still satisfies ">=x" ranges.
+//
+// Go pseudo-versions come in three shapes (go.dev/ref/mod#pseudo-versions):
+//
+//	vX.Y.(Z+1)-0.yyyymmddhhmmss-abcdef123456   commit after release vX.Y.Z
+//	vX.Y.Z-pre.0.yyyymmddhhmmss-abcdef123456   commit after prerelease vX.Y.Z-pre
+//	vX.0.0-yyyymmddhhmmss-abcdef123456         no tag reachable
+//
+// Semver orders all of them as prereleases of their core version, which fails
+// every ">=" range. The first shape is reported as vX.Y.Z (the base release:
+// the code contains it and more); the second as its base prerelease; the
+// third has no release to report and returns "".
 func normalizeModuleVersion(v string) string {
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
 	if v == "" || strings.HasPrefix(v, "(") {
 		return ""
 	}
-	return v
+	m := pseudoVersionRe.FindStringSubmatch(v)
+	if m == nil {
+		return v
+	}
+	core, pre := m[1], m[2]
+	switch {
+	case pre == "" && m[3] == "":
+		// vX.0.0-<ts>-<hash>: no tagged ancestor.
+		return ""
+	case pre != "":
+		// vX.Y.Z-pre.0.<ts>-<hash>: built on prerelease vX.Y.Z-pre.
+		return core + "-" + pre
+	}
+	// vX.Y.(Z+1)-0.<ts>-<hash>: built on release vX.Y.Z.
+	parts := strings.Split(core, ".")
+	patch, err := strconv.Atoi(parts[2])
+	if err != nil || patch == 0 {
+		return ""
+	}
+	return parts[0] + "." + parts[1] + "." + strconv.Itoa(patch-1)
 }
+
+// pseudoVersionRe captures (core, prerelease-before-".0.", "0." marker) of a Go
+// pseudo-version whose timestamp is 14 digits and hash 12 hex characters.
+var pseudoVersionRe = regexp.MustCompile(`^(\d+\.\d+\.\d+)-(?:([0-9A-Za-z.-]+?)\.0\.|(0\.))?\d{14}-[0-9a-f]{12}$`)
 
 // CheckRuntime returns an install-blocking error when the manifest declares a
 // Runtime range (compatibility.requires "metacore-kernel") the host release

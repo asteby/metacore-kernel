@@ -57,7 +57,7 @@ func New(cfg Config) (*Host, error) {
 	inst := installer.New(cfg.DB, cfg.KernelVersion)
 	inst.HookRunner = cfg.HookRunner
 	inst.DynamicHooks = cfg.DynamicHooks
-	if err := cfg.DB.AutoMigrate(&installer.Installation{}); err != nil {
+	if err := installer.EnsureSchema(cfg.DB); err != nil {
 		return nil, err
 	}
 	return &Host{

@@ -9,6 +9,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **manifest: un host fijado a un commit sin etiqueta cumple los rangos de
+  runtime** — `HostRuntimeVersion` reportaba la pseudoversión de Go
+  (`0.203.2-0.20261016164255-…`), que semver ordena como prerelease y falla
+  todo `>=x`: ninguna instalación con `runtime` pasaba. Ahora se reporta la
+  versión base sobre la que se construyó el commit (`0.203.1`); una
+  pseudoversión sin etiqueta ancestra sigue sin poder demostrarse.
+- **installer: `EnsureSchema` al arrancar** — la columna `last_error` se
+  agregaba con DDL dentro de la primera instalación; en hosts con
+  `PrepareStmt` cada conexión del pool conservaba el plan viejo y toda
+  instalación posterior fallaba con `cached plan must not change result type`
+  hasta reiniciar. `installer.EnsureSchema` (tabla, índice único y columna)
+  corre una vez al arrancar; `host.New` la usa y los hosts que arman su propio
+  `Installer` deben llamarla.
+
 - **agent/claude: no enviar temperature/top_p a Claude 5.x** — langchaingo
   serializa `temperature` siempre (y `top_p` si no es cero) y los modelos Claude
   de generación ≥5 responden 400 (`'temperature' is deprecated`). Nuevo

@@ -155,6 +155,24 @@ const installationOrgAddonIndex = "uq_metacore_installations_org_addon"
 // (not its name) are what ON CONFLICT matches, so any unique index over exactly
 // these two columns satisfies the clause. Table name and columns are trusted
 // literals — no injection surface.
+// EnsureSchema creates or upgrades metacore_installations: the table, the
+// composite unique index the idempotent upsert needs, and the best-effort
+// last_error column. Hosts call it ONCE at boot, before serving installs
+// (host.New does; hosts that build an Installer themselves call it). Running this DDL lazily during the first Install
+// instead breaks hosts that use prepared statements (gorm PrepareStmt): every
+// pooled connection keeps a plan prepared against the old row shape and fails
+// with "cached plan must not change result type" until a restart.
+func EnsureSchema(db *gorm.DB) error {
+	if err := db.AutoMigrate(&Installation{}); err != nil {
+		return err
+	}
+	if err := ensureInstallationUniqueIndex(db); err != nil {
+		return fmt.Errorf("ensure installation unique index: %w", err)
+	}
+	ensureLastErrorColumn(db)
+	return nil
+}
+
 func ensureInstallationUniqueIndex(db *gorm.DB) error {
 	tbl := (Installation{}).TableName()
 	switch db.Dialector.Name() {

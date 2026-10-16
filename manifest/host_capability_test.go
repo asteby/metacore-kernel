@@ -129,3 +129,29 @@ func TestEvaluateCompatibility_MultipleIssuesOrderedDeterministically(t *testing
 		t.Fatalf("unexpected Reasons(): %v", reasons)
 	}
 }
+
+func TestNormalizeModuleVersion_PseudoVersions(t *testing.T) {
+	cases := map[string]string{
+		"v0.203.1":                               "0.203.1",
+		"v1.4.0-rc.1":                            "1.4.0-rc.1",
+		"(devel)":                                "",
+		"":                                       "",
+		"v0.203.2-0.20261016164255-ca5563ec1d19": "0.203.1", // commit after v0.203.1
+		"v1.5.0-rc.2.0.20261016164255-ca5563ec1d19": "1.5.0-rc.2",
+		"v0.0.0-20261016164255-ca5563ec1d19":        "", // no tagged ancestor
+	}
+	for in, want := range cases {
+		if got := normalizeModuleVersion(in); got != want {
+			t.Errorf("normalizeModuleVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A host pinned to an untagged kernel commit must satisfy ">=" ranges of the
+// release it is built on (it used to be ordered as a prerelease and fail).
+func TestCheckRuntime_HostOnPseudoVersion(t *testing.T) {
+	m := &Manifest{Runtime: ">=0.182.0"}
+	if err := m.CheckRuntime(normalizeModuleVersion("v0.203.2-0.20261016164255-ca5563ec1d19")); err != nil {
+		t.Fatalf("CheckRuntime on a pseudo-version host: %v", err)
+	}
+}
