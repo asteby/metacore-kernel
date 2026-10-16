@@ -19,6 +19,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **host: cableado opcional de tokens de API y gateway de addons** —
+  `AppConfig.EnableAPITokens` (+ `APITokenOptions`) construye `app.APITokens`,
+  crea `metacore_api_tokens` y monta la administración en `/api-tokens` tras
+  el JWT; `AppConfig.APIGateway` (+ `APIGatewayFallback`,
+  `APIGatewayLimiter`) monta el gateway de `runtime/apiroute` en `/gw`,
+  resolviendo el principal por token Bearer. Desactivado por omisión.
+
 - **apitoken: tokens de API con alcances** — paquete nuevo (tabla
   `metacore_api_tokens`, `Migrate`) con tres tipos: `publishable` (`pk_`,
   apto para navegador; solo alcances de la lista permitida,

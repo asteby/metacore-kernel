@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/asteby/metacore-kernel/apitoken"
 	"github.com/asteby/metacore-kernel/auth"
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
@@ -26,6 +27,7 @@ import (
 	"github.com/asteby/metacore-kernel/outbox"
 	"github.com/asteby/metacore-kernel/permission"
 	"github.com/asteby/metacore-kernel/push"
+	"github.com/asteby/metacore-kernel/runtime/apiroute"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/asteby/metacore-kernel/validate"
 	"github.com/asteby/metacore-kernel/vector"
@@ -158,6 +160,35 @@ type AppConfig struct {
 	// defaults to AppConfig.Logger.
 	OutboxConfig outbox.Config
 
+	// EnableAPITokens builds `app.APITokens` (package apitoken: scoped
+	// pk_/sk_/pt_ tokens over the `metacore_api_tokens` table, created at
+	// boot — the DDL is idempotent) and mounts the staff management routes
+	// at /api-tokens behind the JWT middleware (list / issue / rotate /
+	// revoke, scoped to the caller's organization). Off by default.
+	EnableAPITokens bool
+
+	// APITokenOptions tune app.APITokens (e.g.
+	// apitoken.WithPublishableScopes) when EnableAPITokens is true.
+	APITokenOptions []apitoken.Option
+
+	// APIGateway, when set, is mounted at /gw (outside the JWT middleware)
+	// to serve addon API routes (contributions.api; see runtime/apiroute).
+	// The host builds it — router, wasm dispatcher, domain resolver — since
+	// those depend on its runtime. With EnableAPITokens the principal comes
+	// from the Bearer API token; requests without one go to
+	// APIGatewayFallback (customer session, staff, …) or are anonymous.
+	APIGateway *apiroute.Gateway
+
+	// APIGatewayFallback resolves gateway requests that carry no API token.
+	// nil = anonymous (organization resolved by domain, if the gateway has a
+	// DomainResolver).
+	APIGatewayFallback apiroute.PrincipalResolver
+
+	// APIGatewayLimiter overrides the per-token rate limiter (default: an
+	// in-process apitoken.MemoryLimiter). Multi-replica hosts plug a shared
+	// one.
+	APIGatewayLimiter apitoken.Limiter
+
 	// EventsEnforcer is the optional security.Enforcer the in-process
 	// events.Bus consults for `event:emit` / `event:subscribe` capability
 	// checks. nil disables enforcement — appropriate for tests and bring-up
@@ -284,6 +315,10 @@ type App struct {
 	// AppConfig.EnableOutbox was true; workers start on Outbox.Start.
 	Outbox *outbox.Service
 
+	// APITokens is the scoped API token service. Non-nil iff
+	// AppConfig.EnableAPITokens was true.
+	APITokens *apitoken.Service
+
 	// translations holds the model catalogs merged at RegisterModel
 	// (DefineTranslations / WithTranslations) and AddTranslations.
 	translations *i18n.Catalog
@@ -299,6 +334,8 @@ type App struct {
 	pushHandler         *push.Handler
 	marketplaceHandler  *marketplace.Handler
 	webhooksHandler *webhooks.Handler
+	apiTokenHandler *apitoken.Handler
+	gatewayHandler  *apiroute.Handler
 }
 
 // NewApp wires the default stack: auth + metadata + dynamic (+ optional
@@ -522,6 +559,27 @@ func NewApp(cfg AppConfig) *App {
 		a.Outbox = ob
 	}
 
+	if cfg.EnableAPITokens {
+		if err := apitoken.Migrate(context.Background(), cfg.DB); err != nil {
+			panic("host: " + err.Error())
+		}
+		a.APITokens = apitoken.NewService(apitoken.NewGormStore(cfg.DB), cfg.APITokenOptions...)
+		a.apiTokenHandler = apitoken.NewHandler(a.APITokens, func(c fiber.Ctx) (uuid.UUID, uuid.UUID, error) {
+			return auth.GetOrganizationID(c), auth.GetUserID(c), nil
+		})
+	}
+
+	if cfg.APIGateway != nil {
+		resolve := cfg.APIGatewayFallback
+		if a.APITokens != nil {
+			resolve = apitoken.NewPrincipalResolver(a.APITokens, apitoken.ResolverConfig{
+				Limiter:  cfg.APIGatewayLimiter,
+				Fallback: cfg.APIGatewayFallback,
+			})
+		}
+		a.gatewayHandler = apiroute.NewHandler(cfg.APIGateway, resolve)
+	}
+
 	if cfg.EnableMarketplace {
 		mh, err := marketplace.NewHandler(cfg.DB)
 		if err != nil {
@@ -659,6 +717,13 @@ func (a *App) Mount(r fiber.Router) fiber.Router {
 		r.Get("/metrics", metrics.Handler(a.Metrics))
 	}
 
+	// Addon API gateway — public surface, authenticated per route by the
+	// gateway itself (API token / fallback principal), so it is mounted
+	// before the JWT group.
+	if a.gatewayHandler != nil {
+		a.gatewayHandler.Mount(r.Group("/gw"))
+	}
+
 	mw := auth.Middleware(auth.MiddlewareConfig{
 		Secret:  a.Config.JWTSecret,
 		Skipper: a.Config.AuthMiddlewareSkipper,
@@ -687,6 +752,9 @@ func (a *App) Mount(r fiber.Router) fiber.Router {
 	}
 	if a.webhooksHandler != nil {
 		a.webhooksHandler.Mount(api.Group("/webhooks"))
+	}
+	if a.apiTokenHandler != nil {
+		a.apiTokenHandler.Mount(api.Group("/api-tokens"))
 	}
 
 	// WebSocket — mounted with query-string auth (token in ?token=)
