@@ -19,6 +19,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **runtime/apiroute: rutas de API de addons (`contributions.api`)** — nuevo
+  bloque del manifiesto v3 (`key`, `method` GET|POST|PUT|PATCH|DELETE, `path`
+  con `:param` y `*resto` final, `auth` none|token|customer|staff, `scopes`
+  `area:verbo`, `cache` {`max_age`, `swr`, `private`} solo en GET y
+  `do` `wasm:`/`compiled:`), validado en `manifest/v3` (gramática de ruta
+  exportada como `ParseAPIPath`/`APIPathShape`) y proyectado por `FromV3` a
+  `Manifest.APIRoutes`. El paquete `runtime/apiroute` aporta `Router`
+  (registro atómico por addon con detección de conflictos entre addons,
+  precedencia determinista estático > parámetro > comodín), los sobres
+  `Request`/`Response` (`DecodeResponse`), la interfaz `Dispatcher` para el
+  runtime del host y `Gateway.Handle`: autorización por tipo de principal y
+  alcances, cabeceras en lista blanca (entrada y salida), `Cache-Control`
+  derivado de la política de la ruta (`no-store` por omisión), ETag débil e
+  `If-None-Match` → 304, límite de cuerpo (1 MiB, `WithMaxBodyBytes`),
+  `WithAddonEnabled` y errores tipados mapeados por `ErrorResponse` a
+  `{"error":{"code","message"}}`. Adaptador Fiber opcional (`NewHandler`,
+  `PrincipalResolver`). Puramente aditivo.
+
 - **provenance: procedencia de primera clase** — paquete `provenance` con
   `Provenance` (`actor_kind` human|agent|system|integration, `actor_id`,
   `on_behalf_of`, `authorized_by`/`authorized_at`, `via`, `origin`, `ref`,
