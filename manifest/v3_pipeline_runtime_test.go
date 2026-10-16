@@ -132,3 +132,46 @@ func TestValidate_Runtime_Rejections(t *testing.T) {
 		})
 	}
 }
+
+// addonVerifiedWebhook swaps the hmac route for a payment-style route the addon
+// verifies itself: verify "addon", no secret_ref, extra headers.
+func addonVerifiedWebhook(s string) string {
+	return strings.Replace(s, `"verify": "hmac-sha256",
+      "secret_ref": "github.webhook_secret",`, `"verify": "addon",
+      "headers": ["x-acme-signature", "x-acme-*"],`, 1)
+}
+
+func TestWebhook_AddonVerify_AcceptedBothSurfaces(t *testing.T) {
+	raw := addonVerifiedWebhook(runtimeManifestJSON)
+	m, err := v3.Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("v3.Parse rejected verify=addon: %v", err)
+	}
+	out := manifest.FromV3(m)
+	w := out.Webhooks[0]
+	if w.Verify != "addon" || w.SecretRef != "" || len(w.Headers) != 2 || w.Headers[1] != "x-acme-*" {
+		t.Fatalf("mapped webhook = %+v", w)
+	}
+	if err := out.Validate("3.5.0"); err != nil {
+		t.Fatalf("strict validate rejected verify=addon: %v", err)
+	}
+	// A secret_ref on an addon route is optional but still validated.
+	out.Webhooks[0].SecretRef = "github.nope"
+	if err := out.Validate("3.5.0"); err == nil || !strings.Contains(err.Error(), "credential") {
+		t.Fatalf("addon secret_ref not validated: %v", err)
+	}
+}
+
+func TestWebhook_Headers_Rejections(t *testing.T) {
+	for _, bad := range []string{`"*"`, `"X-Upper"`, `"cookie"`, `"a b"`} {
+		raw := strings.Replace(addonVerifiedWebhook(runtimeManifestJSON), `"x-acme-signature"`, bad, 1)
+		if err := v3.Validate([]byte(raw)); err == nil {
+			t.Fatalf("headers %s accepted", bad)
+		}
+		var def manifest.InboundWebhookDef
+		def.Headers = []string{strings.Trim(bad, `"`)}
+		if msg := v3.WebhookHeaderProblem(def.Headers[0]); msg == "" {
+			t.Fatalf("WebhookHeaderProblem(%s) = ok", bad)
+		}
+	}
+}

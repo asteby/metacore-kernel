@@ -8,7 +8,13 @@
 //
 // Back-compat: a host that mounts no routes — or an addon with no `webhooks`
 // block — never reaches this package. A route with an empty Verify skips
-// signature verification (use only for already-authenticated transports).
+// signature verification (use only for already-authenticated transports); a
+// route with Verify "addon" also skips it in the kernel because the handler
+// verifies the provider's signature itself (see payload.go for what it gets).
+//
+// Hosts should call DispatchRequest (method, query, headers, exact body; the
+// handler may shape the HTTP answer). Dispatch is the original error-only entry
+// point and stays as a thin wrapper.
 package webhookin
 
 import (
@@ -22,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -34,6 +41,33 @@ import (
 type Dispatcher interface {
 	Dispatch(ctx context.Context, orgID uuid.UUID, target string, payload map[string]any) error
 }
+
+// ResultDispatcher is an optional extension of Dispatcher for backends that can
+// return the handler's output (a WASM export's result bytes). DispatchRequest
+// prefers it and decodes the output into a Response; a Dispatcher without it
+// keeps working and simply never shapes the HTTP answer.
+type ResultDispatcher interface {
+	Dispatcher
+	DispatchResult(ctx context.Context, orgID uuid.UUID, target string, payload map[string]any) ([]byte, error)
+}
+
+// Verify schemes.
+const (
+	// VerifyNone ("") skips verification (already-authenticated transports).
+	VerifyNone = ""
+	// VerifyHMACSHA256 checks an HMAC-SHA256 of the raw body (see signatureHeaders).
+	VerifyHMACSHA256 = "hmac-sha256"
+	// VerifyBearer checks a static token in Authorization: Bearer|Token <secret>.
+	VerifyBearer = "bearer"
+	// VerifyAddon delegates verification to the handler: the kernel checks
+	// nothing and needs no secret; the handler gets the exact body
+	// (`raw_body_b64`), the query and the allowlisted headers (including
+	// Authorization) and must reject what it cannot authenticate — typically by
+	// answering a 401 response envelope. The standard for payment providers,
+	// whose schemes (Stripe t.payload, Mercado Pago x-signature manifest,
+	// PayPal CRC32 + cert, Conekta RSA digest) do not fit hmac-sha256.
+	VerifyAddon = "addon"
+)
 
 // SecretResolver resolves a route's SecretRef ("<connector>.<credential>") to
 // the signing secret for an org. connectors.Resolver satisfies this (its Secret
@@ -48,13 +82,19 @@ type Route struct {
 	Key string
 	// Path is the route the host mounts (e.g. "/webhooks/github").
 	Path string
-	// Verify is the signature scheme: "" (none) | "hmac-sha256" | "bearer".
+	// Verify is the signature scheme: "" (none) | "hmac-sha256" | "bearer" |
+	// "addon" (the handler verifies; the kernel needs no secret).
 	Verify string
 	// SecretRef resolves the signing secret as "<connector>.<credential>".
 	SecretRef string
 	// Do is the handler reference: "wasm:<export>" | "webhook:<key>" |
 	// "compiled:<fn>".
 	Do string
+	// Headers extends DefaultHeaders with extra request headers (lowercase;
+	// a trailing "*" matches a prefix) forwarded to the handler for this
+	// route. Never widens the hard deny list (cookies, proxy credentials) nor
+	// forwards Authorization on a route the kernel verifies.
+	Headers []string
 }
 
 // Typed errors so the host HTTP layer can map to status codes (404 / 401 / 400 /
@@ -138,6 +178,23 @@ func (r *Receiver) Unregister(path string) {
 	delete(r.routes, path)
 }
 
+// Inbound is one HTTP request reaching a webhook mount, as the host saw it.
+type Inbound struct {
+	// Path is the receiver route key (the Route.Path it was registered under).
+	Path string
+	// Method is the HTTP method; empty is treated as POST.
+	Method string
+	// Query is the request's parsed query string (url.Values is a
+	// map[string][]string). Mercado Pago, for one, signs `data.id` from it.
+	Query url.Values
+	// Headers are the full request headers; only the allowlisted ones reach
+	// the handler (see DefaultHeaders and Route.Headers).
+	Headers http.Header
+	// Body is the exact request body. It is verified and forwarded byte for
+	// byte (payload `raw_body_b64`), never re-encoded.
+	Body []byte
+}
+
 // Dispatch verifies and routes an inbound webhook for an org. It looks up the
 // route by path, verifies the signature (when the route declares a Verify
 // scheme) using the secret resolved from the route's SecretRef, and dispatches
@@ -147,33 +204,51 @@ func (r *Receiver) Unregister(path string) {
 // Returns a typed error (ErrRouteNotFound / ErrSignatureMissing /
 // ErrSignatureInvalid / ErrUnsupportedVerify / ...) so the caller maps the HTTP
 // status; nil means the handler was dispatched.
+//
+// Deprecated-in-spirit: kept for back-compat. It cannot carry the query string
+// nor return the handler's response; use DispatchRequest.
 func (r *Receiver) Dispatch(ctx context.Context, orgID uuid.UUID, path string, headers http.Header, body []byte) error {
+	_, err := r.DispatchRequest(ctx, orgID, Inbound{Path: path, Headers: headers, Body: body})
+	return err
+}
+
+// DispatchRequest is Dispatch with the whole request: it verifies per the
+// route's Verify scheme, builds the handler payload (see BuildPayload) and
+// dispatches it. When the route's dispatcher implements ResultDispatcher the
+// handler's output comes back in the Response: Output always holds it
+// verbatim, and when it matches the response envelope
+// ({"status":..., "headers":..., "body":...}) Envelope is true and
+// Status/Headers/Body are set — the host answers the provider with them.
+// Errors are the same typed errors Dispatch returns.
+func (r *Receiver) DispatchRequest(ctx context.Context, orgID uuid.UUID, in Inbound) (Response, error) {
 	r.mu.RLock()
-	route, ok := r.routes[path]
+	route, ok := r.routes[in.Path]
 	dispatcher, hasDisp := r.dispatchers[prefixOf(route.Do)]
 	secrets := r.secrets
 	r.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("%w: %q", ErrRouteNotFound, path)
+		return Response{}, fmt.Errorf("%w: %q", ErrRouteNotFound, in.Path)
 	}
 
-	if route.Verify != "" {
-		if err := verifySignature(ctx, route, orgID, headers, body, secrets); err != nil {
-			return err
+	if route.Verify != "" && route.Verify != VerifyAddon {
+		if err := verifySignature(ctx, route, orgID, in.Headers, in.Body, secrets); err != nil {
+			return Response{}, err
 		}
 	}
 
 	if !hasDisp {
-		return fmt.Errorf("%w: %q (route %q)", ErrNoDispatcher, route.Do, route.Key)
+		return Response{}, fmt.Errorf("%w: %q (route %q)", ErrNoDispatcher, route.Do, route.Key)
 	}
 	_, target, _ := strings.Cut(route.Do, ":")
-	payload := map[string]any{
-		"org":     orgID.String(),
-		"webhook": route.Key,
-		"path":    path,
-		"body":    bodyValue(body),
+	payload := BuildPayload(route, orgID, in)
+	if rd, ok := dispatcher.(ResultDispatcher); ok {
+		out, err := rd.DispatchResult(ctx, orgID, target, payload)
+		if err != nil {
+			return Response{}, err
+		}
+		return decodeResponse(out), nil
 	}
-	return dispatcher.Dispatch(ctx, orgID, target, payload)
+	return Response{}, dispatcher.Dispatch(ctx, orgID, target, payload)
 }
 
 // verifySignature checks the request signature against the secret resolved from
@@ -270,7 +345,9 @@ func prefixOf(do string) string {
 }
 
 // bodyValue passes the body to the handler as parsed JSON when it is valid JSON,
-// else as a raw string — the handler decides how to read it.
+// else as a raw string — the handler decides how to read it. Convenience only:
+// JSON serialization compacts it, so signatures must be checked against
+// `raw_body_b64`.
 func bodyValue(body []byte) any {
 	if json.Valid(body) {
 		return json.RawMessage(body)

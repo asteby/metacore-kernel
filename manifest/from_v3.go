@@ -381,6 +381,7 @@ func mapWebhooks(in []v3.InboundWebhook) []InboundWebhookDef {
 			Verify:    w.Verify,
 			SecretRef: w.SecretRef,
 			Do:        w.Do,
+			Headers:   append([]string(nil), w.Headers...),
 		})
 	}
 	return out

@@ -1208,7 +1208,12 @@ func (m *Manifest) validatePipelineRuntime() error {
 		if err := validateDoRef(w.Do); err != nil {
 			return fmt.Errorf("webhooks[%d].do %w", wi, err)
 		}
-		if w.Verify != "" {
+		for hi, h := range w.Headers {
+			if msg := v3.WebhookHeaderProblem(h); msg != "" {
+				return fmt.Errorf("webhooks[%d].headers[%d] %q %s", wi, hi, h, msg)
+			}
+		}
+		if w.Verify != "" && !(w.Verify == "addon" && w.SecretRef == "") {
 			if w.SecretRef == "" {
 				return fmt.Errorf("webhooks[%d] declares verify=%q but no secret_ref", wi, w.Verify)
 			}

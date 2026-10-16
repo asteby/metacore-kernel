@@ -338,13 +338,19 @@ type InboundWebhook struct {
 	// "/webhooks/github").
 	Path string `json:"path"`
 	// Verify is the signature scheme: "" (none) | "hmac-sha256" | "bearer"
-	// (a static token in Authorization: Bearer|Token <secret>).
+	// (a static token in Authorization: Bearer|Token <secret>) | "addon" (the
+	// handler verifies from raw_body_b64/query/headers; no kernel secret).
 	Verify string `json:"verify,omitempty"`
 	// SecretRef resolves the signing secret as "<connector>.<credential>"
-	// (e.g. "github.webhook_secret"). Required when Verify is set.
+	// (e.g. "github.webhook_secret"). Required when Verify is hmac-sha256 or
+	// bearer; optional (validated when set) for "addon".
 	SecretRef string `json:"secret_ref,omitempty"`
 	// Do is the handler reference the verified body is routed to.
 	Do string `json:"do"`
+	// Headers extends the kernel's default request-header allowlist
+	// (webhookin.DefaultHeaders) for this route: lowercase names, a trailing
+	// "*" matches a prefix (e.g. "x-acme-*"). Optional.
+	Headers []string `json:"headers,omitempty"`
 }
 
 // edgeDeviceKinds is the closed set of hardware categories an EdgeDevice may

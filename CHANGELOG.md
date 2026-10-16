@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **runtime/webhookin y runtime/apiroute: el cuerpo llega byte a byte al
+  handler** — el cuerpo viajaba como `json.RawMessage` y al serializarse Go lo
+  compactaba y escapaba HTML (`<` → `\u003c`), rompiendo firmas calculadas
+  sobre los bytes exactos (Stripe `t.payload`, PayPal CRC32, Conekta RSA). El
+  payload del webhook gana `raw_body_b64` y `apiroute.Request` gana `RawBody`
+  (`raw_body_b64`), ambos base64 estándar de los bytes exactos; `body` se
+  conserva como copia de conveniencia. `webhookin.EncodePayload` y
+  `apiroute.Request.Encode` serializan sin escape HTML, y un cuerpo no JSON ya
+  no se escapa al envolverlo en string.
+
 - **manifest: un host fijado a un commit sin etiqueta cumple los rangos de
   runtime** — `HostRuntimeVersion` reportaba la pseudoversión de Go
   (`0.203.2-0.20261016164255-…`), que semver ordena como prerelease y falla
@@ -32,6 +42,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   JSON. `NewCodeHTTPClient` lo aplica automáticamente.
 
 ### Added
+
+- **runtime/webhookin: petición completa, `verify: "addon"` y respuesta del
+  addon** — `Receiver.DispatchRequest(ctx, org, Inbound{Path, Method, Query,
+  Headers, Body}) (Response, error)`; `Dispatch` sigue igual. El payload gana
+  `method`, `query` (`map[string][]string`), `headers` (lista permitida
+  documentada en `webhookin.DefaultHeaders`: firmas de Stripe, PayPal, Mercado
+  Pago, Standard Webhooks, `x-kueski-*`, `x-aplazo-*`…; `authorization` sólo en
+  rutas sin verificación del kernel), `raw_body_b64` y `received_at`. El
+  manifiesto acepta `webhooks[].headers` para ampliar la lista y `verify:
+  "addon"` (el handler verifica; `secret_ref` opcional). Un despachador que
+  implemente `ResultDispatcher` devuelve la salida del handler; si es un sobre
+  `{status, headers, body}` el host responde con él (acks de Aplazo, Kueski,
+  Openpay o un 401 del guest). Ver `docs/rfcs/2026-10-16-webhook-raw-envelope.md`.
 
 - **host: cableado opcional de tokens de API y gateway de addons** —
   `AppConfig.EnableAPITokens` (+ `APITokenOptions`) construye `app.APITokens`,

@@ -3759,18 +3759,27 @@
         "verify": {
           "type": "string",
           "enum": [
-            "hmac-sha256", "bearer"
+            "hmac-sha256", "bearer", "addon"
           ],
-          "description": "Signature scheme. hmac-sha256 signs the body; bearer checks a static token sent as Authorization: Bearer|Token <secret> (for providers that cannot sign). Omit for no verification."
+          "description": "Signature scheme. hmac-sha256 signs the body; bearer checks a static token sent as Authorization: Bearer|Token <secret> (for providers that cannot sign); addon means the handler verifies (it receives raw_body_b64, query and the allowlisted headers) and the kernel needs no secret. Omit for no verification."
         },
         "secret_ref": {
           "type": "string",
-          "description": "Signing secret as '<connector>.<credential>' (e.g. 'github.webhook_secret'). Required when verify is set."
+          "description": "Signing secret as '<connector>.<credential>' (e.g. 'github.webhook_secret'). Required when verify is hmac-sha256 or bearer; optional for addon."
         },
         "do": {
           "type": "string",
           "pattern": "^(wasm|webhook|compiled):.+$",
           "description": "Handler reference the verified body is routed to: 'wasm:<export>' | 'webhook:<key>' | 'compiled:<fn>'."
+        },
+        "headers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+\\*?$"
+          },
+          "uniqueItems": true,
+          "description": "Extra request headers forwarded to the handler on top of the kernel default allowlist (lowercase; a trailing '*' matches a prefix, e.g. 'x-acme-*'). cookie, set-cookie and proxy-authorization are never forwarded; authorization only when verify is omitted or addon."
         }
       }
     },

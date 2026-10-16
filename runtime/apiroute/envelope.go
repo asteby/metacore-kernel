@@ -3,6 +3,7 @@ package apiroute
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -53,7 +54,7 @@ var responseHeaderIndex = func() map[string]string {
 }()
 
 // Request is the envelope the gateway hands the route handler (marshalled to
-// JSON for a WASM export).
+// JSON for a WASM export — use Encode, which never HTML-escapes).
 type Request struct {
 	// Addon is the key of the addon that owns the route.
 	Addon string `json:"addon"`
@@ -71,12 +72,31 @@ type Request struct {
 	// values joined with ", ".
 	Headers map[string]string `json:"headers"`
 	// Body is the request body: verbatim when it is valid JSON, otherwise a
-	// JSON string holding it. Absent when the request has no body.
+	// JSON string holding it. Absent when the request has no body. A
+	// convenience: JSON encoding compacts it, so anything that must see the
+	// exact bytes (a signature, a hash) reads RawBody.
 	Body json.RawMessage `json:"body,omitempty"`
+	// RawBody is the exact request body, base64 (standard, padded). Absent
+	// when the request has no body.
+	RawBody string `json:"raw_body_b64,omitempty"`
 	// Auth describes the principal.
 	Auth RequestAuth `json:"auth"`
 	// Org is the organization the request acts on.
 	Org uuid.UUID `json:"org"`
+}
+
+// Encode serializes the envelope for a handler backend without HTML escaping
+// (json.Marshal would turn `<`, `>` and `&` in Body into \u003c-style
+// escapes). Dispatchers that hand the envelope to a WASM export should use it
+// instead of json.Marshal.
+func (r Request) Encode() ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(r); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
 // RequestAuth is the principal as the handler sees it.
@@ -167,8 +187,19 @@ func encodeBody(b []byte) json.RawMessage {
 	if json.Valid(b) {
 		return append(json.RawMessage(nil), b...)
 	}
-	s, _ := json.Marshal(string(b))
-	return s
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(string(b))
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
+}
+
+// encodeRawBody is the envelope's RawBody: the exact bytes, base64.
+func encodeRawBody(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(b)
 }
 
 // filterRequestHeaders keeps the allowlisted request headers.

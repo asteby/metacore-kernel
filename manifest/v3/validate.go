@@ -839,6 +839,27 @@ func validateNavViewTypes(m *Manifest) []string {
 // wasm:/webhook:/compiled: dispatch prefix (the schema pattern enforces the
 // shape; this enforces the set, mirroring validateStageMachine). Returns an
 // error string suffix or "" when valid.
+// WebhookHeaderProblem checks one webhooks[].headers entry: a lowercase header
+// name (letters, digits, '-'), optionally ending in "*" to match a prefix,
+// never a bare "*" and never a header the receiver always withholds (cookie,
+// set-cookie, proxy-authorization). Returns "" when valid, else the reason.
+func WebhookHeaderProblem(h string) string {
+	name := strings.TrimSuffix(h, "*")
+	if name == "" {
+		return "must name a header (a bare \"*\" is not allowed)"
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+			return "must be a lowercase header name (a-z, 0-9, '-'), optionally ending in \"*\""
+		}
+	}
+	switch name {
+	case "cookie", "set-cookie", "proxy-authorization":
+		return "is never forwarded to handlers"
+	}
+	return ""
+}
+
 func validateDoRef(do string) string {
 	prefix, _, found := strings.Cut(do, ":")
 	if !found {
@@ -1036,9 +1057,16 @@ func validatePipelineRuntime(m *Manifest) []string {
 		if msg := validateDoRef(w.Do); msg != "" {
 			errs = append(errs, fmt.Sprintf("webhooks[%d].do %s", wi, msg))
 		}
+		for hi, h := range w.Headers {
+			if msg := WebhookHeaderProblem(h); msg != "" {
+				errs = append(errs, fmt.Sprintf("webhooks[%d].headers[%d] %q %s", wi, hi, h, msg))
+			}
+		}
 		if w.Verify != "" {
 			if w.SecretRef == "" {
-				errs = append(errs, fmt.Sprintf("webhooks[%d] declares verify=%q but no secret_ref", wi, w.Verify))
+				if w.Verify != "addon" {
+					errs = append(errs, fmt.Sprintf("webhooks[%d] declares verify=%q but no secret_ref", wi, w.Verify))
+				}
 			} else {
 				conn, cred, ok := strings.Cut(w.SecretRef, ".")
 				if !ok {

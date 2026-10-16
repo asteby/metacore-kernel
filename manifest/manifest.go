@@ -400,11 +400,12 @@ func (b BackfillDef) ArgKey() string {
 // route the host mounts and the kernel webhookin receiver routes after
 // verifying the signature (Verify) against the secret resolved from SecretRef.
 type InboundWebhookDef struct {
-	Key       string `json:"key"`
-	Path      string `json:"path"`
-	Verify    string `json:"verify,omitempty"`
-	SecretRef string `json:"secret_ref,omitempty"`
-	Do        string `json:"do"`
+	Key       string   `json:"key"`
+	Path      string   `json:"path"`
+	Verify    string   `json:"verify,omitempty"`
+	SecretRef string   `json:"secret_ref,omitempty"`
+	Do        string   `json:"do"`
+	Headers   []string `json:"headers,omitempty"`
 }
 
 // EdgeDeviceDef is the host/runtime projection of a v3 EdgeDevice: one class

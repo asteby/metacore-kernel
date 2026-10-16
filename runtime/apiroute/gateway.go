@@ -297,6 +297,7 @@ func (g *Gateway) buildRequest(route Route, params map[string]string, in Inbound
 		Query:   query,
 		Headers: filterRequestHeaders(in.Headers, g.reqHeaders),
 		Body:    encodeBody(in.Body),
+		RawBody: encodeRawBody(in.Body),
 		Auth:    auth,
 		Org:     p.OrgID,
 	}
