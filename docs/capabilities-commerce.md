@@ -16,7 +16,7 @@ mercado (PLAN-HEADLESS H12/H13).
 |---|---|
 | **Tipo** | `action` (dispara al proveedor, sin salida para el consumidor; p. ej. `messaging.whatsapp.send`) o `query` (declara `Output`; el consumidor recibe la salida normalizada). Todos los contratos de esta página son `query`. |
 | **Cardinalidad** | `one`: el proveedor seleccionado. `all`: fan-out en paralelo a todos los proveedores elegibles, cada uno con su tiempo límite; devuelve resultados parciales y una lista de errores por proveedor. Nunca falla toda la llamada porque un proveedor falló. |
-| **Tiempo límite** | Por proveedor: `Provider.Timeout` > `Contract.Timeout` > `Executor.Timeout` > 8 s. `commerce.shipping.rates` 4 s, `commerce.search.query` y `commerce.discounts.evaluate` 2 s. |
+| **Tiempo límite** | Por proveedor: `Provider.Timeout` > `Contract.Timeout` > `Executor.Timeout` > 8 s. Contratos mutantes 30 s, `commerce.shipping.rates` 4 s, `commerce.search.query` y `commerce.discounts.evaluate` 2 s. |
 | **Dinero** | Siempre cadena decimal (`"1499.00"`, regex `^-?(0\|[1-9][0-9]*)(\.[0-9]+)?$`) junto a una moneda ISO 4217 (`"MXN"`). Nunca flotantes ni unidades menores. |
 | **Países** | ISO 3166-1 alfa-2 en mayúsculas (`"MX"`). |
 | **Entrada** | Abierta: campos no declarados pasan tal cual (el mapeo del proveedor puede leerlos); los declarados se validan por tipo y los requeridos deben venir y no estar vacíos. |
@@ -66,6 +66,43 @@ Casos reales:
 | Gods Nutrition `us` | `stripe` | `stripe_tax` | 3PL por definir | — |
 | Protekauto (MX) | `mercadopago` | `region_mx` | `skydropx` (+ `shipping_flat` por omisión) | `factura_com` vía `fiscal_mexico` |
 
+## Seguimiento de una operación: el proveedor se fija, no se adivina
+
+`Select` decide el proveedor de una llamada **nueva** (crear sesión de pago,
+comprar guía, emitir factura). Todo lo que sigue sobre algo que un proveedor ya
+creó va **fijado a ese proveedor** con `Query.Provider` (llave del addon):
+`payments.confirm`, `payments.status`, `payments.refund`, `shipping.cancel`,
+`shipping.track`, `fulfillment.cancel`, `fiscal.invoice.cancel`, `tax.commit` y
+`tax.reverse` (`Contract.PinRequired`). Sin `Provider`, `Engine.Query` responde
+`ErrProviderRequired` sin invocar a nadie. El proveedor fijado debe estar
+instalado y habilitado en la organización y atender los países del mercado
+(`SelectPinned`); si no, `ErrNoProvider`. La selección por mercado, el
+proveedor por omisión y la ambigüedad no intervienen.
+
+Reglas para el host:
+
+- Guarda la llave del addon en el registro del pago, del envío, de la factura y de la transacción de impuestos al crearlos, y úsala en todo seguimiento y reembolso aunque el proveedor por omisión o la selección del mercado hayan cambiado.
+- Las rutas de webhook llevan el proveedor en la ruta (por ejemplo `/webhooks/payments/{addon}`) y lo pasan como `Query.Provider`; el `notify_url` que se envía en `payments.session` ya incluye esa ruta. Un evento de Stripe nunca llega al proveedor por omisión.
+
+## Operaciones mutantes: idempotencia obligatoria
+
+`payments.session`, `payments.refund`, `shipping.label`, `fulfillment.create`,
+`fiscal.invoice.create`, `tax.commit` y `tax.reverse` mueven dinero o tienen
+efectos irreversibles (`Contract.Idempotent`):
+
+- `idempotency_key` es **requerida** (cadena no vacía, estable por operación de negocio, p. ej. `ship-{order_ref}`); el Executor rechaza la llamada con `ErrIdempotencyRequired` sin invocar. Se entrega al proveedor en la entrada mapeada y en `Call.IdempotencyKey`; el proveedor debe deduplicar con ella y devolver el resultado original en un reintento.
+- Plazo por omisión **30 s** (`MutatingTimeout`), no 8 s.
+- Si vence el plazo (o el llamador cancela con la llamada en vuelo) el resultado es **indeterminado**: el error envuelve `ErrTimeout` (o el error del contexto) y `ErrIndeterminate`, `Result.Indeterminate()` es `true` y el sobre JSON lleva `"indeterminate": true`. La llamada al proveedor puede seguir y terminar con éxito. El host no reintenta con otra llave ni da la operación por fallida: concilia con `payments.status` / `shipping.track` o reintenta con la **misma** llave.
+
+## Reglas de `commerce.payments.confirm` (webhooks)
+
+El webhook es entrada no confiable. El proveedor y el host deben:
+
+- Verificar la firma exactamente como lo documenta el proveedor (algoritmo, cadena firmada, `raw_body` byte a byte, comparación en tiempo constante) y rechazar si falta o no coincide.
+- Aplicar la ventana de repetición (timestamp firmado dentro de la tolerancia del proveedor) para rechazar eventos reenviados.
+- Consultar el pago a la API del proveedor con su id y devolver de ahí `status`, `amount` y `currency`; nunca confiar en monto, moneda o estado del cuerpo del webhook.
+- El host deduplica por `provider + event_id` (los reintentos del proveedor son normales) y compara `amount`/`currency` con el total del pedido antes de marcarlo pagado; una diferencia no marca el pedido.
+
 ## API Go (host-neutral)
 
 ```go
@@ -84,6 +121,12 @@ res, err := q.Query(ctx, capability.Query{
 for _, r := range res.Outputs() { /* r.Provider, r.Output (json válido) */ }
 for _, r := range res.Failed()  { /* r.ErrorCode(): timeout | invalid_output | panic | canceled | provider_error */ }
 out, err := res.One() // cardinalidad one
+
+// Seguimiento: fijar el proveedor que creó el registro (ver más abajo).
+_, err = q.Query(ctx, capability.Query{
+    Org: orgID, Capability: capability.CommercePaymentsRefund,
+    Provider: payment.Addon, Input: refundInput, // incluye idempotency_key
+})
 ```
 
 Sobre JSON para consumidores (`json.Marshal(res)` o `res.Envelope()`):
@@ -221,7 +264,7 @@ Salida:
 
 ### `commerce.fulfillment.cancel`
 
-cancel a fulfillment that has not shipped. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+cancel a fulfillment that has not shipped. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
 
 Entrada:
 
@@ -240,7 +283,7 @@ Salida:
 
 ### `commerce.fulfillment.create`
 
-send an order to a warehouse / 3PL for picking and shipping. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+send an order to a warehouse / 3PL for picking and shipping. Consulta · cardinalidad **one** · tiempo límite por proveedor **30s** · mutante (idempotente).
 
 Entrada:
 
@@ -256,7 +299,7 @@ Entrada:
 | `declared_value` | decimal |  |  |
 | `currency` | currency |  |  |
 | `notes` | string |  |  |
-| `idempotency_key` | string |  |  |
+| `idempotency_key` | string | sí | required; stable per business operation (reuse it on every retry); the provider must dedupe on it |
 
 Salida:
 
@@ -272,7 +315,7 @@ Salida:
 
 ### `commerce.payments.confirm`
 
-verify and normalize a provider webhook/notification into a payment status. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+verify and normalize a provider webhook/notification into a payment status. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
 
 Entrada:
 
@@ -305,7 +348,7 @@ Salida:
 
 ### `commerce.payments.refund`
 
-refund (fully or partially) a captured payment. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+refund (fully or partially) a captured payment. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **30s** · mutante (idempotente).
 
 Entrada:
 
@@ -316,7 +359,7 @@ Entrada:
 | `currency` | currency | sí |  |
 | `order_ref` | string |  |  |
 | `reason` | string |  |  |
-| `idempotency_key` | string |  |  |
+| `idempotency_key` | string | sí | required; stable per business operation (reuse it on every retry); the provider must dedupe on it |
 
 Salida:
 
@@ -330,7 +373,7 @@ Salida:
 
 ### `commerce.payments.session`
 
-create a payment session (checkout/preference/intent) for an order. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+create a payment session (checkout/preference/intent) for an order. Consulta · cardinalidad **one** · tiempo límite por proveedor **30s** · mutante (idempotente).
 
 Entrada:
 
@@ -356,7 +399,7 @@ Entrada:
 | `description` | string |  | statement / title |
 | `installments` | integer |  | max interest-free installments (MSI) |
 | `expires_at` | string |  | RFC 3339 |
-| `idempotency_key` | string |  |  |
+| `idempotency_key` | string | sí | required; stable per business operation (reuse it on every retry); the provider must dedupe on it |
 | `metadata` | object |  |  |
 
 Salida:
@@ -376,7 +419,7 @@ Salida:
 
 ### `commerce.payments.status`
 
-poll a payment's normalized status (return-URL fallback, reconciliation); same output as confirm. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+poll a payment's normalized status (return-URL fallback, reconciliation); same output as confirm. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
 
 Entrada:
 
@@ -445,7 +488,7 @@ Salida:
 
 ### `commerce.shipping.cancel`
 
-void a label / cancel a shipment not yet picked up. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+void a label / cancel a shipment not yet picked up. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
 
 Entrada:
 
@@ -467,7 +510,7 @@ Salida:
 
 ### `commerce.shipping.label`
 
-buy a label for a quoted rate. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+buy a label for a quoted rate. Consulta · cardinalidad **one** · tiempo límite por proveedor **30s** · mutante (idempotente).
 
 Entrada:
 
@@ -484,7 +527,7 @@ Entrada:
 | `label_format` | string: pdf \| zpl \| png |  |  |
 | `label_size` | string |  | 4x6 / letter |
 | `cod_amount` | decimal |  |  |
-| `idempotency_key` | string |  | stable per shipment; a duplicate label costs money |
+| `idempotency_key` | string | sí | required; stable per business operation (reuse it on every retry); the provider must dedupe on it |
 
 Salida:
 
@@ -538,7 +581,7 @@ Salida:
 
 ### `commerce.shipping.track`
 
-normalized tracking of a shipment. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+normalized tracking of a shipment. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
 
 Entrada:
 
@@ -593,7 +636,7 @@ Salida:
 
 ### `commerce.tax.commit`
 
-record the taxes of a paid order with the provider (no-op for stateless providers). Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+record the taxes of a paid order with the provider (no-op for stateless providers). Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **30s** · mutante (idempotente).
 
 Entrada:
 
@@ -606,6 +649,7 @@ Entrada:
 | `total_tax` | decimal |  |  |
 | `ship_to` | Address |  |  |
 | `paid_at` | string |  | RFC 3339 |
+| `idempotency_key` | string | sí | required; stable per business operation (reuse it on every retry); the provider must dedupe on it |
 
 Salida:
 
@@ -616,7 +660,7 @@ Salida:
 
 ### `commerce.tax.reverse`
 
-reverse (fully or partially) a committed tax transaction after a refund/return. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+reverse (fully or partially) a committed tax transaction after a refund/return. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **30s** · mutante (idempotente).
 
 Entrada:
 
@@ -628,6 +672,7 @@ Entrada:
 | `amount` | decimal |  |  |
 | `currency` | currency |  |  |
 | `reason` | string |  |  |
+| `idempotency_key` | string | sí | required; stable per business operation (reuse it on every retry); the provider must dedupe on it |
 
 Salida:
 
@@ -638,7 +683,7 @@ Salida:
 
 ### `fiscal.invoice.cancel`
 
-cancel an issued fiscal invoice. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+cancel an issued fiscal invoice. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
 
 Entrada:
 
@@ -657,7 +702,7 @@ Salida:
 
 ### `fiscal.invoice.create`
 
-issue a fiscal invoice for an order (CFDI 4.0 in MX via the fiscal_mexico family). Consulta · cardinalidad **one** · tiempo límite por proveedor **8s**.
+issue a fiscal invoice for an order (CFDI 4.0 in MX via the fiscal_mexico family). Consulta · cardinalidad **one** · tiempo límite por proveedor **30s** · mutante (idempotente).
 
 Entrada:
 
@@ -690,7 +735,7 @@ Entrada:
 | `total` | decimal |  |  |
 | `issued_at` | string |  | RFC 3339 |
 | `notes` | string |  |  |
-| `idempotency_key` | string |  |  |
+| `idempotency_key` | string | sí | required; stable per business operation (reuse it on every retry); the provider must dedupe on it |
 
 Salida:
 

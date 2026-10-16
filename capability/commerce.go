@@ -40,11 +40,18 @@ var (
 // Default per-provider deadlines. Fan-out queries are tighter: a slow carrier
 // must never hold the checkout.
 const (
-	DefaultQueryTimeout  = 8 * time.Second
+	DefaultQueryTimeout = 8 * time.Second
+	// MutatingTimeout is the deadline of idempotent (money / irreversible)
+	// contracts: carriers and tax/fiscal authorities are slow, and giving up
+	// early only produces an indeterminate outcome.
+	MutatingTimeout      = 30 * time.Second
 	ShippingRatesTimeout = 4 * time.Second
 	SearchTimeout        = 2 * time.Second
 	DiscountsTimeout     = 2 * time.Second
 )
+
+// IdempotencyDoc documents the required key of mutating contracts.
+const IdempotencyDoc = "required; stable per business operation (reuse it on every retry); the provider must dedupe on it"
 
 func req(name string, t FieldType, doc string) Field {
 	return Field{Name: name, Type: t, Required: true, Doc: doc}
@@ -142,6 +149,33 @@ var (
 	)
 )
 
+// IdempotentContracts are the mutating contracts: `idempotency_key` is
+// required and a timeout is indeterminate (see Contract.Idempotent).
+var IdempotentContracts = map[string]bool{
+	CommercePaymentsSession:   true,
+	CommercePaymentsRefund:    true,
+	CommerceTaxCommit:         true,
+	CommerceTaxReverse:        true,
+	CommerceShippingLabel:     true,
+	CommerceFulfillmentCreate: true,
+	FiscalInvoiceCreate:       true,
+}
+
+// PinnedContracts are the follow-up contracts that must name the provider
+// (Query.Provider) that created the payment / shipment / invoice / tax
+// transaction: webhooks, status, refunds, cancels, tracking, commit, reverse.
+var PinnedContracts = map[string]bool{
+	CommercePaymentsConfirm:   true,
+	CommercePaymentsStatus:    true,
+	CommercePaymentsRefund:    true,
+	CommerceTaxCommit:         true,
+	CommerceTaxReverse:        true,
+	CommerceShippingCancel:    true,
+	CommerceShippingTrack:     true,
+	CommerceFulfillmentCancel: true,
+	FiscalInvoiceCancel:       true,
+}
+
 func init() {
 	for _, c := range commerceContracts() {
 		mustRegister(c)
@@ -161,6 +195,13 @@ func commerceContracts() []Contract {
 		if cs[i].Key == CommercePaymentsStatus {
 			cs[i].Output = confirm
 		}
+		if IdempotentContracts[cs[i].Key] {
+			cs[i].Idempotent = true
+			if cs[i].Timeout == 0 {
+				cs[i].Timeout = MutatingTimeout
+			}
+		}
+		cs[i].PinRequired = PinnedContracts[cs[i].Key]
 	}
 	return cs
 }
@@ -193,7 +234,7 @@ func commerceContractList() []Contract {
 				opt("description", TypeString, "statement / title"),
 				opt("installments", TypeInteger, "max interest-free installments (MSI)"),
 				opt("expires_at", TypeString, "RFC 3339"),
-				opt("idempotency_key", TypeString, ""),
+				req("idempotency_key", TypeString, IdempotencyDoc),
 				opt("metadata", TypeObject, ""),
 			),
 			Output: schema(
@@ -254,7 +295,7 @@ func commerceContractList() []Contract {
 				req("currency", TypeCurrency, ""),
 				opt("order_ref", TypeString, ""),
 				opt("reason", TypeString, ""),
-				opt("idempotency_key", TypeString, ""),
+				req("idempotency_key", TypeString, IdempotencyDoc),
 			),
 			Output: schema(
 				req("refund_id", TypeString, ""),
@@ -303,6 +344,7 @@ func commerceContractList() []Contract {
 				opt("total_tax", TypeDecimal, ""),
 				obj(opt("ship_to", TypeObject, ""), AddressSchema),
 				opt("paid_at", TypeString, "RFC 3339"),
+				req("idempotency_key", TypeString, IdempotencyDoc),
 			),
 			Output: schema(
 				enum(req("status", TypeString, ""), []string{"committed", "skipped"}),
@@ -319,6 +361,7 @@ func commerceContractList() []Contract {
 				opt("amount", TypeDecimal, ""),
 				opt("currency", TypeCurrency, ""),
 				opt("reason", TypeString, ""),
+				req("idempotency_key", TypeString, IdempotencyDoc),
 			),
 			Output: schema(
 				enum(req("status", TypeString, ""), []string{"reversed", "skipped"}),
@@ -371,7 +414,7 @@ func commerceContractList() []Contract {
 				enum(opt("label_format", TypeString, ""), []string{"pdf", "zpl", "png"}),
 				opt("label_size", TypeString, "4x6 / letter"),
 				opt("cod_amount", TypeDecimal, ""),
-				opt("idempotency_key", TypeString, "stable per shipment; a duplicate label costs money"),
+				req("idempotency_key", TypeString, "stable per shipment; a duplicate label costs money"),
 			),
 			Output: schema(
 				enum(req("label_status", TypeString, "label_pending resolves by webhook/poll; tracking_number and label_url are set once created"), []string{"created", "label_pending"}),
@@ -434,7 +477,7 @@ func commerceContractList() []Contract {
 				opt("declared_value", TypeDecimal, ""),
 				opt("currency", TypeCurrency, ""),
 				opt("notes", TypeString, ""),
-				opt("idempotency_key", TypeString, ""),
+				req("idempotency_key", TypeString, IdempotencyDoc),
 			),
 			Output: schema(
 				req("fulfillment_id", TypeString, ""),
@@ -554,7 +597,7 @@ func commerceContractList() []Contract {
 				opt("total", TypeDecimal, ""),
 				opt("issued_at", TypeString, "RFC 3339"),
 				opt("notes", TypeString, ""),
-				opt("idempotency_key", TypeString, ""),
+				req("idempotency_key", TypeString, IdempotencyDoc),
 			),
 			Output: schema(
 				req("invoice_id", TypeString, "provider id"),

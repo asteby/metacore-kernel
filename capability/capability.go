@@ -77,6 +77,17 @@ type Contract struct {
 	Cardinality Cardinality
 	// Timeout is the per-provider deadline of a query; 0 = the Executor's.
 	Timeout time.Duration
+	// Idempotent marks a MUTATING query (money moves or an irreversible side
+	// effect: charge, refund, label, fulfillment, invoice, tax ledger). The
+	// Executor refuses it without a non-blank `idempotency_key` input, hands
+	// the key to the provider (Call.IdempotencyKey), defaults the deadline to
+	// MutatingTimeout and flags a timeout as indeterminate (the provider call
+	// may still succeed: reconcile before retrying).
+	Idempotent bool
+	// PinRequired marks a follow-up query about something a specific provider
+	// already created (confirm, status, refund, cancel, track, commit,
+	// reverse): Query.Provider is mandatory, selection never guesses.
+	PinRequired bool
 	// Input types the input fields (nil = untyped, names only).
 	Input *Schema
 	// Output is the normalized result shape of a query.

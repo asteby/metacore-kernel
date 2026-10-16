@@ -87,6 +87,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `commerce.fulfillment.create|cancel`, `commerce.search.query`,
   `commerce.discounts.evaluate`, `fiscal.invoice.create|cancel`. Referencia en
   `docs/capabilities-commerce.md`.
+- **capability: seguimiento fijado al proveedor e idempotencia obligatoria** —
+  `Query.Provider` + `SelectPinned` fijan una llamada al addon que creó el
+  pago/envío/factura (instalado, habilitado y que atienda el mercado; si no,
+  `ErrNoProvider`). `confirm`, `status`, `refund`, `shipping.cancel|track`,
+  `fulfillment.cancel`, `fiscal.invoice.cancel`, `tax.commit|reverse` exigen
+  proveedor (`Contract.PinRequired`, `ErrProviderRequired`). Los contratos
+  mutantes (`Contract.Idempotent`) exigen `idempotency_key` (también
+  `tax.commit|reverse`; `ErrIdempotencyRequired`), la entregan al proveedor
+  (`Call.IdempotencyKey`), usan 30 s de plazo y marcan el vencimiento como
+  indeterminado (`ErrIndeterminate`, `Result.Indeterminate()`, sobre
+  `indeterminate`). Docs: reglas de webhooks y conciliación.
 - **capability: resolución por mercado** — `Select` resuelve
   `(organización, mercado, capacidad) → addon`: proveedor elegido para el
   mercado, luego el por omisión de la organización entre los que atienden los

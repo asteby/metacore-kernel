@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -143,7 +144,7 @@ func TestExecutorOneInvokesOnlyTheSelectedProvider(t *testing.T) {
 		}
 		return json.RawMessage(`{"session_id":"pref_1","status":"created","redirect_url":"https://mp.example/checkout","x_init_point":"…"}`), nil
 	}
-	input := map[string]any{"order_ref": "ORD-1", "amount": "1499.00", "currency": "MXN", "return_url": "https://shop.mx/thanks"}
+	input := map[string]any{"order_ref": "ORD-1", "amount": "1499.00", "currency": "MXN", "return_url": "https://shop.mx/thanks", "idempotency_key": "ord-1-pay"}
 	res, err := Executor{}.Run(context.Background(), c, org, "", []Provider{
 		{Addon: "mercadopago", Input: map[string]string{"external_reference": "payload.order_ref"}},
 		{Addon: "stripe"},
@@ -284,7 +285,7 @@ func TestEngineQuery(t *testing.T) {
 	}}
 	var q Querier = g
 	in := map[string]any{
-		"order_ref": "ORD-9", "currency": "MXN",
+		"order_ref": "ORD-9", "currency": "MXN", "idempotency_key": "ord-9-cfdi",
 		"customer": map[string]any{"tax_id": "XAXX010101000", "name": "PUBLICO EN GENERAL"},
 		"lines":    []any{map[string]any{"id": "1", "description": "Balata", "quantity": "1", "unit_price": "100.00"}},
 	}
@@ -313,5 +314,151 @@ func TestSelectionFromSettings(t *testing.T) {
 	def, markets = SelectionFromSettings(settings, CommerceShippingRates)
 	if def || markets != nil {
 		t.Fatalf("rates: %v %v", def, markets)
+	}
+}
+
+func pinSource(providers ...Provider) ProviderSource {
+	return ProviderSourceFunc(func(context.Context, uuid.UUID, string) ([]Provider, error) { return providers, nil })
+}
+
+func TestPinnedConfirmReachesOnlyThatProvider(t *testing.T) {
+	var hit []string
+	g := &Engine{
+		// MP is the org default; Stripe is selected for "us" and ambiguity
+		// would otherwise route a Stripe webhook to the default.
+		Source: pinSource(
+			Provider{Addon: "mercadopago", Default: true},
+			Provider{Addon: "stripe", Markets: []string{"us"}},
+			Provider{Addon: "openpay"},
+		),
+		Invoke: func(_ context.Context, call Call) (json.RawMessage, error) {
+			hit = append(hit, call.Provider.Addon)
+			return json.RawMessage(`{"order_ref":"O1","status":"paid","amount":"10.00","currency":"USD","provider_ref":"pi_1"}`), nil
+		},
+	}
+	in := map[string]any{"payload": map[string]any{"id": "evt_1"}}
+	if _, err := g.Query(context.Background(), Query{Org: org, Capability: CommercePaymentsConfirm, Input: in, Provider: "stripe"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(hit) != 1 || hit[0] != "stripe" {
+		t.Fatalf("a Stripe event must reach only Stripe: %v", hit)
+	}
+	// Unknown / not installed addon.
+	if _, err := g.Query(context.Background(), Query{Org: org, Capability: CommercePaymentsConfirm, Input: in, Provider: "paypal"}); !errors.Is(err, ErrNoProvider) {
+		t.Fatalf("unknown addon: %v", err)
+	}
+	// Disabled addon = absent from the source.
+	g.Source = pinSource(Provider{Addon: "mercadopago", Default: true})
+	if _, err := g.Query(context.Background(), Query{Org: org, Capability: CommercePaymentsConfirm, Input: in, Provider: "stripe"}); !errors.Is(err, ErrNoProvider) {
+		t.Fatalf("disabled addon: %v", err)
+	}
+	if len(hit) != 1 {
+		t.Fatalf("rejected pins must not invoke: %v", hit)
+	}
+	// Country filter still applies.
+	g.Source = pinSource(Provider{Addon: "stripe", Countries: []string{"US"}})
+	_, err := g.Query(context.Background(), Query{Org: org, Market: Market{Code: "mx", Countries: []string{"MX"}}, Capability: CommercePaymentsConfirm, Input: in, Provider: "stripe"})
+	if !errors.Is(err, ErrNoProvider) {
+		t.Fatalf("country filter: %v", err)
+	}
+}
+
+func TestPinRequiredContractsRefuseWithoutProvider(t *testing.T) {
+	g := &Engine{
+		Source: pinSource(Provider{Addon: "stripe", Default: true}),
+		Invoke: func(context.Context, Call) (json.RawMessage, error) { t.Error("must not invoke"); return nil, nil },
+	}
+	for _, key := range []string{
+		CommercePaymentsConfirm, CommercePaymentsStatus, CommercePaymentsRefund,
+		CommerceShippingCancel, CommerceShippingTrack, FiscalInvoiceCancel,
+		CommerceTaxCommit, CommerceTaxReverse,
+	} {
+		c := mustContract(t, key)
+		if !c.PinRequired {
+			t.Errorf("%s must require a pinned provider", key)
+		}
+		if _, err := g.Query(context.Background(), Query{Org: org, Capability: key}); !errors.Is(err, ErrProviderRequired) {
+			t.Errorf("%s without provider: %v", key, err)
+		}
+	}
+	// Creation contracts keep the normal selection.
+	if mustContract(t, CommercePaymentsSession).PinRequired {
+		t.Error("payments.session selects, it is not pinned")
+	}
+}
+
+func TestMutatingContractsRequireIdempotencyKey(t *testing.T) {
+	for key := range IdempotentContracts {
+		c := mustContract(t, key)
+		if !c.Idempotent || c.Timeout < MutatingTimeout {
+			t.Errorf("%s: idempotent=%v timeout=%s", key, c.Idempotent, c.Timeout)
+		}
+		f, ok := c.Input.Field("idempotency_key")
+		if !ok || !f.Required {
+			t.Errorf("%s: idempotency_key must be required", key)
+		}
+	}
+	c := mustContract(t, CommerceShippingLabel)
+	// Even with a contract whose schema forgot the field, the Executor refuses.
+	c.Input = nil
+	c.Required = []string{"rate_id", "order_ref"}
+	_, err := Executor{}.Run(context.Background(), c, org, "", []Provider{{Addon: "x"}},
+		map[string]any{"rate_id": "r", "order_ref": "O", "idempotency_key": "  "},
+		func(context.Context, Call) (json.RawMessage, error) { t.Error("must not invoke"); return nil, nil })
+	if !errors.Is(err, ErrIdempotencyRequired) {
+		t.Fatalf("blank key: %v", err)
+	}
+}
+
+func TestTimedOutLabelRetriedWithSameKeyDoesNotDuplicate(t *testing.T) {
+	c := mustContract(t, CommerceShippingLabel)
+	c.Timeout = 20 * time.Millisecond
+	var mu sync.Mutex
+	labels := map[string]string{} // idempotency key -> tracking number
+	var first int32
+	invoke := func(ctx context.Context, call Call) (json.RawMessage, error) {
+		if call.IdempotencyKey == "" {
+			t.Error("key not handed to the provider")
+		}
+		if atomic.AddInt32(&first, 1) == 1 {
+			time.Sleep(80 * time.Millisecond) // slower than the deadline, still completes
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if _, ok := labels[call.IdempotencyKey]; !ok {
+			labels[call.IdempotencyKey] = fmt.Sprintf("TRK%d", len(labels)+1)
+		}
+		return json.RawMessage(fmt.Sprintf(`{"label_status":"created","carrier":"fedex","tracking_number":%q}`, labels[call.IdempotencyKey])), nil
+	}
+	in := map[string]any{"rate_id": "r1", "order_ref": "O1", "idempotency_key": "ship-O1"}
+	res, err := Executor{}.Run(context.Background(), c, org, "", []Provider{{Addon: "skydropx"}}, in, invoke)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := res.Results[0]
+	if !errors.Is(r.Err, ErrTimeout) || !r.Indeterminate() {
+		t.Fatalf("timeout must be indeterminate: %v", r.Err)
+	}
+	if env := res.Envelope(); len(env.Errors) != 1 || !env.Errors[0].Indeterminate {
+		t.Fatalf("envelope must flag it: %+v", env.Errors)
+	}
+	time.Sleep(100 * time.Millisecond) // the abandoned call completes
+	c.Timeout = time.Second
+	res, err = Executor{}.Run(context.Background(), c, org, "", []Provider{{Addon: "skydropx"}}, in, invoke)
+	if err != nil || !res.Results[0].OK() {
+		t.Fatalf("retry: %v %v", err, res.Results[0].Err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(labels) != 1 {
+		t.Fatalf("a retry with the same key created %d labels", len(labels))
+	}
+	// A non-mutating timeout is a plain timeout.
+	rc := mustContract(t, CommerceShippingRates)
+	rc.Timeout = 10 * time.Millisecond
+	res, _ = Executor{}.Run(context.Background(), rc, org, "", []Provider{{Addon: "slow"}}, ratesInput(),
+		func(ctx context.Context, _ Call) (json.RawMessage, error) { <-ctx.Done(); return nil, ctx.Err() })
+	if res.Results[0].Indeterminate() {
+		t.Fatal("rates timeout is not indeterminate")
 	}
 }

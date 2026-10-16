@@ -95,6 +95,17 @@ var (
 	ErrInvalidOutput = errors.New("capability: invalid provider output")
 	// ErrProviderPanic: the invoker panicked.
 	ErrProviderPanic = errors.New("capability: provider panicked")
+	// ErrProviderRequired: a follow-up contract (Contract.PinRequired) was
+	// queried without naming the provider (Query.Provider).
+	ErrProviderRequired = errors.New("capability: provider required")
+	// ErrIdempotencyRequired: a mutating contract (Contract.Idempotent) was
+	// queried without a non-blank idempotency_key.
+	ErrIdempotencyRequired = errors.New("capability: idempotency_key required")
+	// ErrIndeterminate: the outcome of a mutating call is unknown (the
+	// deadline passed or the caller gave up while the provider may still
+	// complete it). Never retry with a new key: reconcile first
+	// (payments.status, shipping.track …) or retry with the SAME key.
+	ErrIndeterminate = errors.New("capability: indeterminate outcome")
 )
 
 // SelectionError details ErrNoProvider / ErrAmbiguousProvider.
@@ -215,6 +226,24 @@ func Select(c Contract, providers []Provider, m Market) ([]Provider, error) {
 	return nil, fail(ErrAmbiguousProvider, eligible)
 }
 
+// SelectPinned resolves the single provider a follow-up call is bound to: the
+// provider that created the payment / shipment / invoice, stored by the host
+// on its record. It must be installed and enabled in the org (present in
+// providers) and still serve the market's countries; otherwise ErrNoProvider.
+// Market selection, org default and ambiguity play no role: the record already
+// names the provider.
+func SelectPinned(c Contract, providers []Provider, m Market, addon string) ([]Provider, error) {
+	var all []string
+	for _, p := range providers {
+		all = append(all, p.Addon)
+		if addon != "" && p.Addon == addon && p.Serves(m) {
+			return []Provider{p}, nil
+		}
+	}
+	sort.Strings(all)
+	return nil, &SelectionError{Capability: c.Key, Market: m.Code, Candidates: all, err: ErrNoProvider}
+}
+
 // Invoker runs one provider: the host dispatches payload (the provider
 // payload, JSON object) to the provider's wasm export / native operation for
 // org and returns its raw JSON output. It must honour ctx's deadline; the
@@ -227,6 +256,11 @@ type Call struct {
 	Market     string
 	Capability string
 	Provider   Provider
+	// IdempotencyKey is the contract input's idempotency_key ("" for
+	// non-mutating contracts). Providers must dedupe on it: the Executor may
+	// give up on a slow call that still completes, and the caller then retries
+	// with the same key.
+	IdempotencyKey string
 	// Payload is the provider payload: the contract input passed through the
 	// provider's Input mapping.
 	Payload json.RawMessage
@@ -242,6 +276,10 @@ type Result struct {
 
 // OK reports whether the provider answered a valid output.
 func (r Result) OK() bool { return r.Err == nil }
+
+// Indeterminate reports whether a mutating call's outcome is unknown (it may
+// have succeeded at the provider); reconcile before retrying.
+func (r Result) Indeterminate() bool { return errors.Is(r.Err, ErrIndeterminate) }
 
 // ErrorCode classifies Err: timeout | invalid_output | panic | canceled |
 // provider_error ("" when OK).
@@ -306,6 +344,8 @@ type ProviderError struct {
 	Provider string `json:"provider"`
 	Code     string `json:"code"`
 	Message  string `json:"message"`
+	// Indeterminate: a mutating call that may still have succeeded.
+	Indeterminate bool `json:"indeterminate,omitempty"`
 }
 
 // ProviderOutput is a successful provider in the wire envelope.
@@ -335,7 +375,7 @@ func (q QueryResult) Envelope() Envelope {
 			env.Results = append(env.Results, ProviderOutput{Provider: r.Provider, Output: r.Output})
 			continue
 		}
-		env.Errors = append(env.Errors, ProviderError{Provider: r.Provider, Code: r.ErrorCode(), Message: r.Err.Error()})
+		env.Errors = append(env.Errors, ProviderError{Provider: r.Provider, Code: r.ErrorCode(), Message: r.Err.Error(), Indeterminate: r.Indeterminate()})
 	}
 	return env
 }
@@ -394,6 +434,11 @@ func (e Executor) Run(ctx context.Context, c Contract, org uuid.UUID, market str
 	if problems := c.CheckInput(input); len(problems) > 0 {
 		return res, &InputError{Capability: c.Key, Problems: problems}
 	}
+	if c.Idempotent {
+		if k, _ := input["idempotency_key"].(string); strings.TrimSpace(k) == "" {
+			return res, fmt.Errorf("%w: %s", ErrIdempotencyRequired, c.Key)
+		}
+	}
 	if len(providers) == 0 {
 		return res, &SelectionError{Capability: c.Key, Market: market, err: ErrNoProvider}
 	}
@@ -439,6 +484,10 @@ func (e Executor) one(parent context.Context, c Contract, org uuid.UUID, market 
 		r.Err = fmt.Errorf("capability %s: provider %s: encode payload: %w", c.Key, p.Addon, err)
 		return r
 	}
+	var idemKey string
+	if c.Idempotent {
+		idemKey, _ = input["idempotency_key"].(string)
+	}
 	timeout := e.timeoutFor(c, p)
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
@@ -450,7 +499,7 @@ func (e Executor) one(parent context.Context, c Contract, org uuid.UUID, market 
 				done <- invokeOutcome{err: fmt.Errorf("%w: %s: %v", ErrProviderPanic, p.Addon, rec)}
 			}
 		}()
-		out, err := invoke(ctx, Call{Org: org, Market: market, Capability: c.Key, Provider: p, Payload: payload})
+		out, err := invoke(ctx, Call{Org: org, Market: market, Capability: c.Key, Provider: p, IdempotencyKey: idemKey, Payload: payload})
 		done <- invokeOutcome{out: out, err: err}
 	}()
 
@@ -463,7 +512,15 @@ func (e Executor) one(parent context.Context, c Contract, org uuid.UUID, market 
 	r.Duration = e.now().Sub(start)
 	switch {
 	case oc.err != nil && errors.Is(oc.err, context.DeadlineExceeded) && parent.Err() == nil:
-		r.Err = fmt.Errorf("%w: %s after %s", ErrTimeout, p.Addon, timeout)
+		if c.Idempotent {
+			r.Err = fmt.Errorf("%w: %w: %s after %s; the provider may still complete it, reconcile or retry with the same idempotency_key", ErrTimeout, ErrIndeterminate, p.Addon, timeout)
+		} else {
+			r.Err = fmt.Errorf("%w: %s after %s", ErrTimeout, p.Addon, timeout)
+		}
+		return r
+	case oc.err != nil && c.Idempotent && (errors.Is(oc.err, context.DeadlineExceeded) || errors.Is(oc.err, context.Canceled)):
+		// The caller gave up while the provider call was in flight.
+		r.Err = fmt.Errorf("capability %s: provider %s: %w: %w", c.Key, p.Addon, ErrIndeterminate, oc.err)
 		return r
 	case oc.err != nil:
 		r.Err = fmt.Errorf("capability %s: provider %s: %w", c.Key, p.Addon, oc.err)
@@ -492,6 +549,15 @@ type Query struct {
 	Market     Market
 	Capability string
 	Input      map[string]any
+	// Provider pins the call to one provider (addon key). It must be an
+	// installed, enabled provider of the org and capability that still serves
+	// the market; otherwise ErrNoProvider. Contracts with PinRequired
+	// (confirm, status, refund, cancel, track, commit, reverse) refuse to run
+	// without it: the host stores the provider on the payment / shipment /
+	// invoice record and webhook routes carry it in the path
+	// (/webhooks/payments/{addon}). Empty on other contracts = normal
+	// selection (market, default, only provider).
+	Provider string
 }
 
 // ProviderSource lists the providers of a capability installed and enabled
@@ -532,11 +598,19 @@ func (g *Engine) Query(ctx context.Context, q Query) (QueryResult, error) {
 	if g.Source == nil {
 		return QueryResult{Capability: c.Key, Market: q.Market.Code}, errors.New("capability: engine has no provider source")
 	}
+	if c.PinRequired && strings.TrimSpace(q.Provider) == "" {
+		return QueryResult{Capability: c.Key, Market: q.Market.Code}, fmt.Errorf("%w: %s must name the provider that created the record", ErrProviderRequired, c.Key)
+	}
 	all, err := g.Source.Providers(ctx, q.Org, c.Key)
 	if err != nil {
 		return QueryResult{Capability: c.Key, Market: q.Market.Code}, fmt.Errorf("capability %s: list providers: %w", c.Key, err)
 	}
-	chosen, err := Select(c, all, q.Market)
+	var chosen []Provider
+	if q.Provider != "" {
+		chosen, err = SelectPinned(c, all, q.Market, q.Provider)
+	} else {
+		chosen, err = Select(c, all, q.Market)
+	}
 	if err != nil {
 		return QueryResult{Capability: c.Key, Market: q.Market.Code}, err
 	}
