@@ -31,6 +31,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/asteby/metacore-kernel/capability"
 	"github.com/asteby/metacore-kernel/connectors"
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
@@ -98,6 +99,7 @@ type Host struct {
 	// answers `approvals_unavailable`.
 	approvalRequester func(ctx context.Context, in dynamic.ApprovalInput) (*dynamic.ApprovalRequest, error)
 	connectors        *connectors.Resolver
+	capQuerier        capability.Querier
 	logger            *log.Logger
 	compiled          sync.Map // addonKey -> *compiledEntry
 	// modules holds one *instPool per instanceKey(addonKey, installation).
@@ -744,6 +746,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		extensions:        h.extensions,
 		approvalRequester: h.approvalRequester,
 		connectors:        h.connectors,
+		capQuerier:        h.capQuerier,
 		logger:            h.logger,
 	})
 

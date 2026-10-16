@@ -26,6 +26,7 @@ type Capabilities struct {
 	eventSub []string
 	connRead []string        // connector keys: "github", "*" for any
 	ctxScope map[string]bool // ctx_get slices: "user", "roles", "org_config"
+	capQuery []string        // capability keys (globs) the addon may query via capability_query
 }
 
 // Compile turns a manifest's declarations into a Capabilities policy.
@@ -49,6 +50,8 @@ func Compile(addonKey string, caps []manifest.Capability) *Capabilities {
 			c.eventSub = append(c.eventSub, cap.Target)
 		case "connector:read":
 			c.connRead = append(c.connRead, cap.Target)
+		case "capability:query":
+			c.capQuery = append(c.capQuery, cap.Target)
 		case "ctx:user", "ctx:roles", "ctx:org_config":
 			// The target is ignored: each kind IS the slice. Kept as a set so
 			// the ctx_get import can answer "which slices may this addon see".
@@ -282,6 +285,21 @@ func (c *Capabilities) CanReadConnector(connectorKey string) error {
 		return nil
 	}
 	return fmt.Errorf("addon %q lacks connector:read %q", c.addonKey, connectorKey)
+}
+
+// CanQueryCapability returns nil if the addon declared
+// `capability:query <key>` (key: "commerce.shipping.rates", a glob such as
+// "commerce.*", or "*") for the capability_query host import. The consumer
+// names the capability, never the provider, so the grant is per capability.
+func (c *Capabilities) CanQueryCapability(key string) error {
+	if c != nil && matchAny(c.capQuery, key) {
+		return nil
+	}
+	addon := ""
+	if c != nil {
+		addon = c.addonKey
+	}
+	return fmt.Errorf("addon %q lacks capability:query %q", addon, key)
 }
 
 // CanReadContext returns nil if the addon declared the `ctx:<scope>` capability

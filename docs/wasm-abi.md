@@ -2466,3 +2466,15 @@ Registered with `wasm.WithMetrics(*metrics.Registry)` (label `addon`):
 `wasm_pool_wait_seconds`, `wasm_instance_evictions_total{reason=trap|memory_limit|closed|unload|replaced|host_close}`,
 `wasm_compilations_total`, `wasm_compile_duration_seconds`,
 `wasm_instantiations_total`, `wasm_instances`.
+
+## 21. `capability_query` — consultas de capacidad (v1.12)
+
+```
+capability_query(reqPtr i32, reqLen i32) -> i64          [v1.12]
+```
+
+Pide una capacidad (`commerce.shipping.rates`, `commerce.tax.calculate`, …) sin nombrar al proveedor: el host resuelve `(organización, mercado, capacidad) -> addon`, llama a uno o a todos según el contrato y devuelve el resultado. Petición: `{"capability":"…","market":"mx","provider":"","input":{…}}` (`provider` solo para dar seguimiento a un registro que ese proveedor creó). Respuesta: sobre v1 `{success, data, meta}` con `data = {capability, market, results:[{provider,output}], errors:[{provider,code,message}]}`.
+
+- Capacidad requerida: `capability:query <clave>` (admite glob, p. ej. `commerce.*`). Sin ella: `forbidden`.
+- Errores: `no_provider`, `ambiguous_provider`, `validation_error`, `provider_required`, `idempotency_required`, `not_query`, `capability_unavailable` (el host no lo configuró), `capability_depth` (anidamiento > 3), `capability_error`.
+- El anfitrión lo activa con `Host.WithCapabilityQuerier`.

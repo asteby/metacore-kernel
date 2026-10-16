@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/asteby/metacore-kernel/capability"
 	"github.com/asteby/metacore-kernel/connectors"
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
@@ -118,6 +119,9 @@ type invocation struct {
 	// (Host.WithConnectors), scoped to orgID and gated by connector:read. nil =
 	// the connectors runtime is off (connector_get returns connector_unavailable).
 	connectors *connectors.Resolver
+	// capQuerier resolves and runs capability queries for the
+	// capability_query import (Host.WithCapabilityQuerier). nil = unavailable.
+	capQuerier capability.Querier
 }
 
 type invKey struct{}
@@ -545,6 +549,23 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 			return writeToGuest(ctx, mod, env)
 		}).
 		Export("ctx_get")
+
+	// capability_query(reqPtr, reqLen) -> i64 (ptr|len envelope)
+	// Asks the host for a capability (commerce.shipping.rates, …); the host
+	// picks the provider per organization and market. Gated by the
+	// `capability:query <key>` capability.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			reqPtr, reqLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			req := readBytes(mod, reqPtr, reqLen)
+			env := executeCapabilityQuery(ctx, inv, req)
+			return writeToGuest(ctx, mod, env)
+		}).
+		Export("capability_query")
 
 	// routing_resolve(reqPtr, reqLen) -> i64 (ptr|len envelope)
 	// Answers which handler wins a decision domain for this org given attrs,

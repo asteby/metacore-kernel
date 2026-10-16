@@ -47,6 +47,7 @@ var HostFunctions = map[string]struct{}{
 	"approval_request": {},
 	"sequence_next":    {},
 	"ctx_get":          {},
+	"capability_query": {},
 	"routing_resolve":  {},
 }
 
