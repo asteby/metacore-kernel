@@ -55,6 +55,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   implemente `ResultDispatcher` devuelve la salida del handler; si es un sobre
   `{status, headers, body}` el host responde con él (acks de Aplazo, Kueski,
   Openpay o un 401 del guest). Ver `docs/rfcs/2026-10-16-webhook-raw-envelope.md`.
+- **runtime/native: ingress HTTP para native services** — `Spec.Ingress`
+  opcional (`kind: http`, `path_prefix` por omisión `/`, `max_body_bytes` por
+  omisión 10 MiB y máximo 64 MiB, `timeout` de cabeceras por omisión 30 s y
+  máximo 5 min) permitido con `scope` `instance` e `installation`. El sidecar
+  sirve HTTP/1.1 en un tercer socket Unix asignado por el supervisor
+  (`METACORE_NATIVE_INGRESS_SOCKET`), nunca en un puerto TCP; el host decide
+  qué dominios públicos llegan al servicio. Nuevo `IngressProxy`
+  (`NewIngressProxy`) reutilizable por cualquier host: quita cabeceras
+  hop-by-hop y las `Forwarded`/`X-Forwarded-*`/`X-Metacore-*`/de confianza del
+  cliente, fija `X-Forwarded-For/Host/Proto` y `X-Request-Id`, admite un hook
+  para cabeceras de confianza (p. ej. `X-Storefront-Domain`), transmite en
+  streaming y responde 413/504/502/501/404. `Status.AcceptsIngress` expresa
+  "sin salud no hay tráfico". Esquema v3, proyección `FromV3` y RFC 002
+  (sección "Ingress plane") actualizados.
 
 - **host: cableado opcional de tokens de API y gateway de addons** —
   `AppConfig.EnableAPITokens` (+ `APITokenOptions`) construye `app.APITokens`,

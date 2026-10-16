@@ -161,6 +161,10 @@ func FromV3(m *v3.Manifest) Manifest {
 	out.Backend = deriveBackend(m)
 	if m.Runtime != nil && m.Runtime.NativeService != nil {
 		spec := *m.Runtime.NativeService
+		if spec.Ingress != nil {
+			ingress := *spec.Ingress
+			spec.Ingress = &ingress
+		}
 		out.NativeService = &spec
 	}
 	out.Connectors = mapConnectors(m.Connectors)

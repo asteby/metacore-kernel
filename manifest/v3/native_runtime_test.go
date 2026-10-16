@@ -64,3 +64,35 @@ func TestValidateNativeServiceRejectsPreset(t *testing.T) {
 		t.Fatalf("expected kind validation error, got %v", err)
 	}
 }
+
+func TestValidateNativeServiceIngress(t *testing.T) {
+	for _, scope := range []string{"instance", "installation"} {
+		m := baseValid()
+		runtime := nativeRuntime()
+		ns := runtime["native_service"].(map[string]interface{})
+		ns["scope"] = scope
+		ns["ingress"] = map[string]interface{}{"kind": "http", "path_prefix": "/", "max_body_bytes": 1048576, "timeout": "30s"}
+		m["runtime"] = runtime
+		if err := Validate(mustJSON(t, m)); err != nil {
+			t.Fatalf("scope %s: expected valid ingress: %v", scope, err)
+		}
+	}
+}
+
+func TestValidateNativeServiceIngressRejects(t *testing.T) {
+	cases := map[string]map[string]interface{}{
+		"kind":        {"kind": "tcp"},
+		"path_prefix": {"kind": "http", "path_prefix": "/a/../b"},
+		"timeout":     {"kind": "http", "timeout": "1h"},
+		"unknown":     {"kind": "http", "hosts": []interface{}{"evil.example"}},
+	}
+	for name, ingress := range cases {
+		m := baseValid()
+		runtime := nativeRuntime()
+		runtime["native_service"].(map[string]interface{})["ingress"] = ingress
+		m["runtime"] = runtime
+		if err := Validate(mustJSON(t, m)); err == nil {
+			t.Errorf("%s: expected ingress validation error", name)
+		}
+	}
+}

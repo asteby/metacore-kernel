@@ -62,6 +62,10 @@ type Spec struct {
 	Secrets    []SecretRef    `json:"secrets,omitempty"`
 	Artifacts  []Artifact     `json:"artifacts"`
 	Control    Control        `json:"control"`
+	// Ingress optionally opts the service into public HTTP traffic routed by
+	// the host. Nil means no public traffic ever reaches the sidecar. See
+	// ingress.go for the contract.
+	Ingress *Ingress `json:"ingress,omitempty"`
 }
 
 // Control pins the local host↔sidecar protocol. The supervisor assigns the
@@ -165,6 +169,11 @@ func (s Spec) Validate() error {
 	for i, target := range s.Network.Egress {
 		if target == "" || strings.ContainsAny(target, "/* \t\n") {
 			return fmt.Errorf("native runtime: network.egress[%d] must be an exact hostname or hostname:port", i)
+		}
+	}
+	if s.Ingress != nil {
+		if err := s.Ingress.Validate(); err != nil {
+			return err
 		}
 	}
 	if len(s.Artifacts) == 0 {

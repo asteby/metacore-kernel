@@ -97,6 +97,71 @@ env envelope). The host-side listener, queue, dedup store and canonical-bus
 publisher are Ops' responsibility, the same split already used for the
 operations dispatcher.
 
+## Ingress plane: public HTTP → sidecar
+
+Operations and events are private host↔sidecar channels. Some services must
+also answer public HTTP (a server-side storefront renderer serving every
+tenant's shop by domain). `runtime/native/ingress.go` defines that third leg
+generically; nothing in it is storefront-specific.
+
+Manifest shape (optional; absent means the service never receives public
+traffic):
+
+```jsonc
+"ingress": {
+  "kind": "http",            // only value in v1
+  "path_prefix": "/",        // optional, default "/"; clean absolute path
+  "max_body_bytes": 10485760, // optional, default 10 MiB, max 64 MiB
+  "timeout": "30s"           // optional, default 30s, max 5m (response headers)
+}
+```
+
+Allowed for both `scope: instance` (one service serving many tenants, which
+resolves the tenant from the forwarded host) and `scope: installation`.
+
+Contract:
+
+- The supervisor assigns a **third** unix socket per service and exports it
+  as `EnvIngressSocket` (`METACORE_NATIVE_INGRESS_SOCKET`), reserved exactly
+  like `EnvSocket`. The sidecar serves plain HTTP/1.1 on it. It never binds a
+  TCP port, and the manifest cannot choose or see the path.
+- `runtime/native.IngressProxy` is the host-neutral reverse proxy every host
+  reuses (`NewIngressProxy(socketPath, ingress, IngressProxyOptions)`, an
+  `http.Handler`). Hosts must not re-implement the header discipline.
+- Requests outside `path_prefix` (segment boundary) get 404; the path is
+  forwarded unchanged and the original `Host` is preserved.
+- Error mapping: declared or streamed body over the cap → 413; no response
+  headers within `timeout` → 504; dial/transport failure → 502; protocol
+  upgrade (WebSocket) → 501. Once headers arrive the response is streamed
+  and flushed immediately.
+
+### Security invariants
+
+1. **Host-only exposure.** The ingress socket lives in the host-private
+   socket directory; only the host dials it. No TCP listener, no port
+   allocation, no collision between installations.
+2. **The host decides routing.** Which public hosts (verified tenant domains,
+   platform subdomains) reach a service is host state, never manifest input.
+   The manifest can only narrow the path prefix.
+3. **Hop-by-hop stripping** in both directions (`Connection` and every header
+   it lists, `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`,
+   `Proxy-*`).
+4. **Forwarded headers are host-authored.** Client `Forwarded`,
+   `X-Forwarded-*`, `X-Real-Ip`, `X-Request-Id`, every `X-Metacore-*` header
+   and every host-declared trusted header (`TrustedHeaders`, e.g.
+   `X-Storefront-Domain`) are dropped. The proxy then sets
+   `X-Forwarded-For` (client IP as seen by the host, not appended to a client
+   value), `X-Forwarded-Host`, `X-Forwarded-Proto` and runs the host's
+   `SetTrustedHeaders` hook.
+5. **Request id.** Every request carries a host-generated `X-Request-Id`
+   upstream, echoed (once) on the response and on proxy error responses.
+6. **Bounded.** Body cap and response-header timeout always apply, with
+   defaults when the manifest omits them.
+7. **No ingress without health.** A host routes traffic only while
+   `Status.AcceptsIngress()` (state `healthy`); otherwise it answers 503
+   itself without dialing, and a disabled installation answers 503 for its
+   hosts only.
+
 ## Baileys target topology
 
 `connector_whatsapp` owns the native service. `link_inbox` owns conversations
@@ -132,6 +197,9 @@ High-isolation deployments may choose `installation` scope.
 10. Addons: package Baileys under `connector_whatsapp`.
 11. Migration: import sessions through secret broker; canary one tenant.
 12. Hub: host-profile filtering by OS/arch/native-runtime capability.
+13. Complete: ingress plane contract and reusable `IngressProxy` — kernel side.
+14. Ops: assign `EnvIngressSocket`, map verified hosts to services, mount the
+    proxy behind TLS.
 
 ## Non-goals
 

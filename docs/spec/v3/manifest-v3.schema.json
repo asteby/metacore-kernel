@@ -326,7 +326,8 @@
         "network": {"$ref": "#/$defs/NativeNetwork"},
         "secrets": {"type": "array", "items": {"$ref": "#/$defs/NativeSecret"}},
         "artifacts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/NativeArtifact"}},
-        "control": {"$ref": "#/$defs/NativeControl"}
+        "control": {"$ref": "#/$defs/NativeControl"},
+        "ingress": {"$ref": "#/$defs/NativeIngress"}
       }
     },
     "NativeHealth": {
@@ -375,6 +376,17 @@
         "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         "sbom": {"type": "string", "pattern": "^backend/"},
         "download_url": {"type": "string", "pattern": "^https://"}
+      }
+    },
+    "NativeIngress": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind"],
+      "description": "Optional public HTTP ingress. The sidecar serves plain HTTP/1.1 on a third supervisor-assigned unix socket; the host decides which public hosts route to it.",
+      "properties": {
+        "kind": {"type": "string", "enum": ["http"]},
+        "path_prefix": {"type": "string", "pattern": "^/"},
+        "max_body_bytes": {"type": "integer", "minimum": 0, "maximum": 67108864},
+        "timeout": {"type": "string"}
       }
     },
     "NativeControl": {
