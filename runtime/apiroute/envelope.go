@@ -16,6 +16,9 @@ import (
 // DefaultRequestHeaders is the allowlist of request headers forwarded to the
 // handler (lowercase). Everything else — cookies, Authorization, internal
 // proxy headers — never reaches the addon. Extend it with WithRequestHeaders.
+//
+// x-customer-token carries an end-customer session the addon that issued it
+// validates itself; idempotency-key lets write handlers deduplicate retries.
 var DefaultRequestHeaders = []string{
 	"accept",
 	"accept-language",
@@ -24,6 +27,8 @@ var DefaultRequestHeaders = []string{
 	"user-agent",
 	"x-forwarded-for",
 	"x-request-id",
+	"x-customer-token",
+	"idempotency-key",
 }
 
 // ResponseHeaders is the allowlist of response headers a handler may set, in

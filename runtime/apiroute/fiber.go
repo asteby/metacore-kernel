@@ -2,7 +2,9 @@ package apiroute
 
 import (
 	"errors"
+	"net"
 	"net/http"
+	"strings"
 
 	"github.com/gofiber/fiber/v3"
 )
@@ -14,16 +16,55 @@ import (
 // error answers 401.
 type PrincipalResolver func(c fiber.Ctx) (Principal, error)
 
+// DefaultDomainHeader is the request header a multi-tenant renderer uses to
+// say which storefront domain it is rendering (it calls the gateway on its
+// own host, so Host alone cannot carry the shop's domain).
+const DefaultDomainHeader = "X-Storefront-Domain"
+
 // Handler is the optional Fiber adapter over a Gateway.
 type Handler struct {
-	gw      *Gateway
-	resolve PrincipalResolver
+	gw           *Gateway
+	resolve      PrincipalResolver
+	domainHeader string
+}
+
+// HandlerOption tunes a Handler.
+type HandlerOption func(*Handler)
+
+// WithDomainHeader overrides DefaultDomainHeader ("" disables the header and
+// leaves only the Host fallback).
+func WithDomainHeader(name string) HandlerOption {
+	return func(h *Handler) { h.domainHeader = name }
 }
 
 // NewHandler builds the adapter. resolve may be nil: every request is then
-// anonymous with no organization (only useful in tests).
-func NewHandler(gw *Gateway, resolve PrincipalResolver) *Handler {
-	return &Handler{gw: gw, resolve: resolve}
+// anonymous, its organization resolved only through the Gateway's
+// DomainResolver.
+func NewHandler(gw *Gateway, resolve PrincipalResolver, opts ...HandlerOption) *Handler {
+	h := &Handler{gw: gw, resolve: resolve, domainHeader: DefaultDomainHeader}
+	for _, o := range opts {
+		if o != nil {
+			o(h)
+		}
+	}
+	return h
+}
+
+// domain returns the storefront domain of the request: the domain header
+// when present, else the Host header, lowercased and without port.
+func (h *Handler) domain(c fiber.Ctx) string {
+	d := ""
+	if h.domainHeader != "" {
+		d = c.Get(h.domainHeader)
+	}
+	if d == "" {
+		d = c.Hostname()
+	}
+	d = strings.ToLower(strings.TrimSpace(d))
+	if host, _, err := net.SplitHostPort(d); err == nil {
+		d = host
+	}
+	return d
 }
 
 // Mount serves every method and path under r, e.g.
@@ -60,6 +101,7 @@ func (h *Handler) Serve(c fiber.Ctx) error {
 		Query:     map[string][]string{},
 		Headers:   http.Header{},
 		Body:      body,
+		Domain:    h.domain(c),
 		Principal: p,
 	}
 	for k, v := range c.Request().URI().QueryArgs().All() {

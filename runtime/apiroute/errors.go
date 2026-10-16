@@ -63,6 +63,9 @@ var (
 	ErrNotFound = &Error{Status: http.StatusNotFound, Code: "not_found", Message: "route not found"}
 	// ErrMethodNotAllowed — the path matches, but not with this method.
 	ErrMethodNotAllowed = &Error{Status: http.StatusMethodNotAllowed, Code: "method_not_allowed", Message: "method not allowed"}
+	// ErrOrgUnresolved — the request's organization could not be resolved:
+	// no org on the principal and no (or an unknown) domain.
+	ErrOrgUnresolved = &Error{Status: http.StatusNotFound, Code: "organization_not_found", Message: "organization not found"}
 	// ErrUnauthorized — the route needs a principal kind the request lacks.
 	ErrUnauthorized = &Error{Status: http.StatusUnauthorized, Code: "unauthorized", Message: "authentication required"}
 	// ErrForbidden — authenticated, but missing a required scope.

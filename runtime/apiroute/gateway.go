@@ -35,6 +35,22 @@ func (f DispatcherFunc) Invoke(ctx context.Context, orgID uuid.UUID, target stri
 // organization. Routes of a disabled addon answer 404.
 type AddonEnabledFunc func(ctx context.Context, orgID uuid.UUID, addonKey string) (bool, error)
 
+// DomainResolver maps a request domain (e.g. "mitienda.mx") to the
+// organization that has it verified. The host implements it over its own
+// domain registry; the kernel keeps no domain table. Return uuid.Nil (or an
+// error) for an unknown or unverified domain.
+type DomainResolver interface {
+	ResolveDomain(ctx context.Context, domain string) (uuid.UUID, error)
+}
+
+// DomainResolverFunc adapts a function to DomainResolver.
+type DomainResolverFunc func(ctx context.Context, domain string) (uuid.UUID, error)
+
+// ResolveDomain implements DomainResolver.
+func (f DomainResolverFunc) ResolveDomain(ctx context.Context, domain string) (uuid.UUID, error) {
+	return f(ctx, domain)
+}
+
 // Inbound is a transport-neutral HTTP request handed to Gateway.Handle.
 type Inbound struct {
 	// Method is the HTTP method.
@@ -47,6 +63,11 @@ type Inbound struct {
 	Headers http.Header
 	// Body is the raw request body.
 	Body []byte
+	// Domain is the storefront domain the request is for (the Fiber adapter
+	// takes it from X-Storefront-Domain, else the Host header, port
+	// stripped). Used only when Principal.OrgID is uuid.Nil and a
+	// DomainResolver is configured.
+	Domain string
 	// Principal is the caller, already resolved by the host.
 	Principal Principal
 }
@@ -60,6 +81,7 @@ type Gateway struct {
 	maxBody    int64
 	enabled    AddonEnabledFunc
 	reqHeaders map[string]struct{}
+	domains    DomainResolver
 	log        *slog.Logger
 }
 
@@ -81,6 +103,14 @@ func WithMaxBodyBytes(n int64) Option {
 // organization.
 func WithAddonEnabled(f AddonEnabledFunc) Option {
 	return func(g *Gateway) { g.enabled = f }
+}
+
+// WithDomainResolver lets Handle fill a missing Principal.OrgID from
+// Inbound.Domain (hosted multi-tenant mode: a platform token or an anonymous
+// caller acting for whichever organization owns the domain). A principal
+// that already carries an organization is never re-scoped by the domain.
+func WithDomainResolver(d DomainResolver) Option {
+	return func(g *Gateway) { g.domains = d }
 }
 
 // WithRequestHeaders adds request headers (case-insensitive) to the
@@ -138,7 +168,8 @@ func (g *Gateway) MaxBodyBytes() int64 { return g.maxBody }
 // Handle serves one request. On success the Response is final (status
 // validated, headers allowlisted, Cache-Control/ETag derived, 304 applied).
 // On failure the error wraps one of the typed *Error sentinels (ErrNotFound,
-// ErrMethodNotAllowed, ErrUnauthorized, ErrForbidden, ErrPayloadTooLarge,
+// ErrMethodNotAllowed, ErrUnauthorized, ErrForbidden, ErrOrgUnresolved,
+// ErrPayloadTooLarge,
 // ErrBadResponse, ErrHandlerFailed) or an *Error from the dispatcher; render
 // it with ErrorResponse.
 func (g *Gateway) Handle(ctx context.Context, in Inbound) (Response, error) {
@@ -153,14 +184,16 @@ func (g *Gateway) Handle(ctx context.Context, in Inbound) (Response, error) {
 		return Response{}, ErrNotFound
 	}
 	p := in.Principal
-	if p.OrgID == uuid.Nil {
-		if route.Auth == AuthNone {
-			return Response{}, fmt.Errorf("%w: organization not resolved", ErrNotFound)
-		}
-		return Response{}, fmt.Errorf("%w: organization not resolved", ErrUnauthorized)
-	}
 	if err := authorize(route, p); err != nil {
 		return Response{}, err
+	}
+	if p.OrgID == uuid.Nil {
+		org, err := g.resolveDomain(ctx, in.Domain)
+		if err != nil {
+			return Response{}, err
+		}
+		p.OrgID = org
+		in.Principal = p
 	}
 	if g.enabled != nil {
 		on, err := g.enabled(ctx, p.OrgID, route.Addon)
@@ -187,6 +220,22 @@ func (g *Gateway) Handle(ctx context.Context, in Inbound) (Response, error) {
 		return Response{}, fmt.Errorf("%w: %v", ErrHandlerFailed, err)
 	}
 	return finalize(route, in, resp)
+}
+
+// resolveDomain resolves the organization of a principal that carries none.
+func (g *Gateway) resolveDomain(ctx context.Context, domain string) (uuid.UUID, error) {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if g.domains == nil || domain == "" {
+		return uuid.Nil, ErrOrgUnresolved
+	}
+	org, err := g.domains.ResolveDomain(ctx, domain)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("%w: domain %q: %v", ErrOrgUnresolved, domain, err)
+	}
+	if org == uuid.Nil {
+		return uuid.Nil, fmt.Errorf("%w: domain %q", ErrOrgUnresolved, domain)
+	}
+	return org, nil
 }
 
 // authorize enforces the route's principal kind and scopes. "token" routes

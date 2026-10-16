@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -49,6 +51,7 @@ func newTestGateway(t *testing.T, d Dispatcher, opts ...Option) *Gateway {
 		Route{Key: "admin", Method: "GET", Path: "/admin/stats", Auth: AuthStaff, Do: "wasm:admin"},
 		Route{Key: "sitemap", Method: "GET", Path: "/sitemap.xml", Auth: AuthNone, Do: "wasm:sitemap"},
 	)
+	opts = append([]Option{WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))}, opts...)
 	return NewGateway(r, d, opts...)
 }
 
@@ -133,8 +136,8 @@ func TestGateway_AuthAndScopes(t *testing.T) {
 		want error
 	}{
 		{"anonymous on token route", get("/storefront/products/x", Principal{OrgID: testOrg}), ErrUnauthorized},
-		{"no org", get("/storefront/products/x", Principal{Kind: AuthToken, Scopes: []string{"catalog:read"}}), ErrUnauthorized},
-		{"no org on public route", get("/sitemap.xml", Principal{}), ErrNotFound},
+		{"no org", get("/storefront/products/x", Principal{Kind: AuthToken, Scopes: []string{"catalog:read"}}), ErrOrgUnresolved},
+		{"no org on public route", get("/sitemap.xml", Principal{}), ErrOrgUnresolved},
 		{"missing scope", get("/storefront/products/x", tokenPrincipal("cart:write")), ErrForbidden},
 		{"token on customer route", get("/storefront/customer", tokenPrincipal("*")), ErrUnauthorized},
 		{"token on staff route", get("/admin/stats", tokenPrincipal("*")), ErrUnauthorized},
@@ -388,5 +391,72 @@ func TestResponse_BodyBytes(t *testing.T) {
 	r = Response{Headers: map[string]string{"Content-Type": "application/problem+json"}, Body: json.RawMessage(`"x"`)}
 	if string(r.BodyBytes()) != `"x"` {
 		t.Fatalf("+json body = %s", r.BodyBytes())
+	}
+}
+
+func TestGateway_DomainResolution(t *testing.T) {
+	d := &recorder{}
+	shopOrg := uuid.MustParse("33333333-3333-3333-3333-333333333333")
+	gw := newTestGateway(t, d, WithDomainResolver(DomainResolverFunc(func(_ context.Context, domain string) (uuid.UUID, error) {
+		if domain == "mitienda.mx" {
+			return shopOrg, nil
+		}
+		return uuid.Nil, nil
+	})))
+	ctx := context.Background()
+	platform := Principal{Kind: AuthToken, Scopes: []string{"*"}, TokenID: uuid.New()} // no org
+
+	in := get("/storefront/products/x", platform)
+	in.Domain = "MiTienda.mx"
+	if _, err := gw.Handle(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if d.org != shopOrg || d.req.Org != shopOrg {
+		t.Fatalf("org not resolved from domain: %s / %s", d.org, d.req.Org)
+	}
+
+	in.Domain = "unknown.example"
+	if _, err := gw.Handle(ctx, in); !errors.Is(err, ErrOrgUnresolved) {
+		t.Fatalf("unknown domain: %v", err)
+	}
+	in.Domain = ""
+	if _, err := gw.Handle(ctx, in); !errors.Is(err, ErrOrgUnresolved) {
+		t.Fatalf("missing domain: %v", err)
+	}
+
+	// An org-scoped principal is never re-scoped by the domain.
+	in = get("/storefront/products/x", tokenPrincipal("catalog:read"))
+	in.Domain = "mitienda.mx"
+	if _, err := gw.Handle(ctx, in); err != nil || d.org != testOrg {
+		t.Fatalf("org-scoped token re-scoped: %s %v", d.org, err)
+	}
+
+	// Anonymous callers resolve the org for public routes; auth still applies
+	// before the domain lookup on protected ones.
+	in = get("/sitemap.xml", Principal{})
+	in.Domain = "mitienda.mx"
+	if _, err := gw.Handle(ctx, in); err != nil || d.org != shopOrg || d.req.Auth.Kind != AuthNone {
+		t.Fatalf("anonymous public route: %s %v", d.org, err)
+	}
+	in.Path = "/storefront/products/x"
+	if _, err := gw.Handle(ctx, in); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("anonymous protected route: %v", err)
+	}
+	if ErrorResponse(ErrOrgUnresolved).Status != 404 {
+		t.Fatal("unresolved org must answer 404")
+	}
+}
+
+func TestGateway_DefaultHeadersIncludeCustomerTokenAndIdempotencyKey(t *testing.T) {
+	d := &recorder{}
+	gw := newTestGateway(t, d)
+	in := Inbound{Method: "POST", Path: "/storefront/carts", Headers: http.Header{}, Principal: tokenPrincipal("cart:write")}
+	in.Headers.Set("X-Customer-Token", "cust-jwt")
+	in.Headers.Set("Idempotency-Key", "idem-1")
+	if _, err := gw.Handle(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	if d.req.Headers["x-customer-token"] != "cust-jwt" || d.req.Headers["idempotency-key"] != "idem-1" {
+		t.Fatalf("headers = %v", d.req.Headers)
 	}
 }

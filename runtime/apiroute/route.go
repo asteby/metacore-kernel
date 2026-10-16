@@ -101,8 +101,13 @@ func (r Route) toManifest() v3.APIRoute {
 // host resolves it (API token, customer session, staff JWT, or anonymous with
 // the organization taken from the domain) before calling Gateway.Handle.
 type Principal struct {
-	// OrgID is the organization the request acts on. Required for every
-	// route; uuid.Nil yields 404 on "none" routes and 401 otherwise.
+	// OrgID is the organization the request acts on, required at Handle
+	// time. Hosts resolve it from the credential (an org-scoped API token, a
+	// customer session, a staff JWT) or — for principals that carry none: a
+	// platform token serving many tenants, or an anonymous caller — from the
+	// request's domain through the Gateway's DomainResolver
+	// (WithDomainResolver + Inbound.Domain). Still uuid.Nil after that,
+	// Handle fails with ErrOrgUnresolved.
 	OrgID uuid.UUID
 	// Kind is the principal kind; "" is treated as AuthNone.
 	Kind AuthKind

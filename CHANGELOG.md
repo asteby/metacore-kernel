@@ -34,8 +34,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   derivado de la política de la ruta (`no-store` por omisión), ETag débil e
   `If-None-Match` → 304, límite de cuerpo (1 MiB, `WithMaxBodyBytes`),
   `WithAddonEnabled` y errores tipados mapeados por `ErrorResponse` a
-  `{"error":{"code","message"}}`. Adaptador Fiber opcional (`NewHandler`,
-  `PrincipalResolver`). Puramente aditivo.
+  `{"error":{"code","message"}}`. La organización es obligatoria: viene de la
+  credencial o, para tokens de plataforma y llamadas anónimas, del dominio
+  (`X-Storefront-Domain` o `Host`) vía la interfaz `DomainResolver` que
+  implementa el host (`WithDomainResolver`; sin resolver → `ErrOrgUnresolved`).
+  Adaptador Fiber opcional (`NewHandler`, `PrincipalResolver`,
+  `WithDomainHeader`). Puramente aditivo.
 
 - **provenance: procedencia de primera clase** — paquete `provenance` con
   `Provenance` (`actor_kind` human|agent|system|integration, `actor_id`,

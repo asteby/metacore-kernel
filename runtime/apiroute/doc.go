@@ -35,6 +35,12 @@
 //	    apiroute.WithAddonEnabled(isInstalledForOrg))
 //	apiroute.NewHandler(gw, resolvePrincipal).Mount(app.Group("/api/gw"))
 //
+// Organization: every request needs one. Org-scoped credentials carry it in
+// the Principal; principals without one — a platform token used by a
+// multi-tenant renderer, or an anonymous caller — get it from the request's
+// domain (X-Storefront-Domain, else Host) through a host-implemented
+// DomainResolver (WithDomainResolver). Unresolved → ErrOrgUnresolved.
+//
 // A WASM dispatcher marshals the Request, invokes the export named after
 // "wasm:" for Request.Addon, and returns DecodeResponse(out).
 //

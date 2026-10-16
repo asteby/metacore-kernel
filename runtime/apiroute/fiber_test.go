@@ -1,6 +1,7 @@
 package apiroute
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/google/uuid"
 )
 
 func TestHandler_ServesThroughFiber(t *testing.T) {
@@ -95,5 +97,35 @@ func TestHandler_ServesThroughFiber(t *testing.T) {
 	status, h, body = do("GET", "/api/gw/sitemap.xml", "", nil)
 	if status != 200 || body != "<urlset/>" || !strings.HasPrefix(h["Content-Type"], "application/xml") {
 		t.Fatalf("xml: %d %v %q", status, h, body)
+	}
+}
+
+func TestHandler_DomainHeaderAndHost(t *testing.T) {
+	d := &recorder{}
+	shopOrg := uuid.MustParse("44444444-4444-4444-4444-444444444444")
+	gw := newTestGateway(t, d, WithDomainResolver(DomainResolverFunc(func(_ context.Context, domain string) (uuid.UUID, error) {
+		if domain == "mitienda.mx" {
+			return shopOrg, nil
+		}
+		return uuid.Nil, nil
+	})))
+	app := fiber.New()
+	NewHandler(gw, nil).Mount(app.Group("/api/gw"))
+
+	req := httptest.NewRequest("GET", "http://ops.example/api/gw/sitemap.xml", nil)
+	req.Header.Set("X-Storefront-Domain", "mitienda.mx")
+	resp, err := app.Test(req)
+	if err != nil || resp.StatusCode != 200 || d.org != shopOrg {
+		t.Fatalf("header domain: %v %v %s", err, resp.StatusCode, d.org)
+	}
+
+	req = httptest.NewRequest("GET", "http://mitienda.mx:8080/api/gw/sitemap.xml", nil)
+	if resp, err = app.Test(req); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("host domain: %v %v", err, resp.StatusCode)
+	}
+
+	req = httptest.NewRequest("GET", "http://ops.example/api/gw/sitemap.xml", nil)
+	if resp, err = app.Test(req); err != nil || resp.StatusCode != 404 {
+		t.Fatalf("unknown domain: %v %v", err, resp.StatusCode)
 	}
 }
