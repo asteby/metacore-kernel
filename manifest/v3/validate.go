@@ -1627,6 +1627,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 		errs = append(errs, validateNavViewTypes(&m)...)
 		errs = append(errs, validateDocuments(&m, colsByModel)...)
 		errs = append(errs, validatePublicRoutes(&m)...)
+		errs = append(errs, validateAPIRoutes(&m)...)
 		errs = append(errs, validateConditions(&m)...)
 		errs = append(errs, validateRoutes(&m)...)
 		errs = append(errs, validateRules(&m, colsByModel)...)

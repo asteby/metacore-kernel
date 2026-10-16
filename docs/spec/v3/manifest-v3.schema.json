@@ -1523,6 +1523,13 @@
             "$ref": "#/$defs/DocumentDef"
           }
         },
+        "api": {
+          "type": "array",
+          "description": "HTTP API routes served by the host through the kernel runtime/apiroute gateway. Each entry binds a method + path pattern (:param segments, optional trailing *rest) to a handler ('wasm:<export>' | 'compiled:<fn>'), gated by an auth kind and scopes; GET routes may declare a cache policy (Cache-Control, weak ETag, 304).",
+          "items": {
+            "$ref": "#/$defs/APIRoute"
+          }
+        },
         "public_routes": {
           "type": "array",
           "description": "Org-scoped, token-addressed PUBLIC views of a record served by the host without a login (shareable quote, order tracking, customer statement, waiting-room screen). Each entry binds a model + its token column to a rendering kind: a printable document (PDF), an allowlisted JSON projection, or a minimal branded HTML page. Served at GET /p/<orgRef>/<addon>/<key>/<token>[.pdf|.json].",
@@ -1757,6 +1764,82 @@
         "comment": {
           "type": "string",
           "description": "Optional author note for the Plantillas catalog."
+        }
+      }
+    },
+    "APIRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "method",
+        "path",
+        "auth",
+        "do"
+      ],
+      "description": "One HTTP API route (contributions.api[]). Static segments beat :params, which beat the trailing *wildcard. Two installed addons may not declare the same method + path shape.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Stable route id, unique within the addon."
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "GET", "POST", "PUT", "PATCH", "DELETE"
+          ],
+          "description": "HTTP method. HEAD is served by GET routes."
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/",
+          "maxLength": 512,
+          "description": "Path pattern under the gateway prefix, e.g. '/storefront/products/:handle' or '/files/*rest'."
+        },
+        "auth": {
+          "type": "string",
+          "enum": [
+            "none", "token", "customer", "staff"
+          ],
+          "description": "Principal the route requires: none (public), token (scoped API token), customer (end-customer session) or staff (back-office user)."
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$"
+          },
+          "description": "Scopes the principal must hold ('<area>:<verb>', e.g. 'catalog:read'). Not allowed with auth 'none'."
+        },
+        "cache": {
+          "$ref": "#/$defs/APICache"
+        },
+        "do": {
+          "type": "string",
+          "pattern": "^(wasm|compiled):.+$",
+          "description": "Handler reference: 'wasm:<export>' | 'compiled:<fn>'."
+        }
+      }
+    },
+    "APICache": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "HTTP caching policy of a GET API route. private emits 'private, no-store'; otherwise 'public, max-age=<max_age>[, stale-while-revalidate=<swr>]'.",
+      "properties": {
+        "max_age": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Freshness lifetime in seconds."
+        },
+        "swr": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "stale-while-revalidate window in seconds."
+        },
+        "private": {
+          "type": "boolean",
+          "description": "Caller-specific response; never stored by shared caches. Excludes max_age/swr."
         }
       }
     },

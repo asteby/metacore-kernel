@@ -1511,6 +1511,16 @@ type Contributions struct {
 	// expose nothing publicly omit it. See PublicRoute for the full contract.
 	PublicRoutes []PublicRoute `json:"public_routes,omitempty"`
 
+	// API contributes HTTP API routes the host serves through the kernel
+	// runtime/apiroute gateway: each entry binds a method + path pattern
+	// (with :param segments and an optional trailing *rest) to a handler,
+	// gated by an authentication kind and a set of scopes, optionally
+	// cacheable. Unlike Webhooks (POST-only, body-only, no response), the
+	// handler sees the method, path params, query, allowlisted headers and
+	// the resolved principal, and answers with a status, allowlisted headers
+	// and a body. Optional — addons that expose no API omit it. See APIRoute.
+	API []APIRoute `json:"api,omitempty"`
+
 	// Config declares the addon's configuration surface so hosts can render a
 	// "Configure" affordance (e.g. in the installed-addons view). Optional —
 	// an addon with nothing to configure omits it and hosts show nothing.
@@ -1668,6 +1678,61 @@ type PublicRouteAction struct {
 	// text being safe to show to anyone holding the link; without it the host
 	// never echoes handler output to an anonymous visitor.
 	ShowMessage bool `json:"show_message,omitempty"`
+}
+
+// APIRoute is one HTTP API route an addon contributes (contributions.api[]).
+// The host mounts the kernel gateway (runtime/apiroute) under a prefix of its
+// choosing (e.g. /api/gw) and every installed addon's routes share that
+// namespace: two addons may not declare the same Method + Path shape.
+//
+// Path is a slash-separated pattern: static segments, ":name" parameters and
+// an optional trailing "*name" (or bare "*") wildcard that captures the rest of
+// the path. When several patterns match a request, static segments beat
+// parameters and parameters beat the wildcard, segment by segment from the
+// left, so "/products/featured" wins over "/products/:handle".
+//
+//	{ "key": "product_get", "method": "GET",
+//	  "path": "/storefront/products/:handle",
+//	  "auth": "token", "scopes": ["catalog:read"],
+//	  "cache": { "max_age": 60, "swr": 600 },
+//	  "do": "wasm:product_get" }
+type APIRoute struct {
+	// Key is the route's stable id, unique within the addon. Required,
+	// snake_case.
+	Key string `json:"key"`
+	// Method is the HTTP method: GET | POST | PUT | PATCH | DELETE. HEAD is
+	// served by GET routes. Required.
+	Method string `json:"method"`
+	// Path is the route pattern, starting with "/". Required.
+	Path string `json:"path"`
+	// Auth is the principal the route requires: "none" (public; the host
+	// still resolves the organization, e.g. by domain), "token" (a scoped API
+	// token, see package apitoken), "customer" (an end-customer session) or
+	// "staff" (a back-office user). Required.
+	Auth string `json:"auth"`
+	// Scopes the principal must hold, each "<area>:<verb>" (e.g.
+	// "catalog:read"). All are required. Not allowed when Auth is "none".
+	Scopes []string `json:"scopes,omitempty"`
+	// Cache makes a GET route cacheable: the gateway derives Cache-Control
+	// (unless the handler sets it), computes a weak ETag and answers
+	// If-None-Match with 304. Only valid on GET.
+	Cache *APICache `json:"cache,omitempty"`
+	// Do is the handler reference: "wasm:<export>" | "compiled:<fn>".
+	// Required.
+	Do string `json:"do"`
+}
+
+// APICache is the HTTP caching policy of a GET APIRoute. With Private the
+// gateway emits "private, no-store" (buyer-specific data); otherwise
+// "public, max-age=<MaxAge>[, stale-while-revalidate=<SWR>]".
+type APICache struct {
+	// MaxAge is the freshness lifetime in seconds (>= 0).
+	MaxAge int `json:"max_age,omitempty"`
+	// SWR is the stale-while-revalidate window in seconds (>= 0).
+	SWR int `json:"swr,omitempty"`
+	// Private marks the response as caller-specific: never stored by shared
+	// caches. Mutually exclusive with MaxAge/SWR.
+	Private bool `json:"private,omitempty"`
 }
 
 // ConfigEntry points at where an addon's configuration lives: a declarative

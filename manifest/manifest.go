@@ -234,6 +234,12 @@ type Manifest struct {
 	// projection, expiry/enabled_when gates), so the v3 type passes through
 	// unchanged. Empty = the addon exposes nothing publicly.
 	PublicRoutes []v3.PublicRoute `json:"public_routes,omitempty"`
+
+	// APIRoutes is the host projection of v3 contributions.api[]: the HTTP API
+	// routes the host registers in the kernel runtime/apiroute gateway (see
+	// apiroute.RoutesFromManifest). The v3 type passes through unchanged.
+	// Empty = the addon exposes no API.
+	APIRoutes []v3.APIRoute `json:"api_routes,omitempty"`
 }
 
 // DocumentDef is the host/runtime projection of a v3 DocumentDef: a printable
