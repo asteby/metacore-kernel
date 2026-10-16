@@ -216,6 +216,7 @@ metacore-kernel/
 ├── config/          # org-scoped config getters (OrgCurrencyGetter) + Fiber-context helpers
 ├── database/        # GORM hooks (RegisterCurrencyDefaultCallback BeforeCreate)
 ├── idempotency/     # idempotency-key middleware + store (in-memory, durable GormStore)
+├── apitoken/        # scoped API tokens (pk_/sk_/pt_): issue, authenticate, rotate, rate limit (+ Fiber)
 ├── outbox/          # durable background jobs (transactional enqueue, retries, dead-letter)
 ├── i18n/            # string-bundle loading + locale resolution
 ├── vector/          # pgvector helpers for embedding columns

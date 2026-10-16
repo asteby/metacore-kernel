@@ -19,6 +19,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **apitoken: tokens de API con alcances** — paquete nuevo (tabla
+  `metacore_api_tokens`, `Migrate`) con tres tipos: `publishable` (`pk_`,
+  apto para navegador; solo alcances de la lista permitida,
+  `WithPublishableScopes`, por omisión `*:read` y `cart:write`), `secret`
+  (`sk_`) y `platform` (`pt_`, sin organización: un renderer multi-tenant cuya
+  organización resuelve el host por dominio). Formato prefijo + 32 bytes
+  base64url; solo se guarda el SHA-256 (índice único) y un prefijo de 12
+  caracteres para mostrar. `Service`: `Issue` (texto plano una sola vez),
+  `Authenticate` (estado, expiración, `last_used_at` como máximo una vez por
+  minuto), `Rotate` con gracia (dos tokens válidos a la vez), `Revoke`,
+  `List`, `Get`; `Store` con implementaciones GORM y en memoria. Limitador por
+  token (`Limiter`, `MemoryLimiter` de cubeta). Capa Fiber opcional:
+  `NewPrincipalResolver` (Bearer → `apiroute.Principal`, 401/429),
+  `Middleware`/`PrincipalFrom` y `Handler` de administración para staff
+  (listar, emitir, rotar, revocar).
+
 - **runtime/apiroute: rutas de API de addons (`contributions.api`)** — nuevo
   bloque del manifiesto v3 (`key`, `method` GET|POST|PUT|PATCH|DELETE, `path`
   con `:param` y `*resto` final, `auth` none|token|customer|staff, `scopes`
