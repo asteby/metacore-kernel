@@ -15,7 +15,7 @@ líneas rectas entre paradas. Nunca falla una pantalla porque falte geo.
 | Concepto | Regla |
 |---|---|
 | **Coordenadas** | WGS84 en grados decimales, `lat` y `lng` como números JSON separados. Tipos `latitude` (`[-90, 90]`) y `longitude` (`[-180, 180]`); una cadena o un valor fuera de rango es salida inválida (`invalid_output`). Solo dentro de GeoJSON el orden es `[lng, lat]`. |
-| **Precisión** | Cada resultado dice qué tan exacto es: `rooftop, street, neighborhood, postal_code, locality, region, country`. Un centroide de CP es `postal_code`: la UI no lo pinta como pin de domicilio. |
+| **Precisión** | Cada resultado dice qué tan exacto es: `rooftop, street, neighborhood, postal_centroid, locality, region, country`. Un centroide de CP es `postal_centroid`: la UI no lo pinta como pin de domicilio. |
 | **Tiempo límite** | `geo.geocode` 3 s, `geo.route` 5 s por proveedor (rutas interactivas: formularios de dirección, paneles de mapa). |
 | **Cardinalidad** | `one` en ambos. No son mutantes ni requieren fijar proveedor. |
 | **Privacidad** | El proveedor recibe direcciones de clientes; preferir proveedores autoalojados. El host no debe mandar nombre ni teléfono del cliente, solo la dirección. |
@@ -35,7 +35,7 @@ líneas rectas entre paradas. Nunca falla una pantalla porque falte geo.
 |---|---|---|---|
 | `lat` | latitude | sí | WGS84 latitude |
 | `lng` | longitude | sí | WGS84 longitude |
-| `precision` | string: rooftop \| street \| neighborhood \| postal_code \| locality \| region \| country | sí | how exact the point is; a postal code centroid is postal_code |
+| `precision` | string: rooftop \| street \| neighborhood \| postal_centroid \| locality \| region \| country | sí | how exact the point is; a postal code centroid is postal_centroid |
 | `label` | string |  | formatted address / place name |
 | `postal_code` | string |  |  |
 | `neighborhood` | string |  | colonia / district |
