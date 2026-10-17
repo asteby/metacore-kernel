@@ -62,6 +62,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **capability: contratos `geo.geocode` y `geo.route` (solo contrato) y
+  coordenadas en el rastreo** — contratos `query` de cardinalidad `one` sin
+  implementación en el kernel: `geo.geocode` (texto y/o CP → `results[]` con
+  `lat`, `lng`, `precision` normalizada `rooftop…country`, `label`, CP, ciudad,
+  `bbox`; 3 s) y `geo.route` (`waypoints[]` ordenados → `distance_m`,
+  `duration_s`, `legs[]`, `geometry` GeoJSON opcional, `approximate`; 5 s).
+  Nuevos tipos de campo `latitude` y `longitude` (número en rango; una cadena o
+  un valor fuera de rango es salida inválida). `TrackingEventSchema` gana
+  `lat`/`lng` opcionales: los proveedores que no los mandan siguen validando.
+  Ver `docs/capabilities-geo.md`.
+
 - **runtime/webhookin: petición completa, `verify: "addon"` y respuesta del
   addon** — `Receiver.DispatchRequest(ctx, org, Inbound{Path, Method, Query,
   Headers, Body}) (Response, error)`; `Dispatch` sigue igual. El payload gana

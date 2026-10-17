@@ -19,6 +19,7 @@ mercado (PLAN-HEADLESS H12/H13).
 | **Tiempo límite** | Por proveedor: `Provider.Timeout` > `Contract.Timeout` > `Executor.Timeout` > 8 s. Contratos mutantes 30 s, `commerce.shipping.rates` 4 s, `commerce.search.query` y `commerce.discounts.evaluate` 2 s. |
 | **Dinero** | Siempre cadena decimal (`"1499.00"`, regex `^-?(0\|[1-9][0-9]*)(\.[0-9]+)?$`) junto a una moneda ISO 4217 (`"MXN"`). Nunca flotantes ni unidades menores. |
 | **Países** | ISO 3166-1 alfa-2 en mayúsculas (`"MX"`). |
+| **Coordenadas** | `latitude` / `longitude`: número JSON en grados decimales WGS84, en `[-90, 90]` / `[-180, 180]`; nunca cadena. Ver [capabilities-geo.md](capabilities-geo.md). |
 | **Entrada** | Abierta: campos no declarados pasan tal cual (el mapeo del proveedor puede leerlos); los declarados se validan por tipo y los requeridos deben venir y no estar vacíos. |
 | **Salida** | Cerrada: tipos, enums y requeridos se validan; campos desconocidos se rechazan salvo extensiones con prefijo `x_` (p. ej. `x_init_point`). Una salida inválida cuenta como error de ese proveedor (`invalid_output`) y no se entrega. |
 | **Estados normalizados** | Pago: `pending, requires_action, authorized, paid, failed, cancelled, expired, refunded, partially_refunded`. Rastreo: `created, picked_up, in_transit, out_for_delivery, delivered, exception, returned, cancelled`. |
@@ -284,6 +285,8 @@ consulta); siempre hay un proveedor por omisión instalado (`search_basic`,
 | `status` | string: created \| picked_up \| in_transit \| out_for_delivery \| delivered \| exception \| returned \| cancelled | sí |  |
 | `description` | string |  | carrier wording |
 | `location` | string |  |  |
+| `lat` | latitude |  | WGS84 latitude of the scan, only when the carrier reports coordinates |
+| `lng` | longitude |  | WGS84 longitude of the scan, only when the carrier reports coordinates |
 
 ## Contratos
 

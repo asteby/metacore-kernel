@@ -30,6 +30,12 @@ const (
 	TypeInteger FieldType = "integer"
 	// TypeNumber is any JSON number (scores, ratios — never money).
 	TypeNumber FieldType = "number"
+	// TypeLatitude is a WGS84 latitude in decimal degrees: a JSON number in
+	// [-90, 90].
+	TypeLatitude FieldType = "latitude"
+	// TypeLongitude is a WGS84 longitude in decimal degrees: a JSON number in
+	// [-180, 180].
+	TypeLongitude FieldType = "longitude"
 	// TypeBoolean is true or false.
 	TypeBoolean FieldType = "boolean"
 	// TypeObject is a JSON object; Field.Of, when set, is its shape.
@@ -240,6 +246,14 @@ func (f Field) check(path string, val any, errs *[]string, open bool) {
 		if !isNumber(val) {
 			bad("number")
 		}
+	case TypeLatitude:
+		if n, ok := toFloat(val); !ok || n < -90 || n > 90 {
+			bad("latitude (number in [-90, 90])")
+		}
+	case TypeLongitude:
+		if n, ok := toFloat(val); !ok || n < -180 || n > 180 {
+			bad("longitude (number in [-180, 180])")
+		}
 	case TypeBoolean:
 		if _, ok := val.(bool); !ok {
 			bad("boolean")
@@ -283,6 +297,32 @@ func isNumber(v any) bool {
 		return true
 	}
 	return false
+}
+
+// toFloat returns a JSON number as float64 (false for anything else).
+func toFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case uint:
+		return float64(n), true
+	case uint64:
+		return float64(n), true
+	case uint32:
+		return float64(n), true
+	}
+	return 0, false
 }
 
 func isInteger(v any) bool {

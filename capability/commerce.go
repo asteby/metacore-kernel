@@ -148,6 +148,8 @@ var (
 		enum(req("status", TypeString, ""), TrackingStatuses),
 		opt("description", TypeString, "carrier wording"),
 		opt("location", TypeString, ""),
+		opt("lat", TypeLatitude, "WGS84 latitude of the scan, only when the carrier reports coordinates"),
+		opt("lng", TypeLongitude, "WGS84 longitude of the scan, only when the carrier reports coordinates"),
 	)
 
 	// TaxLineSchema is one computed tax component.
