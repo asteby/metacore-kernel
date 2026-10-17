@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // FieldType is the JSON type of a contract field.
@@ -50,6 +51,10 @@ type Field struct {
 	Of *Schema
 	// Elem is the element type of an array of scalars (Of == nil).
 	Elem FieldType
+	// Pattern, when set on a string field, is a regular expression (RE2,
+	// anchor it yourself) the value must match, e.g. `^[0-9]{5}$`.
+	// Register rejects a contract whose pattern does not compile.
+	Pattern string
 	// Doc is a one-line description for the generated reference.
 	Doc string
 }
@@ -208,6 +213,13 @@ func (f Field) check(path string, val any, errs *[]string, open bool) {
 		if len(f.Enum) > 0 && !contains(f.Enum, s) {
 			*errs = append(*errs, fmt.Sprintf("%s: %q is not one of %s", path, s, strings.Join(f.Enum, "|")))
 		}
+		if f.Pattern != "" {
+			if re, err := compilePattern(f.Pattern); err != nil {
+				*errs = append(*errs, fmt.Sprintf("%s: contract pattern %q does not compile: %v", path, f.Pattern, err))
+			} else if !re.MatchString(s) {
+				*errs = append(*errs, fmt.Sprintf("%s: %q does not match %s", path, s, f.Pattern))
+			}
+		}
 	case TypeDecimal:
 		if s, ok := val.(string); !ok || !ValidDecimal(s) {
 			bad(`decimal string (e.g. "199.90")`)
@@ -258,7 +270,7 @@ func (f Field) check(path string, val any, errs *[]string, open bool) {
 				f.Of.validate(ep, m, errs, open)
 				continue
 			}
-			Field{Type: f.Elem, Enum: f.Enum}.check(ep, el, errs, open)
+			Field{Type: f.Elem, Enum: f.Enum, Pattern: f.Pattern}.check(ep, el, errs, open)
 		}
 	default:
 		*errs = append(*errs, fmt.Sprintf("%s: contract declares unknown type %q", path, f.Type))
@@ -321,4 +333,38 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// patterns caches compiled Field.Pattern expressions (pattern -> *regexp.Regexp).
+var patterns sync.Map
+
+func compilePattern(p string) (*regexp.Regexp, error) {
+	if re, ok := patterns.Load(p); ok {
+		return re.(*regexp.Regexp), nil
+	}
+	re, err := regexp.Compile(p)
+	if err != nil {
+		return nil, err
+	}
+	patterns.Store(p, re)
+	return re, nil
+}
+
+// checkPatterns reports the first Field.Pattern of s (nested included) that
+// does not compile.
+func (s *Schema) checkPatterns() error {
+	if s == nil {
+		return nil
+	}
+	for _, f := range s.Fields {
+		if f.Pattern != "" {
+			if _, err := compilePattern(f.Pattern); err != nil {
+				return fmt.Errorf("field %q: pattern %q: %v", f.Name, f.Pattern, err)
+			}
+		}
+		if err := f.Of.checkPatterns(); err != nil {
+			return fmt.Errorf("field %q: %w", f.Name, err)
+		}
+	}
+	return nil
 }

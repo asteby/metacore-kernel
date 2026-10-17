@@ -92,6 +92,11 @@ type Contract struct {
 	Input *Schema
 	// Output is the normalized result shape of a query.
 	Output *Schema
+	// Errors lists the error codes a provider may report for this contract
+	// with NewCodedError (e.g. "invalid_input", "not_found"). A declared
+	// code reaches the consumer as Result.ErrorCode(); an undeclared one is
+	// reported as "provider_error". Nil = the generic codes only.
+	Errors []string
 	// Doc is a one-line description.
 	Doc string
 }
@@ -207,6 +212,20 @@ func Register(c Contract) error {
 	default:
 		return fmt.Errorf("capability: contract %q has unknown cardinality %q", c.Key, c.Cardinality)
 	}
+	for _, code := range c.Errors {
+		if !errorCodeRe.MatchString(code) {
+			return fmt.Errorf("capability: contract %q declares malformed error code %q", c.Key, code)
+		}
+		if reservedErrorCodes[code] {
+			return fmt.Errorf("capability: contract %q declares error code %q, reserved for the executor", c.Key, code)
+		}
+	}
+	if err := c.Input.checkPatterns(); err != nil {
+		return fmt.Errorf("capability: contract %q input: %w", c.Key, err)
+	}
+	if err := c.Output.checkPatterns(); err != nil {
+		return fmt.Errorf("capability: contract %q output: %w", c.Key, err)
+	}
 	if c.Input != nil {
 		c.Required, c.Optional = c.Input.Required(), c.Input.Optional()
 	}
@@ -220,9 +239,16 @@ func mustRegister(c Contract) {
 	}
 }
 
+// reservedErrorCodes are the codes Result.ErrorCode derives itself; a
+// contract cannot redeclare them.
+var reservedErrorCodes = map[string]bool{
+	"timeout": true, "invalid_output": true, "panic": true, "canceled": true, "provider_error": true,
+}
+
 var (
-	keyRe   = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
-	fieldRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	errorCodeRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+	keyRe       = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+	fieldRe     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
 // ValidKey reports whether key is a well-formed dotted capability key.

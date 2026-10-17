@@ -103,6 +103,61 @@ El webhook es entrada no confiable. El proveedor y el host deben:
 - Consultar el pago a la API del proveedor con su id y devolver de ahí `status`, `amount` y `currency`; nunca confiar en monto, moneda o estado del cuerpo del webhook.
 - El host deduplica por `provider + event_id` (los reintentos del proveedor son normales) y compara `amount`/`currency` con el total del pedido antes de marcarlo pagado; una diferencia no marca el pedido.
 
+## Eventos de contrato: `commerce.payments.confirmed`
+
+Además de consultas, un dominio de capacidad puede declarar **eventos de
+contrato** (`capability.EventContracts`, `RegisterEvent`, `LookupEvent`). El
+consumidor se suscribe al nombre normalizado y nunca a un proveedor
+(`stripe.payment_updated`), igual que consulta una capacidad sin nombrar quién
+responde.
+
+| Evento | Lo emite | Payload |
+|---|---|---|
+| `commerce.payments.confirmed` | quien provee alguna capacidad `commerce.payments.*` (las pasarelas, desde su propio webhook; `payments_manual`, desde la acción del personal) | `{provider, result}`; `result` es la salida de `commerce.payments.confirm` y `result.kind` ∈ `payment \| refund \| dispute` |
+
+Payload (`CommercePaymentsConfirmed`):
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `provider` | string | sí | clave del addon proveedor (informativa: el suscriptor confía en `emitter`) |
+| `result` | object ([salida de confirm](#commercepaymentsconfirm)) | sí | `kind` distingue pago, reembolso y disputa |
+
+Reglas:
+
+- **Espacio reservado.** Todo evento bajo `EmittedBy` (`commerce.payments.*`)
+  solo lo puede emitir un addon que **provee** al menos una capacidad de ese
+  dominio (`capability.ReservedEventDomain`, `capability.ProvidesDomain`). El
+  host lo aplica en la frontera del guest (`security.EmitPolicy`, regla
+  `contract_namespace`; ver [capabilities.md](capabilities.md#política-de-emisión-de-eventos)).
+- **Emisor estampado.** El despachador escribe `emitter` (la clave con la que se
+  llamó al bus) en el payload entregado y sobrescribe lo que haya escrito el
+  guest. El suscriptor usa `emitter`, no `provider`; si ambos vienen y no
+  coinciden, rechaza.
+- **No es prueba de pago.** El consumidor vuelve a leer el pago con
+  `commerce.payments.status` fijado al proveedor de la sesión antes de marcar el
+  pedido; un evento falso solo provoca una consulta.
+- `EventContract.ValidatePayload` valida el payload e ignora las claves que
+  estampa el host (`event`, `emitter`, `actor_id`, `branch_id`). El kernel no
+  la aplica al publicar; es para emisores y suscriptores.
+- Los eventos propios de cada pasarela (`<key>.payment_updated`,
+  `<key>.refund_created`) siguen existiendo; el evento normalizado se emite
+  junto a ellos.
+
+## Errores con código del proveedor
+
+Un contrato puede declarar los códigos de error que sus proveedores reportan
+(`Contract.Errors`, p. ej. `invalid_input`, `not_found`). El invocador del host
+devuelve `capability.NewCodedError(code, message)` cuando el proveedor contestó
+un error tipado (en WASM, el sobre `{success:false, error:{code, message}}` del
+guest), y el consumidor lo ve en `Result.ErrorCode()` y en
+`errors[].code` del sobre JSON. Un código que el contrato no declara se reporta
+como `provider_error` con el mismo mensaje. `timeout`, `invalid_output`,
+`panic`, `canceled` y `provider_error` están reservados al ejecutor.
+
+Un campo de texto puede fijar `Field.Pattern` (RE2, con anclas): la entrada que
+no cumple se rechaza antes de invocar (`ErrInvalidInput`; `validation_error` en
+`capability_query`) y una salida que no cumple es `invalid_output`.
+
 ## API Go (host-neutral)
 
 ```go
@@ -119,7 +174,7 @@ res, err := q.Query(ctx, capability.Query{
 // err != nil solo antes de invocar: contrato no-query, entrada inválida,
 // sin proveedor o ambiguo.
 for _, r := range res.Outputs() { /* r.Provider, r.Output (json válido) */ }
-for _, r := range res.Failed()  { /* r.ErrorCode(): timeout | invalid_output | panic | canceled | provider_error */ }
+for _, r := range res.Failed()  { /* r.ErrorCode(): timeout | invalid_output | panic | canceled | código de Contract.Errors | provider_error */ }
 out, err := res.One() // cardinalidad one
 
 // Seguimiento: fijar el proveedor que creó el registro (ver más abajo).
@@ -761,6 +816,8 @@ Salida:
 - `commerce.shipping.label` con `label_status = created` debe traer
   `tracking_number` y `label_url`; hoy es convención documentada, no se valida
   condicionalmente.
+- `commerce.shipping.tracking_updated` como evento de contrato (hoy los
+  transportistas emiten `shipping.*` sin reservar).
 - Sin contrato aún: `commerce.shipping.pickup`, `commerce.fulfillment.inventory.sync`,
   `marketing.events`, `marketing.feed`.
 - Función de host WASM para que un addon invitado llame `Querier.Query`

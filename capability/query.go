@@ -282,8 +282,10 @@ func (r Result) OK() bool { return r.Err == nil }
 func (r Result) Indeterminate() bool { return errors.Is(r.Err, ErrIndeterminate) }
 
 // ErrorCode classifies Err: timeout | invalid_output | panic | canceled |
-// provider_error ("" when OK).
+// a code the contract declares in Contract.Errors that the provider reported
+// with NewCodedError (e.g. not_found) | provider_error ("" when OK).
 func (r Result) ErrorCode() string {
+	var coded *CodedError
 	switch {
 	case r.Err == nil:
 		return ""
@@ -295,8 +297,34 @@ func (r Result) ErrorCode() string {
 		return "panic"
 	case errors.Is(r.Err, context.Canceled):
 		return "canceled"
+	case errors.As(r.Err, &coded) && coded.Code != "":
+		return coded.Code
 	}
 	return "provider_error"
+}
+
+// CodedError is a provider failure with a contract-level code (one of
+// Contract.Errors: "invalid_input", "not_found" …). The Invoker returns it
+// when the provider answered a typed error — a host that maps a guest's
+// `{success:false, error:{code, message}}` envelope builds it with
+// NewCodedError — so the consumer can branch on the code instead of parsing
+// messages. A code the contract does not declare is reported as
+// provider_error.
+type CodedError struct {
+	Code    string
+	Message string
+}
+
+// NewCodedError builds a CodedError.
+func NewCodedError(code, message string) *CodedError {
+	return &CodedError{Code: code, Message: message}
+}
+
+func (e *CodedError) Error() string {
+	if e.Message == "" {
+		return e.Code
+	}
+	return e.Code + ": " + e.Message
 }
 
 // QueryResult is what a query returns: one Result per provider reached, in
@@ -523,6 +551,13 @@ func (e Executor) one(parent context.Context, c Contract, org uuid.UUID, market 
 		r.Err = fmt.Errorf("capability %s: provider %s: %w: %w", c.Key, p.Addon, ErrIndeterminate, oc.err)
 		return r
 	case oc.err != nil:
+		var coded *CodedError
+		if errors.As(oc.err, &coded) && !contains(c.Errors, coded.Code) {
+			// Not part of the contract: keep the message, drop the code so
+			// consumers only ever branch on declared codes.
+			r.Err = fmt.Errorf("capability %s: provider %s: %s", c.Key, p.Addon, oc.err.Error())
+			return r
+		}
 		r.Err = fmt.Errorf("capability %s: provider %s: %w", c.Key, p.Addon, oc.err)
 		return r
 	}

@@ -28,6 +28,16 @@ const (
 	FiscalInvoiceCancel       = "fiscal.invoice.cancel"
 )
 
+// CommercePaymentsConfirmed is the normalized payment-update event every
+// payment provider emits from its own webhook (or staff action, for manual
+// payments): {provider, result}, where result is the output of
+// commerce.payments.confirm (result.kind: payment | refund | dispute). Only
+// providers of a commerce.payments.* capability may emit it; the host stamps
+// the real publisher as "emitter" on delivery, and the consumer re-reads the
+// payment with commerce.payments.status pinned to the session's provider
+// before acting on it.
+const CommercePaymentsConfirmed = "commerce.payments.confirmed"
+
 // Normalized status vocabularies shared by providers.
 var (
 	// PaymentStatuses is the normalized payment lifecycle.
@@ -179,6 +189,24 @@ var PinnedContracts = map[string]bool{
 func init() {
 	for _, c := range commerceContracts() {
 		mustRegister(c)
+	}
+	for _, e := range commerceEvents() {
+		mustRegisterEvent(e)
+	}
+}
+
+// commerceEvents are the well-known commerce event contracts. Registered after
+// the query contracts because the payment event reuses the confirm output.
+func commerceEvents() []EventContract {
+	return []EventContract{
+		{
+			Name: CommercePaymentsConfirmed, EmittedBy: "commerce.payments",
+			Doc: "a provider verified a payment, refund or dispute update (webhook or staff action)",
+			Payload: schema(
+				req("provider", TypeString, "addon key of the provider (informative: subscribers trust the host-stamped emitter)"),
+				obj(req("result", TypeObject, "output of commerce.payments.confirm; result.kind tells payment / refund / dispute"), Contracts[CommercePaymentsConfirm].Output),
+			),
+		},
 	}
 }
 
