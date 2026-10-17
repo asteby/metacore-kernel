@@ -29,7 +29,7 @@ func TestGeoGeocodeOutput(t *testing.T) {
 		out  string
 		want []string
 	}{
-		"centroid":      {`{"results":[{"lat":19.4326,"lng":-99.1332,"precision":"postal_code","postal_code":"06000","country":"MX","bbox":[-99.2,19.4,-99.1,19.5]}]}`, nil},
+		"centroid":      {`{"results":[{"lat":19.4326,"lng":-99.1332,"precision":"postal_centroid","postal_code":"06000","country":"MX","bbox":[-99.2,19.4,-99.1,19.5]}]}`, nil},
 		"no match":      {`{"results":[]}`, nil},
 		"lat range":     {`{"results":[{"lat":91,"lng":0,"precision":"street"}]}`, []string{"results[0].lat: want latitude"}},
 		"lng range":     {`{"results":[{"lat":0,"lng":-181,"precision":"street"}]}`, []string{"results[0].lng: want longitude"}},

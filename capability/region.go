@@ -43,8 +43,8 @@ func regionContracts() []Contract {
 				pattern(req("postal_code", TypeString, "5-digit postal code (MX código postal)"), `^[0-9]{5}$`),
 			),
 			Output: schema(
-				req("lat", TypeNumber, "WGS84 latitude of the postal code centroid, decimal degrees [-90, 90]"),
-				req("lng", TypeNumber, "WGS84 longitude of the postal code centroid, decimal degrees [-180, 180]"),
+				req("lat", TypeLatitude, "WGS84 latitude of the postal code centroid"),
+				req("lng", TypeLongitude, "WGS84 longitude of the postal code centroid"),
 				opt("city", TypeString, "city or municipality; omitted when the postal table has none"),
 				req("state", TypeString, "state (name or code, as the region pack publishes it)"),
 				enum(req("precision", TypeString, "always postal_centroid: draw it as an area, never as a rooftop pin"), PostalPrecisions),

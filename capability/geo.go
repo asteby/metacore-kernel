@@ -21,7 +21,7 @@ var (
 	// GeoPrecisions is how exact a geocoded point is, finest first. A postal
 	// code centroid is "postal_code"; consumers must not draw it as a
 	// rooftop pin.
-	GeoPrecisions = []string{"rooftop", "street", "neighborhood", "postal_code", "locality", "region", "country"}
+	GeoPrecisions = []string{"rooftop", "street", "neighborhood", "postal_centroid", "locality", "region", "country"}
 	// RouteProfiles is the travel mode of a route.
 	RouteProfiles = []string{"driving", "truck", "cycling", "walking"}
 )
@@ -47,7 +47,7 @@ var (
 	GeoPlaceSchema = schema(
 		req("lat", TypeLatitude, "WGS84 latitude"),
 		req("lng", TypeLongitude, "WGS84 longitude"),
-		enum(req("precision", TypeString, "how exact the point is; a postal code centroid is postal_code"), GeoPrecisions),
+		enum(req("precision", TypeString, "how exact the point is; a postal code centroid is postal_centroid"), GeoPrecisions),
 		opt("label", TypeString, "formatted address / place name"),
 		opt("postal_code", TypeString, ""),
 		opt("neighborhood", TypeString, "colonia / district"),
