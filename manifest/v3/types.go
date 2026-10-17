@@ -548,6 +548,15 @@ type Frontend struct {
 	// Load tells the host when to mount the federated remote
 	// ("eager" | "route" | "action" | "idle"). Empty = host default (action).
 	Load string `json:"load,omitempty"`
+	// SDK is the semver range of @asteby/metacore-sdk the bundle was built
+	// against (e.g. "^4.0.0"). The host checks it against the SDK it exposes
+	// to remotes (HostCapabilityProfile.SDKVersion) before install. Empty = no
+	// constraint beyond compatibility.requires "sdk".
+	SDK string `json:"sdk,omitempty"`
+	// Pages are federated pages of this remote, each with its own expose,
+	// route, layout and permission. Requires Format "federation". Empty = the
+	// addon registers its routes at runtime (registerRoute), as before.
+	Pages []FrontendPage `json:"pages,omitempty"`
 }
 
 // Metadata is identity + presentation + authorship.
@@ -602,6 +611,12 @@ type Compatibility struct {
 	// treat those keys as covered (e.g. full "hr" provides "hr_lite") so the
 	// catalog does not offer a conflicting twin under the same display name.
 	Provides []string `json:"provides,omitempty"`
+	// HostCapabilities names host features the addon needs present before it
+	// installs (e.g. "ui.maps"). The host checks them with
+	// manifest.EvaluateCompatibility. Capabilities implied by what the manifest
+	// declares (a view_type "map" implies "ui.views.map", a shell page
+	// "ui.embedded_pages"…) are added automatically and need not be listed.
+	HostCapabilities []string `json:"host_capabilities,omitempty"`
 }
 
 // Requirement is a single peer dependency. Key "kernel" is reserved for the
@@ -814,6 +829,12 @@ type Model struct {
 	// (from, to) pair ("*" = wildcard) and dispatches Do (a `wasm:`/`webhook:`/
 	// `compiled:` handler reference) with the {before, after, actor, org} payload.
 	OnTransition []TransitionHook `json:"on_transition,omitempty"`
+
+	// Detail declares the panels of the record detail page (map, timeline,
+	// chart, relation, stats or a federated custom component). Pure UI
+	// metadata: the host serves it with the model's table metadata and needs
+	// host capability "ui.detail_panels". Nil = the default detail page.
+	Detail *ModelDetail `json:"detail,omitempty"`
 }
 
 // Stage is one lifecycle stage of a model's StageField column. The kernel
@@ -1968,7 +1989,14 @@ type NavItem struct {
 	// "table" (the default when empty) renders the DynamicTable; "kanban"
 	// renders a board grouped by GroupBy. The same model can have one table nav
 	// and one kanban nav. Hosts that don't understand a value fall back to table.
+	// map|timeline|calendar|chart|split are declarative views configured by
+	// View and need host capability "ui.views.<type>" (checked at install).
 	ViewType string `json:"view_type,omitempty"`
+
+	// View configures the declarative renderer ViewType selects: exactly the
+	// block named like ViewType (view.map for view_type "map"…). Required for
+	// map|timeline|calendar|chart, optional for split, invalid otherwise.
+	View *NavView `json:"view,omitempty"`
 
 	// GroupBy names the column the kanban board groups its columns by (typically
 	// the model's stage_field). Required when ViewType is "kanban"; ignored

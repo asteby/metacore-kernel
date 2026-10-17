@@ -470,6 +470,41 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 				return fmt.Errorf("manifest.frontend.load: unknown %q (want eager|route|action|idle)", m.Frontend.Load)
 			}
 		}
+		if errs := v3.ValidateFrontendUI(m.Frontend.Format, m.Frontend.Expose, m.Frontend.SDK, m.Frontend.Pages); len(errs) > 0 {
+			return fmt.Errorf("manifest.%s", strings.Join(errs, "; manifest."))
+		}
+	}
+	return m.validateUIViews()
+}
+
+// validateUIViews applies the structural rules of declarative views (nav
+// view_type + view) and detail panels to the legacy carrier. Column and
+// relation existence is checked by the v3 validator, which knows the declared
+// columns; here only shape is enforced so a v2 manifest cannot smuggle an
+// inconsistent view past install.
+func (m *Manifest) validateUIViews() error {
+	var errs []string
+	var walk func(items []NavItem, path string)
+	walk = func(items []NavItem, path string) {
+		for i, it := range items {
+			where := fmt.Sprintf("%s[%d]", path, i)
+			errs = append(errs, v3.ValidateNavView(where, it.Model, it.ViewType, it.View)...)
+			if len(it.Items) > 0 {
+				walk(it.Items, where+".items")
+			}
+		}
+	}
+	for gi, g := range m.Navigation {
+		walk(g.Items, fmt.Sprintf("navigation[%d].items", gi))
+	}
+	federated := m.Frontend != nil && m.Frontend.Format == "federation"
+	for di, d := range m.ModelDefinitions {
+		if d.Detail != nil {
+			errs = append(errs, v3.ValidateModelDetail(fmt.Sprintf("model_definitions[%d].detail", di), d.ModelKey, d.Detail, federated)...)
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("manifest.%s", strings.Join(errs, "; manifest."))
 	}
 	return nil
 }

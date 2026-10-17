@@ -62,6 +62,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **manifest: páginas federadas, vistas declarativas y paneles de detalle** —
+  contrato aditivo (v3 y portador legacy), sin cambios para manifests ya
+  publicados:
+  - `frontend.pages[]` (`key`, `path`, `expose`, `layout` `shell|immersive`
+    —sin alias—, `title`, `icon`, `permission`, `requires`, `shares` cerrado a
+    maps/charts, `budget_kb` ≤ 150, `breadcrumbs`) y `frontend.sdk` (rango de
+    `@asteby/metacore-sdk`). Requiere `format: federation`; un expose por
+    página distinto de `frontend.expose`. `FrontendPage.EffectiveLayout` y
+    `FrontendSpec.Page(path)` para el ruteo del host.
+  - `view_type` cerrado gana `map`, `timeline`, `calendar`, `chart` y `split`,
+    configurados por `NavItem.view` (exactamente el bloque del tipo). `chart`
+    reutiliza `WidgetQuery` y las reglas del tablero.
+  - `models[].detail.panels[]`: `map` (con `route` por relación), `timeline`
+    (por relación o por consulta de capacidad con `input` del registro e
+    `items` verificados contra el contrato), `chart` (acotada a una relación),
+    `relation`, `stats` y `custom` (`expose` federado).
+  - JSON Schema por tipo (`FrontendPage`, `NavView`, `MapView`,
+    `TimelineView`, `CalendarView`, `ChartView`, `SplitView`, `ModelDetail`,
+    `DetailPanel`…) y reglas cruzadas en Go con rutas exactas (columnas y
+    relaciones de los modelos propios, bloques que no corresponden al tipo,
+    duplicados, límites).
+  - Capacidades de host inferidas (`Manifest.RequiredHostCapabilities`):
+    `ui.pages`, `ui.embedded_pages`, `ui.views.<tipo>`, `ui.detail_panels`,
+    `ui.maps`, `ui.charts`. `EvaluateCompatibility` las exige junto con las
+    declaradas (nuevo `compatibility.host_capabilities` en v3) y revisa
+    `frontend.sdk` contra `SDKVersion`. `Manifest.CheckHostCapabilities` e
+    `installer.Installer.HostCapabilities` (opcional; nil = sin cambio)
+    rechazan instalar/actualizar en un host sin ellas.
+  - `Lite` lleva `pages[]` recortado (≤ 300 B por página) y quita `view` de la
+    navegación; `Manifest.NavView(model, viewType)` para servir la vista con la
+    metadata de tabla.
+  Ver `docs/ui-pages-and-views.md` y `docs/spec/v3/examples/addon-ui-example.json`.
+
 - **capability: contratos `geo.geocode` y `geo.route` (solo contrato) y
   coordenadas en el rastreo** — contratos `query` de cardinalidad `one` sin
   implementación en el kernel: `geo.geocode` (texto y/o CP → `results[]` con

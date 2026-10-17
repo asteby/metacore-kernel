@@ -1,0 +1,142 @@
+{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": {
+    "key": "shipping",
+    "name": "Envíos",
+    "description": "Unified shipments across carriers: map, timeline, board and a live control tower.",
+    "version": "0.1.0",
+    "category": "logistics",
+    "icon": { "type": "lucide", "slug": "Truck" }
+  },
+  "compatibility": {
+    "requires": [
+      { "key": "kernel", "version": ">=3.0.0 <4.0.0" },
+      { "key": "locations", "version": ">=0.3.0", "optional": true, "reason": "Branch layer on the shipments map." }
+    ],
+    "host_capabilities": ["ui.maps"]
+  },
+  "tenancy": { "isolation": "shared", "rls_column": "organization_id" },
+  "capabilities": [
+    { "kind": "db:write", "target": "addon_shipping.*" }
+  ],
+  "models": [
+    {
+      "key": "Shipment",
+      "table": "shipments",
+      "label": "shipping.model.shipment",
+      "columns": [
+        { "name": "id", "type": "uuid", "primary_key": true, "default": "gen_random_uuid()" },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
+        { "name": "order_ref", "type": "text" },
+        { "name": "carrier", "type": "text" },
+        { "name": "tracking_number", "type": "text" },
+        { "name": "status", "type": "text", "not_null": true, "default": "'created'" },
+        { "name": "eta", "type": "timestamptz" },
+        { "name": "dest_postal_code", "type": "text" },
+        { "name": "dest_lat", "type": "numeric" },
+        { "name": "dest_lng", "type": "numeric" },
+        { "name": "cost", "type": "numeric" }
+      ],
+      "relations": [
+        { "name": "events", "kind": "one_to_many", "through": "ShipmentEvent", "foreign_key": "shipment_id", "label": "shipping.relation.events", "readonly": true }
+      ],
+      "detail": {
+        "panels": [
+          { "key": "route", "kind": "map", "title": "shipping.panel.route",
+            "map": {
+              "point": { "lat": "dest_lat", "lng": "dest_lng" },
+              "route": { "relation": "events", "point": { "lat": "lat", "lng": "lng" }, "order_by": "at" }
+            } },
+          { "key": "tracking", "kind": "timeline", "title": "shipping.panel.tracking", "span": "half",
+            "timeline": {
+              "date_field": "at", "title_field": "description", "status_field": "status",
+              "source": {
+                "capability": "commerce.shipping.track",
+                "input": { "tracking_number": "record.tracking_number", "carrier": "record.carrier" },
+                "items": "events"
+              }
+            } },
+          { "key": "history", "kind": "relation", "title": "shipping.panel.history", "span": "half",
+            "relation": { "name": "events", "columns": ["at", "status", "location_text"], "limit": 20 } },
+          { "key": "figures", "kind": "stats", "title": "shipping.panel.figures",
+            "stats": { "items": [
+              { "field": "eta", "format": "relative_date" },
+              { "field": "cost", "format": "currency" }
+            ] } }
+        ]
+      }
+    },
+    {
+      "key": "ShipmentEvent",
+      "table": "shipment_events",
+      "label": "shipping.model.shipment_event",
+      "append_only": true,
+      "columns": [
+        { "name": "id", "type": "uuid", "primary_key": true, "default": "gen_random_uuid()" },
+        { "name": "organization_id", "type": "uuid", "not_null": true },
+        { "name": "shipment_id", "type": "uuid", "not_null": true },
+        { "name": "at", "type": "timestamptz", "not_null": true },
+        { "name": "status", "type": "text", "not_null": true },
+        { "name": "description", "type": "text" },
+        { "name": "location_text", "type": "text" },
+        { "name": "lat", "type": "numeric" },
+        { "name": "lng", "type": "numeric" }
+      ]
+    }
+  ],
+  "frontend": {
+    "entry": "/api/metacore/addons/shipping/frontend/dist/remoteEntry.js",
+    "format": "federation",
+    "container": "metacore_shipping",
+    "expose": "./register",
+    "layout": "shell",
+    "load": "route",
+    "sdk": "^4.0.0",
+    "pages": [
+      {
+        "key": "control_tower",
+        "path": "control-tower",
+        "expose": "./pages/control-tower",
+        "layout": "shell",
+        "title": "shipping.pages.control_tower",
+        "icon": "Map",
+        "permission": "shipping.shipment.read",
+        "requires": [{ "model": "Shipment", "actions": ["index"] }],
+        "shares": ["@asteby/metacore-maps"],
+        "budget_kb": 120,
+        "breadcrumbs": [{ "title": "shipping.nav.group" }]
+      }
+    ]
+  },
+  "contributions": {
+    "navigation": [
+      {
+        "title": "shipping.nav.group",
+        "icon": "Truck",
+        "items": [
+          { "title": "shipping.nav.shipments", "model": "Shipment", "view_type": "split",
+            "view": { "split": { "columns": ["tracking_number", "carrier", "status", "eta"] } } },
+          { "title": "shipping.nav.map", "model": "Shipment", "view_type": "map",
+            "view": { "map": {
+              "point": { "lat": "dest_lat", "lng": "dest_lng" },
+              "cluster": true,
+              "color_by": "status",
+              "popup": ["tracking_number", "carrier", "status", "eta"],
+              "layers": [{ "kind": "points", "model": "locations.Branch", "point": { "lat": "lat", "lng": "lng" }, "icon": "Store" }],
+              "fit": "data"
+            } } },
+          { "title": "shipping.nav.board", "model": "Shipment", "view_type": "kanban", "group_by": "status" },
+          { "title": "shipping.nav.calendar", "model": "Shipment", "view_type": "calendar",
+            "view": { "calendar": { "start_field": "eta", "title_field": "tracking_number", "color_by": "status" } } },
+          { "title": "shipping.nav.by_carrier", "model": "Shipment", "view_type": "chart",
+            "view": { "chart": { "kind": "bar", "query": { "model": "Shipment", "group_by": "carrier", "range": "last_30_days" } } } },
+          { "title": "shipping.nav.activity", "model": "ShipmentEvent", "view_type": "timeline",
+            "view": { "timeline": { "date_field": "at", "title_field": "description", "status_field": "status" } } },
+          { "title": "shipping.nav.control_tower", "url": "addon://shipping/control-tower", "icon": "Map",
+            "permission": "shipping.shipment.read" }
+        ]
+      }
+    ]
+  }
+}

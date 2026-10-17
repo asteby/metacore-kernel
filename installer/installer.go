@@ -192,6 +192,15 @@ func ensureInstallationUniqueIndex(db *gorm.DB) error {
 	}
 }
 
+// checkHostCapabilities refuses a manifest needing a host capability this
+// installer's host does not implement. No-op when HostCapabilities is nil.
+func (i *Installer) checkHostCapabilities(m *manifest.Manifest) error {
+	if i.HostCapabilities == nil {
+		return nil
+	}
+	return m.CheckHostCapabilities(i.HostCapabilities)
+}
+
 // Installer wires the collaborators the kernel needs.
 type Installer struct {
 	DB            *gorm.DB
@@ -201,8 +210,14 @@ type Installer struct {
 	// "metacore-kernel" range it does not satisfy is refused on install and
 	// upgrade (manifest.CheckRuntime).
 	RuntimeVersion string
-	Lifecycles     *lifecycle.Registry
-	Interceptors   *lifecycle.InterceptorRegistry
+	// HostCapabilities, when non-nil, is the set of named capabilities this
+	// host implements (e.g. "wasm-runtime", "ui.pages", "ui.views.map"). An
+	// addon that requires one it lacks — declared in host_capabilities or
+	// implied by its UI (manifest.RequiredHostCapabilities) — is refused on
+	// install and upgrade. Nil skips the check (the pre-existing behaviour).
+	HostCapabilities []string
+	Lifecycles       *lifecycle.Registry
+	Interceptors     *lifecycle.InterceptorRegistry
 
 	// HookRunner reads manifest.LifecycleHooks at install/enable/disable/
 	// uninstall and dispatches each declared HookDef through its registered
@@ -581,6 +596,9 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 		return nil, nil, err
 	}
 	if err := b.Manifest.CheckRuntime(i.RuntimeVersion); err != nil {
+		return nil, nil, err
+	}
+	if err := i.checkHostCapabilities(&b.Manifest); err != nil {
 		return nil, nil, err
 	}
 	for _, w := range warnings {
@@ -1282,6 +1300,9 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 		return nil, vfail(err)
 	}
 	if err := newBundle.Manifest.CheckRuntime(i.RuntimeVersion); err != nil {
+		return nil, vfail(err)
+	}
+	if err := i.checkHostCapabilities(&newBundle.Manifest); err != nil {
 		return nil, vfail(err)
 	}
 	// Findings of legacy-tolerated v3 rules the bundle reader downgraded

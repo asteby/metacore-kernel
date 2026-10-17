@@ -510,6 +510,10 @@ type NavItem struct {
 	// default DynamicTable). Empty ViewType = table. See manifest/v3.NavItem.
 	ViewType string `json:"viewType,omitempty"`
 	GroupBy  string `json:"groupBy,omitempty"`
+	// View is the host projection of v3 NavItem.view: the configuration of a
+	// declarative ViewType (map|timeline|calendar|chart|split). The host serves
+	// it with the model's table metadata (on demand); Lite drops it.
+	View *v3.NavView `json:"view,omitempty"`
 
 	// RequiresCapabilities is the host projection of v3 NavItem.requires_capabilities:
 	// API capabilities implied by granting Acceder to this screen. See v3.NavItem.
@@ -576,6 +580,32 @@ type FrontendSpec struct {
 	// Closed set validated at install time. See ops addon-load-policy +
 	// PLAN-ESCALA shell-fino for host behaviour.
 	Load string `json:"load,omitempty"`
+
+	// SDK is the semver range of @asteby/metacore-sdk the bundle was built
+	// against (v3 frontend.sdk). EvaluateCompatibility checks it against
+	// HostCapabilityProfile.SDKVersion. Empty = no constraint.
+	SDK string `json:"sdk,omitempty"`
+
+	// Pages are the remote's federated pages (v3 frontend.pages[]): one
+	// expose, path, layout and permission each. The host uses them (they ride
+	// in the lite manifest) to route a nav "addon://<key>/<path>" link to the
+	// embedded (/a/…) or full-screen (/addons/…) mount BEFORE downloading the
+	// remote. Empty = runtime registerRoute only, as before.
+	Pages []v3.FrontendPage `json:"pages,omitempty"`
+}
+
+// Page returns the frontend page mounted at path ("control-tower"), or nil.
+func (f *FrontendSpec) Page(path string) *v3.FrontendPage {
+	if f == nil {
+		return nil
+	}
+	path = strings.Trim(path, "/")
+	for i := range f.Pages {
+		if f.Pages[i].Path == path {
+			return &f.Pages[i]
+		}
+	}
+	return nil
 }
 
 // BackendSpec declares how the addon's backend code is executed.
@@ -1217,6 +1247,10 @@ type ModelDefinition struct {
 	// read as picker options) so the host can hand it to dynamic.Service via
 	// Config.OptionDisplayResolver. Pure UI metadata. Nil = plain options.
 	OptionDisplay *v3.OptionDisplay `json:"option_display,omitempty"`
+	// Detail carries v3 Model.detail verbatim: the record detail page panels
+	// (map, timeline, chart, relation, stats, custom) the host serves with the
+	// model's table metadata. Pure UI metadata. Nil = the default detail page.
+	Detail *v3.ModelDetail `json:"detail,omitempty"`
 	// OptionMetrics are the option_metrics[] of this addon that AGGREGATE this
 	// model (Metric.Model == ModelKey), copied here so a host persisting only
 	// model definitions keeps them. The same entries are in

@@ -259,34 +259,43 @@ func validateDashboard(m *Manifest) []string {
 			continue
 		}
 		q := w.Query
-		if q.Model == "" {
-			errs = append(errs, fmt.Sprintf("%s.query.model is required", where))
-		}
-		agg := q.Aggregate
-		if agg == "" {
-			agg = "count"
-		}
-		if _, ok := dashAggregates[agg]; !ok {
-			errs = append(errs, fmt.Sprintf("%s.query.aggregate %q is not one of count|sum|avg|min|max", where, q.Aggregate))
-		}
-		if agg != "count" && q.Field == "" {
-			errs = append(errs, fmt.Sprintf("%s.query.field is required when aggregate=%s", where, agg))
-		}
-		switch w.Kind {
-		case "bar", "pie", "donut", "list":
-			if q.GroupBy == "" {
-				errs = append(errs, fmt.Sprintf("%s.query.group_by is required for kind=%s", where, w.Kind))
-			}
-		case "line", "area":
-			if q.DateField == "" {
-				errs = append(errs, fmt.Sprintf("%s.query.date_field is required for kind=%s", where, w.Kind))
-			}
-			if q.Interval == "" {
-				errs = append(errs, fmt.Sprintf("%s.query.interval is required for kind=%s", where, w.Kind))
-			}
-		}
+		errs = append(errs, validateWidgetQuery(where, w.Kind, q)...)
 		if w.Compare != nil && (q.DateField == "" || q.Range == "") {
 			errs = append(errs, fmt.Sprintf("%s.compare requires query.date_field and query.range", where))
+		}
+	}
+	return errs
+}
+
+// validateWidgetQuery enforces the kind-conditional rules of a declarative
+// aggregate (dashboard widgets and chart views share the engine). where is the
+// owner path; errors name "<where>.query.<field>".
+func validateWidgetQuery(where, kind string, q *WidgetQuery) []string {
+	var errs []string
+	if q.Model == "" {
+		errs = append(errs, fmt.Sprintf("%s.query.model is required", where))
+	}
+	agg := q.Aggregate
+	if agg == "" {
+		agg = "count"
+	}
+	if _, ok := dashAggregates[agg]; !ok {
+		errs = append(errs, fmt.Sprintf("%s.query.aggregate %q is not one of count|sum|avg|min|max", where, q.Aggregate))
+	}
+	if agg != "count" && q.Field == "" {
+		errs = append(errs, fmt.Sprintf("%s.query.field is required when aggregate=%s", where, agg))
+	}
+	switch kind {
+	case "bar", "pie", "donut", "list":
+		if q.GroupBy == "" {
+			errs = append(errs, fmt.Sprintf("%s.query.group_by is required for kind=%s", where, kind))
+		}
+	case "line", "area":
+		if q.DateField == "" {
+			errs = append(errs, fmt.Sprintf("%s.query.date_field is required for kind=%s", where, kind))
+		}
+		if q.Interval == "" {
+			errs = append(errs, fmt.Sprintf("%s.query.interval is required for kind=%s", where, kind))
 		}
 	}
 	return errs
@@ -810,8 +819,9 @@ func validateStageMachine(mi int, mod Model, ownCols map[string]struct{}) []stri
 }
 
 // validateNavViewTypes enforces that a kanban nav entry declares the group_by
-// column it groups its board by. view_type is otherwise free (hosts fall back
-// to a table for an unknown value). Walks the nested NavItem tree.
+// column it groups its board by. The view_type set itself is closed by the
+// schema; the declarative views (map, timeline…) are checked by validateUI.
+// Walks the nested NavItem tree.
 func validateNavViewTypes(m *Manifest) []string {
 	if m.Contributions == nil {
 		return nil
@@ -1688,6 +1698,8 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	errs = append(errs, validateOptionMetrics(&m, colsByModel)...)
 	// Provided capability contracts + capability-typed handlers.
 	errs = append(errs, validateCapabilities(&m)...)
+	// Federated pages, declarative views and detail panels (ui_validate.go).
+	errs = append(errs, validateUI(&m, colsByModel)...)
 	// Item-master primitives: 1:1 extension tables, searchable columns and
 	// normalized search keys (extends_validate.go).
 	errs = append(errs, validateExtends(&m, rls)...)

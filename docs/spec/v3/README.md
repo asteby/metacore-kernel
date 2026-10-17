@@ -89,6 +89,12 @@ key references another addon by `metadata.key`. `version` is a semver range
 parsed by Masterminds/semver. `optional: true` lets the addon enable extra
 features when a peer is present without failing the install if it is not.
 
+`compatibility.host_capabilities[]` (optional) names host features the addon
+needs before it installs (e.g. `"ui.maps"`). Capabilities implied by what the
+manifest declares — a declarative `view_type`, detail panels, frontend pages
+and their shares — are added by the host automatically
+(`manifest.RequiredHostCapabilities`), so they need not be listed.
+
 ## Inter-addon coupling
 
 Two addons coordinate exclusively through `contributions` (the consumer side)
@@ -242,6 +248,10 @@ The full field-by-field mapping lives in
   extension points, RBAC, billing and signature.
 - [`examples/preset-example.json`](./examples/preset-example.json) — a
   vertical `Preset` bundling foundation addons with default settings.
+- [`examples/addon-ui-example.json`](./examples/addon-ui-example.json) — an
+  `Addon` (shipping) exercising federated pages (`frontend.pages[]`),
+  declarative views (`view_type` map/timeline/calendar/chart/split + `view`)
+  and detail panels (`models[].detail.panels[]`).
 
 ## Additive revisions inside v3
 
@@ -266,6 +276,7 @@ release added:
 | unreleased | `data_query` `aggregate` (wasm ABI, no manifest change) — grouped `sum`/`count`/`min`/`max`/`avg` over an org-scoped logical table so a guest asks "how much is overdue" without paging rows (see `docs/wasm-abi.md` § 15.8). |
 | v0.117.0 | Top-level `provides_options[]` — publish a model as a reusable option **catalog** any other addon consumes through `options_source` (see [Published option catalogs](#published-option-catalogs)). New `OptionCatalog` type. |
 | next | Top-level `provides_capabilities[]` + handler `type: "capability"` — provider-neutral capability contracts (see [Capability contracts](#capability-contracts)). New `ProvidedCapability` type; `Handler.capability` / `Handler.input`; kernel package `capability`. |
+| unreleased | `frontend.pages[]` (federated pages: key, path, expose, layout `shell`\|`immersive`, title, permission, requires, shares, budget_kb, breadcrumbs) + `frontend.sdk`; `NavItem.view_type` gains `map`\|`timeline`\|`calendar`\|`chart`\|`split` configured by `NavItem.view`; `models[].detail.panels[]`; `compatibility.host_capabilities`. UI host capabilities (`ui.pages`, `ui.embedded_pages`, `ui.views.*`, `ui.detail_panels`, `ui.maps`, `ui.charts`) are implied by use. See [`docs/ui-pages-and-views.md`](../../ui-pages-and-views.md). New `FrontendPage` / `PageBreadcrumb` / `NavView` / `MapView` / `MapPoint` / `MapLayer` / `MapRoute` / `TimelineView` / `TimelineSource` / `CalendarView` / `ChartView` / `SplitView` / `ModelDetail` / `DetailPanel` / `RelationPanel` / `StatsPanel` / `StatItem` types. |
 | unreleased | `models[].option_display` + top-level `option_metrics[]` — declarative picker presentation (title, subtitle, image, trailing metrics with format and tone, badges) and computed values other addons contribute to it (see [Option display](#option-display)). New `OptionDisplay` / `OptionTrailing` / `OptionTone` / `OptionDisplayCondition` / `OptionBadge` / `OptionMetric` types. |
 
 `metadata.i18n` and `metadata.countries` slot into the `metadata` block:

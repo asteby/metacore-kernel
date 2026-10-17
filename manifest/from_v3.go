@@ -113,6 +113,9 @@ func FromV3(m *v3.Manifest) Manifest {
 	if len(m.Compatibility.Provides) > 0 {
 		out.Provides = append([]string(nil), m.Compatibility.Provides...)
 	}
+	if len(m.Compatibility.HostCapabilities) > 0 {
+		out.HostCapabilities = append([]string(nil), m.Compatibility.HostCapabilities...)
+	}
 
 	// Tenancy → TenantIsolation. nil tenancy maps to "" which the kernel and
 	// dynamic.ParseIsolation both treat as the "shared" default.
@@ -131,6 +134,8 @@ func FromV3(m *v3.Manifest) Manifest {
 			Container: m.Frontend.Container,
 			Layout:    m.Frontend.Layout,
 			Load:      m.Frontend.Load,
+			SDK:       m.Frontend.SDK,
+			Pages:     m.Frontend.Pages,
 		}
 	}
 
@@ -736,6 +741,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		// OptionDisplay rides through verbatim (pure UI): the host hands it to
 		// dynamic.Service so the options endpoint serves each option's display.
 		def.OptionDisplay = m.OptionDisplay
+		// Detail panels ride through verbatim (pure UI), served with the
+		// model's table metadata.
+		def.Detail = m.Detail
 		out = append(out, def)
 	}
 	return out
@@ -1071,6 +1079,9 @@ func mapNavItems(in []v3.NavItem, modelTable map[string]string) []NavItem {
 			// the served TableMetadata and the SDK picks the board renderer.
 			ViewType: it.ViewType,
 			GroupBy:  it.GroupBy,
+			// Declarative view config rides across verbatim; the host serves
+			// it with the table metadata (never in the lite manifest).
+			View: it.View,
 			// Column/action allowlists ride across verbatim so two nav entries
 			// filtering the same model can render distinct screens — see
 			// v3.NavItem.Columns/Actions.

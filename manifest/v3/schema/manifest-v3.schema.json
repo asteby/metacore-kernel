@@ -821,7 +821,16 @@
             "minLength": 1
           },
           "uniqueItems": true
-        }
+        },
+          "host_capabilities": {
+            "type": "array",
+            "description": "Host features the addon needs before it installs (e.g. 'ui.maps'). Capabilities implied by the manifest (view_type map → ui.views.map, a shell page → ui.embedded_pages, detail panels → ui.detail_panels…) are added by the host automatically.",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_.-]*$"
+            },
+            "uniqueItems": true
+          }
       },
       "examples": [
         {
@@ -1169,7 +1178,11 @@
           "items": {
             "$ref": "#/$defs/TransitionHook"
           }
-        }
+        },
+          "detail": {
+            "$ref": "#/$defs/ModelDetail",
+            "description": "Panels of the record detail page (map, timeline, chart, relation, stats, custom). Pure UI; implies host capability ui.detail_panels."
+          }
       },
       "examples": [
         {
@@ -2779,9 +2792,18 @@
           "type": "string",
           "enum": [
             "table",
-            "kanban"
+            "kanban",
+            "map",
+            "timeline",
+            "calendar",
+            "chart",
+            "split"
           ],
-          "description": "Renderer the SDK mounts for this entry's model: 'table' (default) or 'kanban' (a board grouped by group_by). The same model can have one table nav and one kanban nav."
+          "description": "Renderer the SDK mounts for this entry's model: 'table' (default), 'kanban' (a board grouped by group_by), or a declarative view configured by 'view' — map, timeline, calendar, chart, split (master-detail). Declarative views need host capability ui.views.<type>; hosts that do not render one fall back to table."
+        },
+        "view": {
+          "$ref": "#/$defs/NavView",
+          "description": "Configuration of the declarative view_type: exactly the block named like view_type (view.map for 'map'…). Required for map|timeline|calendar|chart, optional for split."
         },
         "group_by": {
           "type": "string",
@@ -3021,7 +3043,20 @@
             "idle"
           ],
           "description": "When the host mounts the federated remoteEntry. Empty = host default (action). Prefer action/route; eager taxes every shell open."
-        }
+        },
+          "sdk": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Semver range of @asteby/metacore-sdk the bundle was built against (e.g. '^4.0.0'). Checked against the SDK the host exposes to remotes before install."
+          },
+          "pages": {
+            "type": "array",
+            "maxItems": 32,
+            "description": "Federated pages of this remote, each with its own expose, route, layout (shell = embedded, immersive = full screen) and permission. Requires format=federation. Implies host capability ui.pages (+ ui.embedded_pages for shell pages).",
+            "items": {
+              "$ref": "#/$defs/FrontendPage"
+            }
+          }
       }
     },
     "Action": {
@@ -5213,6 +5248,600 @@
           "description": "'button' (default) or 'auto' (run when the step opens with all inputs filled)."
         }
       }
-    }
+    },
+      "FrontendPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "path",
+          "expose",
+          "title"
+        ],
+        "description": "One federated page of the addon's remote. The host resolves where to mount it before downloading the remote: layout shell → embedded under /a/<addon>/<path>, immersive → full screen under /addons/<addon>/<path>. Nav entries link to it with url 'addon://<addon>/<path>'.",
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 64,
+            "description": "Stable id, unique within the addon."
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)*$",
+            "maxLength": 128,
+            "description": "URL segment(s) under the addon base, lowercase kebab-case, no leading slash."
+          },
+          "expose": {
+            "type": "string",
+            "pattern": "^\\./[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*$",
+            "description": "Federated module that default-exports the page (e.g. './pages/control-tower'). Must differ from frontend.expose."
+          },
+          "layout": {
+            "type": "string",
+            "enum": [
+              "shell",
+              "immersive"
+            ],
+            "description": "shell = embedded in the host chrome; immersive = full screen. Empty = frontend.layout, then shell."
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "i18n key of the page title."
+          },
+          "icon": {
+            "type": "string",
+            "description": "Optional lucide icon name."
+          },
+          "permission": {
+            "type": "string",
+            "description": "Permission the viewer needs; the host does not mount the page without it."
+          },
+          "requires": {
+            "type": "array",
+            "description": "Data surface the page calls (model + actions), projected to capability strings like nav requires.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "model",
+                "actions"
+              ],
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "actions": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          },
+          "shares": {
+            "type": "array",
+            "uniqueItems": true,
+            "description": "Lazy host-provided modules the page imports. Maps imply ui.maps, charts ui.charts.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "@asteby/metacore-maps",
+                "maplibre-gl",
+                "@asteby/metacore-charts",
+                "recharts"
+              ]
+            }
+          },
+          "budget_kb": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 150,
+            "description": "Page JavaScript budget in gzip KB, shares excluded. 0/omitted = 150."
+          },
+          "breadcrumbs": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "$ref": "#/$defs/PageBreadcrumb"
+            },
+            "description": "Static trail before the page title. Empty = derived from the nav entry linking to the page."
+          }
+        }
+      },
+      "PageBreadcrumb": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "i18n key."
+          },
+          "url": {
+            "type": "string",
+            "description": "Optional host URL the crumb links to."
+          }
+        }
+      },
+      "NavView": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Declarative view configuration of a nav entry. Only the block named like view_type is read.",
+        "properties": {
+          "map": {
+            "$ref": "#/$defs/MapView"
+          },
+          "timeline": {
+            "$ref": "#/$defs/TimelineView"
+          },
+          "calendar": {
+            "$ref": "#/$defs/CalendarView"
+          },
+          "chart": {
+            "$ref": "#/$defs/ChartView"
+          },
+          "split": {
+            "$ref": "#/$defs/SplitView"
+          }
+        }
+      },
+      "MapView": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Rows (or, in a detail panel, one record) as map features. Coordinates from point (two numeric WGS84 columns) or geometry (a GeoJSON column), never both.",
+        "properties": {
+          "point": {
+            "$ref": "#/$defs/MapPoint"
+          },
+          "geometry": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "GeoJSON (jsonb) column."
+          },
+          "cluster": {
+            "type": "boolean",
+            "description": "Group nearby points."
+          },
+          "color_by": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Column whose option colours tint each feature."
+          },
+          "popup": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*$"
+            },
+            "description": "Columns shown when a feature is selected."
+          },
+          "layers": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "$ref": "#/$defs/MapLayer"
+            }
+          },
+          "route": {
+            "$ref": "#/$defs/MapRoute",
+            "description": "Detail panels only: line through the record's ordered child points."
+          },
+          "fit": {
+            "type": "string",
+            "enum": [
+              "data",
+              "org_default"
+            ],
+            "description": "Initial viewport. Default data."
+          }
+        }
+      },
+      "MapPoint": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "lat",
+          "lng"
+        ],
+        "properties": {
+          "lat": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Latitude column (WGS84 degrees)."
+          },
+          "lng": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Longitude column (WGS84 degrees)."
+          }
+        }
+      },
+      "MapLayer": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "model"
+        ],
+        "description": "Extra features from another model (own or 'addon.Model').",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "points",
+              "zones"
+            ]
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "point": {
+            "$ref": "#/$defs/MapPoint"
+          },
+          "geometry": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "GeoJSON polygon column (zones)."
+          },
+          "icon": {
+            "type": "string",
+            "description": "Lucide icon name for points."
+          },
+          "label": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Column used as the feature label."
+          },
+          "color_by": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Column whose option colours tint features."
+          }
+        }
+      },
+      "MapRoute": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "relation",
+          "point",
+          "order_by"
+        ],
+        "properties": {
+          "relation": {
+            "type": "string",
+            "minLength": 1,
+            "description": "One of the model's relations (the child rows)."
+          },
+          "point": {
+            "$ref": "#/$defs/MapPoint"
+          },
+          "order_by": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Child column that orders the points."
+          }
+        }
+      },
+      "TimelineView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "date_field",
+          "title_field"
+        ],
+        "description": "Dated entries in order. On a nav entry: the model's rows. In a detail panel: the rows of source.",
+        "properties": {
+          "date_field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Orders and dates each entry."
+          },
+          "title_field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Entry heading."
+          },
+          "status_field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Optional status (option colours)."
+          },
+          "description_field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Optional body text."
+          },
+          "group_by": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Optional grouping column."
+          },
+          "source": {
+            "$ref": "#/$defs/TimelineSource"
+          }
+        }
+      },
+      "TimelineSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Detail panels only. relation = the record's children; capability = the array field 'items' of a capability query's output, called with 'input' mapped from the record (record.<column> | const:<literal>).",
+        "properties": {
+          "relation": {
+            "type": "string",
+            "minLength": 1
+          },
+          "capability": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+          },
+          "input": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "CalendarView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "start_field"
+        ],
+        "properties": {
+          "start_field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Date/timestamp column each entry starts at."
+          },
+          "end_field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Optional end column."
+          },
+          "title_field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Entry label (default: display column)."
+          },
+          "color_by": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Column whose option colours tint entries."
+          },
+          "all_day_field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Boolean column marking all-day entries."
+          }
+        }
+      },
+      "ChartView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "query"
+        ],
+        "description": "One aggregate rendered with the dashboard engine (same query as contributions.dashboard[]).",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bar",
+              "line",
+              "area",
+              "pie",
+              "donut"
+            ]
+          },
+          "query": {
+            "$ref": "#/$defs/WidgetQuery"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "number",
+              "currency",
+              "percent",
+              "compact"
+            ]
+          },
+          "relation": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Detail panels only: scope the query to the record's children (query.model must be the relation's child)."
+          }
+        }
+      },
+      "SplitView": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Master-detail: the list and the selected record's panels on one screen.",
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*$"
+            },
+            "description": "List columns (default: nav columns, then the model's)."
+          },
+          "panels": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "$ref": "#/$defs/DetailPanel"
+            },
+            "description": "Default: the model's detail.panels."
+          }
+        }
+      },
+      "ModelDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "panels"
+        ],
+        "properties": {
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "items": {
+              "$ref": "#/$defs/DetailPanel"
+            }
+          }
+        }
+      },
+      "DetailPanel": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "kind",
+          "title"
+        ],
+        "description": "One block of a record's detail page. kind selects the block read: map|timeline|chart|relation|stats, or custom → expose (federated component).",
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "map",
+              "timeline",
+              "chart",
+              "relation",
+              "stats",
+              "custom"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "i18n key."
+          },
+          "span": {
+            "type": "string",
+            "enum": [
+              "full",
+              "half"
+            ]
+          },
+          "permission": {
+            "type": "string"
+          },
+          "map": {
+            "$ref": "#/$defs/MapView"
+          },
+          "timeline": {
+            "$ref": "#/$defs/TimelineView"
+          },
+          "chart": {
+            "$ref": "#/$defs/ChartView"
+          },
+          "relation": {
+            "$ref": "#/$defs/RelationPanel"
+          },
+          "stats": {
+            "$ref": "#/$defs/StatsPanel"
+          },
+          "expose": {
+            "type": "string",
+            "pattern": "^\\./[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*$",
+            "description": "kind=custom: federated component (needs a federation frontend)."
+          }
+        }
+      },
+      "RelationPanel": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "models[].relations[].name"
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*$"
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          }
+        }
+      },
+      "StatsPanel": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": {
+              "$ref": "#/$defs/StatItem"
+            }
+          }
+        }
+      },
+      "StatItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "field"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "label": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "number",
+              "currency",
+              "percent",
+              "compact",
+              "date",
+              "datetime",
+              "relative_date"
+            ]
+          }
+        }
+      }
   }
 }

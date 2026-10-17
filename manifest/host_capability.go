@@ -72,8 +72,8 @@ const (
 // against a given HostCapabilityProfile.
 type CompatibilityIssue struct {
 	Kind CompatibilityIssueKind
-	// Field names the manifest field the issue is about ("kernel", "sdk", or
-	// "host_capabilities").
+	// Field names the manifest field the issue is about ("kernel", "sdk",
+	// "frontend.sdk", "runtime" or "host_capabilities").
 	Field string
 	// Capability is set only for IssueMissingCapability: the missing name.
 	Capability string
@@ -106,9 +106,11 @@ func (r CompatibilityResult) Reasons() []string {
 // so an incompatible addon is rejected with structured reasons instead of
 // failing mid-install.
 //
-// Evaluation order is fixed (kernel, then sdk, then host capabilities in
-// manifest declaration order) so Issues is stable across runs for the same
-// inputs — callers can diff results or assert on them without sorting.
+// Evaluation order is fixed (kernel, sdk, frontend.sdk, runtime, then the
+// missing host capabilities sorted by name — declared ones plus those implied
+// by the manifest's UI surfaces, see RequiredHostCapabilities) so Issues is
+// stable across runs for the same inputs — callers can diff results or assert
+// on them without sorting.
 func (m *Manifest) EvaluateCompatibility(profile HostCapabilityProfile) CompatibilityResult {
 	var issues []CompatibilityIssue
 
@@ -118,6 +120,12 @@ func (m *Manifest) EvaluateCompatibility(profile HostCapabilityProfile) Compatib
 
 	if m.SDK != "" {
 		if iss := checkSemverField("sdk", m.SDK, profile.SDKVersion, IssueSDKRange); iss != nil {
+			issues = append(issues, *iss)
+		}
+	}
+
+	if m.Frontend != nil && m.Frontend.SDK != "" {
+		if iss := checkFrontendSDK(m.Frontend.SDK, profile.SDKVersion); iss != nil {
 			issues = append(issues, *iss)
 		}
 	}
@@ -137,19 +145,30 @@ func (m *Manifest) EvaluateCompatibility(profile HostCapabilityProfile) Compatib
 		}
 	}
 
-	missing := make([]string, 0, len(m.HostCapabilities))
+	// Declared capabilities plus the ones implied by the manifest's content
+	// (declarative views, detail panels, frontend pages and their shares).
+	declared := make(map[string]struct{}, len(m.HostCapabilities))
 	for _, name := range m.HostCapabilities {
+		declared[name] = struct{}{}
+	}
+	implied := m.impliedHostCapabilities()
+	missing := make([]string, 0, len(m.HostCapabilities)+len(implied))
+	for _, name := range m.RequiredHostCapabilities() {
 		if !profile.hasCapability(name) {
 			missing = append(missing, name)
 		}
 	}
 	sort.Strings(missing)
 	for _, name := range missing {
+		detail := fmt.Sprintf("manifest.host_capabilities: host is missing required capability %q", name)
+		if _, ok := declared[name]; !ok {
+			detail = fmt.Sprintf("manifest uses %s, which needs host capability %q; this host does not provide it — upgrade the host first", implied[name], name)
+		}
 		issues = append(issues, CompatibilityIssue{
 			Kind:       IssueMissingCapability,
 			Field:      "host_capabilities",
 			Capability: name,
-			Detail:     fmt.Sprintf("manifest.host_capabilities: host is missing required capability %q", name),
+			Detail:     detail,
 		})
 	}
 
@@ -188,6 +207,33 @@ func checkSemverField(field, rangeExpr, version string, kind CompatibilityIssueK
 			Field:  field,
 			Detail: fmt.Sprintf("manifest.%s: host %s %s does not satisfy %s", field, field, version, rangeExpr),
 		}
+	}
+	return nil
+}
+
+// checkFrontendSDK evaluates frontend.sdk (the @asteby/metacore-sdk range the
+// UI bundle was built against) against the SDK the host exposes to remotes.
+// Like the top-level SDK range it fails closed when the host does not report
+// its SDK version.
+func checkFrontendSDK(rangeExpr, version string) *CompatibilityIssue {
+	const field = "frontend.sdk"
+	constraint, err := semver.NewConstraint(rangeExpr)
+	if err != nil {
+		return &CompatibilityIssue{Kind: IssueInvalidRange, Field: field,
+			Detail: fmt.Sprintf("manifest.frontend.sdk: invalid range %q: %v", rangeExpr, err)}
+	}
+	if strings.TrimSpace(version) == "" {
+		return &CompatibilityIssue{Kind: IssueInvalidRange, Field: field,
+			Detail: fmt.Sprintf("manifest.frontend.sdk: the addon UI was built against @asteby/metacore-sdk %s but the host does not report its SDK version", rangeExpr)}
+	}
+	v, err := semver.NewVersion(version)
+	if err != nil {
+		return &CompatibilityIssue{Kind: IssueInvalidRange, Field: field,
+			Detail: fmt.Sprintf("host sdk version %q is not semver: %v", version, err)}
+	}
+	if !constraint.Check(v) {
+		return &CompatibilityIssue{Kind: IssueSDKRange, Field: field,
+			Detail: fmt.Sprintf("manifest.frontend.sdk: the addon UI needs @asteby/metacore-sdk %s; this host exposes %s — upgrade the host first", rangeExpr, version)}
 	}
 	return nil
 }
