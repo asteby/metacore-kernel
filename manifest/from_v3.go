@@ -1799,11 +1799,33 @@ func deriveBackend(m *v3.Manifest) *BackendSpec {
 	if len(exports) == 0 {
 		return nil
 	}
-	return &BackendSpec{
+	spec := &BackendSpec{
 		Runtime: "wasm",
 		Entry:   "backend/backend.wasm",
 		Exports: exports,
 	}
+	spec.Concurrency = WasmConcurrencyFromV3(m)
+	return spec
+}
+
+// WasmConcurrencyFromV3 is the number of parallel wasm instances per
+// installation a v3 manifest asks for: runtime.wasm.concurrency when declared,
+// else DefaultAPIConcurrency for an addon that serves contributions.api routes
+// (a store's shoppers hit them concurrently and one serialised instance turns a
+// page's parallel reads into a queue), else 0 (the host default). Hosts that
+// build a BackendSpec themselves (an addon whose only wasm entry points are API
+// routes, schedules or webhooks gets no kernel-derived Backend) should set
+// BackendSpec.Concurrency from it.
+func WasmConcurrencyFromV3(m *v3.Manifest) int {
+	switch {
+	case m == nil:
+		return 0
+	case m.Runtime != nil && m.Runtime.WASM != nil && m.Runtime.WASM.Concurrency > 0:
+		return min(m.Runtime.WASM.Concurrency, MaxConcurrency)
+	case m.Contributions != nil && len(m.Contributions.API) > 0:
+		return DefaultAPIConcurrency
+	}
+	return 0
 }
 
 // mapSignature maps the v3 detached-signature block into the legacy Signature.

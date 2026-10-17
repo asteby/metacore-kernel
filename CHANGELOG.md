@@ -7,6 +7,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **runtime/wasm + manifest: concurrencia del pool WASM por addon (A1)** — el
+  pool tenía UNA instancia por (addon, instalación) salvo que el operador fijara
+  `WASM_POOL_SIZE`, así que todas las lecturas de una tienda se atendían en
+  serie y una operación lenta bloqueaba a los demás compradores de la
+  organización. Ahora el manifiesto la declara: `backend.concurrency` (1..64) o,
+  en v3, `runtime.wasm.concurrency`; un addon v3 con `contributions.api` que no
+  declara nada recibe `manifest.DefaultAPIConcurrency` (4)
+  (`manifest.WasmConcurrencyFromV3` para hosts que arman su propio
+  `BackendSpec`). Precedencia: `WithAddonPoolSize` del operador > manifiesto >
+  `WithPoolSize`/`WASM_POOL_SIZE` (1). Tope por memoria nuevo:
+  `WithPoolMemoryBudget` / `WASM_POOL_MEMORY_MB` (1024 MiB) divide entre el
+  techo del addon (`memory_limit_mb`, o 256 MiB si no lo declara), nunca menos
+  de 1, y se aplica también a los overrides del operador. El pool sigue siendo
+  por instalación (organización): nunca se comparten instancias entre
+  organizaciones. Cambiar la concurrencia con el mismo binario reconstruye los
+  pools. `BenchmarkPoolBlockingHostImport` mide el efecto (docs/wasm-abi.md § 22.2).
+
 ### Fixed
 
 - **runtime/webhookin y runtime/apiroute: el cuerpo llega byte a byte al

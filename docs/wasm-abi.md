@@ -2425,6 +2425,28 @@ excess callers wait up to one `timeout_ms` for a free instance and then fail
 instance is acquired. Instances are created on demand and returned after the
 call; trapped, timed-out or over-memory instances are discarded.
 
+**Where the size comes from** (first match wins, then capped by memory):
+
+1. `WithAddonPoolSize(fn)` — the operator's override for an addon.
+2. The manifest: `backend.concurrency` (1..64) or, in a v3 manifest,
+   `runtime.wasm.concurrency`. A v3 addon that contributes `contributions.api`
+   routes and declares nothing gets `manifest.DefaultAPIConcurrency` (4): its
+   routes serve a store's shoppers in parallel.
+3. `WithPoolSize(n)` / `WASM_POOL_SIZE` (default 1).
+
+**Memory cap.** `WithPoolMemoryBudget(mb)` / `WASM_POOL_MEMORY_MB` (default
+1024) bounds one installation's pool: size <= budget / the addon's memory
+ceiling (`memory_limit_mb`, or 256 MiB when undeclared), never below 1. So an
+undeclared addon gets at most 4 instances; one declared at 64 MiB up to 16.
+Pools are per installation, so organizations never share an instance whatever
+the size; instances are created on demand, only under concurrent load. Changing
+the concurrency of an already loaded addon (same binary) rebuilds its pools.
+
+`go test ./runtime/wasm -run '^$' -bench PoolBlockingHostImport` models calls
+that spend their time inside a host import (16 concurrent callers, one
+installation): ~2.4 ms/call with 1 instance, 1.2 ms with 2, 0.62 ms with 4 and
+0.33 ms with 8 (4 vCPU).
+
 **Guest state is NOT shared across pool instances**: each has its own linear
 memory, Go heap and globals. A call may land on any instance, so consecutive
 calls of one caller may see different state. Use size > 1 only when handlers

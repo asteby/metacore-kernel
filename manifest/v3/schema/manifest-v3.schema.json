@@ -435,6 +435,23 @@
       "properties": {
         "native_service": {
           "$ref": "#/$defs/NativeService"
+        },
+        "wasm": {
+          "$ref": "#/$defs/WasmRuntime"
+        }
+      }
+    },
+    "WasmRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "Tuning of the request-scoped WASM runtime of this addon (the module itself is inferred from handlers).",
+      "properties": {
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "description": "Maximum parallel instances per installation (organization). Default 1 (calls serialised) except for addons that contribute API routes (4). Guest state is NOT shared between instances: raise it only for handlers that keep state in the database. The host may cap it by memory and an operator may override it."
         }
       }
     },

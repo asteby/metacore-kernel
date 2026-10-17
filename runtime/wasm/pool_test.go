@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
@@ -349,4 +353,205 @@ func mustEntry(t *testing.T, h *Host, addon string) *compiledEntry {
 		t.Fatalf("%s not compiled", addon)
 	}
 	return v.(*compiledEntry)
+}
+
+func poolSizeOf(t *testing.T, h *Host, key string) int {
+	t.Helper()
+	return h.poolFor(key, uuid.New(), mustEntry(t, h, key)).size
+}
+
+func TestPool_ManifestConcurrencyAndPrecedence(t *testing.T) {
+	ctx := context.Background()
+	spec := echoSpec()
+
+	// No manifest value, no host option: the historical single instance.
+	h := newPoolHost(t)
+	if err := h.Load(ctx, "testaddon", echoWasm(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if got := poolSizeOf(t, h, "testaddon"); got != 1 {
+		t.Fatalf("default = %d, want 1", got)
+	}
+
+	// The manifest raises it for that addon alone.
+	spec.Concurrency = 6
+	if err := h.Load(ctx, "testaddon", echoWasm(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if got := poolSizeOf(t, h, "testaddon"); got != 6 {
+		t.Fatalf("manifest concurrency = %d, want 6", got)
+	}
+
+	// An operator override beats the manifest (up and down).
+	for _, tc := range []struct{ override, want int }{{2, 2}, {20, 20}, {0, 6}} {
+		ho := newPoolHost(t, WithPoolSize(3), WithAddonPoolSize(func(string) int { return tc.override }))
+		if err := ho.Load(ctx, "testaddon", echoWasm(), spec); err != nil {
+			t.Fatal(err)
+		}
+		if got := poolSizeOf(t, ho, "testaddon"); got != tc.want {
+			t.Fatalf("override %d: size %d, want %d", tc.override, got, tc.want)
+		}
+	}
+
+	// Host default applies when the manifest is silent.
+	hd := newPoolHost(t, WithPoolSize(3))
+	spec.Concurrency = 0
+	if err := hd.Load(ctx, "testaddon", echoWasm(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if got := poolSizeOf(t, hd, "testaddon"); got != 3 {
+		t.Fatalf("host default = %d, want 3", got)
+	}
+}
+
+func TestPool_MemoryBudgetCapsSize(t *testing.T) {
+	ctx := context.Background()
+	spec := echoSpec() // 4 MiB ceiling
+	spec.Concurrency = 40
+	h := newPoolHost(t, WithPoolMemoryBudget(64)) // 64 / 4 = 16 instances at most
+	if err := h.Load(ctx, "testaddon", echoWasm(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if got := poolSizeOf(t, h, "testaddon"); got != 16 {
+		t.Fatalf("size = %d, want 16 (budget 64 MiB / 4 MiB)", got)
+	}
+	// An operator override is capped by memory too: it cannot commit more than the budget.
+	ho := newPoolHost(t, WithPoolMemoryBudget(8), WithAddonPoolSize(func(string) int { return 30 }))
+	if err := ho.Load(ctx, "testaddon", echoWasm(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if got := poolSizeOf(t, ho, "testaddon"); got != 2 {
+		t.Fatalf("override size = %d, want 2 (budget 8 MiB / 4 MiB)", got)
+	}
+	// A budget smaller than one instance still leaves one.
+	hs := newPoolHost(t, WithPoolMemoryBudget(1))
+	if err := hs.Load(ctx, "testaddon", echoWasm(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if got := poolSizeOf(t, hs, "testaddon"); got != 1 {
+		t.Fatalf("size = %d, want 1", got)
+	}
+	// No declared memory_limit_mb: the 256 MiB global ceiling counts, default budget 1024 -> 4.
+	spec.MemoryLimitMB = 0
+	hg := newPoolHost(t)
+	if err := hg.Load(ctx, "testaddon", echoWasm(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if got := poolSizeOf(t, hg, "testaddon"); got != 4 {
+		t.Fatalf("undeclared ceiling: size = %d, want 4", got)
+	}
+}
+
+func TestPool_MemoryBudgetEnv(t *testing.T) {
+	t.Setenv(EnvPoolMemoryMB, "32")
+	h := newPoolHost(t)
+	if h.poolMemMB != 32 {
+		t.Fatalf("env budget = %d", h.poolMemMB)
+	}
+	t.Setenv(EnvPoolMemoryMB, "nope")
+	if h2 := newPoolHost(t); h2.poolMemMB != defaultPoolMemoryMB {
+		t.Fatalf("invalid env must fall back, got %d", h2.poolMemMB)
+	}
+}
+
+// Pools are per (addon, installation): two organizations never share an
+// instance, whatever the size.
+func TestPool_ConcurrencyKeepsTenantIsolation(t *testing.T) {
+	ctx := context.Background()
+	spec := echoSpec()
+	spec.Concurrency = 4
+	h := newPoolHost(t)
+	if err := h.Load(ctx, "testaddon", echoWasm(), spec); err != nil {
+		t.Fatal(err)
+	}
+	entry := mustEntry(t, h, "testaddon")
+	a, b := uuid.New(), uuid.New()
+	pa, pb := h.poolFor("testaddon", a, entry), h.poolFor("testaddon", b, entry)
+	if pa == pb {
+		t.Fatal("two installations share a pool")
+	}
+	ma, err := pa.acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mb, err := pb.acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ma == mb {
+		t.Fatal("two installations share an instance")
+	}
+	pa.release(ma)
+	pb.release(mb)
+}
+
+// Changing backend.concurrency on a same-bytes reload rebuilds the pools.
+func TestPool_ConcurrencyChangeRebuildsPools(t *testing.T) {
+	ctx := context.Background()
+	h := newPoolHost(t)
+	spec := echoSpec()
+	if err := h.Load(ctx, "testaddon", echoWasm(), spec); err != nil {
+		t.Fatal(err)
+	}
+	inst := uuid.New()
+	if got := h.poolFor("testaddon", inst, mustEntry(t, h, "testaddon")).size; got != 1 {
+		t.Fatalf("size = %d", got)
+	}
+	spec2 := echoSpec()
+	spec2.Concurrency = 5
+	if err := h.Load(ctx, "testaddon", echoWasm(), spec2); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.poolFor("testaddon", inst, mustEntry(t, h, "testaddon")).size; got != 5 {
+		t.Fatalf("size after reload = %d, want 5", got)
+	}
+	if out, err := h.Invoke(ctx, inst, "testaddon", "echo", []byte("ok"), nil); err != nil || string(out) != "ok" {
+		t.Fatalf("invoke after resize: %q %v", out, err)
+	}
+}
+
+// BenchmarkPoolBlockingHostImport models what serialises a store today: each
+// call spends most of its time inside a host import (here an event_emit whose
+// subscriber takes 2 ms, standing in for a db_query / http_fetch / the ~270 ms
+// catalog read). One installation, 16 concurrent callers; compare pool sizes:
+//
+//	go test ./runtime/wasm -run '^$' -bench PoolBlockingHostImport -benchtime=2s
+//
+// ns/op is wall time per call across all callers (lower = more throughput).
+func BenchmarkPoolBlockingHostImport(b *testing.B) {
+	log.SetOutput(io.Discard) // the event bus logs every publish
+	defer log.SetOutput(os.Stderr)
+	for _, size := range []int{1, 2, 4, 8} {
+		b.Run(fmt.Sprintf("pool%d", size), func(b *testing.B) {
+			ctx := context.Background()
+			bus := events.NewBus(nil)
+			if err := bus.Subscribe("testaddon", "ev.fired", func(context.Context, uuid.UUID, any) error {
+				time.Sleep(2 * time.Millisecond)
+				return nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+			h, err := NewHost(ctx, security.Compile("testaddon", nil), nil, WithPoolSize(size))
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer h.Close(ctx)
+			h.WithBus(bus)
+			spec := &manifest.BackendSpec{Runtime: "wasm", Entry: "b.wasm", Exports: []string{"emit_test"}, MemoryLimitMB: 4, TimeoutMs: 60000}
+			if err := h.Load(ctx, "testaddon", eventEmitWasm(), spec); err != nil {
+				b.Fatal(err)
+			}
+			org, inst := uuid.New(), uuid.New()
+			b.SetParallelism(16)
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					if _, err := h.InvokeFor(ctx, org, inst, "testaddon", "emit_test", nil, nil); err != nil {
+						b.Error(err)
+						return
+					}
+				}
+			})
+		})
+	}
 }

@@ -599,7 +599,23 @@ type BackendSpec struct {
 	Exports       []string `json:"exports,omitempty"`         // function names the module exports
 	MemoryLimitMB int      `json:"memory_limit_mb,omitempty"` // default 64
 	TimeoutMs     int      `json:"timeout_ms,omitempty"`      // default 10000
+	// Concurrency is the maximum number of parallel wasm instances per
+	// installation (organization): 1..MaxConcurrency. 0 = host default (1,
+	// serialised calls). Instances do not share guest state; the host may cap
+	// it by memory and an operator may override it. See docs/wasm-abi.md § 22.2.
+	Concurrency int `json:"concurrency,omitempty"`
 }
+
+const (
+	// MaxConcurrency is the largest accepted BackendSpec.Concurrency (the
+	// runtime's own pool ceiling).
+	MaxConcurrency = 64
+	// DefaultAPIConcurrency is the concurrency a v3 addon with
+	// contributions.api gets when it declares none: its routes serve a store's
+	// shoppers in parallel, and one serialised instance turns a page's
+	// Promise.all into a queue.
+	DefaultAPIConcurrency = 4
+)
 
 // Capability is a scoped permission request. The runtime enforces these by
 // injecting an AddonContext with only the declared access.

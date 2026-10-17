@@ -65,6 +65,7 @@ type Host struct {
 	runtimes      sync.Map // uint32 memory-limit pages -> *runtimeSlot
 	poolSize      int
 	poolSizeFn    func(addonKey string) int
+	poolMemMB     int
 	metrics       *hostMetrics
 	caps          *security.Capabilities
 	addonCaps     func(addonKey string) *security.Capabilities
@@ -192,7 +193,7 @@ func NewHost(ctx context.Context, caps *security.Capabilities, logger *log.Logge
 		logger = log.Default()
 	}
 	cfg := resolveConfig(logger, opts)
-	h := &Host{caps: caps, logger: logger, poolSize: cfg.poolSize, poolSizeFn: cfg.poolSizeFn,
+	h := &Host{caps: caps, logger: logger, poolSize: cfg.poolSize, poolSizeFn: cfg.poolSizeFn, poolMemMB: cfg.poolMemMB,
 		metrics: newHostMetrics(cfg.metrics)}
 	h.cache = newCompileCache(cfg.cacheDir, logger)
 	// The global-ceiling runtime doubles as the default (h.rt).
@@ -463,7 +464,12 @@ func (h *Host) Load(ctx context.Context, addonKey string, wasmBytes []byte, spec
 		if p, _ := prev.(*compiledEntry); p != nil && p.hash == sum && p.pages == limit {
 			// Same artifact and limit — refresh the spec pointer only
 			// (exports/timeouts may have been edited without a binary change).
-			p.spec.Store(spec)
+			old := p.spec.Swap(spec)
+			if old != nil && old.Concurrency != spec.Concurrency {
+				// Pools are sized at creation: rebuild them (lazily, on the next
+				// call) so a new concurrency applies without an addon upgrade.
+				h.closePools(addonKey, uuid.Nil, evictReplaced)
+			}
 			return nil
 		}
 	}
@@ -589,7 +595,7 @@ func (h *Host) poolFor(addonKey string, installation uuid.UUID, entry *compiledE
 			}
 			continue
 		}
-		np := newInstPool(h, addonKey, installation, entry, h.sizeFor(addonKey))
+		np := newInstPool(h, addonKey, installation, entry, h.poolSizeFor(addonKey, entry))
 		if actual, loaded := h.modules.LoadOrStore(key, np); loaded {
 			if actual.(*instPool).entry == entry {
 				return actual.(*instPool)

@@ -170,6 +170,20 @@ type ProvidedCapability struct {
 // handlers while long-lived services are explicit desired state.
 type Runtime struct {
 	NativeService *native.Spec `json:"native_service,omitempty"`
+	// WASM tunes the request-scoped WASM runtime (the module itself is inferred
+	// from handlers). Optional.
+	WASM *WasmRuntime `json:"wasm,omitempty"`
+}
+
+// WasmRuntime is the per-addon tuning of the in-process WASM runtime.
+type WasmRuntime struct {
+	// Concurrency is the maximum number of parallel module instances per
+	// installation (organization): 1..64. 0 = the default (1, or
+	// manifest.DefaultAPIConcurrency for an addon with contributions.api).
+	// Instances do NOT share guest state, so only raise it for handlers that
+	// keep state in the database. The host caps it by memory and an operator
+	// may override it (runtime/wasm § 22.2).
+	Concurrency int `json:"concurrency,omitempty"`
 }
 
 // Connector declares a third-party credential provider an addon depends on. The

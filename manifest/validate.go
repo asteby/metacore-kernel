@@ -488,6 +488,9 @@ func (m *Manifest) validateBackend() error {
 	default:
 		return fmt.Errorf("manifest.backend.runtime: unknown %q (want webhook|wasm|binary)", m.Backend.Runtime)
 	}
+	if c := m.Backend.Concurrency; c < 0 || c > MaxConcurrency {
+		return fmt.Errorf("manifest.backend.concurrency: %d out of range (0..%d)", c, MaxConcurrency)
+	}
 	if m.Backend.Runtime == "wasm" {
 		if strings.TrimSpace(m.Backend.Entry) == "" {
 			return fmt.Errorf("manifest.backend.entry: required when runtime=wasm")
