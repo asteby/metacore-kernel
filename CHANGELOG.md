@@ -207,6 +207,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   y gancho `OnToolTrace` para auditoría del host. `tools.ProgressLabeler` permite
   a cada herramienta emitir su propia línea de progreso.
 
+- **capability: eventos de contrato y `commerce.payments.confirmed`** —
+  registro `EventContracts` (`RegisterEvent`, `LookupEvent`, `EventNames`,
+  `ReservedEventDomain`, `ProvidesDomain`, `EventContract.ValidatePayload`).
+  `commerce.payments.confirmed` = `{provider, result}` con `result` = salida
+  de `commerce.payments.confirm` (`kind`: payment | refund | dispute); reserva
+  `commerce.payments.*` para los proveedores de ese dominio. Ver
+  `docs/capabilities-commerce.md`.
+- **capability: contrato `region.postal.locate`** — `{postal_code}` (5 dígitos)
+  → `{lat, lng, city?, state, precision: "postal_centroid"}`, salida cerrada,
+  2 s, errores `invalid_input` y `not_found`. Ver `docs/capabilities-region.md`.
+- **capability: errores con código y patrones** — `Contract.Errors` y
+  `NewCodedError`: un código declarado llega a `Result.ErrorCode()` y a
+  `errors[].code`; uno no declarado queda como `provider_error`.
+  `Field.Pattern` (RE2) valida campos de texto y se comprueba al registrar.
+
 ### Changed
 
 - **agent: orden estable de herramientas y parámetros** — `ToolRegistry.List`,
@@ -235,6 +250,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   tests must opt in.
 
 ### Security
+
+- **security/runtime/wasm: política de emisión de eventos (`event:emit`)** —
+  `security.EmitPolicy` (`NewEmitPolicy`, `Check`, `EmitFactsSource`) evalúa
+  en la frontera del guest: (1) nadie emite `kernel.*`; (2) el espacio de un
+  evento de contrato (`commerce.payments.*`) es de quien provee una capacidad
+  de ese dominio; (3) el espacio de otro addon instalado requiere estar en sus
+  `extension_points.events[].emitters`; (4) lo emitido debe estar declarado en
+  `event:emit`. Modos `warn` (por omisión) / `enforce` / `off` por grupo, con
+  banderas propias `METACORE_EVENT_EMIT_RESERVED` (1-3) y
+  `METACORE_EVENT_EMIT_DECLARED` (4), independientes de `METACORE_ENFORCE`.
+  Cada violación se registra, suma `wasm_event_emit_violations_total` y
+  publica `kernel.event_emit.violation`. Se conecta con
+  `wasm.Host.WithEmitPolicy(policy.Check)`; sin conectarla nada cambia. Los
+  eventos CRUD que publica el host (con la clave del dueño o como `kernel`) no
+  pasan por ella. Ver `docs/capabilities.md`.
+- **events/dispatch: emisor estampado por el host** — `PublishWithCount`
+  registra la clave con la que se llamó al bus (`events.EmitterFromContext`);
+  el despachador la escribe como `emitter` en todo payload objeto JSON
+  (sobrescribe la del guest), en el ctx de la entrega y en la columna aditiva
+  `event_deliveries.emitter`. Un guest ya no puede hacerse pasar por otro addon
+  ante sus suscriptores.
 
 - **marketplace: connect-time IP guard (anti DNS-rebinding)** — bundle downloads
   use a dialer that validates the connected IP and refuses loopback, private,

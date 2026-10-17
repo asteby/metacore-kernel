@@ -1226,13 +1226,19 @@ Defined error codes:
 |---------------------|---------------------------------------------------------------------|
 | `invalid_event`     | Event-name parse failure (see § 12.2 sub-reasons).                  |
 | `payload_too_large` | Payload exceeded the cap from § 12.5.                               |
-| `forbidden`         | `Capabilities.CanEmit(event)` denied the publish.                   |
+| `forbidden`         | The bus capability check (`Capabilities.CanEmit`) or the host's emit policy (`Host.WithEmitPolicy`, `security.EmitPolicy` in `enforce`; see docs/capabilities.md "Política de emisión de eventos") denied the publish. |
 | `no_active_org`     | Invocation reached the host import without an `orgID` (§ 12.6).     |
 | `bus_unavailable`   | Host was constructed without an `events.Bus` (deployment misconfig).|
 
 Subscriber-side errors do not appear here. `events.Bus.Publish` already
 swallows handler errors and logs them; the publisher is decoupled from
 delivery failures by design.
+
+**Emitter stamp.** Subscribers do not have to trust who a payload says it
+comes from. The bus records the publishing addon key in the delivery context
+(`events.EmitterFromContext`) and the dispatcher writes it into every JSON-object
+payload as `"emitter"`, replacing any `emitter` field the guest sent. A guest
+cannot publish as another addon.
 
 ### 12.5 Limits
 

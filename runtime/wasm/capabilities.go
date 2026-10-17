@@ -122,6 +122,11 @@ type invocation struct {
 	// capQuerier resolves and runs capability queries for the
 	// capability_query import (Host.WithCapabilityQuerier). nil = unavailable.
 	capQuerier capability.Querier
+	// emitPolicy gates event_emit by event name (Host.WithEmitPolicy). nil =
+	// no policy (pre-policy behaviour).
+	emitPolicy EmitPolicyFunc
+	// metrics are the host collectors (nil when the host has none).
+	metrics *hostMetrics
 }
 
 type invKey struct{}
@@ -376,6 +381,10 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 				return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
 					"no_active_org", "invocation has no bound orgID",
 					uuid.Nil, start))
+			}
+			if denied := inv.checkEmit(ctx, eventName); denied != nil {
+				return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
+					"forbidden", denied.Error(), inv.orgID, start))
 			}
 			subscribers, err := inv.bus.PublishWithCount(ctx, inv.addonKey, eventName, inv.orgID, payload)
 			if err != nil {

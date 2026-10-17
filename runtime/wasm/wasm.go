@@ -101,6 +101,7 @@ type Host struct {
 	approvalRequester func(ctx context.Context, in dynamic.ApprovalInput) (*dynamic.ApprovalRequest, error)
 	connectors        *connectors.Resolver
 	capQuerier        capability.Querier
+	emitPolicy        EmitPolicyFunc
 	logger            *log.Logger
 	compiled          sync.Map // addonKey -> *compiledEntry
 	// modules holds one *instPool per instanceKey(addonKey, installation).
@@ -753,6 +754,8 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		approvalRequester: h.approvalRequester,
 		connectors:        h.connectors,
 		capQuerier:        h.capQuerier,
+		emitPolicy:        h.emitPolicy,
+		metrics:           h.metrics,
 		logger:            h.logger,
 	})
 

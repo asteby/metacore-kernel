@@ -27,6 +27,7 @@ type hostMetrics struct {
 	compileSecs *prometheus.HistogramVec
 	instantiate *prometheus.CounterVec
 	instances   *prometheus.GaugeVec
+	emitViolate *prometheus.CounterVec
 }
 
 func registerOrGet[T prometheus.Collector](reg *prometheus.Registry, c T) T {
@@ -85,7 +86,22 @@ func newHostMetrics(r *kmetrics.Registry) *hostMetrics {
 			Name: "wasm_instances",
 			Help: "Live instances, by addon.",
 		}, []string{"addon"})),
+		emitViolate: registerOrGet(p, prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "wasm_event_emit_violations_total",
+			Help: "event_emit calls that broke the emit policy, by addon, rule and action (warned|denied).",
+		}, []string{"addon", "rule", "action"})),
 	}
+}
+
+func (m *hostMetrics) emitViolation(addon, rule string, denied bool) {
+	if m == nil {
+		return
+	}
+	action := "warned"
+	if denied {
+		action = "denied"
+	}
+	m.emitViolate.WithLabelValues(addon, rule, action).Inc()
 }
 
 func (m *hostMetrics) invoked(addon string, err error, d time.Duration) {
