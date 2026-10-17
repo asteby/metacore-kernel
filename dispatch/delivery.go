@@ -40,6 +40,11 @@ type Delivery struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	DeliveredAt    *time.Time `json:"delivered_at,omitempty"`
+	// Emitter is the publisher the bus recorded for the event: an addon key
+	// (guest event_emit), "kernel", or the owner addon of a canonical CRUD
+	// event the host published. Empty on rows written before the column
+	// existed (additive column, see Migrate).
+	Emitter string `gorm:"size:256" json:"emitter,omitempty"`
 }
 
 // deliveryID derives the deterministic idempotency key for one (event,

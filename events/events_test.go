@@ -163,3 +163,27 @@ func TestEventMatches(t *testing.T) {
 		}
 	}
 }
+
+func TestPublishRecordsEmitterInContext(t *testing.T) {
+	b := NewBus(nil)
+	var seen []string
+	_ = b.SubscribeEvent("kernel", "a.*", func(ctx context.Context, _ uuid.UUID, _ string, _ any) error {
+		seen = append(seen, EmitterFromContext(ctx))
+		return nil
+	})
+	// A ctx that already carries another emitter (a delivery ctx of the
+	// previous hop) must be overwritten by the key Publish is called with.
+	ctx := WithEmitter(context.Background(), "storefront_cart")
+	if err := b.Publish(ctx, "evil", "a.x", uuid.New(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Publish(context.Background(), "kernel", "a.y", uuid.New(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 || seen[0] != "evil" || seen[1] != "kernel" {
+		t.Fatalf("emitters = %v, want [evil kernel]", seen)
+	}
+	if EmitterFromContext(context.Background()) != "" {
+		t.Fatal("plain ctx must have no emitter")
+	}
+}

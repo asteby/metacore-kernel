@@ -170,6 +170,19 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 		occurrenceID = uuid.NewString()
 	}
 
+	// Emitter: who published this event, as the BUS saw it (the addonKey of
+	// Publish, carried in ctx by events.PublishWithCount) — never what the
+	// payload claims. It is stamped into every JSON-object payload under
+	// "emitter", overwriting a value the guest wrote, so a subscriber such as
+	// channel_orders can refuse a storefront_cart.checkout_paid that
+	// storefront_cart did not publish. Stamped AFTER the occurrence id is
+	// derived: the legacy fingerprint above hashes the payload, and an outbox
+	// row written by an older kernel must keep fingerprinting the same bytes.
+	emitter := events.EmitterFromContext(ctx)
+	if emitter != "" {
+		raw = stampString(raw, EmitterField, emitter)
+	}
+
 	subs, err := d.provider.SubscriptionsForOrg(ctx, orgID)
 	if err != nil {
 		d.logger.Warn("dispatch.provider_error",
@@ -185,7 +198,7 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 		if !eventMatches(sub.Event, eventName) {
 			continue
 		}
-		if d.enqueue(ctx, orgID, eventName, occurrenceID, ce, raw, sub) {
+		if d.enqueue(ctx, orgID, eventName, occurrenceID, emitter, ce, raw, sub) {
 			enqueued++
 		}
 	}
@@ -197,7 +210,7 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 // duplicate event that hits the unique index — or a row already delivered/dead —
 // short-circuits with no invocation. Reports whether a delivery was actually
 // enqueued, which feeds the emitter-facing subscriber count.
-func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName, occurrenceID string, ce canonicalEvent, payload []byte, sub Subscription) bool {
+func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName, occurrenceID, emitter string, ce canonicalEvent, payload []byte, sub Subscription) bool {
 	id := deliveryID(eventName, occurrenceID, sub)
 
 	row := Delivery{
@@ -205,6 +218,7 @@ func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName, oc
 		DeliveryID:     id,
 		OrganizationID: orgID,
 		Event:          eventName,
+		Emitter:        emitter,
 		AddonKey:       sub.AddonKey,
 		HandlerType:    sub.HandlerType,
 		Export:         sub.Function,
@@ -244,6 +258,9 @@ func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName, oc
 		defer cancel()
 		bg = dynamic.WithActorID(bg, ce.ActorID)
 		bg = dynamic.WithBranchID(bg, ce.BranchID)
+		if emitter != "" {
+			bg = events.WithEmitter(bg, emitter)
+		}
 		if ce.CorrelationID != "" {
 			bg = dynamic.WithCorrelationID(bg, ce.CorrelationID)
 		}
@@ -657,6 +674,11 @@ func stampEventName(raw []byte, eventName string) []byte {
 	}
 	return out
 }
+
+// EmitterField is the top-level key the dispatcher stamps into every
+// JSON-object payload it delivers: the addon key (or "kernel") that published
+// the event on the bus. Host-authored; a value the emitter wrote is replaced.
+const EmitterField = "emitter"
 
 // stampActorID sets the top-level `actor_id` of a JSON-object payload,
 // replacing whatever was there. Non-object payloads are returned untouched

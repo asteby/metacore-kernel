@@ -171,6 +171,9 @@ func (b *Bus) Publish(ctx context.Context, addonKey, event string, orgID uuid.UU
 // more may have errored internally). What it will NOT do is report 1 because
 // some wildcard tap matched and then discarded the event.
 //
+// Every subscriber receives ctx with addonKey recorded as the publisher
+// (EmitterFromContext), replacing any emitter the caller's ctx carried.
+//
 // On capability denial (enforce mode) or input error the count is `0` and
 // the error is non-nil. Capability denial in `ModeShadow` returns
 // `(matched, nil)` mirroring the bus's pre-existing behaviour.
@@ -181,6 +184,10 @@ func (b *Bus) PublishWithCount(ctx context.Context, addonKey, event string, orgI
 	if err := b.check(addonKey, "event:emit", event); err != nil {
 		return 0, err
 	}
+	// The publisher identity rides on the ctx every subscriber receives
+	// (EmitterFromContext). Always overwritten: a delivery ctx that already
+	// carries the previous hop's emitter must not leak it into this event.
+	ctx = WithEmitter(ctx, addonKey)
 
 	b.mu.RLock()
 	matched := make([]subscription, 0, 4)
