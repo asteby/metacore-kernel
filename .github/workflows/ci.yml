@@ -8,7 +8,8 @@ on:
 
 jobs:
   go:
-    runs-on: ubuntu-latest
+    # Runner propio del VPS: no depende de los minutos de GitHub Actions.
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -25,24 +26,15 @@ jobs:
   # Addon migration runner against a real Postgres (search_path / schema
   # resolution can't be exercised with sqlite or sqlmock). Scratch DB only.
   postgres:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: kernel_test
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
-    env:
-      TEST_POSTGRES_DSN: host=localhost port=5432 user=postgres password=postgres dbname=kernel_test sslmode=disable
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: '1.27'
           cache: true
+      - name: Postgres efímero (scripts/ci-postgres.sh: DSN provisto, docker/podman o binarios locales)
+        run: scripts/ci-postgres.sh start kernel_test
       - run: go test -count=1 -v -run 'Postgres' ./dynamic/
       # El installer también tiene tests que necesitan Postgres real (gated por
       # TEST_POSTGRES_DSN y que, sin esto, se SALTAN en silencio): el pre-flight de
@@ -53,3 +45,6 @@ jobs:
       # data_mutate sobre tabla sin columnas de auditoría (legacy), Postgres real.
       - run: go test -count=1 -v -run 'Postgres' ./runtime/wasm/
       - run: go test -count=1 -race -v -run '/Postgres' ./idempotency/ ./outbox/
+      - name: Detener Postgres
+        if: always()
+        run: scripts/ci-postgres.sh stop
