@@ -17,6 +17,9 @@ type RunRequest struct {
 	Profile   Profile
 	Overrides *Overrides
 	Source    Source
+	// Extract es la etapa de extracción opcional (ver ParseExtract). Entra en la
+	// llave de idempotencia: cambiar el documento produce una corrida distinta.
+	Extract *Extractor
 	// Force aplica aunque ya exista una corrida exitosa con la misma entrada
 	// (por ejemplo tras borrar datos en el destino). Sigue siendo seguro: el
 	// diff deja unchanged lo que ya está.
@@ -32,6 +35,10 @@ type Runner struct {
 	Target Target
 	// Media es opcional; sin ella los medios del perfil se ignoran con aviso.
 	Media *MediaQueue
+	// Reviews es opcional; guarda las filas en espera de decisión (ActionReview)
+	// para aplicarlas después con Decide y ApplyApproved. Sin él, esas filas solo
+	// se reportan en el plan y en la corrida.
+	Reviews ReviewStore
 	// BatchSize de escritura al destino; default 200.
 	BatchSize int
 	// Now es el reloj; default time.Now.
@@ -77,6 +84,11 @@ func (r *Runner) prepare(ctx context.Context, req RunRequest) (Profile, Source, 
 	if err != nil {
 		return Profile{}, nil, "", err
 	}
+	if req.Extract != nil {
+		if err := req.Extract.CheckProfile(prof); err != nil {
+			return Profile{}, nil, "", err
+		}
+	}
 	rows, err := req.Source.Rows(ctx)
 	if err != nil {
 		return Profile{}, nil, "", fmt.Errorf("dataload: no se pudo leer %s: %w", req.Source.Name(), err)
@@ -85,11 +97,15 @@ func (r *Runner) prepare(ctx context.Context, req RunRequest) (Profile, Source, 
 }
 
 func (r *Runner) newRun(req RunRequest, prof Profile, src Source, in string, mode RunMode) Run {
-	return Run{
-		ID: newID(), Key: RunKey(req.Org, prof.Hash(), in, mode), Org: req.Org, Mode: mode, State: RunQueued,
+	run := Run{
+		ID: newID(), Key: RunKey(req.Org, fingerprint(prof.Hash(), req.Extract), in, mode), Org: req.Org, Mode: mode, State: RunQueued,
 		Actor: req.Actor, Profile: prof.Name, ProfileVersion: prof.Version, ProfileHash: prof.Hash(),
 		OverridesHash: req.Overrides.Hash(), Source: src.Name(), InputHash: in, CreatedAt: r.now(),
 	}
+	if req.Extract != nil {
+		run.ExtractHash = req.Extract.Hash()
+	}
+	return run
 }
 
 // DryRun planifica sin escribir nada y lo deja en el historial. Devuelve el
@@ -101,14 +117,14 @@ func (r *Runner) DryRun(ctx context.Context, req RunRequest) (*Plan, Run, error)
 	}
 	run := r.newRun(req, prof, src, in, ModeDryRun)
 	run.State, run.StartedAt = RunRunning, r.now()
-	plan, err := BuildPlan(ctx, PlanRequest{Org: req.Org, Profile: req.Profile, Overrides: req.Overrides, Source: src, Target: r.Target})
+	plan, err := BuildPlan(ctx, PlanRequest{Org: req.Org, Profile: req.Profile, Overrides: req.Overrides, Source: src, Target: r.Target, Extract: req.Extract})
 	run.FinishedAt = r.now()
 	if err != nil {
 		run.State, run.Error = RunFailed, err.Error()
 		_ = r.Ledger.Save(ctx, run)
 		return nil, run, err
 	}
-	run.State, run.PlanHash, run.Progress, run.Issues = RunSucceeded, plan.PlanHash, plan.progress(), plan.issues()
+	run.State, run.PlanHash, run.Progress, run.Issues, run.Review = RunSucceeded, plan.PlanHash, plan.progress(), plan.issues(), plan.reviewNotes()
 	return plan, run, r.Ledger.Save(ctx, run)
 }
 
@@ -185,12 +201,16 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 	run.State, run.StartedAt = RunRunning, r.now()
 	save()
 
-	plan, err := BuildPlan(ctx, PlanRequest{Org: req.Org, Profile: req.Profile, Overrides: req.Overrides, Source: src, Target: r.Target})
+	plan, err := BuildPlan(ctx, PlanRequest{Org: req.Org, Profile: req.Profile, Overrides: req.Overrides, Source: src, Target: r.Target, Extract: req.Extract})
 	if err != nil {
 		fail(err)
 		return
 	}
-	run.PlanHash, run.Progress, run.Issues = plan.PlanHash, plan.progress(), plan.issues()
+	run.PlanHash, run.Progress, run.Issues, run.Review = plan.PlanHash, plan.progress(), plan.issues(), plan.reviewNotes()
+	if err := r.holdReviews(ctx, run, plan); err != nil {
+		fail(err)
+		return
+	}
 	if req.FailOnInvalid && (run.Progress.Invalid > 0 || run.Progress.Duplicates > 0) {
 		fail(fmt.Errorf("dataload: %d filas inválidas y %d duplicadas; no se aplicó nada", run.Progress.Invalid, run.Progress.Duplicates))
 		return
@@ -253,7 +273,7 @@ func (p *Plan) progress() Progress {
 	return Progress{
 		Total: p.Counts[ActionCreate] + p.Counts[ActionUpdate], Unchanged: p.Counts[ActionUnchanged],
 		Invalid: p.Counts[ActionInvalid], Duplicates: p.Counts[ActionDuplicate],
-		Created: p.Counts[ActionCreate], Updated: p.Counts[ActionUpdate],
+		Created: p.Counts[ActionCreate], Updated: p.Counts[ActionUpdate], Review: p.Counts[ActionReview],
 	}
 }
 

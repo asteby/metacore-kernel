@@ -1,0 +1,21 @@
+{
+  "name": "lista-proveedor",
+  "version": "1",
+  "entity": "product",
+  "key": ["sku"],
+  "clean": ["trim", "collapse_spaces"],
+  "defaults": { "currency": "MXN" },
+  "fields": [
+    { "target": "sku", "from": ["Articulo", "Artículo"], "type": "text", "required": true },
+    { "target": "vendor", "from": ["Linea/MARCA", "Línea/MARCA", "Marca"], "type": "text", "required": true },
+    { "target": "category_source", "from": ["Categoria", "Categoría"], "type": "text", "clean": ["upper"] },
+    { "target": "description_raw", "from": ["Descripcion", "Descripción"], "type": "text", "required": true, "clean": ["upper"] },
+    { "target": "unit", "from": ["U.Med.", "U.Med", "UMed"], "type": "text", "values": { "st": "pieza", "kit": "kit" } },
+    { "target": "cost", "from": ["Precio"], "type": "number", "transform": "number_mixed" },
+    { "target": "stock.cdmx", "from": ["CDMX"], "type": "number", "transform": "number_mixed", "values": { "#n/d": "" } },
+    { "target": "stock.edomex", "from": ["EDO MEX", "EDOMEX"], "type": "number", "transform": "number_mixed", "values": { "#n/d": "" } },
+    { "target": "price_before_tax", "from": ["Unitario"], "type": "number", "transform": "number_mixed" },
+    { "target": "tax_amount", "from": ["IVA"], "type": "number", "transform": "number_mixed" },
+    { "target": "price", "from": ["PRECIO PÚBLICO", "PRECIO PUBLICO"], "type": "number", "transform": "number_mixed", "required": true }
+  ]
+}

@@ -33,6 +33,8 @@ type RunMode string
 const (
 	ModeDryRun RunMode = "dry_run"
 	ModeApply  RunMode = "apply"
+	// ModeReview es la aplicación de filas aprobadas tras una revisión.
+	ModeReview RunMode = "apply_reviewed"
 )
 
 // Progress es el avance observable de una corrida en curso.
@@ -45,6 +47,9 @@ type Progress struct {
 	Invalid     int `json:"invalid"`
 	Duplicates  int `json:"duplicates"`
 	MediaQueued int `json:"mediaQueued"`
+	// Review son las filas válidas que esperan una decisión (ActionReview); no
+	// se escriben solas.
+	Review int `json:"review,omitempty"`
 }
 
 // MaxRunIssues acota los problemas que se guardan en la corrida; el conteo
@@ -62,13 +67,17 @@ type Run struct {
 	Profile        string              `json:"profile"`
 	ProfileVersion string              `json:"profileVersion"`
 	ProfileHash    string              `json:"profileHash"`
+	ExtractHash    string              `json:"extractHash,omitempty"`
 	OverridesHash  string              `json:"overridesHash,omitempty"`
 	Source         string              `json:"source"`
 	InputHash      string              `json:"inputHash"`
 	PlanHash       string              `json:"planHash,omitempty"`
 	Progress       Progress            `json:"progress"`
 	Issues         []importer.RowIssue `json:"issues,omitempty"`
-	Error          string              `json:"error,omitempty"`
+	// Review lista (hasta MaxRunIssues) las filas en espera de decisión con su
+	// motivo; el conteo completo está en Progress.Review.
+	Review []ReviewNote `json:"review,omitempty"`
+	Error  string       `json:"error,omitempty"`
 	// ReplayOf es el ID de la corrida que ya había resuelto esta misma entrada:
 	// esta corrida no escribió nada.
 	ReplayOf   string    `json:"replayOf,omitempty"`
@@ -96,6 +105,16 @@ type Ledger interface {
 // resuelto (con sus overrides) y mismo contenido de entrada = misma llave.
 func RunKey(org, profileHash, inputHash string, mode RunMode) string {
 	sum := sha256.Sum256([]byte(org + "\x00" + profileHash + "\x00" + inputHash + "\x00" + string(mode)))
+	return hex.EncodeToString(sum[:])
+}
+
+// fingerprint es la huella que entra en la llave de idempotencia: la del perfil
+// resuelto y, si hay etapa extract, la de su documento.
+func fingerprint(profileHash string, ex *Extractor) string {
+	if ex == nil {
+		return profileHash
+	}
+	sum := sha256.Sum256([]byte(profileHash + "\x00" + ex.Hash()))
 	return hex.EncodeToString(sum[:])
 }
 

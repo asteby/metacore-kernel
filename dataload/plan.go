@@ -21,6 +21,11 @@ const (
 	ActionUnchanged Action = "unchanged"
 	ActionInvalid   Action = "invalid"   // la fila no pasó validación; no se escribe
 	ActionDuplicate Action = "duplicate" // misma identidad que una fila anterior del archivo; gana la primera
+	// ActionReview: la fila es válida pero la etapa extract encontró un motivo que
+	// bloquea la carga automática. No se escribe; queda en espera de una decisión
+	// explícita (ReviewStore, Runner.Decide y Runner.ApplyApproved). Outcome dice
+	// qué haría aplicarla.
+	ActionReview Action = "review"
 )
 
 // Existing es lo que el destino ya tiene para una identidad.
@@ -69,15 +74,31 @@ type RowPlan struct {
 	Media  map[string][]string `json:"media,omitempty"` // campo -> URLs por respaldar
 	Diffs  []FieldDiff         `json:"diffs,omitempty"`
 	Issues []importer.RowIssue `json:"issues,omitempty"`
+	// Review son los motivos de la etapa extract (revisar e info), con su motivo.
+	Review []ReviewItem `json:"review,omitempty"`
+	// Outcome, solo en filas review: lo que pasaría al aplicarla (create, update o unchanged).
+	Outcome Action `json:"outcome,omitempty"`
+}
+
+// Blocking dice si algún motivo de la fila bloquea la carga automática.
+func (r RowPlan) Blocking() bool {
+	for _, it := range r.Review {
+		if it.Severity == SeverityRevisar {
+			return true
+		}
+	}
+	return false
 }
 
 // Plan es el resultado del dry-run: qué pasaría, sin escribir nada.
 type Plan struct {
-	Org            string         `json:"org"`
-	Entity         string         `json:"entity"`
-	Profile        string         `json:"profile"`
-	ProfileVersion string         `json:"profileVersion"`
-	ProfileHash    string         `json:"profileHash"`
+	Org            string `json:"org"`
+	Entity         string `json:"entity"`
+	Profile        string `json:"profile"`
+	ProfileVersion string `json:"profileVersion"`
+	ProfileHash    string `json:"profileHash"`
+	// ExtractHash es la huella del documento de extracción (vacía si no hay).
+	ExtractHash    string         `json:"extractHash,omitempty"`
 	Source         string         `json:"source"`
 	InputHash      string         `json:"inputHash"`
 	PlanHash       string         `json:"planHash"`
@@ -96,7 +117,16 @@ type PlanRequest struct {
 	Overrides *Overrides
 	Source    Source
 	Target    Target
+	// Extract es la etapa de extracción opcional (ParseExtract). Debe
+	// corresponder a la versión del perfil.
+	Extract *Extractor
+	// LookupChunk: cuántas identidades se consultan al destino por llamada; 0 = 500.
+	// Evita una consulta de decenas de miles de llaves en lotes grandes.
+	LookupChunk int
 }
+
+// DefaultLookupChunk es el tamaño de las consultas de identidades al destino.
+const DefaultLookupChunk = 500
 
 // BuildPlan lee la fuente, aplica el perfil (con los overrides de la org),
 // valida y compara contra el destino. Nunca escribe y nunca descarga medios.
@@ -115,11 +145,19 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 	if len(rows) > prof.maxRows() {
 		return nil, importer.ErrTooManyRows{Got: len(rows), Limit: prof.maxRows()}
 	}
+	if req.Extract != nil {
+		if err := req.Extract.CheckProfile(prof); err != nil {
+			return nil, err
+		}
+	}
 	spec := prof.importSpec()
 	plan := &Plan{
 		Org: req.Org, Entity: prof.Entity, Profile: prof.Name, ProfileVersion: prof.Version,
 		ProfileHash: prof.Hash(), Source: req.Source.Name(), InputHash: inputHash(rows),
 		Counts: map[Action]int{}, applyOrder: prof.ApplyOrder,
+	}
+	if req.Extract != nil {
+		plan.ExtractHash = req.Extract.Hash()
 	}
 
 	seen := map[string]int{}
@@ -138,6 +176,9 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 			rp.Action, rp.Issues = ActionInvalid, issues
 			plan.add(rp)
 			continue
+		}
+		if req.Extract != nil {
+			rp.Review = req.Extract.Apply(prof, raw, rec).Review
 		}
 		key, ok := identity(prof.Key, rec)
 		if !ok {
@@ -159,10 +200,33 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 		plan.add(rp)
 	}
 
+	if req.Extract != nil {
+		facts := make([]RowFacts, len(plan.Rows))
+		for i, rp := range plan.Rows {
+			if rp.Action != ActionInvalid {
+				facts[i] = RowFacts{Record: rp.Record}
+			}
+		}
+		for _, di := range req.Extract.CheckDataset(facts) {
+			plan.Rows[di.Index].Review = append(plan.Rows[di.Index].Review, di.Item)
+		}
+	}
+
 	existing := map[string]Existing{}
-	if len(keys) > 0 {
-		if existing, err = req.Target.Lookup(ctx, req.Org, prof.Entity, keys); err != nil {
+	chunk := req.LookupChunk
+	if chunk <= 0 {
+		chunk = DefaultLookupChunk
+	}
+	for lo := 0; lo < len(keys); lo += chunk {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		got, err := req.Target.Lookup(ctx, req.Org, prof.Entity, keys[lo:min(lo+chunk, len(keys))])
+		if err != nil {
 			return nil, fmt.Errorf("dataload: consulta al destino: %w", err)
+		}
+		for k, v := range got {
+			existing[k] = v
 		}
 	}
 	plan.Counts = map[Action]int{}
@@ -184,6 +248,11 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 					rp.Action = ActionUpdate
 				}
 			}
+			// Una fila con motivo bloqueante no se escribe sola. Si el destino ya la
+			// tiene idéntica (p. ej. se aprobó antes) no hay nada que decidir.
+			if rp.Blocking() && rp.Action != ActionUnchanged {
+				rp.Outcome, rp.Action = rp.Action, ActionReview
+			}
 			fmt.Fprintf(h, "%s|%s|%s\n", rp.Key, rp.Action, rp.Hash)
 		}
 		plan.Counts[rp.Action]++
@@ -196,6 +265,17 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 }
 
 func (p *Plan) add(rp RowPlan) { p.Rows = append(p.Rows, rp) }
+
+// Reviews devuelve las filas que esperan una decisión, en orden de fila.
+func (p *Plan) Reviews() []RowPlan {
+	var out []RowPlan
+	for _, r := range p.Rows {
+		if r.Action == ActionReview {
+			out = append(out, r)
+		}
+	}
+	return out
+}
 
 // Changes devuelve las escrituras del plan (create y update), en orden de fila
 // y, si el perfil declara ApplyOrder, ordenadas por esas reglas (estable).
