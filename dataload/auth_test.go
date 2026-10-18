@@ -105,3 +105,117 @@ func TestAuth_AuthorizerFailureDeniesAndKeepsTheCause(t *testing.T) {
 		t.Fatal("acciones nombradas")
 	}
 }
+
+// Una llamada con decisiones de varias entidades pregunta por cada entidad: un
+// permiso que se niega para una entidad no se esquiva mezclándola con otra.
+func TestAuth_DecideAsksPerEntityWhenTheCallMixesEntities(t *testing.T) {
+	r := newRig(t)
+	auth := &recordingAuthorizer{deny: func(req AuthRequest) error {
+		if req.Entity == "product" {
+			return ErrUnauthorized
+		}
+		return nil
+	}}
+	r.runner.Reviews, r.runner.Authorizer = NewMemoryReviewStore(), auth
+	ctx := context.Background()
+	startAndWait(t, r, listaRequest(t))
+	p5, _, _ := r.runner.Reviews.Get(ctx, "org-a", "product", "P5")
+	other := ReviewEntry{Org: "org-a", Entity: "other", Key: "O1", Hash: "h", State: ReviewPending}
+	if err := r.runner.Reviews.Put(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	_, err := r.runner.Decide(ctx, "org-a", "ana", []ReviewDecision{
+		{Entity: "other", Key: "O1", Hash: "h", Approve: true},
+		{Entity: "product", Key: "P5", Hash: p5.Hash, Approve: true},
+	})
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("mezclar entidades esquivó el permiso: %v", err)
+	}
+	for _, req := range auth.reqs {
+		if req.Entity == "*" || req.Entity == "" {
+			t.Fatalf("el Authorizer debe ver la entidad concreta: %+v", req)
+		}
+	}
+	if e, _, _ := r.runner.Reviews.Get(ctx, "org-a", "product", "P5"); e.State != ReviewPending {
+		t.Fatalf("P5 = %s", e.State)
+	}
+	if e, _, _ := r.runner.Reviews.Get(ctx, "org-a", "other", "O1"); e.State != ReviewPending {
+		t.Fatalf("O1 = %s: una negativa no registra ninguna decisión", e.State)
+	}
+}
+
+// ApplyApproved exige la entidad: con "" no aplica las aprobadas de todas las
+// entidades bajo un nombre vacío ni le pregunta al Authorizer por "".
+func TestAuth_ApplyApprovedRequiresAnEntity(t *testing.T) {
+	r := newRig(t)
+	auth := &recordingAuthorizer{deny: func(req AuthRequest) error {
+		if req.Entity == "product" {
+			return ErrUnauthorized
+		}
+		return nil
+	}}
+	r.runner.Reviews, r.runner.Authorizer = NewMemoryReviewStore(), allowAll
+	ctx := context.Background()
+	startAndWait(t, r, listaRequest(t))
+	p5, _, _ := r.runner.Reviews.Get(ctx, "org-a", "product", "P5")
+	if _, err := r.runner.Decide(ctx, "org-a", "ana", []ReviewDecision{{Entity: "product", Key: "P5", Hash: p5.Hash, Approve: true}}); err != nil {
+		t.Fatal(err)
+	}
+	r.runner.Authorizer = auth
+	if _, err := r.runner.ApplyApproved(ctx, "org-a", "ana", ""); err == nil {
+		t.Fatal("ApplyApproved sin entidad debe fallar")
+	}
+	if _, ok := r.target.Get("org-a", "", "P5"); ok {
+		t.Fatal("se escribió P5 en una entidad vacía")
+	}
+	if e, _, _ := r.runner.Reviews.Get(ctx, "org-a", "product", "P5"); e.State != ReviewApproved {
+		t.Fatalf("P5 = %s", e.State)
+	}
+	if _, err := r.runner.Decide(ctx, "org-a", "ana", []ReviewDecision{{Entity: "", Key: "P5", Hash: p5.Hash, Approve: true}}); err == nil {
+		t.Fatal("Decide sin entidad debe fallar")
+	}
+}
+
+// lookupHook corre fn en la primera consulta al destino (simula otra persona
+// actuando mientras ApplyApproved ya listó las aprobadas).
+type lookupHook struct {
+	*MemoryTarget
+	once sync.Once
+	fn   func()
+}
+
+func (h *lookupHook) Lookup(ctx context.Context, org, entity string, keys []string) (map[string]Existing, error) {
+	h.once.Do(h.fn)
+	return h.MemoryTarget.Lookup(ctx, org, entity, keys)
+}
+
+// Si alguien rechaza una fila (o una carga nueva la cambia) mientras
+// ApplyApproved corre, esa fila no se escribe y su nuevo estado no se pisa.
+func TestReview_ApplyApprovedSkipsRowsDecidedAgainWhileItRuns(t *testing.T) {
+	r := newRig(t)
+	r.runner.Reviews = NewMemoryReviewStore()
+	ctx := context.Background()
+	startAndWait(t, r, listaRequest(t))
+	p5, _, _ := r.runner.Reviews.Get(ctx, "org-a", "product", "P5")
+	if _, err := r.runner.Decide(ctx, "org-a", "ana", []ReviewDecision{{Entity: "product", Key: "P5", Hash: p5.Hash, Approve: true}}); err != nil {
+		t.Fatal(err)
+	}
+	r.runner.Target = &lookupHook{MemoryTarget: r.target, fn: func() {
+		if _, err := r.runner.Decide(ctx, "org-a", "luis", []ReviewDecision{{Entity: "product", Key: "P5", Hash: p5.Hash, Approve: false}}); err != nil {
+			t.Error(err)
+		}
+	}}
+	run, err := r.runner.ApplyApproved(ctx, "org-a", "ana", "product")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.target.Get("org-a", "product", "P5"); ok {
+		t.Fatal("se escribió una fila que ya estaba rechazada")
+	}
+	if e, _, _ := r.runner.Reviews.Get(ctx, "org-a", "product", "P5"); e.State != ReviewRejected || e.DecidedBy != "luis" {
+		t.Fatalf("el rechazo se pisó: %s por %s", e.State, e.DecidedBy)
+	}
+	if run.Progress.Created != 0 || run.Progress.Done != 0 {
+		t.Fatalf("avance: %+v", run.Progress)
+	}
+}

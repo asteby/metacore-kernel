@@ -197,18 +197,27 @@ func (r *Runner) Decide(ctx context.Context, org, actor string, ds []ReviewDecis
 	if r.Reviews == nil {
 		return nil, newErr(CodeNoReviewStore)
 	}
-	entity := ""
-	keys := make([]string, 0, len(ds))
+	// Se pregunta por cada entidad con sus identidades: mezclar entidades en una
+	// llamada no esquiva el permiso de ninguna.
+	byEntity := map[string][]string{}
 	for _, d := range ds {
-		keys = append(keys, d.Key)
-		if entity == "" {
-			entity = d.Entity
-		} else if entity != d.Entity {
-			entity = "*" // varias entidades en una misma llamada
+		if d.Entity == "" {
+			return nil, newErr(CodeEntityRequired, "action", msg(ActionReviewDecide))
 		}
+		byEntity[d.Entity] = append(byEntity[d.Entity], d.Key)
 	}
-	if err := r.authorize(ctx, AuthRequest{Org: org, Actor: actor, Action: ActionReviewDecide, Entity: entity, Keys: keys}); err != nil {
-		return nil, err
+	entities := make([]string, 0, len(byEntity))
+	for e := range byEntity {
+		entities = append(entities, e)
+	}
+	sort.Strings(entities)
+	if len(entities) == 0 {
+		entities = []string{""} // sin decisiones: igual se exige org, actor y permiso
+	}
+	for _, e := range entities {
+		if err := r.authorize(ctx, AuthRequest{Org: org, Actor: actor, Action: ActionReviewDecide, Entity: e, Keys: byEntity[e]}); err != nil {
+			return nil, err
+		}
 	}
 	var out []ReviewEntry
 	for _, d := range ds {
@@ -245,6 +254,11 @@ func (r *Runner) Decide(ctx context.Context, org, actor string, ds []ReviewDecis
 func (r *Runner) ApplyApproved(ctx context.Context, org, actor, entity string) (Run, error) {
 	if r.Reviews == nil {
 		return Run{}, newErr(CodeNoReviewStore)
+	}
+	if entity == "" {
+		// Con "" el almacén listaría las aprobadas de todas las entidades y se
+		// escribirían bajo un nombre vacío.
+		return Run{}, newErr(CodeEntityRequired, "action", msg(ActionReviewApply))
 	}
 	entries, err := r.Reviews.List(ctx, org, ReviewFilter{Entity: entity, State: ReviewApproved})
 	if err != nil {
@@ -288,6 +302,18 @@ func (r *Runner) ApplyApproved(ctx context.Context, org, actor, entity string) (
 		if err != nil {
 			return fail(wrapErr(err, CodeTargetLookup))
 		}
+		// Lo listado puede haber cambiado mientras tanto (alguien la rechazó, o
+		// una carga nueva trajo otra versión): solo se aplica lo que sigue
+		// aprobado con la misma huella.
+		var live []ReviewEntry
+		for _, e := range batch {
+			if r.stillApproved(ctx, e) {
+				live = append(live, e)
+			} else {
+				run.Progress.Total--
+			}
+		}
+		batch = live
 		var changes []Change
 		for _, e := range batch {
 			ex, found := existing[e.Key]
@@ -308,6 +334,9 @@ func (r *Runner) ApplyApproved(ctx context.Context, org, actor, entity string) (
 			}
 		}
 		for _, e := range batch {
+			if !r.stillApproved(ctx, e) {
+				continue // cambió durante la escritura: su nuevo estado no se pisa
+			}
 			e.State, e.AppliedRun, e.UpdatedAt = ReviewApplied, run.ID, r.now()
 			if err := r.Reviews.Put(ctx, e); err != nil {
 				return fail(err)
@@ -325,6 +354,14 @@ func (r *Runner) ApplyApproved(ctx context.Context, org, actor, entity string) (
 	}
 	run.State, run.FinishedAt = RunSucceeded, r.now()
 	return run, r.Ledger.Save(ctx, run)
+}
+
+// stillApproved dice si la entrada sigue aprobada y con la misma huella en el
+// almacén. El ReviewStore no ofrece compare-and-swap, así que esto acota la
+// ventana de carrera con Decide y con otra carga, no la cierra del todo.
+func (r *Runner) stillApproved(ctx context.Context, e ReviewEntry) bool {
+	cur, ok, err := r.Reviews.Get(ctx, e.Org, e.Entity, e.Key)
+	return err == nil && ok && cur.State == ReviewApproved && cur.Hash == e.Hash
 }
 
 // MemoryReviewStore es un ReviewStore en memoria (pruebas y desarrollo).

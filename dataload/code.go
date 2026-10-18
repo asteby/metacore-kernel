@@ -52,6 +52,7 @@ const (
 	CodeUnauthorized   Code = "dataload.auth.denied"
 	CodeNoAuthorizer   Code = "dataload.auth.no_authorizer"
 	CodeActorRequired  Code = "dataload.auth.actor_required"
+	CodeEntityRequired Code = "dataload.auth.entity_required"
 
 	// Medios
 	CodeBackupCorrupt    Code = "dataload.media.backup_corrupt"

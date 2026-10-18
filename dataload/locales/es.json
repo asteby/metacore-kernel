@@ -36,6 +36,7 @@
   "dataload.review.apply": "dataload: aplicar filas aprobadas",
   "dataload.auth.denied": "dataload: \"{actor}\" no puede {action} en la organización \"{org}\"",
   "dataload.auth.actor_required": "dataload: {action} necesita org y quién lo hace",
+  "dataload.auth.entity_required": "dataload: {action} necesita la entidad",
   "dataload.media.backup_corrupt": "dataload: el respaldo no coincide con el sha256 descargado",
   "dataload.media.backup_missing": "dataload: el respaldo no está en el almacén",
   "dataload.media.backup_read": "dataload: leer respaldo {name}",

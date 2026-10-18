@@ -36,6 +36,7 @@
   "dataload.review.apply": "dataload: applying approved rows",
   "dataload.auth.denied": "dataload: \"{actor}\" may not {action} in organization \"{org}\"",
   "dataload.auth.actor_required": "dataload: {action} needs an org and an actor",
+  "dataload.auth.entity_required": "dataload: {action} needs an entity",
   "dataload.media.backup_corrupt": "dataload: the backup does not match the downloaded sha256",
   "dataload.media.backup_missing": "dataload: the backup is not in the store",
   "dataload.media.backup_read": "dataload: reading backup {name}",
