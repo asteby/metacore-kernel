@@ -15,12 +15,15 @@ import (
 // fixture: an org with the storefront, customers, a payment provider and an
 // unrelated "evil" addon. Declared event:emit per addon mirrors the manifests.
 func emitFixture() EmitFactsSource {
-	installed := []string{"storefront_cart", "storefront_api", "customers", "stripe", "products", "evil", "inventory", "skydropx", "emissary"}
+	installed := []string{"storefront_cart", "storefront_api", "customers", "stripe", "products", "evil", "inventory", "skydropx", "emissary", "cash_recycler", "pos"}
 	provides := map[string][]string{
 		"stripe":          {"commerce.payments.session", "commerce.payments.confirm", "commerce.payments.status"},
 		"storefront_cart": nil,
 		"skydropx":        {"commerce.shipping.rates", "commerce.shipping.label", "commerce.shipping.track"},
 		"emissary":        {"commerce.fulfillment.create", "commerce.fulfillment.cancel"},
+		// A terminal-only provider (cash recycler) is a payments provider.
+		"cash_recycler": {"commerce.payments.terminal.create", "commerce.payments.status"},
+		"pos":           nil,
 	}
 	declared := map[string][]string{
 		"storefront_cart": {"storefront_cart.*"},
@@ -31,6 +34,8 @@ func emitFixture() EmitFactsSource {
 		"inventory":       {"inventory.*"},
 		"skydropx":        {"shipping.tracking_updated", "commerce.shipping.tracking_updated"},
 		"emissary":        {"emissary.*", "commerce.fulfillment.updated", "commerce.shipping.tracking_updated"},
+		"cash_recycler":   {"cash_recycler.*", "commerce.payments.confirmed"},
+		"pos":             {"pos.*", "commerce.payments.confirmed"},
 	}
 	grants := []EmitterGrant{{Owner: "customers", Event: "customers.external_return_requested", Emitters: []string{"storefront_api", "storefront_customers"}}}
 	return EmitFactsFunc(func(_ context.Context, _ uuid.UUID, emitter string) (EmitFacts, error) {
@@ -64,6 +69,10 @@ func TestEmitPolicyTable(t *testing.T) {
 		{"ungranted emitter", "evil", "customers.external_return_requested", EmitRuleForeign},
 		{"provider emits payment contract", "stripe", "commerce.payments.confirmed", ""},
 		{"non-provider emits payment contract", "products", "commerce.payments.confirmed", EmitRuleContract},
+		{"terminal provider emits payment contract", "cash_recycler", "commerce.payments.confirmed", ""},
+		// A sales channel records payments, it does not confirm them: even
+		// declaring the event, the POS cannot publish a confirmation.
+		{"sales channel emits payment contract", "pos", "commerce.payments.confirmed", EmitRuleContract},
 		{"kernel namespace", "evil", "kernel.dispatch.delivery_dead", EmitRuleKernel},
 		{"bare kernel", "evil", "kernel", EmitRuleKernel},
 		{"undeclared own event", "inventory", "stock.in_transit", EmitRuleDeclared},

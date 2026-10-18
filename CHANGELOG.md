@@ -7,6 +7,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Estándar de pagos de la plataforma, fase K1: contrato** ([RFC](docs/RFC-PAYMENTS-STANDARD.md)).
+  Paquete nuevo `payments` (Go puro, sin base de datos): los registros canónicos
+  `Payment`, `Refund` y `PaymentEvent`, el ciclo de vida normalizado con la
+  tabla de transiciones válidas (`Transition` para comandos locales,
+  `Observe` para estados re-leídos del proveedor: aplicar, ignorar un
+  duplicado o una lectura fuera de orden, o anomalía como `late_capture`), el
+  hold de cobro por documento con TTL y token (`Acquire`, `CheckCharge`,
+  `Release`, `Consume`), el replay idempotente (`CheckReplay`), las reglas del
+  cobro (`CheckTenders`, `CheckLinesTotal`, `Settle` con tolerancia de
+  redondeo de efectivo por organización), lo reembolsable (`Refundable`,
+  `CheckRefund`, `ApplySucceededRefunds`, nota de crédito obligatoria en
+  `Refund.Complete`) y `DecodeConfirmed`, que exige `emitter == provider` en
+  `commerce.payments.confirmed`. El dinero se opera con `math/big`, nunca con
+  `float64`.
+  `capability`: los estados `at_device` y `cancelling` (al final del enum), los
+  vocabularios `PaymentChannels` (`terminal|online|qr|link|cash`), `CardTypes`,
+  `RefundStatuses`, `CancelOutcomes` y `PaymentEventSources`, las formas
+  `Card`, `Seller` (marketplace) y `CashTender`, y los contratos
+  `commerce.payments.cancel`, `.capabilities`, `.reconcile`,
+  `.terminal.create` y `.terminal.devices` (todos fijados al proveedor;
+  `cancel` y `terminal.create` mutantes). Campos opcionales nuevos en
+  `session`, `confirm`/`status`, `refund` y en el payload del evento neutral
+  (`organization_id`, `occurred_at`, `source`, `payment_id`, documento).
+  `ValidCurrency`. Retrocompatible: los 4 contratos de pago conservan sus
+  requeridos de entrada y salida (prueba incluida).
+
 ### Fixed
 
 - **dataload: correcciones de la revisión de la integración con ops.**

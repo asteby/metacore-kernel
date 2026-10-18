@@ -28,6 +28,16 @@ const (
 	FiscalInvoiceCancel       = "fiscal.invoice.cancel"
 )
 
+// Payments standard (docs/RFC-PAYMENTS-STANDARD.md): cancel, provider
+// capabilities, reconciliation listing and the in-person terminal family.
+const (
+	CommercePaymentsCancel          = "commerce.payments.cancel"
+	CommercePaymentsCapabilities    = "commerce.payments.capabilities"
+	CommercePaymentsReconcile       = "commerce.payments.reconcile"
+	CommercePaymentsTerminalCreate  = "commerce.payments.terminal.create"
+	CommercePaymentsTerminalDevices = "commerce.payments.terminal.devices"
+)
+
 // CommercePaymentsConfirmed is the normalized payment-update event every
 // payment provider emits from its own webhook (or staff action, for manual
 // payments): {provider, result}, where result is the output of
@@ -37,6 +47,12 @@ const (
 // payment with commerce.payments.status pinned to the session's provider
 // before acting on it.
 const CommercePaymentsConfirmed = "commerce.payments.confirmed"
+
+// CommercePaymentsTerminalDomain is the capability domain of in-person
+// payment devices (card terminals, cash recyclers). It lies under
+// commerce.payments, so a terminal provider may emit
+// commerce.payments.confirmed like any other payment provider.
+const CommercePaymentsTerminalDomain = "commerce.payments.terminal"
 
 // CommerceShippingTrackingUpdated is the normalized parcel-status event every
 // carrier emits when a shipment it created moves (webhook or poll). Only
@@ -54,7 +70,29 @@ const CommerceFulfillmentUpdated = "commerce.fulfillment.updated"
 // Normalized status vocabularies shared by providers.
 var (
 	// PaymentStatuses is the normalized payment lifecycle.
-	PaymentStatuses = []string{"pending", "requires_action", "authorized", "paid", "failed", "cancelled", "expired", "refunded", "partially_refunded"}
+	// at_device (the amount is on a terminal / cash recycler waiting for the
+	// buyer) and cancelling (cancellation requested, the provider has not
+	// confirmed it yet: the payment may still be captured) were added by the
+	// payments standard; they are appended so the original nine keep their
+	// order. A consumer that does not know a status treats it as not final.
+	PaymentStatuses = []string{"pending", "requires_action", "authorized", "paid", "failed", "cancelled", "expired", "refunded", "partially_refunded", "at_device", "cancelling"}
+	// PaymentChannels is how the buyer pays: on an in-person device
+	// (terminal: card terminal or cash recycler), online (checkout, embedded
+	// widget, voucher), by scanning a QR, through a shared link, or in cash
+	// counted by staff.
+	PaymentChannels = []string{"terminal", "online", "qr", "link", "cash"}
+	// CardTypes classify a card payment (fiscal payment form: credit vs debit).
+	CardTypes = []string{"credit", "debit", "prepaid", "other"}
+	// PaymentEventSources tell how an update was observed.
+	PaymentEventSources = []string{"webhook", "poll", "reconcile", "staff"}
+	// RefundStatuses is the normalized refund lifecycle.
+	RefundStatuses = []string{"pending", "succeeded", "failed", "manual_required"}
+	// CancelOutcomes answer commerce.payments.cancel: cancelled (confirmed),
+	// cancelling (accepted, not confirmed yet: keep polling, it may still end
+	// paid) or not_cancellable (already captured / final).
+	CancelOutcomes = []string{"cancelled", "cancelling", "not_cancellable"}
+	// TerminalDeviceStatuses is the normalized availability of a device.
+	TerminalDeviceStatuses = []string{"online", "offline", "busy", "unknown"}
 	// TrackingStatuses is the normalized parcel lifecycle every carrier
 	// status is mapped onto.
 	TrackingStatuses = []string{"created", "picked_up", "in_transit", "out_for_delivery", "delivered", "exception", "returned", "cancelled"}
@@ -214,33 +252,70 @@ var (
 		req("amount", TypeDecimal, ""),
 		opt("jurisdiction", TypeString, ""),
 	)
+
+	// CardSchema is what a card payment reports for the fiscal record and the
+	// ticket (never the PAN).
+	CardSchema = schema(
+		enum(opt("type", TypeString, "fiscal payment form follows it (credit vs debit)"), CardTypes),
+		opt("brand", TypeString, "visa / master / amex / debmaster / ..."),
+		opt("last4", TypeString, "last four digits, as a string (keeps leading zeros)"),
+		opt("auth_code", TypeString, "issuer authorization code"),
+		opt("entry_mode", TypeString, "chip / contactless / swipe / manual / online"),
+	)
+
+	// SellerSchema routes a payment to a marketplace seller: the provider
+	// charges on behalf of the seller's own provider account (split or
+	// per-seller charge) and keeps the platform commission.
+	SellerSchema = schema(
+		req("account_ref", TypeString, "seller account id at the provider (OAuth-linked account / connected account)"),
+		opt("seller_id", TypeString, "seller id in OPS"),
+		opt("application_fee", TypeDecimal, "platform commission retained from this payment, in the payment currency"),
+	)
+
+	// CashTenderSchema is what a cash device (or a counted drawer) reports.
+	CashTenderSchema = schema(
+		opt("tendered", TypeDecimal, "cash the buyer inserted / handed over"),
+		opt("change", TypeDecimal, "change returned"),
+		opt("operation_id", TypeString, "device operation id (e.g. the cash recycler operation), kept for reconciliation"),
+	)
 )
 
 // IdempotentContracts are the mutating contracts: `idempotency_key` is
 // required and a timeout is indeterminate (see Contract.Idempotent).
 var IdempotentContracts = map[string]bool{
-	CommercePaymentsSession:   true,
-	CommercePaymentsRefund:    true,
-	CommerceTaxCommit:         true,
-	CommerceTaxReverse:        true,
-	CommerceShippingLabel:     true,
-	CommerceFulfillmentCreate: true,
-	FiscalInvoiceCreate:       true,
+	CommercePaymentsSession: true,
+	CommercePaymentsRefund:  true,
+	CommercePaymentsCancel:  true,
+	// A duplicated terminal order charges the buyer twice.
+	CommercePaymentsTerminalCreate: true,
+	CommerceTaxCommit:              true,
+	CommerceTaxReverse:             true,
+	CommerceShippingLabel:          true,
+	CommerceFulfillmentCreate:      true,
+	FiscalInvoiceCreate:            true,
 }
 
 // PinnedContracts are the follow-up contracts that must name the provider
 // (Query.Provider) that created the payment / shipment / invoice / tax
 // transaction: webhooks, status, refunds, cancels, tracking, commit, reverse.
 var PinnedContracts = map[string]bool{
-	CommercePaymentsConfirm:   true,
-	CommercePaymentsStatus:    true,
-	CommercePaymentsRefund:    true,
-	CommerceTaxCommit:         true,
-	CommerceTaxReverse:        true,
-	CommerceShippingCancel:    true,
-	CommerceShippingTrack:     true,
-	CommerceFulfillmentCancel: true,
-	FiscalInvoiceCancel:       true,
+	CommercePaymentsConfirm: true,
+	CommercePaymentsStatus:  true,
+	CommercePaymentsRefund:  true,
+	CommercePaymentsCancel:  true,
+	// Asked of a named provider: what it supports, what it holds, and the
+	// device that belongs to its account (selection must never pick another
+	// provider's terminal).
+	CommercePaymentsCapabilities:    true,
+	CommercePaymentsReconcile:       true,
+	CommercePaymentsTerminalCreate:  true,
+	CommercePaymentsTerminalDevices: true,
+	CommerceTaxCommit:               true,
+	CommerceTaxReverse:              true,
+	CommerceShippingCancel:          true,
+	CommerceShippingTrack:           true,
+	CommerceFulfillmentCancel:       true,
+	FiscalInvoiceCancel:             true,
 }
 
 func init() {
@@ -268,10 +343,16 @@ func commerceEvents() []EventContract {
 		},
 		{
 			Name: CommercePaymentsConfirmed, EmittedBy: "commerce.payments",
-			Doc: "a provider verified a payment, refund or dispute update (webhook or staff action)",
+			Doc: "a provider verified a payment, refund or dispute update (webhook, poll, reconciliation or staff action)",
 			Payload: schema(
 				req("provider", TypeString, "addon key of the provider (informative: subscribers trust the host-stamped emitter)"),
 				obj(req("result", TypeObject, "output of commerce.payments.confirm; result.kind tells payment / refund / dispute"), Contracts[CommercePaymentsConfirm].Output),
+				opt("organization_id", TypeString, "org the payment belongs to (informative: the bus carries the org)"),
+				opt("occurred_at", TypeString, "RFC 3339 time the provider observed the update"),
+				enum(opt("source", TypeString, "how the update was observed"), PaymentEventSources),
+				opt("payment_id", TypeString, "canonical payment id in the payments ledger, when recorded"),
+				opt("document_type", TypeString, "paid document kind in OPS (sales_order, checkout, invoice, ...)"),
+				opt("document_id", TypeString, "paid document id in OPS"),
 			),
 		},
 	}
@@ -287,8 +368,16 @@ func commerceContracts() []Contract {
 		}
 	}
 	for i := range cs {
-		if cs[i].Key == CommercePaymentsStatus {
+		switch cs[i].Key {
+		case CommercePaymentsStatus:
 			cs[i].Output = confirm
+		case CommercePaymentsReconcile:
+			// Each listed payment is exactly a status answer.
+			for j, f := range cs[i].Output.Fields {
+				if f.Name == "payments" {
+					cs[i].Output.Fields[j].Of = confirm
+				}
+			}
 		}
 		if IdempotentContracts[cs[i].Key] {
 			cs[i].Idempotent = true
@@ -331,6 +420,8 @@ func commerceContractList() []Contract {
 				opt("expires_at", TypeString, "RFC 3339"),
 				req("idempotency_key", TypeString, IdempotencyDoc),
 				opt("metadata", TypeObject, ""),
+				enum(opt("channel", TypeString, "online (default), qr or link; terminals use commerce.payments.terminal.create"), PaymentChannels),
+				obj(opt("seller", TypeObject, "marketplace: charge on behalf of this seller"), SellerSchema),
 			),
 			Output: schema(
 				req("session_id", TypeString, "provider session/preference/intent id"),
@@ -343,6 +434,8 @@ func commerceContractList() []Contract {
 				opt("provider_ref", TypeString, "payment id when known already"),
 				obj(opt("instructions", TypeObject, "offline payment instructions (OXXO reference, SPEI CLABE, barcode_url, deadline)"), &Schema{Open: true}),
 				opt("test_mode", TypeBoolean, "session created against the provider sandbox"),
+				opt("qr_data", TypeString, "payload to render as a QR (channel qr)"),
+				opt("qr_image_url", TypeString, "ready-made QR image"),
 			),
 		},
 		{
@@ -370,6 +463,14 @@ func commerceContractList() []Contract {
 				opt("fee", TypeDecimal, "provider fee"),
 				opt("net_amount", TypeDecimal, "amount minus fee"),
 				opt("test_mode", TypeBoolean, "event from the provider sandbox"),
+				enum(opt("channel", TypeString, "how the buyer paid; default online"), PaymentChannels),
+				opt("session_id", TypeString, "session / preference / terminal order id the payment belongs to"),
+				opt("device_id", TypeString, "terminal / cash recycler that took the payment"),
+				obj(opt("card", TypeObject, "card details when the method is a card"), CardSchema),
+				obj(opt("cash", TypeObject, "cash device details"), CashTenderSchema),
+				obj(opt("seller", TypeObject, "marketplace seller the payment was charged for"), SellerSchema),
+				opt("provider_status", TypeString, "provider wording / code of the status, untranslated"),
+				opt("status_detail", TypeString, "provider reason (rejection code, expiry, ...)"),
 			),
 		},
 		{
@@ -391,13 +492,122 @@ func commerceContractList() []Contract {
 				opt("order_ref", TypeString, ""),
 				opt("reason", TypeString, ""),
 				req("idempotency_key", TypeString, IdempotencyDoc),
+				obj(opt("seller", TypeObject, "marketplace: the seller the payment was charged for"), SellerSchema),
+				opt("refund_application_fee", TypeBoolean, "marketplace: also return the platform commission"),
 			),
 			Output: schema(
 				req("refund_id", TypeString, ""),
-				enum(req("status", TypeString, "manual_required: cash/BNPL refunds the merchant settles by hand"), []string{"pending", "succeeded", "failed", "manual_required"}),
+				enum(req("status", TypeString, "manual_required: cash/BNPL refunds the merchant settles by hand"), RefundStatuses),
 				req("amount", TypeDecimal, ""),
 				req("currency", TypeCurrency, ""),
 				opt("instructions", TypeString, "what the merchant must do when manual_required"),
+				opt("provider_ref", TypeString, "provider payment id the refund belongs to"),
+				opt("provider_status", TypeString, "provider wording / code of the refund status, untranslated"),
+			),
+		},
+		{
+			Key: CommercePaymentsCancel, Kind: KindQuery, Cardinality: One,
+			Doc: "cancel a payment that is not captured yet (open session, terminal order, authorization); re-read the status afterwards",
+			Input: schema(
+				opt("provider_ref", TypeString, "provider payment / terminal order id (one of provider_ref or session_id)"),
+				opt("session_id", TypeString, "provider session id when no payment exists yet"),
+				opt("order_ref", TypeString, ""),
+				opt("device_id", TypeString, "terminal holding the order, when the provider needs it"),
+				opt("reason", TypeString, ""),
+				req("idempotency_key", TypeString, IdempotencyDoc),
+			),
+			Output: schema(
+				enum(req("status", TypeString, "cancelling: accepted but not confirmed (the device may still capture it): poll commerce.payments.status"), CancelOutcomes),
+				enum(opt("payment_status", TypeString, "normalized payment status after the call"), PaymentStatuses),
+				opt("message", TypeString, "why it could not be cancelled"),
+			),
+			Errors: []string{"not_found"},
+		},
+		{
+			Key: CommercePaymentsCapabilities, Kind: KindQuery, Cardinality: One,
+			Doc: "what this provider supports (channels, refunds, cancellation, limits, marketplace); channels read it instead of hard-coding a provider",
+			Input: schema(
+				opt("market", TypeString, "market code, when support differs per market"),
+				enum(opt("channel", TypeString, "restrict the answer to one channel"), PaymentChannels),
+			),
+			Output: schema(
+				strs(req("channels", TypeArray, "subset of terminal / online / qr / link / cash")),
+				strs(opt("methods", TypeArray, "method families: card / msi / oxxo / spei / wallet / bnpl / bank_transfer / cash")),
+				strs(opt("currencies", TypeArray, "ISO 4217 codes")),
+				opt("min_amount", TypeDecimal, "smallest chargeable amount (e.g. a terminal minimum)"),
+				opt("max_amount", TypeDecimal, ""),
+				opt("partial_refunds", TypeBoolean, ""),
+				opt("multiple_refunds", TypeBoolean, "several partial refunds on one payment"),
+				opt("refund_window_days", TypeInteger, "0 = no limit"),
+				opt("cancel", TypeBoolean, "commerce.payments.cancel is supported"),
+				opt("cancel_is_async", TypeBoolean, "cancellation may answer cancelling (confirmed later)"),
+				opt("installments", TypeBoolean, "interest-free installments (MSI)"),
+				opt("terminal_expires_seconds", TypeInteger, "lifetime of a terminal order when not paid"),
+				opt("reconcile", TypeBoolean, "commerce.payments.reconcile is supported"),
+				opt("marketplace_split", TypeBoolean, "charges on behalf of a seller account (SellerSchema)"),
+				opt("seller_oauth", TypeBoolean, "seller accounts are linked through the provider OAuth"),
+				opt("test_mode", TypeBoolean, "the configured credentials are sandbox credentials"),
+			),
+		},
+		{
+			Key: CommercePaymentsReconcile, Kind: KindQuery, Cardinality: One,
+			Doc: "list the provider's payments updated in a time window (reconciliation job); items are commerce.payments.status outputs",
+			Input: schema(
+				req("from", TypeString, "RFC 3339, inclusive"),
+				req("to", TypeString, "RFC 3339, exclusive"),
+				opt("cursor", TypeString, "next_cursor of the previous page"),
+				opt("limit", TypeInteger, "page size hint"),
+				obj(opt("seller", TypeObject, "marketplace: only this seller's payments"), SellerSchema),
+			),
+			// payments[] is filled with the confirm output in commerceContracts.
+			Output: schema(
+				list(req("payments", TypeArray, "normalized payments, any order"), schema()),
+				opt("next_cursor", TypeString, "absent on the last page"),
+			),
+		},
+		// ------------------------------------------------- payments: terminal
+		{
+			Key: CommercePaymentsTerminalCreate, Kind: KindQuery, Cardinality: One,
+			Doc: "send an amount to an in-person device (card terminal, cash recycler); the result is followed with commerce.payments.status",
+			Input: schema(
+				req("device_id", TypeString, "provider device id (payment_terminals / cash_recyclers record)"),
+				req("order_ref", TypeString, "document id/number in OPS (external_reference)"),
+				req("amount", TypeDecimal, "amount to collect"),
+				req("currency", TypeCurrency, ""),
+				opt("description", TypeString, "text shown on the device / statement"),
+				opt("installments", TypeInteger, "interest-free installments; a provider that cannot preset them retries without and says so in message"),
+				enum(opt("card_type", TypeString, "preselect credit / debit when the device supports it"), CardTypes),
+				opt("expires_in_seconds", TypeInteger, "order lifetime on the device (provider default when absent)"),
+				opt("print_ticket", TypeBoolean, "ask the device to print its voucher"),
+				req("idempotency_key", TypeString, IdempotencyDoc),
+				opt("metadata", TypeObject, ""),
+			),
+			Output: schema(
+				req("provider_ref", TypeString, "provider terminal order / payment id; pin follow-ups to it"),
+				enum(req("status", TypeString, "pending (queued), at_device (shown on the device) or failed"), []string{"pending", "at_device", "failed"}),
+				opt("device_id", TypeString, ""),
+				opt("expires_at", TypeString, "RFC 3339"),
+				opt("installments", TypeInteger, "installments actually preset (0/1 when the provider dropped them)"),
+				opt("message", TypeString, "provider message (e.g. installments not accepted, retried without)"),
+				opt("test_mode", TypeBoolean, ""),
+			),
+			Errors: []string{"amount_below_minimum", "device_not_found", "device_offline", "device_busy", "invalid_input"},
+		},
+		{
+			Key: CommercePaymentsTerminalDevices, Kind: KindQuery, Cardinality: One,
+			Doc: "list the provider account's in-person devices (to link a payment_terminals record without typing ids)",
+			Input: schema(
+				opt("device_id", TypeString, "only this device"),
+			),
+			Output: schema(
+				list(req("devices", TypeArray, ""), schema(
+					req("device_id", TypeString, ""),
+					opt("name", TypeString, ""),
+					opt("model", TypeString, ""),
+					opt("mode", TypeString, "provider operating mode (e.g. integrated / standalone)"),
+					enum(opt("status", TypeString, ""), TerminalDeviceStatuses),
+					opt("test_mode", TypeBoolean, ""),
+				)),
 			),
 		},
 		// --------------------------------------------------------------- tax
