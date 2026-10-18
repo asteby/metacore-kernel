@@ -82,6 +82,9 @@ type invocation struct {
 	// (Host.WithCreateCheck) data_mutate / data_batch run on every create,
 	// inside the transaction. nil = no check.
 	createCheck CreateCheckFn
+	// createStamp is the embedder-injected stamp phase (Host.WithCreateStamp)
+	// data_mutate / data_batch run on every create, after the folio stamp.
+	createStamp CreateStampFn
 	// ctxProvider is the embedder-injected execution-context port the ctx_get
 	// import calls (Host.WithContextProvider). nil = context_unavailable.
 	ctxProvider ContextProviderFn

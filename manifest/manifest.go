@@ -1202,6 +1202,10 @@ type ModelDefinition struct {
 	// See manifest/v3.Sequence. Empty = the model has no folios.
 	Sequences []SequenceDef `json:"sequences,omitempty"`
 
+	// Snapshots carries the v3 Model.snapshots (columns copied from a related row
+	// at create) through the v3 → host conversion. See manifest/v3.Snapshot.
+	Snapshots []SnapshotDef `json:"snapshots,omitempty"`
+
 	// Locking is the host/runtime projection of a v3 Model.locking. "row" makes
 	// dynamic.Service.Update take a SELECT … FOR UPDATE lock on the target row
 	// inside a transaction before evaluating column Constraints, so a concurrent
@@ -1412,6 +1416,20 @@ type Formula struct {
 	Tier int `json:"tier,omitempty"`
 	// Handler is the Tier-3 backend, "wasm:<export>". Set only when Tier is 3.
 	Handler string `json:"handler,omitempty"`
+}
+
+// SnapshotDef is the host/runtime projection of a v3 Model.Snapshot.
+type SnapshotDef struct {
+	From   string            `json:"from"`
+	Fields map[string]string `json:"fields"`
+}
+
+// GrantDef is the host/runtime projection of a v3 Column.Grant.
+type GrantDef struct {
+	Policy     string            `json:"policy"`
+	Sets       string            `json:"sets"`
+	ContextEq  map[string]string `json:"contextEq,omitempty"`
+	ContextGte map[string]string `json:"contextGte,omitempty"`
 }
 
 // SequenceDef is the host/runtime projection of a v3 Model.Sequence: an atomic
@@ -1679,6 +1697,9 @@ type ColumnDef struct {
 	// evaluate them inside the create/update transaction. See manifest/v3.Constraint
 	// and dynamic constraint evaluation. Empty = no guards on this column.
 	Constraints []ConstraintDef `json:"constraints,omitempty"`
+
+	// Grant carries the v3 Column.grant (supervisor-authorization slot).
+	Grant *GrantDef `json:"grant,omitempty"`
 
 	// Sequence carries the v3 Column.sequence binding (the sequence key whose
 	// next formatted value is auto-stamped on create) through the v3 → host

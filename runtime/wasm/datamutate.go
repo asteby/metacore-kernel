@@ -226,6 +226,10 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		rollback()
 		return fail(code, sErr.Error())
 	}
+	if code, sErr := stampCreate(execCtx, inv, work, orgID, &req, data); sErr != nil {
+		rollback()
+		return fail(code, sErr.Error())
+	}
 	if code, cErr := checkCreate(execCtx, inv, work, orgID, &req, data); cErr != nil {
 		rollback()
 		return fail(code, cErr.Error())
@@ -913,6 +917,27 @@ func stampCreateSequences(ctx context.Context, inv *invocation, work *gorm.DB, o
 	}
 	if err := inv.sequenceStamp(ctx, work, orgID, req.Model, data); err != nil {
 		return "db_error", fmt.Errorf("sequence stamp: %w", err)
+	}
+	return "", nil
+}
+
+// CreateStampFn runs the declarative stamp phase (snapshots copied from a
+// related row, supervisor-grant redemption, the formulas that read them) on the
+// row of a create, on the open transaction. See Host.WithCreateStamp.
+type CreateStampFn func(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, model string, row map[string]any) error
+
+// stampCreate runs the embedder's CreateStampFn for a create. A refused grant
+// (dynamic.ErrApprovalConsume) answers `approval_invalid`; anything else
+// `db_error`. ("", nil) when unset or not a create.
+func stampCreate(ctx context.Context, inv *invocation, work *gorm.DB, orgID uuid.UUID, req *dataMutateRequest, data map[string]any) (string, error) {
+	if inv.createStamp == nil || req.Op != "create" || req.Model == "" {
+		return "", nil
+	}
+	if err := inv.createStamp(ctx, work, orgID, req.Model, data); err != nil {
+		if errors.Is(err, dynamic.ErrApprovalConsume) || errors.Is(err, dynamic.ErrApprovalGrantRequired) {
+			return "approval_invalid", err
+		}
+		return "db_error", fmt.Errorf("create stamp: %w", err)
 	}
 	return "", nil
 }

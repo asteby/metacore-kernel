@@ -230,6 +230,11 @@ type Config struct {
 	// backend) resolves a counter by (model, key). nil = no folios.
 	SequenceResolver SequenceResolver
 
+	// StampResolver returns the create-time stamp configuration of a model:
+	// snapshots copied from a related row and supervisor-grant slots (manifest
+	// Model.snapshots / Column.grant). nil disables the phase (back-compat).
+	StampResolver StampResolver
+
 	// AuthUserExtractor optionally lets the Handler pull the authenticated
 	// principal from the request context using the narrow AuthUserProvider
 	// contract instead of the legacy UserResolver (which forces apps to
@@ -395,6 +400,7 @@ type Service struct {
 	validationSchema  ValidationSchemaResolver
 	customValidators  validate.Resolver
 	sequences         SequenceResolver
+	stamps            StampResolver
 	authExtractor     adapters.AuthUserExtractor
 	selfOptions       bool
 	fileDeleter       FileDeleter
@@ -489,6 +495,7 @@ func New(cfg Config) *Service {
 		validationSchema:  cfg.ValidationSchemaResolver,
 		customValidators:  cfg.CustomValidatorResolver,
 		sequences:         cfg.SequenceResolver,
+		stamps:            cfg.StampResolver,
 		authExtractor:     cfg.AuthUserExtractor,
 		selfOptions:       cfg.EnableSelfOptions,
 		fileDeleter:       cfg.FileDeleter,
@@ -912,6 +919,13 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	}
 
 	coerceInputToStruct(input, instance)
+
+	// Stamp phase (snapshots + supervisor grants): server-owned columns copied
+	// from a related row, overwriting whatever the caller sent, BEFORE the
+	// formulas (before-create hooks) and guards that read them.
+	if err := s.stampCreateRow(ctx, model, user, input); err != nil {
+		return nil, err
+	}
 
 	hc := HookContext{Model: model, User: user, DB: s.db}
 	if err := s.hooks.runBeforeCreate(ctx, hc, input); err != nil {

@@ -14,6 +14,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `permission`, `trigger` (`manual` | `first_visit`), `route` (obligatoria con
   `first_visit`), `order` y `steps[]` (reusa `AgentGuideStep`: `target` de UI o
   paso `concept`). Validación de claves y pasos únicos en `v3.Validate`.
+- **Columnas snapshot y autorizaciones declarativas (`models[].snapshots`,
+  `columns[].grant`; docs/snapshots.md).** Al crear, el servidor copia columnas
+  desde una fila relacionada (costo y piso del producto al vender, sucursal y
+  vendedor del pedido) a columnas `protected`, y canjea una autorización PIN
+  de un solo uso estampando un flag protegido que leen las fórmulas y los
+  guards (`price_shortfall`). Corre igual en `/data`, `data_mutate`/`data_batch`
+  (`Host.WithCreateStamp`, ABI § 24) y acciones; el valor del servidor pisa lo
+  que mande el cliente o el guest. `dynamic.Config.StampResolver`,
+  `Service.StampCreate` / `CreateStamper`.
+
 - **runtime/wasm: import `approval_consume` y `Host.WithApprovalConsumer`
   (docs/wasm-abi.md § 23).** Un handler que escribe una línea bajo una
   autorización de supervisor (precio bajo el piso, descuento fuera de regla)

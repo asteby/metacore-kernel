@@ -185,6 +185,10 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 			_ = work.Rollback()
 			return fail(code, fmt.Sprintf("mutations[%d]: %s", i, sErr.Error()))
 		}
+		if code, sErr := stampCreate(execCtx, inv, work, orgID, p.req, p.data); sErr != nil {
+			_ = work.Rollback()
+			return fail(code, fmt.Sprintf("mutations[%d]: %s", i, sErr.Error()))
+		}
 		if code, cErr := checkCreate(execCtx, inv, work, orgID, p.req, p.data); cErr != nil {
 			_ = work.Rollback()
 			return fail(code, fmt.Sprintf("mutations[%d]: %s", i, cErr.Error()))

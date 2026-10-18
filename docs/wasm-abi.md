@@ -2581,3 +2581,24 @@ envelope code is `approval_required` instead of `constraint_violation`, so the
 guest can tell "this needs a supervisor" from "this data is invalid" and ask
 for the authorization (PIN grant, redeemed with `approval_consume`) before
 retrying. Nothing is parked: a wasm write has no applier that could replay it.
+
+## 24. Create stamp phase on `data_mutate` / `data_batch` (Host.WithCreateStamp)
+
+Creates through the wasm ABI run the same declarative stamp phase as
+`dynamic.Service.Create`, inside the write transaction, after the folio stamp
+and before the create check and the INSERT:
+
+1. **Snapshots** (`Model.snapshots`): columns copied from a related row
+   (`from` = a `ref` column of the model, `fields` = source column -> target).
+   The targets are `protected` and the server value ALWAYS overwrites what the
+   guest sent. A missing source row or an empty ref clears the targets.
+2. **Grants** (`Column.grant`): the column carries a PIN-grant id; when the
+   authorization is needed (a `context_gte` expression is positive) the kernel
+   redeems it (see § 23) and stamps the protected flag column `sets` with 1.
+   A refused grant answers `approval_invalid` and nothing is written.
+3. The Tier-2 formulas that read a stamped column are re-evaluated (so
+   `price_shortfall = (min_price_at_sale - unit_price) * (1 - price_authorized)`
+   is correct on this path too).
+
+The guest must name the `model` in the mutation (a table-only create is not
+stamped). Wire with `host.WithCreateStamp(dynamicService.CreateStamper())`.

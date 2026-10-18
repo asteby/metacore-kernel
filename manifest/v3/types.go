@@ -729,6 +729,15 @@ type Model struct {
 	// `sequence_next` host import. Optional — models without folios omit it.
 	Sequences []Sequence `json:"sequences,omitempty"`
 
+	// Snapshots declare columns the kernel fills on CREATE by copying values from
+	// a related row (the product's cost and floor price at the moment of sale,
+	// the parent order's branch and seller on each line). Every target column is
+	// system-owned: it MUST be declared `protected`, and the kernel overwrites
+	// whatever any write path supplied (generic /data, wasm data_mutate and
+	// data_batch, actions), so the value cannot be forged and survives later
+	// edits of the source. Optional. See Snapshot.
+	Snapshots []Snapshot `json:"snapshots,omitempty"`
+
 	// FormLayout declares declarative grouping for the model's native create/edit
 	// form — collapsible sections on one scroll (mode "sections") or a step
 	// wizard (mode "steps"). Columns bind to a section/step via Column.Section.
@@ -1136,6 +1145,11 @@ type Column struct {
 	// arithmetic allowlist as Formula.Expr governs each side of the comparison.
 	Constraints []Constraint `json:"constraints,omitempty"`
 
+	// Grant redeems a supervisor authorization carried by THIS column (an id the
+	// POS obtained with a PIN) on create, and records the result in a protected
+	// flag column the model's formulas / guards read. See GrantBinding.
+	Grant *GrantBinding `json:"grant,omitempty"`
+
 	// Sequence binds this column to one of the owning Model.Sequences by key: on
 	// create, when the column is empty, the kernel stamps the next formatted
 	// folio value automatically. The column is treated as system-generated (like
@@ -1362,6 +1376,44 @@ type Sequence struct {
 	// exactly one `{seq}` or zero-padded `{seq:0N}` placeholder (e.g. "A-{seq:06}"
 	// → "A-000042"). Any other text is emitted verbatim.
 	Format string `json:"format"`
+}
+
+// Snapshot copies columns from a related row onto the new row at CREATE time.
+//
+//	{"from": "product_id", "fields": {"min_price": "min_price_at_sale", "cost_price": "unit_cost"}}
+//
+// From names a column of the same model that carries a `ref` (the related
+// table); Fields maps a source column of that table to the target column on
+// this model. The lookup is scoped to the writer's organization when the source
+// table is tenant-scoped. A missing source row or an empty ref leaves the
+// targets unset (the write is not refused). Targets must be declared
+// `protected`. Snapshots run before the model's formulas, so a formula or guard
+// can read the copied values (price_shortfall = f(min_price_at_sale, ...)).
+type Snapshot struct {
+	// From is the ref column on this model identifying the source row.
+	From string `json:"from"`
+	// Fields maps source column -> target column on this model.
+	Fields map[string]string `json:"fields"`
+}
+
+// GrantBinding turns the column it sits on into a supervisor-authorization slot.
+// When the column holds an approval id on create, the kernel redeems that PIN
+// grant (single use; same org, kind=pin of Policy, requested by the writer, still
+// fresh) — but only when the authorization is actually needed, i.e. some
+// ContextGte expression is positive. On success the numeric flag column Sets is
+// stamped 1; on failure the write is refused (approval_invalid). When no
+// authorization is needed the id is ignored and Sets stays 0.
+type GrantBinding struct {
+	// Policy is the PIN policy the grant must have been issued for.
+	Policy string `json:"policy"`
+	// Sets is the protected numeric column stamped 1 on a redeemed grant.
+	Sets string `json:"sets"`
+	// ContextEq maps a key of the grant's recorded context to a column of this
+	// row whose value must equal it (anchors the grant to a product, ...).
+	ContextEq map[string]string `json:"context_eq,omitempty"`
+	// ContextGte maps a context key to an arithmetic expression over this row:
+	// the amount the grant must cover (e.g. the per-unit shortfall).
+	ContextGte map[string]string `json:"context_gte,omitempty"`
 }
 
 // Constraint is one declarative GUARD predicate on a column: a boolean
