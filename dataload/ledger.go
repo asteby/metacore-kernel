@@ -58,22 +58,24 @@ const MaxRunIssues = 200
 
 // Run es una entrada del historial: una simulación o una aplicación.
 type Run struct {
-	ID             string              `json:"id"`
-	Key            string              `json:"key"` // llave de idempotencia
-	Org            string              `json:"org"`
-	Mode           RunMode             `json:"mode"`
-	State          RunState            `json:"state"`
-	Actor          string              `json:"actor,omitempty"`
-	Profile        string              `json:"profile"`
-	ProfileVersion string              `json:"profileVersion"`
-	ProfileHash    string              `json:"profileHash"`
-	ExtractHash    string              `json:"extractHash,omitempty"`
-	OverridesHash  string              `json:"overridesHash,omitempty"`
-	Source         string              `json:"source"`
-	InputHash      string              `json:"inputHash"`
-	PlanHash       string              `json:"planHash,omitempty"`
-	Progress       Progress            `json:"progress"`
-	Issues         []importer.RowIssue `json:"issues,omitempty"`
+	ID             string   `json:"id"`
+	Key            string   `json:"key"` // llave de idempotencia
+	Org            string   `json:"org"`
+	Mode           RunMode  `json:"mode"`
+	State          RunState `json:"state"`
+	Actor          string   `json:"actor,omitempty"`
+	Profile        string   `json:"profile"`
+	ProfileVersion string   `json:"profileVersion"`
+	ProfileHash    string   `json:"profileHash"`
+	ExtractHash    string   `json:"extractHash,omitempty"`
+	// Registry es la versión del registro de perfiles de la que salió el perfil (si vino de ahí).
+	Registry      *RegistryRef        `json:"registry,omitempty"`
+	OverridesHash string              `json:"overridesHash,omitempty"`
+	Source        string              `json:"source"`
+	InputHash     string              `json:"inputHash"`
+	PlanHash      string              `json:"planHash,omitempty"`
+	Progress      Progress            `json:"progress"`
+	Issues        []importer.RowIssue `json:"issues,omitempty"`
 	// Review lista (hasta MaxRunIssues) las filas en espera de decisión con su
 	// motivo; el conteo completo está en Progress.Review.
 	Review []ReviewNote `json:"review,omitempty"`

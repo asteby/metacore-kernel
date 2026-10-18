@@ -17,6 +17,9 @@ type RunRequest struct {
 	Profile   Profile
 	Overrides *Overrides
 	Source    Source
+	// Registry, si viene (ResolvedProfile.Request lo llena), liga la corrida con la
+	// versión del registro de la que salió el perfil.
+	Registry *RegistryRef
 	// Extract es la etapa de extracción opcional (ver ParseExtract). Entra en la
 	// llave de idempotencia: cambiar el documento produce una corrida distinta.
 	Extract *Extractor
@@ -104,6 +107,9 @@ func (r *Runner) newRun(req RunRequest, prof Profile, src Source, in string, mod
 	}
 	if req.Extract != nil {
 		run.ExtractHash = req.Extract.Hash()
+	}
+	if req.Registry != nil {
+		run.Registry = req.Registry
 	}
 	return run
 }
