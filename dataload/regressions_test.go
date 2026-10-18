@@ -355,3 +355,41 @@ func TestRegression_CorruptOriginalIsRepairedFromTheOrigin(t *testing.T) {
 		t.Fatalf("tras reparar: %+v", rep)
 	}
 }
+
+// runIDTarget anota la corrida que ve en cada escritura.
+type runIDTarget struct {
+	*MemoryTarget
+	mu   sync.Mutex
+	seen map[string]int
+}
+
+func (t *runIDTarget) Apply(ctx context.Context, org, entity string, changes []Change) error {
+	t.mu.Lock()
+	t.seen[RunIDFrom(ctx)] += len(changes)
+	t.mu.Unlock()
+	return t.MemoryTarget.Apply(ctx, org, entity, changes)
+}
+
+// El destino sabe qué corrida le escribe (Start y ApplyApproved), para asociarle
+// sus avisos sin un estado compartido por organización.
+func TestRegression_TargetSeesTheRunID(t *testing.T) {
+	ctx := context.Background()
+	tgt := &runIDTarget{MemoryTarget: NewMemoryTarget(), seen: map[string]int{}}
+	store := NewMemoryReviewStore()
+	seedReviews(t, store, ReviewApproved, 1, time.Now())
+	rn := &Runner{Ledger: NewMemoryLedger(), Target: tgt, Reviews: store, BatchSize: 2, Authorizer: allowAll}
+	run, err := rn.Start(ctx, RunRequest{Org: "org-a", Profile: catalogProfile(), Source: NewRowsSource("filas", syntheticRows(3))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rn.Wait(ctx, "org-a", run.ID); err != nil {
+		t.Fatal(err)
+	}
+	rv, err := rn.ApplyApproved(ctx, "org-a", "ana", "product")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tgt.seen[run.ID] != 3 || tgt.seen[rv.ID] != 1 || tgt.seen[""] != 0 {
+		t.Fatalf("corridas vistas por el destino: %v (start %s, review %s)", tgt.seen, run.ID, rv.ID)
+	}
+}

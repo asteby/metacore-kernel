@@ -286,6 +286,7 @@ func (r *Runner) spawnLocked(ctx context.Context, req RunRequest, src Source, ru
 }
 
 func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Run) {
+	ctx = WithRunID(ctx, run.ID)
 	ll := r.leaser()
 	owner := r.owner()
 	ctx, cancelCause := context.WithCancelCause(ctx)
@@ -411,6 +412,22 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 	run.Progress.MediaQueued = n
 	run.State, run.FinishedAt = RunSucceeded, r.now()
 	save()
+}
+
+type runIDKey struct{}
+
+// WithRunID deja en el contexto la corrida que está escribiendo. El Runner lo
+// pone antes de llamar al Target (Apply, ApplyMarked) y al MediaSink, así un
+// destino puede asociar a la corrida lo que observe (avisos, métricas) sin
+// estado compartido por organización.
+func WithRunID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, runIDKey{}, id)
+}
+
+// RunIDFrom devuelve la corrida que está escribiendo ("" fuera de una corrida).
+func RunIDFrom(ctx context.Context) string {
+	id, _ := ctx.Value(runIDKey{}).(string)
+	return id
 }
 
 // errStopped: la corrida se soltó porque otro proceso la tomó (ya no se escribe

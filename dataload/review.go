@@ -412,7 +412,7 @@ func (r *Runner) ApplyApproved(ctx context.Context, org, actor, entity string) (
 	// arrendamiento si el ledger lo soporta): se ve en curso, cuenta para la
 	// regla de "una aplicación activa" del almacén y, si el proceso muere,
 	// Recover la encuentra (la cierra; RecoverApplying cierra sus reservas).
-	ctx, save, stop := r.reviewRunSaver(ctx, &run)
+	ctx, save, stop := r.reviewRunSaver(WithRunID(ctx, run.ID), &run)
 	defer stop()
 	fail := func(err error) (Run, error) {
 		run.State, run.FinishedAt = RunFailed, r.now()

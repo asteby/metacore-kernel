@@ -41,7 +41,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   = `review`) ninguna fila se carga sola; la primera va a revisión con el motivo
   `duplicate_key` y las demás quedan `duplicate` (`dataload.row.duplicate_held`).
   `duplicates: "first"` conserva el comportamiento anterior.
-  (8) importer: `ParseCSV` ya no reserva un mapa del tamaño del encabezado por
+  (8) `WithRunID`/`RunIDFrom`: el Runner deja en el contexto la corrida que
+  escribe (Start y ApplyApproved) para que el destino asocie sus avisos a la
+  corrida y no a la organización.
+  (9) importer: `ParseCSV` ya no reserva un mapa del tamaño del encabezado por
   fila (un CSV de 1.5 MB pedía ~600 MB); nuevos `ParseCSVLimited`,
   `ParseJSONLimited` y `EachCSV` con `ParseLimits` (filas, columnas contando el
   encabezado, bytes por celda) revisados mientras se lee.
