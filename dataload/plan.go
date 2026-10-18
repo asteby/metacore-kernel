@@ -213,14 +213,6 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 		}
 		plan.add(rp)
 	}
-	if pl.prof.duplicatesReview() {
-		// Ninguna fila de una identidad repetida se carga sola: la primera va a
-		// revisión (con las demás como referencia) y las demás quedan duplicate.
-		for key, others := range dups {
-			first := &plan.Rows[seen[key]-1]
-			first.Review = append(first.Review, duplicateItem(others))
-		}
-	}
 
 	if req.Extract != nil {
 		facts := make([]RowFacts, len(plan.Rows))
@@ -231,6 +223,15 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 		}
 		for _, di := range req.Extract.CheckDataset(facts) {
 			plan.Rows[di.Index].Review = append(plan.Rows[di.Index].Review, di.Item)
+		}
+	}
+
+	if pl.prof.duplicatesReview() {
+		// Ninguna fila de una identidad repetida se carga sola: la primera va a
+		// revisión (con las demás como referencia) y las demás quedan duplicate.
+		for key, others := range dups {
+			first := &plan.Rows[seen[key]-1]
+			first.Review = pl.prof.withDuplicateItem(first.Review, others)
 		}
 	}
 

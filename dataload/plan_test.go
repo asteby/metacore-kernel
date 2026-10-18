@@ -190,3 +190,17 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+// Si la etapa extract ya bloqueó la fila por su identidad (unique sobre la llave),
+// el kernel no agrega un segundo motivo de identidad repetida.
+func TestPlan_DuplicateKeyReasonIsNotRepeated(t *testing.T) {
+	p := catalogProfile()
+	byExtract := []ReviewItem{{Code: "sku_duplicado", Field: "external_id", Severity: SeverityRevisar}}
+	if got := p.withDuplicateItem(byExtract, []int{4}); len(got) != 1 {
+		t.Fatalf("motivos = %+v", got)
+	}
+	info := []ReviewItem{{Code: "nota", Field: "external_id", Severity: SeverityInfo}}
+	if got := p.withDuplicateItem(info, []int{4}); len(got) != 2 || got[1].Code != ReviewCodeDuplicateKey {
+		t.Fatalf("un aviso info no cuenta como bloqueo: %+v", got)
+	}
+}

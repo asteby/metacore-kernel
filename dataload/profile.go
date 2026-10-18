@@ -78,6 +78,23 @@ func duplicateItem(others []int) ReviewItem {
 	return ReviewItem{Code: ReviewCodeDuplicateKey, Severity: SeverityRevisar, Detail: m.String(), DetailCode: m.Code, DetailParams: m.Params}
 }
 
+// withDuplicateItem agrega el motivo duplicate_key, salvo que la fila ya traiga
+// un motivo bloqueante sobre un campo de la identidad (p. ej. una comprobación
+// unique de la etapa extract sobre el SKU): el motivo no se repite.
+func (p Profile) withDuplicateItem(items []ReviewItem, others []int) []ReviewItem {
+	for _, it := range items {
+		if it.Severity != SeverityRevisar {
+			continue
+		}
+		for _, k := range p.Key {
+			if it.Field == k {
+				return items
+			}
+		}
+	}
+	return append(items, duplicateItem(others))
+}
+
 // OrderRule ordena por el valor de un campo destino según una lista de rangos.
 type OrderRule struct {
 	Field string   `json:"field"`

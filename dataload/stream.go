@@ -436,11 +436,12 @@ func (sp *streamPlanner) plan(ctx context.Context, only func(*RowPlan) bool, onP
 		if rp.Action == "" {
 			if first := sp.first[rp.Key]; first != rp.Row {
 				rp.markDuplicate(first, sp.prof.duplicatesReview())
-			} else if others := sp.dups[rp.Key]; len(others) > 0 && sp.prof.duplicatesReview() {
-				rp.Review = append(rp.Review, duplicateItem(others))
 			}
 			if sp.req.Extract != nil {
 				rp.Review = append(rp.Review, sp.datasetItems(rp.Record)...)
+			}
+			if others := sp.dups[rp.Key]; len(others) > 0 && rp.Action == "" && sp.prof.duplicatesReview() {
+				rp.Review = sp.prof.withDuplicateItem(rp.Review, others)
 			}
 		}
 		if only == nil || only(&rp) {
