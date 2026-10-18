@@ -186,6 +186,9 @@ func (r *Runner) DryRun(ctx context.Context, req RunRequest) (*Plan, Run, error)
 	var plan *Plan
 	if _, ok := src.(StreamSource); ok {
 		plan, err = r.dryRunStream(ctx, RunRequest{Org: req.Org, Profile: req.Profile, Overrides: req.Overrides, Source: src, Extract: req.Extract}, &run)
+		if err == nil && plan.InputHash != in {
+			plan, err = nil, newErr(CodeSourceChanged, "source", src.Name())
+		}
 	} else {
 		plan, err = BuildPlan(ctx, PlanRequest{Org: req.Org, Profile: req.Profile, Overrides: req.Overrides, Source: src, Target: r.Target, Extract: req.Extract})
 	}

@@ -33,8 +33,13 @@ func (r *Runner) executeStream(ctx context.Context, req RunRequest, src StreamSo
 	if err != nil {
 		return err
 	}
-	if err := sp.scan(ctx); err != nil {
+	if err := sp.scan(ctx, r.pageSize()); err != nil {
 		return err
+	}
+	// La llave y la huella de la corrida se calcularon con otra lectura: si el
+	// archivo cambió desde entonces no se aplica nada.
+	if sp.summary.InputHash != run.InputHash {
+		return newErr(CodeSourceChanged, "source", src.Name())
 	}
 	if req.FailOnInvalid && (sp.summary.Invalid > 0 || sp.summary.Duplicates > 0) {
 		return newErr(CodeRunInvalidRows, "invalid", sp.summary.Invalid, "duplicates", sp.summary.Duplicates)
@@ -106,7 +111,7 @@ func (r *Runner) executeStream(ctx context.Context, req RunRequest, src StreamSo
 		}
 		return nil
 	}
-	plan, err := sp.plan(ctx, r.pageSize(), nil, onPage)
+	plan, err := sp.plan(ctx, nil, onPage)
 	if err != nil {
 		return err
 	}
@@ -135,7 +140,7 @@ func (r *Runner) executeStream(ctx context.Context, req RunRequest, src StreamSo
 				run.Progress.MediaQueued += n
 				return nil
 			}
-			if _, err := sp.plan(ctx, r.pageSize(), only, write); err != nil {
+			if _, err := sp.plan(ctx, only, write); err != nil {
 				return err
 			}
 		}

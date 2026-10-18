@@ -256,7 +256,7 @@ func StreamPlan(ctx context.Context, req PlanRequest, opt StreamOptions) (*Plan,
 	if err != nil {
 		return nil, err
 	}
-	if err := sp.scan(ctx); err != nil {
+	if err := sp.scan(ctx, opt.PageSize); err != nil {
 		return nil, err
 	}
 	if opt.OnScan != nil {
@@ -264,7 +264,7 @@ func StreamPlan(ctx context.Context, req PlanRequest, opt StreamOptions) (*Plan,
 			return nil, err
 		}
 	}
-	return sp.plan(ctx, opt.PageSize, nil, opt.OnPage)
+	return sp.plan(ctx, nil, opt.OnPage)
 }
 
 // streamPlanner guarda el estado de la primera pasada para poder recorrer el
@@ -275,6 +275,32 @@ type streamPlanner struct {
 	first   map[string]int   // identidad -> primera fila que la trae
 	unique  []map[string]int // por comprobación unique: valor -> filas que lo traen
 	summary ScanSummary
+	// block es el tamaño de página; blocks, la huella de cada bloque de block
+	// filas de la primera pasada. Las pasadas siguientes comparan cada bloque
+	// antes de entregar sus filas, así un archivo que cambió se detecta antes de
+	// escribir nada de él (no solo al final).
+	block  int
+	blocks [][sha256.Size]byte
+}
+
+// blockHasher es la huella de un bloque de filas.
+type blockHasher struct {
+	h   hash.Hash
+	enc *json.Encoder
+}
+
+func newBlockHasher() *blockHasher {
+	h := sha256.New()
+	return &blockHasher{h: h, enc: json.NewEncoder(h)}
+}
+
+func (b *blockHasher) add(row map[string]any) { _ = b.enc.Encode(row) }
+
+func (b *blockHasher) take() [sha256.Size]byte {
+	var out [sha256.Size]byte
+	copy(out[:], b.h.Sum(nil))
+	b.h.Reset()
+	return out
 }
 
 func newStreamPlanner(req PlanRequest) (*streamPlanner, error) {
@@ -295,7 +321,12 @@ func newStreamPlanner(req PlanRequest) (*streamPlanner, error) {
 
 // scan es la primera pasada: huella de la entrada, identidades (para los
 // duplicados) y valores de las comprobaciones unique.
-func (sp *streamPlanner) scan(ctx context.Context) error {
+func (sp *streamPlanner) scan(ctx context.Context, pageSize int) error {
+	if pageSize <= 0 {
+		pageSize = DefaultPageSize
+	}
+	sp.block, sp.blocks = pageSize, nil
+	bh := newBlockHasher()
 	ih := newInputHasher()
 	var checks []DatasetCheck
 	if sp.req.Extract != nil {
@@ -312,6 +343,10 @@ func (sp *streamPlanner) scan(ctx context.Context) error {
 		}
 		i := ih.n
 		ih.add(raw)
+		bh.add(raw)
+		if ih.n%sp.block == 0 {
+			sp.blocks = append(sp.blocks, bh.take())
+		}
 		rp, _ := sp.planRow(i, raw)
 		if rp.Action == ActionInvalid {
 			sp.summary.Invalid++
@@ -331,6 +366,9 @@ func (sp *streamPlanner) scan(ctx context.Context) error {
 	})
 	if err != nil {
 		return readErr(sp.src, err)
+	}
+	if ih.n%sp.block != 0 {
+		sp.blocks = append(sp.blocks, bh.take())
 	}
 	sp.summary.Rows, sp.summary.InputHash = ih.n, ih.sum()
 	return nil
@@ -359,12 +397,20 @@ func (sp *streamPlanner) datasetItems(rec map[string]any) []ReviewItem {
 }
 
 // plan es la segunda pasada: arma cada fila, marca duplicados y motivos de
-// conjunto, decide contra el destino por páginas y entrega cada página. only,
-// si no es nil, deja solo las filas que acepta (las demás ni se consultan); con
-// filtro el Plan devuelto no lleva conteos ni huella.
-func (sp *streamPlanner) plan(ctx context.Context, pageSize int, only func(*RowPlan) bool, onPage func(context.Context, []RowPlan) error) (*Plan, error) {
-	if pageSize <= 0 {
-		pageSize = DefaultPageSize
+// conjunto, decide contra el destino por páginas (del tamaño de scan) y entrega
+// cada página después de comprobar que sus filas son las de la primera pasada.
+// only, si no es nil, deja solo las filas que acepta (las demás ni se
+// consultan); con filtro el Plan devuelto no lleva conteos ni huella.
+func (sp *streamPlanner) plan(ctx context.Context, only func(*RowPlan) bool, onPage func(context.Context, []RowPlan) error) (*Plan, error) {
+	pageSize := sp.block
+	changed := newErr(CodeSourceChanged, "source", sp.src.Name())
+	bh := newBlockHasher()
+	verify := func(n int) error { // n filas leídas; cierra el bloque en curso
+		b := (n - 1) / sp.block
+		if b >= len(sp.blocks) || bh.take() != sp.blocks[b] {
+			return changed
+		}
+		return nil
 	}
 	plan := sp.newPlan(sp.src.Name())
 	plan.InputHash = sp.summary.InputHash
@@ -398,7 +444,11 @@ func (sp *streamPlanner) plan(ctx context.Context, pageSize int, only func(*RowP
 	}
 	err := sp.src.Each(ctx, func(raw map[string]any) error {
 		i := ih.n
+		if i >= sp.summary.Rows {
+			return changed // más filas que en la primera pasada
+		}
 		ih.add(raw)
+		bh.add(raw)
 		rp, ignored := sp.planRow(i, raw)
 		plan.IgnoredColumns += ignored
 		if rp.Action == "" {
@@ -409,15 +459,27 @@ func (sp *streamPlanner) plan(ctx context.Context, pageSize int, only func(*RowP
 				rp.Review = append(rp.Review, sp.datasetItems(rp.Record)...)
 			}
 		}
-		if only != nil && !only(&rp) {
+		if only == nil || only(&rp) {
+			page = append(page, rp)
+		}
+		// Solo se entrega lo ya comprobado: al cerrar cada bloque.
+		if ih.n%sp.block != 0 {
 			return nil
 		}
-		page = append(page, rp)
+		if err := verify(ih.n); err != nil {
+			return err
+		}
 		if len(page) >= pageSize {
 			return flush()
 		}
 		return nil
 	})
+	if err == nil && ih.n != sp.summary.Rows {
+		err = changed // menos filas que en la primera pasada
+	}
+	if err == nil && ih.n%sp.block != 0 {
+		err = verify(ih.n)
+	}
 	if err == nil {
 		err = flush()
 	}

@@ -376,3 +376,38 @@ func TestStream_ReviewsAndMediaArePagedLikeInMemory(t *testing.T) {
 		t.Fatal("mismo destino")
 	}
 }
+
+// Si la fuente cambia entre pasadas, se detecta ANTES de escribir la página
+// cambiada: nada del archivo nuevo llega al destino. Y si cambia entre la huella
+// de la llave (prepare) y la primera pasada del plan, también falla.
+func TestStream_ChangedSourceNeverReachesTheTarget(t *testing.T) {
+	ctx := context.Background()
+	body := func(name string) []byte { return []byte("ID,Nombre\n1," + name + "\n2,DOS\n") }
+	for _, tc := range []struct {
+		name    string
+		sameFor int // aperturas que devuelven el archivo original
+	}{{"entre scan y plan", 2}, {"entre prepare y scan", 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := &countingOpener{body: func(n int) []byte {
+				if n <= tc.sameFor {
+					return body("UNO")
+				}
+				return body("OTRO")
+			}}
+			tgt := NewMemoryTarget()
+			r := &Runner{Ledger: NewMemoryLedger(), Target: tgt}
+			defer r.Close()
+			run, err := r.Start(ctx, RunRequest{Org: "o", Profile: catalogProfile(), Source: NewCSVStreamSource("x.csv", o.open)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			done, _ := r.Wait(ctx, "o", run.ID)
+			if done.State != RunFailed || done.ErrorCode != CodeSourceChanged {
+				t.Fatalf("%+v", done)
+			}
+			if n := tgt.Batches(); n != 0 {
+				t.Fatalf("se escribieron %d lotes de una fuente que cambió", n)
+			}
+		})
+	}
+}
