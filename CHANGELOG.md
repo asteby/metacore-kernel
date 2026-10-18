@@ -9,6 +9,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **dataload: escritura condicional de revisiones** — extensión opcional
+  `ConditionalReviewStore` (`PutIf(ctx, entry, ReviewExpect{Missing, State,
+  Hash})`, compare-and-swap atómico; `MemoryReviewStore` la implementa) y estado
+  `ReviewApplying`. Con ella `ApplyApproved` reserva cada fila (`approved` →
+  `applying`) antes de escribir al destino y la marca `applied` con otro
+  `PutIf`; `Decide` escribe con `PutIf`, niega las filas reservadas
+  (`ErrReviewBusy`, `dataload.review.busy`) y deshace sus decisiones si pierde
+  la carrera (`ErrReviewConflict`, `dataload.review.conflict`). Una fila escrita
+  ya no puede quedar `rejected`. `Runner.RecoverApplying` cierra las reservas
+  huérfanas leyendo el destino (applied si ya tiene la huella, approved si no)
+  sin escribir en él; necesita la extensión (`dataload.review.no_conditional`).
+  Sin la extensión, comportamiento anterior (la carrera solo se acota,
+  documentado en `dataload/README.md`).
+
 - **dataload: pulido para producción** — (1) Archivos grandes en streaming:
   `StreamSource` con `NewCSVStreamSource` y `NewJSONLinesSource` (sobre un
   `Opener`, `FileOpener`) y `StreamPlan` (dos pasadas, páginas con

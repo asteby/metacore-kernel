@@ -36,6 +36,7 @@ Source ──► Profile (+Overrides, +Extract) ──► Plan ──► Runner 
 | `Ledger` | sí | historial de corridas |
 | `LeaseLedger` | no | arrendamiento + latido + cerco: `Recover` y no duplicar entre procesos |
 | `ReviewStore` | no | guardar filas en revisión para decidir después |
+| `ConditionalReviewStore` | no (recomendada) | `PutIf` atómico: cierra la carrera entre `Decide` y `ApplyApproved` |
 | `Authorizer` | sí para revisiones | `Decide` / `ApplyApproved` (acciones `ActionReviewDecide`, `ActionReviewApply`) |
 | `MediaJobStore` | con medios | cola persistente de descargas |
 | `LimitedJobStore` | no | tope global de medios por organización entre procesos |
@@ -107,6 +108,39 @@ reanuda: lo ya escrito sale `unchanged`. Si además el destino es
 conteo exacto de `Created`/`Updated` aunque el proceso muriera entre escribir y
 guardar el checkpoint (`Checkpoint.Recovered`).
 
+## Revisión: decidir y aplicar sin carreras
+
+`Decide` registra decisiones (todo o nada, atadas a la huella de la fila) y
+`ApplyApproved` escribe lo aprobado. Si el `ReviewStore` implementa además
+`ConditionalReviewStore` (`PutIf(ctx, entry, ReviewExpect{Missing, State,
+Hash})`, compare-and-swap atómico que dice si escribió; `MemoryReviewStore` lo
+implementa):
+
+- `ApplyApproved` reserva cada fila con `PutIf` (`approved` → `applying`, con
+  su misma huella) **antes** de escribir al destino; la que ya no está aprobada
+  se salta. Tras escribir pasa `applying` → `applied` con otro `PutIf`.
+- `Decide` escribe con `PutIf` contra la versión leída; una fila en `applying`
+  se rechaza con `dataload.review.busy` (`ErrReviewBusy`) y, si otra escritura
+  gana la carrera, deshace las decisiones ya escritas de esa llamada y devuelve
+  `dataload.review.conflict` (`ErrReviewConflict`, se puede reintentar).
+- Resultado: una fila escrita en el destino **nunca** queda `rejected`
+  (`TestReviewCAS_ConcurrentRejectAndApplyNeverLeaveARejectedRowWritten`, con
+  `-race`).
+- Si el proceso muere con filas en `applying`, `RecoverApplying(ctx, org,
+  actor, entity, olderThan)` las cierra: lee el destino y deja en `applied` las
+  que ya tienen el registro con su huella (y encola sus medios) y en `approved`
+  las demás. No escribe al destino; como el `Target` hace upsert por identidad,
+  el `ApplyApproved` siguiente reescribe a lo sumo una vez y nunca duplica.
+  `olderThan` debe superar lo que tarda en escribirse un lote, para no tomar
+  reservas de un proceso que sigue vivo. Si `Target.Apply` falla, las reservas
+  se resuelven igual en el momento.
+
+Sin la extensión se conserva el comportamiento anterior: `ApplyApproved` relee
+el estado antes y después de escribir, lo que acota la carrera pero no la
+cierra; un rechazo que llega entre la escritura y la marca `applied` deja el
+dato escrito y la entrada `rejected`
+(`TestReview_WithoutConditionalStoreALateRejectStillLeavesTheRowWritten`).
+
 ## Mensajes
 
 El motor no escribe textos fijos: cada error, problema de fila (`RowIssue.Code`)
@@ -124,7 +158,7 @@ go test -race ./dataload ./importer ./netguard
 ```
 
 Cada pieza tiene pruebas con nombre propio (`TestStream_*`, `TestMediaGlobal_*`,
-`TestMediaPartial_*`, `TestMarks_*`, `TestAuth_*`, `TestMessages_*`, además de
+`TestMediaPartial_*`, `TestMarks_*`, `TestAuth_*`, `TestMessages_*`, `TestReviewCAS_*`, además de
 las de plan, corrida, recuperación, revisión, registro y medios).
 
 ## Límites conocidos
@@ -138,3 +172,8 @@ las de plan, corrida, recuperación, revisión, registro y medios).
 - Los textos de los errores de red y del origen (`importer.FetchMedia`) no
   tienen código: se guardan tal cual en `LastError`.
 - `AllowAnyActor` existe solo para pruebas y desarrollo.
+- Sin `ConditionalReviewStore` la carrera entre `Decide` y `ApplyApproved` solo
+  se acota (ver "Revisión"). Con ella, una carga nueva que trae otra versión de
+  una fila mientras está en `applying` la devuelve a `pending` con la huella
+  nueva: el destino conserva la versión aprobada anterior y la nueva pide su
+  propia decisión.
