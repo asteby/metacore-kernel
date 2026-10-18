@@ -1467,6 +1467,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 		if m.Lifecycle != nil {
 			errs = append(errs, "kind=Preset must not declare a lifecycle block")
 		}
+		errs = append(errs, validatePresetBlock(&m)...)
 	case KindTheme:
 		if m.Theme == nil {
 			errs = append(errs, "kind=Theme requires a theme block")
@@ -1478,6 +1479,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	}
 
 	errs = append(errs, validatePermissionModels(&m)...)
+	errs = append(errs, validateMetadataVisibility(&m)...)
 
 	// Index every model's declared columns by model KEY so rollup/formula
 	// cross-field checks can resolve targets/identifiers on the PARENT (the

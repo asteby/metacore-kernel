@@ -14,6 +14,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `permission`, `trigger` (`manual` | `first_visit`), `route` (obligatoria con
   `first_visit`), `order` y `steps[]` (reusa `AgentGuideStep`: `target` de UI o
   paso `concept`). Validación de claves y pasos únicos en `v3.Validate`.
+- **preset: presets que extienden a otro (`preset.extends`) y visibilidad
+  privada.** Base del RFC `docs/rfcs/RFC-PRESETS-DE-EMPRESA.md`.
+  - Manifest v3: `metadata.visibility` (`public|private`), `metadata.owner`,
+    `preset.extends {key, version}` y `preset.remove_addons`. `preset.addons`
+    puede ir vacío cuando hay `extends`. El schema embebido lo acepta, así que
+    hub y manifestcheck deben subir a esta versión antes de publicar un preset
+    que lo use.
+  - `preset.Flatten(base, overlay)` une un preset con su base. Los addons se
+    unen por clave, con rangos combinados (deben cumplirse los dos), `optional`
+    del overlay y `requires` unidos; `remove_addons` se aplica al final. Los
+    `defaults` se unen con la tabla `preset.MergeStrategies` (merge-patch,
+    reemplazo, listas por identidad con `_remove` y unión de `permissions`, y
+    `records` por modelo).
+  - `Resolved.Lineage` registra la cadena (base primero). `ResolveFromManifest`
+    devuelve `ErrNeedsBase` para un overlay, así un host viejo falla en vez de
+    instalar solo las diferencias.
+  - `preset.InlineFiles` resuelve las claves `*_file` de `preset.defaults`
+    desde el bundle. Hoy nadie las lee, por eso los roles, categorías, branding
+    y dashboards de los presets por archivo no se aplican en SaaS.
 
 ### Fixed
 

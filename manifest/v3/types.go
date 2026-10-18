@@ -585,7 +585,24 @@ type Metadata struct {
 	// stay the default/fallback copy; the hub serves the localized variant
 	// when the catalog is browsed in that locale, falling back to the default.
 	I18n map[string]MetadataLocale `json:"i18n,omitempty"`
+	// Visibility is the author's assertion of who may see and install the
+	// bundle: "public" (default when empty) or "private". The marketplace
+	// enforces it at publish time — a bundle declared private is never listed
+	// publicly. WHO is granted access to a private bundle is NOT part of the
+	// signed manifest (it changes without republishing); the marketplace owns
+	// that allowlist.
+	Visibility string `json:"visibility,omitempty"`
+	// Owner is the informative slug of the account that owns a private bundle
+	// (e.g. the company a private preset belongs to). The marketplace remains
+	// the authority on ownership.
+	Owner string `json:"owner,omitempty"`
 }
+
+// Metadata visibility values.
+const (
+	VisibilityPublic  = "public"
+	VisibilityPrivate = "private"
+)
 
 // MetadataLocale is one locale's catalog copy. Every field is optional so an
 // author can localize just the description, and the renderer falls back to the
@@ -2865,8 +2882,25 @@ type MeteredEvent struct {
 
 // Preset block for kind: "Preset" manifests.
 type Preset struct {
-	Addons   []PresetAddon          `json:"addons"`
-	Defaults map[string]interface{} `json:"defaults,omitempty"`
+	// Extends names the preset this one builds on (e.g. a company's private
+	// preset over a public vertical). The host resolves the base, then
+	// flattens this manifest on top of it (preset.Flatten): Addons are added or
+	// patched by key, RemoveAddons drops base entries and Defaults are merged
+	// per key strategy. Nil = a standalone preset.
+	Extends *PresetExtends `json:"extends,omitempty"`
+	// Addons may be empty when Extends is set (an overlay that only changes
+	// defaults); a standalone preset must list at least one.
+	Addons []PresetAddon `json:"addons"`
+	// RemoveAddons drops addons the base preset lists. Only valid with Extends.
+	RemoveAddons []string               `json:"remove_addons,omitempty"`
+	Defaults     map[string]interface{} `json:"defaults,omitempty"`
+}
+
+// PresetExtends references the base preset by key and semver range. The host
+// picks the highest published version that satisfies Version.
+type PresetExtends struct {
+	Key     string `json:"key"`
+	Version string `json:"version"`
 }
 
 // PresetAddon is one entry in a preset's bundle list.
