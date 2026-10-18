@@ -47,12 +47,16 @@ const (
 	CodeReviewNotFound Code = "dataload.review.not_found"
 	CodeReviewStale    Code = "dataload.review.stale"
 	CodeReviewClosed   Code = "dataload.review.closed"
-	CodeReviewStore    Code = "dataload.review.store"
-	CodeApplyApproved  Code = "dataload.review.apply"
-	CodeUnauthorized   Code = "dataload.auth.denied"
-	CodeNoAuthorizer   Code = "dataload.auth.no_authorizer"
-	CodeActorRequired  Code = "dataload.auth.actor_required"
-	CodeEntityRequired Code = "dataload.auth.entity_required"
+	CodeReviewBusy     Code = "dataload.review.busy"
+	CodeReviewConflict Code = "dataload.review.conflict"
+	// CodeReviewNoConditional: la operación necesita ConditionalReviewStore.
+	CodeReviewNoConditional Code = "dataload.review.no_conditional"
+	CodeReviewStore         Code = "dataload.review.store"
+	CodeApplyApproved       Code = "dataload.review.apply"
+	CodeUnauthorized        Code = "dataload.auth.denied"
+	CodeNoAuthorizer        Code = "dataload.auth.no_authorizer"
+	CodeActorRequired       Code = "dataload.auth.actor_required"
+	CodeEntityRequired      Code = "dataload.auth.entity_required"
 
 	// Medios
 	CodeBackupCorrupt    Code = "dataload.media.backup_corrupt"

@@ -189,11 +189,15 @@ func (h *lookupHook) Lookup(ctx context.Context, org, entity string, keys []stri
 	return h.MemoryTarget.Lookup(ctx, org, entity, keys)
 }
 
-// Si alguien rechaza una fila (o una carga nueva la cambia) mientras
-// ApplyApproved corre, esa fila no se escribe y su nuevo estado no se pisa.
+// plainReviewStore esconde PutIf: un ReviewStore sin escritura condicional.
+type plainReviewStore struct{ ReviewStore }
+
+// Sin escritura condicional: si alguien rechaza una fila (o una carga nueva la
+// cambia) mientras ApplyApproved corre, esa fila no se escribe y su nuevo estado
+// no se pisa (la carrera solo se acota; ver la prueba con -race en review_cas_test.go).
 func TestReview_ApplyApprovedSkipsRowsDecidedAgainWhileItRuns(t *testing.T) {
 	r := newRig(t)
-	r.runner.Reviews = NewMemoryReviewStore()
+	r.runner.Reviews = plainReviewStore{NewMemoryReviewStore()}
 	ctx := context.Background()
 	startAndWait(t, r, listaRequest(t))
 	p5, _, _ := r.runner.Reviews.Get(ctx, "org-a", "product", "P5")

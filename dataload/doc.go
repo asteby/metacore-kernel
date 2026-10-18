@@ -9,7 +9,8 @@
 // datos: un Profile JSON y los Overrides de cada organización. La persistencia la cablean ops/addons implementando las
 // interfaces Target, Ledger, MediaJobStore, Manifest, BackupStore y MediaSink
 // (y, si quieren, las extensiones opcionales MarkingTarget, LeaseLedger,
-// LimitedJobStore, PartialStore, ReviewStore y un Authorizer);
+// LimitedJobStore, PartialStore, ReviewStore, ConditionalReviewStore y un
+// Authorizer);
 // las implementaciones en memoria (NewMemory*) sirven para pruebas y desarrollo.
 //
 // Piezas:
