@@ -144,6 +144,10 @@ type Backuper struct {
 	Fetch importer.TransformDeps
 	// Revalidate es la política opcional de revalidación; vacía = nunca.
 	Revalidate RevalidatePolicy
+	// Partials, opcional, guarda los bytes de una descarga cortada entre intentos
+	// de la cola (y entre procesos) para continuarla con Range. Sin él, cada
+	// intento de la cola empieza de cero (dentro de un intento ya se reanuda).
+	Partials PartialStore
 	// Now es el reloj; default time.Now.
 	Now func() time.Time
 }
@@ -214,7 +218,7 @@ func (b *Backuper) Ensure(ctx context.Context, org, rawURL string, mode Revalida
 }
 
 func (b *Backuper) revalidate(ctx context.Context, org, rawURL string, prev ManifestEntry, opt importer.FetchOptions) (ManifestEntry, BackupResult, error) {
-	f, err := b.fetch(ctx, rawURL, opt)
+	f, err := b.fetch(ctx, org, rawURL, opt)
 	if err != nil {
 		return ManifestEntry{}, BackupResult{}, err
 	}
@@ -241,17 +245,43 @@ func (b *Backuper) revalidate(ctx context.Context, org, rawURL string, prev Mani
 	return e, BackupResult{Outcome: OutcomeReplaced}, nil
 }
 
-func (b *Backuper) fetch(ctx context.Context, rawURL string, opt importer.FetchOptions) (*importer.FetchedMedia, error) {
+func (b *Backuper) fetch(ctx context.Context, org, rawURL string, opt importer.FetchOptions) (*importer.FetchedMedia, error) {
 	deps := b.Fetch
 	deps.Store, deps.Context = nil, ctx
 	if deps.Policy.MaxAttempts == 0 {
 		deps.Policy.MaxAttempts = 2
 	}
-	return importer.FetchMediaWith(&deps, rawURL, opt)
+	if b.Partials == nil {
+		return importer.FetchMediaWith(&deps, rawURL, opt)
+	}
+	// Bytes de un intento anterior de la cola (quizá de otro proceso): se continúan
+	// con Range en vez de bajar todo otra vez.
+	had := false
+	if p, ok, err := b.Partials.LoadPartial(ctx, org, rawURL); err != nil {
+		return nil, wrapErr(err, CodePartialStore)
+	} else if ok {
+		had, opt.Resume = true, &p
+	}
+	var cut *importer.Partial
+	opt.OnPartial = func(p importer.Partial) { cut = &p }
+	f, err := importer.FetchMediaWith(&deps, rawURL, opt)
+	sctx := context.WithoutCancel(ctx)
+	switch {
+	case cut != nil:
+		// Lo bajado se guarda aunque el intento falle; un fallo al guardarlo no
+		// tapa el error de la descarga (el siguiente intento empieza de cero).
+		_ = b.Partials.SavePartial(sctx, org, rawURL, *cut)
+	case had:
+		// Terminó (bien, o mal sin nada que continuar): lo parcial ya no sirve.
+		if derr := b.Partials.DeletePartial(sctx, org, rawURL); derr != nil && err == nil {
+			return nil, wrapErr(derr, CodePartialStore)
+		}
+	}
+	return f, err
 }
 
 func (b *Backuper) fetchAndStore(ctx context.Context, org, rawURL string, prev *ManifestEntry, opt importer.FetchOptions) (ManifestEntry, error) {
-	f, err := b.fetch(ctx, rawURL, opt)
+	f, err := b.fetch(ctx, org, rawURL, opt)
 	if err != nil {
 		return ManifestEntry{}, err
 	}
@@ -356,6 +386,17 @@ func (b *Backuper) VerifyAll(ctx context.Context, org string) (VerifyReport, err
 		}
 	}
 	return rep, nil
+}
+
+// PartialStore guarda descargas incompletas por (org, URL) para continuarlas en
+// el siguiente intento. Es opcional; lo implementa ops/addons (p. ej. un objeto
+// temporal en el almacén). Los bytes parciales no son un original: nunca entran
+// al manifiesto ni al BackupStore hasta que la descarga termina y se verifica.
+type PartialStore interface {
+	LoadPartial(ctx context.Context, org, url string) (importer.Partial, bool, error)
+	// SavePartial reemplaza lo guardado para (org, url).
+	SavePartial(ctx context.Context, org, url string, p importer.Partial) error
+	DeletePartial(ctx context.Context, org, url string) error
 }
 
 // MediaState es el estado de un trabajo de medios.

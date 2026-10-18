@@ -20,6 +20,29 @@ type FetchOptions struct {
 	// la primera petición de una descarga (no con una reanudación).
 	IfNoneMatch     string
 	IfModifiedSince string
+	// Resume continúa una descarga cortada en un intento ANTERIOR (otra llamada,
+	// otro proceso): se piden solo los bytes que faltan con Range + If-Range. Solo
+	// se usa con validador fuerte; si el servidor no confirma la misma versión
+	// (200 completo, 416, rango que no empieza donde se esperaba) se descarta y se
+	// baja de nuevo, nunca se mezclan versiones.
+	Resume *Partial
+	// OnPartial, si no es nil, recibe lo bajado cuando la llamada termina en error
+	// con un cuerpo incompleto que se puede continuar (validador fuerte). Quien
+	// llama lo guarda y lo pasa como Resume en el siguiente intento.
+	OnPartial func(Partial)
+}
+
+// Partial es una descarga incompleta que se puede continuar con Range.
+type Partial struct {
+	Data         []byte `json:"data"`
+	ETag         string `json:"etag,omitempty"`
+	LastModified string `json:"lastModified,omitempty"`
+}
+
+// Resumable dice si p se puede continuar: trae bytes y un validador fuerte.
+func (p Partial) Resumable() bool {
+	d := download{data: p.Data, etag: p.ETag, lastMod: p.LastModified}
+	return len(p.Data) > 0 && d.ifRange() != ""
 }
 
 // FetchMedia descarga rawURL aplicando MediaPolicy (allowlist, tope de bytes
@@ -67,10 +90,20 @@ func FetchMediaWith(deps *TransformDeps, rawURL string, opt FetchOptions) (*Fetc
 	attempts := pol.maxAttempts()
 
 	st := &download{}
+	if r := opt.Resume; r != nil && r.Resumable() && int64(len(r.Data)) < pol.maxBytes() {
+		st.data, st.etag, st.lastMod, st.partial = append([]byte(nil), r.Data...), r.ETag, r.LastModified, true
+	}
+	// Al salir con error, lo que se pueda continuar se entrega a quien llama.
+	keep := func(err error) error {
+		if opt.OnPartial != nil && st.partial && len(st.data) > 0 && st.ifRange() != "" {
+			opt.OnPartial(Partial{Data: append([]byte(nil), st.data...), ETag: st.etag, LastModified: st.lastMod})
+		}
+		return err
+	}
 	var lastErr error
 	for n := 1; n <= attempts; n++ {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, keep(err)
 		}
 		retryAfter, err := st.attempt(ctx, client, rawURL, pol, opt)
 		if err == nil {
@@ -84,7 +117,7 @@ func FetchMediaWith(deps *TransformDeps, rawURL string, opt FetchOptions) (*Fetc
 			return &FetchedMedia{URL: u, Data: st.data, Type: detected, SuggestedName: suggestName(u, detected), ETag: st.etag, LastModified: st.lastMod, ResumedBytes: st.resumedBytes}, nil
 		}
 		if !retryable(ctx, err) {
-			return nil, err
+			return nil, keep(err)
 		}
 		lastErr = err
 		if n == attempts {
@@ -95,10 +128,10 @@ func FetchMediaWith(deps *TransformDeps, rawURL string, opt FetchOptions) (*Fetc
 			wait = retryAfter
 		}
 		if serr := sleep(ctx, wait); serr != nil {
-			return nil, serr
+			return nil, keep(serr)
 		}
 	}
-	return nil, fmt.Errorf("tras %d intentos: %w", attempts, lastErr)
+	return nil, keep(fmt.Errorf("tras %d intentos: %w", attempts, lastErr))
 }
 
 func firstNonEmpty(a, b string) string {

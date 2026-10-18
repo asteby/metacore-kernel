@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/asteby/metacore-kernel/importer"
 )
 
 // Implementaciones en memoria de las interfaces de persistencia. Sirven para
@@ -476,6 +478,40 @@ func (s *MemoryJobStore) RequeueDead(_ context.Context, org, runID string, now t
 		}
 	}
 	return n, nil
+}
+
+// MemoryPartialStore es un PartialStore en memoria.
+type MemoryPartialStore struct {
+	mu sync.Mutex
+	m  map[string]importer.Partial
+	// Saves cuenta las escrituras (pruebas).
+	Saves int
+}
+
+func NewMemoryPartialStore() *MemoryPartialStore {
+	return &MemoryPartialStore{m: map[string]importer.Partial{}}
+}
+
+func (s *MemoryPartialStore) LoadPartial(_ context.Context, org, url string) (importer.Partial, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.m[mk(org, url)]
+	return p, ok, nil
+}
+
+func (s *MemoryPartialStore) SavePartial(_ context.Context, org, url string, p importer.Partial) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Saves++
+	s.m[mk(org, url)] = p
+	return nil
+}
+
+func (s *MemoryPartialStore) DeletePartial(_ context.Context, org, url string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.m, mk(org, url))
+	return nil
 }
 
 // MemorySink es un MediaSink en memoria que recuerda lo último ligado a cada campo.
