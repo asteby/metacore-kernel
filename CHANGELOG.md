@@ -9,6 +9,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **dataload: pulido para producción** — (1) Archivos grandes en streaming:
+  `StreamSource` con `NewCSVStreamSource` y `NewJSONLinesSource` (sobre un
+  `Opener`, `FileOpener`) y `StreamPlan` (dos pasadas, páginas con
+  `StreamOptions.OnPage`), con la misma semántica que `BuildPlan` (acciones,
+  diffs, motivos, `Counts`, `InputHash`, `PlanHash`); `Runner.Start`/`DryRun`/
+  `Recover` lo usan solos con una `StreamSource` (escritura por páginas,
+  `Runner.PageSize`, una pasada por rango de `ApplyOrder`, fuente que cambia
+  entre pasadas = error) y `Profile.MaxStreamRows` (5 000 000 por omisión).
+  (2) `OrgMediaLimits.MaxConcurrentGlobal`: tope de medios por organización
+  entre procesos con la extensión opcional `LimitedJobStore.ClaimLimited`
+  (`MemoryJobStore` la implementa; sin ella vale por proceso). (3)
+  `PartialStore` (opcional, `Backuper.Partials`, `MemoryPartialStore`) y
+  `importer.FetchOptions.Resume`/`OnPartial`/`importer.Partial`: los bytes de
+  una descarga cortada sobreviven al reintento de la cola y se continúan con
+  `Range` + `If-Range`. (4) `MarkingTarget` + `ApplyMark` (opcional,
+  `MemoryMarkingTarget`): marca por lote en la misma transacción; al reanudar se
+  recupera el conteo exacto de `Created`/`Updated` aunque el proceso muriera
+  entre `Target.Apply` y el checkpoint (`Checkpoint.Recovered`). (5)
+  `Authorizer` (`AuthorizerFunc`, `AuthRequest`) en `Runner.Decide` y
+  `Runner.ApplyApproved` con las acciones nombradas `ActionReviewDecide` y
+  `ActionReviewApply`; `ErrUnauthorized`, `ErrNoAuthorizer` y
+  `Runner.AllowAnyActor` (solo pruebas). (6) Códigos de mensaje estables:
+  `Code`, `Message`, `Error` (con `errors.Is` por código), `ErrorCode`,
+  `ErrorMessage`, `Localize`, `LocalizeIssue`, `ReviewItem.Localize` y el
+  catálogo embebido `Messages()` (`locales/es.json`, `locales/en.json`);
+  `Run.ErrorCode`/`ErrorParams`, `MediaJob.LastErrorCode`,
+  `ReviewItem.DetailCode`/`DetailParams`, `importer.RowIssue.Code`/`Params` e
+  `importer.IssueCodes`. (7) `dataload/README.md`, perfil genérico de ejemplo
+  (`dataload/examples/`), `Example` ejecutable y nota de release
+  (`docs/releases/v0.211.0-dataload.md`).
+
 - **dataload: escala, extracción y registro de perfiles** — (1) `importer`:
   transformación `number_mixed` para números con separadores de miles y
   decimales mezclados (`$1.059,32`, `1,059.32`, `99,9`, `1.059.32`); lo ambiguo
@@ -364,6 +395,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `Field.Pattern` (RE2) valida campos de texto y se comprueba al registrar.
 
 ### Changed
+
+- **dataload (cambio de comportamiento)** — `Runner.Decide` y
+  `Runner.ApplyApproved` niegan (`ErrNoAuthorizer`) si el `Runner` no tiene
+  `Authorizer` (antes bastaba un actor no vacío en `Decide` y `ApplyApproved`
+  no pedía nada). Las corridas `ModeReview` registran `Source: "review"`
+  (`ReviewSourceName`) en vez de un texto en español. Los textos de error
+  conservan su redacción en español por omisión, pero salen del catálogo.
 
 - **agent: orden estable de herramientas y parámetros** — `ToolRegistry.List`,
   `ToOpenAIFormat`/`ToLangChainFormat` y `AppendToolsSection` salen ordenados

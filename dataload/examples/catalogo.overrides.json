@@ -1,0 +1,7 @@
+{
+  "org": "org-ejemplo",
+  "rename": {"price": ["Precio de lista"]},
+  "drop": ["tags"],
+  "defaults": {"published": true},
+  "cleanAdd": {"description": ["drop_lines:^\\s*SKU:"]}
+}
