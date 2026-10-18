@@ -36,7 +36,7 @@ func TestNumberMixed_ReadsEveryUnambiguousFormat(t *testing.T) {
 		"3.14159":       3.14159,
 		".5":            0.5,
 		"1.5":           1.5,
-		"1 059,32": 1059.32,
+		"1 059,32":      1059.32,
 	}
 	for in, want := range ok {
 		got, err := ParseMixedNumber(in)
