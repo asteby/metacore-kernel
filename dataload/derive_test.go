@@ -23,7 +23,7 @@ func deriveProfile() Profile {
 			{Target: "id", From: []string{"ID"}},
 			{Target: "sku", From: []string{"SKU"}},
 			{Target: "price", Type: "number", Derive: &Derive{Op: DeriveFirst, Cols: []string{"Precio rebajado", "Precio normal"}}},
-			{Target: "compare_at", Type: "number", Derive: &Derive{Op: DeriveFirst, Cols: []string{"Precio normal"}, When: "Precio rebajado"}},
+			{Target: "compare_at", Type: "number", Derive: &Derive{Op: DeriveFirst, Cols: []string{"Precio normal"}, When: []string{"Precio rebajado"}}},
 			{Target: "barcode", Derive: &Derive{Op: DeriveGTIN, Cols: []string{"GTIN", "SKU"}}},
 			{Target: "parent", Derive: &Derive{Op: DeriveExtract, Cols: []string{"Superior"}, Pattern: `^id:(\d+)$`}},
 			{Target: "tags", From: []string{"Etiquetas"}, Split: ","},
@@ -126,5 +126,26 @@ func TestSanitizeHTML_Security(t *testing.T) {
 		if got := sanitizeHTML(in); got != want {
 			t.Errorf("sanitizeHTML(%q) = %q, quería %q", in, got, want)
 		}
+	}
+}
+
+func TestOverrides_ValuesAddMergesWithoutMutatingBase(t *testing.T) {
+	p := Profile{Name: "v", Entity: "e", Key: []string{"id"}, Fields: []Field{
+		{Target: "id", From: []string{"ID"}},
+		{Target: "axis", From: []string{"Eje"}, Clean: []string{CleanTrimQuotes}, Values: map[string]string{"Sabor": "sabor"}},
+	}}
+	r, err := p.Resolve(&Overrides{ValuesAdd: map[string]map[string]string{"axis": {"SABOR GOD'S WHEY": "sabor"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, _, _, _ := r.buildRecord(r.importSpec(), map[string]any{"ID": "1", "Eje": "SABOR GOD\u2019S whey"}, nil, 0)
+	if rec["axis"] != "sabor" {
+		t.Fatalf("rec = %v", rec)
+	}
+	if len(p.Fields[1].Values) != 1 {
+		t.Fatal("mutó el perfil base")
+	}
+	if _, err := p.Resolve(&Overrides{ValuesAdd: map[string]map[string]string{"nada": {"a": "b"}}}); err == nil {
+		t.Fatal("valuesAdd de un campo inexistente debía fallar")
 	}
 }

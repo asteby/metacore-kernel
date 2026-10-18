@@ -290,6 +290,10 @@ type Overrides struct {
 	// CleanAdd agrega reglas de limpieza al final de las de un campo existente
 	// (target -> reglas): p. ej. quitar el aviso legal de la descripción.
 	CleanAdd map[string][]string `json:"cleanAdd,omitempty"`
+	// ValuesAdd agrega traducciones de valores a un campo existente
+	// (target -> {valor de origen: valor destino}); ganan sobre las del perfil.
+	// Sirve para unificar nombres sucios de un origen (p. ej. ejes de variante).
+	ValuesAdd map[string]map[string]string `json:"valuesAdd,omitempty"`
 }
 
 // Resolve devuelve una copia del perfil con los overrides aplicados. No muta p.
@@ -326,6 +330,16 @@ func (p Profile) Resolve(o *Overrides) (Profile, error) {
 		if extra, ok := o.CleanAdd[f.Target]; ok {
 			f.Clean = append(append([]string(nil), f.Clean...), extra...)
 		}
+		if extra, ok := o.ValuesAdd[f.Target]; ok {
+			merged := make(map[string]string, len(f.Values)+len(extra))
+			for k, v := range f.Values {
+				merged[k] = v
+			}
+			for k, v := range extra {
+				merged[k] = v
+			}
+			f.Values = merged
+		}
 		kept = append(kept, f)
 	}
 	out.Fields = kept
@@ -337,6 +351,11 @@ func (p Profile) Resolve(o *Overrides) (Profile, error) {
 	for t := range o.CleanAdd {
 		if _, ok := out.field(t); !ok {
 			return Profile{}, fmt.Errorf("override: cleanAdd de %q, que no existe en el perfil %q", t, p.Name)
+		}
+	}
+	for t := range o.ValuesAdd {
+		if _, ok := out.field(t); !ok {
+			return Profile{}, fmt.Errorf("override: valuesAdd de %q, que no existe en el perfil %q", t, p.Name)
 		}
 	}
 	for _, nf := range o.Fields {

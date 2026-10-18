@@ -15,14 +15,14 @@ import (
 //	extract  grupo 1 de Pattern sobre el primer valor no vacío de Cols
 //	gtin     primer valor de Cols que sea un GTIN-8/12/13/14 con dígito verificador válido
 //
-// When, si se indica, es una columna que debe traer dato para que el campo se
-// calcule (p. ej. "precio antes" solo si hay "precio rebajado"). El resultado
-// vacío deja el campo ausente.
+// When, si se indica, son columnas (alternativas, como Cols) de las que alguna
+// debe traer dato para que el campo se calcule (p. ej. "precio antes" solo si
+// hay "precio rebajado"). El resultado vacío deja el campo ausente.
 type Derive struct {
 	Op      string   `json:"op"`
 	Cols    []string `json:"cols"`
 	Pattern string   `json:"pattern,omitempty"`
-	When    string   `json:"when,omitempty"`
+	When    []string `json:"when,omitempty"`
 }
 
 const (
@@ -95,8 +95,17 @@ func (p Profile) withDerived(raw map[string]any) map[string]any {
 }
 
 func (d Derive) eval(cells map[string]string) string {
-	if d.When != "" && strings.TrimSpace(cells[normHeader(d.When)]) == "" {
-		return ""
+	if len(d.When) > 0 {
+		any := false
+		for _, w := range d.When {
+			if strings.TrimSpace(cells[normHeader(w)]) != "" {
+				any = true
+				break
+			}
+		}
+		if !any {
+			return ""
+		}
 	}
 	for _, c := range d.Cols {
 		v := strings.TrimSpace(cells[normHeader(c)])
