@@ -2551,6 +2551,20 @@ authorization. Implementation: `runtime/wasm/approvalconsume.go`,
 host.WithApprovalConsumer(dynamicService.ConsumeApproval)
 ```
 
+All conditions (org, `kind=pin`, policy, `applied`, requester, freshness and the
+unused marker) are part of the WHERE of the single UPDATE that redeems the
+grant, not only checked on the row that was read, so a grant that changes
+between the read and the redemption cannot be consumed. A non-finite amount
+(`Infinity`, `NaN`) recorded in the grant's context covers nothing, and a
+non-finite required amount is refused.
+
+> **Requirement for the PIN UI (SDK modal).** `context_gte` / `context_eq` are
+> only a control if the supervisor SEES what they authorize: the PIN dialog
+> must show the product and the amount (the shortfall or discount) it is
+> granting, and the context recorded with the grant must be the one displayed.
+> A dialog that records a context the supervisor never saw turns the amount
+> check into a formality.
+
 ### 23.1 `approval_required` from `data_mutate` / `data_batch`
 
 A declarative guard declared `on_violation: request_approval` that fails on the

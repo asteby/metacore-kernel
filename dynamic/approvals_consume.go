@@ -3,6 +3,7 @@ package dynamic
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +54,9 @@ func (s *Service) ConsumeApproval(ctx context.Context, in ConsumeInput) error {
 	if err := s.db.WithContext(ctx).Where("id = ? AND organization_id = ?", in.ApprovalID, in.OrgID).First(&row).Error; err != nil {
 		return refuse("unknown grant")
 	}
+	// Early, readable refusals on the row we read. They are advisory: the
+	// UPDATE below re-checks every one of them atomically, so a row that changes
+	// between this read and the redemption (status, owner, age, usage) still loses.
 	switch {
 	case row.Kind != ApprovalKindPIN || row.ConstraintKey != in.Policy:
 		return refuse("wrong policy")
@@ -65,6 +69,8 @@ func (s *Service) ConsumeApproval(ctx context.Context, in ConsumeInput) error {
 	case time.Since(*row.DecidedAt) > PINGrantMaxAge:
 		return refuse("expired")
 	}
+	// The recorded context is immutable once the grant is applied, so checking
+	// it on the read row is sound.
 	recorded, _ := row.PayloadMap()["context"].(map[string]any)
 	for k, want := range in.ContextEq {
 		if got := fmt.Sprint(recorded[k]); recorded[k] == nil || got != want {
@@ -72,18 +78,27 @@ func (s *Service) ConsumeApproval(ctx context.Context, in ConsumeInput) error {
 		}
 	}
 	for k, min := range in.ContextGte {
+		if math.IsNaN(min) || math.IsInf(min, 0) {
+			return refuse("invalid amount: " + k)
+		}
 		if numberOf(recorded[k]) < min-0.01 {
 			return refuse("grant does not cover: " + k)
 		}
 	}
+	// Atomic single use. Org, kind, policy, status, owner, freshness and the unused
+	// marker are all in the WHERE: only a row that STILL satisfies every condition
+	// flips from '' to "consumed".
 	res := s.db.WithContext(ctx).Model(&ApprovalRequest{}).
-		Where("id = ? AND organization_id = ? AND (applied_event_id = '' OR applied_event_id IS NULL)", in.ApprovalID, in.OrgID).
+		Where("id = ? AND organization_id = ? AND kind = ? AND constraint_key = ? AND status = ? AND requested_by = ?",
+			in.ApprovalID, in.OrgID, ApprovalKindPIN, in.Policy, ApprovalStatusApplied, in.RequestedBy).
+		Where("decided_at IS NOT NULL AND decided_at > ?", time.Now().Add(-PINGrantMaxAge)).
+		Where("(applied_event_id = '' OR applied_event_id IS NULL)").
 		Update("applied_event_id", "consumed")
 	if res.Error != nil {
 		return res.Error
 	}
 	if res.RowsAffected != 1 {
-		return refuse("already used")
+		return refuse("no longer redeemable")
 	}
 	return nil
 }
@@ -92,11 +107,16 @@ func (s *Service) ConsumeApproval(ctx context.Context, in ConsumeInput) error {
 func numberOf(v any) float64 {
 	switch t := v.(type) {
 	case float64:
+		if math.IsNaN(t) || math.IsInf(t, 0) {
+			return 0
+		}
 		return t
 	case int:
 		return float64(t)
 	case string:
-		if f, err := strconv.ParseFloat(strings.TrimSpace(t), 64); err == nil {
+		// ParseFloat accepts "Inf", "Infinity" and "NaN": a non-finite recorded
+		// amount must never cover anything.
+		if f, err := strconv.ParseFloat(strings.TrimSpace(t), 64); err == nil && !math.IsNaN(f) && !math.IsInf(f, 0) {
 			return f
 		}
 	}

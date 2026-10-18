@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/asteby/metacore-kernel/metadata"
 	"github.com/asteby/metacore-kernel/modelbase"
@@ -207,5 +209,56 @@ func TestConsumeApproval(t *testing.T) {
 				t.Errorf("%s: el rechazo quemó la autorización: %v", name, err)
 			}
 		}
+	}
+}
+
+func TestConsumeApprovalNonFiniteAmountsCoverNothing(t *testing.T) {
+	svc, cashier, _ := pinFixture(t)
+	ctx := context.Background()
+	for _, bad := range []any{"Infinity", "+Inf", "NaN", "inf"} {
+		req, err := svc.GrantPINApproval(ctx, cashier, PINGrantInput{PolicyKey: "price_below_min", Reason: "r", PIN: "4321",
+			Context: map[string]any{"product_id": "p1", "unit_shortfall": bad}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = svc.ConsumeApproval(ctx, ConsumeInput{OrgID: cashier.orgID, ApprovalID: req.ID, Policy: "price_below_min",
+			RequestedBy: cashier.id, ContextGte: map[string]float64{"unit_shortfall": 5}})
+		if !errors.Is(err, ErrApprovalConsume) {
+			t.Errorf("%v no debe cubrir un faltante: %v", bad, err)
+		}
+	}
+	// A non-finite REQUIRED amount is refused too.
+	req, _ := svc.GrantPINApproval(ctx, cashier, PINGrantInput{PolicyKey: "price_below_min", Reason: "r", PIN: "4321",
+		Context: map[string]any{"unit_shortfall": 9.0}})
+	err := svc.ConsumeApproval(ctx, ConsumeInput{OrgID: cashier.orgID, ApprovalID: req.ID, Policy: "price_below_min",
+		RequestedBy: cashier.id, ContextGte: map[string]float64{"unit_shortfall": math.Inf(1)}})
+	if !errors.Is(err, ErrApprovalConsume) {
+		t.Errorf("monto requerido infinito: %v", err)
+	}
+}
+
+// The state is checked INSIDE the conditional UPDATE: a grant revoked between
+// the read and the redemption cannot be consumed.
+func TestConsumeApprovalRechecksStateAtomically(t *testing.T) {
+	svc, cashier, _ := pinFixture(t)
+	ctx := context.Background()
+	req, err := svc.GrantPINApproval(ctx, cashier, PINGrantInput{PolicyKey: "p", Reason: "r", PIN: "4321"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fired := false
+	svc.db.Callback().Query().After("gorm:query").Register("test:revoke_after_read", func(tx *gorm.DB) {
+		if fired || tx.Statement.Table != "approval_requests" {
+			return
+		}
+		fired = true
+		svc.db.Session(&gorm.Session{NewDB: true}).Exec("UPDATE approval_requests SET status = 'rejected' WHERE id = ?", req.ID)
+	})
+	err = svc.ConsumeApproval(ctx, ConsumeInput{OrgID: cashier.orgID, ApprovalID: req.ID, Policy: "p", RequestedBy: cashier.id})
+	if !fired {
+		t.Skip("el callback no se disparó en este driver")
+	}
+	if !errors.Is(err, ErrApprovalConsume) {
+		t.Fatalf("una autorización revocada tras la lectura no debe canjearse: %v", err)
 	}
 }
