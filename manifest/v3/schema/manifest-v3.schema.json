@@ -2011,6 +2011,13 @@
             "$ref": "#/$defs/AgentCapability"
           }
         },
+        "guides": {
+          "type": "array",
+          "description": "In-app help for the host help center: short guides and guided tours aimed at roles, optionally auto-started the first time a user opens a route.",
+          "items": {
+            "$ref": "#/$defs/HelpGuide"
+          }
+        },
         "subscriptions": {
           "type": "array",
           "description": "Event handlers. Each subscription must be backed by an 'event:subscribe' capability.",
@@ -2176,6 +2183,65 @@
             "minLength": 1
           },
           "uniqueItems": true
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/AgentGuideStep"
+          }
+        }
+      }
+    },
+    "HelpGuide": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "title",
+        "steps"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "description": "Role keys the guide is aimed at. Empty or omitted = every user.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "permission": {
+          "type": "string",
+          "description": "Capability the viewer must hold to see the guide."
+        },
+        "trigger": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "first_visit"
+          ],
+          "description": "manual (default) only lists the guide; first_visit starts it the first time the user opens `route`."
+        },
+        "route": {
+          "type": "string",
+          "description": "Route that auto-starts the guide for trigger=first_visit."
+        },
+        "order": {
+          "type": "integer"
         },
         "steps": {
           "type": "array",

@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **manifest v3: `contributions.guides[]` (ayuda in-app por rol).** Guías cortas
+  y tours guiados declarables por addon o preset: `key`, `title`, `roles[]`,
+  `permission`, `trigger` (`manual` | `first_visit`), `route` (obligatoria con
+  `first_visit`), `order` y `steps[]` (reusa `AgentGuideStep`: `target` de UI o
+  paso `concept`). Validación de claves y pasos únicos en `v3.Validate`.
+
 ### Fixed
 
 - **dataload: correcciones de la revisión de la integración con ops.**
