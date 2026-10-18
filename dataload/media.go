@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"sort"
 	"sync"
@@ -87,9 +86,9 @@ type Manifest interface {
 // Errores de respaldo.
 var (
 	// ErrBackupCorrupt: lo leído del almacén no coincide con el sha256 descargado.
-	ErrBackupCorrupt = errors.New("dataload: el respaldo no coincide con el sha256 descargado")
+	ErrBackupCorrupt = newErr(CodeBackupCorrupt)
 	// ErrBackupMissing: el almacén no tiene el objeto que el manifiesto promete.
-	ErrBackupMissing = errors.New("dataload: el respaldo no está en el almacén")
+	ErrBackupMissing = newErr(CodeBackupMissing)
 )
 
 // RevalidateMode dice cómo comprobar que un original ya respaldado sigue vigente.
@@ -222,7 +221,7 @@ func (b *Backuper) revalidate(ctx context.Context, org, rawURL string, prev Mani
 	if f.NotModified {
 		prev.ValidatedAt = b.now()
 		if err := b.Manifest.Put(ctx, prev); err != nil {
-			return ManifestEntry{}, BackupResult{}, fmt.Errorf("dataload: escribir manifiesto: %w", err)
+			return ManifestEntry{}, BackupResult{}, wrapErr(err, CodeManifestWrite)
 		}
 		return prev, BackupResult{Outcome: OutcomeNotModified}, nil
 	}
@@ -230,7 +229,7 @@ func (b *Backuper) revalidate(ctx context.Context, org, rawURL string, prev Mani
 	if hex.EncodeToString(sum[:]) == prev.SHA256 {
 		prev.ETag, prev.LastModified, prev.ValidatedAt = f.ETag, f.LastModified, b.now()
 		if err := b.Manifest.Put(ctx, prev); err != nil {
-			return ManifestEntry{}, BackupResult{}, fmt.Errorf("dataload: escribir manifiesto: %w", err)
+			return ManifestEntry{}, BackupResult{}, wrapErr(err, CodeManifestWrite)
 		}
 		return prev, BackupResult{Outcome: OutcomeUnchanged}, nil
 	}
@@ -268,11 +267,11 @@ func (b *Backuper) store(ctx context.Context, org, rawURL string, f *importer.Fe
 
 	name, found, err := b.Store.Lookup(ctx, hexsum)
 	if err != nil {
-		return ManifestEntry{}, fmt.Errorf("dataload: consultar almacén: %w", err)
+		return ManifestEntry{}, wrapErr(err, CodeStoreLookup)
 	}
 	if !found {
 		if name, err = b.Store.PutHashed(ctx, hexsum, f.SuggestedName, bytes.NewReader(f.Data), f.Type); err != nil {
-			return ManifestEntry{}, fmt.Errorf("dataload: guardar original: %w", err)
+			return ManifestEntry{}, wrapErr(err, CodeStorePut)
 		}
 	}
 	entry := ManifestEntry{
@@ -292,7 +291,7 @@ func (b *Backuper) store(ctx context.Context, org, rawURL string, f *importer.Fe
 		return ManifestEntry{}, err
 	}
 	if err := b.Manifest.Put(ctx, entry); err != nil {
-		return ManifestEntry{}, fmt.Errorf("dataload: escribir manifiesto: %w", err)
+		return ManifestEntry{}, wrapErr(err, CodeManifestWrite)
 	}
 	return entry, nil
 }
@@ -302,17 +301,17 @@ func (b *Backuper) verify(ctx context.Context, e *ManifestEntry) error {
 	rc, err := b.Store.Open(ctx, e.StoredName)
 	if err != nil {
 		e.Status = EntryMissing
-		return fmt.Errorf("%w: %s: %v", ErrBackupMissing, e.StoredName, err)
+		return wrapErr(err, CodeBackupMissing, "name", e.StoredName)
 	}
 	defer rc.Close()
 	h := sha256.New()
 	n, err := io.Copy(h, rc)
 	if err != nil {
-		return fmt.Errorf("dataload: leer respaldo %s: %w", e.StoredName, err)
+		return wrapErr(err, CodeBackupRead, "name", e.StoredName)
 	}
 	if hex.EncodeToString(h.Sum(nil)) != e.SHA256 || n != e.Bytes {
 		e.Status = EntryCorrupt
-		return fmt.Errorf("%w: %s", ErrBackupCorrupt, e.StoredName)
+		return newErr(CodeBackupCorrupt, "name", e.StoredName)
 	}
 	e.Status, e.VerifiedAt = EntryOK, b.now()
 	return nil
@@ -382,6 +381,9 @@ type MediaJob struct {
 	State     MediaState `json:"state"`
 	Attempts  int        `json:"attempts"`
 	LastError string     `json:"lastError,omitempty"`
+	// LastErrorCode identifica LastError cuando viene del motor (vacío para
+	// errores de red o del origen, que traen su propio texto).
+	LastErrorCode Code `json:"lastErrorCode,omitempty"`
 	// NextAttempt es cuándo puede volver a intentarse (pending) o cuándo vence
 	// el arrendamiento (running).
 	NextAttempt time.Time `json:"nextAttempt"`
@@ -733,7 +735,7 @@ func roundRobinByOrg(jobs []MediaJob) []MediaJob {
 // Un fallo al revalidar no invalida el original anterior.
 func (q *MediaQueue) Revalidate(ctx context.Context, org string, f MediaJobFilter, mode RevalidateMode) (int, error) {
 	if mode != RevalidateConditional && mode != RevalidateRefetch {
-		return 0, fmt.Errorf("dataload: modo de revalidación desconocido %q", mode)
+		return 0, newErr(CodeRevalidateMode, "mode", mode)
 	}
 	f.State = MediaDone
 	jobs, err := q.Jobs.List(ctx, org, f)
@@ -778,10 +780,11 @@ func (q *MediaQueue) process(ctx context.Context, j MediaJob) error {
 	j.UpdatedAt = q.now()
 	switch {
 	case err == nil:
-		j.State, j.SHA256, j.StoredName, j.LastError = MediaDone, entry.SHA256, entry.StoredName, ""
+		j.State, j.SHA256, j.StoredName = MediaDone, entry.SHA256, entry.StoredName
+		j.setError(nil)
 		j.Revalidate, j.Outcome = RevalidateNone, res.Outcome
 		if res.Err != nil {
-			j.LastError = "revalidación: " + res.Err.Error() // el original anterior sigue vigente
+			j.setError(wrapErr(res.Err, CodeRevalidateFailed)) // el original anterior sigue vigente
 		}
 		if q.Deriver != nil {
 			if derr := q.Deriver.Derive(ctx, entry); derr != nil {
@@ -796,9 +799,11 @@ func (q *MediaQueue) process(ctx context.Context, j MediaJob) error {
 		_ = q.Jobs.Update(context.WithoutCancel(ctx), j)
 		return ctx.Err()
 	case !importer.IsRetryable(ctx, err) || errors.Is(err, ErrBackupCorrupt) || j.Attempts >= q.maxAttemptsFor(j.Org):
-		j.State, j.LastError = MediaDead, err.Error()
+		j.State = MediaDead
+		j.setError(err)
 	default:
-		j.State, j.LastError, j.NextAttempt = MediaPending, err.Error(), q.now().Add(q.delay(j.Attempts))
+		j.State, j.NextAttempt = MediaPending, q.now().Add(q.delay(j.Attempts))
+		j.setError(err)
 	}
 	if uerr := q.Jobs.Update(ctx, j); uerr != nil {
 		return uerr
@@ -877,4 +882,12 @@ func ExportManifest(ctx context.Context, m Manifest, org string) ([]byte, error)
 		entries = []ManifestEntry{}
 	}
 	return json.MarshalIndent(entries, "", "  ")
+}
+
+// setError deja el último error del trabajo (nil lo limpia).
+func (j *MediaJob) setError(err error) {
+	j.LastError, j.LastErrorCode = "", ""
+	if err != nil {
+		j.LastError, j.LastErrorCode = err.Error(), ErrorCode(err)
+	}
 }

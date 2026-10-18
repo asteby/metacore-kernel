@@ -1,7 +1,6 @@
 package dataload
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 	"sync"
@@ -31,22 +30,23 @@ const (
 	DeriveGTIN    = "gtin"
 )
 
-func (d Derive) validate() error {
+func (d Derive) validate() *Message {
+	bad := func(code Code, kv ...any) *Message { m := msg(code, kv...); return &m }
 	if len(d.Cols) == 0 {
-		return fmt.Errorf("derive sin cols")
+		return bad(CodeDeriveNoCols)
 	}
 	switch d.Op {
 	case DeriveFirst, DeriveGTIN:
 	case DeriveExtract:
 		re, err := regexp.Compile(d.Pattern)
 		if err != nil {
-			return fmt.Errorf("derive.pattern inválido: %v", err)
+			return bad(CodeDerivePattern, "error", err.Error())
 		}
 		if re.NumSubexp() < 1 {
-			return fmt.Errorf("derive.pattern necesita un grupo de captura")
+			return bad(CodeDeriveNoGroup)
 		}
 	default:
-		return fmt.Errorf("derive.op desconocido %q (first, extract, gtin)", d.Op)
+		return bad(CodeDeriveOp, "op", d.Op)
 	}
 	return nil
 }

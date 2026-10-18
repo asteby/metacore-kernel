@@ -338,7 +338,13 @@ type ReviewItem struct {
 	Code     string `json:"code"`
 	Field    string `json:"field,omitempty"`
 	Severity string `json:"severity"`
-	Detail   string `json:"detail,omitempty"`
+	// Detail es el texto del motivo: el que escribió el autor del documento o, si
+	// no escribió ninguno, el texto por omisión de DetailCode.
+	Detail string `json:"detail,omitempty"`
+	// DetailCode y DetailParams identifican el motivo por omisión del motor para
+	// traducirlo (vacíos si el documento trae su propio detail).
+	DetailCode   Code   `json:"detailCode,omitempty"`
+	DetailParams Params `json:"detailParams,omitempty"`
 }
 
 // ParseExtract decodifica y valida un documento de extracción (rechaza campos
@@ -348,7 +354,7 @@ func ParseExtract(b []byte) (*Extractor, error) {
 	dec := json.NewDecoder(strings.NewReader(string(b)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&d); err != nil {
-		return nil, fmt.Errorf("extracción inválida: %w", err)
+		return nil, wrapErr(err, CodeExtractParse)
 	}
 	return NewExtractor(d)
 }
@@ -380,7 +386,7 @@ func (e *Extractor) Profile() ProfileRef { return e.Doc.Profile }
 // CheckProfile exige que el documento corresponda a esta versión del perfil.
 func (e *Extractor) CheckProfile(p Profile) error {
 	if e.Doc.Profile.Name != p.Name || e.Doc.Profile.Version != p.Version {
-		return fmt.Errorf("extracción %s@%s no corresponde al perfil %s@%s", e.Doc.Profile.Name, e.Doc.Profile.Version, p.Name, p.Version)
+		return newErr(CodeExtractProfileMismatch, "extract", e.Doc.Profile.Name+"@"+e.Doc.Profile.Version, "profile", p.Name+"@"+p.Version)
 	}
 	return nil
 }
@@ -427,21 +433,21 @@ func NewExtractor(d ExtractDoc) (*Extractor, error) {
 		Doc: d, severity: map[string]string{}, vocabTxt: map[string][]string{}, vocabDict: map[string]map[string]string{},
 		vocabEnt: map[string]*entityVocab{}, cats: map[string]*compiledCat{}, drop: map[string]bool{},
 	}
-	var errs []string
-	bad := func(f string, a ...any) { errs = append(errs, fmt.Sprintf(f, a...)) }
+	var errs []Message
+	bad := func(code Code, kv ...any) { errs = append(errs, msg(code, kv...)) }
 
 	if d.Schema != ExtractSchema {
-		bad("schema %q no soportado (se esperaba %s)", d.Schema, ExtractSchema)
+		bad(CodeExtractSchema, "schema", d.Schema, "want", ExtractSchema)
 	}
 	if d.Profile.Name == "" {
-		bad("falta profile.name")
+		bad(CodeExtractMissing, "where", "", "field", "profile.name")
 	}
 	if d.Text.Source == "" {
-		bad("falta text.source")
+		bad(CodeExtractMissing, "where", "", "field", "text.source")
 	}
 	for _, r := range d.Text.Normalize {
 		if !validCleanRule(r) {
-			bad("text.normalize: %s", cleanRuleError(r))
+			bad(CodeExtractAt, "where", "text.normalize", "detail", cleanRuleError(r))
 		}
 	}
 	e.norm = d.Text.Normalize
@@ -451,13 +457,13 @@ func NewExtractor(d ExtractDoc) (*Extractor, error) {
 	}
 	for _, c := range d.Review.Info {
 		if e.severity[c] == SeverityRevisar {
-			bad("el código %q está en revisar e info", c)
+			bad(CodeExtractCodeTwoLevels, "code", c)
 		}
 		e.severity[c] = SeverityInfo
 	}
 	known := func(where, code string) {
 		if code != "" && e.severity[code] == "" {
-			bad("%s: el código %q no tiene severidad en review", where, code)
+			bad(CodeExtractCodeNoSeverity, "where", where, "code", code)
 		}
 	}
 
@@ -467,9 +473,9 @@ func NewExtractor(d ExtractDoc) (*Extractor, error) {
 	for i, r := range d.Rules {
 		where := fmt.Sprintf("rules[%d] %q", i, r.ID)
 		if r.ID == "" {
-			bad("rules[%d]: falta id", i)
+			bad(CodeExtractMissing, "where", fmt.Sprintf("rules[%d]: ", i), "field", "id")
 		} else if ids[r.ID] {
-			bad("%s: id repetido", where)
+			bad(CodeExtractDuplicateID, "where", where)
 		}
 		ids[r.ID] = true
 		cr := compiledRule{ExtractRule: r, idx: map[string]int{}}
@@ -479,7 +485,7 @@ func NewExtractor(d ExtractDoc) (*Extractor, error) {
 
 	if c := d.Categories; c != nil {
 		if c.Source == "" || c.Into == "" {
-			bad("categories: faltan source o into")
+			bad(CodeExtractMissing, "where", "categories: ", "field", "source/into")
 		}
 		known("categories", c.UnmappedCode)
 		for src, to := range c.Map {
@@ -487,10 +493,10 @@ func NewExtractor(d ExtractDoc) (*Extractor, error) {
 			for j, rf := range to.Refine {
 				re, err := compileRE2(rf.Match)
 				if err != nil {
-					bad("categories.%s.refine[%d]: %v", src, j, err)
+					bad(CodeExtractAt, "where", fmt.Sprintf("categories.%s.refine[%d]", src, j), "detail", err)
 				}
 				if rf.Field == "" || rf.ID == "" {
-					bad("categories.%s.refine[%d]: faltan field o id", src, j)
+					bad(CodeExtractMissing, "where", fmt.Sprintf("categories.%s.refine[%d]: ", src, j), "field", "field/id")
 				}
 				cc.refine = append(cc.refine, re)
 			}
@@ -502,7 +508,7 @@ func NewExtractor(d ExtractDoc) (*Extractor, error) {
 	e.compileChecks(&errs, known)
 	for i, c := range d.DatasetChecks {
 		if c.Type != "unique" || c.Field == "" {
-			bad("datasetChecks[%d]: solo se soporta type unique con field", i)
+			bad(CodeExtractDatasetUnique, "where", fmt.Sprintf("datasetChecks[%d]", i))
 		}
 		known(fmt.Sprintf("datasetChecks[%d]", i), c.Code)
 	}
@@ -510,9 +516,8 @@ func NewExtractor(d ExtractDoc) (*Extractor, error) {
 		e.drop[f] = true
 	}
 
-	if len(errs) > 0 {
-		sort.Strings(errs)
-		return nil, fmt.Errorf("extracción %q: %s", d.Profile.Name, strings.Join(errs, "; "))
+	if err := detailsErr(errs, CodeExtractInvalid, "name", d.Profile.Name); err != nil {
+		return nil, err
 	}
 	e.hash = canonicalHash(d)
 	return e, nil
@@ -531,16 +536,17 @@ func canonicalHash(v any) string {
 // acepta Go 1.22+.
 func compileRE2(p string) (*regexp.Regexp, error) {
 	if p == "" {
-		return nil, fmt.Errorf("patrón vacío")
+		return nil, newErr(CodePatternEmpty)
 	}
 	re, err := regexp.Compile(p)
 	if err != nil {
-		return nil, fmt.Errorf("patrón %q: %v", p, err)
+		return nil, newErr(CodePatternInvalid, "pattern", p, "error", err.Error())
 	}
 	return re, nil
 }
 
-func (e *Extractor) compileVocab(errs *[]string) {
+func (e *Extractor) compileVocab(errs *[]Message) {
+	bad := func(code Code, kv ...any) { *errs = append(*errs, msg(code, kv...)) }
 	names := make([]string, 0, len(e.Doc.Vocab))
 	for n := range e.Doc.Vocab {
 		names = append(names, n)
@@ -553,7 +559,7 @@ func (e *Extractor) compileVocab(errs *[]string) {
 			for k, val := range v {
 				s, ok := val.(string)
 				if !ok {
-					*errs = append(*errs, fmt.Sprintf("vocab.%s: el valor de %q debe ser texto", name, k))
+					bad(CodeVocabValueText, "vocab", name, "key", k)
 					continue
 				}
 				dict[k] = s
@@ -561,7 +567,7 @@ func (e *Extractor) compileVocab(errs *[]string) {
 			e.vocabDict[name] = dict
 		case []any:
 			if len(v) == 0 {
-				*errs = append(*errs, fmt.Sprintf("vocab.%s: vacío", name))
+				bad(CodeVocabEmpty, "vocab", name)
 				continue
 			}
 			switch v[0].(type) {
@@ -570,7 +576,7 @@ func (e *Extractor) compileVocab(errs *[]string) {
 				for _, it := range v {
 					s, ok := it.(string)
 					if !ok {
-						*errs = append(*errs, fmt.Sprintf("vocab.%s: mezcla textos y objetos", name))
+						bad(CodeVocabMixed, "vocab", name)
 						break
 					}
 					list = append(list, s)
@@ -581,7 +587,7 @@ func (e *Extractor) compileVocab(errs *[]string) {
 				for i, it := range v {
 					m, ok := it.(map[string]any)
 					if !ok {
-						*errs = append(*errs, fmt.Sprintf("vocab.%s[%d]: debe ser objeto {id,label,aliases}", name, i))
+						bad(CodeVocabEntityShape, "vocab", fmt.Sprintf("%s[%d]", name, i))
 						continue
 					}
 					en := entityEntry{ID: str(m["id"]), Label: str(m["label"])}
@@ -591,7 +597,7 @@ func (e *Extractor) compileVocab(errs *[]string) {
 						}
 					}
 					if en.ID == "" || len(en.Aliases) == 0 {
-						*errs = append(*errs, fmt.Sprintf("vocab.%s[%d]: faltan id o aliases", name, i))
+						bad(CodeVocabEntityMissing, "vocab", fmt.Sprintf("%s[%d]", name, i))
 						continue
 					}
 					if en.Label == "" {
@@ -599,7 +605,7 @@ func (e *Extractor) compileVocab(errs *[]string) {
 					}
 					for _, a := range en.Aliases {
 						if prev, dup := ev.byAlias[a]; dup {
-							*errs = append(*errs, fmt.Sprintf("vocab.%s: el alias %q lo usan %s y %s", name, a, prev.ID, en.ID))
+							bad(CodeVocabAliasDup, "vocab", name, "alias", a, "first", prev.ID, "second", en.ID)
 						}
 						ev.byAlias[a] = en
 					}
@@ -624,10 +630,10 @@ func (e *Extractor) compileVocab(errs *[]string) {
 				}
 				e.vocabEnt[name] = ev
 			default:
-				*errs = append(*errs, fmt.Sprintf("vocab.%s: elementos no soportados", name))
+				bad(CodeVocabUnsupported, "vocab", name)
 			}
 		default:
-			*errs = append(*errs, fmt.Sprintf("vocab.%s: debe ser lista o diccionario", name))
+			bad(CodeVocabShape, "vocab", name)
 		}
 	}
 }
@@ -637,13 +643,13 @@ func str(v any) string {
 	return s
 }
 
-func (e *Extractor) compileRule(cr *compiledRule, where string, bad func(string, ...any), known func(string, string)) {
+func (e *Extractor) compileRule(cr *compiledRule, where string, bad func(Code, ...any), known func(string, string)) {
 	r := cr.ExtractRule
 	switch r.Kind {
 	case RuleCapture:
 		re, err := compileRE2(r.Pattern)
 		if err != nil {
-			bad("%s: %v", where, err)
+			bad(CodeExtractAt, "where", where, "detail", err)
 			return
 		}
 		cr.re = re
@@ -653,51 +659,51 @@ func (e *Extractor) compileRule(cr *compiledRule, where string, bad func(string,
 			}
 		}
 		if r.Title != "" && r.Title != "remove" && r.Title != "keep" {
-			bad("%s: title debe ser remove o keep", where)
+			bad(CodeExtractTitle, "where", where)
 		}
 		if len(r.Into) > 0 {
 			if err := decodeStrict(r.Into, &cr.into); err != nil {
-				bad("%s: into: %v", where, err)
+				bad(CodeExtractAt, "where", where+": into", "detail", err.Error())
 			}
 			for field, spec := range cr.into {
 				if _, ok := cr.idx[spec.Group]; !ok {
-					bad("%s: into.%s: el patrón no tiene el grupo %q", where, field, spec.Group)
+					bad(CodeExtractNoGroup, "where", where+": into."+field, "group", spec.Group)
 				}
 				switch spec.As {
 				case "", "text", "int", "flag":
 				case "list":
 					if spec.Split == "" {
-						bad("%s: into.%s: list necesita split", where, field)
+						bad(CodeExtractMissing, "where", where+": into."+field+": list → ", "field", "split")
 					} else if _, err := compileRE2(spec.Split); err != nil {
-						bad("%s: into.%s: split: %v", where, field, err)
+						bad(CodeExtractAt, "where", where+": into."+field+": split", "detail", err)
 					}
 				default:
-					bad("%s: into.%s: as %q desconocido", where, field, spec.As)
+					bad(CodeExtractUnknown, "where", where+": into."+field, "what", "as", "value", spec.As)
 				}
 			}
 		}
 		for _, ri := range r.ReviewIf {
 			if ri.When != "listLengthGt1" {
-				bad("%s: reviewIf.when %q desconocido", where, ri.When)
+				bad(CodeExtractUnknown, "where", where, "what", "reviewIf.when", "value", ri.When)
 			}
 			if _, ok := cr.into[ri.Into]; !ok {
-				bad("%s: reviewIf.into %q no es un campo de into", where, ri.Into)
+				bad(CodeExtractReviewIfInto, "where", where, "field", ri.Into)
 			}
 			known(where, ri.Code)
 		}
 	case RuleEntity:
 		ev := e.vocabEnt[r.Vocab]
 		if ev == nil {
-			bad("%s: vocab %q inexistente o no es una lista de entidades {id,label,aliases}", where, r.Vocab)
+			bad(CodeExtractEntityVocab, "where", where, "vocab", r.Vocab)
 			return
 		}
 		if !strings.Contains(r.Pattern, "{{vocab}}") {
-			bad("%s: el patrón debe llevar {{vocab}}", where)
+			bad(CodeExtractVocabPlaceholder, "where", where)
 			return
 		}
 		re, err := compileRE2(strings.ReplaceAll(r.Pattern, "{{vocab}}", ev.alt))
 		if err != nil {
-			bad("%s: %v", where, err)
+			bad(CodeExtractAt, "where", where, "detail", err)
 			return
 		}
 		cr.re = re
@@ -708,18 +714,18 @@ func (e *Extractor) compileRule(cr *compiledRule, where string, bad func(string,
 		}
 		for _, g := range []string{r.EntityGroup, r.RestGroup} {
 			if _, ok := cr.idx[g]; !ok {
-				bad("%s: el patrón no tiene el grupo %q", where, g)
+				bad(CodeExtractNoGroup, "where", where, "group", g)
 			}
 		}
 		if r.DetailGroup != "" {
 			if _, ok := cr.idx[r.DetailGroup]; !ok {
-				bad("%s: el patrón no tiene el grupo %q", where, r.DetailGroup)
+				bad(CodeExtractNoGroup, "where", where, "group", r.DetailGroup)
 			}
 		}
 		if g := r.Guards; g != nil {
 			if g.RejectPattern != "" {
 				if cr.suspect, err = compileRE2(g.RejectPattern); err != nil {
-					bad("%s: guards.rejectPattern: %v", where, err)
+					bad(CodeExtractAt, "where", where+": guards.rejectPattern", "detail", err)
 				}
 			}
 			known(where, g.SuspectCode)
@@ -727,38 +733,38 @@ func (e *Extractor) compileRule(cr *compiledRule, where string, bad func(string,
 		}
 	case RuleTokens, RulePrefix:
 		if r.From == "" || r.Dictionary == "" {
-			bad("%s: faltan from o dictionary", where)
+			bad(CodeExtractMissing, "where", where+": ", "field", "from/dictionary")
 			return
 		}
 		if err := json.Unmarshal(r.Into, &cr.intoTxt); err != nil || cr.intoTxt == "" {
-			bad("%s: into debe ser el nombre del campo destino", where)
+			bad(CodeExtractIntoName, "where", where)
 		}
 		if r.Kind == RuleTokens && e.vocabDict[r.Dictionary] == nil {
-			bad("%s: dictionary %q no es un diccionario alias->valor", where, r.Dictionary)
+			bad(CodeExtractDictionary, "where", where, "dictionary", r.Dictionary)
 		}
 		if r.Kind == RulePrefix {
 			if e.vocabTxt[r.Dictionary] == nil {
-				bad("%s: dictionary %q no es una lista de textos", where, r.Dictionary)
+				bad(CodeExtractTextList, "where", where, "dictionary", r.Dictionary)
 			}
 			known(where, r.UnknownCode)
 		}
 	case RuleSet:
 		if r.Field == "" || r.Template == "" {
-			bad("%s: faltan field o template", where)
+			bad(CodeExtractMissing, "where", where+": ", "field", "field/template")
 			return
 		}
 		t, err := parseTemplate(r.Template)
 		if err != nil {
-			bad("%s: %v", where, err)
+			bad(CodeExtractAt, "where", where, "detail", err)
 		}
 		cr.tmpl = t
 		for _, p := range r.Post {
 			if !validPost(p) {
-				bad("%s: post %q desconocido (collapse, slug, upper, lower)", where, p)
+				bad(CodeExtractUnknown, "where", where, "what", "post (collapse, slug, upper, lower)", "value", p)
 			}
 		}
 	default:
-		bad("%s: tipo de regla desconocido %q", where, r.Kind)
+		bad(CodeExtractRuleKind, "where", where, "kind", r.Kind)
 	}
 }
 
@@ -768,13 +774,13 @@ func decodeStrict(raw json.RawMessage, v any) error {
 	return dec.Decode(v)
 }
 
-func (e *Extractor) compileOutputs(errs *[]string, known func(string, string)) {
+func (e *Extractor) compileOutputs(errs *[]Message, known func(string, string)) {
 	o := e.Doc.Outputs
-	bad := func(f string, a ...any) { *errs = append(*errs, fmt.Sprintf(f, a...)) }
+	bad := func(code Code, kv ...any) { *errs = append(*errs, msg(code, kv...)) }
 	names := make([]string, 0, len(o.Attributes))
 	for n, a := range o.Attributes {
 		if a.Field == "" {
-			bad("outputs.attributes.%s: falta el campo", n)
+			bad(CodeExtractMissing, "where", "outputs.attributes."+n+": ", "field", "field")
 		}
 		for _, c := range a.Unless {
 			known("outputs.attributes."+n, c)
@@ -786,15 +792,15 @@ func (e *Extractor) compileOutputs(errs *[]string, known func(string, string)) {
 	for i, l := range o.Lists {
 		where := fmt.Sprintf("outputs.lists[%d]", i)
 		if l.Target == "" || l.Template == "" {
-			bad("%s: faltan target o template", where)
+			bad(CodeExtractMissing, "where", where+": ", "field", "target/template")
 			continue
 		}
 		t, err := parseTemplate(l.Template)
 		if err != nil {
-			bad("%s: %v", where, err)
+			bad(CodeExtractAt, "where", where, "detail", err)
 		}
 		if l.Each != nil && (l.Each.As == "" || l.Each.From == "" || l.Each.To == "") {
-			bad("%s: each necesita as, from y to", where)
+			bad(CodeExtractMissing, "where", where+": each → ", "field", "as/from/to")
 		}
 		for _, c := range l.Unless {
 			known(where, c)
@@ -803,55 +809,55 @@ func (e *Extractor) compileOutputs(errs *[]string, known func(string, string)) {
 	}
 }
 
-func (e *Extractor) compileChecks(errs *[]string, known func(string, string)) {
-	bad := func(f string, a ...any) { *errs = append(*errs, fmt.Sprintf(f, a...)) }
+func (e *Extractor) compileChecks(errs *[]Message, known func(string, string)) {
+	bad := func(code Code, kv ...any) { *errs = append(*errs, msg(code, kv...)) }
 	ids := map[string]bool{}
 	for i, c := range e.Doc.Checks {
 		where := fmt.Sprintf("checks[%d] %q", i, c.ID)
 		if c.ID == "" || ids[c.ID] {
-			bad("%s: id vacío o repetido", where)
+			bad(CodeExtractDuplicateID, "where", where)
 		}
 		ids[c.ID] = true
 		known(where, c.Code)
 		if c.Code == "" {
-			bad("%s: falta code", where)
+			bad(CodeExtractMissing, "where", where+": ", "field", "code")
 		}
 		cc := compiledCheck{ExtractCheck: c}
 		switch c.Type {
 		case CheckSum:
 			if c.Total == "" || len(c.Parts) == 0 {
-				bad("%s: sum necesita total y parts", where)
+				bad(CodeExtractMissing, "where", where+": sum → ", "field", "total/parts")
 			}
 		case CheckGreater:
 			if c.Left == "" || c.Right == "" {
-				bad("%s: greater necesita left y right", where)
+				bad(CodeExtractMissing, "where", where+": greater → ", "field", "left/right")
 			}
 		case CheckRawPattern:
 			// Se compara sin distinguir mayúsculas: el origen escribe "#N/D" y "#n/d".
 			re, err := compileRE2("(?i)" + c.Pattern)
 			if err != nil || len(c.Fields) == 0 {
-				bad("%s: rawPattern necesita fields y un patrón válido (%v)", where, err)
+				bad(CodeExtractRawPattern, "where", where, "detail", fmt.Sprint(err))
 			}
 			cc.re = re
 		case CheckWholeNumber, CheckNonNegative:
 			if len(c.Fields) == 0 {
-				bad("%s: %s necesita fields", where, c.Type)
+				bad(CodeExtractMissing, "where", where+": "+c.Type+" → ", "field", "fields")
 			}
 		case CheckRange:
 			if c.From == "" || c.To == "" {
-				bad("%s: range necesita from y to", where)
+				bad(CodeExtractMissing, "where", where+": range → ", "field", "from/to")
 			}
 		case CheckWhen:
 			if len(c.All) == 0 {
-				bad("%s: when necesita all", where)
+				bad(CodeExtractMissing, "where", where+": when → ", "field", "all")
 			}
 			for _, cond := range c.All {
 				if cond.Field == "" || (cond.Is != "set" && cond.Is != "unset") {
-					bad("%s: condición inválida (is: set|unset)", where)
+					bad(CodeExtractCondition, "where", where)
 				}
 			}
 		default:
-			bad("%s: tipo %q desconocido", where, c.Type)
+			bad(CodeExtractUnknown, "where", where, "what", "type", "value", c.Type)
 		}
 		e.checks = append(e.checks, cc)
 	}

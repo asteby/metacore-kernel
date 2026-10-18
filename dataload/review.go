@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -83,13 +82,16 @@ type ReviewStore interface {
 	List(ctx context.Context, org string, f ReviewFilter) ([]ReviewEntry, error)
 }
 
+// ReviewSourceName es el nombre de fuente de las corridas ModeReview en el historial.
+const ReviewSourceName = "review"
+
 // Errores de revisión.
 var (
-	ErrReviewNotFound = errors.New("dataload: la fila no está en revisión")
+	ErrReviewNotFound = newErr(CodeReviewNotFound)
 	// ErrReviewStale: la decisión se tomó sobre una versión de la fila que ya no es la vigente.
-	ErrReviewStale = errors.New("dataload: la fila cambió desde que se revisó; decide sobre la versión vigente")
+	ErrReviewStale = newErr(CodeReviewStale)
 	// ErrReviewClosed: la fila ya se aplicó o la resolvió otra corrida.
-	ErrReviewClosed = errors.New("dataload: la fila ya no está abierta a decisión")
+	ErrReviewClosed = newErr(CodeReviewClosed)
 )
 
 func (p *Plan) reviewNotes() []ReviewNote {
@@ -127,18 +129,18 @@ func (r *Runner) holdReviews(ctx context.Context, run Run, plan *Plan) error {
 		}
 		prev, ok, err := r.Reviews.Get(ctx, plan.Org, plan.Entity, row.Key)
 		if err != nil {
-			return fmt.Errorf("dataload: revisión: %w", err)
+			return wrapErr(err, CodeReviewStore)
 		}
 		if ok && prev.Hash == row.Hash && prev.State != ReviewApplied && prev.State != ReviewSuperseded {
 			e.State, e.DecidedBy, e.DecidedAt, e.Note, e.CreatedAt = prev.State, prev.DecidedBy, prev.DecidedAt, prev.Note, prev.CreatedAt
 		}
 		if err := r.Reviews.Put(ctx, e); err != nil {
-			return fmt.Errorf("dataload: revisión: %w", err)
+			return wrapErr(err, CodeReviewStore)
 		}
 	}
 	pending, err := r.Reviews.List(ctx, plan.Org, ReviewFilter{Entity: plan.Entity, State: ReviewPending})
 	if err != nil {
-		return fmt.Errorf("dataload: revisión: %w", err)
+		return wrapErr(err, CodeReviewStore)
 	}
 	seen := map[string]bool{}
 	for _, row := range plan.Rows {
@@ -150,7 +152,7 @@ func (r *Runner) holdReviews(ctx context.Context, run Run, plan *Plan) error {
 		if seen[e.Key] && !inReview[e.Key] {
 			e.State, e.UpdatedAt = ReviewSuperseded, now
 			if err := r.Reviews.Put(ctx, e); err != nil {
-				return fmt.Errorf("dataload: revisión: %w", err)
+				return wrapErr(err, CodeReviewStore)
 			}
 		}
 	}
@@ -171,10 +173,20 @@ type ReviewDecision struct {
 // si una decisión no corresponde a la versión vigente de su fila, no se registra ninguna.
 func (r *Runner) Decide(ctx context.Context, org, actor string, ds []ReviewDecision) ([]ReviewEntry, error) {
 	if r.Reviews == nil {
-		return nil, errors.New("dataload: el runner no tiene ReviewStore")
+		return nil, newErr(CodeNoReviewStore)
 	}
-	if org == "" || actor == "" {
-		return nil, errors.New("dataload: una decisión necesita org y quién decide")
+	entity := ""
+	keys := make([]string, 0, len(ds))
+	for _, d := range ds {
+		keys = append(keys, d.Key)
+		if entity == "" {
+			entity = d.Entity
+		} else if entity != d.Entity {
+			entity = "*" // varias entidades en una misma llamada
+		}
+	}
+	if err := r.authorize(ctx, AuthRequest{Org: org, Actor: actor, Action: ActionReviewDecide, Entity: entity, Keys: keys}); err != nil {
+		return nil, err
 	}
 	var out []ReviewEntry
 	for _, d := range ds {
@@ -184,11 +196,11 @@ func (r *Runner) Decide(ctx context.Context, org, actor string, ds []ReviewDecis
 		}
 		switch {
 		case !ok:
-			return nil, fmt.Errorf("%w: %s/%s", ErrReviewNotFound, d.Entity, d.Key)
+			return nil, newErr(CodeReviewNotFound, "entity", d.Entity, "key", d.Key)
 		case e.State == ReviewApplied || e.State == ReviewSuperseded:
-			return nil, fmt.Errorf("%w: %s (%s)", ErrReviewClosed, d.Key, e.State)
+			return nil, newErr(CodeReviewClosed, "key", d.Key, "state", e.State)
 		case e.Hash != d.Hash:
-			return nil, fmt.Errorf("%w: %s", ErrReviewStale, d.Key)
+			return nil, newErr(CodeReviewStale, "key", d.Key)
 		}
 		e.State = ReviewRejected
 		if d.Approve {
@@ -210,10 +222,17 @@ func (r *Runner) Decide(ctx context.Context, org, actor string, ds []ReviewDecis
 // por identidad y lo ya idéntico no se reescribe. Los medios de la fila se encolan.
 func (r *Runner) ApplyApproved(ctx context.Context, org, actor, entity string) (Run, error) {
 	if r.Reviews == nil {
-		return Run{}, errors.New("dataload: el runner no tiene ReviewStore")
+		return Run{}, newErr(CodeNoReviewStore)
 	}
 	entries, err := r.Reviews.List(ctx, org, ReviewFilter{Entity: entity, State: ReviewApproved})
 	if err != nil {
+		return Run{}, err
+	}
+	keys := make([]string, len(entries))
+	for i, e := range entries {
+		keys[i] = e.Key
+	}
+	if err := r.authorize(ctx, AuthRequest{Org: org, Actor: actor, Action: ActionReviewApply, Entity: entity, Keys: keys}); err != nil {
 		return Run{}, err
 	}
 	h := sha256.New()
@@ -221,14 +240,15 @@ func (r *Runner) ApplyApproved(ctx context.Context, org, actor, entity string) (
 		fmt.Fprintf(h, "%s|%s\n", e.Key, e.Hash)
 	}
 	run := Run{
-		ID: newID(), Org: org, Mode: ModeReview, State: RunRunning, Actor: actor, Source: "revisión", CreatedAt: r.now(), StartedAt: r.now(),
+		ID: newID(), Org: org, Mode: ModeReview, State: RunRunning, Actor: actor, Source: ReviewSourceName, CreatedAt: r.now(), StartedAt: r.now(),
 		Key: RunKey(org, "review", hex.EncodeToString(h.Sum(nil)), ModeReview), InputHash: hex.EncodeToString(h.Sum(nil)),
 	}
 	if len(entries) > 0 {
 		run.Profile, run.ProfileVersion, run.ProfileHash = entries[0].Profile, entries[0].ProfileVersion, entries[0].ProfileHash
 	}
 	fail := func(err error) (Run, error) {
-		run.State, run.Error, run.FinishedAt = RunFailed, err.Error(), r.now()
+		run.State, run.FinishedAt = RunFailed, r.now()
+		run.setError(err)
 		_ = r.Ledger.Save(context.WithoutCancel(ctx), run)
 		return run, err
 	}
@@ -244,7 +264,7 @@ func (r *Runner) ApplyApproved(ctx context.Context, org, actor, entity string) (
 		}
 		existing, err := r.Target.Lookup(ctx, org, entity, keys)
 		if err != nil {
-			return fail(fmt.Errorf("dataload: consulta al destino: %w", err))
+			return fail(wrapErr(err, CodeTargetLookup))
 		}
 		var changes []Change
 		for _, e := range batch {
@@ -262,7 +282,7 @@ func (r *Runner) ApplyApproved(ctx context.Context, org, actor, entity string) (
 		}
 		if len(changes) > 0 {
 			if err := r.Target.Apply(ctx, org, entity, changes); err != nil {
-				return fail(fmt.Errorf("dataload: aplicar filas aprobadas: %w", err))
+				return fail(wrapErr(err, CodeApplyApproved))
 			}
 		}
 		for _, e := range batch {
@@ -274,7 +294,7 @@ func (r *Runner) ApplyApproved(ctx context.Context, org, actor, entity string) (
 			if r.Media != nil && len(e.Media) > 0 {
 				n, err := r.Media.Enqueue(ctx, r.Media.jobsFor(org, entity, run.ID, e.Key, e.Media))
 				if err != nil {
-					return fail(fmt.Errorf("dataload: encolar medios: %w", err))
+					return fail(wrapErr(err, CodeMediaEnqueue))
 				}
 				run.Progress.MediaQueued += n
 			}

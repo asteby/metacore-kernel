@@ -1,7 +1,6 @@
 package dataload
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 )
@@ -14,16 +13,16 @@ func validCleanRule(r string) bool {
 	return knownClean[r]
 }
 
-func cleanRuleError(r string) string {
+func cleanRuleError(r string) Message {
 	if arg, ok := strings.CutPrefix(r, CleanDropLines+":"); ok {
 		if arg == "" {
-			return "drop_lines necesita una expresión"
+			return msg(CodeCleanDropLinesEmpty)
 		}
 		if _, err := regexp.Compile(arg); err != nil {
-			return fmt.Sprintf("drop_lines: expresión inválida %q: %v", arg, err)
+			return msg(CodeCleanDropLinesInvalid, "pattern", arg, "error", err.Error())
 		}
 	}
-	return fmt.Sprintf("regla de limpieza desconocida %q", r)
+	return msg(CodeCleanUnknown, "rule", r)
 }
 
 func dropLines(pattern, s string) string {

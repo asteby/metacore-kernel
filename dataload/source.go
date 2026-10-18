@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"strings"
 
@@ -66,29 +65,29 @@ func NewBundleSource(name string, body []byte, path string) Source {
 	return bytesSource{name, body, func(b []byte) ([]map[string]any, error) {
 		var doc any
 		if err := json.Unmarshal(b, &doc); err != nil {
-			return nil, fmt.Errorf("bundle inválido: %w", err)
+			return nil, wrapErr(err, CodeBundleInvalid)
 		}
 		cur := doc
 		if path != "" {
 			for _, seg := range strings.Split(path, ".") {
 				m, ok := cur.(map[string]any)
 				if !ok {
-					return nil, fmt.Errorf("bundle: %q no es un objeto en la ruta %q", seg, path)
+					return nil, newErr(CodeBundleNotObject, "segment", seg, "path", path)
 				}
 				if cur, ok = m[seg]; !ok {
-					return nil, fmt.Errorf("bundle: no existe %q en la ruta %q", seg, path)
+					return nil, newErr(CodeBundleMissing, "segment", seg, "path", path)
 				}
 			}
 		}
 		arr, ok := cur.([]any)
 		if !ok {
-			return nil, fmt.Errorf("bundle: la ruta %q no es un arreglo", path)
+			return nil, newErr(CodeBundleNotArray, "path", path)
 		}
 		rows := make([]map[string]any, 0, len(arr))
 		for i, it := range arr {
 			m, ok := it.(map[string]any)
 			if !ok {
-				return nil, fmt.Errorf("bundle: el elemento %d no es un objeto", i)
+				return nil, newErr(CodeBundleItemNotObject, "index", i)
 			}
 			rows = append(rows, m)
 		}

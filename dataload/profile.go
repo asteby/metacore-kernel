@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/asteby/metacore-kernel/importer"
@@ -176,7 +175,7 @@ func ParseProfile(b []byte) (Profile, error) {
 	dec := json.NewDecoder(strings.NewReader(string(b)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&p); err != nil {
-		return Profile{}, fmt.Errorf("perfil inválido: %w", err)
+		return Profile{}, wrapErr(err, CodeProfileParse)
 	}
 	if err := p.Validate(); err != nil {
 		return Profile{}, err
@@ -186,42 +185,43 @@ func ParseProfile(b []byte) (Profile, error) {
 
 // Validate revisa los errores de autoría del perfil.
 func (p Profile) Validate() error {
-	var errs []string
+	var errs []Message
+	bad := func(code Code, kv ...any) { errs = append(errs, msg(code, kv...)) }
 	if p.Name == "" {
-		errs = append(errs, "falta name")
+		bad(CodeProfileMissing, "field", "name")
 	}
 	if p.Entity == "" {
-		errs = append(errs, "falta entity")
+		bad(CodeProfileMissing, "field", "entity")
 	}
 	if len(p.Key) == 0 {
-		errs = append(errs, "falta key (identidad natural)")
+		bad(CodeProfileMissingKey)
 	}
 	targets := map[string]bool{}
 	for i, f := range p.Fields {
 		if f.Target == "" || (len(f.From) == 0 && f.Derive == nil) {
-			errs = append(errs, fmt.Sprintf("fields[%d]: faltan target o from", i))
+			bad(CodeProfileFieldIncomplete, "index", i)
 			continue
 		}
 		if f.Derive != nil {
 			if len(f.From) > 0 {
-				errs = append(errs, fmt.Sprintf("%q: con derive no se usa from", f.Target))
+				bad(CodeProfileDeriveFrom, "target", f.Target)
 			}
 			if f.Media {
-				errs = append(errs, fmt.Sprintf("%q: derive y media son excluyentes", f.Target))
+				bad(CodeProfileDeriveMedia, "target", f.Target)
 			}
-			if err := f.Derive.validate(); err != nil {
-				errs = append(errs, fmt.Sprintf("%q: %v", f.Target, err))
+			if m := f.Derive.validate(); m != nil {
+				bad(CodeProfileFieldProblem, "target", f.Target, "detail", *m)
 			}
 		}
 		if targets[f.Target] {
-			errs = append(errs, fmt.Sprintf("target %q repetido", f.Target))
+			bad(CodeProfileTargetDup, "target", f.Target)
 		}
 		targets[f.Target] = true
 		if f.Media && f.Transform != "" {
-			errs = append(errs, fmt.Sprintf("%q: Media y Transform son excluyentes", f.Target))
+			bad(CodeProfileMediaTransform, "target", f.Target)
 		}
 		if strings.HasPrefix(f.Transform, "media_url") {
-			errs = append(errs, fmt.Sprintf("%q: usa media:true; las transformaciones media_url descargan al planificar", f.Target))
+			bad(CodeProfileMediaURL, "target", f.Target)
 		}
 		for _, r := range append(append(append([]string{}, p.Clean...), f.Clean...), f.Finish...) {
 			if !validCleanRule(r) {
@@ -231,22 +231,18 @@ func (p Profile) Validate() error {
 	}
 	for _, o := range p.ApplyOrder {
 		if !targets[o.Field] || len(o.Rank) == 0 {
-			errs = append(errs, fmt.Sprintf("applyOrder %q: el campo debe existir en fields y rank no puede ir vacío", o.Field))
+			bad(CodeProfileApplyOrder, "field", o.Field)
 		}
 	}
 	for _, k := range p.Key {
 		if !targets[k] {
-			errs = append(errs, fmt.Sprintf("key %q no es un target de fields", k))
+			bad(CodeProfileKeyNotTarget, "key", k)
 		}
 	}
 	for _, spec := range p.importSpec().Validate() {
-		errs = append(errs, spec.Error())
+		bad(CodeProfileImportSpec, "detail", spec.Error())
 	}
-	if len(errs) > 0 {
-		sort.Strings(errs)
-		return fmt.Errorf("perfil %q: %s", p.Name, strings.Join(errs, "; "))
-	}
-	return nil
+	return detailsErr(errs, CodeProfileInvalid, "name", p.Name)
 }
 
 // Hash es la huella estable del perfil resuelto (JSON canónico: los mapas se
@@ -366,17 +362,17 @@ func (p Profile) Resolve(o *Overrides) (Profile, error) {
 	out.Fields = kept
 	for t := range o.Rename {
 		if _, ok := out.field(t); !ok {
-			return Profile{}, fmt.Errorf("override: rename de %q, que no existe en el perfil %q", t, p.Name)
+			return Profile{}, newErr(CodeOverrideUnknownField, "op", "rename", "target", t, "profile", p.Name)
 		}
 	}
 	for t := range o.CleanAdd {
 		if _, ok := out.field(t); !ok {
-			return Profile{}, fmt.Errorf("override: cleanAdd de %q, que no existe en el perfil %q", t, p.Name)
+			return Profile{}, newErr(CodeOverrideUnknownField, "op", "cleanAdd", "target", t, "profile", p.Name)
 		}
 	}
 	for t := range o.ValuesAdd {
 		if _, ok := out.field(t); !ok {
-			return Profile{}, fmt.Errorf("override: valuesAdd de %q, que no existe en el perfil %q", t, p.Name)
+			return Profile{}, newErr(CodeOverrideUnknownField, "op", "valuesAdd", "target", t, "profile", p.Name)
 		}
 	}
 	for _, nf := range o.Fields {

@@ -45,14 +45,14 @@ func parseTemplate(s string) (*template, error) {
 		}
 		j := strings.IndexByte(s[i:], '}')
 		if j < 0 {
-			return nil, fmt.Errorf("plantilla con { sin cerrar: %q", s)
+			return nil, newErr(CodeTemplateUnclosed, "template", s)
 		}
 		body := s[i+1 : i+j]
 		s = s[i+j+1:]
 		segs := strings.Split(body, "|")
 		p := tmplPart{name: strings.TrimSpace(segs[0])}
 		if p.name == "" {
-			return nil, fmt.Errorf("plantilla con {} vacío")
+			return nil, newErr(CodeTemplateEmpty)
 		}
 		for _, f := range segs[1:] {
 			f = strings.TrimSpace(f)
@@ -61,10 +61,10 @@ func parseTemplate(s string) (*template, error) {
 				flt = tmplFilter{name: f[:k], arg: strings.TrimSpace(f[k+1 : len(f)-1])}
 			}
 			if !filterNames[flt.name] {
-				return nil, fmt.Errorf("filtro %q desconocido en la plantilla", flt.name)
+				return nil, newErr(CodeTemplateFilter, "filter", flt.name)
 			}
 			if flt.name == "span" && flt.arg == "" {
-				return nil, fmt.Errorf("el filtro span necesita el otro campo: span(campo)")
+				return nil, newErr(CodeTemplateSpan)
 			}
 			p.filters = append(p.filters, flt)
 		}
@@ -185,7 +185,9 @@ type rowState struct {
 	codes  map[string]bool
 }
 
-func (s *rowState) issue(code, field, detail string) {
+// issue anota un motivo. custom es el detail que escribió el autor del documento
+// (gana si viene); def es el motivo por omisión del motor.
+func (s *rowState) issue(code, field, custom string, def Message) {
 	if code == "" {
 		return
 	}
@@ -195,10 +197,15 @@ func (s *rowState) issue(code, field, detail string) {
 	}
 	s.seen[key] = true
 	s.codes[code] = true
-	if detail == "" {
-		detail = code
+	it := ReviewItem{Code: code, Field: field, Severity: s.e.severity[code], Detail: custom}
+	switch {
+	case custom != "":
+	case def.Code != "":
+		it.Detail, it.DetailCode, it.DetailParams = def.String(), def.Code, def.Params
+	default:
+		it.Detail = code
 	}
-	s.items = append(s.items, ReviewItem{Code: code, Field: field, Severity: s.e.severity[code], Detail: detail})
+	s.items = append(s.items, it)
 }
 
 func (s *rowState) get(name string) (string, bool) {
@@ -380,7 +387,7 @@ func (s *rowState) runRule(r *compiledRule) {
 		}
 		for _, ri := range r.ReviewIf {
 			if l, ok := s.vars[ri.Into].([]string); ok && ri.When == "listLengthGt1" && len(l) > 1 {
-				s.issue(ri.Code, ri.Into, ri.Detail)
+				s.issue(ri.Code, ri.Into, ri.Detail, Message{})
 			}
 		}
 		if r.Consume {
@@ -455,7 +462,7 @@ func (s *rowState) runRule(r *compiledRule) {
 		}
 		if text != "" {
 			s.vars[r.intoTxt] = text
-			s.issue(r.UnknownCode, r.intoTxt, "el texto no está en el vocabulario del documento")
+			s.issue(r.UnknownCode, r.intoTxt, "", msg(CodeReviewNotInVocab))
 		}
 	case RuleSet:
 		for _, req := range r.Requires {
@@ -549,11 +556,11 @@ func (s *rowState) runEntity(r *compiledRule) {
 	}
 	switch {
 	case detail == "":
-		s.issue(g.SuspectCode, "entity", "se reconoció la entidad pero no su detalle")
+		s.issue(g.SuspectCode, "entity", "", msg(CodeReviewEntityNoDetail))
 	case g.MaxTokens > 0 && len(strings.Fields(detail)) > g.MaxTokens:
-		s.issue(g.SuspectCode, "entity", "detalle demasiado largo: "+detail)
+		s.issue(g.SuspectCode, "entity", "", msg(CodeReviewDetailTooLong, "detail", detail))
 	case r.suspect != nil && r.suspect.MatchString(detail):
-		s.issue(g.SuspectCode, "entity", "detalle con calificadores: "+detail)
+		s.issue(g.SuspectCode, "entity", "", msg(CodeReviewDetailQualified, "detail", detail))
 	}
 	if ev.anyRe != nil {
 		if m := ev.anyRe.FindStringSubmatch(detail); m != nil {
@@ -564,7 +571,7 @@ func (s *rowState) runEntity(r *compiledRule) {
 				}
 			}
 			if !allowed {
-				s.issue(g.AmbiguousCode, "entity", "otra entidad aparece dentro del detalle")
+				s.issue(g.AmbiguousCode, "entity", "", msg(CodeReviewEntityAmbiguous))
 			}
 		}
 	}
@@ -578,7 +585,7 @@ func (s *rowState) applyCategories() {
 	src, _ := s.get(c.Source)
 	cc, ok := s.e.cats[src]
 	if !ok || cc.ID == nil {
-		s.issue(c.UnmappedCode, c.Into, fmt.Sprintf("categoría de origen sin equivalente: %s", orEmpty(src)))
+		s.issue(c.UnmappedCode, c.Into, "", unmappedCategory(src))
 		if ok {
 			s.applySet(cc.Set)
 		}
@@ -594,11 +601,11 @@ func (s *rowState) applyCategories() {
 	s.applySet(cc.Set)
 }
 
-func orEmpty(s string) string {
-	if s == "" {
-		return "(vacía)"
+func unmappedCategory(src string) Message {
+	if src == "" {
+		return msg(CodeReviewCategoryEmpty)
 	}
-	return s
+	return msg(CodeReviewCategoryUnmapped, "category", src)
 }
 
 func (s *rowState) applySet(m map[string]any) {
@@ -624,30 +631,30 @@ func (s *rowState) runCheck(c compiledCheck) {
 			sum += n
 		}
 		if math.Abs(sum-total) > c.Tolerance {
-			s.issue(c.Code, c.Total, orDetail(detail, "el total no coincide con la suma de sus partes"))
+			s.issue(c.Code, c.Total, detail, msg(CodeReviewSumMismatch))
 		}
 	case CheckGreater:
 		l, ok1 := s.number(c.Left)
 		r, ok2 := s.number(c.Right)
 		if ok1 && ok2 && !(l > r) {
-			s.issue(c.Code, c.Left, orDetail(detail, c.Left+" no es mayor que "+c.Right))
+			s.issue(c.Code, c.Left, detail, msg(CodeReviewNotGreater, "left", c.Left, "right", c.Right))
 		}
 	case CheckRawPattern:
 		for _, f := range c.Fields {
 			if cell, ok := s.rawCell(f); ok && c.re.MatchString(strings.TrimSpace(cell)) {
-				s.issue(c.Code, f, orDetail(detail, "el origen no trae el dato"))
+				s.issue(c.Code, f, detail, msg(CodeReviewRawMissing))
 			}
 		}
 	case CheckWholeNumber:
 		for _, f := range c.Fields {
 			if n, ok := s.number(f); ok && n != math.Trunc(n) {
-				s.issue(c.Code, f, orDetail(detail, "el valor no es un entero"))
+				s.issue(c.Code, f, detail, msg(CodeReviewNotInteger))
 			}
 		}
 	case CheckNonNegative:
 		for _, f := range c.Fields {
 			if n, ok := s.number(f); ok && n < 0 {
-				s.issue(c.Code, f, orDetail(detail, "el valor es negativo"))
+				s.issue(c.Code, f, detail, msg(CodeReviewNegative))
 			}
 		}
 	case CheckRange:
@@ -667,7 +674,7 @@ func (s *rowState) runCheck(c compiledCheck) {
 			invalid = true
 		}
 		if invalid {
-			s.issue(c.Code, c.From, orDetail(detail, fmt.Sprintf("%v-%v fuera de rango o invertido", from, to)))
+			s.issue(c.Code, c.From, detail, msg(CodeReviewRange, "from", from, "to", to))
 		}
 	case CheckWhen:
 		for _, cond := range c.All {
@@ -675,7 +682,7 @@ func (s *rowState) runCheck(c compiledCheck) {
 				return
 			}
 		}
-		s.issue(c.Code, c.Field, orDetail(detail, c.ID))
+		s.issue(c.Code, c.Field, orDetail(detail, c.ID), Message{})
 	}
 }
 
@@ -891,9 +898,7 @@ func (e *Extractor) CheckDataset(rows []RowFacts) []DatasetIssue {
 				continue
 			}
 			for _, i := range idxs {
-				out = append(out, DatasetIssue{Index: i, Item: ReviewItem{
-					Code: c.Code, Field: c.Field, Severity: e.severity[c.Code], Detail: orDetail(c.Detail, "valor repetido en el archivo"),
-				}})
+				out = append(out, DatasetIssue{Index: i, Item: e.uniqueItem(c)})
 			}
 		}
 	}
@@ -904,4 +909,14 @@ func (e *Extractor) CheckDataset(rows []RowFacts) []DatasetIssue {
 		return out[a].Item.Code < out[b].Item.Code
 	})
 	return out
+}
+
+// uniqueItem es el motivo de una comprobación unique para una fila repetida.
+func (e *Extractor) uniqueItem(c DatasetCheck) ReviewItem {
+	it := ReviewItem{Code: c.Code, Field: c.Field, Severity: e.severity[c.Code], Detail: c.Detail}
+	if it.Detail == "" {
+		m := msg(CodeReviewRepeated)
+		it.Detail, it.DetailCode = m.String(), m.Code
+	}
+	return it
 }

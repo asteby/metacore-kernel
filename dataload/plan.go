@@ -132,7 +132,7 @@ const DefaultLookupChunk = 500
 // valida y compara contra el destino. Nunca escribe y nunca descarga medios.
 func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 	if req.Org == "" {
-		return nil, fmt.Errorf("dataload: falta org")
+		return nil, newErr(CodeRequestIncomplete)
 	}
 	prof, err := req.Profile.Resolve(req.Overrides)
 	if err != nil {
@@ -140,7 +140,7 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 	}
 	rows, err := req.Source.Rows(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("dataload: no se pudo leer %s: %w", req.Source.Name(), err)
+		return nil, wrapErr(err, CodeSourceRead, "source", req.Source.Name())
 	}
 	if len(rows) > prof.maxRows() {
 		return nil, importer.ErrTooManyRows{Got: len(rows), Limit: prof.maxRows()}
@@ -183,7 +183,7 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 		key, ok := identity(prof.Key, rec)
 		if !ok {
 			rp.Action = ActionInvalid
-			rp.Issues = []importer.RowIssue{{Row: rp.Row, Message: "falta la identidad (" + strings.Join(prof.Key, ", ") + ")"}}
+			rp.Issues = []importer.RowIssue{rowIssue(rp.Row, "", CodeRowMissingIdentity, "keys", strings.Join(prof.Key, ", "))}
 			plan.add(rp)
 			continue
 		}
@@ -191,7 +191,7 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 		rp.Hash = recordHash(rec, media)
 		if first, dup := seen[key]; dup {
 			rp.Action = ActionDuplicate
-			rp.Issues = []importer.RowIssue{{Row: rp.Row, Message: fmt.Sprintf("identidad repetida; se usa la fila %d", first)}}
+			rp.Issues = []importer.RowIssue{rowIssue(rp.Row, "", CodeRowDuplicate, "first", first)}
 			plan.add(rp)
 			continue
 		}
@@ -223,7 +223,7 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 		}
 		got, err := req.Target.Lookup(ctx, req.Org, prof.Entity, keys[lo:min(lo+chunk, len(keys))])
 		if err != nil {
-			return nil, fmt.Errorf("dataload: consulta al destino: %w", err)
+			return nil, wrapErr(err, CodeTargetLookup)
 		}
 		for k, v := range got {
 			existing[k] = v

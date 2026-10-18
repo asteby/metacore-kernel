@@ -77,6 +77,9 @@ func (o *origin) Hits(path string) int {
 func (o *origin) Flaky(path string, failures int32) { o.flaky.Store(path, &failures) }
 func (o *origin) URL(path string) string            { return o.Server.URL + path }
 
+// allowAll autoriza todo (las pruebas de autorización usan el suyo).
+var allowAll = AuthorizerFunc(func(context.Context, AuthRequest) error { return nil })
+
 // rig arma todo el sistema en memoria.
 type rig struct {
 	clk      *clock
@@ -104,7 +107,7 @@ func newRig(t *testing.T) *rig {
 			Policy:     importer.MediaPolicy{MaxAttempts: 1},
 		}},
 	}
-	r.runner = &Runner{Ledger: r.ledger, Target: r.target, Media: r.queue, Now: r.clk.Now, BatchSize: 2}
+	r.runner = &Runner{Ledger: r.ledger, Target: r.target, Media: r.queue, Now: r.clk.Now, BatchSize: 2, Authorizer: allowAll}
 	t.Cleanup(r.runner.Close)
 	return r
 }

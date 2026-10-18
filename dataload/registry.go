@@ -2,8 +2,6 @@ package dataload
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -62,9 +60,9 @@ type StoredProfile struct {
 
 // Errores del registro.
 var (
-	ErrProfileNotFound = errors.New("dataload: perfil no encontrado")
+	ErrProfileNotFound = newErr(CodeProfileNotFound)
 	// ErrProfileVersionExists: la versión ya existe con otro contenido; las versiones no se reescriben.
-	ErrProfileVersionExists = errors.New("dataload: esa versión del perfil ya existe con otro contenido; publica una versión nueva")
+	ErrProfileVersionExists = newErr(CodeProfileVersionExists)
 )
 
 // ProfileStore es la persistencia de versiones de perfiles.
@@ -107,41 +105,41 @@ func (sp StoredProfile) contentHash() string {
 // Publish valida (incluida la resolución completa con su base) y guarda una
 // versión nueva. Publicar de nuevo exactamente lo mismo es no-op.
 func (g *Registry) Publish(ctx context.Context, sp StoredProfile) (StoredProfile, error) {
-	var errs []string
-	bad := func(f string, a ...any) { errs = append(errs, fmt.Sprintf(f, a...)) }
+	var errs []Message
+	bad := func(code Code, kv ...any) { errs = append(errs, msg(code, kv...)) }
 	if sp.Name == "" || sp.Version == "" {
-		bad("faltan name o version")
+		bad(CodeRegistryMissingName)
 	}
 	switch {
 	case sp.Profile != nil && sp.Base != nil:
-		bad("Profile y Base son excluyentes")
+		bad(CodeRegistryProfileAndBase)
 	case sp.Profile == nil && sp.Base == nil:
-		bad("falta Profile o Base")
+		bad(CodeRegistryNoProfileOrBase)
 	}
 	if sp.Profile != nil {
 		if sp.Profile.Name != sp.Name || sp.Profile.Version != sp.Version {
-			bad("el perfil es %s@%s pero se publica como %s@%s", sp.Profile.Name, sp.Profile.Version, sp.Name, sp.Version)
+			bad(CodeRegistryNameMismatch, "profile", sp.Profile.Name+"@"+sp.Profile.Version, "published", sp.Name+"@"+sp.Version)
 		}
 		if sp.Overrides != nil {
-			bad("un perfil completo no lleva Overrides; usa Base para derivar")
+			bad(CodeRegistryFullWithOverrides)
 		}
 	}
 	if sp.Base != nil {
 		if sp.Base.Name == "" || sp.Base.Version == "" {
-			bad("Base necesita name y version exacta")
+			bad(CodeRegistryBaseIncomplete)
 		}
 		if sp.Base.Org != "" && sp.Base.Org != sp.Org {
-			bad("la base de una organización es suya o del catálogo base, no de %q", sp.Base.Org)
+			bad(CodeRegistryBaseForeign, "org", sp.Base.Org)
 		}
 		if *sp.Base == sp.ProfileKey {
-			bad("una versión no puede ser su propia base")
+			bad(CodeRegistryBaseSelf)
 		}
 	}
 	if sp.Overrides != nil && sp.Overrides.Org != "" && sp.Overrides.Org != sp.Org {
-		bad("los Overrides son de la organización %q, no de %q", sp.Overrides.Org, sp.Org)
+		bad(CodeRegistryOverridesForeign, "got", sp.Overrides.Org, "want", sp.Org)
 	}
-	if len(errs) > 0 {
-		return StoredProfile{}, fmt.Errorf("dataload: perfil %s: %v", sp.ProfileKey, errs)
+	if err := detailsErr(errs, CodeRegistryInvalid, "key", sp.ProfileKey.String()); err != nil {
+		return StoredProfile{}, err
 	}
 	sp.Fingerprint = sp.contentHash()
 	if prev, ok, err := g.Store.Get(ctx, sp.Org, sp.Name, sp.Version); err != nil {
@@ -150,7 +148,7 @@ func (g *Registry) Publish(ctx context.Context, sp StoredProfile) (StoredProfile
 		if prev.Fingerprint == sp.Fingerprint {
 			return prev, nil
 		}
-		return StoredProfile{}, fmt.Errorf("%w: %s", ErrProfileVersionExists, sp.ProfileKey)
+		return StoredProfile{}, newErr(CodeProfileVersionExists, "key", sp.ProfileKey.String())
 	}
 	// Resolver antes de guardar: no se publica nada que no se pueda usar.
 	if _, err := g.resolveRecord(ctx, sp, map[ProfileKey]bool{}, 0); err != nil {
@@ -195,7 +193,7 @@ func (g *Registry) Resolve(ctx context.Context, org, name, version string) (Reso
 		}
 	}
 	if !ok {
-		return ResolvedProfile{}, fmt.Errorf("%w: %s", ErrProfileNotFound, ProfileKey{Org: org, Name: name, Version: version})
+		return ResolvedProfile{}, newErr(CodeProfileNotFound, "key", ProfileKey{Org: org, Name: name, Version: version}.String())
 	}
 	return g.resolveRecord(ctx, sp, map[ProfileKey]bool{}, 0)
 }
@@ -203,10 +201,10 @@ func (g *Registry) Resolve(ctx context.Context, org, name, version string) (Reso
 // resolveRecord resuelve sp siguiendo su cadena de bases (cada una a su versión exacta).
 func (g *Registry) resolveRecord(ctx context.Context, sp StoredProfile, seen map[ProfileKey]bool, depth int) (ResolvedProfile, error) {
 	if depth > maxProfileDepth {
-		return ResolvedProfile{}, fmt.Errorf("dataload: la cadena de bases de %s es demasiado larga", sp.ProfileKey)
+		return ResolvedProfile{}, newErr(CodeRegistryChainTooLong, "key", sp.ProfileKey.String())
 	}
 	if seen[sp.ProfileKey] {
-		return ResolvedProfile{}, fmt.Errorf("dataload: ciclo de bases en %s", sp.ProfileKey)
+		return ResolvedProfile{}, newErr(CodeRegistryCycle, "key", sp.ProfileKey.String())
 	}
 	seen[sp.ProfileKey] = true
 
@@ -224,7 +222,7 @@ func (g *Registry) resolveRecord(ctx context.Context, sp StoredProfile, seen map
 			return ResolvedProfile{}, err
 		}
 		if !ok {
-			return ResolvedProfile{}, fmt.Errorf("%w: la base %s de %s", ErrProfileNotFound, *sp.Base, sp.ProfileKey)
+			return ResolvedProfile{}, newErr(CodeProfileBaseNotFound, "base", sp.Base.String(), "key", sp.ProfileKey.String())
 		}
 		parent, err := g.resolveRecord(ctx, base, seen, depth+1)
 		if err != nil {
@@ -232,7 +230,7 @@ func (g *Registry) resolveRecord(ctx context.Context, sp StoredProfile, seen map
 		}
 		p, err := parent.Profile.Resolve(sp.Overrides)
 		if err != nil {
-			return ResolvedProfile{}, fmt.Errorf("dataload: %s: %w", sp.ProfileKey, err)
+			return ResolvedProfile{}, wrapErr(err, CodeRegistryAt, "key", sp.ProfileKey.String())
 		}
 		out.Profile, out.Chain, out.OverridesHash = p, append(out.Chain, parent.Chain...), parent.OverridesHash
 		if parent.Extract != nil {
@@ -251,7 +249,7 @@ func (g *Registry) resolveRecord(ctx context.Context, sp StoredProfile, seen map
 			return ResolvedProfile{}, err
 		}
 		if err := e.CheckProfile(out.Profile); err != nil {
-			return ResolvedProfile{}, fmt.Errorf("dataload: %s: %w", sp.ProfileKey, err)
+			return ResolvedProfile{}, wrapErr(err, CodeRegistryAt, "key", sp.ProfileKey.String())
 		}
 		out.Extract = e
 	}
@@ -287,7 +285,7 @@ func (s *MemoryProfileStore) Put(_ context.Context, sp StoredProfile) error {
 			if r.Fingerprint == sp.Fingerprint {
 				return nil
 			}
-			return fmt.Errorf("%w: %s", ErrProfileVersionExists, sp.ProfileKey)
+			return newErr(CodeProfileVersionExists, "key", sp.ProfileKey.String())
 		}
 	}
 	s.recs = append(s.recs, sp)

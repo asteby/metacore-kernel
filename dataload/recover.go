@@ -2,8 +2,6 @@ package dataload
 
 import (
 	"context"
-	"errors"
-	"fmt"
 )
 
 // Recuperación de corridas huérfanas. Una corrida en 'running' tiene un
@@ -18,7 +16,7 @@ import (
 // pierde el cerco del ledger (ErrLeaseLost) y se retira sin tocar el historial.
 
 // ErrNoLeaseLedger: Recover necesita un Ledger con arrendamientos.
-var ErrNoLeaseLedger = errors.New("dataload: el ledger no soporta arrendamientos (LeaseLedger)")
+var ErrNoLeaseLedger = newErr(CodeNoLeaseLedger)
 
 // RequestResolver reconstruye la solicitud de una corrida interrumpida: el
 // perfil resuelto (p. ej. con Registry.Resolve), la extracción y la fuente.
@@ -43,7 +41,7 @@ func (r *Runner) Recover(ctx context.Context, org string, resolve RequestResolve
 		return RecoverReport{}, ErrNoLeaseLedger
 	}
 	if resolve == nil {
-		return RecoverReport{}, errors.New("dataload: Recover necesita un RequestResolver")
+		return RecoverReport{}, newErr(CodeRecoverNoResolver)
 	}
 	claimed, err := ll.ClaimStale(ctx, org, r.now(), r.owner(), r.leaseTTL(), 100)
 	if err != nil {
@@ -71,10 +69,10 @@ func (r *Runner) Recover(ctx context.Context, org string, resolve RequestResolve
 func (r *Runner) rebuild(ctx context.Context, run Run, resolve RequestResolver) (RunRequest, Source, error) {
 	req, err := resolve(ctx, run)
 	if err != nil {
-		return RunRequest{}, nil, fmt.Errorf("no se pudo reconstruir la solicitud: %w", err)
+		return RunRequest{}, nil, wrapErr(err, CodeRecoverRebuild)
 	}
 	if req.Org != run.Org {
-		return RunRequest{}, nil, fmt.Errorf("la solicitud es de la organización %q, no de %q", req.Org, run.Org)
+		return RunRequest{}, nil, newErr(CodeRecoverOrgMismatch, "got", req.Org, "want", run.Org)
 	}
 	prof, src, in, err := r.prepare(ctx, req)
 	if err != nil {
@@ -86,11 +84,11 @@ func (r *Runner) rebuild(ctx context.Context, run Run, resolve RequestResolver) 
 	}
 	switch {
 	case prof.Hash() != run.ProfileHash || exHash != run.ExtractHash:
-		return RunRequest{}, nil, errors.New("el perfil o la extracción ya no son los de la corrida")
+		return RunRequest{}, nil, newErr(CodeRecoverProfileChanged)
 	case in != run.InputHash:
-		return RunRequest{}, nil, errors.New("la entrada ya no es la de la corrida")
+		return RunRequest{}, nil, newErr(CodeRecoverInputChanged)
 	case RunKey(req.Org, fingerprint(prof.Hash(), req.Extract), in, ModeApply) != run.Key:
-		return RunRequest{}, nil, errors.New("la llave de idempotencia no coincide")
+		return RunRequest{}, nil, newErr(CodeRecoverKeyMismatch)
 	}
 	return req, src, nil
 }
@@ -100,7 +98,7 @@ func (r *Runner) rebuild(ctx context.Context, run Run, resolve RequestResolver) 
 // donde quedó porque el diff deja unchanged lo ya escrito.
 func (r *Runner) abandon(ctx context.Context, ll LeaseLedger, run Run, cause error) Run {
 	run.State, run.FinishedAt = RunFailed, r.now()
-	run.Error = "interrumpida y no se pudo reanudar: " + cause.Error()
+	run.setError(wrapErr(cause, CodeRecoverAbandoned))
 	_ = ll.SaveLeased(context.WithoutCancel(ctx), run, r.owner(), r.now(), r.leaseTTL())
 	return run
 }

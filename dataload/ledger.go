@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"time"
 
 	"github.com/asteby/metacore-kernel/importer"
@@ -99,7 +98,11 @@ type Run struct {
 	// Review lista (hasta MaxRunIssues) las filas en espera de decisión con su
 	// motivo; el conteo completo está en Progress.Review.
 	Review []ReviewNote `json:"review,omitempty"`
-	Error  string       `json:"error,omitempty"`
+	// Error es el texto del fallo (idioma por omisión); ErrorCode y ErrorParams lo
+	// identifican de forma estable para traducirlo o filtrarlo.
+	Error       string `json:"error,omitempty"`
+	ErrorCode   Code   `json:"errorCode,omitempty"`
+	ErrorParams Params `json:"errorParams,omitempty"`
 	// Lease dice qué proceso tiene la corrida (solo con un LeaseLedger). Lo
 	// administra el ledger; el ejecutor no lo escribe con Save.
 	Lease *RunLease `json:"lease,omitempty"`
@@ -114,7 +117,7 @@ type Run struct {
 }
 
 // ErrRunNotFound se devuelve cuando la corrida no existe en esa organización.
-var ErrRunNotFound = errors.New("dataload: corrida no encontrada")
+var ErrRunNotFound = newErr(CodeRunNotFound)
 
 // Ledger es el historial persistente de corridas; lo implementa ops/addons.
 type Ledger interface {
@@ -130,7 +133,7 @@ type Ledger interface {
 
 // ErrLeaseLost indica que otro proceso recuperó la corrida: quien la ejecutaba
 // debe soltarla sin escribir más en el historial.
-var ErrLeaseLost = errors.New("dataload: la corrida ya la tiene otro proceso")
+var ErrLeaseLost = newErr(CodeLeaseLost)
 
 // LeaseLedger es un Ledger que además sabe de arrendamientos. Es opcional: sin
 // él, el Runner funciona como antes y no hay recuperación (Recover devuelve

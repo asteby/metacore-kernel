@@ -3,7 +3,6 @@ package dataload
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -42,6 +41,13 @@ type Runner struct {
 	// para aplicarlas después con Decide y ApplyApproved. Sin él, esas filas solo
 	// se reportan en el plan y en la corrida.
 	Reviews ReviewStore
+	// Authorizer decide quién puede decidir y aplicar filas en revisión (acciones
+	// ActionReviewDecide y ActionReviewApply). Sin él esas operaciones se niegan
+	// (ErrNoAuthorizer) salvo con AllowAnyActor.
+	Authorizer Authorizer
+	// AllowAnyActor permite operar sin Authorizer (solo exige org y actor). Es
+	// para pruebas y desarrollo; en producción ops debe dar un Authorizer.
+	AllowAnyActor bool
 	// BatchSize de escritura al destino; default 200.
 	BatchSize int
 	// Now es el reloj; default time.Now.
@@ -122,7 +128,7 @@ func NewRowsSource(name string, rows []map[string]any) Source { return rowsSourc
 
 func (r *Runner) prepare(ctx context.Context, req RunRequest) (Profile, Source, string, error) {
 	if req.Org == "" || req.Source == nil {
-		return Profile{}, nil, "", errors.New("dataload: faltan org o source")
+		return Profile{}, nil, "", newErr(CodeRequestIncomplete)
 	}
 	prof, err := req.Profile.Resolve(req.Overrides)
 	if err != nil {
@@ -135,7 +141,7 @@ func (r *Runner) prepare(ctx context.Context, req RunRequest) (Profile, Source, 
 	}
 	rows, err := req.Source.Rows(ctx)
 	if err != nil {
-		return Profile{}, nil, "", fmt.Errorf("dataload: no se pudo leer %s: %w", req.Source.Name(), err)
+		return Profile{}, nil, "", wrapErr(err, CodeSourceRead, "source", req.Source.Name())
 	}
 	return prof, rowsSource{req.Source.Name(), rows}, inputHash(rows), nil
 }
@@ -167,7 +173,8 @@ func (r *Runner) DryRun(ctx context.Context, req RunRequest) (*Plan, Run, error)
 	plan, err := BuildPlan(ctx, PlanRequest{Org: req.Org, Profile: req.Profile, Overrides: req.Overrides, Source: src, Target: r.Target, Extract: req.Extract})
 	run.FinishedAt = r.now()
 	if err != nil {
-		run.State, run.Error = RunFailed, err.Error()
+		run.State = RunFailed
+		run.setError(err)
 		_ = r.Ledger.Save(ctx, run)
 		return nil, run, err
 	}
@@ -285,7 +292,7 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 		} else {
 			run.State = RunFailed
 		}
-		run.Error = err.Error()
+		run.setError(err)
 		save()
 	}
 	if ll != nil {
@@ -326,7 +333,7 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 		return
 	}
 	if req.FailOnInvalid && (run.Progress.Invalid > 0 || run.Progress.Duplicates > 0) {
-		fail(fmt.Errorf("dataload: %d filas inválidas y %d duplicadas; no se aplicó nada", run.Progress.Invalid, run.Progress.Duplicates))
+		fail(newErr(CodeRunInvalidRows, "invalid", run.Progress.Invalid, "duplicates", run.Progress.Duplicates))
 		return
 	}
 	// Reanudación: lo que escribió el dueño anterior ya aparece como unchanged en
@@ -352,7 +359,7 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 		}
 		hi := min(lo+r.batch(), len(changes))
 		if err := r.Target.Apply(ctx, req.Org, plan.Entity, changes[lo:hi]); err != nil {
-			fail(fmt.Errorf("dataload: aplicar lote %d-%d: %w", lo+1, hi, err))
+			fail(wrapErr(err, CodeApplyBatch, "from", lo+1, "to", hi))
 			return
 		}
 		for _, c := range changes[lo:hi] {
@@ -390,7 +397,7 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 		if len(jobs) > 0 {
 			n, err := r.Media.Enqueue(ctx, jobs)
 			if err != nil {
-				fail(fmt.Errorf("dataload: encolar medios: %w", err))
+				fail(wrapErr(err, CodeMediaEnqueue))
 				return
 			}
 			run.Progress.MediaQueued = n
@@ -469,4 +476,14 @@ func (r *Runner) Close() {
 	}
 	r.mu.Unlock()
 	r.wg.Wait()
+}
+
+// setError deja el fallo en la corrida: texto por omisión y, si viene del motor,
+// su código y parámetros.
+func (run *Run) setError(err error) {
+	run.Error = err.Error()
+	run.ErrorCode, run.ErrorParams = "", nil
+	if m, ok := ErrorMessage(err); ok {
+		run.ErrorCode, run.ErrorParams = m.Code, m.Params
+	}
 }

@@ -3,7 +3,6 @@ package dataload
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"sort"
 	"strings"
@@ -312,7 +311,7 @@ func (s *MemoryBackupStore) Open(_ context.Context, name string) (io.ReadCloser,
 	defer s.mu.Unlock()
 	b, ok := s.Objects[name]
 	if !ok {
-		return nil, errors.New("no existe")
+		return nil, newErr(CodeObjectNotFound, "name", name)
 	}
 	return io.NopCloser(bytes.NewReader(b)), nil
 }
@@ -365,7 +364,7 @@ func (s *MemoryJobStore) Update(_ context.Context, j MediaJob) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.jobs[j.ID]; !ok {
-		return errors.New("trabajo desconocido")
+		return newErr(CodeJobNotFound, "id", j.ID)
 	}
 	s.jobs[j.ID] = j
 	return nil
