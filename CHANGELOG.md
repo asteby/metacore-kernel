@@ -9,6 +9,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Estándar de pagos, fases K2 (ledger) y K3 (conciliación)** ([RFC §16](docs/RFC-PAYMENTS-STANDARD.md)).
+  Paquete nuevo `payments/ledger`: escritor único de `commerce_payments`,
+  `commerce_payment_events` (dedupe único por proveedor + evento),
+  `commerce_refunds`, `commerce_payment_holds` (un hold vivo por documento,
+  token guardado como hash) y `commerce_payment_reconcile_leases`, con
+  `Migrate`/`Schema` idempotentes (Postgres y SQLite). `StartCharge` (hold +
+  replay bajo bloqueo del documento, luego `terminal.create` o `session` del
+  proveedor, o efectivo de cajón), `Refresh`, `Cancel` (siempre re-lee),
+  `Observe` (solo el proveedor dueño del pago; `payments.Observe`, dedupe,
+  monto distinto = anomalía, corrección auditada con una segunda lectura),
+  `CreateRefund`/`SettleRefund` y `Document`. Cada cambio aplicado publica
+  `commerce.payments.confirmed` con el proveedor como emisor; cada anomalía va
+  a un `AnomalySink` y al evento `kernel.payments.anomaly`.
+  `HostQuerier` expone el ledger a los addons como contratos `payments.*`
+  sobre el import `capability_query` existente (sin cambio de ABI ni de
+  esquema del manifest). `Reconciler` (K3): re-lee pagos abiertos, cancela y
+  marca `stuck` los vencidos, confirma anomalías, lista
+  `commerce.payments.reconcile` por proveedor (huérfanos), con lease por org.
+- `capability.Query.Caller`: la llave del addon que consulta, estampada por el
+  host (el import `capability_query` la toma de la invocación, nunca del guest).
+
+### Added
+
 - **Estándar de pagos de la plataforma, fase K1: contrato** ([RFC](docs/RFC-PAYMENTS-STANDARD.md)).
   Paquete nuevo `payments` (Go puro, sin base de datos): los registros canónicos
   `Payment`, `Refund` y `PaymentEvent`, el ciclo de vida normalizado con la

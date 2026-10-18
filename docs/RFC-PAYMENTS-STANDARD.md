@@ -379,3 +379,62 @@ Retrocompatibilidad durante la migración: un proveedor sin migrar sigue funcion
 - ❓ Marketplace v2 (cobro centralizado y liquidación).
 - Contrato fiscal de nota de crédito (Fase 4), que necesita 3.7.
 - Disputas y contracargos: hoy `kind: dispute` llega en el evento, pero el ciclo de vida de la disputa (evidencia, plazos) no tiene contrato.
+
+## 16. Implementación de K2 (ledger) y K3 (conciliación)
+
+Paquete `payments/ledger`. El host lo construye con `ledger.New(ctx, db, Config{...})`:
+
+| Campo de `Config` | Qué conecta el host |
+|---|---|
+| `Providers` | El querier de capacidades de proveedores (el de ops, **no** el `HostQuerier`: así no hay recursión). |
+| `Publish` | El bus de eventos. Publica `commerce.payments.confirmed` con el proveedor como emisor y `kernel.payments.anomaly` como `kernel`. |
+| `Anomalies` | La cola de revisión y las notificaciones (en ops: `rule_flags` de B8 y el aviso por rol). |
+| `IsPaymentsProvider` | Dice si un addon provee alguna capacidad `commerce.payments.*` en la org. |
+
+**Escritor único.** Ningún addon escribe en las tablas `commerce_*`:
+
+- Los **canales** cobran, consultan, cancelan y reembolsan con `payments.*`. El ledger llama al proveedor y registra su respuesta.
+- Los **proveedores** solo reportan con `payments.observe` lo que su webhook re-leyó, y solo sobre sus propios pagos: el host fuerza `provider = caller`.
+
+**API para addons.** Son contratos implementados por el host. Se llaman con el import `capability_query` de siempre y se autorizan con la concesión `capability:query` del manifest. No hay import nuevo ni cambio de esquema.
+
+| Llave | Quién la usa | Qué hace |
+|---|---|---|
+| `payments.hold.acquire` / `payments.hold.release` | POS, caja, kiosko, tienda | Toma o renueva el hold de un documento (409 `in_payment` si es ajeno). El token se devuelve una sola vez y se guarda como hash. Un guest no puede forzar la liberación. |
+| `payments.charge.start` | Canales | Bajo el bloqueo del documento: `CheckCharge` del hold, `CheckReplay`, y un monto ≤ lo que falta. Luego `terminal.create` o `session` fijados al proveedor, o efectivo de cajón (`paid` en el acto). Un timeout queda `pending` con `indeterminate: true`. |
+| `payments.charge.refresh` | Canales (sondeo de la UI) | Re-lee con `commerce.payments.status` y registra. |
+| `payments.charge.cancel` | Canales | `commerce.payments.cancel`; si responde `cancelling` lo registra, y **siempre** re-lee (la carrera con el comprador puede terminar en `paid`). |
+| `payments.document.get` | Canales, `returns` | Pagos, reembolsos, `net_paid`, `open` y el hold vivo (sin token). |
+| `payments.refund.create` / `payments.refund.settle` | `returns`, POS, caja | `CheckRefund` bajo bloqueo del pago. Al método original se llama `commerce.payments.refund`; monedero y efectivo quedan `pending` hasta que el canal los liquida. `credit_note_id` cierra la NC. |
+| `payments.observe` | Solo proveedores | Registra un estado re-leído por el webhook del proveedor. |
+
+**Reglas que aplica `Observe`:**
+
+- Dedupe por `(org, provider, event_id)`, con el id del proveedor o uno derivado.
+- `payments.Observe` decide entre aplicar, ignorar o marcar anomalía.
+- Una captura con **otro monto o moneda** es la anomalía `amount_mismatch` y nunca se aplica.
+- Una anomalía confirmada por una segunda lectura de conciliación con el mismo estado se aplica como corrección auditada (evento `corrected`), salvo `amount_mismatch`.
+- Un pago desconocido es `orphan`.
+- Un webhook de reembolso con `amount_refunded` marca `succeeded` los reembolsos pendientes que cubre, del más antiguo al más nuevo.
+- Cuando el documento queda pagado completo (contra el `document_total` que se guardó al cobrar), el hold vivo pasa a `consumed`.
+
+**Concurrencia:** hay un `pg_advisory_xact_lock` por documento para holds y cobros, `SELECT … FOR UPDATE` sobre el pago en `Observe` y en los reembolsos, y los índices únicos de §2.4. Hay pruebas en Postgres con `-race`: 8 cobros simultáneos del mismo documento dejan **un** pago, y 8 holds simultáneos dejan uno.
+
+**K3, `Reconciler`.** `Run(ctx, every)` hace lo siguiente en cada vuelta y por organización:
+
+- Toma un lease en `commerce_payment_reconcile_leases`, para que nunca haya dos réplicas sobre la misma org.
+- Re-lee los pagos abiertos que no se han revisado en `MinAge` (30 s).
+- Si un pago venció (`expires_at`, o más de `StuckAfter` = 30 min sin expiración), pide cancelarlo, lo re-lee y lo marca `stuck` si el proveedor lo mantiene abierto.
+- Re-lee los pagos con anomalía (la segunda lectura corrige).
+- Lista `commerce.payments.reconcile` por proveedor en una ventana de 2 h. Las ventanas se traslapan a propósito y el dedupe vuelve idempotente el proceso; lo desconocido es huérfano.
+
+Al final guarda el `Report` en el lease (`last_report`).
+
+**Cadena de versiones:**
+
+1. El kernel #507 (K1) entra primero.
+2. Después este PR (K2/K3), apilado sobre #507.
+3. Luego el tag minor del kernel.
+4. Al final, ops quita el `replace` o pseudo-versión temporal y fija el tag.
+
+El hub y manifestcheck no necesitan nada: las llaves `payments.*` son datos.
