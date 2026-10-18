@@ -16,7 +16,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   reglas de limpieza y traducciones de valores a un campo (`Field.Finish` corre siempre después), y las reglas nuevas `sanitize_html` (lista blanca, sin atributos
   salvo `href` http/https), `collapse_blank_lines`, `auto_paragraphs` y la
   parametrizada `drop_lines:<regex>`. Todo declarativo: ningún origen concreto
-  vive en el kernel. `dataload.IsGTIN` se exporta.
+  vive en el kernel. `dataload.IsGTIN` se exporta. `Profile.ApplyOrder` escribe en el destino
+  en un orden por rangos (p. ej. padres antes que variantes) sin alterar el orden
+  del plan.
 
 - **dataload: carga masiva genérica con respaldo de medios** — nuevo paquete
   `dataload`. `Profile` declarativo (JSON, rechaza campos desconocidos): mapeo

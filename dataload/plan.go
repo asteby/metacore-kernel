@@ -85,6 +85,8 @@ type Plan struct {
 	Counts         map[Action]int `json:"counts"`
 	IgnoredColumns int            `json:"ignoredColumns"`
 	MediaURLs      int            `json:"mediaUrls"`
+
+	applyOrder []OrderRule
 }
 
 // PlanRequest reúne lo necesario para planificar.
@@ -117,7 +119,7 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 	plan := &Plan{
 		Org: req.Org, Entity: prof.Entity, Profile: prof.Name, ProfileVersion: prof.Version,
 		ProfileHash: prof.Hash(), Source: req.Source.Name(), InputHash: inputHash(rows),
-		Counts: map[Action]int{},
+		Counts: map[Action]int{}, applyOrder: prof.ApplyOrder,
 	}
 
 	seen := map[string]int{}
@@ -195,13 +197,40 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 
 func (p *Plan) add(rp RowPlan) { p.Rows = append(p.Rows, rp) }
 
-// Changes devuelve las escrituras del plan (create y update), en orden de fila.
+// Changes devuelve las escrituras del plan (create y update), en orden de fila
+// y, si el perfil declara ApplyOrder, ordenadas por esas reglas (estable).
 func (p *Plan) Changes() []Change {
 	var out []Change
 	for _, r := range p.Rows {
 		if r.Action == ActionCreate || r.Action == ActionUpdate {
 			out = append(out, Change{Key: r.Key, Action: r.Action, Record: r.Record, Hash: r.Hash})
 		}
+	}
+	if len(p.applyOrder) > 0 {
+		rank := func(c Change) []int {
+			rs := make([]int, len(p.applyOrder))
+			for i, o := range p.applyOrder {
+				rs[i] = len(o.Rank)
+				v, _ := getPath(c.Record, o.Field)
+				s := fmt.Sprint(v)
+				for j, want := range o.Rank {
+					if s == want {
+						rs[i] = j
+						break
+					}
+				}
+			}
+			return rs
+		}
+		sort.SliceStable(out, func(a, b int) bool {
+			ra, rb := rank(out[a]), rank(out[b])
+			for i := range ra {
+				if ra[i] != rb[i] {
+					return ra[i] < rb[i]
+				}
+			}
+			return false
+		})
 	}
 	return out
 }

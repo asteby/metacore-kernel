@@ -1,6 +1,7 @@
 package dataload
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -162,5 +163,32 @@ func TestFinishRunsAfterCleanAdd(t *testing.T) {
 	rec, _, _, _ := r.buildRecord(r.importSpec(), map[string]any{"ID": "1", "D": "Texto bueno\\nAviso legal\\nOtra línea"}, nil, 0)
 	if rec["d"] != "<p>Texto bueno<br>Otra línea</p>" {
 		t.Fatalf("rec = %q", rec["d"])
+	}
+}
+
+func TestApplyOrder_ParentsBeforeVariantsWithoutChangingPlanOrder(t *testing.T) {
+	p := Profile{Name: "o", Entity: "e", Key: []string{"id"},
+		Fields:     []Field{{Target: "id", From: []string{"ID"}}, {Target: "kind", From: []string{"Tipo"}}},
+		ApplyOrder: []OrderRule{{Field: "kind", Rank: []string{"simple", "variable", "variant"}}}}
+	rows := []map[string]any{
+		{"ID": "1", "Tipo": "variant"}, {"ID": "2", "Tipo": "variable"}, {"ID": "3", "Tipo": "variant"},
+		{"ID": "4", "Tipo": "simple"}, {"ID": "5", "Tipo": "otro"}, {"ID": "6", "Tipo": "variable"},
+	}
+	plan, err := BuildPlan(context.Background(), PlanRequest{Org: "o", Profile: p, Source: NewRowsSource("t", rows), Target: NewMemoryTarget()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Rows[0].Key != "1" {
+		t.Fatalf("el plan debe conservar el orden del archivo: %v", plan.Rows[0].Key)
+	}
+	var got []string
+	for _, c := range plan.Changes() {
+		got = append(got, c.Key)
+	}
+	if want := "4,2,6,1,3,5"; strings.Join(got, ",") != want {
+		t.Fatalf("orden = %v, quería %s", got, want)
+	}
+	if err := (Profile{Name: "o", Entity: "e", Key: []string{"id"}, Fields: p.Fields, ApplyOrder: []OrderRule{{Field: "nada", Rank: []string{"a"}}}}).Validate(); err == nil {
+		t.Fatal("applyOrder sobre un campo inexistente debía fallar")
 	}
 }

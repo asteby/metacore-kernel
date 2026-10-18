@@ -38,6 +38,18 @@ type Profile struct {
 	IgnoreHeaders []string `json:"ignoreHeaders,omitempty"`
 	// MaxRows tope de filas por corrida; 0 = DefaultMaxRows.
 	MaxRows int `json:"maxRows,omitempty"`
+	// ApplyOrder ordena la aplicación al destino sin alterar el plan (que sigue
+	// el orden del archivo): p. ej. {"field":"kind","rank":["simple","variable","variant"]}
+	// escribe los padres antes que sus variantes aunque el archivo los intercale.
+	// Los valores fuera de rank van al final; el orden dentro de un mismo rank es
+	// el del archivo.
+	ApplyOrder []OrderRule `json:"applyOrder,omitempty"`
+}
+
+// OrderRule ordena por el valor de un campo destino según una lista de rangos.
+type OrderRule struct {
+	Field string   `json:"field"`
+	Rank  []string `json:"rank"`
 }
 
 // DefaultMaxRows es el tope de filas por corrida si el perfil no dice otro.
@@ -215,6 +227,11 @@ func (p Profile) Validate() error {
 			if !validCleanRule(r) {
 				errs = append(errs, cleanRuleError(r))
 			}
+		}
+	}
+	for _, o := range p.ApplyOrder {
+		if !targets[o.Field] || len(o.Rank) == 0 {
+			errs = append(errs, fmt.Sprintf("applyOrder %q: el campo debe existir en fields y rank no puede ir vacío", o.Field))
 		}
 	}
 	for _, k := range p.Key {
