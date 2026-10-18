@@ -49,6 +49,9 @@ type Runner struct {
 	// AllowAnyActor permite operar sin Authorizer (solo exige org y actor). Es
 	// para pruebas y desarrollo; en producción ops debe dar un Authorizer.
 	AllowAnyActor bool
+	// PageSize: filas por página al planificar una StreamSource; 0 = DefaultPageSize.
+	// Se redondea a un múltiplo de BatchSize.
+	PageSize int
 	// BatchSize de escritura al destino; default 200.
 	BatchSize int
 	// Now es el reloj; default time.Now.
@@ -140,6 +143,15 @@ func (r *Runner) prepare(ctx context.Context, req RunRequest) (Profile, Source, 
 			return Profile{}, nil, "", err
 		}
 	}
+	// Una StreamSource no se carga: basta su huella (una pasada) para la llave de
+	// idempotencia; el plan la vuelve a recorrer.
+	if ss, ok := req.Source.(StreamSource); ok {
+		in, _, err := scanInput(ctx, ss, prof.maxStreamRows())
+		if err != nil {
+			return Profile{}, nil, "", err
+		}
+		return prof, ss, in, nil
+	}
 	rows, err := req.Source.Rows(ctx)
 	if err != nil {
 		return Profile{}, nil, "", wrapErr(err, CodeSourceRead, "source", req.Source.Name())
@@ -171,7 +183,12 @@ func (r *Runner) DryRun(ctx context.Context, req RunRequest) (*Plan, Run, error)
 	}
 	run := r.newRun(req, prof, src, in, ModeDryRun)
 	run.State, run.StartedAt = RunRunning, r.now()
-	plan, err := BuildPlan(ctx, PlanRequest{Org: req.Org, Profile: req.Profile, Overrides: req.Overrides, Source: src, Target: r.Target, Extract: req.Extract})
+	var plan *Plan
+	if _, ok := src.(StreamSource); ok {
+		plan, err = r.dryRunStream(ctx, RunRequest{Org: req.Org, Profile: req.Profile, Overrides: req.Overrides, Source: src, Extract: req.Extract}, &run)
+	} else {
+		plan, err = BuildPlan(ctx, PlanRequest{Org: req.Org, Profile: req.Profile, Overrides: req.Overrides, Source: src, Target: r.Target, Extract: req.Extract})
+	}
 	run.FinishedAt = r.now()
 	if err != nil {
 		run.State = RunFailed
@@ -179,7 +196,10 @@ func (r *Runner) DryRun(ctx context.Context, req RunRequest) (*Plan, Run, error)
 		_ = r.Ledger.Save(ctx, run)
 		return nil, run, err
 	}
-	run.State, run.PlanHash, run.Progress, run.Issues, run.Review = RunSucceeded, plan.PlanHash, plan.progress(), plan.issues(), plan.reviewNotes()
+	run.State, run.PlanHash, run.Progress = RunSucceeded, plan.PlanHash, plan.progress()
+	if plan.Rows != nil {
+		run.Issues, run.Review = plan.issues(), plan.reviewNotes()
+	}
 	return plan, run, r.Ledger.Save(ctx, run)
 }
 
@@ -324,6 +344,21 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 		return
 	}
 
+	stop := func(err error) {
+		if !errors.Is(err, errStopped) {
+			fail(err)
+		}
+	}
+	if ss, ok := src.(StreamSource); ok {
+		if err := r.executeStream(ctx, req, ss, &run, base, marker, save); err != nil {
+			stop(err)
+			return
+		}
+		run.State, run.FinishedAt = RunSucceeded, r.now()
+		save()
+		return
+	}
+
 	plan, err := BuildPlan(ctx, PlanRequest{Org: req.Org, Profile: req.Profile, Overrides: req.Overrides, Source: src, Target: r.Target, Extract: req.Extract})
 	if err != nil {
 		fail(err)
@@ -338,23 +373,10 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 		fail(newErr(CodeRunInvalidRows, "invalid", run.Progress.Invalid, "duplicates", run.Progress.Duplicates))
 		return
 	}
-	cp := Checkpoint{}
-	if run.Checkpoint != nil {
-		cp = *run.Checkpoint
-	}
-	// Lotes que el dueño anterior escribió después de su último checkpoint: sus
-	// marcas dicen cuántas filas creó y actualizó (si el destino las guarda).
-	if marker != nil && run.Checkpoint != nil {
-		marks, err := marker.ApplyMarks(ctx, req.Org, run.ID, cp.Batches)
-		if err != nil {
-			fail(wrapErr(err, CodeTargetMarks))
-			return
-		}
-		for _, m := range latestMarks(marks) {
-			n := m.Created + m.Updated
-			base.Done, base.Created, base.Updated = base.Done+n, base.Created+m.Created, base.Updated+m.Updated
-			cp.Batches, cp.Rows, cp.LastKey, cp.Recovered = m.Batch, cp.Rows+n, m.LastKey, cp.Recovered+n
-		}
+	w, err := r.newBatchWriter(ctx, req.Org, plan.Entity, &run, &base, marker, save)
+	if err != nil {
+		fail(err)
+		return
 	}
 	// Reanudación: lo que escribió el dueño anterior ya aparece como unchanged en
 	// este plan; se suma al avance y se quita de unchanged.
@@ -366,44 +388,10 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 	if !save() {
 		return
 	}
-
-	changes := plan.Changes()
-	for lo := 0; lo < len(changes); lo += r.batch() {
-		if err := ctx.Err(); err != nil {
-			fail(contextError(ctx, err))
-			return
-		}
-		hi := min(lo+r.batch(), len(changes))
-		mark := ApplyMark{RunID: run.ID, Batch: cp.Batches + 1, Generation: cp.Resumes, LastKey: changes[hi-1].Key}
-		for _, c := range changes[lo:hi] {
-			if c.Action == ActionCreate {
-				mark.Created++
-			} else {
-				mark.Updated++
-			}
-		}
-		var err error
-		if marker != nil {
-			err = marker.ApplyMarked(ctx, req.Org, plan.Entity, mark, changes[lo:hi])
-		} else {
-			err = r.Target.Apply(ctx, req.Org, plan.Entity, changes[lo:hi])
-		}
-		if err != nil {
-			fail(wrapErr(err, CodeApplyBatch, "from", lo+1, "to", hi))
-			return
-		}
-		run.Progress.Done += hi - lo
-		run.Progress.Created += mark.Created
-		run.Progress.Updated += mark.Updated
-		cp.Batches++
-		cp.Rows, cp.LastKey, cp.UpdatedAt = run.Progress.Done, changes[hi-1].Key, r.now()
-		saved := cp
-		run.Checkpoint = &saved
-		if !save() {
-			return
-		}
+	if err := w.write(plan.Changes()); err != nil {
+		stop(err)
+		return
 	}
-
 	if err := ctx.Err(); err != nil {
 		fail(contextError(ctx, err))
 		return
@@ -412,25 +400,122 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 	// Medios de TODAS las filas válidas, también las unchanged: encolar es
 	// idempotente y así una corrida interrumpida entre escribir y encolar se
 	// recupera sola. Las filas en revisión no encolan nada hasta que se aprueben.
-	if r.Media != nil {
-		var jobs []MediaJob
-		for _, row := range plan.Rows {
-			if row.Action == ActionInvalid || row.Action == ActionDuplicate || row.Action == ActionReview {
-				continue
-			}
-			jobs = append(jobs, r.Media.jobsFor(req.Org, plan.Entity, run.ID, row.Key, row.Media)...)
-		}
-		if len(jobs) > 0 {
-			n, err := r.Media.Enqueue(ctx, jobs)
-			if err != nil {
-				fail(wrapErr(err, CodeMediaEnqueue))
-				return
-			}
-			run.Progress.MediaQueued = n
-		}
+	n, err := r.enqueueMedia(ctx, req.Org, plan.Entity, run.ID, plan.Rows, nil)
+	if err != nil {
+		fail(err)
+		return
 	}
+	run.Progress.MediaQueued = n
 	run.State, run.FinishedAt = RunSucceeded, r.now()
 	save()
+}
+
+// errStopped: la corrida se soltó porque otro proceso la tomó (ya no se escribe
+// nada). Es interno: nunca llega a quien llama.
+var errStopped error = internalErr("stopped")
+
+// internalErr es una señal interna del motor, nunca un mensaje para personas.
+type internalErr string
+
+func (e internalErr) Error() string { return "dataload: " + string(e) }
+
+// batchWriter escribe cambios al destino por lotes, con marca de aplicación (si
+// el destino la soporta) y checkpoint después de cada lote.
+type batchWriter struct {
+	r       *Runner
+	ctx     context.Context
+	org     string
+	entity  string
+	run     *Run
+	cp      Checkpoint
+	marker  MarkingTarget
+	save    func() bool
+	written int // cambios escritos por esta ejecución (para los mensajes de lote)
+}
+
+// newBatchWriter prepara el checkpoint de la corrida y, si es una reanudación con
+// marcas, suma a base lo que el dueño anterior escribió después de su último
+// checkpoint.
+func (r *Runner) newBatchWriter(ctx context.Context, org, entity string, run *Run, base *Progress, marker MarkingTarget, save func() bool) (*batchWriter, error) {
+	w := &batchWriter{r: r, ctx: ctx, org: org, entity: entity, run: run, marker: marker, save: save}
+	if run.Checkpoint != nil {
+		w.cp = *run.Checkpoint
+	}
+	if marker != nil && run.Checkpoint != nil {
+		marks, err := marker.ApplyMarks(ctx, org, run.ID, w.cp.Batches)
+		if err != nil {
+			return nil, wrapErr(err, CodeTargetMarks)
+		}
+		for _, m := range latestMarks(marks) {
+			n := m.Created + m.Updated
+			base.Done, base.Created, base.Updated = base.Done+n, base.Created+m.Created, base.Updated+m.Updated
+			w.cp.Batches, w.cp.Rows, w.cp.LastKey, w.cp.Recovered = m.Batch, w.cp.Rows+n, m.LastKey, w.cp.Recovered+n
+		}
+	}
+	return w, nil
+}
+
+// write aplica changes en lotes de BatchSize. errStopped si la corrida se soltó.
+func (w *batchWriter) write(changes []Change) error {
+	r, run := w.r, w.run
+	for lo := 0; lo < len(changes); lo += r.batch() {
+		if err := w.ctx.Err(); err != nil {
+			return contextError(w.ctx, err)
+		}
+		hi := min(lo+r.batch(), len(changes))
+		mark := ApplyMark{RunID: run.ID, Batch: w.cp.Batches + 1, Generation: w.cp.Resumes, LastKey: changes[hi-1].Key}
+		for _, c := range changes[lo:hi] {
+			if c.Action == ActionCreate {
+				mark.Created++
+			} else {
+				mark.Updated++
+			}
+		}
+		var err error
+		if w.marker != nil {
+			err = w.marker.ApplyMarked(w.ctx, w.org, w.entity, mark, changes[lo:hi])
+		} else {
+			err = r.Target.Apply(w.ctx, w.org, w.entity, changes[lo:hi])
+		}
+		if err != nil {
+			return wrapErr(err, CodeApplyBatch, "from", w.written+lo+1, "to", w.written+hi)
+		}
+		run.Progress.Done += hi - lo
+		run.Progress.Created += mark.Created
+		run.Progress.Updated += mark.Updated
+		w.cp.Batches++
+		w.cp.Rows, w.cp.LastKey, w.cp.UpdatedAt = run.Progress.Done, changes[hi-1].Key, r.now()
+		saved := w.cp
+		run.Checkpoint = &saved
+		if !w.save() {
+			return errStopped
+		}
+	}
+	w.written += len(changes)
+	return nil
+}
+
+// enqueueMedia encola los medios de las filas válidas que no esperan revisión
+// (only, si no es nil, acota cuáles). Devuelve cuántos trabajos eran nuevos.
+func (r *Runner) enqueueMedia(ctx context.Context, org, entity, runID string, rows []RowPlan, only func(RowPlan) bool) (int, error) {
+	if r.Media == nil {
+		return 0, nil
+	}
+	var jobs []MediaJob
+	for _, row := range rows {
+		if row.Action == ActionInvalid || row.Action == ActionDuplicate || row.Action == ActionReview || (only != nil && !only(row)) {
+			continue
+		}
+		jobs = append(jobs, r.Media.jobsFor(org, entity, runID, row.Key, row.Media)...)
+	}
+	if len(jobs) == 0 {
+		return 0, nil
+	}
+	n, err := r.Media.Enqueue(ctx, jobs)
+	if err != nil {
+		return 0, wrapErr(err, CodeMediaEnqueue)
+	}
+	return n, nil
 }
 
 // contextError devuelve la causa de cancelación si hay una (p. ej. ErrLeaseLost).

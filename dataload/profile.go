@@ -37,6 +37,9 @@ type Profile struct {
 	IgnoreHeaders []string `json:"ignoreHeaders,omitempty"`
 	// MaxRows tope de filas por corrida; 0 = DefaultMaxRows.
 	MaxRows int `json:"maxRows,omitempty"`
+	// MaxStreamRows tope de filas por corrida con una StreamSource (que no se
+	// carga a memoria); 0 = DefaultMaxStreamRows.
+	MaxStreamRows int `json:"maxStreamRows,omitempty"`
 	// ApplyOrder ordena la aplicación al destino sin alterar el plan (que sigue
 	// el orden del archivo): p. ej. {"field":"kind","rank":["simple","variable","variant"]}
 	// escribe los padres antes que sus variantes aunque el archivo los intercale.
@@ -53,6 +56,9 @@ type OrderRule struct {
 
 // DefaultMaxRows es el tope de filas por corrida si el perfil no dice otro.
 const DefaultMaxRows = 50000
+
+// DefaultMaxStreamRows es el tope de filas con una StreamSource si el perfil no dice otro.
+const DefaultMaxStreamRows = 5_000_000
 
 // Field mapea una o más columnas de la fuente a un campo destino.
 type Field struct {
@@ -251,6 +257,13 @@ func (p Profile) Hash() string {
 	b, _ := json.Marshal(p)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+func (p Profile) maxStreamRows() int {
+	if p.MaxStreamRows > 0 {
+		return p.MaxStreamRows
+	}
+	return DefaultMaxStreamRows
 }
 
 func (p Profile) maxRows() int {

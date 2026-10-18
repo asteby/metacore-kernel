@@ -11,6 +11,7 @@ const (
 	CodeSourceLine          Code = "dataload.source.line"
 	CodeSourceLineNotObject Code = "dataload.source.line_not_object"
 	CodeSourceLineTooLong   Code = "dataload.source.line_too_long"
+	CodeSourceChanged       Code = "dataload.source.changed"
 	CodeSourceReopen        Code = "dataload.source.reopen"
 	CodeBundleInvalid       Code = "dataload.bundle.invalid"
 	CodeBundleNotObject     Code = "dataload.bundle.not_object"

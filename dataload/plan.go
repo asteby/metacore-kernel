@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
 	"github.com/asteby/metacore-kernel/importer"
+	"github.com/asteby/metacore-kernel/modelbase"
 )
 
 // Action es lo que el plan hará con una fila.
@@ -162,6 +164,8 @@ const DefaultLookupChunk = 500
 
 // BuildPlan lee la fuente, aplica el perfil (con los overrides de la org),
 // valida y compara contra el destino. Nunca escribe y nunca descarga medios.
+// Tiene todo el archivo en memoria (tope Profile.MaxRows); para archivos más
+// grandes está StreamPlan, con la misma semántica.
 func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 	if req.Org == "" {
 		return nil, newErr(CodeRequestIncomplete)
@@ -182,15 +186,9 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 			return nil, err
 		}
 	}
-	spec := prof.importSpec()
-	plan := &Plan{
-		Org: req.Org, Entity: prof.Entity, Profile: prof.Name, ProfileVersion: prof.Version,
-		ProfileHash: prof.Hash(), Source: req.Source.Name(), InputHash: inputHash(rows),
-		Counts: map[Action]int{}, applyOrder: prof.ApplyOrder,
-	}
-	if req.Extract != nil {
-		plan.ExtractHash = req.Extract.Hash()
-	}
+	pl := newPlanner(req, prof)
+	plan := pl.newPlan(req.Source.Name())
+	plan.InputHash = inputHash(rows)
 
 	seen := map[string]int{}
 	var keys []string
@@ -198,37 +196,16 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		rp := RowPlan{Row: i + 1}
-		rec, media, ignored, issues := prof.buildRecord(spec, raw, nil, i)
+		rp, ignored := pl.planRow(i, raw)
 		plan.IgnoredColumns += ignored
-		if len(issues) > 0 {
-			for j := range issues {
-				issues[j].Row = rp.Row
+		if rp.Action == "" {
+			if first, dup := seen[rp.Key]; dup {
+				rp.markDuplicate(first)
+			} else {
+				seen[rp.Key] = rp.Row
+				keys = append(keys, rp.Key)
 			}
-			rp.Action, rp.Issues = ActionInvalid, issues
-			plan.add(rp)
-			continue
 		}
-		if req.Extract != nil {
-			rp.Review = req.Extract.Apply(prof, raw, rec).Review
-		}
-		key, ok := identity(prof.Key, rec)
-		if !ok {
-			rp.Action = ActionInvalid
-			rp.Issues = []importer.RowIssue{rowIssue(rp.Row, "", CodeRowMissingIdentity, "keys", strings.Join(prof.Key, ", "))}
-			plan.add(rp)
-			continue
-		}
-		rp.Key, rp.Record, rp.Media = key, rec, media
-		rp.Hash = recordHash(rec, media)
-		if first, dup := seen[key]; dup {
-			rp.Action = ActionDuplicate
-			rp.Issues = []importer.RowIssue{rowIssue(rp.Row, "", CodeRowDuplicate, "first", first)}
-			plan.add(rp)
-			continue
-		}
-		seen[key] = rp.Row
-		keys = append(keys, key)
 		plan.add(rp)
 	}
 
@@ -244,8 +221,79 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 		}
 	}
 
+	existing, err := pl.lookup(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
+	h := sha256.New()
+	for i := range plan.Rows {
+		plan.count(&plan.Rows[i], existing, h)
+	}
+	plan.PlanHash = hex.EncodeToString(h.Sum(nil))
+	return plan, nil
+}
+
+// planner reúne lo que comparten BuildPlan y StreamPlan para planificar una
+// fila: la misma función produce el mismo resultado en los dos caminos.
+type planner struct {
+	req  PlanRequest
+	prof Profile
+	spec modelbase.ImportSpec
+}
+
+func newPlanner(req PlanRequest, prof Profile) *planner {
+	return &planner{req: req, prof: prof, spec: prof.importSpec()}
+}
+
+func (pl *planner) newPlan(source string) *Plan {
+	p := &Plan{
+		Org: pl.req.Org, Entity: pl.prof.Entity, Profile: pl.prof.Name, ProfileVersion: pl.prof.Version,
+		ProfileHash: pl.prof.Hash(), Source: source, Counts: map[Action]int{}, applyOrder: pl.prof.ApplyOrder,
+	}
+	if pl.req.Extract != nil {
+		p.ExtractHash = pl.req.Extract.Hash()
+	}
+	return p
+}
+
+// planRow arma la fila i (0-based): registro, medios, motivos de la etapa
+// extract e identidad. Action queda en invalid o vacía (por decidir contra el
+// destino); la detección de duplicados y las comprobaciones de conjunto las
+// hace quien recorre el archivo.
+func (pl *planner) planRow(i int, raw map[string]any) (RowPlan, int) {
+	rp := RowPlan{Row: i + 1}
+	rec, media, ignored, issues := pl.prof.buildRecord(pl.spec, raw, nil, i)
+	if len(issues) > 0 {
+		for j := range issues {
+			issues[j].Row = rp.Row
+		}
+		rp.Action, rp.Issues = ActionInvalid, issues
+		return rp, ignored
+	}
+	if pl.req.Extract != nil {
+		rp.Review = pl.req.Extract.Apply(pl.prof, raw, rec).Review
+	}
+	key, ok := identity(pl.prof.Key, rec)
+	if !ok {
+		rp.Action = ActionInvalid
+		rp.Issues = []importer.RowIssue{rowIssue(rp.Row, "", CodeRowMissingIdentity, "keys", strings.Join(pl.prof.Key, ", "))}
+		return rp, ignored
+	}
+	rp.Key, rp.Record, rp.Media = key, rec, media
+	rp.Hash = recordHash(rec, media)
+	return rp, ignored
+}
+
+// markDuplicate marca la fila como repetida de la fila first.
+func (rp *RowPlan) markDuplicate(first int) {
+	rp.Action = ActionDuplicate
+	rp.Issues = []importer.RowIssue{rowIssue(rp.Row, "", CodeRowDuplicate, "first", first)}
+}
+
+// lookup consulta al destino por tandas de LookupChunk identidades.
+func (pl *planner) lookup(ctx context.Context, keys []string) (map[string]Existing, error) {
 	existing := map[string]Existing{}
-	chunk := req.LookupChunk
+	chunk := pl.req.LookupChunk
 	if chunk <= 0 {
 		chunk = DefaultLookupChunk
 	}
@@ -253,7 +301,7 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		got, err := req.Target.Lookup(ctx, req.Org, prof.Entity, keys[lo:min(lo+chunk, len(keys))])
+		got, err := pl.req.Target.Lookup(ctx, pl.req.Org, pl.prof.Entity, keys[lo:min(lo+chunk, len(keys))])
 		if err != nil {
 			return nil, wrapErr(err, CodeTargetLookup)
 		}
@@ -261,39 +309,38 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 			existing[k] = v
 		}
 	}
-	plan.Counts = map[Action]int{}
-	h := sha256.New()
-	for i := range plan.Rows {
-		rp := &plan.Rows[i]
-		if rp.Action == "" {
-			ex, found := existing[rp.Key]
-			switch {
-			case !found:
-				rp.Action = ActionCreate
-			case ex.Hash != "" && ex.Hash == rp.Hash:
+	return existing, nil
+}
+
+// count decide la acción de una fila pendiente contra lo existente, la suma a
+// la huella del plan y a los conteos.
+func (p *Plan) count(rp *RowPlan, existing map[string]Existing, h io.Writer) {
+	if rp.Action == "" {
+		ex, found := existing[rp.Key]
+		switch {
+		case !found:
+			rp.Action = ActionCreate
+		case ex.Hash != "" && ex.Hash == rp.Hash:
+			rp.Action = ActionUnchanged
+		default:
+			rp.Diffs = diffRecords(ex.Record, rp.Record)
+			if ex.Hash == "" && len(rp.Diffs) == 0 {
 				rp.Action = ActionUnchanged
-			default:
-				rp.Diffs = diffRecords(ex.Record, rp.Record)
-				if ex.Hash == "" && len(rp.Diffs) == 0 {
-					rp.Action = ActionUnchanged
-				} else {
-					rp.Action = ActionUpdate
-				}
+			} else {
+				rp.Action = ActionUpdate
 			}
-			// Una fila con motivo bloqueante no se escribe sola. Si el destino ya la
-			// tiene idéntica (p. ej. se aprobó antes) no hay nada que decidir.
-			if rp.Blocking() && rp.Action != ActionUnchanged {
-				rp.Outcome, rp.Action = rp.Action, ActionReview
-			}
-			fmt.Fprintf(h, "%s|%s|%s\n", rp.Key, rp.Action, rp.Hash)
 		}
-		plan.Counts[rp.Action]++
-		for _, u := range rp.Media {
-			plan.MediaURLs += len(u)
+		// Una fila con motivo bloqueante no se escribe sola. Si el destino ya la
+		// tiene idéntica (p. ej. se aprobó antes) no hay nada que decidir.
+		if rp.Blocking() && rp.Action != ActionUnchanged {
+			rp.Outcome, rp.Action = rp.Action, ActionReview
 		}
+		fmt.Fprintf(h, "%s|%s|%s\n", rp.Key, rp.Action, rp.Hash)
 	}
-	plan.PlanHash = hex.EncodeToString(h.Sum(nil))
-	return plan, nil
+	p.Counts[rp.Action]++
+	for _, u := range rp.Media {
+		p.MediaURLs += len(u)
+	}
 }
 
 func (p *Plan) add(rp RowPlan) { p.Rows = append(p.Rows, rp) }
@@ -319,32 +366,26 @@ func (p *Plan) Changes() []Change {
 		}
 	}
 	if len(p.applyOrder) > 0 {
-		rank := func(c Change) []int {
-			rs := make([]int, len(p.applyOrder))
-			for i, o := range p.applyOrder {
-				rs[i] = len(o.Rank)
-				v, _ := getPath(c.Record, o.Field)
-				s := fmt.Sprint(v)
-				for j, want := range o.Rank {
-					if s == want {
-						rs[i] = j
-						break
-					}
-				}
-			}
-			return rs
-		}
-		sort.SliceStable(out, func(a, b int) bool {
-			ra, rb := rank(out[a]), rank(out[b])
-			for i := range ra {
-				if ra[i] != rb[i] {
-					return ra[i] < rb[i]
-				}
-			}
-			return false
-		})
+		sort.SliceStable(out, func(a, b int) bool { return lessRank(p.rank(out[a]), p.rank(out[b])) })
 	}
 	return out
+}
+
+// rank es la posición de un cambio según ApplyOrder (un valor fuera de Rank va al final).
+func (p *Plan) rank(c Change) []int {
+	rs := make([]int, len(p.applyOrder))
+	for i, o := range p.applyOrder {
+		rs[i] = len(o.Rank)
+		v, _ := getPath(c.Record, o.Field)
+		s := fmt.Sprint(v)
+		for j, want := range o.Rank {
+			if s == want {
+				rs[i] = j
+				break
+			}
+		}
+	}
+	return rs
 }
 
 // identity arma la identidad a partir de los campos clave; vacía = inválida.

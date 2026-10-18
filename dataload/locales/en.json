@@ -145,5 +145,6 @@
   "importer.transform": "'{column}': transform '{transform}': {error}",
   "dataload.action.review_decide": "decide rows under review",
   "dataload.action.review_apply": "apply approved rows",
-  "dataload.auth.no_authorizer": "dataload: no Authorizer for {action}; set one (or AllowAnyActor in development)"
+  "dataload.auth.no_authorizer": "dataload: no Authorizer for {action}; set one (or AllowAnyActor in development)",
+  "dataload.source.changed": "dataload: {source} changed while being read (the input fingerprint differs between passes)"
 }

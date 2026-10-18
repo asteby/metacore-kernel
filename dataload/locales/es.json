@@ -145,5 +145,6 @@
   "importer.transform": "'{column}': transform '{transform}': {error}",
   "dataload.action.review_decide": "decidir filas en revisión",
   "dataload.action.review_apply": "aplicar filas aprobadas",
-  "dataload.auth.no_authorizer": "dataload: no hay Authorizer para {action}; configúralo (o AllowAnyActor en desarrollo)"
+  "dataload.auth.no_authorizer": "dataload: no hay Authorizer para {action}; configúralo (o AllowAnyActor en desarrollo)",
+  "dataload.source.changed": "dataload: {source} cambió mientras se leía (la huella de la entrada no coincide entre pasadas)"
 }

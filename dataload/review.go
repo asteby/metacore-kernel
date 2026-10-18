@@ -115,19 +115,37 @@ func (r *Runner) holdReviews(ctx context.Context, run Run, plan *Plan) error {
 	if r.Reviews == nil {
 		return nil
 	}
-	now := r.now()
-	inReview := map[string]bool{}
+	if err := r.holdReviewRows(ctx, run, plan.Org, plan.Entity, plan.Rows); err != nil {
+		return err
+	}
+	inReview, seen := map[string]bool{}, map[string]bool{}
 	for _, row := range plan.Rows {
+		switch {
+		case row.Action == ActionReview:
+			inReview[row.Key] = true
+		case row.Action != ActionInvalid && row.Key != "":
+			seen[row.Key] = true
+		}
+	}
+	return r.supersedeReviews(ctx, plan.Org, plan.Entity, func(key string) bool { return seen[key] && !inReview[key] })
+}
+
+// holdReviewRows guarda las filas ActionReview de rows (una página o el plan entero).
+func (r *Runner) holdReviewRows(ctx context.Context, run Run, org, entity string, rows []RowPlan) error {
+	if r.Reviews == nil {
+		return nil
+	}
+	now := r.now()
+	for _, row := range rows {
 		if row.Action != ActionReview {
 			continue
 		}
-		inReview[row.Key] = true
 		e := ReviewEntry{
-			Org: plan.Org, Entity: plan.Entity, Key: row.Key, Profile: run.Profile, ProfileVersion: run.ProfileVersion, ProfileHash: run.ProfileHash,
+			Org: org, Entity: entity, Key: row.Key, Profile: run.Profile, ProfileVersion: run.ProfileVersion, ProfileHash: run.ProfileHash,
 			RunID: run.ID, Row: row.Row, Hash: row.Hash, Record: row.Record, Media: row.Media, Items: row.Review, Outcome: row.Outcome,
 			State: ReviewPending, CreatedAt: now, UpdatedAt: now,
 		}
-		prev, ok, err := r.Reviews.Get(ctx, plan.Org, plan.Entity, row.Key)
+		prev, ok, err := r.Reviews.Get(ctx, org, entity, row.Key)
 		if err != nil {
 			return wrapErr(err, CodeReviewStore)
 		}
@@ -138,18 +156,22 @@ func (r *Runner) holdReviews(ctx context.Context, run Run, plan *Plan) error {
 			return wrapErr(err, CodeReviewStore)
 		}
 	}
-	pending, err := r.Reviews.List(ctx, plan.Org, ReviewFilter{Entity: plan.Entity, State: ReviewPending})
+	return nil
+}
+
+// supersedeReviews pasa a superseded las pendientes que esta corrida resolvió
+// sin intervención (resolved(key): la trajo y ya no pide revisión).
+func (r *Runner) supersedeReviews(ctx context.Context, org, entity string, resolved func(string) bool) error {
+	if r.Reviews == nil {
+		return nil
+	}
+	now := r.now()
+	pending, err := r.Reviews.List(ctx, org, ReviewFilter{Entity: entity, State: ReviewPending})
 	if err != nil {
 		return wrapErr(err, CodeReviewStore)
 	}
-	seen := map[string]bool{}
-	for _, row := range plan.Rows {
-		if row.Action != ActionInvalid && row.Action != ActionReview && row.Key != "" {
-			seen[row.Key] = true
-		}
-	}
 	for _, e := range pending {
-		if seen[e.Key] && !inReview[e.Key] {
+		if resolved(e.Key) {
 			e.State, e.UpdatedAt = ReviewSuperseded, now
 			if err := r.Reviews.Put(ctx, e); err != nil {
 				return wrapErr(err, CodeReviewStore)
