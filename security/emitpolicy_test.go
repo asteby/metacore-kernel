@@ -15,10 +15,12 @@ import (
 // fixture: an org with the storefront, customers, a payment provider and an
 // unrelated "evil" addon. Declared event:emit per addon mirrors the manifests.
 func emitFixture() EmitFactsSource {
-	installed := []string{"storefront_cart", "storefront_api", "customers", "stripe", "products", "evil", "inventory"}
+	installed := []string{"storefront_cart", "storefront_api", "customers", "stripe", "products", "evil", "inventory", "skydropx", "emissary"}
 	provides := map[string][]string{
 		"stripe":          {"commerce.payments.session", "commerce.payments.confirm", "commerce.payments.status"},
 		"storefront_cart": nil,
+		"skydropx":        {"commerce.shipping.rates", "commerce.shipping.label", "commerce.shipping.track"},
+		"emissary":        {"commerce.fulfillment.create", "commerce.fulfillment.cancel"},
 	}
 	declared := map[string][]string{
 		"storefront_cart": {"storefront_cart.*"},
@@ -27,6 +29,8 @@ func emitFixture() EmitFactsSource {
 		"products":        {"commerce.payments.confirmed"},
 		"evil":            {"*"},
 		"inventory":       {"inventory.*"},
+		"skydropx":        {"shipping.tracking_updated", "commerce.shipping.tracking_updated"},
+		"emissary":        {"emissary.*", "commerce.fulfillment.updated", "commerce.shipping.tracking_updated"},
 	}
 	grants := []EmitterGrant{{Owner: "customers", Event: "customers.external_return_requested", Emitters: []string{"storefront_api", "storefront_customers"}}}
 	return EmitFactsFunc(func(_ context.Context, _ uuid.UUID, emitter string) (EmitFacts, error) {
@@ -64,6 +68,14 @@ func TestEmitPolicyTable(t *testing.T) {
 		{"bare kernel", "evil", "kernel", EmitRuleKernel},
 		{"undeclared own event", "inventory", "stock.in_transit", EmitRuleDeclared},
 		{"shared namespace declared", "evil", "shipping.updated", ""},
+		{"carrier emits tracking contract", "skydropx", "commerce.shipping.tracking_updated", ""},
+		{"forged tracking contract", "evil", "commerce.shipping.tracking_updated", EmitRuleContract},
+		{"3PL emits fulfillment contract", "emissary", "commerce.fulfillment.updated", ""},
+		{"forged fulfillment contract", "evil", "commerce.fulfillment.updated", EmitRuleContract},
+		{"3PL without a shipping capability emits tracking contract", "emissary", "commerce.shipping.tracking_updated", EmitRuleContract},
+		{"carrier emits fulfillment contract", "skydropx", "commerce.fulfillment.updated", EmitRuleContract},
+		// The legacy name is not reserved: why subscribers move to the contract.
+		{"legacy tracking name is forgeable", "evil", "shipping.tracking_updated", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

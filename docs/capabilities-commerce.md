@@ -104,7 +104,7 @@ El webhook es entrada no confiable. El proveedor y el host deben:
 - Consultar el pago a la API del proveedor con su id y devolver de ahí `status`, `amount` y `currency`; nunca confiar en monto, moneda o estado del cuerpo del webhook.
 - El host deduplica por `provider + event_id` (los reintentos del proveedor son normales) y compara `amount`/`currency` con el total del pedido antes de marcarlo pagado; una diferencia no marca el pedido.
 
-## Eventos de contrato: `commerce.payments.confirmed`
+## Eventos de contrato: `commerce.payments.confirmed`, `commerce.shipping.tracking_updated`, `commerce.fulfillment.updated`
 
 Además de consultas, un dominio de capacidad puede declarar **eventos de
 contrato** (`capability.EventContracts`, `RegisterEvent`, `LookupEvent`). El
@@ -115,6 +115,8 @@ responde.
 | Evento | Lo emite | Payload |
 |---|---|---|
 | `commerce.payments.confirmed` | quien provee alguna capacidad `commerce.payments.*` (las pasarelas, desde su propio webhook; `payments_manual`, desde la acción del personal) | `{provider, result}`; `result` es la salida de `commerce.payments.confirm` y `result.kind` ∈ `payment \| refund \| dispute` |
+| `commerce.shipping.tracking_updated` | quien provee alguna capacidad `commerce.shipping.*` (las paqueterías: `skydropx`, `envia`, `noventa9minutos`), desde su webhook o su sondeo | cambio de estado normalizado de un envío (`TrackingUpdatedSchema`, abajo) |
+| `commerce.fulfillment.updated` | quien provee alguna capacidad `commerce.fulfillment.*` (almacenes y 3PL: `emissary`) | cambio de estado normalizado de un surtido (`FulfillmentUpdatedSchema`, abajo) |
 
 Payload (`CommercePaymentsConfirmed`):
 
@@ -123,9 +125,46 @@ Payload (`CommercePaymentsConfirmed`):
 | `provider` | string | sí | clave del addon proveedor (informativa: el suscriptor confía en `emitter`) |
 | `result` | object ([salida de confirm](#commercepaymentsconfirm)) | sí | `kind` distingue pago, reembolso y disputa |
 
+Payload (`CommerceShippingTrackingUpdated`, `capability.TrackingUpdatedSchema`):
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `provider` | string | sí | clave del addon (informativa: el suscriptor confía en `emitter`) |
+| `event_id` | string | sí | estable por cambio observado; el suscriptor deduplica por `emitter + event_id` |
+| `status` | string | sí | `TrackingStatuses`: `created`, `picked_up`, `in_transit`, `out_for_delivery`, `delivered`, `exception`, `returned`, `cancelled` |
+| `occurred_at` | string | sí | RFC 3339 del escaneo |
+| `order_ref` | string |  | el `order_ref` de `commerce.shipping.label`; ausente si la paquetería no lo sabe |
+| `shipment_id` | string |  | `shipment_id` de `commerce.shipping.label` |
+| `carrier`, `tracking_number`, `tracking_url` | string |  |  |
+| `label_url` | string |  | cuando ya hay guía (las guías asíncronas llegan después) |
+| `label_ready` | boolean |  | este cambio es el que dejó lista la guía |
+| `provider_status`, `description`, `location` | string |  | texto o código del proveedor, sin traducir |
+| `test_mode` | boolean |  | evento del sandbox |
+
+Payload (`CommerceFulfillmentUpdated`, `capability.FulfillmentUpdatedSchema`):
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `provider` | string | sí | clave del addon (informativa: el suscriptor confía en `emitter`) |
+| `event_id` | string | sí | estable por cambio observado |
+| `fulfillment_id` | string | sí | el `fulfillment_id` de `commerce.fulfillment.create` |
+| `order_ref` | string | sí | el `order_ref` de `commerce.fulfillment.create` |
+| `status` | string | sí | `FulfillmentStatuses`: los de `commerce.fulfillment.create` (`accepted`, `on_hold`, `rejected`) seguidos de `TrackingStatuses` |
+| `occurred_at` | string | sí | RFC 3339 |
+| `previous_status` | string |  | mismo vocabulario |
+| `warehouse`, `carrier`, `tracking_number`, `tracking_url` | string |  |  |
+| `provider_status`, `description` | string |  | texto o código del proveedor, sin traducir |
+| `test_mode` | boolean |  | evento del sandbox |
+
+Los dos esquemas son cerrados: un campo propio del proveedor va con prefijo
+`x_`. Un 3PL que solo provee `commerce.fulfillment.*` publica el estado del
+paquete en `commerce.fulfillment.updated`, no en `commerce.shipping.*` (no es
+proveedor de ese dominio).
+
 Reglas:
 
-- **Espacio reservado.** Todo evento bajo `EmittedBy` (`commerce.payments.*`)
+- **Espacio reservado.** Todo evento bajo `EmittedBy` (`commerce.payments.*`,
+  `commerce.shipping.*`, `commerce.fulfillment.*`)
   solo lo puede emitir un addon que **provee** al menos una capacidad de ese
   dominio (`capability.ReservedEventDomain`, `capability.ProvidesDomain`). El
   host lo aplica en la frontera del guest (`security.EmitPolicy`, regla
@@ -142,7 +181,14 @@ Reglas:
   la aplica al publicar; es para emisores y suscriptores.
 - Los eventos propios de cada pasarela (`<key>.payment_updated`,
   `<key>.refund_created`) siguen existiendo; el evento normalizado se emite
-  junto a ellos.
+  junto a ellos. Igual con los envíos: el nombre heredado
+  `shipping.tracking_updated` (sin reservar: cualquier addon que lo declare lo
+  puede emitir) y `emissary.shipment_status_changed` se siguen emitiendo por
+  compatibilidad, pero un suscriptor que dispare avisos o mueva pedidos se
+  suscribe solo al contrato.
+- **No es prueba de entrega.** Igual que con los pagos, quien vaya a mover un
+  pedido con el evento puede volver a leer el estado con
+  `commerce.shipping.track` fijado al proveedor del envío.
 
 ## Errores con código del proveedor
 
@@ -819,8 +865,9 @@ Salida:
 - `commerce.shipping.label` con `label_status = created` debe traer
   `tracking_number` y `label_url`; hoy es convención documentada, no se valida
   condicionalmente.
-- `commerce.shipping.tracking_updated` como evento de contrato (hoy los
-  transportistas emiten `shipping.*` sin reservar).
+- Retirar los nombres heredados `shipping.tracking_updated`,
+  `shipping.label_ready` y `emissary.shipment_status_changed` cuando ningún
+  suscriptor los use (hoy solo se emiten por compatibilidad).
 - Sin contrato aún: `commerce.shipping.pickup`, `commerce.fulfillment.inventory.sync`,
   `marketing.events`, `marketing.feed`.
 - Función de host WASM para que un addon invitado llame `Querier.Query`

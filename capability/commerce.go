@@ -38,6 +38,19 @@ const (
 // before acting on it.
 const CommercePaymentsConfirmed = "commerce.payments.confirmed"
 
+// CommerceShippingTrackingUpdated is the normalized parcel-status event every
+// carrier emits when a shipment it created moves (webhook or poll). Only
+// providers of a commerce.shipping.* capability may emit it (the domain is
+// reserved), so a non-carrier cannot forge a "delivered" notice. The payload
+// is TrackingUpdatedSchema; dedupe on emitter + event_id.
+const CommerceShippingTrackingUpdated = "commerce.shipping.tracking_updated"
+
+// CommerceFulfillmentUpdated is the normalized status event every warehouse /
+// 3PL emits when a fulfillment it accepted (commerce.fulfillment.create)
+// moves. Only providers of a commerce.fulfillment.* capability may emit it.
+// The payload is FulfillmentUpdatedSchema; dedupe on emitter + event_id.
+const CommerceFulfillmentUpdated = "commerce.fulfillment.updated"
+
 // Normalized status vocabularies shared by providers.
 var (
 	// PaymentStatuses is the normalized payment lifecycle.
@@ -45,6 +58,11 @@ var (
 	// TrackingStatuses is the normalized parcel lifecycle every carrier
 	// status is mapped onto.
 	TrackingStatuses = []string{"created", "picked_up", "in_transit", "out_for_delivery", "delivered", "exception", "returned", "cancelled"}
+	// FulfillmentStatuses is the normalized fulfillment lifecycle: the
+	// statuses commerce.fulfillment.create answers (accepted, on_hold,
+	// rejected) followed by the parcel lifecycle of the shipment the
+	// warehouse dispatches.
+	FulfillmentStatuses = append([]string{"accepted", "on_hold", "rejected"}, TrackingStatuses...)
 )
 
 // Default per-provider deadlines. Fan-out queries are tighter: a slow carrier
@@ -152,6 +170,43 @@ var (
 		opt("lng", TypeLongitude, "WGS84 longitude of the scan, only when the carrier reports coordinates"),
 	)
 
+	// TrackingUpdatedSchema is the payload of commerce.shipping.tracking_updated.
+	TrackingUpdatedSchema = schema(
+		req("provider", TypeString, "addon key of the carrier (informative: subscribers trust the host-stamped emitter)"),
+		req("event_id", TypeString, "stable per observed status change; subscribers dedupe on emitter + event_id"),
+		enum(req("status", TypeString, ""), TrackingStatuses),
+		req("occurred_at", TypeString, "RFC 3339 time of the scan / status change"),
+		opt("order_ref", TypeString, "the order_ref sent to commerce.shipping.label; absent when the carrier cannot tell"),
+		opt("shipment_id", TypeString, "provider shipment id (commerce.shipping.label shipment_id)"),
+		opt("carrier", TypeString, "e.g. fedex, estafeta, dhl"),
+		opt("tracking_number", TypeString, ""),
+		opt("tracking_url", TypeString, ""),
+		opt("label_url", TypeString, "set once an asynchronous label became available"),
+		opt("label_ready", TypeBoolean, "this update is the one that made the label available"),
+		opt("provider_status", TypeString, "carrier wording / code of the status, untranslated"),
+		opt("description", TypeString, ""),
+		opt("location", TypeString, ""),
+		opt("test_mode", TypeBoolean, "update from the provider sandbox"),
+	)
+
+	// FulfillmentUpdatedSchema is the payload of commerce.fulfillment.updated.
+	FulfillmentUpdatedSchema = schema(
+		req("provider", TypeString, "addon key of the warehouse / 3PL (informative: subscribers trust the host-stamped emitter)"),
+		req("event_id", TypeString, "stable per observed status change; subscribers dedupe on emitter + event_id"),
+		req("fulfillment_id", TypeString, "commerce.fulfillment.create fulfillment_id"),
+		req("order_ref", TypeString, "the order_ref sent to commerce.fulfillment.create"),
+		enum(req("status", TypeString, ""), FulfillmentStatuses),
+		req("occurred_at", TypeString, "RFC 3339"),
+		enum(opt("previous_status", TypeString, ""), FulfillmentStatuses),
+		opt("warehouse", TypeString, "provider warehouse code"),
+		opt("carrier", TypeString, ""),
+		opt("tracking_number", TypeString, ""),
+		opt("tracking_url", TypeString, ""),
+		opt("provider_status", TypeString, "provider wording / code of the status, untranslated"),
+		opt("description", TypeString, ""),
+		opt("test_mode", TypeBoolean, "update from the provider sandbox"),
+	)
+
 	// TaxLineSchema is one computed tax component.
 	TaxLineSchema = schema(
 		req("name", TypeString, "e.g. IVA, State tax"),
@@ -201,6 +256,16 @@ func init() {
 // the query contracts because the payment event reuses the confirm output.
 func commerceEvents() []EventContract {
 	return []EventContract{
+		{
+			Name: CommerceShippingTrackingUpdated, EmittedBy: "commerce.shipping",
+			Doc:     "a carrier observed a new normalized status of a shipment it created (webhook or poll)",
+			Payload: TrackingUpdatedSchema,
+		},
+		{
+			Name: CommerceFulfillmentUpdated, EmittedBy: "commerce.fulfillment",
+			Doc:     "a warehouse / 3PL observed a new normalized status of a fulfillment it accepted (webhook or poll)",
+			Payload: FulfillmentUpdatedSchema,
+		},
 		{
 			Name: CommercePaymentsConfirmed, EmittedBy: "commerce.payments",
 			Doc: "a provider verified a payment, refund or dispute update (webhook or staff action)",

@@ -9,6 +9,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **capability: eventos de contrato `commerce.shipping.tracking_updated` y
+  `commerce.fulfillment.updated`** — reservan `commerce.shipping.*` a quien
+  provee una capacidad `commerce.shipping.*` (paqueterías) y
+  `commerce.fulfillment.*` a quien provee `commerce.fulfillment.*` (almacenes,
+  3PL); `security.EmitPolicy` (regla `contract_namespace`) ya los aplica sin
+  cambios. Payloads cerrados `TrackingUpdatedSchema` (`provider`, `event_id`,
+  `status` ∈ `TrackingStatuses`, `occurred_at`, y opcionales `order_ref`,
+  `shipment_id`, guía y rastreo) y `FulfillmentUpdatedSchema` (`provider`,
+  `event_id`, `fulfillment_id`, `order_ref`, `status` ∈ `FulfillmentStatuses`
+  nuevo = estados de `commerce.fulfillment.create` + `TrackingStatuses`).
+  Cierra la falsificación de avisos de «entregado»: el nombre heredado
+  `shipping.tracking_updated` no está reservado.
+
 - **runtime/wasm + manifest: concurrencia del pool WASM por addon (A1)** — el
   pool tenía UNA instancia por (addon, instalación) salvo que el operador fijara
   `WASM_POOL_SIZE`, así que todas las lecturas de una tienda se atendían en

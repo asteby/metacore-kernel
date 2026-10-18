@@ -102,7 +102,7 @@ func TestPaymentsConfirmedEventContract(t *testing.T) {
 	if !ok || e.EmittedBy != "commerce.payments" {
 		t.Fatalf("event not registered: %+v", e)
 	}
-	if names := EventNames(); len(names) == 0 || names[0] != CommercePaymentsConfirmed {
+	if names := EventNames(); len(names) == 0 || names[1] != CommercePaymentsConfirmed {
 		t.Fatalf("EventNames = %v", names)
 	}
 	good := `{"provider":"stripe","emitter":"stripe","event":"commerce.payments.confirmed",
@@ -128,14 +128,17 @@ func TestPaymentsConfirmedEventContract(t *testing.T) {
 
 func TestReservedEventDomainAndProviders(t *testing.T) {
 	for ev, want := range map[string]string{
-		"commerce.payments.confirmed": "commerce.payments",
-		"commerce.payments.anything":  "commerce.payments",
+		"commerce.payments.confirmed":        "commerce.payments",
+		"commerce.payments.anything":         "commerce.payments",
+		"commerce.shipping.tracking_updated": "commerce.shipping",
+		"commerce.shipping.label_ready":      "commerce.shipping",
+		"commerce.fulfillment.updated":       "commerce.fulfillment",
 	} {
 		if d, ok := ReservedEventDomain(ev); !ok || d != want {
 			t.Fatalf("%s: domain = %q,%v want %q", ev, d, ok, want)
 		}
 	}
-	for _, ev := range []string{"commerce.paymentsx.y", "commerce.shipping.tracking_updated", "stripe.payment_updated", "shipping.updated"} {
+	for _, ev := range []string{"commerce.paymentsx.y", "commerce.shippingx.tracking_updated", "stripe.payment_updated", "shipping.tracking_updated", "emissary.shipment_status_changed", "commerce.tax.calculated"} {
 		if d, ok := ReservedEventDomain(ev); ok {
 			t.Fatalf("%s must not be reserved, got %q", ev, d)
 		}
