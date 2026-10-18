@@ -15,7 +15,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `first_visit`), `order` y `steps[]` (reusa `AgentGuideStep`: `target` de UI o
   paso `concept`). Validación de claves y pasos únicos en `v3.Validate`.
 - **preset: presets que extienden a otro (`preset.extends`) y visibilidad
-  privada.** Base del RFC `docs/rfcs/RFC-PRESETS-DE-EMPRESA.md`.
+  privada.** Base del RFC `docs/rfcs/RFC-PRESETS-DE-EMPRESA-Y-DISTRIBUCION.md`.
   - Manifest v3: `metadata.visibility` (`public|private`), `metadata.owner`,
     `preset.extends {key, version}` y `preset.remove_addons`. `preset.addons`
     puede ir vacío cuando hay `extends`. El schema embebido lo acepta, así que
