@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -76,34 +75,12 @@ func (s streamSource) Rows(ctx context.Context) ([]map[string]any, error) {
 // NewCSVSource (BOM, filas irregulares): las dos producen las mismas filas.
 func NewCSVStreamSource(name string, open Opener) StreamSource {
 	return streamSource{name: name, open: open, read: func(r io.Reader, fn func(map[string]any) error) error {
-		cr := csv.NewReader(r)
-		cr.FieldsPerRecord = -1
-		var headers []string
-		for {
-			rec, err := cr.Read()
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-			if err != nil {
-				return wrapErr(err, CodeSourceRead, "source", name)
-			}
-			if headers == nil {
-				headers = append([]string(nil), rec...)
-				if len(headers) > 0 {
-					headers[0] = importer.StripBOM(headers[0])
-				}
-				continue
-			}
-			row := make(map[string]any, len(headers))
-			for i, key := range headers {
-				if i < len(rec) {
-					row[key] = rec[i]
-				}
-			}
-			if err := fn(row); err != nil {
-				return err
-			}
+		err := importer.EachCSV(r, importer.ParseLimits{}, fn)
+		var re importer.CSVReadError
+		if errors.As(err, &re) {
+			return wrapErr(err, CodeSourceRead, "source", name)
 		}
+		return err
 	}}
 }
 
@@ -273,6 +250,7 @@ type streamPlanner struct {
 	*planner
 	src     StreamSource
 	first   map[string]int   // identidad -> primera fila que la trae
+	dups    map[string][]int // identidad repetida -> filas repetidas (sin la primera)
 	unique  []map[string]int // por comprobación unique: valor -> filas que lo traen
 	summary ScanSummary
 	// block es el tamaño de página; blocks, la huella de cada bloque de block
@@ -354,6 +332,10 @@ func (sp *streamPlanner) scan(ctx context.Context, pageSize int) error {
 		}
 		if _, dup := sp.first[rp.Key]; dup {
 			sp.summary.Duplicates++
+			if sp.dups == nil {
+				sp.dups = map[string][]int{}
+			}
+			sp.dups[rp.Key] = append(sp.dups[rp.Key], rp.Row)
 		} else {
 			sp.first[rp.Key] = rp.Row
 		}
@@ -453,7 +435,9 @@ func (sp *streamPlanner) plan(ctx context.Context, only func(*RowPlan) bool, onP
 		plan.IgnoredColumns += ignored
 		if rp.Action == "" {
 			if first := sp.first[rp.Key]; first != rp.Row {
-				rp.markDuplicate(first)
+				rp.markDuplicate(first, sp.prof.duplicatesReview())
+			} else if others := sp.dups[rp.Key]; len(others) > 0 && sp.prof.duplicatesReview() {
+				rp.Review = append(rp.Review, duplicateItem(others))
 			}
 			if sp.req.Extract != nil {
 				rp.Review = append(rp.Review, sp.datasetItems(rp.Record)...)

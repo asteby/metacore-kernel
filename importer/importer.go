@@ -433,7 +433,7 @@ func ParseXLSX(r io.Reader) ([]map[string]any, error) {
 	}
 	out := make([]map[string]any, 0, len(rows)-1)
 	for _, rec := range rows[1:] {
-		row := make(map[string]any, len(headers))
+		row := make(map[string]any, min(len(rec), len(headers)))
 		empty := true
 		for i, key := range headers {
 			if i < len(rec) {
@@ -505,30 +505,7 @@ func WriteCSVWithBOM(records [][]string) ([]byte, error) {
 }
 
 func ParseCSV(r io.Reader) ([]map[string]any, error) {
-	reader := csv.NewReader(r)
-	reader.FieldsPerRecord = -1 // tolerate ragged rows
-	records, err := reader.ReadAll()
-	if err != nil {
-		return nil, fmt.Errorf("csv decode: %w", err)
-	}
-	if len(records) == 0 {
-		return nil, nil
-	}
-	headers := records[0]
-	if len(headers) > 0 {
-		headers[0] = StripBOM(headers[0])
-	}
-	rows := make([]map[string]any, 0, len(records)-1)
-	for _, rec := range records[1:] {
-		row := make(map[string]any, len(headers))
-		for i, key := range headers {
-			if i < len(rec) {
-				row[key] = rec[i]
-			}
-		}
-		rows = append(rows, row)
-	}
-	return rows, nil
+	return ParseCSVLimited(r, ParseLimits{})
 }
 
 // ReadRows reads the uploaded payload of an import request and returns its
