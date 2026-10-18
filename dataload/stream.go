@@ -217,7 +217,8 @@ func scanInput(ctx context.Context, src StreamSource, limit int) (string, int, e
 // readErr envuelve un error de lectura salvo que ya sea del motor o de contexto.
 func readErr(src Source, err error) error {
 	var e *Error
-	if errors.As(err, &e) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	var internal internalErr
+	if errors.As(err, &e) || errors.As(err, &internal) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
 	return wrapErr(err, CodeSourceRead, "source", src.Name())

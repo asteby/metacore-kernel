@@ -132,6 +132,9 @@ las de plan, corrida, recuperación, revisión, registro y medios).
 - Streaming: el mapa de identidades crece con el archivo (una entrada por fila
   única); con decenas de millones de filas hace falta más memoria o partir el
   archivo.
+- `Runner.Start` con una `StreamSource` lee el archivo una vez de forma
+  síncrona para calcular la llave de idempotencia (antes de encolar); con
+  millones de filas conviene llamarlo desde un trabajo de fondo.
 - Los textos de los errores de red y del origen (`importer.FetchMedia`) no
   tienen código: se guardan tal cual en `LastError`.
 - `AllowAnyActor` existe solo para pruebas y desarrollo.
