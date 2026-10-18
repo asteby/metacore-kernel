@@ -90,6 +90,7 @@ type rig struct {
 	manifest *MemoryManifest
 	jobs     *MemoryJobStore
 	sink     *MemorySink
+	sets     *MemoryMediaSetStore
 	queue    *MediaQueue
 	runner   *Runner
 }
@@ -97,9 +98,9 @@ type rig struct {
 func newRig(t *testing.T) *rig {
 	t.Helper()
 	r := &rig{clk: newClock(), origin: newOrigin(t), target: NewMemoryTarget(), ledger: NewMemoryLedger(),
-		store: NewMemoryBackupStore(), manifest: NewMemoryManifest(), jobs: NewMemoryJobStore(), sink: NewMemorySink()}
+		store: NewMemoryBackupStore(), manifest: NewMemoryManifest(), jobs: NewMemoryJobStore(), sink: NewMemorySink(), sets: NewMemoryMediaSetStore()}
 	r.queue = &MediaQueue{
-		Jobs: r.jobs, Sink: r.sink, Now: r.clk.Now, Workers: 3,
+		Jobs: r.jobs, Sink: r.sink, Sets: r.sets, Now: r.clk.Now, Workers: 3,
 		Backup: &Backuper{Store: r.store, Manifest: r.manifest, Now: r.clk.Now, Fetch: importer.TransformDeps{
 			// El cliente del test llega a 127.0.0.1; en producción se usa el de netguard.
 			HTTPClient: &http.Client{Timeout: 5 * time.Second},

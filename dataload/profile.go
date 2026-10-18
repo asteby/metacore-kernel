@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/asteby/metacore-kernel/importer"
@@ -46,6 +47,35 @@ type Profile struct {
 	// Los valores fuera de rank van al final; el orden dentro de un mismo rank es
 	// el del archivo.
 	ApplyOrder []OrderRule `json:"applyOrder,omitempty"`
+	// Duplicates dice qué hacer cuando la misma identidad aparece en varias filas
+	// del archivo: DuplicatesReview (por omisión) no carga ninguna y manda la
+	// primera a revisión con las demás como referencia; DuplicatesFirst carga la
+	// primera y descarta las demás.
+	Duplicates string `json:"duplicates,omitempty"`
+}
+
+// Políticas de identidad repetida (Profile.Duplicates).
+const (
+	DuplicatesReview = "review"
+	DuplicatesFirst  = "first"
+)
+
+// ReviewCodeDuplicateKey es el código del motivo de revisión de una identidad
+// repetida en el archivo (con DuplicatesReview).
+const ReviewCodeDuplicateKey = "duplicate_key"
+
+// duplicatesReview dice si la política es mandar las repetidas a revisión.
+func (p Profile) duplicatesReview() bool { return p.Duplicates != DuplicatesFirst }
+
+// duplicateItem es el motivo de revisión de la primera fila de una identidad
+// repetida: bloquea la carga y nombra las otras filas.
+func duplicateItem(others []int) ReviewItem {
+	rows := make([]string, len(others))
+	for i, r := range others {
+		rows[i] = strconv.Itoa(r)
+	}
+	m := msg(CodeRowDuplicateKey, "rows", strings.Join(rows, ", "))
+	return ReviewItem{Code: ReviewCodeDuplicateKey, Severity: SeverityRevisar, Detail: m.String(), DetailCode: m.Code, DetailParams: m.Params}
 }
 
 // OrderRule ordena por el valor de un campo destino según una lista de rangos.
@@ -202,6 +232,11 @@ func (p Profile) Validate() error {
 	if len(p.Key) == 0 {
 		bad(CodeProfileMissingKey)
 	}
+	switch p.Duplicates {
+	case "", DuplicatesReview, DuplicatesFirst:
+	default:
+		bad(CodeProfileDuplicates, "value", p.Duplicates)
+	}
 	targets := map[string]bool{}
 	for i, f := range p.Fields {
 		if f.Target == "" || (len(f.From) == 0 && f.Derive == nil) {
@@ -324,6 +359,9 @@ type Overrides struct {
 	// (target -> {valor de origen: valor destino}); ganan sobre las del perfil.
 	// Sirve para unificar nombres sucios de un origen (p. ej. ejes de variante).
 	ValuesAdd map[string]map[string]string `json:"valuesAdd,omitempty"`
+	// Duplicates reemplaza la política de identidades repetidas del perfil si no
+	// está vacío (ver Profile.Duplicates).
+	Duplicates string `json:"duplicates,omitempty"`
 }
 
 // Resolve devuelve una copia del perfil con los overrides aplicados. No muta p.
@@ -344,6 +382,9 @@ func (p Profile) Resolve(o *Overrides) (Profile, error) {
 	}
 	if o.Clean != nil {
 		out.Clean = o.Clean
+	}
+	if o.Duplicates != "" {
+		out.Duplicates = o.Duplicates
 	}
 	drop := map[string]bool{}
 	for _, t := range o.Drop {

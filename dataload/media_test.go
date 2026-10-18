@@ -66,8 +66,12 @@ func TestBackup_SameContentUnderTwoURLsIsWrittenOnce(t *testing.T) {
 	}
 }
 
+// noRepairStore oculta RepairHashed: un almacén sin la extensión opcional.
+type noRepairStore struct{ BackupStore }
+
 func TestBackup_OriginalIsNeverOverwritten(t *testing.T) {
 	r := newRig(t)
+	r.queue.Backup.Store = noRepairStore{r.store}
 	e, _ := r.queue.Backup.Backup(context.Background(), "org-a", r.origin.URL("/same/1.jpg"))
 	r.store.Objects[e.StoredName] = []byte("alterado") // simula corrupción en el almacén
 	// Otra URL con el mismo contenido: el almacén dice "ya existe", no se reescribe y la verificación lo delata.

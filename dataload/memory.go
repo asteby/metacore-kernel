@@ -3,6 +3,8 @@ package dataload
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"sort"
 	"strconv"
@@ -201,7 +203,7 @@ func (l *MemoryLedger) ClaimStale(_ context.Context, org string, now time.Time, 
 		if limit > 0 && len(out) >= limit {
 			break
 		}
-		if (org != "" && r.Org != org) || r.Mode != ModeApply || (r.State != RunRunning && r.State != RunQueued) {
+		if (org != "" && r.Org != org) || (r.Mode != ModeApply && r.Mode != ModeReview) || (r.State != RunRunning && r.State != RunQueued) {
 			continue
 		}
 		if r.Lease != nil && r.Lease.Until.After(now) {
@@ -350,6 +352,21 @@ func (s *MemoryBackupStore) PutHashed(_ context.Context, sha, _ string, r io.Rea
 	s.Puts++
 	s.Objects[hashedName(sha)] = b
 	return hashedName(sha), nil
+}
+
+// RepairHashed restaura el objeto dañado de ese sha256 (ver RepairingStore).
+func (s *MemoryBackupStore) RepairHashed(_ context.Context, sha, name string, r io.Reader, _ string) error {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	if sum := sha256.Sum256(b); hex.EncodeToString(sum[:]) != sha {
+		return newErr(CodeBackupCorrupt, "name", name)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Objects[name] = b
+	return nil
 }
 
 func (s *MemoryBackupStore) Open(_ context.Context, name string) (io.ReadCloser, error) {

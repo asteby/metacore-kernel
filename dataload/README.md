@@ -43,6 +43,8 @@ Source ──► Profile (+Overrides, +Extract) ──► Plan ──► Runner 
 | `BackupStore`, `Manifest` | con medios | originales por sha256 y su registro verificable |
 | `PartialStore` | no | bytes de descargas cortadas entre reintentos (reanudación con Range) |
 | `MediaSink`, `Deriver` | no | ligar medios al registro; generar derivados aparte |
+| `MediaSetStore` | con medios (recomendada) | conjunto vigente por campo: lo ligado sigue a la última escritura, no al historial de la cola |
+| `RepairingStore` | no (recomendada) | restaurar un original dañado con los bytes del mismo sha256 |
 
 Todas tienen versión en memoria (`NewMemory*`) para pruebas y como referencia
 de la semántica.

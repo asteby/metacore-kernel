@@ -186,7 +186,9 @@ func TestRecover_RefusesToResumeWhenInputOrProfileChanged(t *testing.T) {
 func TestRecover_FailedResolverAndChangedProfileMarkTheRunFailed(t *testing.T) {
 	for name, resolve := range map[string]func(RunRequest) RequestResolver{
 		"resolver con error": func(RunRequest) RequestResolver {
-			return func(context.Context, Run) (RunRequest, error) { return RunRequest{}, errors.New("fuente borrada") }
+			return func(context.Context, Run) (RunRequest, error) {
+				return RunRequest{}, NotResumable(errors.New("fuente borrada"))
+			}
 		},
 		"otro perfil": func(req RunRequest) RequestResolver {
 			req.Profile.Defaults = map[string]any{"extra": "x"}

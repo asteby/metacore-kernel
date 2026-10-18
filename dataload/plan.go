@@ -112,6 +112,9 @@ type RowPlan struct {
 	Review []ReviewItem `json:"review,omitempty"`
 	// Outcome, solo en filas review: lo que pasaría al aplicarla (create, update o unchanged).
 	Outcome Action `json:"outcome,omitempty"`
+	// TargetHash, solo en filas review: la huella que tenía el destino al
+	// planificar (ReviewEntry.BaseHash). No entra en la huella del plan.
+	TargetHash string `json:"targetHash,omitempty"`
 }
 
 // Blocking dice si algún motivo de la fila bloquea la carga automática.
@@ -191,6 +194,7 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 	plan.InputHash = inputHash(rows)
 
 	seen := map[string]int{}
+	dups := map[string][]int{} // identidad -> filas repetidas (sin la primera)
 	var keys []string
 	for i, raw := range rows {
 		if err := ctx.Err(); err != nil {
@@ -200,13 +204,22 @@ func BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
 		plan.IgnoredColumns += ignored
 		if rp.Action == "" {
 			if first, dup := seen[rp.Key]; dup {
-				rp.markDuplicate(first)
+				rp.markDuplicate(first, pl.prof.duplicatesReview())
+				dups[rp.Key] = append(dups[rp.Key], rp.Row)
 			} else {
 				seen[rp.Key] = rp.Row
 				keys = append(keys, rp.Key)
 			}
 		}
 		plan.add(rp)
+	}
+	if pl.prof.duplicatesReview() {
+		// Ninguna fila de una identidad repetida se carga sola: la primera va a
+		// revisión (con las demás como referencia) y las demás quedan duplicate.
+		for key, others := range dups {
+			first := &plan.Rows[seen[key]-1]
+			first.Review = append(first.Review, duplicateItem(others))
+		}
 	}
 
 	if req.Extract != nil {
@@ -284,10 +297,15 @@ func (pl *planner) planRow(i int, raw map[string]any) (RowPlan, int) {
 	return rp, ignored
 }
 
-// markDuplicate marca la fila como repetida de la fila first.
-func (rp *RowPlan) markDuplicate(first int) {
+// markDuplicate marca la fila como repetida de la fila first. held dice si la
+// política manda la primera a revisión (ninguna se carga) en vez de usarla.
+func (rp *RowPlan) markDuplicate(first int, held bool) {
 	rp.Action = ActionDuplicate
-	rp.Issues = []importer.RowIssue{rowIssue(rp.Row, "", CodeRowDuplicate, "first", first)}
+	code := CodeRowDuplicate
+	if held {
+		code = CodeRowDuplicateHeld
+	}
+	rp.Issues = []importer.RowIssue{rowIssue(rp.Row, "", code, "first", first)}
 }
 
 // lookup consulta al destino por tandas de LookupChunk identidades.
@@ -333,7 +351,7 @@ func (p *Plan) count(rp *RowPlan, existing map[string]Existing, h io.Writer) {
 		// Una fila con motivo bloqueante no se escribe sola. Si el destino ya la
 		// tiene idéntica (p. ej. se aprobó antes) no hay nada que decidir.
 		if rp.Blocking() && rp.Action != ActionUnchanged {
-			rp.Outcome, rp.Action = rp.Action, ActionReview
+			rp.Outcome, rp.Action, rp.TargetHash = rp.Action, ActionReview, ex.Hash
 		}
 		fmt.Fprintf(h, "%s|%s|%s\n", rp.Key, rp.Action, rp.Hash)
 	}

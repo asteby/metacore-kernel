@@ -49,6 +49,10 @@ type Progress struct {
 	// Review son las filas válidas que esperan una decisión (ActionReview); no
 	// se escriben solas.
 	Review int `json:"review,omitempty"`
+	// Superseded (solo en apply_reviewed) son las filas aprobadas que no se
+	// escribieron porque el destino cambió después de decidirlas: pasan a
+	// superseded y hay que volver a revisarlas si siguen pendientes.
+	Superseded int `json:"superseded,omitempty"`
 }
 
 // RunLease es el arrendamiento con que un proceso declara que está ejecutando
@@ -149,8 +153,8 @@ var ErrLeaseLost = newErr(CodeLeaseLost)
 //     sigue siendo de owner (y la corrida no es terminal); además lo extiende.
 //     Si no, devuelve ErrLeaseLost y no escribe. Es el cerco que impide que un
 //     proceso lento pise el resultado del que lo recuperó.
-//   - ClaimStale toma de forma atómica corridas queued/running sin arrendamiento o
-//     con el arrendamiento vencido, las deja a nombre de owner y suma una
+//   - ClaimStale toma de forma atómica corridas queued/running (modos apply y
+//     apply_reviewed) sin arrendamiento o con el arrendamiento vencido, las deja a nombre de owner y suma una
 //     reanudación a su Checkpoint. Dos procesos nunca reciben la misma corrida.
 type LeaseLedger interface {
 	Ledger

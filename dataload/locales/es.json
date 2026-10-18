@@ -150,5 +150,15 @@
   "dataload.action.review_decide": "decidir filas en revisión",
   "dataload.action.review_apply": "aplicar filas aprobadas",
   "dataload.auth.no_authorizer": "dataload: no hay Authorizer para {action}; configúralo (o AllowAnyActor en desarrollo)",
-  "dataload.source.changed": "dataload: {source} cambió mientras se leía (la huella de la entrada no coincide entre pasadas)"
+  "dataload.source.changed": "dataload: {source} cambió mientras se leía (la huella de la entrada no coincide entre pasadas)",
+  "dataload.row.duplicate_key": "la identidad se repite en las filas {rows}; ninguna se carga sola: decide cuál vale",
+  "dataload.media.set_store": "dataload: conjunto vigente de medios",
+  "dataload.media.attach": "dataload: ligar los medios de {key} ({field})",
+  "dataload.media.attach_deferred": "dataload: el registro todavía no puede recibir sus medios; se ligan después",
+  "dataload.media.backup_repair": "dataload: reparar el original {name}",
+  "dataload.profile.duplicates": "duplicates: valor desconocido \"{value}\" (review o first)",
+  "dataload.recover.not_resumable": "la corrida no se puede reanudar",
+  "dataload.recover.deferred": "no se pudo reanudar por ahora; se reintenta en la siguiente pasada",
+  "dataload.recover.review_run": "la aplicación de filas aprobadas se interrumpió; sus filas reservadas las cierra RecoverApplying",
+  "dataload.row.duplicate_held": "identidad repetida de la fila {first}; ninguna se carga hasta que se decida en revisión"
 }

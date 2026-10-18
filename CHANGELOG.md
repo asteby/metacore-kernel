@@ -7,6 +7,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **dataload: correcciones de la revisión de la integración con ops.**
+  (1) Una fila aprobada (o rechazada) y sin aplicar pasa a `superseded` cuando
+  una corrida posterior ya cargó esa identidad sin revisión; `ApplyApproved` ya
+  no regresa el destino a la versión de un archivo anterior. Además cada entrada
+  guarda `BaseHash` (la huella del destino al planificar, `RowPlan.TargetHash`)
+  y `ApplyApproved` no escribe si el destino cambió después: la entrada pasa a
+  `superseded` y se cuenta en `Progress.Superseded`. Una decisión solo se
+  conserva entre corridas si la fila y el destino siguen iguales.
+  (2) `ApplyApproved` encola los medios ANTES de marcar `applied`; si encolar
+  falla, las filas vuelven a `approved` y el siguiente intento solo encola.
+  (3) `ApplyApproved` guarda la corrida `apply_reviewed` al empezar (con
+  arrendamiento y latidos si el ledger es `LeaseLedger`); `ClaimStale` también
+  toma estas corridas y `Recover` las cierra como fallidas
+  (`dataload.recover.review_run`) sin llamar al resolver.
+  (4) Medios: el conjunto vigente de cada campo (`MediaSetStore`,
+  `MediaQueue.Sets`, `MediaQueue.Sync`) manda sobre el historial de la cola:
+  una URL quitada deja de ligarse y un cambio de orden se respeta. Sync vuelve a
+  ligar si el conjunto cambió, si el registro se reescribió (p. ej. `Force` tras
+  borrar en el destino) o si nunca se ligó; `MediaSink.Attach` puede devolver
+  `ErrAttachDeferred` (dueño aún no listo) y un fallo de `Attach` regresa el
+  trabajo a la cola sin tocar la red. Sin `Sets`, comportamiento anterior.
+  (5) Un original dañado se repara: con la extensión opcional `RepairingStore`
+  (`RepairHashed`) el almacén restaura el objeto con los bytes recién bajados
+  del mismo sha256.
+  (6) `Recover` distingue errores definitivos (`ErrNotResumable`,
+  `NotResumable(err)`) de transitorios: ante uno transitorio suelta el
+  arrendamiento sin pasar a terminal (`RecoverReport.Deferred`,
+  `dataload.recover.deferred`).
+  (7) Identidad repetida: por omisión (`Profile.Duplicates`/`Overrides.Duplicates`
+  = `review`) ninguna fila se carga sola; la primera va a revisión con el motivo
+  `duplicate_key` y las demás quedan `duplicate` (`dataload.row.duplicate_held`).
+  `duplicates: "first"` conserva el comportamiento anterior.
+  (8) importer: `ParseCSV` ya no reserva un mapa del tamaño del encabezado por
+  fila (un CSV de 1.5 MB pedía ~600 MB); nuevos `ParseCSVLimited`,
+  `ParseJSONLimited` y `EachCSV` con `ParseLimits` (filas, columnas contando el
+  encabezado, bytes por celda) revisados mientras se lee.
+
 ### Added
 
 - **dataload: escritura condicional de revisiones** — extensión opcional
@@ -2180,6 +2219,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   now invokes whichever entry point the module exports.
 
 ## [Unreleased]
+
+### Fixed
+
+- **dataload: correcciones de la revisión de la integración con ops.**
+  (1) Una fila aprobada (o rechazada) y sin aplicar pasa a `superseded` cuando
+  una corrida posterior ya cargó esa identidad sin revisión; `ApplyApproved` ya
+  no regresa el destino a la versión de un archivo anterior. Además cada entrada
+  guarda `BaseHash` (la huella del destino al planificar, `RowPlan.TargetHash`)
+  y `ApplyApproved` no escribe si el destino cambió después: la entrada pasa a
+  `superseded` y se cuenta en `Progress.Superseded`. Una decisión solo se
+  conserva entre corridas si la fila y el destino siguen iguales.
+  (2) `ApplyApproved` encola los medios ANTES de marcar `applied`; si encolar
+  falla, las filas vuelven a `approved` y el siguiente intento solo encola.
+  (3) `ApplyApproved` guarda la corrida `apply_reviewed` al empezar (con
+  arrendamiento y latidos si el ledger es `LeaseLedger`); `ClaimStale` también
+  toma estas corridas y `Recover` las cierra como fallidas
+  (`dataload.recover.review_run`) sin llamar al resolver.
+  (4) Medios: el conjunto vigente de cada campo (`MediaSetStore`,
+  `MediaQueue.Sets`, `MediaQueue.Sync`) manda sobre el historial de la cola:
+  una URL quitada deja de ligarse y un cambio de orden se respeta. Sync vuelve a
+  ligar si el conjunto cambió, si el registro se reescribió (p. ej. `Force` tras
+  borrar en el destino) o si nunca se ligó; `MediaSink.Attach` puede devolver
+  `ErrAttachDeferred` (dueño aún no listo) y un fallo de `Attach` regresa el
+  trabajo a la cola sin tocar la red. Sin `Sets`, comportamiento anterior.
+  (5) Un original dañado se repara: con la extensión opcional `RepairingStore`
+  (`RepairHashed`) el almacén restaura el objeto con los bytes recién bajados
+  del mismo sha256.
+  (6) `Recover` distingue errores definitivos (`ErrNotResumable`,
+  `NotResumable(err)`) de transitorios: ante uno transitorio suelta el
+  arrendamiento sin pasar a terminal (`RecoverReport.Deferred`,
+  `dataload.recover.deferred`).
+  (7) Identidad repetida: por omisión (`Profile.Duplicates`/`Overrides.Duplicates`
+  = `review`) ninguna fila se carga sola; la primera va a revisión con el motivo
+  `duplicate_key` y las demás quedan `duplicate` (`dataload.row.duplicate_held`).
+  `duplicates: "first"` conserva el comportamiento anterior.
+  (8) importer: `ParseCSV` ya no reserva un mapa del tamaño del encabezado por
+  fila (un CSV de 1.5 MB pedía ~600 MB); nuevos `ParseCSVLimited`,
+  `ParseJSONLimited` y `EachCSV` con `ParseLimits` (filas, columnas contando el
+  encabezado, bytes por celda) revisados mientras se lee.
 
 ### Added
 

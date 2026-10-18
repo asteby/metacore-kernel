@@ -503,23 +503,24 @@ func (w *batchWriter) write(changes []Change) error {
 	return nil
 }
 
-// enqueueMedia encola los medios de las filas válidas que no esperan revisión
-// (only, si no es nil, acota cuáles). Devuelve cuántos trabajos eran nuevos.
+// enqueueMedia deja vigentes los medios de las filas válidas que no esperan
+// revisión (only, si no es nil, acota cuáles): encola lo que falte y vuelve a
+// ligar lo necesario (ver MediaQueue.Sync). Devuelve cuántos trabajos eran nuevos.
 func (r *Runner) enqueueMedia(ctx context.Context, org, entity, runID string, rows []RowPlan, only func(RowPlan) bool) (int, error) {
 	if r.Media == nil {
 		return 0, nil
 	}
-	var jobs []MediaJob
+	var mrows []MediaRow
 	for _, row := range rows {
 		if row.Action == ActionInvalid || row.Action == ActionDuplicate || row.Action == ActionReview || (only != nil && !only(row)) {
 			continue
 		}
-		jobs = append(jobs, r.Media.jobsFor(org, entity, runID, row.Key, row.Media)...)
+		mrows = append(mrows, MediaRow{Key: row.Key, Media: row.Media, Rewritten: row.Action == ActionCreate || row.Action == ActionUpdate})
 	}
-	if len(jobs) == 0 {
+	if len(mrows) == 0 {
 		return 0, nil
 	}
-	n, err := r.Media.Enqueue(ctx, jobs)
+	n, err := r.Media.Sync(ctx, org, entity, runID, mrows)
 	if err != nil {
 		return 0, wrapErr(err, CodeMediaEnqueue)
 	}

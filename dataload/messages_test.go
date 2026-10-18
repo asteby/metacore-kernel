@@ -190,7 +190,7 @@ func TestMessages_RunIssuesAndReviewItemsCarryCodes(t *testing.T) {
 	tgt := NewMemoryTarget()
 	src := NewCSVSource("dup.csv", []byte("ID,Nombre\n1,A\n1,B\n,C\n"))
 	plan := mustPlan(t, PlanRequest{Org: "org", Profile: catalogProfile(), Source: src, Target: tgt})
-	if is := plan.Rows[1].Issues[0]; is.Code != string(CodeRowDuplicate) || is.Params["first"] != 1 || is.Message != "identidad repetida; se usa la fila 1" {
+	if is := plan.Rows[1].Issues[0]; is.Code != string(CodeRowDuplicateHeld) || is.Params["first"] != 1 || is.Message != "identidad repetida de la fila 1; ninguna se carga hasta que se decida en revisión" {
 		t.Fatalf("duplicada: %+v", is)
 	}
 	if is := plan.Rows[2].Issues[0]; is.Code != importer.IssueRequired || is.Params["column"] != "ID" {
@@ -220,7 +220,7 @@ func TestMessages_RunIssuesAndReviewItemsCarryCodes(t *testing.T) {
 	if s := got[0].Item.Localize(en); s != "value repeated in the file" {
 		t.Fatalf("motivo en = %q", s)
 	}
-	if s := LocalizeIssue(en, plan.Rows[1].Issues[0]); s != "repeated identity; row 1 is used" {
+	if s := LocalizeIssue(en, plan.Rows[1].Issues[0]); s != "repeated identity of row 1; none is loaded until it is decided in review" {
 		t.Fatalf("problema en = %q", s)
 	}
 }

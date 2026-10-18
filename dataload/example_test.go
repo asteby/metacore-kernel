@@ -52,9 +52,9 @@ func Example() {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("create:", plan.Counts[dataload.ActionCreate], "duplicate:", plan.Counts[dataload.ActionDuplicate], "invalid:", plan.Counts[dataload.ActionInvalid])
+	fmt.Println("create:", plan.Counts[dataload.ActionCreate], "review:", plan.Counts[dataload.ActionReview], "duplicate:", plan.Counts[dataload.ActionDuplicate], "invalid:", plan.Counts[dataload.ActionInvalid])
 	// Output:
-	// fila 3 [dataload.row.duplicate] repeated identity; row 2 is used
+	// fila 3 [dataload.row.duplicate_held] repeated identity of row 2; none is loaded until it is decided in review
 	// fila 4 [importer.required] 'SKU' missing
-	// create: 2 duplicate: 1 invalid: 1
+	// create: 1 review: 1 duplicate: 1 invalid: 1
 }

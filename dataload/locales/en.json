@@ -150,5 +150,15 @@
   "dataload.action.review_decide": "decide rows under review",
   "dataload.action.review_apply": "apply approved rows",
   "dataload.auth.no_authorizer": "dataload: no Authorizer for {action}; set one (or AllowAnyActor in development)",
-  "dataload.source.changed": "dataload: {source} changed while being read (the input fingerprint differs between passes)"
+  "dataload.source.changed": "dataload: {source} changed while being read (the input fingerprint differs between passes)",
+  "dataload.row.duplicate_key": "the identity repeats in rows {rows}; none is loaded automatically: decide which one is right",
+  "dataload.media.set_store": "dataload: current media set",
+  "dataload.media.attach": "dataload: attach media of {key} ({field})",
+  "dataload.media.attach_deferred": "dataload: the record cannot take its media yet; they are attached later",
+  "dataload.media.backup_repair": "dataload: repair original {name}",
+  "dataload.profile.duplicates": "duplicates: unknown value \"{value}\" (review or first)",
+  "dataload.recover.not_resumable": "the run cannot be resumed",
+  "dataload.recover.deferred": "could not resume for now; retried on the next pass",
+  "dataload.recover.review_run": "the approved-rows apply was interrupted; RecoverApplying closes its reserved rows",
+  "dataload.row.duplicate_held": "repeated identity of row {first}; none is loaded until it is decided in review"
 }

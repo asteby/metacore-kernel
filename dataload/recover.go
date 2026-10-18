@@ -2,6 +2,7 @@ package dataload
 
 import (
 	"context"
+	"errors"
 )
 
 // Recuperación de corridas huérfanas. Una corrida en 'running' tiene un
@@ -30,7 +31,32 @@ type RecoverReport struct {
 	Resumed []Run
 	// Failed son las que no se pudieron reanudar y quedaron marcadas como fallidas.
 	Failed []Run
+	// Deferred son las que no se pudieron reanudar por una falla transitoria:
+	// siguen en running con el arrendamiento vencido y la siguiente pasada de
+	// Recover las vuelve a intentar.
+	Deferred []Run
 }
+
+// ErrNotResumable marca un error definitivo al reconstruir una corrida (la
+// solicitud guardada no existe, quien la lanzó ya no tiene permiso, el perfil o
+// la entrada cambiaron...). Recover la cierra como fallida. Cualquier otro
+// error del RequestResolver se trata como transitorio: la corrida se suelta y se
+// reintenta en la siguiente pasada. Un RequestResolver lo usa con
+// fmt.Errorf("...: %w", dataload.ErrNotResumable) o NotResumable(err).
+var ErrNotResumable = newErr(CodeRecoverNotResumable)
+
+// NotResumable envuelve err como definitivo para Recover.
+func NotResumable(err error) error {
+	if err == nil {
+		return nil
+	}
+	return notResumable{err}
+}
+
+type notResumable struct{ err error }
+
+func (e notResumable) Error() string   { return e.err.Error() }
+func (e notResumable) Unwrap() []error { return []error{e.err, ErrNotResumable} }
 
 // Recover toma las corridas de la organización (o de todas, con org "") que
 // quedaron en queued/running sin arrendamiento vigente y las reanuda. Se llama al
@@ -49,7 +75,20 @@ func (r *Runner) Recover(ctx context.Context, org string, resolve RequestResolve
 	}
 	var rep RecoverReport
 	for _, run := range claimed {
+		if run.Mode == ModeReview {
+			// Una aplicación de revisadas no se reanuda desde aquí: sus filas
+			// quedaron reservadas ('applying') y RecoverApplying las cierra
+			// leyendo el destino. La corrida se cierra como fallida.
+			rep.Failed = append(rep.Failed, r.abandon(ctx, ll, run, newErr(CodeRecoverReviewRun)))
+			continue
+		}
 		req, src, err := r.rebuild(ctx, run, resolve)
+		if err != nil && !errors.Is(err, ErrNotResumable) && ctx.Err() == nil {
+			// Falla transitoria (base caída, tiempo agotado...): se suelta el
+			// arrendamiento sin pasar a terminal y la siguiente pasada reintenta.
+			rep.Deferred = append(rep.Deferred, r.release(ctx, ll, run, err))
+			continue
+		}
 		if err != nil {
 			rep.Failed = append(rep.Failed, r.abandon(ctx, ll, run, err))
 			continue
@@ -72,11 +111,14 @@ func (r *Runner) rebuild(ctx context.Context, run Run, resolve RequestResolver) 
 		return RunRequest{}, nil, wrapErr(err, CodeRecoverRebuild)
 	}
 	if req.Org != run.Org {
-		return RunRequest{}, nil, newErr(CodeRecoverOrgMismatch, "got", req.Org, "want", run.Org)
+		return RunRequest{}, nil, NotResumable(newErr(CodeRecoverOrgMismatch, "got", req.Org, "want", run.Org))
 	}
 	prof, src, in, err := r.prepare(ctx, req)
 	if err != nil {
-		return RunRequest{}, nil, err
+		if ErrorCode(err) == CodeSourceRead {
+			return RunRequest{}, nil, err // leer la fuente puede fallar de paso
+		}
+		return RunRequest{}, nil, NotResumable(err) // perfil o extracción inválidos
 	}
 	exHash := ""
 	if req.Extract != nil {
@@ -84,13 +126,22 @@ func (r *Runner) rebuild(ctx context.Context, run Run, resolve RequestResolver) 
 	}
 	switch {
 	case prof.Hash() != run.ProfileHash || exHash != run.ExtractHash:
-		return RunRequest{}, nil, newErr(CodeRecoverProfileChanged)
+		return RunRequest{}, nil, NotResumable(newErr(CodeRecoverProfileChanged))
 	case in != run.InputHash:
-		return RunRequest{}, nil, newErr(CodeRecoverInputChanged)
+		return RunRequest{}, nil, NotResumable(newErr(CodeRecoverInputChanged))
 	case RunKey(req.Org, fingerprint(prof.Hash(), req.Extract), in, ModeApply) != run.Key:
-		return RunRequest{}, nil, newErr(CodeRecoverKeyMismatch)
+		return RunRequest{}, nil, NotResumable(newErr(CodeRecoverKeyMismatch))
 	}
 	return req, src, nil
+}
+
+// release suelta el arrendamiento de una corrida que no se pudo reconstruir por
+// una falla transitoria: queda en running con el arrendamiento ya vencido (y el
+// motivo en Error) para que la siguiente pasada de Recover la vuelva a tomar.
+func (r *Runner) release(ctx context.Context, ll LeaseLedger, run Run, cause error) Run {
+	run.setError(wrapErr(cause, CodeRecoverDeferred))
+	_ = ll.SaveLeased(context.WithoutCancel(ctx), run, r.owner(), r.now(), 0)
+	return run
 }
 
 // abandon marca como fallida una corrida que no se puede reanudar, para que no

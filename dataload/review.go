@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -48,23 +49,27 @@ type ReviewEntry struct {
 	Entity string `json:"entity"`
 	Key    string `json:"key"`
 	// Perfil con el que se planificó (para el historial de la aplicación posterior).
-	Profile        string              `json:"profile"`
-	ProfileVersion string              `json:"profileVersion"`
-	ProfileHash    string              `json:"profileHash"`
-	RunID          string              `json:"runId"`
-	Row            int                 `json:"row"`
-	Hash           string              `json:"hash"`
-	Record         map[string]any      `json:"record"`
-	Media          map[string][]string `json:"media,omitempty"`
-	Items          []ReviewItem        `json:"items"`
-	Outcome        Action              `json:"outcome,omitempty"`
-	State          ReviewState         `json:"state"`
-	DecidedBy      string              `json:"decidedBy,omitempty"`
-	DecidedAt      time.Time           `json:"decidedAt,omitempty"`
-	Note           string              `json:"note,omitempty"`
-	AppliedRun     string              `json:"appliedRun,omitempty"`
-	CreatedAt      time.Time           `json:"createdAt"`
-	UpdatedAt      time.Time           `json:"updatedAt"`
+	Profile        string `json:"profile"`
+	ProfileVersion string `json:"profileVersion"`
+	ProfileHash    string `json:"profileHash"`
+	RunID          string `json:"runId"`
+	Row            int    `json:"row"`
+	Hash           string `json:"hash"`
+	// BaseHash es la huella que tenía el destino para esta identidad cuando se
+	// planificó la fila (vacía si no existía o el destino no guarda huellas).
+	// ApplyApproved no escribe si el destino cambió desde entonces.
+	BaseHash   string              `json:"baseHash,omitempty"`
+	Record     map[string]any      `json:"record"`
+	Media      map[string][]string `json:"media,omitempty"`
+	Items      []ReviewItem        `json:"items"`
+	Outcome    Action              `json:"outcome,omitempty"`
+	State      ReviewState         `json:"state"`
+	DecidedBy  string              `json:"decidedBy,omitempty"`
+	DecidedAt  time.Time           `json:"decidedAt,omitempty"`
+	Note       string              `json:"note,omitempty"`
+	AppliedRun string              `json:"appliedRun,omitempty"`
+	CreatedAt  time.Time           `json:"createdAt"`
+	UpdatedAt  time.Time           `json:"updatedAt"`
 }
 
 // ReviewFilter acota List.
@@ -194,15 +199,16 @@ func (r *Runner) holdReviewRows(ctx context.Context, run Run, org, entity string
 			}
 			e := ReviewEntry{
 				Org: org, Entity: entity, Key: row.Key, Profile: run.Profile, ProfileVersion: run.ProfileVersion, ProfileHash: run.ProfileHash,
-				RunID: run.ID, Row: row.Row, Hash: row.Hash, Record: row.Record, Media: row.Media, Items: row.Review, Outcome: row.Outcome,
+				RunID: run.ID, Row: row.Row, Hash: row.Hash, BaseHash: row.TargetHash, Record: row.Record, Media: row.Media, Items: row.Review, Outcome: row.Outcome,
 				State: ReviewPending, CreatedAt: now, UpdatedAt: now,
 			}
 			prev, ok, err := r.Reviews.Get(ctx, org, entity, row.Key)
 			if err != nil {
 				return wrapErr(err, CodeReviewStore)
 			}
-			if ok && prev.Hash == row.Hash && prev.State != ReviewApplied && prev.State != ReviewSuperseded {
-				// Misma versión: se conserva la decisión (o la reserva 'applying' en curso).
+			if ok && prev.Hash == row.Hash && prev.BaseHash == row.TargetHash && prev.State != ReviewApplied && prev.State != ReviewSuperseded {
+				// Misma versión de la fila y el destino sigue como cuando se decidió:
+				// se conserva la decisión (o la reserva 'applying' en curso).
 				e.State, e.DecidedBy, e.DecidedAt, e.Note, e.CreatedAt, e.AppliedRun = prev.State, prev.DecidedBy, prev.DecidedAt, prev.Note, prev.CreatedAt, prev.AppliedRun
 			}
 			if cas == nil {
@@ -228,19 +234,27 @@ func (r *Runner) holdReviewRows(ctx context.Context, run Run, org, entity string
 	return nil
 }
 
-// supersedeReviews pasa a superseded las pendientes que esta corrida resolvió
-// sin intervención (resolved(key): la trajo y ya no pide revisión).
+// supersedeReviews pasa a superseded las entradas abiertas (pendientes,
+// aprobadas sin aplicar o rechazadas) que esta corrida resolvió sin
+// intervención (resolved(key): la trajo y ya no pide revisión). Una aprobada
+// que no se superara aquí la escribiría después ApplyApproved encima de la
+// versión más nueva que esta corrida acaba de cargar.
 func (r *Runner) supersedeReviews(ctx context.Context, org, entity string, resolved func(string) bool) error {
 	if r.Reviews == nil {
 		return nil
 	}
 	now := r.now()
-	pending, err := r.Reviews.List(ctx, org, ReviewFilter{Entity: entity, State: ReviewPending})
+	open, err := r.Reviews.List(ctx, org, ReviewFilter{Entity: entity})
 	if err != nil {
 		return wrapErr(err, CodeReviewStore)
 	}
 	cas := r.casReviews()
-	for _, e := range pending {
+	for _, e := range open {
+		switch e.State {
+		case ReviewPending, ReviewApproved, ReviewRejected:
+		default:
+			continue // applying (en curso), applied o superseded: cerradas
+		}
 		if !resolved(e.Key) {
 			continue
 		}
@@ -393,17 +407,26 @@ func (r *Runner) ApplyApproved(ctx context.Context, org, actor, entity string) (
 	if len(entries) > 0 {
 		run.Profile, run.ProfileVersion, run.ProfileHash = entries[0].Profile, entries[0].ProfileVersion, entries[0].ProfileHash
 	}
+	run.Progress.Total = len(entries)
+	// La corrida queda en el historial desde el inicio (running, con
+	// arrendamiento si el ledger lo soporta): se ve en curso, cuenta para la
+	// regla de "una aplicación activa" del almacén y, si el proceso muere,
+	// Recover la encuentra (la cierra; RecoverApplying cierra sus reservas).
+	ctx, save, stop := r.reviewRunSaver(ctx, &run)
+	defer stop()
 	fail := func(err error) (Run, error) {
 		run.State, run.FinishedAt = RunFailed, r.now()
 		run.setError(err)
-		_ = r.Ledger.Save(context.WithoutCancel(ctx), run)
+		_ = save()
 		return run, err
 	}
-	run.Progress.Total = len(entries)
+	if err := save(); err != nil {
+		return Run{}, err
+	}
 	cas := r.casReviews()
 	for lo := 0; lo < len(entries); lo += r.batch() {
 		if err := ctx.Err(); err != nil {
-			return fail(err)
+			return fail(contextError(ctx, err))
 		}
 		batch := entries[lo:min(lo+r.batch(), len(entries))]
 		var err error
@@ -415,18 +438,89 @@ func (r *Runner) ApplyApproved(ctx context.Context, org, actor, entity string) (
 		if err != nil {
 			return fail(err)
 		}
-		_ = r.Ledger.Save(ctx, run)
+		if err := save(); err != nil {
+			return fail(err)
+		}
 	}
 	run.State, run.FinishedAt = RunSucceeded, r.now()
-	return run, r.Ledger.Save(ctx, run)
+	return run, save()
+}
+
+// reviewRunSaver devuelve cómo guardar una corrida apply_reviewed. Con un
+// LeaseLedger la guarda con arrendamiento y la mantiene viva con latidos; si
+// otro proceso la toma (ErrLeaseLost) se cancela el contexto devuelto. stop
+// termina los latidos.
+func (r *Runner) reviewRunSaver(ctx context.Context, run *Run) (context.Context, func() error, func()) {
+	ll := r.leaser()
+	if ll == nil {
+		return ctx, func() error { return r.Ledger.Save(context.WithoutCancel(ctx), *run) }, func() {}
+	}
+	owner := r.owner()
+	run.Lease = &RunLease{Owner: owner, Heartbeat: r.now(), Until: r.now().Add(r.leaseTTL())}
+	cctx, cancel := context.WithCancelCause(ctx)
+	inserted := false
+	save := func() error {
+		if !inserted {
+			// La primera vez se inserta con el arrendamiento ya puesto (como Start).
+			inserted = true
+			return r.Ledger.Save(context.WithoutCancel(cctx), *run)
+		}
+		err := ll.SaveLeased(context.WithoutCancel(cctx), *run, owner, r.now(), r.leaseTTL())
+		if errors.Is(err, ErrLeaseLost) {
+			cancel(ErrLeaseLost)
+		}
+		return err
+	}
+	done := make(chan struct{})
+	if every := r.heartbeatEvery(); every > 0 {
+		go func() {
+			t := time.NewTicker(every)
+			defer t.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-cctx.Done():
+					return
+				case <-t.C:
+					if ok, err := ll.Heartbeat(cctx, run.Org, run.ID, owner, r.now(), r.leaseTTL()); err == nil && !ok {
+						cancel(ErrLeaseLost)
+						return
+					}
+				}
+			}
+		}()
+	}
+	return cctx, save, func() { close(done); cancel(nil) }
+}
+
+// destinationMoved dice si el destino cambió para esta identidad después de
+// planificar la fila en revisión: otra corrida (o alguien) ya escribió una
+// versión distinta de la que vio quien decidió. Escribir lo aprobado ahí
+// regresaría el dato a la versión de un archivo anterior.
+func destinationMoved(e ReviewEntry, ex Existing, found bool) bool {
+	if !found || ex.Hash == e.Hash {
+		return false
+	}
+	if e.Outcome == ActionCreate {
+		return true // no existía al planificar y ahora existe con otro contenido
+	}
+	return e.BaseHash != "" && ex.Hash != e.BaseHash
 }
 
 // approvedChanges arma los cambios de un lote contra lo que ya tiene el destino
-// y cuenta created/updated/unchanged.
-func approvedChanges(run *Run, batch []ReviewEntry, existing map[string]Existing) []Change {
-	var changes []Change
+// y cuenta created/updated/unchanged. Devuelve aparte las entradas cuyo destino
+// cambió después de planificarlas (no se escriben).
+func approvedChanges(run *Run, batch []ReviewEntry, existing map[string]Existing) (changes []Change, live, moved []ReviewEntry) {
 	for _, e := range batch {
 		ex, found := existing[e.Key]
+		if destinationMoved(e, ex, found) {
+			moved = append(moved, e)
+			run.Progress.Total--
+			run.Progress.Superseded++
+			continue
+		}
+		live = append(live, e)
 		switch {
 		case !found:
 			changes = append(changes, Change{Key: e.Key, Action: ActionCreate, Record: e.Record, Hash: e.Hash})
@@ -438,15 +532,21 @@ func approvedChanges(run *Run, batch []ReviewEntry, existing map[string]Existing
 			run.Progress.Updated++
 		}
 	}
-	return changes
+	return changes, live, moved
 }
 
-// enqueueReviewMedia encola los medios de una fila ya aplicada.
-func (r *Runner) enqueueReviewMedia(ctx context.Context, org, entity, runID string, e ReviewEntry) (int, error) {
-	if r.Media == nil || len(e.Media) == 0 {
+// syncReviewMedia deja al día los medios de filas ya escritas en el destino
+// (las vuelve a ligar). Va ANTES de marcarlas applied: si falla, la fila sigue
+// sin marcar y el siguiente intento (o RecoverApplying) los encola.
+func (r *Runner) syncReviewMedia(ctx context.Context, org, entity, runID string, entries []ReviewEntry) (int, error) {
+	if r.Media == nil || len(entries) == 0 {
 		return 0, nil
 	}
-	n, err := r.Media.Enqueue(ctx, r.Media.jobsFor(org, entity, runID, e.Key, e.Media))
+	rows := make([]MediaRow, 0, len(entries))
+	for _, e := range entries {
+		rows = append(rows, MediaRow{Key: e.Key, Media: e.Media, Rewritten: true})
+	}
+	n, err := r.Media.Sync(ctx, org, entity, runID, rows)
 	if err != nil {
 		return 0, wrapErr(err, CodeMediaEnqueue)
 	}
@@ -486,14 +586,32 @@ func (r *Runner) applyReservedBatch(ctx context.Context, cas ConditionalReviewSt
 		r.releaseReserved(ctx, cas, org, entity, reserved)
 		return wrapErr(err, CodeTargetLookup)
 	}
-	if changes := approvedChanges(run, reserved, existing); len(changes) > 0 {
+	changes, live, moved := approvedChanges(run, reserved, existing)
+	for _, e := range moved {
+		sup := e
+		sup.State, sup.UpdatedAt = ReviewSuperseded, r.now()
+		if _, err := cas.PutIf(ctx, sup, expectOf(e)); err != nil {
+			r.releaseReserved(ctx, cas, org, entity, live)
+			return wrapErr(err, CodeReviewStore)
+		}
+	}
+	if len(changes) > 0 {
 		if err := r.Target.Apply(ctx, org, entity, changes); err != nil {
 			// Puede que una parte sí se haya escrito: se resuelve leyendo el destino.
-			_, _ = r.settleApplying(context.WithoutCancel(ctx), cas, org, entity, reserved)
+			_, _ = r.settleApplying(context.WithoutCancel(ctx), cas, org, entity, live)
 			return wrapErr(err, CodeApplyApproved)
 		}
 	}
-	for _, e := range reserved {
+	// Medios antes de marcar applied. Si encolar falla, las filas vuelven a
+	// approved: el destino ya las tiene con su huella, así que el siguiente
+	// ApplyApproved las ve unchanged (no reescribe nada) y solo encola sus medios.
+	n, err := r.syncReviewMedia(ctx, org, entity, run.ID, live)
+	if err != nil {
+		r.releaseReserved(ctx, cas, org, entity, live)
+		return err
+	}
+	run.Progress.MediaQueued += n
+	for _, e := range live {
 		done := e
 		done.State, done.UpdatedAt = ReviewApplied, r.now()
 		ok, err := cas.PutIf(ctx, done, expectOf(e))
@@ -504,11 +622,6 @@ func (r *Runner) applyReservedBatch(ctx context.Context, cas ConditionalReviewSt
 			continue // la tomó RecoverApplying (o la reemplazó una versión nueva): no se pisa
 		}
 		run.Progress.Done++
-		n, err := r.enqueueReviewMedia(ctx, org, entity, run.ID, e)
-		if err != nil {
-			return err
-		}
-		run.Progress.MediaQueued += n
 	}
 	return nil
 }
@@ -547,6 +660,13 @@ func (r *Runner) settleApplying(ctx context.Context, cas ConditionalReviewStore,
 		next.UpdatedAt = r.now()
 		written := false
 		if ex, ok := existing[e.Key]; ok && ex.Hash == e.Hash {
+			// Escrita: sus medios se encolan antes de marcarla applied, así un
+			// fallo al encolar la deja en 'applying' para el siguiente intento.
+			n, err := r.syncReviewMedia(ctx, org, entity, e.AppliedRun, []ReviewEntry{e})
+			if err != nil {
+				return rep, err
+			}
+			rep.MediaQueued += n
 			next.State, written = ReviewApplied, true
 		} else {
 			next.State, next.AppliedRun = ReviewApproved, ""
@@ -563,11 +683,6 @@ func (r *Runner) settleApplying(ctx context.Context, cas ConditionalReviewStore,
 			continue
 		}
 		rep.Applied = append(rep.Applied, e.Key)
-		n, err := r.enqueueReviewMedia(ctx, org, entity, e.AppliedRun, e)
-		if err != nil {
-			return rep, err
-		}
-		rep.MediaQueued += n
 	}
 	return rep, nil
 }
@@ -659,11 +774,25 @@ func (r *Runner) applyListedBatch(ctx context.Context, run *Run, org, entity str
 			run.Progress.Total--
 		}
 	}
-	if changes := approvedChanges(run, live, existing); len(changes) > 0 {
+	changes, live, moved := approvedChanges(run, live, existing)
+	for _, e := range moved {
+		e.State, e.UpdatedAt = ReviewSuperseded, r.now()
+		if err := r.Reviews.Put(ctx, e); err != nil {
+			return err
+		}
+	}
+	if len(changes) > 0 {
 		if err := r.Target.Apply(ctx, org, entity, changes); err != nil {
 			return wrapErr(err, CodeApplyApproved)
 		}
 	}
+	// Medios antes de marcar applied: si encolar falla, la fila sigue aprobada y
+	// el siguiente ApplyApproved la reescribe (sin cambios) y los encola.
+	n, err := r.syncReviewMedia(ctx, org, entity, run.ID, live)
+	if err != nil {
+		return err
+	}
+	run.Progress.MediaQueued += n
 	for _, e := range live {
 		if !r.stillApproved(ctx, e) {
 			continue // cambió durante la escritura: su nuevo estado no se pisa
@@ -673,11 +802,6 @@ func (r *Runner) applyListedBatch(ctx context.Context, run *Run, org, entity str
 			return err
 		}
 		run.Progress.Done++
-		n, err := r.enqueueReviewMedia(ctx, org, entity, run.ID, e)
-		if err != nil {
-			return err
-		}
-		run.Progress.MediaQueued += n
 	}
 	return nil
 }

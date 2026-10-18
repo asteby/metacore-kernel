@@ -22,15 +22,21 @@ const (
 	// Plan y filas
 	CodeRowMissingIdentity Code = "dataload.row.missing_identity"
 	CodeRowDuplicate       Code = "dataload.row.duplicate"
+	CodeRowDuplicateKey    Code = "dataload.row.duplicate_key"
+	CodeRowDuplicateHeld   Code = "dataload.row.duplicate_held"
 	CodeTargetLookup       Code = "dataload.target.lookup"
 	CodeTargetMarks        Code = "dataload.target.marks"
 
 	// Corridas
-	CodeRunNotFound    Code = "dataload.run.not_found"
-	CodeLeaseLost      Code = "dataload.run.lease_lost"
-	CodeRunInvalidRows Code = "dataload.run.invalid_rows"
-	CodeApplyBatch     Code = "dataload.run.apply_batch"
-	CodeMediaEnqueue   Code = "dataload.run.media_enqueue"
+	CodeRunNotFound         Code = "dataload.run.not_found"
+	CodeLeaseLost           Code = "dataload.run.lease_lost"
+	CodeRunInvalidRows      Code = "dataload.run.invalid_rows"
+	CodeApplyBatch          Code = "dataload.run.apply_batch"
+	CodeMediaEnqueue        Code = "dataload.run.media_enqueue"
+	CodeMediaSetStore       Code = "dataload.media.set_store"
+	CodeMediaAttach         Code = "dataload.media.attach"
+	CodeMediaAttachDeferred Code = "dataload.media.attach_deferred"
+	CodeBackupRepair        Code = "dataload.media.backup_repair"
 
 	// Recuperación
 	CodeNoLeaseLedger         Code = "dataload.recover.no_lease_ledger"
@@ -41,6 +47,9 @@ const (
 	CodeRecoverInputChanged   Code = "dataload.recover.input_changed"
 	CodeRecoverKeyMismatch    Code = "dataload.recover.key_mismatch"
 	CodeRecoverAbandoned      Code = "dataload.recover.abandoned"
+	CodeRecoverNotResumable   Code = "dataload.recover.not_resumable"
+	CodeRecoverDeferred       Code = "dataload.recover.deferred"
+	CodeRecoverReviewRun      Code = "dataload.recover.review_run"
 
 	// Revisión y autorización
 	CodeNoReviewStore  Code = "dataload.review.no_store"
@@ -75,6 +84,7 @@ const (
 	CodeProfileParse           Code = "dataload.profile.parse"
 	CodeProfileInvalid         Code = "dataload.profile.invalid"
 	CodeProfileMissing         Code = "dataload.profile.missing"
+	CodeProfileDuplicates      Code = "dataload.profile.duplicates"
 	CodeProfileMissingKey      Code = "dataload.profile.missing_key"
 	CodeProfileFieldIncomplete Code = "dataload.profile.field_incomplete"
 	CodeProfileDeriveFrom      Code = "dataload.profile.derive_from"

@@ -28,6 +28,15 @@ type BackupStore interface {
 	Open(ctx context.Context, storedName string) (io.ReadCloser, error)
 }
 
+// RepairingStore es una extensión OPCIONAL de BackupStore: reemplaza de forma
+// atómica (temporal, fsync, rename) el objeto ya guardado con ese sha256 cuando
+// sus bytes se dañaron. No rompe la inmutabilidad: el contenido direccionado por
+// el sha256 es el mismo; solo se restaura. Quien la implemente debe comprobar que
+// r produce exactamente ese sha256 antes de reemplazar.
+type RepairingStore interface {
+	RepairHashed(ctx context.Context, sha256, storedName string, r io.Reader, contentType string) error
+}
+
 // EntryStatus es el resultado de la última verificación de un respaldo.
 type EntryStatus string
 
@@ -314,7 +323,18 @@ func (b *Backuper) store(ctx context.Context, org, rawURL string, f *importer.Fe
 			FetchedAt: prev.FetchedAt, ETag: prev.ETag, LastModified: prev.LastModified,
 		})
 	}
-	if err := b.verify(ctx, &entry); err != nil {
+	err = b.verify(ctx, &entry)
+	if err != nil && found && (entry.Status == EntryCorrupt || entry.Status == EntryMissing) {
+		// El objeto con ese sha256 ya existía pero está dañado o falta, y los
+		// bytes recién bajados sí son ese sha256: se restaura en su lugar.
+		if rs, ok := b.Store.(RepairingStore); ok {
+			if rerr := rs.RepairHashed(ctx, hexsum, name, bytes.NewReader(f.Data), f.Type); rerr != nil {
+				return ManifestEntry{}, wrapErr(rerr, CodeBackupRepair, "name", name)
+			}
+			err = b.verify(ctx, &entry)
+		}
+	}
+	if err != nil {
 		if prev == nil && (entry.Status == EntryCorrupt || entry.Status == EntryMissing) {
 			_ = b.Manifest.Put(ctx, entry) // queda constancia para la auditoría
 		}
@@ -517,6 +537,10 @@ type MediaQueue struct {
 	Jobs   MediaJobStore
 	Backup *Backuper
 	Sink   MediaSink // opcional
+	// Sets guarda el conjunto vigente de cada campo (ver Sync). Sin él, lo ligado
+	// sale de todo el historial de la cola: una URL quitada en una carga
+	// posterior sigue ligada y un cambio de orden no se aplica.
+	Sets MediaSetStore
 	// Deriver opcional; un fallo se anota en el trabajo sin invalidar el original.
 	Deriver Deriver
 	// MaxAttempts por trabajo; default 5.
@@ -889,14 +913,24 @@ func (q *MediaQueue) process(ctx context.Context, j MediaJob) error {
 	if uerr := q.Jobs.Update(ctx, j); uerr != nil {
 		return uerr
 	}
-	if j.State == MediaDone || j.State == MediaDead {
-		return q.attachIfSettled(ctx, j)
+	if j.State != MediaDone && j.State != MediaDead {
+		return nil
 	}
-	return nil
+	aerr := q.attachJob(ctx, j)
+	if aerr != nil && j.State == MediaDone && j.Attempts < q.maxAttemptsFor(j.Org) {
+		// El original ya está respaldado; solo falló ligarlo. El trabajo vuelve a
+		// la cola con espera: el siguiente intento no toca la red (Ensure lo da
+		// por vigente) y vuelve a ligar.
+		j.State, j.NextAttempt, j.UpdatedAt = MediaPending, q.now().Add(q.delay(j.Attempts)), q.now()
+		j.setError(aerr)
+		_ = q.Jobs.Update(context.WithoutCancel(ctx), j)
+	}
+	return aerr
 }
 
 // attachIfSettled liga al registro el conjunto de originales del campo cuando
-// ya no queda ningún trabajo pendiente o en curso para él.
+// ya no queda ningún trabajo pendiente o en curso para él. Es el camino sin
+// MediaSetStore: arma el conjunto con TODO el historial del campo.
 func (q *MediaQueue) attachIfSettled(ctx context.Context, j MediaJob) error {
 	if q.Sink == nil {
 		return nil
