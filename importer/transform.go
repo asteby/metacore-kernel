@@ -299,105 +299,22 @@ type FetchedMedia struct {
 	Type string
 	// SuggestedName conserva el nombre base de la URL con la extensión del tipo.
 	SuggestedName string
-}
-
-// FetchMedia descarga rawURL aplicando MediaPolicy (allowlist, tope de bytes
-// sin truncar, tipo por magic bytes, reintentos con backoff y Retry-After) y la
-// guarda de salida de netguard. No escribe en ningún almacén: quien llama decide
-// qué hacer con los bytes (media_url los guarda; dataload respalda el original
-// por sha256). TransformDeps.Store no se usa.
-func FetchMedia(deps *TransformDeps, rawURL string) (*FetchedMedia, error) {
-	rawURL = strings.TrimSpace(rawURL)
-	if rawURL == "" {
-		return nil, fmt.Errorf("URL vacía")
-	}
-	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
-		return nil, fmt.Errorf("URL debe empezar con http:// o https:// (recibido: %q)", rawURL)
-	}
-	if deps == nil {
-		deps = &TransformDeps{}
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" {
-		return nil, fmt.Errorf("URL inválida: %q", rawURL)
-	}
-	pol := deps.Policy
-	if len(pol.AllowHosts) > 0 && !netguard.HostAllowed(pol.AllowHosts, strings.ToLower(u.Host)) {
-		return nil, fmt.Errorf("%w: %s", ErrMediaHost, u.Host)
-	}
-
-	ctx := transformDepsContext(deps)
-	client := httpClient(deps)
-	if deps.HTTPClient == nil {
-		defer client.CloseIdleConnections()
-	}
-	sleep := sleepFn(deps)
-	attempts := pol.maxAttempts()
-
-	var lastErr error
-	for n := 1; n <= attempts; n++ {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		data, _, retryAfter, err := downloadOnce(ctx, client, rawURL, pol)
-		if err == nil {
-			detected := detectImageType(data)
-			if !pol.typeAllowed(detected) {
-				return nil, fmt.Errorf("%w: %s", ErrMediaType, detected)
-			}
-			return &FetchedMedia{URL: u, Data: data, Type: detected, SuggestedName: suggestName(u, detected)}, nil
-		}
-		if !retryable(ctx, err) {
-			return nil, err
-		}
-		lastErr = err
-		if n == attempts {
-			break
-		}
-		wait := backoff(pol.baseBackoff(), n)
-		if retryAfter > 0 {
-			wait = retryAfter
-		}
-		if serr := sleep(ctx, wait); serr != nil {
-			return nil, serr
-		}
-	}
-	return nil, fmt.Errorf("tras %d intentos: %w", attempts, lastErr)
+	// ETag y LastModified son los validadores que el servidor mandó; sirven para
+	// revalidar después con FetchOptions.
+	ETag         string
+	LastModified string
+	// NotModified: el servidor respondió 304 a una petición condicional; Data va
+	// vacío y lo que ya se tenía sigue vigente.
+	NotModified bool
+	// ResumedBytes son los bytes que no hizo falta volver a bajar porque una
+	// descarga cortada se reanudó con Range.
+	ResumedBytes int64
 }
 
 // IsRetryable indica si vale la pena reintentar más tarde tras err: errores de
 // red, timeouts, 408/425/429 y 5xx. Los 4xx definitivos, los bloqueos de
 // netguard, host/tamaño/tipo y la cancelación no se reintentan.
 func IsRetryable(ctx context.Context, err error) bool { return retryable(ctx, err) }
-
-// downloadOnce performs a single GET and returns the whole body (never more
-// than MaxBytes). retryAfter is the server-requested wait, if any.
-func downloadOnce(ctx context.Context, client *http.Client, rawURL string, pol MediaPolicy) (data []byte, ctype string, retryAfter time.Duration, err error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, "", 0, fmt.Errorf("URL inválida: %w", err)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, "", 0, fmt.Errorf("no se pudo descargar: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", parseRetryAfter(resp.Header.Get("Retry-After")), ErrMediaHTTP{Status: resp.StatusCode}
-	}
-	max := pol.maxBytes()
-	if resp.ContentLength > max {
-		return nil, "", 0, fmt.Errorf("%w (%d bytes, máximo %d)", ErrMediaTooLarge, resp.ContentLength, max)
-	}
-	data, err = io.ReadAll(io.LimitReader(resp.Body, max+1))
-	if err != nil {
-		return nil, "", 0, fmt.Errorf("no se pudo descargar: %w", err)
-	}
-	if int64(len(data)) > max {
-		return nil, "", 0, fmt.Errorf("%w (máximo %d bytes)", ErrMediaTooLarge, max)
-	}
-	return data, resp.Header.Get("Content-Type"), 0, nil
-}
 
 // retryable: network errors, timeouts, 408/425/429 and 5xx. Definitive 4xx,
 // netguard blocks, host/size/type errors and a cancelled context are not.
