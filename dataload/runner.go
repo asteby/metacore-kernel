@@ -3,6 +3,7 @@ package dataload
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -317,6 +318,7 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 
 	// Una corrida recuperada trae el avance que dejó su dueño anterior.
 	base := run.Progress
+	marker, _ := r.Target.(MarkingTarget)
 	run.State, run.StartedAt = RunRunning, r.now()
 	if !save() {
 		return
@@ -336,6 +338,24 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 		fail(newErr(CodeRunInvalidRows, "invalid", run.Progress.Invalid, "duplicates", run.Progress.Duplicates))
 		return
 	}
+	cp := Checkpoint{}
+	if run.Checkpoint != nil {
+		cp = *run.Checkpoint
+	}
+	// Lotes que el dueño anterior escribió después de su último checkpoint: sus
+	// marcas dicen cuántas filas creó y actualizó (si el destino las guarda).
+	if marker != nil && run.Checkpoint != nil {
+		marks, err := marker.ApplyMarks(ctx, req.Org, run.ID, cp.Batches)
+		if err != nil {
+			fail(wrapErr(err, CodeTargetMarks))
+			return
+		}
+		for _, m := range latestMarks(marks) {
+			n := m.Created + m.Updated
+			base.Done, base.Created, base.Updated = base.Done+n, base.Created+m.Created, base.Updated+m.Updated
+			cp.Batches, cp.Rows, cp.LastKey, cp.Recovered = m.Batch, cp.Rows+n, m.LastKey, cp.Recovered+n
+		}
+	}
 	// Reanudación: lo que escribió el dueño anterior ya aparece como unchanged en
 	// este plan; se suma al avance y se quita de unchanged.
 	if base.Done > 0 {
@@ -343,10 +363,6 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 		run.Progress.Unchanged = max(0, run.Progress.Unchanged-base.Done)
 	}
 	run.Progress.Done, run.Progress.Created, run.Progress.Updated = base.Done, base.Created, base.Updated
-	cp := Checkpoint{}
-	if run.Checkpoint != nil {
-		cp = *run.Checkpoint
-	}
 	if !save() {
 		return
 	}
@@ -358,21 +374,31 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 			return
 		}
 		hi := min(lo+r.batch(), len(changes))
-		if err := r.Target.Apply(ctx, req.Org, plan.Entity, changes[lo:hi]); err != nil {
+		mark := ApplyMark{RunID: run.ID, Batch: cp.Batches + 1, Generation: cp.Resumes, LastKey: changes[hi-1].Key}
+		for _, c := range changes[lo:hi] {
+			if c.Action == ActionCreate {
+				mark.Created++
+			} else {
+				mark.Updated++
+			}
+		}
+		var err error
+		if marker != nil {
+			err = marker.ApplyMarked(ctx, req.Org, plan.Entity, mark, changes[lo:hi])
+		} else {
+			err = r.Target.Apply(ctx, req.Org, plan.Entity, changes[lo:hi])
+		}
+		if err != nil {
 			fail(wrapErr(err, CodeApplyBatch, "from", lo+1, "to", hi))
 			return
 		}
-		for _, c := range changes[lo:hi] {
-			run.Progress.Done++
-			if c.Action == ActionCreate {
-				run.Progress.Created++
-			} else {
-				run.Progress.Updated++
-			}
-		}
+		run.Progress.Done += hi - lo
+		run.Progress.Created += mark.Created
+		run.Progress.Updated += mark.Updated
 		cp.Batches++
 		cp.Rows, cp.LastKey, cp.UpdatedAt = run.Progress.Done, changes[hi-1].Key, r.now()
-		run.Checkpoint = &Checkpoint{Batches: cp.Batches, Rows: cp.Rows, LastKey: cp.LastKey, Resumes: cp.Resumes, UpdatedAt: cp.UpdatedAt}
+		saved := cp
+		run.Checkpoint = &saved
 		if !save() {
 			return
 		}
@@ -486,4 +512,22 @@ func (run *Run) setError(err error) {
 	if m, ok := ErrorMessage(err); ok {
 		run.ErrorCode, run.ErrorParams = m.Code, m.Params
 	}
+}
+
+// latestMarks deja, por número de lote, la marca de la generación más reciente:
+// si un dueño anterior colgado despierta y escribe tarde un lote con el mismo
+// número que ya escribió quien lo recuperó, cuenta el de este último.
+func latestMarks(marks []ApplyMark) []ApplyMark {
+	byBatch := map[int]ApplyMark{}
+	for _, m := range marks {
+		if prev, ok := byBatch[m.Batch]; !ok || m.Generation > prev.Generation {
+			byBatch[m.Batch] = m
+		}
+	}
+	out := make([]ApplyMark, 0, len(byBatch))
+	for _, m := range byBatch {
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Batch < out[j].Batch })
+	return out
 }

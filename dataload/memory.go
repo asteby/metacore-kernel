@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ type MemoryTarget struct {
 	mu      sync.Mutex
 	rows    map[string]Existing // org|entity|key
 	applies int
+	marks   map[string]ApplyMark // org|run|generación|lote
 	// FailApply, si no es nil, se invoca antes de cada lote y puede devolver un error.
 	FailApply func(batch int) error
 }
@@ -56,6 +58,48 @@ func (t *MemoryTarget) Apply(_ context.Context, org, entity string, changes []Ch
 		t.rows[mk(org, entity, c.Key)] = Existing{Record: c.Record, Hash: c.Hash}
 	}
 	return nil
+}
+
+// MemoryMarkingTarget es un MemoryTarget que además guarda marcas de
+// aplicación (MarkingTarget).
+type MemoryMarkingTarget struct {
+	*MemoryTarget
+}
+
+// NewMemoryMarkingTarget arma un MemoryMarkingTarget vacío.
+func NewMemoryMarkingTarget() *MemoryMarkingTarget {
+	return &MemoryMarkingTarget{MemoryTarget: NewMemoryTarget()}
+}
+
+var _ MarkingTarget = (*MemoryMarkingTarget)(nil)
+
+// ApplyMarked aplica el lote y guarda su marca (en una base de datos, en la
+// misma transacción; aquí la marca se escribe solo si el lote se aplicó).
+func (t *MemoryMarkingTarget) ApplyMarked(ctx context.Context, org, entity string, mark ApplyMark, changes []Change) error {
+	if err := t.Apply(ctx, org, entity, changes); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.marks == nil {
+		t.marks = map[string]ApplyMark{}
+	}
+	t.marks[mk(org, mark.RunID, strconv.Itoa(mark.Generation), strconv.Itoa(mark.Batch))] = mark
+	return nil
+}
+
+// ApplyMarks devuelve las marcas de la corrida posteriores a after.
+func (t *MemoryMarkingTarget) ApplyMarks(_ context.Context, org, runID string, after int) ([]ApplyMark, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []ApplyMark
+	for k, m := range t.marks {
+		if strings.HasPrefix(k, mk(org, runID)+"\x00") && m.Batch > after {
+			out = append(out, m)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Batch < out[j].Batch })
+	return out, nil
 }
 
 // Get devuelve lo guardado para una identidad.

@@ -57,6 +57,38 @@ type Target interface {
 	Apply(ctx context.Context, org, entity string, changes []Change) error
 }
 
+// ApplyMark es la constancia de un lote escrito por una corrida: cuántas filas
+// creó y actualizó. La escribe el destino en la misma transacción que el lote,
+// así que sobrevive aunque el proceso muera antes de guardar el checkpoint.
+type ApplyMark struct {
+	RunID string `json:"runId"`
+	// Batch es el número de lote de la corrida (acumulado entre reanudaciones:
+	// Checkpoint.Batches + 1).
+	Batch int `json:"batch"`
+	// Generation es Checkpoint.Resumes del proceso que escribió el lote: entre
+	// dos marcas del mismo lote vale la de generación mayor.
+	Generation int    `json:"generation,omitempty"`
+	Created    int    `json:"created"`
+	Updated    int    `json:"updated"`
+	LastKey    string `json:"lastKey,omitempty"`
+}
+
+// MarkingTarget es un Target que además guarda marcas de aplicación. Es
+// opcional: sin él, si el proceso muere entre escribir un lote y guardar su
+// checkpoint, la reanudación ve esas filas como unchanged y el conteo de
+// Created/Updated de la corrida queda corto (los datos sí quedan bien). Con él,
+// la reanudación lee las marcas posteriores al checkpoint y el conteo es exacto.
+type MarkingTarget interface {
+	Target
+	// ApplyMarked hace lo mismo que Apply y guarda mark en la MISMA transacción
+	// (lote y marca, o nada). Es idempotente por (org, RunID, Generation, Batch):
+	// repetirla reemplaza la marca.
+	ApplyMarked(ctx context.Context, org, entity string, mark ApplyMark, changes []Change) error
+	// ApplyMarks devuelve las marcas de la corrida con Batch > after (de todas las
+	// generaciones), en cualquier orden.
+	ApplyMarks(ctx context.Context, org, runID string, after int) ([]ApplyMark, error)
+}
+
 // FieldDiff es un campo que cambia en una actualización.
 type FieldDiff struct {
 	Field string `json:"field"`

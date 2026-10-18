@@ -67,7 +67,11 @@ type Checkpoint struct {
 	// LastKey es la identidad de la última fila escrita.
 	LastKey string `json:"lastKey,omitempty"`
 	// Resumes cuenta cuántas veces se recuperó la corrida tras quedar huérfana.
-	Resumes   int       `json:"resumes,omitempty"`
+	Resumes int `json:"resumes,omitempty"`
+	// Recovered son las filas que una reanudación contó desde las marcas de
+	// aplicación (MarkingTarget): escritas por el dueño anterior después de su
+	// último checkpoint.
+	Recovered int       `json:"recovered,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
