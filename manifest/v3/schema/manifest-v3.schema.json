@@ -2204,7 +2204,7 @@
       "properties": {
         "key": {
           "type": "string",
-          "minLength": 1
+          "pattern": "^[a-z][a-z0-9_]*$"
         },
         "title": {
           "type": "string",
@@ -2238,7 +2238,8 @@
         },
         "route": {
           "type": "string",
-          "description": "Route that auto-starts the guide for trigger=first_visit."
+          "pattern": "^/",
+          "description": "Route that auto-starts the guide for trigger=first_visit; it is only the trigger (each step may carry its own route)."
         },
         "order": {
           "type": "integer"

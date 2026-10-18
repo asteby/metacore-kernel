@@ -58,6 +58,12 @@ func TestGuides_Rejects(t *testing.T) {
 				map[string]interface{}{"id": "a", "title": "t", "description": "d"},
 			}},
 		}, "target is required"},
+		"key no snake_case": {[]interface{}{
+			map[string]interface{}{"key": "Bad-Key", "title": "t", "steps": []interface{}{guideStep("a")}},
+		}, "key"},
+		"route sin slash": {[]interface{}{
+			map[string]interface{}{"key": "g", "title": "t", "trigger": "first_visit", "route": "pos", "steps": []interface{}{guideStep("a")}},
+		}, "route"},
 		"sin pasos": {[]interface{}{
 			map[string]interface{}{"key": "g", "title": "t", "steps": []interface{}{}},
 		}, "steps"},
@@ -67,5 +73,28 @@ func TestGuides_Rejects(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: want error containing %q, got %v", name, c.want, err)
 		}
+	}
+}
+
+// A preset has no contributions of its own: it declares guides inline in
+// preset.defaults (free-form), which the host materializes per org.
+func TestGuides_PresetDefaults(t *testing.T) {
+	m := baseValid()
+	m["kind"] = "Preset"
+	delete(m, "capabilities")
+	m["preset"] = map[string]interface{}{
+		"addons": []interface{}{map[string]interface{}{"key": "pos", "version": ">=0.1.0"}},
+		"defaults": map[string]interface{}{
+			"guides": []interface{}{
+				map[string]interface{}{
+					"key": "cajero_caja", "title": "t", "roles": []interface{}{"cajero"},
+					"trigger": "first_visit", "route": "/addons/pos/terminal",
+					"steps": []interface{}{guideStep("a")},
+				},
+			},
+		},
+	}
+	if err := Validate(mustJSON(t, m)); err != nil {
+		t.Fatalf("preset with defaults.guides must validate, got: %v", err)
 	}
 }

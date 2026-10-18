@@ -235,6 +235,9 @@ func validateGuides(m *Manifest) []string {
 		if g.Trigger == "first_visit" && g.Route == "" {
 			errs = append(errs, fmt.Sprintf("%s.route is required when trigger is first_visit", where))
 		}
+		if g.Route != "" && !strings.HasPrefix(g.Route, "/") {
+			errs = append(errs, fmt.Sprintf("%s.route %q must start with \"/\"", where, g.Route))
+		}
 		steps := make(map[string]struct{}, len(g.Steps))
 		for _, st := range g.Steps {
 			if _, dup := steps[st.ID]; dup {
