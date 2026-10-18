@@ -60,3 +60,16 @@ func TestIsValidHTTPHostPattern(t *testing.T) {
 		}
 	}
 }
+
+func TestIsBlockedEgressHostLiteralIPs(t *testing.T) {
+	for _, h := range []string{"127.0.0.2", "127.1.2.3", "::ffff:127.0.0.1", "[::ffff:10.0.0.1]", "100.64.0.1", "0.1.2.3", "fd00::1", "169.254.169.254"} {
+		if !isBlockedEgressHost(h) {
+			t.Errorf("%q must be blocked", h)
+		}
+	}
+	for _, h := range []string{"8.8.8.8", "api.stripe.com", "2606:4700::1111"} {
+		if isBlockedEgressHost(h) {
+			t.Errorf("%q must not be blocked", h)
+		}
+	}
+}

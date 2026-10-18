@@ -1,0 +1,21 @@
+{
+  "name": "catalogo-generico",
+  "version": "1",
+  "entity": "item",
+  "key": ["sku"],
+  "clean": ["trim"],
+  "ignoreHeaders": ["Meta: "],
+  "maxStreamRows": 2000000,
+  "fields": [
+    {"target": "sku", "from": ["SKU", "Código", "id"], "required": true, "clean": ["upper"]},
+    {"target": "name", "from": ["Nombre", "Name", "Título"], "required": true, "clean": ["trim_quotes", "collapse_spaces"]},
+    {"target": "price", "from": ["Precio", "Price"], "type": "number"},
+    {"target": "description", "from": ["Descripción", "Description"], "clean": ["unescape_newlines", "sanitize_html"]},
+    {"target": "published", "from": ["Publicado", "Published"], "type": "boolean", "values": {"-1": "0"}},
+    {"target": "tags", "from": ["Etiquetas", "Tags"], "split": ","},
+    {"target": "gtin", "derive": {"op": "gtin", "cols": ["EAN", "UPC", "GTIN"]}},
+    {"target": "images", "from": ["Imágenes", "Images"], "media": true},
+    {"target": "kind", "from": ["Tipo", "Type"], "values": {"simple": "simple", "variable": "parent", "variation": "variant"}}
+  ],
+  "applyOrder": [{"field": "kind", "rank": ["simple", "parent", "variant"]}]
+}

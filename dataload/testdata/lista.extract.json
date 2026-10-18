@@ -1,0 +1,164 @@
+{
+  "schema": "metacore.dataload.extract/v1",
+  "profile": { "name": "lista-proveedor", "version": "1" },
+
+  "text": { "source": "description_raw", "normalize": ["upper", "collapse_spaces", "trim"], "dropTokens": ["-"] },
+
+  "rules": [
+    {
+      "id": "sustituye", "kind": "capture",
+      "pattern": "(?:^|\\s)SUSTITUYE A\\s+(?<codes>\\S+(?:\\s+A\\s+\\S+)*)",
+      "consume": true, "title": "remove",
+      "into": { "equivalencias": { "group": "codes", "as": "list", "split": "\\s+A\\s+" } },
+      "reviewIf": [{ "when": "listLengthGt1", "into": "equivalencias", "code": "equivalencia_ambigua" }]
+    },
+    {
+      "id": "nuevo", "kind": "capture",
+      "pattern": "(?:^|\\s)(?<flag>NUEVO)(?:\\s|$)", "consume": true, "title": "remove",
+      "into": { "nuevo": { "group": "flag", "as": "flag" } }
+    },
+    { "id": "cola-guiones", "kind": "capture", "pattern": "(?:\\s+-){3,}(?:\\s+|$)", "consume": true, "title": "remove" },
+    {
+      "id": "caja", "kind": "capture",
+      "pattern": "(?:^|\\s)(?:CAJA(?:\\s+CERRADA)?(?:\\s+CONT\\.?)?\\s+)?C/(?<n>\\d+)(?:\\s|$)",
+      "consume": true, "title": "keep",
+      "into": { "caja_piezas": { "group": "n", "as": "int" } }
+    },
+    {
+      "id": "universal", "kind": "capture",
+      "pattern": "(?:^|\\s)(?<flag>UNIVERSAL)(?:\\s|$)", "consume": false, "title": "keep",
+      "into": { "universal": { "group": "flag", "as": "flag" } }
+    },
+    {
+      "id": "anios", "kind": "capture",
+      "pattern": "\\s(?<desde>\\d{4})\\s+(?<hasta>\\d{4})$", "consume": true, "title": "keep",
+      "into": { "anio_desde": { "group": "desde", "as": "int" }, "anio_hasta": { "group": "hasta", "as": "int" } }
+    },
+    {
+      "id": "motor", "kind": "capture",
+      "pattern": "\\s(?<disp>\\d+(?:\\.\\d+)?|-)(?:\\s+(?<variante>[A-Z]{2,6}))?\\s+(?<cfg>[LVHR]\\d{1,2}|-)$",
+      "consume": true, "title": "keep",
+      "into": {
+        "motor_bloque": { "group": "disp", "as": "flag" },
+        "motor_desplazamiento": { "group": "disp", "as": "text", "null": ["-"] },
+        "motor_variante": { "group": "variante", "as": "text" },
+        "motor_cilindros": { "group": "cfg", "as": "text", "null": ["-"] }
+      }
+    },
+    {
+      "id": "vehiculo", "kind": "entity", "vocab": "vehicleBrands",
+      "pattern": "^(?<pieza>.+?)\\s(?<marca>{{vocab}})\\s(?<modelo>.+)$",
+      "entityGroup": "marca", "restGroup": "pieza", "detailGroup": "modelo",
+      "emit": { "id": "vehiculo_marca_id", "label": "vehiculo_marca", "detail": "vehiculo_modelo" },
+      "guards": {
+        "maxTokens": 4,
+        "rejectPattern": "(?:^|\\s)(?:EXCEPTO|EXT|DOBLE|HECHO|STD|STANDARD|NORTE|GDE|LARGA|C/PERNO|SIN|CON)(?:\\s|$)",
+        "allowIn": { "dodge": ["RAM"], "mg": ["MG"] },
+        "suspectCode": "modelo_sospechoso", "ambiguousCode": "marca_ambigua"
+      }
+    },
+    { "id": "posicion", "kind": "tokens", "from": "pieza", "dictionary": "positions", "into": "position", "order": ["delantera", "trasera", "superior", "inferior", "izquierda", "derecha"], "join": "/" },
+    { "id": "traccion", "kind": "tokens", "from": "pieza", "dictionary": "drivetrain", "into": "traccion", "join": "/" },
+    { "id": "tipo-pieza", "kind": "prefix", "from": "pieza", "dictionary": "pieceTypes", "into": "pieza", "rest": "detalle", "unknownCode": "pieza_sin_catalogo" },
+    { "id": "motor-etiqueta", "kind": "set", "field": "motor", "template": "{motor_desplazamiento|decimal} {motor_variante} {motor_cilindros}", "post": ["collapse"] },
+    { "id": "motor-id", "kind": "set", "field": "motor_id", "template": "{motor_desplazamiento|decimal} {motor_variante}", "requires": ["motor_desplazamiento"], "post": ["collapse", "slug"] },
+    { "id": "modelo-id", "kind": "set", "field": "vehiculo_modelo_id", "template": "{vehiculo_modelo}", "requires": ["vehiculo_modelo"], "post": ["slug"] },
+    { "id": "anios-texto", "kind": "set", "field": "anios", "template": "{anio_desde|span(anio_hasta)}", "requires": ["anio_desde"] }
+  ],
+
+  "vocab": {
+    "vehicleBrands": [
+      { "id": "chevrolet", "label": "Chevrolet", "aliases": ["CHEVROLET", "GM"] },
+      { "id": "dodge", "label": "Dodge", "aliases": ["DODGE"] },
+      { "id": "ford", "label": "Ford", "aliases": ["FORD"] },
+      { "id": "honda", "label": "Honda", "aliases": ["HONDA"] },
+      { "id": "mazda", "label": "Mazda", "aliases": ["MAZDA"] },
+      { "id": "mercedes-benz", "label": "Mercedes-Benz", "aliases": ["MERCEDES BENZ", "MERCEDES-BENZ", "MERCEDES"] },
+      { "id": "nissan", "label": "Nissan", "aliases": ["NISSAN"] },
+      { "id": "ram", "label": "RAM", "aliases": ["RAM"] },
+      { "id": "toyota", "label": "Toyota", "aliases": ["TOYOTA"] },
+      { "id": "volkswagen", "label": "Volkswagen", "aliases": ["VOLKSWAGEN"] }
+    ],
+    "positions": {
+      "DEL": "delantera", "DELANTERO": "delantera", "DELANTERA": "delantera",
+      "TRAS": "trasera", "TRASERO": "trasera", "TRASERA": "trasera",
+      "IZQ": "izquierda", "IZQUIERDO": "izquierda", "IZQUIERDA": "izquierda",
+      "DER": "derecha", "DERECHO": "derecha", "DERECHA": "derecha",
+      "INF": "inferior", "INFERIOR": "inferior", "SUP": "superior", "SUPERIOR": "superior"
+    },
+    "drivetrain": { "FWD": "FWD", "RWD": "RWD", "AWD": "AWD", "4WD": "4WD", "4X4": "4X4", "4X2": "4X2" },
+    "pieceTypes": ["ACEITE MOTOR", "AMORTIGUADOR", "BALATA DISCO", "BALATA TAMBOR", "BIELETA", "BUJE", "DISCO", "FILTRO ACEITE", "ROTULA", "TERMINAL DIRECCION"]
+  },
+
+  "categories": {
+    "source": "category_source",
+    "into": "category",
+    "unmappedCode": "categoria_sin_mapa",
+    "map": {
+      "FRENOS": { "id": "frenos" },
+      "SUSPENSION Y DIRECCION": { "id": "suspension" },
+      "AFINACION": { "id": "motor", "refine": [{ "field": "pieza", "match": "^FILTRO(?:\\s|$)", "id": "filtros" }] },
+      "QUIMICOS": { "id": null, "set": { "vehiculo_opcional": true } }
+    }
+  },
+
+  "outputs": {
+    "title": "title",
+    "drop": ["description_raw", "category_source"],
+    "attributes": {
+      "part_number": "sku",
+      "pieza": "pieza",
+      "detalle": "detalle",
+      "position": "position",
+      "traccion": "traccion",
+      "caja_piezas": "caja_piezas",
+      "equivalencias": "equivalencias",
+      "nuevo": "nuevo",
+      "anio_desde": "anio_desde",
+      "anio_hasta": "anio_hasta",
+      "motor": "motor",
+      "vehiculo_marca": { "field": "vehiculo_marca", "unless": ["vehiculo_no_reconocido", "modelo_sospechoso", "marca_ambigua", "anios_no_reconocidos", "anios_invalidos", "motor_no_reconocido"] },
+      "vehiculo_modelo": { "field": "vehiculo_modelo", "unless": ["vehiculo_no_reconocido", "modelo_sospechoso", "marca_ambigua", "anios_no_reconocidos", "anios_invalidos", "motor_no_reconocido"] }
+    },
+    "lists": [
+      {
+        "target": "tags", "template": "fit:{vehiculo_marca_id}/{vehiculo_modelo_id}/{year}/{motor_id}",
+        "each": { "as": "year", "from": "anio_desde", "to": "anio_hasta" },
+        "requires": ["vehiculo_marca_id", "vehiculo_modelo_id", "motor_id", "anio_desde", "anio_hasta"],
+        "unless": ["vehiculo_no_reconocido", "modelo_sospechoso", "marca_ambigua", "anios_no_reconocidos", "anios_invalidos", "motor_no_reconocido"]
+      },
+      { "target": "tags", "template": "fit:universal", "requires": ["universal"], "requiresNot": ["vehiculo_marca"] },
+      {
+        "target": "attributes.compatibilidad", "template": "{vehiculo_marca|safe}|{vehiculo_modelo|safe}|{anios}|{motor|safe}|", "join": ";",
+        "requires": ["vehiculo_marca", "vehiculo_modelo", "anios"],
+        "unless": ["vehiculo_no_reconocido", "modelo_sospechoso", "marca_ambigua", "anios_no_reconocidos", "anios_invalidos", "motor_no_reconocido"]
+      }
+    ]
+  },
+
+  "checks": [
+    { "id": "iva-suma", "type": "sum", "total": "price", "parts": ["price_before_tax", "tax_amount"], "tolerance": 0.02, "code": "precio_incoherente" },
+    { "id": "costo-menor-que-precio", "type": "greater", "left": "price", "right": "cost", "code": "costo_mayor_que_precio" },
+    { "id": "stock-nd", "type": "rawPattern", "fields": ["stock.cdmx", "stock.edomex"], "pattern": "^#N/D$", "code": "stock_nd" },
+    { "id": "stock-entero", "type": "wholeNumber", "fields": ["stock.cdmx", "stock.edomex"], "code": "stock_fraccionario" },
+    { "id": "stock-no-negativo", "type": "nonNegative", "fields": ["stock.cdmx", "stock.edomex"], "code": "stock_negativo" },
+    { "id": "anios-rango", "type": "range", "from": "anio_desde", "to": "anio_hasta", "min": 1930, "max": 2035, "maxSpan": 80, "code": "anios_invalidos" },
+    { "id": "anios-faltan", "type": "when", "all": [{ "field": "vehiculo_marca", "is": "set" }, { "field": "anio_desde", "is": "unset" }], "code": "anios_no_reconocidos", "field": "anio_desde" },
+    { "id": "motor-no-reconocido", "type": "when", "all": [{ "field": "vehiculo_marca", "is": "set" }, { "field": "motor_bloque", "is": "unset" }], "code": "motor_no_reconocido", "field": "motor" },
+    { "id": "motor-desconocido", "type": "when", "all": [{ "field": "motor_bloque", "is": "set" }, { "field": "motor_desplazamiento", "is": "unset" }], "code": "motor_desconocido", "field": "motor", "detail": "el origen no trae cilindrada: no se generan etiquetas fit para este motor" },
+    { "id": "sin-vehiculo", "type": "when", "all": [{ "field": "vehiculo_marca", "is": "unset" }, { "field": "universal", "is": "unset" }, { "field": "vehiculo_opcional", "is": "unset" }], "code": "vehiculo_no_reconocido", "field": "vehiculo" },
+    { "id": "universal", "type": "when", "all": [{ "field": "vehiculo_marca", "is": "unset" }, { "field": "universal", "is": "set" }], "code": "universal", "field": "vehiculo" },
+    { "id": "vehiculo-opcional", "type": "when", "all": [{ "field": "vehiculo_marca", "is": "unset" }, { "field": "universal", "is": "unset" }, { "field": "vehiculo_opcional", "is": "set" }], "code": "sin_vehiculo_opcional", "field": "vehiculo" }
+  ],
+
+  "datasetChecks": [{ "id": "sku-unico", "type": "unique", "field": "sku", "code": "sku_duplicado" }],
+
+  "review": {
+    "revisar": [
+      "precio_incoherente", "costo_mayor_que_precio", "stock_nd", "stock_fraccionario", "stock_negativo", "sku_duplicado",
+      "equivalencia_ambigua", "anios_no_reconocidos", "anios_invalidos", "motor_no_reconocido", "motor_desconocido",
+      "vehiculo_no_reconocido", "marca_ambigua", "modelo_sospechoso"
+    ],
+    "info": ["pieza_sin_catalogo", "categoria_sin_mapa", "universal", "sin_vehiculo_opcional"]
+  }
+}

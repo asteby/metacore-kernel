@@ -36,6 +36,7 @@ import (
 	"github.com/asteby/metacore-kernel/installer"
 	"github.com/asteby/metacore-kernel/manifest"
 	v3 "github.com/asteby/metacore-kernel/manifest/v3"
+	"github.com/asteby/metacore-kernel/netguard"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -252,25 +253,10 @@ func (h *Handler) validateBundleURL(raw string) error {
 // from: loopback (unless allowed), private, link-local (includes the
 // 169.254.169.254 IMDS), CGNAT, unspecified, multicast and IPv6 ULA/IMDS.
 func blockedIP(ip net.IP, allowLoopback bool) bool {
-	if ip4 := ip.To4(); ip4 != nil {
-		ip = ip4
+	if allowLoopback && ip.IsLoopback() {
+		return false
 	}
-	if ip.IsLoopback() {
-		return !allowLoopback
-	}
-	if ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
-		return true
-	}
-	if ip4 := ip.To4(); ip4 != nil {
-		// 100.64.0.0/10 CGNAT, 0.0.0.0/8, 192.0.0.0/24, 198.18.0.0/15.
-		if ip4[0] == 100 && ip4[1]&0xc0 == 64 || ip4[0] == 0 ||
-			ip4[0] == 192 && ip4[1] == 0 && ip4[2] == 0 ||
-			ip4[0] == 198 && ip4[1]&0xfe == 18 {
-			return true
-		}
-	}
-	return false
+	return netguard.IsBlockedIP(ip)
 }
 
 // guardedControl is a net.Dialer.Control hook: it runs after DNS resolution

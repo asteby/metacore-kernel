@@ -73,6 +73,11 @@ type RowIssue struct {
 	Row     int    `json:"row"`
 	Column  string `json:"column,omitempty"`
 	Message string `json:"message"`
+	// Code y Params, si vienen, identifican el problema de forma estable para
+	// traducirlo (Message es el texto por omisión). Los llena quien usa un
+	// catálogo de mensajes, p. ej. dataload.
+	Code   string         `json:"code,omitempty"`
+	Params map[string]any `json:"params,omitempty"`
 }
 
 // BuildRecord maps one raw row (keyed by whatever headers the file had)
@@ -113,7 +118,7 @@ func BuildRecordWithDeps(spec modelbase.ImportSpec, raw map[string]any, deps *Tr
 				if gen, ok := lookupGenerator(col.Generator); ok {
 					generated, err := gen()
 					if err != nil {
-						issues = append(issues, RowIssue{Column: col.Header, Message: fmt.Sprintf("no se pudo generar el valor: %v", err)})
+						issues = append(issues, RowIssue{Column: col.Header, Message: fmt.Sprintf("no se pudo generar el valor: %v", err), Code: IssueGenerator, Params: map[string]any{"column": col.Header, "error": err.Error()}})
 						continue
 					}
 					setPath(record, col.Key, generated)
@@ -125,14 +130,21 @@ func BuildRecordWithDeps(spec modelbase.ImportSpec, raw map[string]any, deps *Tr
 				// surface as an opaque database error much later.
 			}
 			if col.Required {
-				issues = append(issues, RowIssue{Column: col.Header, Message: fmt.Sprintf("falta '%s'", col.Header)})
+				issues = append(issues, RowIssue{Column: col.Header, Message: fmt.Sprintf("falta '%s'", col.Header), Code: IssueRequired, Params: map[string]any{"column": col.Header}})
 			}
 			continue
 		}
-		coerced, err := coerceCell(col, value)
-		if err != nil {
-			issues = append(issues, RowIssue{Column: col.Header, Message: err.Error()})
-			continue
+		var coerced any = value
+		if col.Transform == "" || !isRawTransform(col.Transform) {
+			var err error
+			if coerced, err = coerceCell(col, value); err != nil {
+				is := RowIssue{Column: col.Header, Message: err.Error()}
+				if ce, ok := err.(cellError); ok {
+					is.Code, is.Params = ce.code, map[string]any{"column": col.Header, "value": ce.value}
+				}
+				issues = append(issues, is)
+				continue
+			}
 		}
 		if col.Transform != "" {
 			fn, ok := lookupTransform(col.Transform)
@@ -140,6 +152,7 @@ func BuildRecordWithDeps(spec modelbase.ImportSpec, raw map[string]any, deps *Tr
 				issues = append(issues, RowIssue{
 					Column:  col.Header,
 					Message: fmt.Sprintf("transform '%s' no registrado", col.Transform),
+					Code:    IssueTransformUnknown, Params: map[string]any{"column": col.Header, "transform": col.Transform},
 				})
 				continue
 			}
@@ -154,6 +167,7 @@ func BuildRecordWithDeps(spec modelbase.ImportSpec, raw map[string]any, deps *Tr
 				issues = append(issues, RowIssue{
 					Column:  col.Header,
 					Message: fmt.Sprintf("transform '%s': %v", col.Transform, xfErr),
+					Code:    IssueTransform, Params: map[string]any{"column": col.Header, "transform": col.Transform, "error": xfErr.Error()},
 				})
 				continue
 			}
@@ -167,6 +181,32 @@ func BuildRecordWithDeps(spec modelbase.ImportSpec, raw map[string]any, deps *Tr
 	return record, nil
 }
 
+// Códigos estables de RowIssue (RowIssue.Code). Params lleva "column" y, según
+// el caso, "value", "transform" y "error". Quien traduce (p. ej. el catálogo de
+// dataload) usa estas claves; Message sigue siendo el texto por omisión.
+const (
+	IssueRequired         = "importer.required"
+	IssueGenerator        = "importer.generator"
+	IssueNumber           = "importer.number"
+	IssueBoolean          = "importer.boolean"
+	IssueDate             = "importer.date"
+	IssueEmail            = "importer.email"
+	IssueTransformUnknown = "importer.transform_unknown"
+	IssueTransform        = "importer.transform"
+)
+
+// IssueCodes enumera los códigos de RowIssue que produce el importador.
+func IssueCodes() []string {
+	return []string{IssueRequired, IssueGenerator, IssueNumber, IssueBoolean, IssueDate, IssueEmail, IssueTransformUnknown, IssueTransform}
+}
+
+// cellError es el rechazo de una celda con su código estable.
+type cellError struct {
+	code, value, text string
+}
+
+func (e cellError) Error() string { return e.text }
+
 // coerceCell converts a spreadsheet cell (always text) into the Go value
 // the column's type implies, rejecting what cannot be converted.
 func coerceCell(col modelbase.ImportColumn, value string) (any, error) {
@@ -174,7 +214,7 @@ func coerceCell(col modelbase.ImportColumn, value string) (any, error) {
 	case "number":
 		n, err := strconv.ParseFloat(value, 64)
 		if err != nil {
-			return nil, fmt.Errorf("'%s' debe ser un número (recibido: %q)", col.Header, value)
+			return nil, cellError{IssueNumber, value, fmt.Sprintf("'%s' debe ser un número (recibido: %q)", col.Header, value)}
 		}
 		return n, nil
 	case "boolean":
@@ -184,7 +224,7 @@ func coerceCell(col modelbase.ImportColumn, value string) (any, error) {
 		case "false", "0", "no":
 			return false, nil
 		}
-		return nil, fmt.Errorf("'%s' debe ser sí o no (recibido: %q)", col.Header, value)
+		return nil, cellError{IssueBoolean, value, fmt.Sprintf("'%s' debe ser sí o no (recibido: %q)", col.Header, value)}
 	case "date":
 		// Only unambiguous layouts are accepted, and the value is normalised to
 		// ISO before it reaches Create. Supporting both D/M/Y and M/D/Y would
@@ -195,11 +235,11 @@ func coerceCell(col modelbase.ImportColumn, value string) (any, error) {
 				return parsed.Format("2006-01-02"), nil
 			}
 		}
-		return nil, fmt.Errorf("'%s' debe ser una fecha con formato AAAA-MM-DD (recibido: %q)", col.Header, value)
+		return nil, cellError{IssueDate, value, fmt.Sprintf("'%s' debe ser una fecha con formato AAAA-MM-DD (recibido: %q)", col.Header, value)}
 	case "email":
 		at := strings.Index(value, "@")
 		if at <= 0 || at == len(value)-1 || strings.Contains(value, " ") {
-			return nil, fmt.Errorf("'%s' no es un correo válido (recibido: %q)", col.Header, value)
+			return nil, cellError{IssueEmail, value, fmt.Sprintf("'%s' no es un correo válido (recibido: %q)", col.Header, value)}
 		}
 		return value, nil
 	default:
@@ -393,7 +433,7 @@ func ParseXLSX(r io.Reader) ([]map[string]any, error) {
 	}
 	out := make([]map[string]any, 0, len(rows)-1)
 	for _, rec := range rows[1:] {
-		row := make(map[string]any, len(headers))
+		row := make(map[string]any, min(len(rec), len(headers)))
 		empty := true
 		for i, key := range headers {
 			if i < len(rec) {
@@ -465,30 +505,7 @@ func WriteCSVWithBOM(records [][]string) ([]byte, error) {
 }
 
 func ParseCSV(r io.Reader) ([]map[string]any, error) {
-	reader := csv.NewReader(r)
-	reader.FieldsPerRecord = -1 // tolerate ragged rows
-	records, err := reader.ReadAll()
-	if err != nil {
-		return nil, fmt.Errorf("csv decode: %w", err)
-	}
-	if len(records) == 0 {
-		return nil, nil
-	}
-	headers := records[0]
-	if len(headers) > 0 {
-		headers[0] = StripBOM(headers[0])
-	}
-	rows := make([]map[string]any, 0, len(records)-1)
-	for _, rec := range records[1:] {
-		row := make(map[string]any, len(headers))
-		for i, key := range headers {
-			if i < len(rec) {
-				row[key] = rec[i]
-			}
-		}
-		rows = append(rows, row)
-	}
-	return rows, nil
+	return ParseCSVLimited(r, ParseLimits{})
 }
 
 // ReadRows reads the uploaded payload of an import request and returns its

@@ -7,6 +7,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **dataload: correcciones de la revisión de la integración con ops.**
+  (1) Una fila aprobada (o rechazada) y sin aplicar pasa a `superseded` cuando
+  una corrida posterior ya cargó esa identidad sin revisión; `ApplyApproved` ya
+  no regresa el destino a la versión de un archivo anterior. Además cada entrada
+  guarda `BaseHash` (la huella del destino al planificar, `RowPlan.TargetHash`)
+  y `ApplyApproved` no escribe si el destino cambió después: la entrada pasa a
+  `superseded` y se cuenta en `Progress.Superseded`. Una decisión solo se
+  conserva entre corridas si la fila y el destino siguen iguales.
+  (2) `ApplyApproved` encola los medios ANTES de marcar `applied`; si encolar
+  falla, las filas vuelven a `approved` y el siguiente intento solo encola.
+  (3) `ApplyApproved` guarda la corrida `apply_reviewed` al empezar (con
+  arrendamiento y latidos si el ledger es `LeaseLedger`); `ClaimStale` también
+  toma estas corridas y `Recover` las cierra como fallidas
+  (`dataload.recover.review_run`) sin llamar al resolver.
+  (4) Medios: el conjunto vigente de cada campo (`MediaSetStore`,
+  `MediaQueue.Sets`, `MediaQueue.Sync`) manda sobre el historial de la cola:
+  una URL quitada deja de ligarse y un cambio de orden se respeta. Sync vuelve a
+  ligar si el conjunto cambió, si el registro se reescribió (p. ej. `Force` tras
+  borrar en el destino) o si nunca se ligó; `MediaSink.Attach` puede devolver
+  `ErrAttachDeferred` (dueño aún no listo) y un fallo de `Attach` regresa el
+  trabajo a la cola sin tocar la red. Sin `Sets`, comportamiento anterior.
+  (5) Un original dañado se repara: con la extensión opcional `RepairingStore`
+  (`RepairHashed`) el almacén restaura el objeto con los bytes recién bajados
+  del mismo sha256.
+  (6) `Recover` distingue errores definitivos (`ErrNotResumable`,
+  `NotResumable(err)`) de transitorios: ante uno transitorio suelta el
+  arrendamiento sin pasar a terminal (`RecoverReport.Deferred`,
+  `dataload.recover.deferred`).
+  (7) Identidad repetida: por omisión (`Profile.Duplicates`/`Overrides.Duplicates`
+  = `review`) ninguna fila se carga sola; la primera va a revisión con el motivo
+  `duplicate_key` y las demás quedan `duplicate` (`dataload.row.duplicate_held`).
+  `duplicates: "first"` conserva el comportamiento anterior.
+  (8) `WithRunID`/`RunIDFrom`: el Runner deja en el contexto la corrida que
+  escribe (Start y ApplyApproved) para que el destino asocie sus avisos a la
+  corrida y no a la organización.
+  (9) importer: `ParseCSV` ya no reserva un mapa del tamaño del encabezado por
+  fila (un CSV de 1.5 MB pedía ~600 MB); nuevos `ParseCSVLimited`,
+  `ParseJSONLimited` y `EachCSV` con `ParseLimits` (filas, columnas contando el
+  encabezado, bytes por celda) revisados mientras se lee.
+
 ### Added
 
 - **capability: eventos de contrato `commerce.shipping.tracking_updated` y
@@ -21,6 +63,148 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   nuevo = estados de `commerce.fulfillment.create` + `TrackingStatuses`).
   Cierra la falsificación de avisos de «entregado»: el nombre heredado
   `shipping.tracking_updated` no está reservado.
+
+- **dataload: escritura condicional de revisiones** — extensión opcional
+  `ConditionalReviewStore` (`PutIf(ctx, entry, ReviewExpect{Missing, State,
+  Hash})`, compare-and-swap atómico; `MemoryReviewStore` la implementa) y estado
+  `ReviewApplying`. Con ella `ApplyApproved` reserva cada fila (`approved` →
+  `applying`) antes de escribir al destino y la marca `applied` con otro
+  `PutIf`; `Decide` escribe con `PutIf`, niega las filas reservadas
+  (`ErrReviewBusy`, `dataload.review.busy`) y deshace sus decisiones si pierde
+  la carrera (`ErrReviewConflict`, `dataload.review.conflict`). Una fila escrita
+  ya no puede quedar `rejected`. `Runner.RecoverApplying` cierra las reservas
+  huérfanas leyendo el destino (applied si ya tiene la huella, approved si no)
+  sin escribir en él; necesita la extensión (`dataload.review.no_conditional`).
+  Sin la extensión, comportamiento anterior (la carrera solo se acota,
+  documentado en `dataload/README.md`).
+
+- **dataload: pulido para producción** — (1) Archivos grandes en streaming:
+  `StreamSource` con `NewCSVStreamSource` y `NewJSONLinesSource` (sobre un
+  `Opener`, `FileOpener`) y `StreamPlan` (dos pasadas, páginas con
+  `StreamOptions.OnPage`), con la misma semántica que `BuildPlan` (acciones,
+  diffs, motivos, `Counts`, `InputHash`, `PlanHash`); `Runner.Start`/`DryRun`/
+  `Recover` lo usan solos con una `StreamSource` (escritura por páginas,
+  `Runner.PageSize`, una pasada por rango de `ApplyOrder`, fuente que cambia
+  entre pasadas = error) y `Profile.MaxStreamRows` (5 000 000 por omisión).
+  (2) `OrgMediaLimits.MaxConcurrentGlobal`: tope de medios por organización
+  entre procesos con la extensión opcional `LimitedJobStore.ClaimLimited`
+  (`MemoryJobStore` la implementa; sin ella vale por proceso). (3)
+  `PartialStore` (opcional, `Backuper.Partials`, `MemoryPartialStore`) y
+  `importer.FetchOptions.Resume`/`OnPartial`/`importer.Partial`: los bytes de
+  una descarga cortada sobreviven al reintento de la cola y se continúan con
+  `Range` + `If-Range`. (4) `MarkingTarget` + `ApplyMark` (opcional,
+  `MemoryMarkingTarget`): marca por lote en la misma transacción; al reanudar se
+  recupera el conteo exacto de `Created`/`Updated` aunque el proceso muriera
+  entre `Target.Apply` y el checkpoint (`Checkpoint.Recovered`). (5)
+  `Authorizer` (`AuthorizerFunc`, `AuthRequest`) en `Runner.Decide` y
+  `Runner.ApplyApproved` con las acciones nombradas `ActionReviewDecide` y
+  `ActionReviewApply`; `ErrUnauthorized`, `ErrNoAuthorizer` y
+  `Runner.AllowAnyActor` (solo pruebas). (6) Códigos de mensaje estables:
+  `Code`, `Message`, `Error` (con `errors.Is` por código), `ErrorCode`,
+  `ErrorMessage`, `Localize`, `LocalizeIssue`, `ReviewItem.Localize` y el
+  catálogo embebido `Messages()` (`locales/es.json`, `locales/en.json`);
+  `Run.ErrorCode`/`ErrorParams`, `MediaJob.LastErrorCode`,
+  `ReviewItem.DetailCode`/`DetailParams`, `importer.RowIssue.Code`/`Params` e
+  `importer.IssueCodes`. (7) `dataload/README.md`, perfil genérico de ejemplo
+  (`dataload/examples/`), `Example` ejecutable y nota de release
+  (`docs/releases/v0.211.0-dataload.md`).
+
+- **dataload: escala, extracción y registro de perfiles** — (1) `importer`:
+  transformación `number_mixed` para números con separadores de miles y
+  decimales mezclados (`$1.059,32`, `1,059.32`, `99,9`, `1.059.32`); lo ambiguo
+  (`1.059`) es error de fila, nunca se adivina; se registra con
+  `importer.RegisterRawTransform`, que corre antes de la coerción de tipo de su
+  columna. (2) Etapa `extract` (`ParseExtract`, `PlanRequest.Extract`,
+  `RunRequest.Extract`): un documento declarativo `metacore.dataload.extract/v1`,
+  hermano del `Profile` y enlazado por nombre y versión, con reglas en orden
+  sobre RE2 (`capture`, `entity`, `tokens`, `prefix`, `set`), vocabularios,
+  categorías, comprobaciones por fila (`sum`, `greater`, `rawPattern`, `range`,
+  `when`...) y por archivo (`unique`), plantillas de salida (etiquetas, tablas) y
+  códigos de revisión con severidad; entra en la huella y en la llave de
+  idempotencia. (3) Filas `revisar`: un motivo bloqueante saca la fila de la carga
+  automática (`ActionReview`, con `Outcome`), se reporta en el plan y en el
+  ledger (`Progress.Review`, `Run.Review`) con su motivo y se guarda en un
+  `ReviewStore`; `Runner.Decide` registra la decisión de una persona atada a la
+  huella de la fila y `Runner.ApplyApproved` escribe lo aprobado (`ModeReview`).
+  (4) `ProfileStore` + `MemoryProfileStore` y `Registry` (`Publish`/`Resolve`):
+  versiones inmutables por organización, perfiles completos o derivados (base a
+  versión exacta + `Overrides`), catálogo base compartido, versión y huella de lo
+  resuelto, que la corrida guarda (`Run.Registry`). (5) Lotes grandes:
+  `Run.Checkpoint` por lote, `LeaseLedger` (arrendamiento con latido y cerco
+  `SaveLeased`) y `Runner.Recover`, que reanuda las corridas que quedaron en
+  `running` comprobando las huellas de perfil, extracción y entrada, sin
+  duplicar; `Start` no duplica una corrida activa en otro proceso y el plan
+  consulta el destino por tandas (`LookupChunk`). (6) Medios: `MediaQueue.Limits`
+  (tope de concurrencia y de reintentos por organización, con reparto por turnos),
+  `Backuper.Ensure`/`Refetch` y `RevalidatePolicy` (ETag/Last-Modified con 304 o
+  descarga explícita; si el contenido cambia se guarda un nuevo original con otro
+  sha256 y el anterior queda en `ManifestEntry.Revisions`), `MediaQueue.Revalidate`,
+  y `importer.FetchMedia` reanuda descargas cortadas con `Range` + `If-Range`
+  (solo con validador fuerte) y admite peticiones condicionales
+  (`FetchMediaWith`). `golang.org/x/text` pasa a dependencia directa.
+
+- **dataload: campos derivados, listas y limpieza de HTML** — `Field.Derive`
+  calcula un campo desde otras columnas de la fila (`first`, `extract` con
+  regex de un grupo y `gtin` con dígito verificador GS1; `when` condiciona),
+  `Field.Split` produce listas, `Overrides.CleanAdd` y `Overrides.ValuesAdd` agregan
+  reglas de limpieza y traducciones de valores a un campo (`Field.Finish` corre siempre después), y las reglas nuevas `sanitize_html` (lista blanca, sin atributos
+  salvo `href` http/https), `collapse_blank_lines`, `auto_paragraphs` y la
+  parametrizada `drop_lines:<regex>`. Todo declarativo: ningún origen concreto
+  vive en el kernel. `dataload.IsGTIN` se exporta. `Profile.ApplyOrder` escribe en el destino
+  en un orden por rangos (p. ej. padres antes que variantes) sin alterar el orden
+  del plan.
+
+- **dataload: carga masiva genérica con respaldo de medios** — nuevo paquete
+  `dataload`. `Profile` declarativo (JSON, rechaza campos desconocidos): mapeo
+  de columnas con alias, tipos, valores traducidos, reglas de limpieza
+  (`trim`, `collapse_spaces`, `unescape_newlines`, `strip_html`, `trim_quotes`,
+  `null_if_emptyish`, `lower`, `upper`), transformaciones registradas con
+  `importer.RegisterTransform` y `Overrides` por organización (ignorar
+  encabezados por prefijo, renombrar, quitar o agregar campos, defaults) que
+  entran en la huella del perfil. Fuentes tras la interfaz `Source`: CSV, JSON y
+  bundle por ruta. `BuildPlan` hace dry-run y diff (create/update/unchanged/
+  invalid/duplicate, con diff por campo) sin escribir ni descargar. `Runner`
+  aplica de forma asíncrona por lotes con estado y progreso, `Cancel` y
+  `Wait`; el `Ledger` guarda el historial y la llave de idempotencia
+  `(org, perfil resuelto, huella de la entrada, modo)`: repetir la misma
+  entrada registra un replay sin escribir. `MediaQueue` descarga con
+  `netguard`/`MediaPolicy`, reintenta con espera creciente (2s, 8s, 30s, 2min,
+  10min), distingue errores definitivos, arrienda trabajos y respalda cada
+  original sin tocarlo en un `BackupStore` (`HashedMediaStore` + lectura)
+  direccionado por sha256, con `Manifest` (url origen, sha256, bytes, tipo,
+  fecha, estado), verificación al guardar y `VerifyAll`; los derivados los
+  genera aparte un `Deriver` opcional. Interfaces de persistencia para ops y
+  addons: `Target`, `Ledger`, `MediaJobStore`, `Manifest`, `BackupStore`,
+  `MediaSink`; hay versiones en memoria `NewMemory*` para pruebas.
+- **importer: `FetchMedia` e `IsRetryable`** — la descarga validada de
+  `media_url` (política, reintentos, magic bytes) queda disponible sin guardar
+  en ningún almacén; `media_url` la usa internamente, sin cambio de comportamiento.
+
+- **netguard + importer: descargas de medios endurecidas (SPEC-B)** — nuevo
+  paquete `netguard`, la fuente única de la regla de salida: `IsBlockedIP`
+  (loopback completo 127/8, privadas, link-local/metadata, CGNAT, 0/8,
+  reservadas e IPv6 que incrustan IPv4: mapeada, NAT64 y 6to4), `DialControl`
+  (corre tras el DNS, cubre rebinding y redirecciones), `NewClient` (sin proxy,
+  con `AllowHosts`, `MaxRedirects` y `AllowPrivate` solo para pruebas) y
+  `HostAllowed` (rechaza `*` y `*.com`). `agent.NewGuardedHTTPClient`,
+  `security.isBlockedEgressHost` (ahora evalúa IPs literales como `127.0.0.2` o
+  `[::ffff:127.0.0.1]`, que antes pasaban), `security.matchHTTPHost` y el
+  `blockedIP` de `marketplace` delegan en él; `agent.ErrBlockedEgress` es ahora
+  `netguard.ErrBlockedEgress`. `importer`: `TransformDeps` gana `Policy
+  MediaPolicy` (`MaxBytes` 15 MiB, `AllowedTypes`, `AllowHosts`, `MaxAttempts`,
+  `BaseBackoff`) y `Sleep`; `media_url`/`media_url_list` reintentan con backoff
+  exponencial y jitter solo errores de red, 408/425/429 y 5xx (respetan
+  `Retry-After` hasta 30 s), fallan con `ErrMediaTooLarge` en vez de guardar un
+  archivo truncado, verifican el tipo por magic bytes (jpeg, png, webp, gif,
+  avif; SVG excluido) y sugieren la extensión del tipo detectado, deduplican
+  URLs repetidas en la celda y, si el `Store` implementa la interfaz opcional
+  `HashedMediaStore` (`Lookup` + `PutHashed`), deduplican por sha256. Errores
+  tipados: `ErrMediaTooLarge`, `ErrMediaType`, `ErrMediaHost`, `ErrMediaHTTP`.
+  Cambios de comportamiento a tener en cuenta: con `HTTPClient == nil` el
+  cliente ahora bloquea destinos internos; el tope por defecto sube de 5 a
+  15 MiB; un archivo que no es imagen permitida ya no se guarda. Un host que
+  pase su propio `HTTPClient` asume su guarda. **ops debe conectar
+  `PrepareWithDeps` con un `MediaStore`** (hoy no lo hace) en una tarea aparte.
 
 - **runtime/wasm + manifest: concurrencia del pool WASM por addon (A1)** — el
   pool tenía UNA instancia por (addon, instalación) salvo que el operador fijara
@@ -280,6 +464,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `Field.Pattern` (RE2) valida campos de texto y se comprueba al registrar.
 
 ### Changed
+
+- **dataload (cambio de comportamiento)** — `Runner.Decide` y
+  `Runner.ApplyApproved` niegan (`ErrNoAuthorizer`) si el `Runner` no tiene
+  `Authorizer` (antes bastaba un actor no vacío en `Decide` y `ApplyApproved`
+  no pedía nada). Las corridas `ModeReview` registran `Source: "review"`
+  (`ReviewSourceName`) en vez de un texto en español. Los textos de error
+  conservan su redacción en español por omisión, pero salen del catálogo.
 
 - **agent: orden estable de herramientas y parámetros** — `ToolRegistry.List`,
   `ToOpenAIFormat`/`ToLangChainFormat` y `AppendToolsSection` salen ordenados
@@ -2044,6 +2235,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   now invokes whichever entry point the module exports.
 
 ## [Unreleased]
+
+### Fixed
+
+- **dataload: correcciones de la revisión de la integración con ops.**
+  (1) Una fila aprobada (o rechazada) y sin aplicar pasa a `superseded` cuando
+  una corrida posterior ya cargó esa identidad sin revisión; `ApplyApproved` ya
+  no regresa el destino a la versión de un archivo anterior. Además cada entrada
+  guarda `BaseHash` (la huella del destino al planificar, `RowPlan.TargetHash`)
+  y `ApplyApproved` no escribe si el destino cambió después: la entrada pasa a
+  `superseded` y se cuenta en `Progress.Superseded`. Una decisión solo se
+  conserva entre corridas si la fila y el destino siguen iguales.
+  (2) `ApplyApproved` encola los medios ANTES de marcar `applied`; si encolar
+  falla, las filas vuelven a `approved` y el siguiente intento solo encola.
+  (3) `ApplyApproved` guarda la corrida `apply_reviewed` al empezar (con
+  arrendamiento y latidos si el ledger es `LeaseLedger`); `ClaimStale` también
+  toma estas corridas y `Recover` las cierra como fallidas
+  (`dataload.recover.review_run`) sin llamar al resolver.
+  (4) Medios: el conjunto vigente de cada campo (`MediaSetStore`,
+  `MediaQueue.Sets`, `MediaQueue.Sync`) manda sobre el historial de la cola:
+  una URL quitada deja de ligarse y un cambio de orden se respeta. Sync vuelve a
+  ligar si el conjunto cambió, si el registro se reescribió (p. ej. `Force` tras
+  borrar en el destino) o si nunca se ligó; `MediaSink.Attach` puede devolver
+  `ErrAttachDeferred` (dueño aún no listo) y un fallo de `Attach` regresa el
+  trabajo a la cola sin tocar la red. Sin `Sets`, comportamiento anterior.
+  (5) Un original dañado se repara: con la extensión opcional `RepairingStore`
+  (`RepairHashed`) el almacén restaura el objeto con los bytes recién bajados
+  del mismo sha256.
+  (6) `Recover` distingue errores definitivos (`ErrNotResumable`,
+  `NotResumable(err)`) de transitorios: ante uno transitorio suelta el
+  arrendamiento sin pasar a terminal (`RecoverReport.Deferred`,
+  `dataload.recover.deferred`).
+  (7) Identidad repetida: por omisión (`Profile.Duplicates`/`Overrides.Duplicates`
+  = `review`) ninguna fila se carga sola; la primera va a revisión con el motivo
+  `duplicate_key` y las demás quedan `duplicate` (`dataload.row.duplicate_held`).
+  `duplicates: "first"` conserva el comportamiento anterior.
+  (8) importer: `ParseCSV` ya no reserva un mapa del tamaño del encabezado por
+  fila (un CSV de 1.5 MB pedía ~600 MB); nuevos `ParseCSVLimited`,
+  `ParseJSONLimited` y `EachCSV` con `ParseLimits` (filas, columnas contando el
+  encabezado, bytes por celda) revisados mientras se lee.
 
 ### Added
 
