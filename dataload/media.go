@@ -50,6 +50,28 @@ type ManifestEntry struct {
 	FetchedAt   time.Time   `json:"fetchedAt"`
 	VerifiedAt  time.Time   `json:"verifiedAt"`
 	Status      EntryStatus `json:"status"`
+	// ETag y LastModified son los validadores que mandó el origen al bajar este
+	// original; con ellos se revalida sin volver a bajar el archivo.
+	ETag         string `json:"etag,omitempty"`
+	LastModified string `json:"lastModified,omitempty"`
+	// ValidatedAt es la última vez que se confirmó contra el origen que este
+	// original sigue vigente (al bajarlo o al revalidarlo).
+	ValidatedAt time.Time `json:"validatedAt,omitempty"`
+	// Revisions son los originales anteriores de la misma URL, del más viejo al
+	// más nuevo: cuando el origen cambia el archivo se guarda uno nuevo con otro
+	// sha256 y el anterior queda intacto en el almacén.
+	Revisions []ManifestRevision `json:"revisions,omitempty"`
+}
+
+// ManifestRevision documenta un original que dejó de ser el vigente de su URL.
+type ManifestRevision struct {
+	SHA256       string    `json:"sha256"`
+	Bytes        int64     `json:"bytes"`
+	ContentType  string    `json:"contentType"`
+	StoredName   string    `json:"storedName"`
+	FetchedAt    time.Time `json:"fetchedAt"`
+	ETag         string    `json:"etag,omitempty"`
+	LastModified string    `json:"lastModified,omitempty"`
 }
 
 // Manifest es el registro persistente de respaldos; lo implementa ops/addons.
@@ -70,6 +92,49 @@ var (
 	ErrBackupMissing = errors.New("dataload: el respaldo no está en el almacén")
 )
 
+// RevalidateMode dice cómo comprobar que un original ya respaldado sigue vigente.
+type RevalidateMode string
+
+const (
+	// RevalidateNone: lo respaldado se da por bueno; no se toca la red.
+	RevalidateNone RevalidateMode = ""
+	// RevalidateConditional pide al origen solo si cambió (If-None-Match /
+	// If-Modified-Since con los validadores guardados). 304 = nada que bajar.
+	// Sin validadores guardados degrada a refetch.
+	RevalidateConditional RevalidateMode = "conditional"
+	// RevalidateRefetch baja el archivo de nuevo sin condiciones. Si el contenido
+	// cambió se guarda un original nuevo con otro sha256.
+	RevalidateRefetch RevalidateMode = "refetch"
+)
+
+// RevalidatePolicy es la política opcional de revalidación de un Backuper: pasado
+// MaxAge desde la última confirmación, Backup revalida según Mode. El valor cero
+// no revalida nunca (comportamiento de siempre).
+type RevalidatePolicy struct {
+	Mode   RevalidateMode
+	MaxAge time.Duration
+}
+
+// BackupOutcome es lo que pasó con un original al pedir su respaldo.
+type BackupOutcome string
+
+const (
+	OutcomeNew         BackupOutcome = "new"          // no existía: se bajó y respaldó
+	OutcomeFresh       BackupOutcome = "fresh"        // ya respaldado y vigente por política: no se tocó la red
+	OutcomeNotModified BackupOutcome = "not_modified" // el origen contestó 304
+	OutcomeUnchanged   BackupOutcome = "unchanged"    // se bajó de nuevo y el contenido es el mismo (mismo sha256)
+	OutcomeReplaced    BackupOutcome = "replaced"     // el contenido cambió: nuevo original con otro sha256
+	// OutcomeStale: no se pudo revalidar (origen caído, etc.); sigue vigente el original anterior.
+	OutcomeStale BackupOutcome = "stale"
+)
+
+// BackupResult acompaña a la entrada con lo ocurrido.
+type BackupResult struct {
+	Outcome BackupOutcome
+	// Err solo viene con OutcomeStale: por qué no se pudo revalidar.
+	Err error
+}
+
 // Backuper descarga, respalda y verifica originales.
 type Backuper struct {
 	Store    BackupStore
@@ -78,6 +143,8 @@ type Backuper struct {
 	// Store y Context se ignoran. Con HTTPClient nil se usa el cliente con guarda
 	// de netguard. MaxAttempts por omisión es 2: la cola reintenta más tarde.
 	Fetch importer.TransformDeps
+	// Revalidate es la política opcional de revalidación; vacía = nunca.
+	Revalidate RevalidatePolicy
 	// Now es el reloj; default time.Now.
 	Now func() time.Time
 }
@@ -90,25 +157,112 @@ func (b *Backuper) now() time.Time {
 }
 
 // Backup deja un original respaldado y verificado y devuelve su entrada. Si el
-// manifiesto ya tiene la URL con estado ok no toca la red: repetir una corrida
-// no descarga de nuevo. Un objeto que ya existe en el almacén con ese sha256 no
-// se reescribe.
+// manifiesto ya tiene la URL con estado ok no toca la red (salvo que la política
+// Revalidate lo pida): repetir una corrida no descarga de nuevo. Un objeto que ya
+// existe en el almacén con ese sha256 no se reescribe.
 func (b *Backuper) Backup(ctx context.Context, org, rawURL string) (ManifestEntry, error) {
-	if prev, ok, err := b.Manifest.ByURL(ctx, org, rawURL); err != nil {
-		return ManifestEntry{}, err
-	} else if ok && prev.Status == EntryOK {
-		return prev, nil
-	}
+	e, _, err := b.Ensure(ctx, org, rawURL, RevalidateNone)
+	return e, err
+}
 
+// Refetch baja de nuevo el original de la URL sin condiciones (decisión explícita
+// de quien opera). Si el contenido cambió guarda un original nuevo con otro
+// sha256; el anterior queda en el almacén y en Revisions.
+func (b *Backuper) Refetch(ctx context.Context, org, rawURL string) (ManifestEntry, BackupResult, error) {
+	return b.Ensure(ctx, org, rawURL, RevalidateRefetch)
+}
+
+// Ensure es Backup con control de la revalidación. mode vacío aplica la política
+// del Backuper; un modo explícito la ignora y revalida ya. Un fallo al revalidar
+// NO es un error: el original anterior sigue siendo bueno (OutcomeStale).
+func (b *Backuper) Ensure(ctx context.Context, org, rawURL string, mode RevalidateMode) (ManifestEntry, BackupResult, error) {
+	prev, ok, err := b.Manifest.ByURL(ctx, org, rawURL)
+	if err != nil {
+		return ManifestEntry{}, BackupResult{}, err
+	}
+	if !ok || prev.Status != EntryOK {
+		e, err := b.fetchAndStore(ctx, org, rawURL, nil, importer.FetchOptions{})
+		return e, BackupResult{Outcome: OutcomeNew}, err
+	}
+	if mode == RevalidateNone {
+		pol := b.Revalidate
+		since := prev.ValidatedAt
+		if since.IsZero() {
+			since = prev.FetchedAt
+		}
+		if pol.Mode == RevalidateNone || b.now().Sub(since) < pol.MaxAge {
+			return prev, BackupResult{Outcome: OutcomeFresh}, nil
+		}
+		mode = pol.Mode
+	}
+	opt := importer.FetchOptions{}
+	if mode == RevalidateConditional {
+		switch {
+		case prev.ETag != "":
+			opt.IfNoneMatch = prev.ETag
+		case prev.LastModified != "":
+			opt.IfModifiedSince = prev.LastModified
+		}
+	}
+	e, res, err := b.revalidate(ctx, org, rawURL, prev, opt)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ManifestEntry{}, BackupResult{}, ctx.Err()
+		}
+		return prev, BackupResult{Outcome: OutcomeStale, Err: err}, nil
+	}
+	return e, res, nil
+}
+
+func (b *Backuper) revalidate(ctx context.Context, org, rawURL string, prev ManifestEntry, opt importer.FetchOptions) (ManifestEntry, BackupResult, error) {
+	f, err := b.fetch(ctx, rawURL, opt)
+	if err != nil {
+		return ManifestEntry{}, BackupResult{}, err
+	}
+	if f.NotModified {
+		prev.ValidatedAt = b.now()
+		if err := b.Manifest.Put(ctx, prev); err != nil {
+			return ManifestEntry{}, BackupResult{}, fmt.Errorf("dataload: escribir manifiesto: %w", err)
+		}
+		return prev, BackupResult{Outcome: OutcomeNotModified}, nil
+	}
+	sum := sha256.Sum256(f.Data)
+	if hex.EncodeToString(sum[:]) == prev.SHA256 {
+		prev.ETag, prev.LastModified, prev.ValidatedAt = f.ETag, f.LastModified, b.now()
+		if err := b.Manifest.Put(ctx, prev); err != nil {
+			return ManifestEntry{}, BackupResult{}, fmt.Errorf("dataload: escribir manifiesto: %w", err)
+		}
+		return prev, BackupResult{Outcome: OutcomeUnchanged}, nil
+	}
+	// Contenido nuevo: otro original, otro sha256. El anterior no se toca.
+	e, err := b.store(ctx, org, rawURL, f, &prev)
+	if err != nil {
+		return ManifestEntry{}, BackupResult{}, err
+	}
+	return e, BackupResult{Outcome: OutcomeReplaced}, nil
+}
+
+func (b *Backuper) fetch(ctx context.Context, rawURL string, opt importer.FetchOptions) (*importer.FetchedMedia, error) {
 	deps := b.Fetch
 	deps.Store, deps.Context = nil, ctx
 	if deps.Policy.MaxAttempts == 0 {
 		deps.Policy.MaxAttempts = 2
 	}
-	f, err := importer.FetchMedia(&deps, rawURL)
+	return importer.FetchMediaWith(&deps, rawURL, opt)
+}
+
+func (b *Backuper) fetchAndStore(ctx context.Context, org, rawURL string, prev *ManifestEntry, opt importer.FetchOptions) (ManifestEntry, error) {
+	f, err := b.fetch(ctx, rawURL, opt)
 	if err != nil {
 		return ManifestEntry{}, err
 	}
+	return b.store(ctx, org, rawURL, f, prev)
+}
+
+// store respalda los bytes bajados (sin reescribir un objeto que ya existe con
+// ese sha256), verifica y deja la entrada en el manifiesto. Si prev viene, pasa
+// a Revisions.
+func (b *Backuper) store(ctx context.Context, org, rawURL string, f *importer.FetchedMedia, prev *ManifestEntry) (ManifestEntry, error) {
 	sum := sha256.Sum256(f.Data)
 	hexsum := hex.EncodeToString(sum[:])
 
@@ -123,10 +277,16 @@ func (b *Backuper) Backup(ctx context.Context, org, rawURL string) (ManifestEntr
 	}
 	entry := ManifestEntry{
 		Org: org, SourceURL: rawURL, SHA256: hexsum, Bytes: int64(len(f.Data)), ContentType: f.Type,
-		StoredName: name, FetchedAt: b.now(), Status: EntryOK,
+		StoredName: name, FetchedAt: b.now(), ValidatedAt: b.now(), Status: EntryOK, ETag: f.ETag, LastModified: f.LastModified,
+	}
+	if prev != nil {
+		entry.Revisions = append(append([]ManifestRevision(nil), prev.Revisions...), ManifestRevision{
+			SHA256: prev.SHA256, Bytes: prev.Bytes, ContentType: prev.ContentType, StoredName: prev.StoredName,
+			FetchedAt: prev.FetchedAt, ETag: prev.ETag, LastModified: prev.LastModified,
+		})
 	}
 	if err := b.verify(ctx, &entry); err != nil {
-		if entry.Status == EntryCorrupt || entry.Status == EntryMissing {
+		if prev == nil && (entry.Status == EntryCorrupt || entry.Status == EntryMissing) {
 			_ = b.Manifest.Put(ctx, entry) // queda constancia para la auditoría
 		}
 		return ManifestEntry{}, err
@@ -227,6 +387,11 @@ type MediaJob struct {
 	NextAttempt time.Time `json:"nextAttempt"`
 	SHA256      string    `json:"sha256,omitempty"`
 	StoredName  string    `json:"storedName,omitempty"`
+	// Revalidate, si no está vacío, pide revalidar el original ya respaldado en
+	// vez de solo asegurarlo (ver MediaQueue.Revalidate). Se limpia al terminar.
+	Revalidate RevalidateMode `json:"revalidate,omitempty"`
+	// Outcome es lo que pasó en el último intento exitoso (nuevo, vigente, 304, reemplazado...).
+	Outcome BackupOutcome `json:"outcome,omitempty"`
 	// DeriveError guarda el fallo del generador de derivados; no invalida el original.
 	DeriveError string    `json:"deriveError,omitempty"`
 	UpdatedAt   time.Time `json:"updatedAt"`
@@ -302,11 +467,81 @@ type MediaQueue struct {
 	// Default: 2s, 8s, 30s, 2min, 10min. Un 429/5xx con Retry-After no lo acorta
 	// más allá de lo que el cliente ya espera dentro del intento.
 	RetryDelays []time.Duration
+	// Limits da los topes de una organización (concurrencia y reintentos); nil o
+	// el valor cero = sin tope propio. Ver OrgMediaLimits.
+	Limits func(org string) OrgMediaLimits
 	// Workers en paralelo por pasada; default 4.
 	Workers int
 	// Lease es cuánto se reserva un trabajo; default 5min.
 	Lease time.Duration
 	Now   func() time.Time
+
+	orgMu     sync.Mutex
+	orgActive map[string]int
+}
+
+// OrgMediaLimits son los topes de una organización en la cola de medios, para
+// que una carga enorme de un tenant no se coma a los demás.
+type OrgMediaLimits struct {
+	// MaxConcurrent es cuántos trabajos de la organización se procesan a la vez
+	// en este proceso (0 = solo vale el tope Workers de la cola). Con varios
+	// procesos el tope es por proceso.
+	MaxConcurrent int `json:"maxConcurrent,omitempty"`
+	// MaxAttempts es el tope de intentos por trabajo de la organización (0 = el de la cola).
+	MaxAttempts int `json:"maxAttempts,omitempty"`
+}
+
+// StaticOrgLimits arma un Limits con un valor por defecto y excepciones por organización.
+func StaticOrgLimits(def OrgMediaLimits, per map[string]OrgMediaLimits) func(string) OrgMediaLimits {
+	return func(org string) OrgMediaLimits {
+		if l, ok := per[org]; ok {
+			return l
+		}
+		return def
+	}
+}
+
+func (q *MediaQueue) limits(org string) OrgMediaLimits {
+	if q.Limits == nil {
+		return OrgMediaLimits{}
+	}
+	return q.Limits(org)
+}
+
+func (q *MediaQueue) maxAttemptsFor(org string) int {
+	if n := q.limits(org).MaxAttempts; n > 0 {
+		return n
+	}
+	return q.maxAttempts()
+}
+
+// acquireOrg reserva un lugar de la organización; false si ya está en su tope.
+func (q *MediaQueue) acquireOrg(org string) bool {
+	q.orgMu.Lock()
+	defer q.orgMu.Unlock()
+	if q.orgActive == nil {
+		q.orgActive = map[string]int{}
+	}
+	if max := q.limits(org).MaxConcurrent; max > 0 && q.orgActive[org] >= max {
+		return false
+	}
+	q.orgActive[org]++
+	return true
+}
+
+func (q *MediaQueue) releaseOrg(org string) {
+	q.orgMu.Lock()
+	defer q.orgMu.Unlock()
+	if q.orgActive[org] > 0 {
+		q.orgActive[org]--
+	}
+}
+
+// ActiveForOrg dice cuántos trabajos de la organización se están procesando ahora en este proceso.
+func (q *MediaQueue) ActiveForOrg(org string) int {
+	q.orgMu.Lock()
+	defer q.orgMu.Unlock()
+	return q.orgActive[org]
 }
 
 var defaultRetryDelays = []time.Duration{2 * time.Second, 8 * time.Second, 30 * time.Second, 2 * time.Minute, 10 * time.Minute}
@@ -388,33 +623,132 @@ func (q *MediaQueue) RetryFailed(ctx context.Context, org, runID string) (int, e
 }
 
 // ProcessOnce reclama y procesa hasta limit trabajos vencidos con Workers en
-// paralelo. Devuelve cuántos procesó. Un worker del outbox lo llama en bucle.
+// paralelo, respetando el tope de concurrencia de cada organización (Limits). Los
+// trabajos reclamados se reparten por turnos entre organizaciones, así una con
+// miles de medios no hace esperar a las demás dentro de la misma pasada; los que
+// no caben por su tope esperan su turno sin gastar intentos. Devuelve cuántos
+// procesó. Un worker del outbox lo llama en bucle.
 func (q *MediaQueue) ProcessOnce(ctx context.Context, limit int) (int, error) {
 	jobs, err := q.Jobs.Claim(ctx, q.now(), limit, q.lease())
 	if err != nil {
 		return 0, err
 	}
-	sem := make(chan struct{}, q.workers())
+	pending := roundRobinByOrg(jobs)
+	slots := make(chan struct{}, q.workers())
+	wake := make(chan struct{}, 1)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var firstErr error
-	for _, j := range jobs {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(j MediaJob) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			if err := q.process(ctx, j); err != nil {
+	running := 0
+	processed := 0
+
+	for len(pending) > 0 {
+		if ctx.Err() != nil {
+			// Apagado: lo reclamado y no iniciado vuelve a la cola sin gastar un intento.
+			for _, j := range pending {
+				j.State, j.NextAttempt, j.UpdatedAt = MediaPending, q.now(), q.now()
+				_ = q.Jobs.Update(context.WithoutCancel(ctx), j)
+			}
+			break
+		}
+		var rest []MediaJob
+		launched := false
+		for _, j := range pending {
+			select {
+			case slots <- struct{}{}:
+			default:
+				rest = append(rest, j)
+				continue
+			}
+			if !q.acquireOrg(j.Org) {
+				<-slots
+				rest = append(rest, j)
+				continue
+			}
+			launched = true
+			mu.Lock()
+			running++
+			processed++
+			mu.Unlock()
+			wg.Add(1)
+			go func(j MediaJob) {
+				defer wg.Done()
+				err := q.process(ctx, j)
+				q.releaseOrg(j.Org)
+				<-slots
 				mu.Lock()
-				if firstErr == nil {
+				running--
+				if err != nil && firstErr == nil {
 					firstErr = err
 				}
 				mu.Unlock()
+				select {
+				case wake <- struct{}{}:
+				default:
+				}
+			}(j)
+		}
+		pending = rest
+		if len(pending) > 0 && !launched {
+			// Todo lo pendiente está frenado por topes: se espera a que algo termine
+			// (en esta pasada o en otra que comparte los topes de la organización).
+			select {
+			case <-wake:
+			case <-time.After(5 * time.Millisecond):
+			case <-ctx.Done():
 			}
-		}(j)
+		}
 	}
 	wg.Wait()
-	return len(jobs), firstErr
+	return processed, firstErr
+}
+
+// roundRobinByOrg reparte los trabajos por turnos entre organizaciones sin
+// alterar el orden relativo dentro de cada una.
+func roundRobinByOrg(jobs []MediaJob) []MediaJob {
+	byOrg := map[string][]MediaJob{}
+	var order []string
+	for _, j := range jobs {
+		if _, ok := byOrg[j.Org]; !ok {
+			order = append(order, j.Org)
+		}
+		byOrg[j.Org] = append(byOrg[j.Org], j)
+	}
+	out := make([]MediaJob, 0, len(jobs))
+	for len(out) < len(jobs) {
+		for _, o := range order {
+			if q := byOrg[o]; len(q) > 0 {
+				out = append(out, q[0])
+				byOrg[o] = q[1:]
+			}
+		}
+	}
+	return out
+}
+
+// Revalidate vuelve a poner en cola, para revalidar su original, los trabajos ya
+// terminados que cumplan el filtro (p. ej. los de una organización, o los de un
+// campo). mode: RevalidateConditional (If-None-Match / If-Modified-Since) o
+// RevalidateRefetch (bajar de nuevo; si cambió, nuevo original con otro sha256).
+// Un fallo al revalidar no invalida el original anterior.
+func (q *MediaQueue) Revalidate(ctx context.Context, org string, f MediaJobFilter, mode RevalidateMode) (int, error) {
+	if mode != RevalidateConditional && mode != RevalidateRefetch {
+		return 0, fmt.Errorf("dataload: modo de revalidación desconocido %q", mode)
+	}
+	f.State = MediaDone
+	jobs, err := q.Jobs.List(ctx, org, f)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, j := range jobs {
+		j.State, j.Revalidate, j.Attempts, j.NextAttempt, j.UpdatedAt = MediaPending, mode, 0, q.now(), q.now()
+		if err := q.Jobs.Update(ctx, j); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }
 
 // Run procesa la cola en bucle hasta que ctx termine, esperando poll cuando no
@@ -440,11 +774,15 @@ func (q *MediaQueue) Run(ctx context.Context, poll time.Duration) error {
 
 func (q *MediaQueue) process(ctx context.Context, j MediaJob) error {
 	j.Attempts++
-	entry, err := q.Backup.Backup(ctx, j.Org, j.URL)
+	entry, res, err := q.Backup.Ensure(ctx, j.Org, j.URL, j.Revalidate)
 	j.UpdatedAt = q.now()
 	switch {
 	case err == nil:
 		j.State, j.SHA256, j.StoredName, j.LastError = MediaDone, entry.SHA256, entry.StoredName, ""
+		j.Revalidate, j.Outcome = RevalidateNone, res.Outcome
+		if res.Err != nil {
+			j.LastError = "revalidación: " + res.Err.Error() // el original anterior sigue vigente
+		}
 		if q.Deriver != nil {
 			if derr := q.Deriver.Derive(ctx, entry); derr != nil {
 				j.DeriveError = derr.Error()
@@ -457,7 +795,7 @@ func (q *MediaQueue) process(ctx context.Context, j MediaJob) error {
 		j.State, j.NextAttempt = MediaPending, q.now()
 		_ = q.Jobs.Update(context.WithoutCancel(ctx), j)
 		return ctx.Err()
-	case !importer.IsRetryable(ctx, err) || errors.Is(err, ErrBackupCorrupt) || j.Attempts >= q.maxAttempts():
+	case !importer.IsRetryable(ctx, err) || errors.Is(err, ErrBackupCorrupt) || j.Attempts >= q.maxAttemptsFor(j.Org):
 		j.State, j.LastError = MediaDead, err.Error()
 	default:
 		j.State, j.LastError, j.NextAttempt = MediaPending, err.Error(), q.now().Add(q.delay(j.Attempts))

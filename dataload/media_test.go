@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -37,7 +38,7 @@ func TestBackup_StoresImmutableOriginalBySHA256WithManifest(t *testing.T) {
 		t.Fatalf("manifiesto incompleto: %+v", e)
 	}
 	got, ok, _ := r.manifest.ByURL(context.Background(), "org-a", e.SourceURL)
-	if !ok || got != e {
+	if !ok || !reflect.DeepEqual(got, e) {
 		t.Fatal("el manifiesto no quedó guardado")
 	}
 }
