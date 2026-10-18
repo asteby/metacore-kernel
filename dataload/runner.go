@@ -47,11 +47,21 @@ type Runner struct {
 	// Now es el reloj; default time.Now.
 	Now func() time.Time
 
-	mu       sync.Mutex
-	inflight map[string]string // org|key -> run id
-	cancels  map[string]context.CancelFunc
-	done     map[string]chan struct{}
-	wg       sync.WaitGroup
+	// Owner identifica a este proceso en los arrendamientos de corridas (solo con
+	// un LeaseLedger); default un id aleatorio por Runner.
+	Owner string
+	// LeaseTTL es cuánto vale un arrendamiento sin latido; default 2 minutos.
+	LeaseTTL time.Duration
+	// HeartbeatEvery es cada cuánto late una corrida en curso; default LeaseTTL/3,
+	// negativo = solo late al terminar cada lote.
+	HeartbeatEvery time.Duration
+
+	ownerOnce sync.Once
+	mu        sync.Mutex
+	inflight  map[string]string // org|key -> run id
+	cancels   map[string]context.CancelFunc
+	done      map[string]chan struct{}
+	wg        sync.WaitGroup
 }
 
 func (r *Runner) now() time.Time {
@@ -59,6 +69,37 @@ func (r *Runner) now() time.Time {
 		return r.Now().UTC()
 	}
 	return time.Now().UTC()
+}
+
+func (r *Runner) owner() string {
+	r.ownerOnce.Do(func() {
+		if r.Owner == "" {
+			r.Owner = "runner-" + newID()
+		}
+	})
+	return r.Owner
+}
+
+func (r *Runner) leaseTTL() time.Duration {
+	if r.LeaseTTL > 0 {
+		return r.LeaseTTL
+	}
+	return 2 * time.Minute
+}
+
+func (r *Runner) heartbeatEvery() time.Duration {
+	switch {
+	case r.HeartbeatEvery < 0:
+		return 0
+	case r.HeartbeatEvery > 0:
+		return r.HeartbeatEvery
+	}
+	return r.leaseTTL() / 3
+}
+
+func (r *Runner) leaser() LeaseLedger {
+	ll, _ := r.Ledger.(LeaseLedger)
+	return ll
 }
 
 func (r *Runner) batch() int {
@@ -137,7 +178,7 @@ func (r *Runner) DryRun(ctx context.Context, req RunRequest) (*Plan, Run, error)
 // Start encola una aplicación y vuelve de inmediato; el avance se consulta con
 // Status/Wait. Si la misma entrada ya se aplicó con éxito (y no hay Force)
 // registra una corrida replay que no escribe nada. Si la misma entrada ya está
-// en curso devuelve esa corrida.
+// en curso (en este proceso o, con un LeaseLedger, en otro) devuelve esa corrida.
 func (r *Runner) Start(ctx context.Context, req RunRequest) (Run, error) {
 	prof, src, in, err := r.prepare(ctx, req)
 	if err != nil {
@@ -145,11 +186,24 @@ func (r *Runner) Start(ctx context.Context, req RunRequest) (Run, error) {
 	}
 	run := r.newRun(req, prof, src, in, ModeApply)
 	flight := req.Org + "|" + run.Key
+	ll := r.leaser()
+	if ll != nil {
+		run.Lease = &RunLease{Owner: r.owner(), Heartbeat: r.now(), Until: r.now().Add(r.leaseTTL())}
+	}
 
 	r.mu.Lock()
 	if id, ok := r.inflight[flight]; ok {
 		r.mu.Unlock()
 		return r.Ledger.Get(ctx, req.Org, id)
+	}
+	if ll != nil {
+		if active, found, err := ll.FindActive(ctx, req.Org, run.Key, r.now()); err != nil {
+			r.mu.Unlock()
+			return Run{}, err
+		} else if found {
+			r.mu.Unlock()
+			return active, nil
+		}
 	}
 	if !req.Force {
 		prev, found, err := r.Ledger.FindApplied(ctx, req.Org, run.Key)
@@ -159,17 +213,26 @@ func (r *Runner) Start(ctx context.Context, req RunRequest) (Run, error) {
 		}
 		if found {
 			r.mu.Unlock()
+			run.Lease = nil
 			run.State, run.ReplayOf, run.PlanHash, run.Progress = RunSucceeded, prev.ID, prev.PlanHash, prev.Progress
 			run.StartedAt, run.FinishedAt = r.now(), r.now()
 			return run, r.Ledger.Save(ctx, run)
 		}
 	}
-	if r.inflight == nil {
-		r.inflight, r.cancels, r.done = map[string]string{}, map[string]context.CancelFunc{}, map[string]chan struct{}{}
-	}
 	if err := r.Ledger.Save(ctx, run); err != nil {
 		r.mu.Unlock()
 		return Run{}, err
+	}
+	r.spawnLocked(ctx, req, src, run) // suelta r.mu
+	return run, nil
+}
+
+// spawnLocked registra la corrida como en curso y arranca su trabajo. Requiere r.mu
+// tomado y lo suelta.
+func (r *Runner) spawnLocked(ctx context.Context, req RunRequest, src Source, run Run) {
+	flight := req.Org + "|" + run.Key
+	if r.inflight == nil {
+		r.inflight, r.cancels, r.done = map[string]string{}, map[string]context.CancelFunc{}, map[string]chan struct{}{}
 	}
 	// El trabajo sobrevive a la petición que lo inició; se corta con Cancel/Close.
 	wctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -189,12 +252,33 @@ func (r *Runner) Start(ctx context.Context, req RunRequest) (Run, error) {
 		delete(r.done, run.ID)
 		r.mu.Unlock()
 	}()
-	return run, nil
 }
 
 func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Run) {
-	save := func() { _ = r.Ledger.Save(context.WithoutCancel(ctx), run) }
+	ll := r.leaser()
+	owner := r.owner()
+	ctx, cancelCause := context.WithCancelCause(ctx)
+	defer cancelCause(nil)
+	lost := func() bool { return errors.Is(context.Cause(ctx), ErrLeaseLost) }
+
+	// save escribe la corrida. Con un LeaseLedger lo hace con cerco: si otro
+	// proceso recuperó la corrida, se suelta sin tocar su historial.
+	save := func() bool {
+		sctx := context.WithoutCancel(ctx)
+		if ll == nil {
+			_ = r.Ledger.Save(sctx, run)
+			return true
+		}
+		if err := ll.SaveLeased(sctx, run, owner, r.now(), r.leaseTTL()); errors.Is(err, ErrLeaseLost) {
+			cancelCause(ErrLeaseLost)
+			return false
+		}
+		return true
+	}
 	fail := func(err error) {
+		if lost() {
+			return
+		}
 		run.FinishedAt = r.now()
 		if errors.Is(err, context.Canceled) {
 			run.State = RunCanceled
@@ -204,8 +288,32 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 		run.Error = err.Error()
 		save()
 	}
+	if ll != nil {
+		if every := r.heartbeatEvery(); every > 0 {
+			go func() {
+				t := time.NewTicker(every)
+				defer t.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-t.C:
+						if ok, err := ll.Heartbeat(ctx, run.Org, run.ID, owner, r.now(), r.leaseTTL()); err == nil && !ok {
+							cancelCause(ErrLeaseLost)
+							return
+						}
+					}
+				}
+			}()
+		}
+	}
+
+	// Una corrida recuperada trae el avance que dejó su dueño anterior.
+	base := run.Progress
 	run.State, run.StartedAt = RunRunning, r.now()
-	save()
+	if !save() {
+		return
+	}
 
 	plan, err := BuildPlan(ctx, PlanRequest{Org: req.Org, Profile: req.Profile, Overrides: req.Overrides, Source: src, Target: r.Target, Extract: req.Extract})
 	if err != nil {
@@ -221,13 +329,25 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 		fail(fmt.Errorf("dataload: %d filas inválidas y %d duplicadas; no se aplicó nada", run.Progress.Invalid, run.Progress.Duplicates))
 		return
 	}
-	run.Progress.Done, run.Progress.Created, run.Progress.Updated = 0, 0, 0
-	save()
+	// Reanudación: lo que escribió el dueño anterior ya aparece como unchanged en
+	// este plan; se suma al avance y se quita de unchanged.
+	if base.Done > 0 {
+		run.Progress.Total += base.Done
+		run.Progress.Unchanged = max(0, run.Progress.Unchanged-base.Done)
+	}
+	run.Progress.Done, run.Progress.Created, run.Progress.Updated = base.Done, base.Created, base.Updated
+	cp := Checkpoint{}
+	if run.Checkpoint != nil {
+		cp = *run.Checkpoint
+	}
+	if !save() {
+		return
+	}
 
 	changes := plan.Changes()
 	for lo := 0; lo < len(changes); lo += r.batch() {
 		if err := ctx.Err(); err != nil {
-			fail(err)
+			fail(contextError(ctx, err))
 			return
 		}
 		hi := min(lo+r.batch(), len(changes))
@@ -243,21 +363,26 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 				run.Progress.Updated++
 			}
 		}
-		save()
+		cp.Batches++
+		cp.Rows, cp.LastKey, cp.UpdatedAt = run.Progress.Done, changes[hi-1].Key, r.now()
+		run.Checkpoint = &Checkpoint{Batches: cp.Batches, Rows: cp.Rows, LastKey: cp.LastKey, Resumes: cp.Resumes, UpdatedAt: cp.UpdatedAt}
+		if !save() {
+			return
+		}
 	}
 
 	if err := ctx.Err(); err != nil {
-		fail(err)
+		fail(contextError(ctx, err))
 		return
 	}
 
 	// Medios de TODAS las filas válidas, también las unchanged: encolar es
 	// idempotente y así una corrida interrumpida entre escribir y encolar se
-	// recupera sola.
+	// recupera sola. Las filas en revisión no encolan nada hasta que se aprueben.
 	if r.Media != nil {
 		var jobs []MediaJob
 		for _, row := range plan.Rows {
-			if row.Action == ActionInvalid || row.Action == ActionDuplicate {
+			if row.Action == ActionInvalid || row.Action == ActionDuplicate || row.Action == ActionReview {
 				continue
 			}
 			jobs = append(jobs, r.Media.jobsFor(req.Org, plan.Entity, run.ID, row.Key, row.Media)...)
@@ -273,6 +398,14 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, src Source, run Ru
 	}
 	run.State, run.FinishedAt = RunSucceeded, r.now()
 	save()
+}
+
+// contextError devuelve la causa de cancelación si hay una (p. ej. ErrLeaseLost).
+func contextError(ctx context.Context, err error) error {
+	if c := context.Cause(ctx); c != nil {
+		return c
+	}
+	return err
 }
 
 func (p *Plan) progress() Progress {

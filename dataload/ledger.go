@@ -52,6 +52,26 @@ type Progress struct {
 	Review int `json:"review,omitempty"`
 }
 
+// RunLease es el arrendamiento con que un proceso declara que está ejecutando
+// una corrida. Si deja de latir y vence, otro proceso puede recuperarla.
+type RunLease struct {
+	Owner     string    `json:"owner"`
+	Heartbeat time.Time `json:"heartbeat"`
+	Until     time.Time `json:"until"`
+}
+
+// Checkpoint es el punto de reanudación: se guarda después de cada lote escrito.
+type Checkpoint struct {
+	// Batches y Rows son los lotes y filas ya escritos (acumulados entre reanudaciones).
+	Batches int `json:"batches"`
+	Rows    int `json:"rows"`
+	// LastKey es la identidad de la última fila escrita.
+	LastKey string `json:"lastKey,omitempty"`
+	// Resumes cuenta cuántas veces se recuperó la corrida tras quedar huérfana.
+	Resumes   int       `json:"resumes,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
 // MaxRunIssues acota los problemas que se guardan en la corrida; el conteo
 // completo queda en Progress.
 const MaxRunIssues = 200
@@ -80,6 +100,11 @@ type Run struct {
 	// motivo; el conteo completo está en Progress.Review.
 	Review []ReviewNote `json:"review,omitempty"`
 	Error  string       `json:"error,omitempty"`
+	// Lease dice qué proceso tiene la corrida (solo con un LeaseLedger). Lo
+	// administra el ledger; el ejecutor no lo escribe con Save.
+	Lease *RunLease `json:"lease,omitempty"`
+	// Checkpoint es el avance durable por lote: lo que una recuperación necesita saber.
+	Checkpoint *Checkpoint `json:"checkpoint,omitempty"`
 	// ReplayOf es el ID de la corrida que ya había resuelto esta misma entrada:
 	// esta corrida no escribió nada.
 	ReplayOf   string    `json:"replayOf,omitempty"`
@@ -101,6 +126,34 @@ type Ledger interface {
 	FindApplied(ctx context.Context, org, key string) (Run, bool, error)
 	// List devuelve las corridas más recientes primero.
 	List(ctx context.Context, org string, limit int) ([]Run, error)
+}
+
+// ErrLeaseLost indica que otro proceso recuperó la corrida: quien la ejecutaba
+// debe soltarla sin escribir más en el historial.
+var ErrLeaseLost = errors.New("dataload: la corrida ya la tiene otro proceso")
+
+// LeaseLedger es un Ledger que además sabe de arrendamientos. Es opcional: sin
+// él, el Runner funciona como antes y no hay recuperación (Recover devuelve
+// ErrNoLeaseLedger). Contrato:
+//
+//   - Save inserta tal cual (con el Lease de la corrida) y al actualizar NO toca
+//     el Lease almacenado; una corrida que pasa a estado terminal pierde el Lease.
+//   - SaveLeased guarda la corrida de forma atómica solo si el Lease almacenado
+//     sigue siendo de owner (y la corrida no es terminal); además lo extiende.
+//     Si no, devuelve ErrLeaseLost y no escribe. Es el cerco que impide que un
+//     proceso lento pise el resultado del que lo recuperó.
+//   - ClaimStale toma de forma atómica corridas queued/running sin arrendamiento o
+//     con el arrendamiento vencido, las deja a nombre de owner y suma una
+//     reanudación a su Checkpoint. Dos procesos nunca reciben la misma corrida.
+type LeaseLedger interface {
+	Ledger
+	SaveLeased(ctx context.Context, run Run, owner string, now time.Time, ttl time.Duration) error
+	// Heartbeat extiende el arrendamiento; false = ya no es de owner.
+	Heartbeat(ctx context.Context, org, id, owner string, now time.Time, ttl time.Duration) (bool, error)
+	ClaimStale(ctx context.Context, org string, now time.Time, owner string, ttl time.Duration, limit int) ([]Run, error)
+	// FindActive devuelve la corrida de aplicación con esa llave que está en curso
+	// con arrendamiento vigente.
+	FindActive(ctx context.Context, org, key string, now time.Time) (Run, bool, error)
 }
 
 // RunKey es la llave de idempotencia: misma organización, mismo perfil

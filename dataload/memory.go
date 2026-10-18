@@ -93,12 +93,97 @@ func (l *MemoryLedger) Save(_ context.Context, run Run) error {
 	defer l.mu.Unlock()
 	for i := range l.runs {
 		if l.runs[i].ID == run.ID {
+			run.Lease = l.runs[i].Lease // el arrendamiento solo lo mueve el contrato de LeaseLedger
+			if run.State.Terminal() {
+				run.Lease = nil
+			}
 			l.runs[i] = run
 			return nil
 		}
 	}
+	if run.State.Terminal() {
+		run.Lease = nil
+	}
 	l.runs = append(l.runs, run)
 	return nil
+}
+
+var _ LeaseLedger = (*MemoryLedger)(nil)
+
+func (l *MemoryLedger) SaveLeased(_ context.Context, run Run, owner string, now time.Time, ttl time.Duration) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i := range l.runs {
+		if l.runs[i].ID != run.ID || l.runs[i].Org != run.Org {
+			continue
+		}
+		cur := l.runs[i]
+		if cur.State.Terminal() || cur.Lease == nil || cur.Lease.Owner != owner {
+			return ErrLeaseLost
+		}
+		run.Lease = &RunLease{Owner: owner, Heartbeat: now, Until: now.Add(ttl)}
+		if run.State.Terminal() {
+			run.Lease = nil
+		}
+		l.runs[i] = run
+		return nil
+	}
+	return ErrRunNotFound
+}
+
+func (l *MemoryLedger) Heartbeat(_ context.Context, org, id, owner string, now time.Time, ttl time.Duration) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i := range l.runs {
+		r := &l.runs[i]
+		if r.ID == id && r.Org == org {
+			if r.State.Terminal() || r.Lease == nil || r.Lease.Owner != owner {
+				return false, nil
+			}
+			r.Lease = &RunLease{Owner: owner, Heartbeat: now, Until: now.Add(ttl)}
+			return true, nil
+		}
+	}
+	return false, ErrRunNotFound
+}
+
+func (l *MemoryLedger) ClaimStale(_ context.Context, org string, now time.Time, owner string, ttl time.Duration, limit int) ([]Run, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []Run
+	for i := range l.runs {
+		r := &l.runs[i]
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+		if (org != "" && r.Org != org) || r.Mode != ModeApply || (r.State != RunRunning && r.State != RunQueued) {
+			continue
+		}
+		if r.Lease != nil && r.Lease.Until.After(now) {
+			continue
+		}
+		r.Lease = &RunLease{Owner: owner, Heartbeat: now, Until: now.Add(ttl)}
+		cp := Checkpoint{}
+		if r.Checkpoint != nil {
+			cp = *r.Checkpoint
+		}
+		cp.Resumes++
+		r.Checkpoint = &cp
+		out = append(out, *r)
+	}
+	return out, nil
+}
+
+func (l *MemoryLedger) FindActive(_ context.Context, org, key string, now time.Time) (Run, bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i := len(l.runs) - 1; i >= 0; i-- {
+		r := l.runs[i]
+		if r.Org == org && r.Key == key && r.Mode == ModeApply && (r.State == RunRunning || r.State == RunQueued) && r.Lease != nil && r.Lease.Until.After(now) {
+			return r, true, nil
+		}
+	}
+	return Run{}, false, nil
 }
 
 func (l *MemoryLedger) Get(_ context.Context, org, id string) (Run, error) {
