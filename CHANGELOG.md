@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **dataload: campos derivados, listas y limpieza de HTML** — `Field.Derive`
+  calcula un campo desde otras columnas de la fila (`first`, `extract` con
+  regex de un grupo y `gtin` con dígito verificador GS1; `when` condiciona),
+  `Field.Split` produce listas, `Overrides.CleanAdd` agrega reglas de limpieza
+  a un campo, y las reglas nuevas `sanitize_html` (lista blanca, sin atributos
+  salvo `href` http/https), `collapse_blank_lines`, `auto_paragraphs` y la
+  parametrizada `drop_lines:<regex>`. Todo declarativo: ningún origen concreto
+  vive en el kernel. `dataload.IsGTIN` se exporta.
+
 - **dataload: carga masiva genérica con respaldo de medios** — nuevo paquete
   `dataload`. `Profile` declarativo (JSON, rechaza campos desconocidos): mapeo
   de columnas con alias, tipos, valores traducidos, reglas de limpieza

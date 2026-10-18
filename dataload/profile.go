@@ -67,6 +67,12 @@ type Field struct {
 	Sep string `json:"sep,omitempty"`
 	// Default se usa cuando la celda viene vacía.
 	Default any `json:"default,omitempty"`
+	// Split separa la celda (ya limpia) en una lista de textos sin vacíos:
+	// "creatine, ares" con Split "," da ["creatine","ares"].
+	Split string `json:"split,omitempty"`
+	// Derive calcula el valor a partir de otras columnas de la fila (ver Derive).
+	// Con Derive el campo no lleva From: lo alimenta el cálculo.
+	Derive *Derive `json:"derive,omitempty"`
 }
 
 // Reglas de limpieza disponibles (nombres estables, parte del contrato del perfil).
@@ -79,6 +85,17 @@ const (
 	CleanUpper           = "upper"
 	CleanTrimQuotes      = "trim_quotes" // comillas tipográficas -> rectas y quita las de los extremos
 	CleanNullIfEmptyish  = "null_if_emptyish"
+	// CleanSanitizeHTML conserva solo etiquetas de texto seguras (p, br, ul, ol, li,
+	// strong, b, em, i, h2-h4, a con http/https), sin atributos salvo href; quita
+	// scripts, estilos y comentarios.
+	CleanSanitizeHTML = "sanitize_html"
+	// CleanCollapseBlankLines deja a lo más una línea en blanco seguida.
+	CleanCollapseBlankLines = "collapse_blank_lines"
+	// CleanAutoParagraphs envuelve en <p> cada bloque de texto que no sea ya HTML de bloque.
+	CleanAutoParagraphs = "auto_paragraphs"
+	// CleanDropLines es parametrizada: "drop_lines:<regex>" elimina las líneas
+	// que coinciden (la regex se compila sin distinguir mayúsculas si empieza con (?i)).
+	CleanDropLines = "drop_lines"
 )
 
 var (
@@ -93,6 +110,10 @@ var (
 // validación del perfil (ver Validate), nunca se ignora en silencio.
 func applyClean(rules []string, s string) string {
 	for _, r := range rules {
+		if arg, ok := strings.CutPrefix(r, CleanDropLines+":"); ok {
+			s = dropLines(arg, s)
+			continue
+		}
 		switch r {
 		case CleanTrim:
 			s = strings.TrimSpace(s)
@@ -110,6 +131,12 @@ func applyClean(rules []string, s string) string {
 			s = strings.ToUpper(s)
 		case CleanTrimQuotes:
 			s = strings.Trim(quoteRepl.Replace(strings.TrimSpace(s)), `"`)
+		case CleanSanitizeHTML:
+			s = sanitizeHTML(s)
+		case CleanCollapseBlankLines:
+			s = strings.TrimSpace(reBlankRun.ReplaceAllString(s, "\n\n"))
+		case CleanAutoParagraphs:
+			s = autoParagraphs(s)
 		case CleanNullIfEmptyish:
 			switch strings.ToLower(strings.TrimSpace(s)) {
 			case "n/a", "na", "null", "none", "-", "--", "undefined":
@@ -123,6 +150,7 @@ func applyClean(rules []string, s string) string {
 var knownClean = map[string]bool{
 	CleanTrim: true, CleanCollapseSpaces: true, CleanUnescapeNewline: true, CleanStripHTML: true,
 	CleanLower: true, CleanUpper: true, CleanTrimQuotes: true, CleanNullIfEmptyish: true,
+	CleanSanitizeHTML: true, CleanCollapseBlankLines: true, CleanAutoParagraphs: true,
 }
 
 // ParseProfile decodifica y valida un perfil JSON. Rechaza campos desconocidos
@@ -154,9 +182,20 @@ func (p Profile) Validate() error {
 	}
 	targets := map[string]bool{}
 	for i, f := range p.Fields {
-		if f.Target == "" || len(f.From) == 0 {
+		if f.Target == "" || (len(f.From) == 0 && f.Derive == nil) {
 			errs = append(errs, fmt.Sprintf("fields[%d]: faltan target o from", i))
 			continue
+		}
+		if f.Derive != nil {
+			if len(f.From) > 0 {
+				errs = append(errs, fmt.Sprintf("%q: con derive no se usa from", f.Target))
+			}
+			if f.Media {
+				errs = append(errs, fmt.Sprintf("%q: derive y media son excluyentes", f.Target))
+			}
+			if err := f.Derive.validate(); err != nil {
+				errs = append(errs, fmt.Sprintf("%q: %v", f.Target, err))
+			}
 		}
 		if targets[f.Target] {
 			errs = append(errs, fmt.Sprintf("target %q repetido", f.Target))
@@ -169,8 +208,8 @@ func (p Profile) Validate() error {
 			errs = append(errs, fmt.Sprintf("%q: usa media:true; las transformaciones media_url descargan al planificar", f.Target))
 		}
 		for _, r := range append(append([]string{}, p.Clean...), f.Clean...) {
-			if !knownClean[r] {
-				errs = append(errs, fmt.Sprintf("regla de limpieza desconocida %q", r))
+			if !validCleanRule(r) {
+				errs = append(errs, cleanRuleError(r))
 			}
 		}
 	}
@@ -223,9 +262,9 @@ func (p Profile) importSpec() modelbase.ImportSpec {
 		if f.Media {
 			col.Required, col.Transform = false, "" // las URLs no entran al registro; ver normalizeRow
 		}
-		if len(f.From) > 0 {
-			col.Header = f.From[0]
-			col.Aliases = f.From[1:]
+		if h := f.headers(); len(h) > 0 {
+			col.Header = h[0]
+			col.Aliases = h[1:]
 		}
 		spec.Columns = append(spec.Columns, col)
 	}
@@ -248,6 +287,9 @@ type Overrides struct {
 	Defaults map[string]any `json:"defaults,omitempty"`
 	// Clean reemplaza las reglas globales de limpieza si no es nil.
 	Clean []string `json:"clean,omitempty"`
+	// CleanAdd agrega reglas de limpieza al final de las de un campo existente
+	// (target -> reglas): p. ej. quitar el aviso legal de la descripción.
+	CleanAdd map[string][]string `json:"cleanAdd,omitempty"`
 }
 
 // Resolve devuelve una copia del perfil con los overrides aplicados. No muta p.
@@ -281,12 +323,20 @@ func (p Profile) Resolve(o *Overrides) (Profile, error) {
 		if extra, ok := o.Rename[f.Target]; ok {
 			f.From = append(append([]string(nil), f.From...), extra...)
 		}
+		if extra, ok := o.CleanAdd[f.Target]; ok {
+			f.Clean = append(append([]string(nil), f.Clean...), extra...)
+		}
 		kept = append(kept, f)
 	}
 	out.Fields = kept
 	for t := range o.Rename {
 		if _, ok := out.field(t); !ok {
 			return Profile{}, fmt.Errorf("override: rename de %q, que no existe en el perfil %q", t, p.Name)
+		}
+	}
+	for t := range o.CleanAdd {
+		if _, ok := out.field(t); !ok {
+			return Profile{}, fmt.Errorf("override: cleanAdd de %q, que no existe en el perfil %q", t, p.Name)
 		}
 	}
 	for _, nf := range o.Fields {
@@ -332,9 +382,10 @@ func (p Profile) headerIgnored(h string) bool {
 // Devuelve la fila lista para importer.BuildRecordWithDeps, las URLs de medios
 // por campo destino y cuántas columnas ignoradas se descartaron.
 func (p Profile) normalizeRow(raw map[string]any) (row map[string]any, media map[string][]string, ignored int) {
+	raw = p.withDerived(raw)
 	idx := map[string]Field{}
 	for _, f := range p.Fields {
-		for _, h := range f.From {
+		for _, h := range f.headers() {
 			idx[normHeader(h)] = f
 		}
 		idx[normHeader(f.Target)] = f
@@ -420,5 +471,6 @@ func splitMedia(s, sep string) []string {
 func (p Profile) buildRecord(spec modelbase.ImportSpec, raw map[string]any, deps *importer.TransformDeps, i int) (rec map[string]any, media map[string][]string, ignored int, issues []importer.RowIssue) {
 	row, media, ignored := p.normalizeRow(raw)
 	rec, issues = importer.BuildRecordWithDeps(spec, row, deps, i)
+	p.applySplits(rec)
 	return rec, media, ignored, issues
 }
