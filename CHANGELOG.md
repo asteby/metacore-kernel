@@ -7,6 +7,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **legacybridge: motor genérico de coexistencia con un sistema legado.**
+  Paquete nuevo (`bridge/` ya es la costura host-kernel). Sirve para operar el
+  host y el ERP anterior a la vez durante una migración por fases, sin nada de
+  un legado concreto:
+  - `Envelope` (agregado completo: raíz, hijos, facetas y dependencias),
+    `Batch` y `ParseNDJSON`; `SourceVersion` monótona por fila
+    (`CompareVersions`) y huella de contenido (`Hash`).
+  - `Applier.Ingest`/`Apply`: idempotencia por versión y huella, orden por fila
+    (lo viejo se descarta), espera de dependencias con backoff y revisión tras
+    `MaxWait` (nunca filas fantasma), propiedad por (entidad, sucursal, fase) con
+    conflictos a `dataload.ReviewStore`, supresión del eco de los comandos
+    propios y cursor guardado en el host.
+  - `bridge_refs` (mapa de ids por sistema, únicos por external_id y por
+    local_id), `bridge_cursors`, `bridge_ownership` (+ bitácora y fase activa),
+    `bridge_pending` y `bridge_commands`: `GormStore` (Postgres/SQLite, `Migrate`)
+    y `MemoryStore`.
+  - `Outbound`: comandos con clave de idempotencia, entregados por el outbox del
+    kernel en orden por agregado, con backoff propio y cola de muertos que
+    bloquea su agregado hasta `RetryDead`/`Discard`; `Run` barre los agregados
+    vencidos.
+  - `Router`: `CanonicalEvent` → comandos según el mapa de propiedad (hacia el
+    dueño legado, o réplica cuando el dueño es el host); ignora las escrituras
+    del propio puente (`CorrelationPrefix`).
+  - `HTTPConnector` (Bearer, `X-Idempotency-Key`, firma HMAC-SHA256
+    `Sign`/`Verify`; 4xx de validación = permanente, 5xx/429 = reintento).
+
 ### Fixed
 
 - **dataload: correcciones de la revisión de la integración con ops.**
