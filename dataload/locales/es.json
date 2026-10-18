@@ -45,7 +45,6 @@
   "dataload.media.revalidate_mode": "dataload: modo de revalidación desconocido \"{mode}\"",
   "dataload.media.revalidate_failed": "revalidación",
   "dataload.media.partial_store": "dataload: guardar la descarga parcial",
-  "dataload.media.slots": "dataload: tope global de medios",
   "dataload.memory.object_not_found": "no existe el objeto {name}",
   "dataload.memory.job_not_found": "trabajo desconocido {id}",
   "dataload.profile.parse": "perfil inválido",

@@ -62,7 +62,6 @@ const (
 	CodeRevalidateMode   Code = "dataload.media.revalidate_mode"
 	CodeRevalidateFailed Code = "dataload.media.revalidate_failed"
 	CodePartialStore     Code = "dataload.media.partial_store"
-	CodeMediaSlots       Code = "dataload.media.slots"
 	CodeObjectNotFound   Code = "dataload.memory.object_not_found"
 	CodeJobNotFound      Code = "dataload.memory.job_not_found"
 

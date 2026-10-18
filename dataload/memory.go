@@ -404,6 +404,41 @@ func (s *MemoryJobStore) Claim(_ context.Context, now time.Time, limit int, leas
 	return out, nil
 }
 
+var _ LimitedJobStore = (*MemoryJobStore)(nil)
+
+// ClaimLimited es Claim respetando un tope global de trabajos en curso por
+// organización (todo bajo el mismo candado: atómico entre "procesos" que
+// comparten el almacén).
+func (s *MemoryJobStore) ClaimLimited(_ context.Context, now time.Time, limit int, lease time.Duration, maxRunning func(string) int) ([]MediaJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	running := map[string]int{}
+	for _, id := range s.ord {
+		if j := s.jobs[id]; j.State == MediaRunning && j.NextAttempt.After(now) {
+			running[j.Org]++
+		}
+	}
+	var out []MediaJob
+	for _, id := range s.ord {
+		if len(out) >= limit {
+			break
+		}
+		j := s.jobs[id]
+		due := (j.State == MediaPending || j.State == MediaRunning) && !j.NextAttempt.After(now)
+		if !due {
+			continue
+		}
+		if max := maxRunning(j.Org); max > 0 && running[j.Org] >= max {
+			continue
+		}
+		running[j.Org]++
+		j.State, j.NextAttempt = MediaRunning, now.Add(lease)
+		s.jobs[id] = j
+		out = append(out, j)
+	}
+	return out, nil
+}
+
 func (s *MemoryJobStore) Update(_ context.Context, j MediaJob) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

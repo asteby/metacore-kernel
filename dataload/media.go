@@ -426,6 +426,21 @@ type MediaJobStore interface {
 	RequeueDead(ctx context.Context, org, runID string, now time.Time) (int, error)
 }
 
+// LimitedJobStore es una extensión opcional de MediaJobStore para topes de
+// concurrencia GLOBALES por organización (entre todos los procesos que comparten
+// la cola). Sin ella, OrgMediaLimits.MaxConcurrentGlobal se aplica como tope por
+// proceso (más estricto, nunca más laxo).
+type LimitedJobStore interface {
+	MediaJobStore
+	// ClaimLimited es Claim con un tope por organización contado en todo el
+	// almacén: no reclama trabajos de una organización que ya tenga maxRunning(org)
+	// trabajos running con arrendamiento vigente (NextAttempt > now), contando los
+	// que reclama en la misma llamada. maxRunning(org) <= 0 = sin tope. Debe ser
+	// atómico frente a otros procesos (p. ej. una transacción con bloqueo por
+	// organización, o SELECT ... FOR UPDATE SKIP LOCKED con el conteo dentro).
+	ClaimLimited(ctx context.Context, now time.Time, limit int, lease time.Duration, maxRunning func(org string) int) ([]MediaJob, error)
+}
+
 // MediaRef describe un original respaldado ligado a un campo.
 type MediaRef struct {
 	Index       int    `json:"index"`
@@ -491,6 +506,11 @@ type OrgMediaLimits struct {
 	MaxConcurrent int `json:"maxConcurrent,omitempty"`
 	// MaxAttempts es el tope de intentos por trabajo de la organización (0 = el de la cola).
 	MaxAttempts int `json:"maxAttempts,omitempty"`
+	// MaxConcurrentGlobal es cuántos trabajos de la organización pueden estar en
+	// curso a la vez entre TODOS los procesos (0 = sin tope global). Lo cuenta el
+	// almacén (LimitedJobStore); si el almacén no lo soporta, vale como tope por
+	// proceso.
+	MaxConcurrentGlobal int `json:"maxConcurrentGlobal,omitempty"`
 }
 
 // StaticOrgLimits arma un Limits con un valor por defecto y excepciones por organización.
@@ -524,7 +544,7 @@ func (q *MediaQueue) acquireOrg(org string) bool {
 	if q.orgActive == nil {
 		q.orgActive = map[string]int{}
 	}
-	if max := q.limits(org).MaxConcurrent; max > 0 && q.orgActive[org] >= max {
+	if max := q.localCap(org); max > 0 && q.orgActive[org] >= max {
 		return false
 	}
 	q.orgActive[org]++
@@ -537,6 +557,26 @@ func (q *MediaQueue) releaseOrg(org string) {
 	if q.orgActive[org] > 0 {
 		q.orgActive[org]--
 	}
+}
+
+// localCap es el tope de la organización dentro de este proceso. Si el tope
+// global no lo puede contar el almacén, se aplica aquí también.
+func (q *MediaQueue) localCap(org string) int {
+	l := q.limits(org)
+	max := l.MaxConcurrent
+	if _, global := q.Jobs.(LimitedJobStore); !global && l.MaxConcurrentGlobal > 0 && (max <= 0 || l.MaxConcurrentGlobal < max) {
+		max = l.MaxConcurrentGlobal
+	}
+	return max
+}
+
+// claim reclama trabajos vencidos; con un LimitedJobStore respeta los topes
+// globales por organización.
+func (q *MediaQueue) claim(ctx context.Context, limit int) ([]MediaJob, error) {
+	if ls, ok := q.Jobs.(LimitedJobStore); ok && q.Limits != nil {
+		return ls.ClaimLimited(ctx, q.now(), limit, q.lease(), func(org string) int { return q.limits(org).MaxConcurrentGlobal })
+	}
+	return q.Jobs.Claim(ctx, q.now(), limit, q.lease())
 }
 
 // ActiveForOrg dice cuántos trabajos de la organización se están procesando ahora en este proceso.
@@ -631,7 +671,7 @@ func (q *MediaQueue) RetryFailed(ctx context.Context, org, runID string) (int, e
 // no caben por su tope esperan su turno sin gastar intentos. Devuelve cuántos
 // procesó. Un worker del outbox lo llama en bucle.
 func (q *MediaQueue) ProcessOnce(ctx context.Context, limit int) (int, error) {
-	jobs, err := q.Jobs.Claim(ctx, q.now(), limit, q.lease())
+	jobs, err := q.claim(ctx, limit)
 	if err != nil {
 		return 0, err
 	}

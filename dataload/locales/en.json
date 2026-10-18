@@ -45,7 +45,6 @@
   "dataload.media.revalidate_mode": "dataload: unknown revalidation mode \"{mode}\"",
   "dataload.media.revalidate_failed": "revalidation",
   "dataload.media.partial_store": "dataload: saving the partial download",
-  "dataload.media.slots": "dataload: global media limit",
   "dataload.memory.object_not_found": "object {name} does not exist",
   "dataload.memory.job_not_found": "unknown job {id}",
   "dataload.profile.parse": "invalid profile",
