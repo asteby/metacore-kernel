@@ -13,7 +13,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   calcula un campo desde otras columnas de la fila (`first`, `extract` con
   regex de un grupo y `gtin` con dígito verificador GS1; `when` condiciona),
   `Field.Split` produce listas, `Overrides.CleanAdd` y `Overrides.ValuesAdd` agregan
-  reglas de limpieza y traducciones de valores a un campo, y las reglas nuevas `sanitize_html` (lista blanca, sin atributos
+  reglas de limpieza y traducciones de valores a un campo (`Field.Finish` corre siempre después), y las reglas nuevas `sanitize_html` (lista blanca, sin atributos
   salvo `href` http/https), `collapse_blank_lines`, `auto_paragraphs` y la
   parametrizada `drop_lines:<regex>`. Todo declarativo: ningún origen concreto
   vive en el kernel. `dataload.IsGTIN` se exporta.

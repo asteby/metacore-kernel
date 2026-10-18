@@ -53,6 +53,10 @@ type Field struct {
 	Required bool     `json:"required,omitempty"`
 	// Clean son reglas de limpieza propias del campo.
 	Clean []string `json:"clean,omitempty"`
+	// Finish son reglas que corren siempre al final, después de Clean y de las
+	// que un override agregue con CleanAdd (p. ej. sanitizar el HTML una vez
+	// que el override quitó sus avisos).
+	Finish []string `json:"finish,omitempty"`
 	// Values traduce valores textuales (tras limpiar, sin distinguir
 	// mayúsculas) antes de convertir el tipo: {"publish":"true","draft":"false"}.
 	Values map[string]string `json:"values,omitempty"`
@@ -207,7 +211,7 @@ func (p Profile) Validate() error {
 		if strings.HasPrefix(f.Transform, "media_url") {
 			errs = append(errs, fmt.Sprintf("%q: usa media:true; las transformaciones media_url descargan al planificar", f.Target))
 		}
-		for _, r := range append(append([]string{}, p.Clean...), f.Clean...) {
+		for _, r := range append(append(append([]string{}, p.Clean...), f.Clean...), f.Finish...) {
 			if !validCleanRule(r) {
 				errs = append(errs, cleanRuleError(r))
 			}
@@ -420,7 +424,7 @@ func (p Profile) normalizeRow(raw map[string]any) (row map[string]any, media map
 			continue
 		}
 		s := stringifyCell(v)
-		s = applyClean(append(append([]string{}, p.Clean...), f.Clean...), s)
+		s = applyClean(append(append(append([]string{}, p.Clean...), f.Clean...), f.Finish...), s)
 		if len(f.Values) > 0 {
 			for from, to := range f.Values {
 				if strings.EqualFold(strings.TrimSpace(from), strings.TrimSpace(s)) {

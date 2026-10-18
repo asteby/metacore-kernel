@@ -149,3 +149,18 @@ func TestOverrides_ValuesAddMergesWithoutMutatingBase(t *testing.T) {
 		t.Fatal("valuesAdd de un campo inexistente debía fallar")
 	}
 }
+
+func TestFinishRunsAfterCleanAdd(t *testing.T) {
+	p := Profile{Name: "f", Entity: "e", Key: []string{"id"}, Fields: []Field{
+		{Target: "id", From: []string{"ID"}},
+		{Target: "d", From: []string{"D"}, Clean: []string{CleanUnescapeNewline}, Finish: []string{CleanSanitizeHTML, CleanAutoParagraphs}},
+	}}
+	r, err := p.Resolve(&Overrides{CleanAdd: map[string][]string{"d": {"drop_lines:(?i)^aviso"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, _, _, _ := r.buildRecord(r.importSpec(), map[string]any{"ID": "1", "D": "Texto bueno\\nAviso legal\\nOtra línea"}, nil, 0)
+	if rec["d"] != "<p>Texto bueno<br>Otra línea</p>" {
+		t.Fatalf("rec = %q", rec["d"])
+	}
+}
