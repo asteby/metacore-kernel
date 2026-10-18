@@ -255,23 +255,50 @@ func splitMediaList(raw string) []string {
 }
 
 func fetchAndStore(deps *TransformDeps, rawURL string) (string, error) {
-	rawURL = strings.TrimSpace(rawURL)
-	if rawURL == "" {
-		return "", fmt.Errorf("URL vacía")
-	}
-	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
-		return "", fmt.Errorf("URL debe empezar con http:// o https:// (recibido: %q)", rawURL)
-	}
 	if deps == nil || deps.Store == nil {
 		return "", fmt.Errorf("media transform requires TransformDeps.Store (host must call PrepareWithDeps)")
 	}
+	f, err := FetchMedia(deps, rawURL)
+	if err != nil {
+		return "", err
+	}
+	return storeMedia(transformDepsContext(deps), deps, f.URL, f.Data, f.Type)
+}
+
+// FetchedMedia es un medio descargado y validado (tipo por magic bytes, tamaño
+// dentro de la política) que todavía no se guardó en ningún lado.
+type FetchedMedia struct {
+	URL  *url.URL
+	Data []byte
+	// Type es el MIME detectado por los bytes, no el que declara el servidor.
+	Type string
+	// SuggestedName conserva el nombre base de la URL con la extensión del tipo.
+	SuggestedName string
+}
+
+// FetchMedia descarga rawURL aplicando MediaPolicy (allowlist, tope de bytes
+// sin truncar, tipo por magic bytes, reintentos con backoff y Retry-After) y la
+// guarda de salida de netguard. No escribe en ningún almacén: quien llama decide
+// qué hacer con los bytes (media_url los guarda; dataload respalda el original
+// por sha256). TransformDeps.Store no se usa.
+func FetchMedia(deps *TransformDeps, rawURL string) (*FetchedMedia, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return nil, fmt.Errorf("URL vacía")
+	}
+	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
+		return nil, fmt.Errorf("URL debe empezar con http:// o https:// (recibido: %q)", rawURL)
+	}
+	if deps == nil {
+		deps = &TransformDeps{}
+	}
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {
-		return "", fmt.Errorf("URL inválida: %q", rawURL)
+		return nil, fmt.Errorf("URL inválida: %q", rawURL)
 	}
 	pol := deps.Policy
 	if len(pol.AllowHosts) > 0 && !netguard.HostAllowed(pol.AllowHosts, strings.ToLower(u.Host)) {
-		return "", fmt.Errorf("%w: %s", ErrMediaHost, u.Host)
+		return nil, fmt.Errorf("%w: %s", ErrMediaHost, u.Host)
 	}
 
 	ctx := transformDepsContext(deps)
@@ -285,14 +312,18 @@ func fetchAndStore(deps *TransformDeps, rawURL string) (string, error) {
 	var lastErr error
 	for n := 1; n <= attempts; n++ {
 		if err := ctx.Err(); err != nil {
-			return "", err
+			return nil, err
 		}
-		data, ctype, retryAfter, err := downloadOnce(ctx, client, rawURL, pol)
+		data, _, retryAfter, err := downloadOnce(ctx, client, rawURL, pol)
 		if err == nil {
-			return storeMedia(ctx, deps, u, data, ctype)
+			detected := detectImageType(data)
+			if !pol.typeAllowed(detected) {
+				return nil, fmt.Errorf("%w: %s", ErrMediaType, detected)
+			}
+			return &FetchedMedia{URL: u, Data: data, Type: detected, SuggestedName: suggestName(u, detected)}, nil
 		}
 		if !retryable(ctx, err) {
-			return "", err
+			return nil, err
 		}
 		lastErr = err
 		if n == attempts {
@@ -303,11 +334,16 @@ func fetchAndStore(deps *TransformDeps, rawURL string) (string, error) {
 			wait = retryAfter
 		}
 		if serr := sleep(ctx, wait); serr != nil {
-			return "", serr
+			return nil, serr
 		}
 	}
-	return "", fmt.Errorf("tras %d intentos: %w", attempts, lastErr)
+	return nil, fmt.Errorf("tras %d intentos: %w", attempts, lastErr)
 }
+
+// IsRetryable indica si vale la pena reintentar más tarde tras err: errores de
+// red, timeouts, 408/425/429 y 5xx. Los 4xx definitivos, los bloqueos de
+// netguard, host/tamaño/tipo y la cancelación no se reintentan.
+func IsRetryable(ctx context.Context, err error) bool { return retryable(ctx, err) }
 
 // downloadOnce performs a single GET and returns the whole body (never more
 // than MaxBytes). retryAfter is the server-requested wait, if any.

@@ -518,3 +518,28 @@ func TestMediaURLContextCancelStopsRetries(t *testing.T) {
 		t.Fatalf("hits=%d, want 1 (no attempts after cancel)", hits)
 	}
 }
+
+func TestFetchMedia_ReturnsValidatedBytesWithoutTouchingTheStore(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(jpegBytes)
+	}))
+	defer srv.Close()
+	f, err := FetchMedia(&TransformDeps{HTTPClient: srv.Client()}, srv.URL+"/foto.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Type != "image/jpeg" || f.SuggestedName != "foto.jpg" || !bytes.Equal(f.Data, jpegBytes) {
+		t.Fatalf("got %+v", f)
+	}
+}
+
+func TestFetchMedia_RejectsNonImageAndBadScheme(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("<html>")) }))
+	defer srv.Close()
+	if _, err := FetchMedia(&TransformDeps{HTTPClient: srv.Client()}, srv.URL); !errors.Is(err, ErrMediaType) {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := FetchMedia(nil, "ftp://x/y.jpg"); err == nil {
+		t.Fatal("esquema inválido aceptado")
+	}
+}

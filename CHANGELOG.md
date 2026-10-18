@@ -9,6 +9,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **dataload: carga masiva genérica con respaldo de medios** — nuevo paquete
+  `dataload`. `Profile` declarativo (JSON, rechaza campos desconocidos): mapeo
+  de columnas con alias, tipos, valores traducidos, reglas de limpieza
+  (`trim`, `collapse_spaces`, `unescape_newlines`, `strip_html`, `trim_quotes`,
+  `null_if_emptyish`, `lower`, `upper`), transformaciones registradas con
+  `importer.RegisterTransform` y `Overrides` por organización (ignorar
+  encabezados por prefijo, renombrar, quitar o agregar campos, defaults) que
+  entran en la huella del perfil. Fuentes tras la interfaz `Source`: CSV, JSON y
+  bundle por ruta. `BuildPlan` hace dry-run y diff (create/update/unchanged/
+  invalid/duplicate, con diff por campo) sin escribir ni descargar. `Runner`
+  aplica de forma asíncrona por lotes con estado y progreso, `Cancel` y
+  `Wait`; el `Ledger` guarda el historial y la llave de idempotencia
+  `(org, perfil resuelto, huella de la entrada, modo)`: repetir la misma
+  entrada registra un replay sin escribir. `MediaQueue` descarga con
+  `netguard`/`MediaPolicy`, reintenta con espera creciente (2s, 8s, 30s, 2min,
+  10min), distingue errores definitivos, arrienda trabajos y respalda cada
+  original sin tocarlo en un `BackupStore` (`HashedMediaStore` + lectura)
+  direccionado por sha256, con `Manifest` (url origen, sha256, bytes, tipo,
+  fecha, estado), verificación al guardar y `VerifyAll`; los derivados los
+  genera aparte un `Deriver` opcional. Interfaces de persistencia para ops y
+  addons: `Target`, `Ledger`, `MediaJobStore`, `Manifest`, `BackupStore`,
+  `MediaSink`; hay versiones en memoria `NewMemory*` para pruebas.
+- **importer: `FetchMedia` e `IsRetryable`** — la descarga validada de
+  `media_url` (política, reintentos, magic bytes) queda disponible sin guardar
+  en ningún almacén; `media_url` la usa internamente, sin cambio de comportamiento.
+
 - **netguard + importer: descargas de medios endurecidas (SPEC-B)** — nuevo
   paquete `netguard`, la fuente única de la regla de salida: `IsBlockedIP`
   (loopback completo 127/8, privadas, link-local/metadata, CGNAT, 0/8,
