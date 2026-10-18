@@ -451,6 +451,11 @@ func (r *Runner) newBatchWriter(ctx context.Context, org, entity string, run *Ru
 			base.Done, base.Created, base.Updated = base.Done+n, base.Created+m.Created, base.Updated+m.Updated
 			w.cp.Batches, w.cp.Rows, w.cp.LastKey, w.cp.Recovered = m.Batch, w.cp.Rows+n, m.LastKey, w.cp.Recovered+n
 		}
+		// El checkpoint avanza junto con el avance que ya incluye esas marcas: si
+		// esta ejecución también muere antes de su primer lote, la siguiente no
+		// las vuelve a sumar.
+		saved := w.cp
+		run.Checkpoint = &saved
 	}
 	return w, nil
 }

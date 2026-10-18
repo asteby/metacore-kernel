@@ -120,3 +120,60 @@ func TestMarks_LatestGenerationWinsPerBatch(t *testing.T) {
 		t.Fatalf("got = %+v", got)
 	}
 }
+
+// hangBeforeApply simula un proceso que muere ANTES de escribir su primer lote:
+// la primera llamada a ApplyMarked se queda colgada sin escribir nada.
+type hangBeforeApply struct {
+	*MemoryMarkingTarget
+	n       int32
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (h *hangBeforeApply) ApplyMarked(ctx context.Context, org, entity string, m ApplyMark, ch []Change) error {
+	if atomic.AddInt32(&h.n, 1) == 1 {
+		close(h.reached)
+		<-h.release
+		return context.Canceled
+	}
+	return h.MemoryMarkingTarget.ApplyMarked(ctx, org, entity, m, ch)
+}
+
+// Las marcas que una reanudación ya sumó al avance no se vuelven a sumar si esa
+// reanudación también muere antes de su primer checkpoint.
+func TestMarks_RecoveredMarksAreNotCountedTwiceAcrossTwoResumes(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	tgt := NewMemoryMarkingTarget()
+	crash := &crashAfterWrite{MemoryMarkingTarget: tgt, atBatch: 3, reached: make(chan struct{}), release: make(chan struct{})}
+	a := leased(t, r, "A", crash, -1)
+	t.Cleanup(func() { crash.once.Do(func() { close(crash.release) }) })
+	req := RunRequest{Org: "org-a", Profile: catalogProfile(), Source: NewRowsSource("filas", syntheticRows(10))}
+	run, err := a.Start(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-crash.reached // lote 3 escrito con marca; checkpoint en el lote 2
+
+	r.clk.Advance(2 * time.Minute)
+	hang := &hangBeforeApply{MemoryMarkingTarget: tgt, reached: make(chan struct{}), release: make(chan struct{})}
+	b := leased(t, r, "B", hang, -1)
+	t.Cleanup(func() { close(hang.release) })
+	if _, err := b.Recover(ctx, "org-a", sameRequest(req)); err != nil {
+		t.Fatal(err)
+	}
+	<-hang.reached // B sumó la marca del lote 3 y murió antes de escribir
+
+	r.clk.Advance(2 * time.Minute)
+	c := leased(t, r, "C", tgt, -1)
+	if _, err := c.Recover(ctx, "org-a", sameRequest(req)); err != nil {
+		t.Fatal(err)
+	}
+	done, _ := c.Wait(ctx, "org-a", run.ID)
+	if p := done.Progress; done.State != RunSucceeded || p.Created != 10 || p.Done != 10 || p.Unchanged != 0 {
+		t.Fatalf("conteo exacto tras dos reanudaciones: %+v", p)
+	}
+	if tgt.Len("org-a", "item") != 10 {
+		t.Fatal("sin duplicados")
+	}
+}
