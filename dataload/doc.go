@@ -13,10 +13,14 @@
 // Piezas:
 //
 //	profile.go   Profile, Field, Overrides: mapeo, limpieza y transformaciones
+//	registry.go  ProfileStore y Registry: perfiles versionados por organización (base + overrides)
+//	extract.go   etapa extract: documento declarativo de reglas (RE2) que lee campos de texto
+//	review.go    filas "revisar": fuera de la carga automática, con decisión explícita después
 //	source.go    Source y adaptadores CSV / JSON / bundle
 //	plan.go      Plan, dry-run y diff contra el destino
-//	ledger.go    Run, Ledger y la llave de idempotencia
-//	runner.go    ejecución asíncrona con estado y progreso
-//	media.go     cola de medios, respaldo por sha256, manifiesto y verificación
+//	ledger.go    Run, Ledger, LeaseLedger y la llave de idempotencia
+//	runner.go    ejecución asíncrona por lotes con checkpoint, estado y progreso
+//	recover.go   Recover: reanuda corridas huérfanas (lease + heartbeat) sin duplicar
+//	media.go     cola de medios (topes por organización), respaldo por sha256, revalidación
 //	memory.go    implementaciones en memoria de las interfaces de persistencia
 package dataload

@@ -17,7 +17,7 @@ import (
 // se enlaza por profile.name + profile.version.
 //
 // El motor no conoce ningún giro. Los vocabularios (marcas, tipos de pieza,
-// sabores...), las plantillas de etiquetas y los códigos de revisión viven en el
+// categorías...), las plantillas de etiquetas y los códigos de revisión viven en el
 // documento. Formato: "metacore.dataload.extract/v1".
 //
 //	{

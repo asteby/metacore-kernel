@@ -9,6 +9,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **dataload: escala, extracción y registro de perfiles** — (1) `importer`:
+  transformación `number_mixed` para números con separadores de miles y
+  decimales mezclados (`$1.059,32`, `1,059.32`, `99,9`, `1.059.32`); lo ambiguo
+  (`1.059`) es error de fila, nunca se adivina; se registra con
+  `importer.RegisterRawTransform`, que corre antes de la coerción de tipo de su
+  columna. (2) Etapa `extract` (`ParseExtract`, `PlanRequest.Extract`,
+  `RunRequest.Extract`): un documento declarativo `metacore.dataload.extract/v1`,
+  hermano del `Profile` y enlazado por nombre y versión, con reglas en orden
+  sobre RE2 (`capture`, `entity`, `tokens`, `prefix`, `set`), vocabularios,
+  categorías, comprobaciones por fila (`sum`, `greater`, `rawPattern`, `range`,
+  `when`...) y por archivo (`unique`), plantillas de salida (etiquetas, tablas) y
+  códigos de revisión con severidad; entra en la huella y en la llave de
+  idempotencia. (3) Filas `revisar`: un motivo bloqueante saca la fila de la carga
+  automática (`ActionReview`, con `Outcome`), se reporta en el plan y en el
+  ledger (`Progress.Review`, `Run.Review`) con su motivo y se guarda en un
+  `ReviewStore`; `Runner.Decide` registra la decisión de una persona atada a la
+  huella de la fila y `Runner.ApplyApproved` escribe lo aprobado (`ModeReview`).
+  (4) `ProfileStore` + `MemoryProfileStore` y `Registry` (`Publish`/`Resolve`):
+  versiones inmutables por organización, perfiles completos o derivados (base a
+  versión exacta + `Overrides`), catálogo base compartido, versión y huella de lo
+  resuelto, que la corrida guarda (`Run.Registry`). (5) Lotes grandes:
+  `Run.Checkpoint` por lote, `LeaseLedger` (arrendamiento con latido y cerco
+  `SaveLeased`) y `Runner.Recover`, que reanuda las corridas que quedaron en
+  `running` comprobando las huellas de perfil, extracción y entrada, sin
+  duplicar; `Start` no duplica una corrida activa en otro proceso y el plan
+  consulta el destino por tandas (`LookupChunk`). (6) Medios: `MediaQueue.Limits`
+  (tope de concurrencia y de reintentos por organización, con reparto por turnos),
+  `Backuper.Ensure`/`Refetch` y `RevalidatePolicy` (ETag/Last-Modified con 304 o
+  descarga explícita; si el contenido cambia se guarda un nuevo original con otro
+  sha256 y el anterior queda en `ManifestEntry.Revisions`), `MediaQueue.Revalidate`,
+  y `importer.FetchMedia` reanuda descargas cortadas con `Range` + `If-Range`
+  (solo con validador fuerte) y admite peticiones condicionales
+  (`FetchMediaWith`). `golang.org/x/text` pasa a dependencia directa.
+
 - **dataload: campos derivados, listas y limpieza de HTML** — `Field.Derive`
   calcula un campo desde otras columnas de la fila (`first`, `extract` con
   regex de un grupo y `gtin` con dígito verificador GS1; `when` condiciona),
