@@ -9,6 +9,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **netguard + importer: descargas de medios endurecidas (SPEC-B)** — nuevo
+  paquete `netguard`, la fuente única de la regla de salida: `IsBlockedIP`
+  (loopback completo 127/8, privadas, link-local/metadata, CGNAT, 0/8,
+  reservadas e IPv6 que incrustan IPv4: mapeada, NAT64 y 6to4), `DialControl`
+  (corre tras el DNS, cubre rebinding y redirecciones), `NewClient` (sin proxy,
+  con `AllowHosts`, `MaxRedirects` y `AllowPrivate` solo para pruebas) y
+  `HostAllowed` (rechaza `*` y `*.com`). `agent.NewGuardedHTTPClient`,
+  `security.isBlockedEgressHost` (ahora evalúa IPs literales como `127.0.0.2` o
+  `[::ffff:127.0.0.1]`, que antes pasaban), `security.matchHTTPHost` y el
+  `blockedIP` de `marketplace` delegan en él; `agent.ErrBlockedEgress` es ahora
+  `netguard.ErrBlockedEgress`. `importer`: `TransformDeps` gana `Policy
+  MediaPolicy` (`MaxBytes` 15 MiB, `AllowedTypes`, `AllowHosts`, `MaxAttempts`,
+  `BaseBackoff`) y `Sleep`; `media_url`/`media_url_list` reintentan con backoff
+  exponencial y jitter solo errores de red, 408/425/429 y 5xx (respetan
+  `Retry-After` hasta 30 s), fallan con `ErrMediaTooLarge` en vez de guardar un
+  archivo truncado, verifican el tipo por magic bytes (jpeg, png, webp, gif,
+  avif; SVG excluido) y sugieren la extensión del tipo detectado, deduplican
+  URLs repetidas en la celda y, si el `Store` implementa la interfaz opcional
+  `HashedMediaStore` (`Lookup` + `PutHashed`), deduplican por sha256. Errores
+  tipados: `ErrMediaTooLarge`, `ErrMediaType`, `ErrMediaHost`, `ErrMediaHTTP`.
+  Cambios de comportamiento a tener en cuenta: con `HTTPClient == nil` el
+  cliente ahora bloquea destinos internos; el tope por defecto sube de 5 a
+  15 MiB; un archivo que no es imagen permitida ya no se guarda. Un host que
+  pase su propio `HTTPClient` asume su guarda. **ops debe conectar
+  `PrepareWithDeps` con un `MediaStore`** (hoy no lo hace) en una tarea aparte.
+
 - **runtime/wasm + manifest: concurrencia del pool WASM por addon (A1)** — el
   pool tenía UNA instancia por (addon, instalación) salvo que el operador fijara
   `WASM_POOL_SIZE`, así que todas las lecturas de una tienda se atendían en

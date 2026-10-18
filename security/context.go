@@ -2,11 +2,13 @@ package security
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/asteby/metacore-kernel/manifest"
+	"github.com/asteby/metacore-kernel/netguard"
 )
 
 // Capabilities is the compiled policy derived from an addon's declared
@@ -184,62 +186,26 @@ func (c *Capabilities) CanFetchHosts(rawURL string, hosts []string) error {
 
 // matchHTTPHost is stricter than matchAny: a capability pattern must resolve
 // to a concrete domain with a TLD. Bare "*", "*.*", "*.com" et al are rejected
-// because they would neutralise the capability system — a marketplace publisher
-// could exfiltrate to any host by declaring one of them.
+// because they would neutralise the capability system. The rule lives in
+// netguard so every egress check in the kernel shares one implementation.
 func matchHTTPHost(patterns []string, value string) bool {
-	for _, p := range patterns {
-		if !isValidHTTPHostPattern(p) {
-			continue
-		}
-		if p == value {
-			return true
-		}
-		if strings.HasPrefix(p, "*.") {
-			suffix := strings.TrimPrefix(p, "*.")
-			if strings.HasSuffix(value, "."+suffix) || value == suffix {
-				return true
-			}
-		}
-	}
-	return false
+	return netguard.HostAllowed(patterns, value)
 }
 
-// isValidHTTPHostPattern enforces that a http:fetch target has at least one
-// dot and that any wildcard is a leftmost-label wildcard above a registrable
-// domain (so "*.example.com" is fine, "*.com" is not).
-func isValidHTTPHostPattern(p string) bool {
-	if p == "" || p == "*" {
-		return false
-	}
-	// Strip optional port for validation.
-	host := p
-	if i := strings.LastIndex(host, ":"); i >= 0 && !strings.Contains(host[i+1:], ".") {
-		host = host[:i]
-	}
-	if strings.HasPrefix(host, "*.") {
-		host = strings.TrimPrefix(host, "*.")
-	}
-	// Reject leftover wildcards anywhere else.
-	if strings.Contains(host, "*") {
-		return false
-	}
-	// Require a registrable domain: at least two labels, each non-empty.
-	labels := strings.Split(host, ".")
-	if len(labels) < 2 {
-		return false
-	}
-	for _, l := range labels {
-		if l == "" {
-			return false
-		}
-	}
-	return true
-}
+// isValidHTTPHostPattern is netguard.IsValidHostPattern (kept for callers and
+// tests in this package).
+func isValidHTTPHostPattern(p string) bool { return netguard.IsValidHostPattern(p) }
 
 // isBlockedEgressHost rejects hosts that no addon should reach, regardless of
 // the capability list. Covers loopback, private ranges and cloud instance
 // metadata endpoints.
 func isBlockedEgressHost(h string) bool {
+	// A literal IP (127.0.0.2, ::ffff:127.0.0.1, 100.64.x…) is judged by the
+	// shared rule; DNS names are not resolved here — the real defence is
+	// netguard.DialControl in the HTTP client.
+	if ip := net.ParseIP(strings.Trim(h, "[]")); ip != nil && netguard.IsBlockedIP(ip) {
+		return true
+	}
 	switch strings.ToLower(h) {
 	case "", "localhost", "127.0.0.1", "::1", "0.0.0.0":
 		return true
