@@ -56,7 +56,7 @@ func rowOf(p *Plan, key string) RowPlan {
 	return RowPlan{}
 }
 
-func TestProtekStyle_MixedNumbersExtractionAndReviewRowsInThePlan(t *testing.T) {
+func TestSupplierList_MixedNumbersExtractionAndReviewRowsInThePlan(t *testing.T) {
 	r := newRig(t)
 	req := listaRequest(t)
 	plan, run, err := r.runner.DryRun(context.Background(), req)
