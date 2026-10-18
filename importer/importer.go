@@ -129,10 +129,13 @@ func BuildRecordWithDeps(spec modelbase.ImportSpec, raw map[string]any, deps *Tr
 			}
 			continue
 		}
-		coerced, err := coerceCell(col, value)
-		if err != nil {
-			issues = append(issues, RowIssue{Column: col.Header, Message: err.Error()})
-			continue
+		var coerced any = value
+		if col.Transform == "" || !isRawTransform(col.Transform) {
+			var err error
+			if coerced, err = coerceCell(col, value); err != nil {
+				issues = append(issues, RowIssue{Column: col.Header, Message: err.Error()})
+				continue
+			}
 		}
 		if col.Transform != "" {
 			fn, ok := lookupTransform(col.Transform)

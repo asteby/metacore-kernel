@@ -91,6 +91,9 @@ type TransformDeps struct {
 var (
 	xfMu       sync.RWMutex
 	transforms = map[string]TransformFunc{}
+	// rawTransforms are the transforms that run before (instead of after) the
+	// type coercion of their column.
+	rawTransforms = map[string]bool{}
 )
 
 func init() {
@@ -107,6 +110,28 @@ func RegisterTransform(name string, fn TransformFunc) {
 	xfMu.Lock()
 	defer xfMu.Unlock()
 	transforms[name] = fn
+	delete(rawTransforms, name) // re-registering as a normal transform clears the raw flag
+}
+
+// RegisterRawTransform registers a transform that parses the RAW cell text and
+// returns the final typed value itself: the column's Type coercion is skipped
+// for it (a "number" column with number_mixed must see "1.059,32", which
+// strconv would reject before the transform ran). It is the same registry as
+// RegisterTransform; only the order of operations differs.
+func RegisterRawTransform(name string, fn TransformFunc) {
+	if name == "" || fn == nil {
+		return
+	}
+	RegisterTransform(name, fn)
+	xfMu.Lock()
+	defer xfMu.Unlock()
+	rawTransforms[name] = true
+}
+
+func isRawTransform(name string) bool {
+	xfMu.RLock()
+	defer xfMu.RUnlock()
+	return rawTransforms[name]
 }
 
 func lookupTransform(name string) (TransformFunc, bool) {
