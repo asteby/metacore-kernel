@@ -200,7 +200,7 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 		if inv.mutationGuard != nil && res.action != "deleted" {
 			if gErr := inv.mutationGuard(execCtx, p.req.Table, res.after); gErr != nil {
 				_ = work.Rollback()
-				return fail("constraint_violation", fmt.Sprintf("mutations[%d]: %s", i, gErr.Error()))
+				return fail(guardErrCode(gErr), fmt.Sprintf("mutations[%d]: %s", i, gErr.Error()))
 			}
 		}
 		// Declarative compute (Host.WithMutationCompute): maintain the

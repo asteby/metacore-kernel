@@ -14,6 +14,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `permission`, `trigger` (`manual` | `first_visit`), `route` (obligatoria con
   `first_visit`), `order` y `steps[]` (reusa `AgentGuideStep`: `target` de UI o
   paso `concept`). Validación de claves y pasos únicos en `v3.Validate`.
+- **runtime/wasm: import `approval_consume` y `Host.WithApprovalConsumer`
+  (docs/wasm-abi.md § 23).** Un handler que escribe una línea bajo una
+  autorización de supervisor (precio bajo el piso, descuento fuera de regla)
+  canjea el grant PIN de un solo uso en un paso atómico del host, sin necesitar
+  escritura sobre la tabla `approval_requests`. `dynamic.Service.ConsumeApproval`
+  valida org, política, solicitante, vigencia, uso único y el contexto
+  autorizado (`context_eq` / `context_gte`); un intento rechazado no quema el
+  grant. Org y usuario salen de la invocación, nunca del guest.
+- **runtime/wasm: un guard `on_violation: request_approval` que falla en
+  `data_mutate` / `data_batch` responde `approval_required`** (antes
+  `constraint_violation`), para que el guest distinga "requiere supervisor" de
+  "dato inválido". Sigue haciendo rollback y no estaciona nada (no hay applier
+  que reejecute una escritura wasm).
 
 ### Fixed
 

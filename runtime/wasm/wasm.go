@@ -99,6 +99,8 @@ type Host struct {
 	// the `approval_request` import calls (Host.WithApprovals). nil = import
 	// answers `approvals_unavailable`.
 	approvalRequester func(ctx context.Context, in dynamic.ApprovalInput) (*dynamic.ApprovalRequest, error)
+	// approvalConsumer backs the `approval_consume` import (Host.WithApprovalConsumer).
+	approvalConsumer func(ctx context.Context, in dynamic.ConsumeInput) error
 	connectors        *connectors.Resolver
 	capQuerier        capability.Querier
 	emitPolicy        EmitPolicyFunc
@@ -387,6 +389,18 @@ func (h *Host) WithMutationCompute(f MutationComputeFn) *Host {
 // import answers `approvals_unavailable`.
 func (h *Host) WithApprovals(f func(ctx context.Context, in dynamic.ApprovalInput) (*dynamic.ApprovalRequest, error)) *Host {
 	h.approvalRequester = f
+	return h
+}
+
+// WithApprovalConsumer injects the embedder's dynamic.Service.ConsumeApproval
+// for the `metacore_host.approval_consume` import (docs/wasm-abi.md § 23). A
+// handler that writes a document line under a supervisor authorization (price
+// under the floor, discount over the cap) redeems the PIN grant through it:
+// the host checks org, policy, requester, freshness, single use and the
+// recorded context in one atomic step. When unset, the import answers
+// `approvals_unavailable`.
+func (h *Host) WithApprovalConsumer(f func(ctx context.Context, in dynamic.ConsumeInput) error) *Host {
+	h.approvalConsumer = f
 	return h
 }
 
@@ -752,6 +766,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		stageMachine:      h.stageMachine,
 		extensions:        h.extensions,
 		approvalRequester: h.approvalRequester,
+		approvalConsumer:  h.approvalConsumer,
 		connectors:        h.connectors,
 		capQuerier:        h.capQuerier,
 		emitPolicy:        h.emitPolicy,

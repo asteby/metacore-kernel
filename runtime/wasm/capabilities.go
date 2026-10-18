@@ -111,6 +111,10 @@ type invocation struct {
 	// (Host.WithApprovals) the `approval_request` import calls. nil = the
 	// import answers `approvals_unavailable`.
 	approvalRequester func(ctx context.Context, in dynamic.ApprovalInput) (*dynamic.ApprovalRequest, error)
+	// approvalConsumer is the embedder-injected dynamic.Service.ConsumeApproval
+	// (Host.WithApprovalConsumer) the `approval_consume` import calls. nil = the
+	// import answers `approvals_unavailable`.
+	approvalConsumer func(ctx context.Context, in dynamic.ConsumeInput) error
 	// execSchema overrides the schema db_exec scopes bare names to via
 	// search_path (Host.WithExecSchema). nil = AddonSchema(addonKey). The
 	// capability gate still authorises against AddonSchema regardless.
@@ -523,6 +527,25 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 			return writeToGuest(ctx, mod, env)
 		}).
 		Export("approval_request")
+
+	// approval_consume(reqPtr, reqLen) -> i64 (ptr|len envelope)
+	// Redeems a supervisor PIN grant for ONE use, atomically. Org and acting
+	// user come from the invocation context, never from the guest. No
+	// capability gate: the grant itself is the authorization, and the host
+	// refuses anything that is not the caller's own, fresh, unused grant.
+	// See docs/wasm-abi.md § 23.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			reqPtr, reqLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			req := readBytes(mod, reqPtr, reqLen)
+			env := executeApprovalConsume(ctx, inv, req)
+			return writeToGuest(ctx, mod, env)
+		}).
+		Export("approval_consume")
 
 	// sequence_next(reqPtr, reqLen) -> i64 (ptr|len envelope)
 	// Issues the next formatted folio value for a model's declared sequence,

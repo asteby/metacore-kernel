@@ -160,3 +160,52 @@ func TestApprovalPINRoutes(t *testing.T) {
 		t.Fatalf("no reason: %d %v", code, out)
 	}
 }
+
+func TestConsumeApproval(t *testing.T) {
+	svc, cashier, _ := pinFixture(t)
+	ctx := context.Background()
+	grant := func(policy string, c map[string]any) uuid.UUID {
+		t.Helper()
+		req, err := svc.GrantPINApproval(ctx, cashier, PINGrantInput{PolicyKey: policy, Reason: "r", PIN: "4321", Context: c})
+		if err != nil {
+			t.Fatalf("grant: %v", err)
+		}
+		return req.ID
+	}
+	in := func(id uuid.UUID) ConsumeInput {
+		return ConsumeInput{
+			OrgID: cashier.orgID, ApprovalID: id, Policy: "price_below_min", RequestedBy: cashier.id,
+			ContextEq:  map[string]string{"product_id": "p1"},
+			ContextGte: map[string]float64{"unit_shortfall": 5},
+		}
+	}
+
+	id := grant("price_below_min", map[string]any{"product_id": "p1", "unit_shortfall": 7.5})
+	if err := svc.ConsumeApproval(ctx, in(id)); err != nil {
+		t.Fatalf("first use: %v", err)
+	}
+	if err := svc.ConsumeApproval(ctx, in(id)); !errors.Is(err, ErrApprovalConsume) {
+		t.Fatalf("second use must fail: %v", err)
+	}
+
+	cases := map[string]func(ConsumeInput) ConsumeInput{
+		"otra org":         func(c ConsumeInput) ConsumeInput { c.OrgID = uuid.New(); return c },
+		"otra politica":    func(c ConsumeInput) ConsumeInput { c.Policy = "discount"; return c },
+		"otro solicitante": func(c ConsumeInput) ConsumeInput { c.RequestedBy = uuid.New(); return c },
+		"otro producto":    func(c ConsumeInput) ConsumeInput { c.ContextEq = map[string]string{"product_id": "p2"}; return c },
+		"no cubre":         func(c ConsumeInput) ConsumeInput { c.ContextGte = map[string]float64{"unit_shortfall": 9}; return c },
+		"id inexistente":   func(c ConsumeInput) ConsumeInput { c.ApprovalID = uuid.New(); return c },
+	}
+	for name, mod := range cases {
+		fresh := grant("price_below_min", map[string]any{"product_id": "p1", "unit_shortfall": 7.5})
+		if err := svc.ConsumeApproval(ctx, mod(in(fresh))); !errors.Is(err, ErrApprovalConsume) && name != "otra org" {
+			t.Errorf("%s: %v", name, err)
+		}
+		// A refused attempt must not burn the grant.
+		if name != "id inexistente" {
+			if err := svc.ConsumeApproval(ctx, in(fresh)); err != nil {
+				t.Errorf("%s: el rechazo quemó la autorización: %v", name, err)
+			}
+		}
+	}
+}

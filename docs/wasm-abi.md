@@ -2506,3 +2506,56 @@ Pide una capacidad (`commerce.shipping.rates`, `commerce.tax.calculate`, …) si
 - Capacidad requerida: `capability:query <clave>` (admite glob, p. ej. `commerce.*`). Sin ella: `forbidden`.
 - Errores: `no_provider`, `ambiguous_provider`, `validation_error`, `provider_required`, `idempotency_required`, `not_query`, `capability_unavailable` (el host no lo configuró), `capability_depth` (anidamiento > 3), `capability_error`.
 - El anfitrión lo activa con `Host.WithCapabilityQuerier`.
+
+## 23. `approval_consume` — redeem a supervisor PIN grant (v1.15)
+
+A handler that writes a document line under a supervisor authorization (a sale
+line under the price floor, a discount over the cap) must not trust the
+`approval_id` the caller sent: it redeems it. `approval_consume` does that in
+one atomic host step, so the addon needs no write capability on the core
+`approval_requests` table.
+
+```
+approval_consume(reqPtr i32, reqLen i32) -> i64   // ptr<<32 | len (envelope)
+```
+
+Request (max 8 KiB):
+
+```json
+{
+  "approval_id": "<uuid of the kind=pin grant>",
+  "policy": "price_below_min",
+  "context_eq":  {"product_id": "<uuid>"},
+  "context_gte": {"unit_shortfall": 5.0}
+}
+```
+
+`organization_id` and the acting user are NEVER read from the guest: they come
+from the invocation. The grant is redeemable only when it is in the caller's
+org, `kind=pin` for `policy`, authorized (`applied`), requested by the acting
+user, unused, fresher than `dynamic.PINGrantMaxAge`, every `context_eq` key
+equals the context the supervisor authorized (compared as text) and every
+`context_gte` key is >= the amount (one-cent tolerance). The redemption is a
+single conditional UPDATE: a second call, or two racing calls, lose, and a
+refused attempt does not burn the grant.
+
+Success: `{"success": true, "data": {"consumed": true}}`. Errors:
+`invalid_request`, `approvals_unavailable` (no `Host.WithApprovalConsumer`),
+`approval_invalid` (message names the failed condition: unknown grant, wrong
+policy, requested by someone else, already used, expired, context mismatch,
+does not cover), `db_error`. No capability gate: the grant itself is the
+authorization. Implementation: `runtime/wasm/approvalconsume.go`,
+`dynamic.Service.ConsumeApproval`.
+
+```go
+host.WithApprovalConsumer(dynamicService.ConsumeApproval)
+```
+
+### 23.1 `approval_required` from `data_mutate` / `data_batch`
+
+A declarative guard declared `on_violation: request_approval` that fails on the
+wasm write path still rolls the mutation (or the whole batch) back, but the
+envelope code is `approval_required` instead of `constraint_violation`, so the
+guest can tell "this needs a supervisor" from "this data is invalid" and ask
+for the authorization (PIN grant, redeemed with `approval_consume`) before
+retrying. Nothing is parked: a wasm write has no applier that could replay it.
