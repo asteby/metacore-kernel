@@ -4,6 +4,7 @@
 - **Estado:** propuesta. Faltan las decisiones del dueño (§12).
 - **Tarea:** 7.1 del plan `PLAN-MIGRACION-7LEGUAS-A-OPS-2026-10-18`.
 - **Repos afectados:** metacore-kernel (contrato), hub (distribución), ops (instalación, upgrade y export) y addons (presets).
+- **Implementación:** la parte del kernel que no depende del bundle (campos v3, validación, `Flatten`, `MergeStrategies` e `InlineFiles`) está en el PR draft #508.
 - **Base verificada:** kernel `v0.212.0` (`f3a2392`), ops `73b7a467`, hub `1d1f1c4` y addons `1e9e28126`, todos en `origin/main` del 2026-10-18.
 
 ## 0. Resumen
