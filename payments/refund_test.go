@@ -37,10 +37,21 @@ func TestCheckRefund(t *testing.T) {
 	if _, err := CheckRefund(p, existing, next); !errors.Is(err, ErrRefundExceeds) {
 		t.Fatalf("over-refund: %v", err)
 	}
-	// Same key = replay, whatever the amount says now.
-	next.IdempotencyKey = "ret-1"
-	if replay, err := CheckRefund(p, existing, next); err != nil || replay == nil || replay.ID != "r1" {
+	// Same key and same data = replay of the existing refund.
+	same := Refund{PaymentID: "p1", Amount: "400.00", Currency: "MXN", IdempotencyKey: "ret-1", Destination: RefundToOriginal}
+	if replay, err := CheckRefund(p, existing, same); err != nil || replay == nil || replay.ID != "r1" {
 		t.Fatalf("replay: %v %v", replay, err)
+	}
+	// r4 B5: the same key with another amount, currency, destination or
+	// payment is a conflict, never a replay the caller reads as done.
+	for name, r := range map[string]Refund{
+		"amount":      {PaymentID: "p1", Amount: "90", Currency: "MXN", IdempotencyKey: "ret-1", Destination: RefundToOriginal},
+		"destination": {PaymentID: "p1", Amount: "400", Currency: "MXN", IdempotencyKey: "ret-1", Destination: RefundToWallet},
+		"payment":     {PaymentID: "p1", Amount: "1000", Currency: "MXN", IdempotencyKey: "x", Destination: RefundToOriginal},
+	} {
+		if replay, err := CheckRefund(p, existing, r); !errors.Is(err, ErrIdempotencyConflict) || replay != nil {
+			t.Errorf("key reuse with other %s: %v %v", name, replay, err)
+		}
 	}
 	for name, r := range map[string]Refund{
 		"currency":    {PaymentID: "p1", Amount: "1", Currency: "USD", IdempotencyKey: "a", Destination: RefundToCash},
@@ -77,6 +88,35 @@ func TestApplySucceededRefunds(t *testing.T) {
 	refunds = append(refunds, Refund{PaymentID: "p1", Amount: "1", Status: RefundSucceeded})
 	if err := ApplySucceededRefunds(&p, refunds); !errors.Is(err, ErrRefundExceeds) {
 		t.Fatalf("double refund not caught: %v", err)
+	}
+}
+
+// r4 B2: a refund made in the provider panel (amount_refunded observed, no
+// Refund row) is not refundable again, and applying the rows never lowers it.
+func TestRefundableHonorsProviderRefunded(t *testing.T) {
+	p := Payment{ID: "p1", Provider: "mercadopago", Status: StatusPartiallyRefunded, Amount: "100.00", AmountRefunded: "60.00", Currency: "MXN"}
+	left, err := Refundable(p, nil)
+	if err != nil || left.String() != "40.00" {
+		t.Fatalf("Refundable = %s, %v", left, err)
+	}
+	r := Refund{PaymentID: "p1", Amount: "100", Currency: "MXN", IdempotencyKey: "k", Destination: RefundToOriginal}
+	if _, err := CheckRefund(p, nil, r); !errors.Is(err, ErrRefundExceeds) {
+		t.Fatalf("double refund accepted: %v", err)
+	}
+	// Local rows above what the provider reports: the rows win.
+	rows := []Refund{{PaymentID: "p1", Amount: "70", Status: RefundSucceeded}}
+	if left, _ := Refundable(p, rows); left.String() != "30.00" {
+		t.Fatalf("Refundable with rows = %s", left)
+	}
+	// Rows below the provider's total leave the payment as it is.
+	small := []Refund{{PaymentID: "p1", Amount: "10", Status: RefundSucceeded}}
+	if err := ApplySucceededRefunds(&p, small); err != nil || p.AmountRefunded != "60.00" || p.Status != StatusPartiallyRefunded {
+		t.Fatalf("ApplySucceededRefunds lowered the provider total: %+v %v", p, err)
+	}
+	// In-flight refunds reserve on top of the provider total.
+	pending := []Refund{{PaymentID: "p1", Amount: "40", Status: RefundPending}}
+	if left, _ := Refundable(p, pending); left.Sign() != 0 {
+		t.Fatalf("Refundable with pending = %s", left)
 	}
 }
 

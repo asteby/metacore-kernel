@@ -147,7 +147,11 @@ func (p Payment) Validate() []string {
 		bad("channel cash (drawer counted by staff) goes with provider %q and only with it; a cash recycler is channel terminal", ProviderCash)
 	}
 
-	amount, err := ParseAmount(p.Amount)
+	cur := p.Currency
+	if !capability.ValidCurrency(cur) {
+		cur = "XXX" // already reported; quantize as 2 decimals
+	}
+	amount, err := ParseMoney(p.Amount, cur)
 	if err != nil {
 		bad("amount: %v", err)
 		return errs
@@ -157,7 +161,7 @@ func (p Payment) Validate() []string {
 	}
 	refunded := Amount{}
 	if p.AmountRefunded != "" {
-		if refunded, err = ParseAmount(p.AmountRefunded); err != nil {
+		if refunded, err = ParseMoney(p.AmountRefunded, cur); err != nil {
 			bad("amount_refunded: %v", err)
 			return errs
 		}
@@ -176,14 +180,14 @@ func (p Payment) Validate() []string {
 		}
 	}
 	if p.Fee != "" {
-		fee, err := ParseAmount(p.Fee)
+		fee, err := ParseMoney(p.Fee, cur)
 		switch {
 		case err != nil:
 			bad("fee: %v", err)
 		case fee.Sign() < 0 || fee.Cmp(amount) > 0:
 			bad("fee %s must be within [0, amount]", fee)
 		case p.Net != "":
-			net, err := ParseAmount(p.Net)
+			net, err := ParseMoney(p.Net, cur)
 			if err != nil {
 				bad("net: %v", err)
 			} else if net.Cmp(amount.Sub(fee)) != 0 {
@@ -200,16 +204,8 @@ func (p Payment) Validate() []string {
 		}
 	}
 	if p.Seller != nil {
-		if blank(p.Seller.AccountRef) {
-			bad("seller.account_ref is required")
-		}
-		if p.Seller.ApplicationFee != "" {
-			fee, err := ParseAmount(p.Seller.ApplicationFee)
-			if err != nil {
-				bad("seller.application_fee: %v", err)
-			} else if fee.Sign() < 0 || fee.Cmp(amount) > 0 {
-				bad("seller.application_fee %s must be within [0, amount]", fee)
-			}
+		if err := ValidateSeller(*p.Seller, p.Amount, cur); err != nil {
+			bad("%v", err)
 		}
 	}
 	return errs
@@ -253,4 +249,30 @@ func oneOf(s string, set []string) bool {
 		}
 	}
 	return false
+}
+
+// ValidateSeller checks a marketplace seller routing against the payment
+// amount: an account and a commission within [0, amount], quantized. The
+// commission is server-derived: hosts stamp Seller from the marketplace
+// configuration and never take it from a channel or a client payload
+// (RFC §11); this check is the last line, not the source.
+func ValidateSeller(s Seller, amount, currency string) error {
+	if strings.TrimSpace(s.AccountRef) == "" {
+		return fmt.Errorf("seller.account_ref is required")
+	}
+	if s.ApplicationFee == "" {
+		return nil
+	}
+	fee, err := ParseMoney(s.ApplicationFee, currency)
+	if err != nil {
+		return fmt.Errorf("seller.application_fee: %v", err)
+	}
+	a, err := ParseAmount(amount)
+	if err != nil {
+		return fmt.Errorf("amount: %v", err)
+	}
+	if fee.Sign() < 0 || fee.Cmp(a) > 0 {
+		return fmt.Errorf("seller.application_fee %s must be within [0, amount]", fee)
+	}
+	return nil
 }

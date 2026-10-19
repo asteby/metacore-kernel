@@ -119,14 +119,19 @@ var ErrUntrustedConfirmation = errors.New("payments: untrusted commerce.payments
 
 // DecodeConfirmed validates a delivered commerce.payments.confirmed payload
 // for a subscriber: it must match the event contract, carry the host-stamped
-// emitter, and that emitter must be the provider it claims to be (a payment
-// event published by anyone else is dropped). The kernel only delivers the
-// event from providers of a commerce.payments.* capability (EmitPolicy
-// contract_namespace); this check closes the remaining gap of one provider
-// speaking for another. It is still not proof of payment: re-read with
-// commerce.payments.status pinned to the provider before acting.
-func DecodeConfirmed(raw []byte) (Confirmed, error) {
+// emitter, that emitter must be the provider it claims to be, and isProvider
+// must confirm the emitter really provides a commerce.payments.* capability
+// in the org (in EmitPolicy warn mode a channel naming itself "provider"
+// would otherwise pass). isProvider is required; the kernel also enforces
+// the reserved namespace of commerce.payments.* whatever the policy mode
+// (security.EmitPolicy). Still not proof of payment: find the payment the
+// event is about (ConfirmedFor) and re-read it pinned to the provider STORED
+// on that payment, never to the event's provider.
+func DecodeConfirmed(raw []byte, isProvider func(addon string) bool) (Confirmed, error) {
 	var c Confirmed
+	if isProvider == nil {
+		return c, fmt.Errorf("%w: no provider check", ErrUntrustedConfirmation)
+	}
 	ev, ok := capability.LookupEvent(capability.CommercePaymentsConfirmed)
 	if !ok {
 		return c, fmt.Errorf("%w: event contract not registered", ErrUntrustedConfirmation)
@@ -143,6 +148,24 @@ func DecodeConfirmed(raw []byte) (Confirmed, error) {
 		return c, fmt.Errorf("%w: no host-stamped emitter", ErrUntrustedConfirmation)
 	case c.Emitter != c.Provider:
 		return c, fmt.Errorf("%w: emitter %q speaks for provider %q", ErrUntrustedConfirmation, c.Emitter, c.Provider)
+	case !isProvider(c.Emitter):
+		return c, fmt.Errorf("%w: %q is not a payments provider", ErrUntrustedConfirmation, c.Emitter)
 	}
 	return c, nil
+}
+
+// ConfirmedFor reports whether a decoded confirmation may concern p: same
+// provider as the one stored on p (a legitimate provider cannot speak about
+// another provider's payment) and, when both are known, the same
+// provider_ref and canonical payment id.
+func (c Confirmed) ConfirmedFor(p Payment) error {
+	switch {
+	case c.Provider != p.Provider:
+		return fmt.Errorf("%w: event of %q about a payment of %q", ErrUntrustedConfirmation, c.Provider, p.Provider)
+	case c.PaymentID != "" && p.ID != "" && c.PaymentID != p.ID:
+		return fmt.Errorf("%w: event about payment %s, not %s", ErrUntrustedConfirmation, c.PaymentID, p.ID)
+	case c.Result.ProviderRef != "" && p.ProviderRef != "" && c.Result.ProviderRef != p.ProviderRef:
+		return fmt.Errorf("%w: event about provider payment %s, not %s", ErrUntrustedConfirmation, c.Result.ProviderRef, p.ProviderRef)
+	}
+	return nil
 }

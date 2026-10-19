@@ -118,9 +118,9 @@ func CanTransition(from, to Status) bool {
 // ErrInvalidTransition is wrapped by Transition errors.
 var ErrInvalidTransition = errors.New("payments: invalid status transition")
 
-// Transition validates a LOCAL command (cancel requested, cash counted, staff
-// confirmation): from → to must be in the table. Provider re-reads go through
-// Observe instead.
+// Transition checks from → to against the table only. Local commands must
+// go through Command (which also knows the channel); provider re-reads go
+// through Observe / ObserveOutcome.
 func Transition(from, to Status) error {
 	if !from.Valid() || !to.Valid() {
 		return fmt.Errorf("%w: unknown status %q -> %q", ErrInvalidTransition, from, to)
@@ -131,9 +131,56 @@ func Transition(from, to Status) error {
 	return nil
 }
 
-// Reachable reports whether to can follow from through one or more valid
-// moves (a provider re-read may skip intermediate statuses: a missed "paid"
-// webhook followed by "refunded").
+// Command validates a LOCAL command on a payment of channel: what staff or a
+// channel may set without the provider saying so.
+//
+//   - Drawer cash (channel cash) has no provider: staff counts it, so any
+//     table move is a valid command (pending → paid, pending → cancelled).
+//   - Every other channel: the only local command is asking to cancel an
+//     open payment (→ cancelling). cancelled, paid, failed... arrive only
+//     through a provider re-read. A terminal or cash recycler order marked
+//     cancelled locally may still be captured (7leguas #604 the other way
+//     round: the money ends inside the device with the ticket open).
+func Command(channel Channel, from, to Status) error {
+	if err := Transition(from, to); err != nil {
+		return err
+	}
+	if channel == ChannelCash {
+		return nil
+	}
+	if to != StatusCancelling {
+		return fmt.Errorf("%w: %s -> %s on channel %s is decided by the provider (request cancelling and re-read)", ErrInvalidTransition, from, to, channel)
+	}
+	return nil
+}
+
+// openRank orders the open statuses for observations: an older open status
+// never replaces a newer one. cancelling is outside the order: it is only
+// entered by a direct move and only left as the stored status.
+var openRank = map[Status]int{
+	StatusPending: 0, StatusRequiresAction: 1, StatusAtDevice: 1, StatusAuthorized: 2, StatusCancelling: 3,
+}
+
+// advances reports whether a re-read may move from → to in one step.
+func advances(from, to Status) bool {
+	if !CanTransition(from, to) {
+		return false
+	}
+	if from == StatusCancelling {
+		// The cancellation was refused (at_device / authorized) or lost.
+		return true
+	}
+	if from.Open() && to.Open() && openRank[to] <= openRank[from] {
+		// requires_action → pending, at_device ↔ requires_action: older.
+		return false
+	}
+	return true
+}
+
+// Reachable reports whether a provider re-read may move a payment from →
+// to, possibly skipping intermediate statuses (a missed "paid" webhook
+// followed by "refunded"). It never goes back to an older open status and
+// never passes through cancelling, unless cancelling is the stored status.
 func Reachable(from, to Status) bool {
 	seen := map[Status]bool{from: true}
 	queue := []Status{from}
@@ -141,10 +188,15 @@ func Reachable(from, to Status) bool {
 		cur := queue[0]
 		queue = queue[1:]
 		for _, n := range transitions[cur] {
+			if !advances(cur, n) {
+				continue
+			}
 			if n == to {
 				return true
 			}
-			if !seen[n] {
+			// Never THROUGH cancelling: authorized → cancelling → at_device
+			// would let a late at_device poll undo an authorization.
+			if !seen[n] && n != StatusCancelling {
 				seen[n] = true
 				queue = append(queue, n)
 			}

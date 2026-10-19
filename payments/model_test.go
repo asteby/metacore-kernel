@@ -100,3 +100,29 @@ func TestNetCaptured(t *testing.T) {
 		t.Fatal("authorized does not count")
 	}
 }
+
+// r4 I4 / r1 punto 4: bounded scale, exact rendering, per-currency quantum.
+func TestMoneyPrecision(t *testing.T) {
+	if _, err := ParseAmount("0.000000001"); err == nil {
+		t.Fatal("more than MaxScale decimals accepted")
+	}
+	if got := MustAmount("0.000001").String(); got != "0.000001" {
+		t.Fatalf("String lost precision: %s", got)
+	}
+	for _, c := range []struct {
+		s, cur string
+		ok     bool
+	}{
+		{"10.00", "MXN", true}, {"10.005", "MXN", false}, {"100", "JPY", true}, {"100.5", "JPY", false},
+		{"1.234", "KWD", true}, {"1.2345", "KWD", false}, {"10.000", "MXN", true}, {"10", "mx", false},
+	} {
+		if _, err := ParseMoney(c.s, c.cur); (err == nil) != c.ok {
+			t.Errorf("ParseMoney(%s, %s) = %v", c.s, c.cur, err)
+		}
+	}
+	p := validPayment()
+	p.Amount, p.Fee, p.Net = "10.123", "", ""
+	if errs := p.Validate(); len(errs) == 0 {
+		t.Fatal("sub-cent payment amount accepted")
+	}
+}

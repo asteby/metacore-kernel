@@ -1,7 +1,9 @@
 package payments
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -52,6 +54,22 @@ func ClampHoldTTL(d time.Duration) time.Duration {
 	}
 	return d
 }
+
+// MinHoldTokenLen is the shortest token Acquire accepts (NewHoldToken makes
+// 64 hex characters: 256 bits).
+const MinHoldTokenLen = 32
+
+// NewHoldToken returns an unguessable hold token from crypto/rand.
+func NewHoldToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic("payments: crypto/rand failed: " + err.Error())
+	}
+	return hex.EncodeToString(b)
+}
+
+// ErrHoldExpired: the hold is no longer active (expired, released, consumed).
+var ErrHoldExpired = errors.New("payments: hold is no longer active")
 
 // Hold is a document-level charge reservation.
 type Hold struct {
@@ -112,7 +130,8 @@ type HoldRequest struct {
 // Acquire takes or renews the hold of a document given the current one (nil
 // = none). The owner presenting its token renews it; a live hold of someone
 // else is a *HeldError; an expired or finished hold is replaced. newToken
-// must return an unguessable token (e.g. a random UUID).
+// returns the new token; nil = NewHoldToken. A token shorter than
+// MinHoldTokenLen is refused.
 func Acquire(current *Hold, req HoldRequest, now time.Time, newToken func() string) (Hold, error) {
 	if strings.TrimSpace(req.DocumentType) == "" || strings.TrimSpace(req.DocumentID) == "" || strings.TrimSpace(req.Holder) == "" {
 		return Hold{}, errors.New("payments: hold needs document_type, document_id and holder")
@@ -126,9 +145,12 @@ func Acquire(current *Hold, req HoldRequest, now time.Time, newToken func() stri
 		}
 		return Hold{}, &HeldError{Holder: current.Holder, ExpiresAt: current.ExpiresAt}
 	}
+	if newToken == nil {
+		newToken = NewHoldToken
+	}
 	token := newToken()
-	if strings.TrimSpace(token) == "" {
-		return Hold{}, errors.New("payments: empty hold token")
+	if len(strings.TrimSpace(token)) < MinHoldTokenLen {
+		return Hold{}, fmt.Errorf("payments: hold token shorter than %d characters", MinHoldTokenLen)
 	}
 	return Hold{
 		DocumentType: req.DocumentType, DocumentID: req.DocumentID, Token: token,
@@ -164,13 +186,19 @@ func Release(current *Hold, token string, force bool, now time.Time) (*Hold, err
 	return &h, nil
 }
 
-// Consume marks the hold as used by the recorded charge.
+// Consume marks the hold as used by the recorded charge. Only the owner
+// consumes, and only a hold still active and live: a stale copy of a hold
+// that expired (another point of sale may hold the document now) or was
+// released fails with ErrHoldExpired, so the overlap is detected.
 func Consume(current *Hold, token string, now time.Time) (*Hold, error) {
 	if current == nil {
 		return nil, nil
 	}
 	if !current.Owns(token) {
 		return current, ErrHoldNotOwner
+	}
+	if !current.Live(now) {
+		return current, ErrHoldExpired
 	}
 	h := *current
 	h.Status = HoldConsumed

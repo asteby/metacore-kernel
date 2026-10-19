@@ -227,3 +227,27 @@ func TestEmitModeParsing(t *testing.T) {
 		t.Fatal("nil policy must allow")
 	}
 }
+
+// r4 I1: payment confirmations are enforced even during the warn rollout; a
+// sales channel can never publish one. Other contracts keep warn.
+func TestEmitPolicyPaymentsEnforcedInWarn(t *testing.T) {
+	p, _, _ := newTestPolicy(emitFixture(), EmitModeWarn, EmitModeWarn)
+	if _, err := p.Check(context.Background(), uuid.New(), "pos", "commerce.payments.confirmed"); !errors.Is(err, ErrEmitDenied) {
+		t.Fatalf("pos confirmation in warn mode: %v", err)
+	}
+	if _, err := p.Check(context.Background(), uuid.New(), "stripe", "commerce.payments.confirmed"); err != nil {
+		t.Fatalf("provider confirmation: %v", err)
+	}
+	if _, err := p.Check(context.Background(), uuid.New(), "evil", "commerce.fulfillment.updated"); err != nil {
+		t.Fatalf("non-money contract must stay warn: %v", err)
+	}
+	p.EnforcedDomains = []string{}
+	if _, err := p.Check(context.Background(), uuid.New(), "pos", "commerce.payments.confirmed"); err != nil {
+		t.Fatalf("exception disabled: %v", err)
+	}
+	p.SetMode(EmitGroupReserved, EmitModeOff)
+	p.EnforcedDomains = nil
+	if _, err := p.Check(context.Background(), uuid.New(), "pos", "commerce.payments.confirmed"); err != nil {
+		t.Fatalf("reserved off: %v", err)
+	}
+}

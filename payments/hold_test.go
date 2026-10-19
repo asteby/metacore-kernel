@@ -2,14 +2,14 @@ package payments
 
 import (
 	"errors"
-	"strconv"
+	"fmt"
 	"testing"
 	"time"
 )
 
 func tokens() func() string {
 	n := 0
-	return func() string { n++; return "tok-" + strconv.Itoa(n) }
+	return func() string { n++; return fmt.Sprintf("tok-%028d", n) }
 }
 
 func TestHoldLifecycle(t *testing.T) {
@@ -17,8 +17,9 @@ func TestHoldLifecycle(t *testing.T) {
 	gen := tokens()
 	req := HoldRequest{DocumentType: "sales_order", DocumentID: "SO-1", Holder: "kiosk:K1", Channel: ChannelTerminal}
 
+	tok1 := fmt.Sprintf("tok-%028d", 1)
 	h, err := Acquire(nil, req, now, gen)
-	if err != nil || h.Token != "tok-1" || !h.Live(now) || !h.ExpiresAt.Equal(now.Add(DefaultHoldTTL)) {
+	if err != nil || h.Token != tok1 || !h.Live(now) || !h.ExpiresAt.Equal(now.Add(DefaultHoldTTL)) {
 		t.Fatalf("acquire: %+v %v", h, err)
 	}
 	// The cash desk tries to charge the same ticket while the kiosk's cash
@@ -32,13 +33,13 @@ func TestHoldLifecycle(t *testing.T) {
 	if err := CheckCharge(&h, "", now.Add(time.Minute)); !errors.Is(err, ErrHeld) {
 		t.Fatalf("charge without the token passed: %v", err)
 	}
-	if err := CheckCharge(&h, "tok-1", now.Add(time.Minute)); err != nil {
+	if err := CheckCharge(&h, tok1, now.Add(time.Minute)); err != nil {
 		t.Fatalf("owner charge refused: %v", err)
 	}
 	// Renewal keeps the token.
-	req.Token = "tok-1"
+	req.Token = tok1
 	renewed, err := Acquire(&h, req, now.Add(4*time.Minute), gen)
-	if err != nil || renewed.Token != "tok-1" || !renewed.ExpiresAt.Equal(now.Add(4*time.Minute+DefaultHoldTTL)) {
+	if err != nil || renewed.Token != tok1 || !renewed.ExpiresAt.Equal(now.Add(4*time.Minute+DefaultHoldTTL)) {
 		t.Fatalf("renew: %+v %v", renewed, err)
 	}
 	// A kiosk that died leaves an expired hold anyone replaces.
@@ -47,10 +48,10 @@ func TestHoldLifecycle(t *testing.T) {
 		t.Fatalf("expired hold still blocks: %v", err)
 	}
 	taken, err := Acquire(&renewed, other, late, gen)
-	if err != nil || taken.Token == "tok-1" || taken.Holder != "pos:caja-1" {
+	if err != nil || taken.Token == tok1 || taken.Holder != "pos:caja-1" {
 		t.Fatalf("takeover of expired hold: %+v %v", taken, err)
 	}
-	if _, err := Release(&taken, "tok-1", false, late); !errors.Is(err, ErrHoldNotOwner) {
+	if _, err := Release(&taken, tok1, false, late); !errors.Is(err, ErrHoldNotOwner) {
 		t.Fatalf("release by non-owner: %v", err)
 	}
 	rel, err := Release(&taken, "", true, late)
@@ -63,11 +64,28 @@ func TestHoldLifecycle(t *testing.T) {
 	if c, err := Consume(&taken, taken.Token, late); err != nil || c.Status != HoldConsumed {
 		t.Fatalf("consume: %+v %v", c, err)
 	}
+	// r1/r4: a released or expired copy is not consumed: the overlap with
+	// whoever holds the document now is detected.
+	if _, err := Consume(rel, rel.Token, late); !errors.Is(err, ErrHoldExpired) {
+		t.Fatalf("consume of a released hold: %v", err)
+	}
+	if _, err := Consume(&taken, taken.Token, taken.ExpiresAt.Add(time.Second)); !errors.Is(err, ErrHoldExpired) {
+		t.Fatalf("consume of an expired hold: %v", err)
+	}
 	if _, err := Acquire(nil, HoldRequest{DocumentType: "sales_order"}, now, gen); err == nil {
 		t.Fatal("hold without document accepted")
 	}
 	if _, err := Acquire(nil, other, now, func() string { return "" }); err == nil {
 		t.Fatal("empty token accepted")
+	}
+	if _, err := Acquire(nil, other, now, func() string { return "short-token" }); err == nil {
+		t.Fatal("guessable short token accepted")
+	}
+	// nil generator = crypto/rand, 256 bits, never repeated.
+	a, err := Acquire(nil, other, now, nil)
+	b, err2 := Acquire(nil, other, now, nil)
+	if err != nil || err2 != nil || len(a.Token) != 64 || a.Token == b.Token {
+		t.Fatalf("default tokens: %q %q %v %v", a.Token, b.Token, err, err2)
 	}
 }
 

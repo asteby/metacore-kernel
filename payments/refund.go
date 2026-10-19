@@ -79,11 +79,17 @@ type Refund struct {
 	// refund is not complete until CreditNoteID is set (fiscal rule, any
 	// country with invoices: the invoice must be corrected, never the refund
 	// left without a fiscal document).
-	CreditNoteRequired bool       `json:"credit_note_required,omitempty"`
-	CreditNoteID       string     `json:"credit_note_id,omitempty"`
-	CashSessionID      string     `json:"cash_session_id,omitempty"`
-	CreatedAt          time.Time  `json:"created_at"`
-	SettledAt          *time.Time `json:"settled_at,omitempty"`
+	CreditNoteRequired bool   `json:"credit_note_required,omitempty"`
+	CreditNoteID       string `json:"credit_note_id,omitempty"`
+	// AdjustsTotal is set when the refund comes with a matching reduction
+	// of the document total (a return, a credit note): only then does it
+	// lower what counts as paid (DocumentPaid). A refund that does not touch
+	// the total (goodwill, a refund made in the provider panel) never
+	// reopens the document's debt, or a channel would charge it again.
+	AdjustsTotal  bool       `json:"adjusts_total,omitempty"`
+	CashSessionID string     `json:"cash_session_id,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	SettledAt     *time.Time `json:"settled_at,omitempty"`
 }
 
 // Complete reports whether nothing is left to do: money returned and, when
@@ -97,11 +103,35 @@ var (
 	ErrNotRefundable  = errors.New("payments: payment is not refundable")
 	ErrRefundExceeds  = errors.New("payments: refund exceeds the refundable amount")
 	ErrRefundCurrency = errors.New("payments: refund currency differs from the payment")
+	// ErrIdempotencyConflict: a refund with this idempotency key exists with
+	// other data (amount, currency, destination).
+	ErrIdempotencyConflict = errors.New("payments: idempotency key reused with different data")
 )
 
-// Refundable is what can still be refunded on p given its refunds: the
-// captured amount minus every refund that returned or may still return money
-// (succeeded, pending, manual_required). Failed refunds free their amount.
+func sumRefunds(p Payment, refunds []Refund, statuses ...RefundStatus) (Amount, error) {
+	total := Amount{}
+	for _, r := range refunds {
+		if r.PaymentID != p.ID {
+			continue
+		}
+		for _, st := range statuses {
+			if r.Status == st {
+				a, err := ParseAmount(r.Amount)
+				if err != nil {
+					return Amount{}, err
+				}
+				total = total.Add(a)
+			}
+		}
+	}
+	return total, nil
+}
+
+// Refundable is what can still be refunded on p: the captured amount minus
+// what already went back — the larger of the provider's amount_refunded
+// (which includes refunds made outside OPS, in the provider panel) and the
+// succeeded refund rows — minus what may still go back (pending,
+// manual_required). Failed refunds free their amount.
 func Refundable(p Payment, refunds []Refund) (Amount, error) {
 	if !p.Status.Counts() {
 		return Amount{}, nil
@@ -110,48 +140,65 @@ func Refundable(p Payment, refunds []Refund) (Amount, error) {
 	if err != nil {
 		return Amount{}, err
 	}
-	reserved := Amount{}
-	for _, r := range refunds {
-		if r.PaymentID != p.ID || r.Status == RefundFailed {
-			continue
-		}
-		a, err := ParseAmount(r.Amount)
-		if err != nil {
+	recorded := Amount{}
+	if p.AmountRefunded != "" {
+		if recorded, err = ParseAmount(p.AmountRefunded); err != nil {
 			return Amount{}, err
 		}
-		reserved = reserved.Add(a)
 	}
-	left := amount.Sub(reserved)
+	done, err := sumRefunds(p, refunds, RefundSucceeded)
+	if err != nil {
+		return Amount{}, err
+	}
+	inFlight, err := sumRefunds(p, refunds, RefundPending, RefundManualRequired)
+	if err != nil {
+		return Amount{}, err
+	}
+	left := amount.Sub(Max(recorded, done)).Sub(inFlight)
 	if left.Sign() < 0 {
 		return Amount{}, nil
 	}
 	return left, nil
 }
 
-// CheckRefund validates a new refund of amount on p against its existing
-// refunds. A refund with an IdempotencyKey already present is a replay: the
-// caller returns the existing refund instead of creating one (replay=true).
+// CheckRefund validates a new refund on p against its existing refunds. The
+// same IdempotencyKey with the same amount, currency and destination is a
+// replay (the caller returns the existing refund); with other data, or on
+// another payment, it is ErrIdempotencyConflict, never a silent replay of a
+// different refund.
 func CheckRefund(p Payment, refunds []Refund, next Refund) (replay *Refund, err error) {
+	if strings.TrimSpace(next.IdempotencyKey) == "" {
+		return nil, fmt.Errorf("%w: idempotency_key is required", ErrNotRefundable)
+	}
+	if next.Currency == "" {
+		next.Currency = p.Currency
+	}
+	amount, err := ParseMoney(next.Amount, next.Currency)
+	if err != nil {
+		return nil, err
+	}
 	for i := range refunds {
-		if refunds[i].PaymentID == p.ID && next.IdempotencyKey != "" && refunds[i].IdempotencyKey == next.IdempotencyKey {
-			return &refunds[i], nil
+		r := &refunds[i]
+		if r.IdempotencyKey != next.IdempotencyKey {
+			continue
 		}
+		prev, perr := ParseAmount(r.Amount)
+		if perr != nil || r.PaymentID != p.ID || prev.Cmp(amount) != 0 || r.Currency != next.Currency || r.Destination != next.Destination {
+			return nil, fmt.Errorf("%w: refund %s is %s %s to %s", ErrIdempotencyConflict, r.ID, r.Amount, r.Currency, r.Destination)
+		}
+		return r, nil
 	}
 	if !next.Destination.Valid() {
 		return nil, fmt.Errorf("%w: destination %q", ErrNotRefundable, next.Destination)
 	}
-	if strings.TrimSpace(next.IdempotencyKey) == "" {
-		return nil, fmt.Errorf("%w: idempotency_key is required", ErrNotRefundable)
+	if next.Destination == RefundToOriginal && next.Provider != "" && next.Provider != p.Provider {
+		return nil, fmt.Errorf("%w: the original method is provider %s, not %s", ErrNotRefundable, p.Provider, next.Provider)
 	}
 	if !p.Status.Counts() {
 		return nil, fmt.Errorf("%w: status %s", ErrNotRefundable, p.Status)
 	}
 	if next.Currency != p.Currency {
 		return nil, fmt.Errorf("%w: %s vs %s", ErrRefundCurrency, next.Currency, p.Currency)
-	}
-	amount, err := ParseAmount(next.Amount)
-	if err != nil {
-		return nil, err
 	}
 	if amount.Sign() <= 0 {
 		return nil, fmt.Errorf("%w: amount must be positive", ErrNotRefundable)
@@ -166,8 +213,11 @@ func CheckRefund(p Payment, refunds []Refund, next Refund) (replay *Refund, err 
 	return nil, nil
 }
 
-// ApplySucceededRefunds recomputes AmountRefunded and the captured status of
-// p from its succeeded refunds (the only ones that returned money).
+// ApplySucceededRefunds raises AmountRefunded and the captured status of p to
+// cover its succeeded refunds. It never LOWERS what is recorded (the
+// provider's amount_refunded may include refunds made outside OPS): rows that
+// add up to less only leave the payment as it is, and rows that add up to
+// more than the amount are ErrRefundExceeds.
 func ApplySucceededRefunds(p *Payment, refunds []Refund) error {
 	if !p.Status.Captured() {
 		return fmt.Errorf("%w: status %s", ErrNotRefundable, p.Status)
@@ -176,21 +226,54 @@ func ApplySucceededRefunds(p *Payment, refunds []Refund) error {
 	if err != nil {
 		return err
 	}
-	done := Amount{}
-	for _, r := range refunds {
-		if r.PaymentID != p.ID || r.Status != RefundSucceeded {
-			continue
-		}
-		a, err := ParseAmount(r.Amount)
-		if err != nil {
-			return err
-		}
-		done = done.Add(a)
+	done, err := sumRefunds(*p, refunds, RefundSucceeded)
+	if err != nil {
+		return err
 	}
 	if done.Cmp(amount) > 0 {
 		return fmt.Errorf("%w: %s refunded of %s", ErrRefundExceeds, done, amount)
 	}
-	p.AmountRefunded = done.String()
-	p.Status = StatusAfterRefunds(amount, done)
+	recorded := Amount{}
+	if p.AmountRefunded != "" {
+		if recorded, err = ParseAmount(p.AmountRefunded); err != nil {
+			return err
+		}
+	}
+	total := Max(recorded, done)
+	if total.Sign() > 0 {
+		p.AmountRefunded = total.String()
+	}
+	p.Status = StatusAfterRefunds(amount, total)
 	return nil
+}
+
+// DocumentPaid is what counts as paid toward a document's total: every
+// captured payment's amount, minus only the refunds that came with a
+// reduction of the total (Refund.AdjustsTotal, succeeded or in flight). A
+// refund that did not touch the total never reopens the debt.
+func DocumentPaid(payments []Payment, refunds []Refund) (Amount, error) {
+	paid := Amount{}
+	ids := map[string]bool{}
+	for _, p := range payments {
+		if !p.Status.Captured() {
+			continue
+		}
+		a, err := ParseAmount(p.Amount)
+		if err != nil {
+			return Amount{}, err
+		}
+		paid = paid.Add(a)
+		ids[p.ID] = true
+	}
+	for _, r := range refunds {
+		if !r.AdjustsTotal || !ids[r.PaymentID] || r.Status == RefundFailed {
+			continue
+		}
+		a, err := ParseAmount(r.Amount)
+		if err != nil {
+			return Amount{}, err
+		}
+		paid = paid.Sub(a)
+	}
+	return paid, nil
 }

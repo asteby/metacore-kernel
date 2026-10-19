@@ -148,11 +148,57 @@ func TestObserveCases(t *testing.T) {
 		{StatusFailed, StatusExpired, Ignore, ReasonStale},
 		{StatusCancelling, StatusPaid, Apply, ""},
 		{StatusPending, "approved", Anomaly, ReasonUnknownStatus},
+		// r4 B4: monotonic. A late at_device poll never undoes an
+		// authorization (no path through cancelling), and an older open
+		// status never replaces a newer one.
+		{StatusAuthorized, StatusAtDevice, Ignore, ReasonStale},
+		{StatusAuthorized, StatusPending, Ignore, ReasonStale},
+		{StatusRequiresAction, StatusPending, Ignore, ReasonStale},
+		{StatusAtDevice, StatusPending, Ignore, ReasonStale},
+		{StatusPending, StatusCancelling, Apply, ""},
+		// From cancelling (the stored status) a refused cancellation applies.
+		{StatusCancelling, StatusAtDevice, Apply, ""},
+		{StatusCancelling, StatusAuthorized, Apply, ""},
 	}
 	for _, c := range cases {
 		got := Observe(c.stored, c.observed)
 		if got.Decision != c.want || got.Reason != c.reason {
 			t.Errorf("Observe(%s, %s) = %+v, want %s %q", c.stored, c.observed, got, c.want, c.reason)
 		}
+	}
+}
+
+// Reachable never goes back to an older open status, whatever the path.
+func TestReachableMonotonic(t *testing.T) {
+	for _, from := range Statuses {
+		for _, to := range Statuses {
+			if from == StatusCancelling || !from.Open() || !to.Open() || !Reachable(from, to) {
+				continue
+			}
+			if openRank[to] <= openRank[from] {
+				t.Errorf("%s -> %s reachable: goes back", from, to)
+			}
+		}
+	}
+}
+
+// r1 punto 1: on a channel with a provider the only local command is
+// cancelling; the provider decides the rest. Drawer cash is counted by staff.
+func TestCommand(t *testing.T) {
+	for _, ch := range []Channel{ChannelTerminal, ChannelOnline, ChannelQR, ChannelLink} {
+		if err := Command(ch, StatusAtDevice, StatusCancelling); err != nil {
+			t.Errorf("%s: cancelling refused: %v", ch, err)
+		}
+		for _, to := range []Status{StatusCancelled, StatusPaid, StatusFailed} {
+			if err := Command(ch, StatusPending, to); !errors.Is(err, ErrInvalidTransition) {
+				t.Errorf("%s: local pending -> %s accepted", ch, to)
+			}
+		}
+	}
+	if err := Command(ChannelCash, StatusPending, StatusPaid); err != nil {
+		t.Fatalf("drawer cash paid: %v", err)
+	}
+	if err := Command(ChannelCash, StatusPaid, StatusPending); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatal("drawer cash goes back")
 	}
 }

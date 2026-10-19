@@ -5,20 +5,33 @@ import (
 	"testing"
 )
 
+// providers is the org's set of commerce.payments.* providers.
+func providers(addons ...string) func(string) bool {
+	return func(a string) bool {
+		for _, x := range addons {
+			if x == a {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 func TestDecodeConfirmed(t *testing.T) {
+	isProvider := providers("mercadopago", "clip")
 	// The shape mercadopago 0.8.0 publishes (organization_id and occurred_at
 	// at the top level), with the host-stamped emitter.
 	mp := `{"provider":"mercadopago","emitter":"mercadopago","event":"commerce.payments.confirmed",
 	  "organization_id":"8d0c","occurred_at":"2026-10-18T10:00:00Z",
 	  "result":{"order_ref":"SO-1","status":"paid","amount":"1499.00","currency":"MXN","provider_ref":"123","event_id":"evt-1","kind":"payment"}}`
-	c, err := DecodeConfirmed([]byte(mp))
+	c, err := DecodeConfirmed([]byte(mp), isProvider)
 	if err != nil || c.Result.Status != StatusPaid || c.Result.DedupeEventID() != "evt-1" {
 		t.Fatalf("mercadopago payload: %+v %v", c, err)
 	}
 	terminal := `{"provider":"clip","emitter":"clip","source":"poll",
 	  "result":{"order_ref":"SO-2","status":"paid","amount":"80","currency":"MXN","provider_ref":"tx9",
 	    "channel":"terminal","device_id":"PIN-1","card":{"type":"credit","brand":"visa","last4":"0007"}}}`
-	c, err = DecodeConfirmed([]byte(terminal))
+	c, err = DecodeConfirmed([]byte(terminal), isProvider)
 	if err != nil || c.Result.Card == nil || c.Result.Card.Last4 != "0007" || c.Result.Channel != ChannelTerminal {
 		t.Fatalf("terminal payload: %+v %v", c, err)
 	}
@@ -33,8 +46,35 @@ func TestDecodeConfirmed(t *testing.T) {
 		"float money":    `{"provider":"clip","emitter":"clip","result":{"order_ref":"SO-2","status":"paid","amount":80,"currency":"MXN","provider_ref":"tx9"}}`,
 		"bad channel":    `{"provider":"clip","emitter":"clip","result":{"order_ref":"SO-2","status":"paid","amount":"80","currency":"MXN","provider_ref":"tx9","channel":"pos"}}`,
 		"unknown source": `{"provider":"clip","emitter":"clip","source":"guess","result":{"order_ref":"SO-2","status":"paid","amount":"80","currency":"MXN","provider_ref":"tx9"}}`,
+		// r4 I1: a channel naming itself provider (EmitPolicy warn) is not one.
+		"channel as provider": `{"provider":"pos","emitter":"pos","result":{"order_ref":"SO-2","status":"paid","amount":"80","currency":"MXN","provider_ref":"tx9"}}`,
 	} {
-		if _, err := DecodeConfirmed([]byte(bad)); !errors.Is(err, ErrUntrustedConfirmation) {
+		if _, err := DecodeConfirmed([]byte(bad), isProvider); !errors.Is(err, ErrUntrustedConfirmation) {
+			t.Errorf("%s accepted: %v", name, err)
+		}
+	}
+}
+
+func TestDecodeConfirmedNeedsProviderCheck(t *testing.T) {
+	mp := `{"provider":"mercadopago","emitter":"mercadopago","result":{"order_ref":"SO-1","status":"paid","amount":"10","currency":"MXN","provider_ref":"1"}}`
+	if _, err := DecodeConfirmed([]byte(mp), nil); !errors.Is(err, ErrUntrustedConfirmation) {
+		t.Fatalf("nil provider check accepted: %v", err)
+	}
+}
+
+// r1 punto 5: a legitimate provider cannot confirm another provider's payment.
+func TestConfirmedFor(t *testing.T) {
+	p := validPayment() // mercadopago, ORD01, p1
+	ok := Confirmed{Provider: "mercadopago", PaymentID: "p1", Result: Outcome{ProviderRef: "ORD01"}}
+	if err := ok.ConfirmedFor(p); err != nil {
+		t.Fatalf("own payment: %v", err)
+	}
+	for name, c := range map[string]Confirmed{
+		"other provider":     {Provider: "clip", PaymentID: "p1", Result: Outcome{ProviderRef: "ORD01"}},
+		"other payment":      {Provider: "mercadopago", PaymentID: "p2", Result: Outcome{ProviderRef: "ORD01"}},
+		"other provider ref": {Provider: "mercadopago", PaymentID: "p1", Result: Outcome{ProviderRef: "ORD02"}},
+	} {
+		if err := c.ConfirmedFor(p); !errors.Is(err, ErrUntrustedConfirmation) {
 			t.Errorf("%s accepted: %v", name, err)
 		}
 	}

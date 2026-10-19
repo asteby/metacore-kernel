@@ -14,7 +14,7 @@ Lo usan el POS, la caja, el kiosko, la pantalla de cliente, las tiendas (`storef
 | D4 | Cinco canales: `terminal`, `online`, `qr`, `link`, `cash`. El reciclador de efectivo (CashDro) es canal `terminal` con método `cash`. `cash` es solo el cajón contado por el personal, con el proveedor interno `cash`. |
 | D5 | La interfaz de proveedor son capacidades `commerce.payments.*`: `session`, `terminal.create`, `status`, `cancel`, `refund`, `confirm`, `capabilities`, `reconcile` y `terminal.devices`. El dinero va como cadena decimal y las credenciales son por organización (conectores). |
 | D6 | Las terminales de tarjeta (MP Point, Clip) se manejan **en la nube**, con la API del proveedor desde su addon. El `ops-edge-agent` no lleva driver de tarjeta. Solo el CashDro, que vive en la LAN, va por el edge-agent. |
-| D7 | Hay un solo evento neutral, `commerce.payments.confirmed`. Solo lo emite quien provee alguna capacidad `commerce.payments.*`, y el suscriptor exige `emitter == provider` (`payments.DecodeConfirmed`). Ningún canal escucha eventos con nombre de proveedor. |
+| D7 | Hay un solo evento neutral, `commerce.payments.confirmed`. Solo lo emite quien provee alguna capacidad `commerce.payments.*`, y el suscriptor exige `emitter == provider` y que el emisor sea proveedor de pagos en la org (`payments.DecodeConfirmed`), y que el evento sea del proveedor guardado en el pago (`Confirmed.ConfirmedFor`). Ningún canal escucha eventos con nombre de proveedor. |
 | D8 | El hold de cobro es por documento, con TTL (300 s por omisión, acotado a [30 s, 1 h]) y token del dueño. Se toma **antes** del cobro físico. |
 | D9 | El replay es idempotente por `idempotency_key`. Un cobro repetido nunca crea un segundo `Payment`: `payments.CheckReplay` responde `replay`, `already_paid`, `in_progress`, `retry_with_new_key` o `new`. |
 | D10 | Marketplace v1: cobro por vendedor en la cuenta del vendedor (OAuth del proveedor por vendedor) con la comisión de la plataforma retenida en el mismo cobro (`seller.application_fee`). El cobro centralizado con liquidación a vendedores queda como decisión del dueño. |
@@ -73,9 +73,9 @@ Un pago mixto (efectivo + tarjeta) son **varios** `Payment` del mismo documento.
 
 `id`, `payment_id`, `destination` (`original_method | wallet | cash`), `provider` y `provider_refund_id` (solo con `original_method`), `amount`, `currency`, `status` (`pending → succeeded | failed | manual_required`; `manual_required → succeeded | failed`), `reason`, `idempotency_key`, `source_type` y `source_id` (`sales_return`, cancelación, disputa), `credit_note_required`, `credit_note_id`, `cash_session_id`.
 
-- `Refundable(p, refunds)` = capturado − (reembolsos `succeeded`, `pending` y `manual_required`). Un reembolso `failed` libera su monto. Uno pendiente lo reserva, para que dos devoluciones simultáneas no reembolsen de más.
-- `CheckRefund` rechaza si el monto excede lo reembolsable, si la moneda difiere, si el pago no está capturado o si falta la llave. La misma `idempotency_key` es un **replay** y devuelve el reembolso existente.
-- `ApplySucceededRefunds` recalcula `amount_refunded` y el estado (`partially_refunded` o `refunded`) usando solo los reembolsos que devolvieron dinero.
+- `Refundable(p, refunds)` = capturado − max(`amount_refunded` que reporta el proveedor, Σ `succeeded`) − Σ (`pending`, `manual_required`). Es decir, el mínimo entre lo que queda según el ledger local y según el proveedor: un reembolso hecho en el panel del proveedor (sin fila `Refund`) no se puede volver a reembolsar. Un reembolso `failed` libera su monto. Uno pendiente lo reserva, para que dos devoluciones simultáneas no reembolsen de más.
+- `CheckRefund` rechaza si el monto excede lo reembolsable, si la moneda difiere, si el pago no está capturado o si falta la llave. La misma `idempotency_key` con el mismo monto, moneda, destino y pago es un **replay** y devuelve el reembolso existente; con cualquier dato distinto es `ErrIdempotencyConflict`, nunca un replay de otro reembolso.
+- `ApplySucceededRefunds` sube `amount_refunded` y el estado (`partially_refunded` o `refunded`) con los reembolsos que devolvieron dinero. Nunca lo **baja**: si las filas suman menos que lo que reportó el proveedor, el pago queda como está (la diferencia es un reembolso hecho fuera de OPS).
 - `Complete()` es verdadero solo con `succeeded` y, si `credit_note_required`, con `credit_note_id`.
 
 ### 2.3 `PaymentEvent` (dedupe y auditoría)
@@ -151,17 +151,18 @@ stateDiagram-v2
 
 **Comandos frente a observaciones:**
 
-- Un **comando local** (el cajero pide cancelar, el personal registra efectivo) debe cumplir la tabla exacta: `payments.Transition`, que devuelve `ErrInvalidTransition` si no.
-- Una **observación** (estado re-leído del proveedor) pasa por `payments.Observe` y nunca falla:
+- Un **comando local** (el cajero pide cancelar, el personal registra efectivo) pasa por `payments.Command(canal, de, a)`: debe cumplir la tabla exacta (`Transition`) y, en todo canal con proveedor (terminal, online, qr, link), el único comando local es pedir `cancelling`. `cancelled`, `paid` o `failed` llegan solo por re-lectura. El efectivo de cajón (`cash`) lo cuenta el personal y admite cualquier movimiento de la tabla.
+- Una **observación** (estado re-leído del proveedor) pasa por `payments.ObserveOutcome(pagoGuardado, resultado)` y nunca falla. Compara primero el dinero: otra moneda (`currency_mismatch`), otro `provider_ref` (`provider_ref_mismatch`), una autorización o captura por otro monto o un reembolsado fuera de `[0, monto]` o incoherente con el estado (`amount_mismatch`), y menos reembolsado que lo guardado (`refund_reversed`) son **anomalías**. Después clasifica el estado con `Observe(guardado, observado)`. La máquina es **monótona**: un estado abierto nunca reemplaza a uno posterior (`pending < requires_action, at_device < authorized`), y ningún camino pasa *a través* de `cancelling` (salvo que sea el estado guardado), así que un sondeo tardío de `at_device` no deshace un `authorized`:
 
 | Caso | Decisión | Motivo |
 |---|---|---|
 | Mismo estado (salvo otro parcial) | Ignorar | `duplicate` |
 | Alcanzable por movimientos válidos (aunque salte pasos: un `paid` perdido seguido de `refunded`) | Aplicar | |
 | `authorized` o capturado después de `failed`, `cancelled` o `expired` | **Anomalía** | `late_capture`: dinero cobrado cuando ya se había dado por perdido. Es el `late_payment` de la tienda y el caso de la terminal que cobra después del timeout. |
-| Estado abierto después de uno posterior | Ignorar | `stale`: webhook o sondeo fuera de orden. |
+| Estado abierto después de uno posterior (`authorized → at_device`, `requires_action → pending`) | Ignorar | `stale`: webhook o sondeo fuera de orden. |
 | `failed`, `cancelled` o `expired` después de una captura | **Anomalía** | `capture_reversed` |
-| Menos reembolsado de lo registrado | **Anomalía** | `refund_reversed` |
+| Menos reembolsado de lo registrado (por estado o por monto) | **Anomalía** | `refund_reversed` |
+| `partially_refunded` otra vez con el mismo total | Ignorar | `duplicate` |
 | `failed` ↔ `cancelled` ↔ `expired` | Ignorar | `stale`: no hubo dinero en ninguno, se queda la primera palabra final. |
 
 Una anomalía **no sobrescribe sola**. Se registra el evento, se marca `anomaly` en el pago, se avisa (métrica y notificación al rol de tesorería) y se vuelve a leer. Si la conciliación (§8) lee lo mismo otra vez, el ledger aplica el estado del proveedor como **corrección auditada**. El dinero lo decide el proveedor, pero nadie lo decide en silencio.
@@ -235,7 +236,8 @@ Reglas de MP Point heredadas de incidentes de 7leguas. Cada una se porta con su 
 
 - **Payload:** `{provider, result}`, donde `result` es la salida de `confirm`/`status` (`kind`: `payment`, `refund` o `dispute`). Son opcionales `organization_id`, `occurred_at` (mercadopago 0.8.0 ya los mandaba y el esquema cerrado los rechazaba), `source`, `payment_id`, `document_type` y `document_id`.
 - **Emisión:** el espacio `commerce.payments.*` está reservado. Solo lo publica un addon que provee alguna capacidad del dominio (`security.EmitPolicy`, regla `contract_namespace`). Las capacidades `terminal.*` están dentro del dominio, así que un proveedor solo de terminal (el CashDro) puede emitir. Un canal (POS, caja, kiosko) **no** puede, aunque lo declare (prueba en `security/emitpolicy_test.go`). El emisor lo estampa el host.
-- **Consumo:** `payments.DecodeConfirmed` valida contra el contrato y exige `emitter` presente e igual a `provider`. Después el suscriptor deduplica por `emitter + EventID()`, **re-lee** con `commerce.payments.status` fijado al proveedor y solo entonces mueve el documento, comparando monto y moneda contra el total guardado.
+- **Emisión en modo `warn`:** los dominios de dinero (`EmitPolicy.EnforcedDomains`, por omisión `commerce.payments`) se aplican siempre como `enforce` mientras el grupo reservado no esté en `off`: ni durante el despliegue en `warn` un canal publica una confirmación de pago.
+- **Consumo:** `payments.DecodeConfirmed(raw, isProvider)` valida contra el contrato, exige `emitter` presente e igual a `provider`, y que `isProvider(emitter)` confirme que provee una capacidad `commerce.payments.*` en la org (obligatorio). Después el suscriptor deduplica por `emitter + EventID()`, busca el pago del documento y exige `ConfirmedFor(pago)` (mismo proveedor, `payment_id` y `provider_ref`), **re-lee** con `commerce.payments.status` fijado al proveedor **guardado en el pago**, nunca al `provider` del evento, y aplica la lectura con `ObserveOutcome`.
 - **Qué se emite:** solo cambios que pueden mover un documento (no `pending` ni `requires_action`, como ya hace mercadopago). Los terminales emiten también `at_device` → `paid` y `cancelling` → `cancelled`.
 - **K2:** el ledger del host, al aplicar una transición, publica el evento **con la llave del proveedor como emisor** y `payment_id` en el payload. Los suscriptores no cambian: el emisor sigue siendo el proveedor, y el `event_id` es el mismo que habría usado el addon, así que si los dos publican durante la transición el dedupe lo absorbe. Cuando K2 esté desplegado, los addons dejan de emitir el evento neutral por su cuenta (minor de cada addon).
 - **Eventos propios de los proveedores** (`mercadopago.payment_confirmed`, `mercadopago.point_payment_approved`, `clip.*`): se siguen emitiendo por compatibilidad, pero **ningún canal se suscribe a ellos**. Hoy `caja` sí lo hace, y se migra en 3.4.
@@ -258,16 +260,16 @@ Cierra la ventana entre que un punto de cobro **inicia** un cobro físico y el m
 
 - `Acquire(current, {document, holder, token, ttl})`. El dueño que presenta su token **renueva**. Un hold vivo ajeno devuelve `*HeldError` (409 `in_payment`, con `holder` y `expires_at` para el mensaje "se está cobrando en Kiosko 1 hasta las 12:05"). Uno vencido o terminado se reemplaza.
 - `CheckCharge(current, token)` corre antes de registrar cualquier cobro del documento, sea por el canal que sea.
-- `Release(current, token, force)`: solo el dueño libera, salvo `force` cuando el documento ya quedó pagado. `Consume` lo marca usado al registrar el cobro.
-- El token es secreto (no se serializa: `json:"-"`) y se compara en tiempo constante.
+- `Release(current, token, force)`: solo el dueño libera, salvo `force` cuando el documento ya quedó pagado. `Consume` lo marca usado al registrar el cobro; solo el dueño y solo con el hold activo y vigente (una copia vencida o liberada da `ErrHoldExpired`: detecta el traslape con quien tenga el documento ahora).
+- El token es secreto (no se serializa: `json:"-"`) y se compara en tiempo constante. Por omisión lo genera `NewHoldToken` (`crypto/rand`, 256 bits); `Acquire` rechaza tokens de menos de 32 caracteres.
 - TTL: 300 s por omisión, acotado a [30 s, 1 h] (`ClampHoldTTL`), configurable por organización (ajuste `payment_hold_ttl_seconds`, que hoy es del POS).
-- **Atomicidad:** la da el almacén, con el índice único parcial de holds activos (§2.4) dentro de la misma transacción que evalúa `Acquire`. El POS ya lo hace así con `pos_payment_holds` y las reglas `unique`/`sum_lte` del manifest. En K2 la tabla pasa al kernel para que el kiosko, la caja y la tienda compartan el mismo hold.
+- **Atomicidad:** la da el almacén, con el índice único parcial de holds activos (§2.4) dentro de la misma transacción que evalúa `Acquire`; el almacén marca `expired` el hold vencido en esa misma transacción antes de insertar el nuevo (si no, el índice choca). K2 trae la prueba de concurrencia. El POS ya lo hace así con `pos_payment_holds` y las reglas `unique`/`sum_lte` del manifest. En K2 la tabla pasa al kernel para que el kiosko, la caja y la tienda compartan el mismo hold.
 
 ## 10. Replay idempotente y reglas del cobro
 
 **Llave:** el canal la genera **una vez** por intento de cobro (`{document}:{uuid}`), la guarda en el estado de la UI y la reusa en cada reintento: timeout, recarga de la pantalla o reconexión de la terminal. Es la misma llave que se manda al proveedor.
 
-`CheckReplay(pagosDelDocumento, llave, pagadoNeto, total)`:
+`CheckReplay(pagosDelDocumento, reembolsosDelDocumento, llave, total)`. La llave es obligatoria (`ErrKeyRequired`) y lo pagado lo calcula `DocumentPaid` con los pagos y reembolsos que recibe, nunca un número del caller: cuenta lo capturado bruto menos solo los reembolsos que vinieron con una reducción del total (`Refund.adjusts_total`: devolución o nota de crédito). Un reembolso de cortesía o hecho en el panel no reabre la deuda. La llave debe ser **única por organización** en el ledger (K2), no solo dentro del documento.
 
 | Veredicto | Cuándo | Respuesta al canal |
 |---|---|---|
@@ -281,7 +283,7 @@ Reglas del cobro, en orden:
 
 1. **El total sale del documento guardado**, nunca del cliente. `CheckLinesTotal(total, líneas…)` exige que el total sea la suma de las líneas guardadas (7leguas orden 71621).
 2. `CheckTenders(declarado, tenders…)`: los tenders suman **exactamente** lo declarado y ninguno es cero o negativo. Una fila con importe sin método se rechaza (7leguas 649f6197f).
-3. `Settle(total, pagado, cobrado, hayEfectivo, tolerancia)`. Con efectivo, el sobrante es cambio y un faltante ≤ tolerancia se absorbe como `rounding` (el reciclador no da monedas menores a la mínima: 7leguas a8f3e6df6). Sin efectivo, un sobrante es `ErrExceedsTotal` y nunca hay redondeo. La **tolerancia es un ajuste de la organización** (hoy `cash_rounding_tolerance_cents` del POS, $0.50 por omisión); el kernel no fija ninguna. Un faltante mayor deja `Remaining`, y el canal decide si el documento admite pago parcial (apartados).
+3. `Settle(Collection{currency, total, already_paid, non_cash, cash, cash_tolerance})`. La parte no efectivo nunca excede lo debido (`ErrExceedsTotal`: una tarjeta cobrada de más jamás se devuelve en efectivo). Solo el efectivo da cambio, y el cambio nunca excede el efectivo entregado. Un faltante del efectivo ≤ tolerancia se absorbe como `rounding` (el reciclador no da monedas menores a la mínima: 7leguas a8f3e6df6); la tarjeta nunca redondea. Montos negativos son `ErrNegativeAmount` y todo monto se cuantiza a la moneda (`ErrNotQuantized`). La **tolerancia es un ajuste de la organización** (hoy `cash_rounding_tolerance_cents` del POS, $0.50 por omisión) dentro de un tope del kernel: `MaxCashTolerance` = una unidad de la moneda menos su unidad mínima (0.99 MXN, 0.999 KWD, 0 JPY). `CheckCashTolerance` valida el ajuste al guardarlo y `Settle` rechaza uno fuera de rango (`ErrInvalidTolerance`): una configuración mala no perdona deudas. Un faltante mayor deja `Remaining`, y el canal decide si el documento admite pago parcial (apartados).
 4. El cobro y el estado del documento se escriben **en una sola transacción**, bajo el hold.
 
 **Reglas por método que se portan con prueba (3.4, 3.5):**
@@ -296,7 +298,7 @@ Reglas del cobro, en orden:
 
 - Cada vendedor liga **su** cuenta del proveedor por OAuth (MP: Marketplace/OAuth; Stripe: Connect). El token se guarda como credencial de conector **del vendedor**, cifrada y con rotación del refresh. El vendedor puede desligarla; sin cuenta ligada no puede vender con ese proveedor.
 - El carrito se agrupa por vendedor. Cada sub-pedido es un documento y su cobro es un `Payment` con `seller{account_ref, seller_id, application_fee}`. El proveedor cobra en la cuenta del vendedor y retiene la comisión de la plataforma en el mismo cobro (MP `marketplace_fee`; Stripe `application_fee_amount`).
-- **Comisión:** la calcula la plataforma (configuración por vendedor o categoría del addon de marketplace, nunca el kernel) y queda guardada en el `Payment`. El ledger reporta el ingreso de la plataforma por `application_fee`. No tiene relación con el Stripe del hub (D12).
+- **Comisión:** la calcula la plataforma (configuración por vendedor o categoría del addon de marketplace, nunca el kernel) y queda guardada en el `Payment`. **Regla normativa:** `seller` y `refund_application_fee` se derivan en el servidor. El host (K2) los estampa desde la configuración del marketplace e ignora lo que mande el canal, y el proveedor cobra con los del `Payment` guardado. La validación del manifest rechaza mapearlos desde `payload.*`, y `ValidateSeller` acota la comisión a `[0, monto]`. El ledger reporta el ingreso de la plataforma por `application_fee`. No tiene relación con el Stripe del hub (D12).
 - **Varios vendedores en un carrito:** si el proveedor soporta dividir un solo cargo (`capabilities.marketplace_split`), es un cobro por vendedor dentro de una sola experiencia de pago. Si no, el checkout cobra los sub-pedidos en secuencia, o la tienda limita el carrito a un vendedor. Lo decide la configuración de la tienda con lo que diga `capabilities`.
 - **Reembolsos:** van por el `Payment` del vendedor. `refund_application_fee` decide si la plataforma también devuelve su comisión (política de la plataforma; por omisión, proporcional en devoluciones y completa en cancelaciones previas al envío).
 - **Conciliación por vendedor:** §8, paso 6.
@@ -360,14 +362,16 @@ Retrocompatibilidad durante la migración: un proveedor sin migrar sigue funcion
 
 ## 14. Pruebas que trae K1
 
-- `payments/status_test.go`: el vocabulario coincide con `capability.PaymentStatuses` (los 9 originales en su orden), las clases de estado, la tabla de transiciones (incluye `cancelling → paid` y `cancelling → at_device`) y `Observe` sobre los 121 pares, con los casos de incidente.
-- `payments/model_test.go`: dinero exacto (`0.1 + 0.2 = 0.30`, se rechazan flotantes y exponentes) y las invariantes de `Payment`.
-- `payments/refund_test.go`: lo reembolsable con reembolsos pendientes o fallidos, el replay por llave, el exceso y la doble aplicación, y la nota de crédito obligatoria.
-- `payments/hold_test.go`: el caso #604, la renovación, el vencimiento, que solo el dueño libera, la liberación forzada y los límites del TTL.
-- `payments/settle_test.go`: suma de tenders y de líneas, cambio, redondeo en el límite (0.49 y 0.50 con tolerancia 0.50; 0.51 no), que la tarjeta nunca redondea, y los cinco veredictos de replay.
-- `payments/event_test.go`: el payload real de mercadopago 0.8.0, el de terminal con tarjeta, la suplantación (`emitter ≠ provider`) y el dedupe derivado.
+- `payments/status_test.go`: el vocabulario coincide con `capability.PaymentStatuses` (los 9 originales en su orden), las clases de estado, la tabla de transiciones (incluye `cancelling → paid` y `cancelling → at_device`) y `Observe` sobre los 121 pares, con los casos de incidente, la monotonía (`authorized → at_device` es `stale`) y `Command` por canal.
+- `payments/observe_test.go`: `ObserveOutcome` con monto, moneda y `provider_ref` distintos, reembolso que crece, se repite o baja, y estado incoherente con su total.
+- `payments/model_test.go`: dinero exacto (`0.1 + 0.2 = 0.30`, se rechazan flotantes y exponentes) las invariantes de `Payment`, la escala máxima, el render exacto y la cuantización por moneda.
+- `payments/refund_test.go`: lo reembolsable con reembolsos pendientes o fallidos, el replay por llave y el conflicto con otro monto, destino o pago, el `amount_refunded` del proveedor (sin doble reembolso), el exceso y la doble aplicación, y la nota de crédito obligatoria.
+- `payments/hold_test.go`: el caso #604, la renovación, el vencimiento, que solo el dueño libera, la liberación forzada, que no se consume un hold vencido o liberado, el token por omisión y los límites del TTL.
+- `payments/settle_test.go`: suma de tenders y de líneas, cambio, pago mixto (tarjeta 600 + efectivo 10 sobre 500 es `ErrExceedsTotal`; el cambio sale solo del efectivo), redondeo en el límite (0.49 y 0.50 con tolerancia 0.50; 0.51 no), el tope de la tolerancia, negativos, que la tarjeta nunca redondea, y los cinco veredictos de replay.
+- `payments/event_test.go`: el payload real de mercadopago 0.8.0, el de terminal con tarjeta, la suplantación (`emitter ≠ provider`), el canal que se nombra proveedor, `ConfirmedFor` y el dedupe derivado.
 - `capability/payments_standard_test.go`: retrocompatibilidad de los 4 contratos, registro, fijado e idempotencia de los 5 nuevos, salidas válidas e inválidas (PAN rechazado, comisión flotante) y emisores del evento.
-- `security/emitpolicy_test.go`: un proveedor solo de terminal emite; el POS no, aunque declare el evento.
+- `security/emitpolicy_test.go`: un proveedor solo de terminal emite; el POS no, aunque declare el evento y aunque la política esté en `warn`.
+- `manifest/v3/capabilities_validate_test.go`: `seller` y `refund_application_fee` no se mapean desde `payload.*`.
 
 ## 15. Abierto
 

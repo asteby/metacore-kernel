@@ -265,7 +265,9 @@ var (
 
 	// SellerSchema routes a payment to a marketplace seller: the provider
 	// charges on behalf of the seller's own provider account (split or
-	// per-seller charge) and keeps the platform commission.
+	// per-seller charge) and keeps the platform commission. SERVER-DERIVED:
+	// the host stamps it from the marketplace configuration; it is never
+	// mapped from a client payload (manifest validation rejects that).
 	SellerSchema = schema(
 		req("account_ref", TypeString, "seller account id at the provider (OAuth-linked account / connected account)"),
 		opt("seller_id", TypeString, "seller id in OPS"),
@@ -277,6 +279,7 @@ var (
 		opt("tendered", TypeDecimal, "cash the buyer inserted / handed over"),
 		opt("change", TypeDecimal, "change returned"),
 		opt("operation_id", TypeString, "device operation id (e.g. the cash recycler operation), kept for reconciliation"),
+		opt("rounding", TypeDecimal, "shortfall absorbed under the org's cash rounding tolerance"),
 	)
 )
 

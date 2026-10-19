@@ -20,15 +20,16 @@ var (
 )
 
 // CheckTenders verifies that the tender amounts add up exactly to the
-// declared collected amount and that none is zero or negative.
-func CheckTenders(declared string, tenders ...string) error {
-	want, err := ParseAmount(declared)
+// declared collected amount, that none is zero or negative, and that all are
+// quantized to currency.
+func CheckTenders(currency, declared string, tenders ...string) error {
+	want, err := ParseMoney(declared, currency)
 	if err != nil {
 		return err
 	}
 	sum := Amount{}
 	for i, t := range tenders {
-		a, err := ParseAmount(t)
+		a, err := ParseMoney(t, currency)
 		if err != nil {
 			return fmt.Errorf("tender %d: %w", i, err)
 		}
@@ -67,7 +68,7 @@ type Settlement struct {
 	Due Amount
 	// Applied is what this collection contributes to the document.
 	Applied Amount
-	// Change is cash handed back (only with cash).
+	// Change is cash handed back; never more than the cash tendered.
 	Change Amount
 	// Rounding is a cash shortfall absorbed under the tolerance.
 	Rounding Amount
@@ -77,52 +78,107 @@ type Settlement struct {
 	Settled bool
 }
 
-// Settle applies collected to a document whose total and already-paid amount
-// are known (server-side). With cash involved, an overpayment is change and
-// a shortfall up to cashTolerance is absorbed as rounding (cash cannot be
-// split below the smallest coin a device or a drawer handles; the tolerance is
-// an organization setting, "0" disables it). Without cash, an overpayment is
-// ErrExceedsTotal. A shortfall beyond the tolerance leaves Remaining > 0: the
-// caller decides whether partial payments are allowed for the document.
-func Settle(total, alreadyPaid, collected string, cashInvolved bool, cashTolerance string) (Settlement, error) {
+// Settle errors.
+var (
+	// ErrInvalidTolerance: a cash rounding tolerance outside
+	// [0, MaxCashTolerance(currency)].
+	ErrInvalidTolerance = errors.New("payments: cash rounding tolerance out of range")
+	// ErrNegativeAmount: a negative total, paid or tendered amount.
+	ErrNegativeAmount = errors.New("payments: negative amount")
+)
+
+// MaxCashTolerance is the hard cap of the cash rounding tolerance: less than
+// one major unit of the currency (0.99 MXN, 0.999 KWD, 0 JPY). An
+// organization configures its tolerance (the smallest coin its drawers or
+// devices handle) inside this cap; anything above is a configuration error,
+// never a way to forgive debts.
+func MaxCashTolerance(currency string) Amount {
+	return MustAmount("1").Sub(MinorUnit(currency))
+}
+
+// CheckCashTolerance validates an organization's tolerance for currency.
+func CheckCashTolerance(tolerance, currency string) (Amount, error) {
+	tol, err := ParseMoney(orZero(tolerance), currency)
+	if err != nil {
+		return Amount{}, fmt.Errorf("%w: %v", ErrInvalidTolerance, err)
+	}
+	if tol.Sign() < 0 || tol.Cmp(MaxCashTolerance(currency)) > 0 {
+		return Amount{}, fmt.Errorf("%w: %s %s (max %s)", ErrInvalidTolerance, tol, currency, MaxCashTolerance(currency))
+	}
+	return tol, nil
+}
+
+// Collection is what a point of sale collects at once toward a document.
+type Collection struct {
+	Currency string
+	// Total is the document total (from its stored lines) and AlreadyPaid
+	// what counts as paid before (DocumentPaid), both server-side.
+	Total       string
+	AlreadyPaid string
+	// NonCash is the card / transfer / wallet part; it can never exceed
+	// what is due (there is no change on a card).
+	NonCash string
+	// Cash is the cash tendered; change comes only from it.
+	Cash string
+	// CashTolerance is the org's rounding tolerance (CheckCashTolerance).
+	CashTolerance string
+}
+
+// Settle applies a collection. The non-cash part must fit in what is due
+// (ErrExceedsTotal otherwise: an overcharged card is never paid back in
+// cash). The cash part covers the rest: its excess is change (≤ cash
+// tendered) and a shortfall up to the tolerance is absorbed as rounding
+// (cash cannot be split below the smallest coin). A shortfall beyond the
+// tolerance leaves Remaining > 0: the caller decides whether partial
+// payments are allowed for the document.
+func Settle(c Collection) (Settlement, error) {
 	var s Settlement
-	t, err := ParseAmount(total)
+	parse := func(v string) (Amount, error) {
+		a, err := ParseMoney(orZero(v), c.Currency)
+		if err == nil && a.Sign() < 0 {
+			err = fmt.Errorf("%w: %s", ErrNegativeAmount, a)
+		}
+		return a, err
+	}
+	total, err := parse(c.Total)
 	if err != nil {
 		return s, err
 	}
-	paid, err := ParseAmount(orZero(alreadyPaid))
+	paid, err := parse(c.AlreadyPaid)
 	if err != nil {
 		return s, err
 	}
-	c, err := ParseAmount(collected)
+	nonCash, err := parse(c.NonCash)
 	if err != nil {
 		return s, err
 	}
-	tol, err := ParseAmount(orZero(cashTolerance))
+	cash, err := parse(c.Cash)
 	if err != nil {
 		return s, err
 	}
-	if c.Sign() <= 0 {
-		return s, fmt.Errorf("%w: collected must be positive", ErrTenderMismatch)
+	tol, err := CheckCashTolerance(c.CashTolerance, c.Currency)
+	if err != nil {
+		return s, err
 	}
-	if tol.Sign() < 0 {
-		tol = Amount{}
+	if nonCash.Add(cash).Sign() <= 0 {
+		return s, fmt.Errorf("%w: nothing collected", ErrTenderMismatch)
 	}
-	s.Due = t.Sub(paid)
+	s.Due = total.Sub(paid)
 	if s.Due.Sign() <= 0 {
 		return s, ErrNothingDue
 	}
-	diff := c.Sub(s.Due)
+	if nonCash.Cmp(s.Due) > 0 {
+		return s, fmt.Errorf("%w: non-cash %s, due %s", ErrExceedsTotal, nonCash, s.Due)
+	}
+	rest := s.Due.Sub(nonCash) // what the cash must cover
 	switch {
-	case diff.Sign() >= 0:
-		if diff.Sign() > 0 && !cashInvolved {
-			return s, fmt.Errorf("%w: collected %s, due %s", ErrExceedsTotal, c, s.Due)
-		}
-		s.Applied, s.Change, s.Settled = s.Due, diff, true
-	case cashInvolved && c.Sub(s.Due).Add(tol).Sign() >= 0:
-		s.Applied, s.Rounding, s.Settled = c, s.Due.Sub(c), true
+	case cash.Cmp(rest) >= 0:
+		s.Applied, s.Change, s.Settled = s.Due, cash.Sub(rest), true
+	case cash.Sign() > 0 && rest.Sub(cash).Cmp(tol) <= 0:
+		s.Applied, s.Rounding, s.Settled = nonCash.Add(cash), rest.Sub(cash), true
 	default:
-		s.Applied, s.Remaining = c, s.Due.Sub(c)
+		s.Applied = nonCash.Add(cash)
+		s.Remaining = s.Due.Sub(s.Applied)
 	}
 	return s, nil
 }
@@ -158,31 +214,39 @@ const (
 	VerdictRetryNewKey Verdict = "retry_with_new_key"
 )
 
-// CheckReplay decides whether a charge of a document may proceed. payments are
-// every payment of the document; netPaid is what they already settled
-// (sum of NetCaptured) and total the document total, both server-side.
-func CheckReplay(payments []Payment, idempotencyKey string, netPaid, total string) (Verdict, *Payment, error) {
-	if strings.TrimSpace(idempotencyKey) != "" {
-		for i := range payments {
-			p := &payments[i]
-			if p.IdempotencyKey != idempotencyKey {
-				continue
-			}
-			switch {
-			case p.Status.Captured():
-				return VerdictReplay, p, nil
-			case p.Status.Open():
-				return VerdictInProgress, p, nil
-			default:
-				return VerdictRetryNewKey, p, nil
-			}
+// ErrKeyRequired: a charge without an idempotency key.
+var ErrKeyRequired = errors.New("payments: idempotency_key is required")
+
+// CheckReplay decides whether a charge of a document may proceed. payments
+// and refunds are every payment and refund of the document; what counts as
+// paid is computed from them (DocumentPaid), never taken from the caller.
+// total is the document total from its stored lines.
+func CheckReplay(payments []Payment, refunds []Refund, idempotencyKey, total string) (Verdict, *Payment, error) {
+	if strings.TrimSpace(idempotencyKey) == "" {
+		return "", nil, ErrKeyRequired
+	}
+	for i := range payments {
+		p := &payments[i]
+		if p.IdempotencyKey != idempotencyKey {
+			continue
+		}
+		switch {
+		case p.Status.Captured():
+			return VerdictReplay, p, nil
+		case p.Status.Open():
+			return VerdictInProgress, p, nil
+		default:
+			return VerdictRetryNewKey, p, nil
 		}
 	}
-	paid, err := ParseAmount(orZero(netPaid))
+	t, err := ParseAmount(total)
 	if err != nil {
 		return "", nil, err
 	}
-	t, err := ParseAmount(total)
+	if t.Sign() <= 0 {
+		return "", nil, fmt.Errorf("%w: total %s", ErrNegativeAmount, t)
+	}
+	paid, err := DocumentPaid(payments, refunds)
 	if err != nil {
 		return "", nil, err
 	}

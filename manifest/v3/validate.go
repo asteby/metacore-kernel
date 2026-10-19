@@ -2178,6 +2178,9 @@ func validateCapabilities(m *Manifest) []string {
 			}
 		}
 	}
+	for i, pc := range m.ProvidesCapabilities {
+		errs = append(errs, serverDerivedPaymentInputs(fmt.Sprintf("provides_capabilities[%d]", i), pc.Key, pc.Input)...)
+	}
 	check := func(where string, h Handler) {
 		if h.Type != "capability" {
 			if h.Capability != "" || len(h.Input) > 0 {
@@ -2198,6 +2201,7 @@ func validateCapabilities(m *Manifest) []string {
 		for _, e := range capability.ValidateInput(h.Input, contract) {
 			errs = append(errs, where+".handler."+e)
 		}
+		errs = append(errs, serverDerivedPaymentInputs(where+".handler", h.Capability, h.Input)...)
 	}
 	if m.Contributions != nil {
 		for i, a := range m.Contributions.Actions {
@@ -2265,4 +2269,25 @@ func auditColumnTypeProblem(name, typ string) string {
 		}
 	}
 	return ""
+}
+
+// paymentServerDerived are payment inputs the host derives (marketplace
+// routing and commission): mapping them from a payload would let whoever
+// fills the payload (a buyer, a channel) set the platform's commission or
+// the seller's account.
+var paymentServerDerived = map[string]bool{"seller": true, "refund_application_fee": true}
+
+func serverDerivedPaymentInputs(where, key string, input map[string]string) []string {
+	if !strings.HasPrefix(key, "commerce.payments.") {
+		return nil
+	}
+	var errs []string
+	for target, src := range input {
+		root := strings.SplitN(target, ".", 2)[0]
+		if paymentServerDerived[root] && strings.HasPrefix(src, "payload.") {
+			errs = append(errs, fmt.Sprintf("%s.input[%q] maps %s from %q: it is server-derived (marketplace configuration), never taken from a payload", where, target, root, src))
+		}
+	}
+	sort.Strings(errs)
+	return errs
 }

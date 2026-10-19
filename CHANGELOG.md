@@ -34,6 +34,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`organization_id`, `occurred_at`, `source`, `payment_id`, documento).
   `ValidCurrency`. Retrocompatible: los 4 contratos de pago conservan sus
   requeridos de entrada y salida (prueba incluida).
+  Reglas de dinero endurecidas en la revisión: `Settle(Collection)` separa
+  la parte no efectivo (nunca excede lo debido) del efectivo (el único que da
+  cambio, nunca mayor que lo entregado) y acota la tolerancia de redondeo a
+  `MaxCashTolerance` (menos de una unidad de la moneda); `Refundable` respeta
+  el `amount_refunded` del proveedor; `CheckRefund` da
+  `ErrIdempotencyConflict` si la llave se reusa con otros datos;
+  `ObserveOutcome` compara monto, moneda, `provider_ref` y total reembolsado;
+  la máquina de estados es monótona (`authorized → at_device` es `stale`) y
+  `Command` limita los comandos locales por canal; montos cuantizados por
+  moneda (`ParseMoney`) con escala máxima `MaxScale`; `NewHoldToken` y
+  `Consume` solo sobre un hold vigente; `DecodeConfirmed` exige `isProvider` y
+  `ConfirmedFor`; `EmitPolicy` aplica `commerce.payments` como enforce aun en
+  modo warn; el manifest rechaza `seller`/`refund_application_fee` desde
+  `payload.*`; `cash.rounding` en el contrato.
 
 ### Fixed
 
