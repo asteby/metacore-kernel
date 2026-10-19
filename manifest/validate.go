@@ -260,11 +260,63 @@ func (m *Manifest) ValidateAdvisory(kernelVersion string) ([]string, error) {
 			"is accepted but installation will fail with "+
 			"runtime_not_implemented")
 	}
+	warnings = append(warnings, readPermissionOracleWarnings(m.ModelDefinitions)...)
 	if err := m.validateStrict(kernelVersion); err != nil {
 		return warnings, err
 	}
 	return warnings, nil
 }
+
+// readPermissionOracleWarnings flags guards that let a writer infer a column
+// gated by read_permission by trial: a constraint whose expression reads it
+// (the write is accepted or refused depending on the hidden value) and a
+// unique column (a duplicate answer says the value exists). They stay valid —
+// "price >= cost, ask for approval" is the motivating POS case — but the
+// author should not give write access on the model to roles without the
+// permission. See docs/access-policies.md "Oráculos residuales".
+func readPermissionOracleWarnings(defs []ModelDefinition) []string {
+	var out []string
+	for _, md := range defs {
+		gated := map[string]string{}
+		for _, c := range md.Columns {
+			if c.ReadPermission != "" {
+				gated[c.Name] = c.ReadPermission
+			}
+		}
+		if len(gated) == 0 {
+			continue
+		}
+		for _, c := range md.Columns {
+			if c.Unique && gated[c.Name] != "" {
+				out = append(out, fmt.Sprintf("model_definitions[%s].columns[%s]: unique on a column gated by read_permission %q lets a writer probe whether a value exists", md.ModelKey, c.Name, gated[c.Name]))
+			}
+			for _, con := range c.Constraints {
+				for _, id := range constraintIdents(con.Expr) {
+					if p := gated[id]; p != "" {
+						out = append(out, fmt.Sprintf("model_definitions[%s].columns[%s].constraints[%s]: the guard reads %q (read_permission %q); a writer without the permission can infer it from accept/refuse", md.ModelKey, c.Name, con.ErrorKey, id, p))
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// constraintIdents returns the column identifiers of a guard expression
+// ("price >= cost * 1.1" → price, cost), deduplicated.
+func constraintIdents(expr string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, tok := range constraintIdentRe.FindAllString(expr, -1) {
+		if !seen[tok] {
+			seen[tok] = true
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+var constraintIdentRe = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
 
 // Validate performs a full structural + semantic check of the manifest.
 // It is cheap and side-effect free; callers should run it before install.

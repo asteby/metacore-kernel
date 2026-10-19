@@ -85,3 +85,21 @@ func TestValidateDerivedReadPermissions_Legacy(t *testing.T) {
 		t.Fatalf("snapshot of a gated column: %v", err)
 	}
 }
+
+func TestValidateAdvisory_ReadPermissionOracles(t *testing.T) {
+	m := &Manifest{ModelDefinitions: []ModelDefinition{{ModelKey: "Product", Columns: []ColumnDef{
+		{Name: "price", Constraints: []ConstraintDef{{Expr: "price >= cost", ErrorKey: "below_cost"}}},
+		{Name: "cost", ReadPermission: "inv.product.view_cost"},
+		{Name: "sku", Unique: true, ReadPermission: "inv.product.view_sku"},
+		{Name: "qty", Constraints: []ConstraintDef{{Expr: "qty >= 0", ErrorKey: "neg"}}},
+	}}}}
+	w := readPermissionOracleWarnings(m.ModelDefinitions)
+	joined := strings.Join(w, "\n")
+	if len(w) != 2 || !strings.Contains(joined, "below_cost") || !strings.Contains(joined, "unique") {
+		t.Fatalf("warnings: %v", w)
+	}
+	got, _ := m.ValidateAdvisory("")
+	if !strings.Contains(strings.Join(got, "\n"), "below_cost") {
+		t.Fatalf("ValidateAdvisory must surface the oracle warnings: %v", got)
+	}
+}
