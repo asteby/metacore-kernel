@@ -415,10 +415,13 @@ Paquete `payments/ledger`. El host lo construye con `ledger.New(ctx, db, Config{
 - Una captura con **otro monto o moneda** es la anomalía `amount_mismatch` y nunca se aplica.
 - Una anomalía confirmada por una segunda lectura de conciliación con el mismo estado se aplica como corrección auditada (evento `corrected`), salvo `amount_mismatch`.
 - Un pago desconocido es `orphan`.
-- Un webhook de reembolso con `amount_refunded` marca `succeeded` los reembolsos pendientes que cubre, del más antiguo al más nuevo.
+- Un webhook que sube `amount_refunded` **no** marca `succeeded` los reembolsos pendientes por cobertura: el total no dice cuál reembolso fue, y uno hecho en el panel del proveedor no puede saldar uno de OPS que el proveedor no ha ejecutado. En su lugar, el ledger le pregunta al proveedor por los reembolsos pendientes de ese pago (`commerce.payments.refund` con la misma llave) que ya no están en vuelo (con `provider_refund_id`, o creados hace más de un minuto). Mientras tanto, lo reservado es `max(amount_refunded, Σ succeeded) + Σ pending`.
+- El estado de un reembolso es monótono (`CanTransitionRefund`, bajo bloqueo de la fila): una respuesta síncrona `pending` que llega después del webhook no regresa un `succeeded`. Un reintento de `payments.refund.create` con la misma llave sobre un reembolso `pending` vuelve a consultar al proveedor; un error en esa re-consulta nunca lo marca `failed`.
+- El dedupe usa `INSERT … ON CONFLICT DO NOTHING`: dos entregas concurrentes del mismo evento (también huérfano, sin fila de pago que bloquear) dan una inserción y un `duplicate`, nunca un 500. Un id derivado que se repite en un movimiento válido a otro estado (`authorized → cancelling → authorized`, cancelación rechazada) se registra con su propio id (`…|after|<estado guardado>`).
+- Al pasar a `cancelling` se guarda `cancelled_from`; una re-lectura de un estado abierto anterior a ese es `stale`.
 - Cuando el documento queda pagado completo (contra el `document_total` que se guardó al cobrar), el hold vivo pasa a `consumed`.
 
-**Concurrencia:** hay un `pg_advisory_xact_lock` por documento para holds y cobros, `SELECT … FOR UPDATE` sobre el pago en `Observe` y en los reembolsos, y los índices únicos de §2.4. Hay pruebas en Postgres con `-race`: 8 cobros simultáneos del mismo documento dejan **un** pago, y 8 holds simultáneos dejan uno.
+**Concurrencia:** hay un `pg_advisory_xact_lock` por documento para holds y cobros, `SELECT … FOR UPDATE` sobre el pago en `Observe` y en los reembolsos, y los índices únicos de §2.4. Hay pruebas en Postgres con `-race` (corren con `TEST_POSTGRES_DSN`): 8 cobros simultáneos del mismo documento dejan **un** pago, 8 holds simultáneos dejan uno y 8 entregas simultáneas del mismo huérfano dan un registro y 7 duplicados.
 
 **K3, `Reconciler`.** `Run(ctx, every)` hace lo siguiente en cada vuelta y por organización:
 
@@ -427,6 +430,8 @@ Paquete `payments/ledger`. El host lo construye con `ledger.New(ctx, db, Config{
 - Si un pago venció (`expires_at`, o más de `StuckAfter` = 30 min sin expiración), pide cancelarlo, lo re-lee y lo marca `stuck` si el proveedor lo mantiene abierto.
 - Re-lee los pagos con anomalía (la segunda lectura corrige).
 - Lista `commerce.payments.reconcile` por proveedor en una ventana de 2 h. Las ventanas se traslapan a propósito y el dedupe vuelve idempotente el proceso; lo desconocido es huérfano.
+- Re-consulta al proveedor los reembolsos al método original que siguen `pending` (timeout, webhook perdido), con su propia llave, para que ninguno quede reservado para siempre ni bloquee la nota de crédito.
+- Renueva el lease cuando pasa la mitad de su duración; si otra réplica lo tomó, la corrida se detiene y lo anota en el `Report`.
 
 Al final guarda el `Report` en el lease (`last_report`).
 

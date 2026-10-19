@@ -13,6 +13,7 @@ import (
 	"github.com/asteby/metacore-kernel/payments"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Observation is what recording one provider update did.
@@ -97,6 +98,7 @@ func (l *Ledger) observe(ctx context.Context, org uuid.UUID, provider string, o 
 	var publish bool
 	var anomaly *Anomaly
 	var stored paymentRow
+	var recheck *uuid.UUID
 	err := l.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		row, found, err := findPayment(forUpdate(tx), org, provider, o)
 		if err != nil {
@@ -140,6 +142,15 @@ func (l *Ledger) observe(ctx context.Context, org uuid.UUID, provider string, o 
 		if err != nil {
 			return err
 		}
+		if dup && !corrected && decision.Decision == payments.Apply && o.EventID == "" && p.Status != o.Status {
+			// A derived id names the observed state, not the move: the same
+			// state can come back as a valid move (authorized → cancelling →
+			// authorized when the cancellation is refused). Its own row.
+			ev.ID, ev.EventID = uuid.New(), ev.EventID+"|after|"+string(p.Status)
+			if dup, err = insertEvent(tx, ev); err != nil {
+				return err
+			}
+		}
 		updates := map[string]any{"last_checked_at": now, "updated_at": now}
 		if dup && !corrected {
 			obs = Observation{Payment: p, Decision: payments.Ignore, Reason: payments.ReasonDuplicate, Duplicate: true}
@@ -161,10 +172,12 @@ func (l *Ledger) observe(ctx context.Context, org uuid.UUID, provider string, o 
 		if err := tx.Where("id = ?", row.ID).Take(&stored).Error; err != nil {
 			return err
 		}
-		if (decision.Decision == payments.Apply || corrected) && stored.payment().Status.Captured() {
-			if err := l.matchProviderRefunds(tx, org, stored); err != nil {
-				return err
-			}
+		if (decision.Decision == payments.Apply || corrected) &&
+			payments.MustAmount(norm(stored.AmountRefunded)).Cmp(payments.MustAmount(norm(row.AmountRefunded))) > 0 {
+			// The provider refunded more: ask it about OUR pending refunds
+			// (after commit). The total alone cannot tell which refund it
+			// was: one made in the provider's panel must not settle ours.
+			recheck = &stored.ID
 		}
 		obs = Observation{Payment: stored.payment(), Decision: decision.Decision, Reason: decision.Reason, Corrected: corrected}
 		if decision.Decision == payments.Anomaly || corrected {
@@ -188,12 +201,23 @@ func (l *Ledger) observe(ctx context.Context, org uuid.UUID, provider string, o 
 	if publish {
 		l.publish(ctx, org, stored, o, source)
 	}
+	if recheck != nil {
+		if _, err := l.recheckRefunds(ctx, org, *recheck, 0); err != nil {
+			log.Printf("payments ledger: recheck refunds payment=%s: %v", recheck, err)
+		}
+		if p, err := l.Payment(ctx, org, recheck.String()); err == nil {
+			obs.Payment = p
+		}
+	}
 	return obs, nil
 }
 
 // applyOutcome copies what the provider says onto the payment.
 func applyOutcome(updates map[string]any, row paymentRow, o payments.Outcome, now time.Time) {
 	updates["status"] = string(o.Status)
+	if o.Status != payments.StatusCancelling {
+		updates["cancelled_from"] = ""
+	}
 	if o.ProviderRef != "" && (row.ProviderRef == nil || *row.ProviderRef == "") {
 		updates["provider_ref"] = o.ProviderRef
 	}
@@ -276,54 +300,15 @@ func findPayment(tx *gorm.DB, org uuid.UUID, provider string, o payments.Outcome
 }
 
 // insertEvent records an event; dup=true when (org, provider, event_id) was
-// already recorded.
+// already recorded. ON CONFLICT DO NOTHING: two concurrent deliveries of the
+// same event (no payment row to lock: orphans) are one insert and one
+// duplicate, never a unique violation.
 func insertEvent(tx *gorm.DB, ev eventRow) (dup bool, err error) {
-	var n int64
-	if err := tx.Model(&eventRow{}).Where("organization_id = ? AND provider = ? AND event_id = ?", ev.OrganizationID, ev.Provider, ev.EventID).
-		Count(&n).Error; err != nil {
-		return false, err
-	}
-	if n > 0 {
-		return true, nil
-	}
-	return false, tx.Create(&ev).Error
-}
-
-// matchProviderRefunds marks pending original-method refunds succeeded, oldest
-// first, as far as the refunded total the provider reports covers them (the
-// provider's refund webhook usually arrives after commerce.payments.refund
-// answered pending).
-func (l *Ledger) matchProviderRefunds(tx *gorm.DB, org uuid.UUID, row paymentRow) error {
-	reported := payments.MustAmount(norm(row.AmountRefunded))
-	if reported.Sign() <= 0 {
-		return nil
-	}
-	var rows []refundRow
-	if err := tx.Where("organization_id = ? AND payment_id = ? AND status IN ?", org, row.ID,
-		[]string{string(payments.RefundSucceeded), string(payments.RefundPending)}).Order("created_at").Find(&rows).Error; err != nil {
-		return err
-	}
-	covered := payments.Amount{}
-	for _, r := range rows {
-		if r.Status == string(payments.RefundSucceeded) {
-			covered = covered.Add(payments.MustAmount(norm(r.Amount)))
-		}
-	}
-	for _, r := range rows {
-		if r.Status != string(payments.RefundPending) || r.Destination != string(payments.RefundToOriginal) {
-			continue
-		}
-		next := covered.Add(payments.MustAmount(norm(r.Amount)))
-		if next.Cmp(reported) > 0 {
-			break
-		}
-		covered = next
-		if err := tx.Model(&refundRow{}).Where("id = ?", r.ID).
-			Updates(map[string]any{"status": string(payments.RefundSucceeded), "settled_at": l.now(), "updated_at": l.now()}).Error; err != nil {
-			return err
-		}
-	}
-	return nil
+	res := tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "organization_id"}, {Name: "provider"}, {Name: "event_id"}},
+		DoNothing: true,
+	}).Create(&ev)
+	return res.Error == nil && res.RowsAffected == 0, res.Error
 }
 
 func outcomeOf(p payments.Payment) payments.Outcome {

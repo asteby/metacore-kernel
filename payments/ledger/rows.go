@@ -38,6 +38,7 @@ type paymentRow struct {
 	StatusDetail   string     `gorm:"column:status_detail"`
 	Anomaly        string     `gorm:"column:anomaly"`
 	AnomalyStatus  string     `gorm:"column:anomaly_status"`
+	CancelledFrom  string     `gorm:"column:cancelled_from"`
 	CreatedBy      string     `gorm:"column:created_by"`
 	ExpiresAt      *time.Time `gorm:"column:expires_at"`
 	LastCheckedAt  *time.Time `gorm:"column:last_checked_at"`
@@ -66,28 +67,30 @@ type eventRow struct {
 func (eventRow) TableName() string { return TableEvents }
 
 type refundRow struct {
-	ID                 uuid.UUID  `gorm:"column:id;primaryKey"`
-	OrganizationID     uuid.UUID  `gorm:"column:organization_id"`
-	PaymentID          uuid.UUID  `gorm:"column:payment_id"`
-	Destination        string     `gorm:"column:destination"`
-	Provider           string     `gorm:"column:provider"`
-	ProviderRefundID   string     `gorm:"column:provider_refund_id"`
-	Amount             string     `gorm:"column:amount"`
-	Currency           string     `gorm:"column:currency"`
-	Status             string     `gorm:"column:status"`
-	Reason             string     `gorm:"column:reason"`
-	IdempotencyKey     string     `gorm:"column:idempotency_key"`
-	SourceType         string     `gorm:"column:source_type"`
-	SourceID           string     `gorm:"column:source_id"`
-	CreditNoteRequired bool       `gorm:"column:credit_note_required"`
-	AdjustsTotal       bool       `gorm:"column:adjusts_total"`
-	CreditNoteID       string     `gorm:"column:credit_note_id"`
-	CashSessionID      string     `gorm:"column:cash_session_id"`
-	Instructions       string     `gorm:"column:instructions"`
-	CreatedBy          string     `gorm:"column:created_by"`
-	SettledAt          *time.Time `gorm:"column:settled_at"`
-	CreatedAt          time.Time  `gorm:"column:created_at"`
-	UpdatedAt          time.Time  `gorm:"column:updated_at"`
+	ID                 uuid.UUID `gorm:"column:id;primaryKey"`
+	OrganizationID     uuid.UUID `gorm:"column:organization_id"`
+	PaymentID          uuid.UUID `gorm:"column:payment_id"`
+	Destination        string    `gorm:"column:destination"`
+	Provider           string    `gorm:"column:provider"`
+	ProviderRefundID   string    `gorm:"column:provider_refund_id"`
+	Amount             string    `gorm:"column:amount"`
+	Currency           string    `gorm:"column:currency"`
+	Status             string    `gorm:"column:status"`
+	Reason             string    `gorm:"column:reason"`
+	IdempotencyKey     string    `gorm:"column:idempotency_key"`
+	SourceType         string    `gorm:"column:source_type"`
+	SourceID           string    `gorm:"column:source_id"`
+	CreditNoteRequired bool      `gorm:"column:credit_note_required"`
+	// RefundApplicationFee is kept so a re-query sends the same request.
+	RefundApplicationFee bool       `gorm:"column:refund_application_fee"`
+	AdjustsTotal         bool       `gorm:"column:adjusts_total"`
+	CreditNoteID         string     `gorm:"column:credit_note_id"`
+	CashSessionID        string     `gorm:"column:cash_session_id"`
+	Instructions         string     `gorm:"column:instructions"`
+	CreatedBy            string     `gorm:"column:created_by"`
+	SettledAt            *time.Time `gorm:"column:settled_at"`
+	CreatedAt            time.Time  `gorm:"column:created_at"`
+	UpdatedAt            time.Time  `gorm:"column:updated_at"`
 }
 
 func (refundRow) TableName() string { return TableRefunds }
@@ -178,7 +181,8 @@ func (r paymentRow) payment() payments.Payment {
 		Fee: normPtr(r.Fee), Net: normPtr(r.Net), Method: r.Method, Installments: r.Installments,
 		Card: decodeInto[payments.Card](r.Card), Cash: decodeInto[payments.CashTender](r.Cash),
 		Seller: decodeInto[payments.Seller](r.Seller), TestMode: r.TestMode, Anomaly: r.Anomaly,
-		PaidAt: r.PaidAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		CancelledFrom: payments.Status(r.CancelledFrom),
+		PaidAt:        r.PaidAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 	if r.ProviderRef != nil {
 		p.ProviderRef = *r.ProviderRef

@@ -422,7 +422,7 @@ func (l *Ledger) Cancel(ctx context.Context, org uuid.UUID, paymentID, idempoten
 			if out.Status == "cancelling" && p.Status != payments.StatusCancelling {
 				if terr := payments.Transition(p.Status, payments.StatusCancelling); terr == nil {
 					_ = l.db.WithContext(ctx).Model(&paymentRow{}).Where("id = ? AND status = ?", row.ID, string(p.Status)).
-						Updates(map[string]any{"status": string(payments.StatusCancelling), "updated_at": l.now()}).Error
+						Updates(map[string]any{"status": string(payments.StatusCancelling), "cancelled_from": string(p.Status), "updated_at": l.now()}).Error
 				}
 			}
 		}

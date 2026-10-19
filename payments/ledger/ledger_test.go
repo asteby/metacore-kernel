@@ -343,13 +343,17 @@ func TestRefunds(t *testing.T) {
 	eachDialect(t, func(t *testing.T, db *gorm.DB) {
 		h := newHarness(t, db)
 		p := paidTerminal(t, h)
+		pendingAsked := 0
 		h.fake.on("mercadopago", capability.CommercePaymentsRefund, func(in map[string]any) (any, error) {
 			if in["provider_ref"] != "ORD10" {
 				t.Errorf("refund input %v", in)
 			}
 			st := "succeeded"
 			if in["idempotency_key"] == "ret-pending" {
-				st = "pending"
+				// Pending when requested, executed by the time it is asked again.
+				if pendingAsked++; pendingAsked == 1 {
+					st = "pending"
+				}
 			}
 			return map[string]any{"refund_id": "rf-" + in["idempotency_key"].(string), "status": st, "amount": in["amount"], "currency": "MXN"}, nil
 		})
@@ -385,7 +389,8 @@ func TestRefunds(t *testing.T) {
 		if err != nil || !note.Refund.Complete() {
 			t.Fatalf("credit note: %+v %v", note, err)
 		}
-		// Pending at the provider, confirmed by its webhook (amount_refunded).
+		// Pending at the provider; its webhook (amount_refunded) makes the
+		// ledger ask the provider about the refund, which confirms it.
 		pend, err := h.l.CreateRefund(ctx, h.org, RefundRequest{PaymentID: p.ID, Amount: "20", Destination: payments.RefundToOriginal, IdempotencyKey: "ret-pending"})
 		if err != nil || pend.Refund.Status != payments.RefundPending {
 			t.Fatalf("pending refund: %+v %v", pend, err)
@@ -399,7 +404,7 @@ func TestRefunds(t *testing.T) {
 		doc, _ := h.l.Document(ctx, h.org, "sales_order", "SO-1")
 		for _, r := range doc.Refunds {
 			if r.IdempotencyKey == "ret-pending" && r.Status != payments.RefundSucceeded {
-				t.Fatalf("pending refund not matched: %+v", r)
+				t.Fatalf("pending refund not rechecked: %+v", r)
 			}
 		}
 		drawer, _ := h.l.StartCharge(ctx, h.org, func() ChargeRequest {

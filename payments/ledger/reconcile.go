@@ -27,10 +27,14 @@ import (
 //     applies the provider's status as an audited correction;
 //  4. lists every provider's payments of the last Window
 //     (commerce.payments.reconcile) and records them: unknown ones are
-//     orphans (money without a document), changed ones are applied.
+//     orphans (money without a document), changed ones are applied;
+//  5. re-queries original-method refunds still pending (timeout, lost
+//     webhook) with their own idempotency key, so none stays reserved
+//     forever.
 //
 // Runs are leased per organization (commerce_payment_reconcile_leases), so
-// several replicas never reconcile the same org at once.
+// several replicas never reconcile the same org at once. A long run renews
+// its lease as it goes and stops if another replica took it over.
 type Reconciler struct {
 	Ledger *Ledger
 	// MinAge between two re-reads of the same open payment (default 30 s).
@@ -60,6 +64,7 @@ type Report struct {
 	Corrected int       `json:"corrected"`
 	Listed    int       `json:"listed"`
 	Orphans   int       `json:"orphans"`
+	Refunds   int       `json:"refunds_rechecked"`
 	Errors    []string  `json:"errors,omitempty"`
 	Skipped   bool      `json:"skipped,omitempty"`
 }
@@ -107,6 +112,23 @@ func (r *Reconciler) RunOrg(ctx context.Context, org uuid.UUID) (Report, error) 
 	defer r.release(ctx, org, &rep)
 	db := l.db.WithContext(ctx)
 	now := l.now()
+	renewed, lost := now, false
+	// alive renews the lease once half of it went by; false once lost.
+	alive := func() bool {
+		if lost {
+			return false
+		}
+		if t := l.now(); t.Sub(renewed) >= r.Lease/2 {
+			ok, err := r.renew(ctx, org)
+			if err != nil || !ok {
+				lost = true
+				rep.Errors = append(rep.Errors, "reconcile lease lost: another replica took over")
+				return false
+			}
+			renewed = t
+		}
+		return true
+	}
 	note := func(err error) {
 		if err != nil {
 			rep.Errors = append(rep.Errors, err.Error())
@@ -130,6 +152,9 @@ func (r *Reconciler) RunOrg(ctx context.Context, org uuid.UUID) (Report, error) 
 		org, openStatuses, payments.ProviderCash, now.Add(-r.MinAge)).
 		Order("created_at").Limit(r.Batch).Find(&open).Error)
 	for _, p := range open {
+		if !alive() {
+			return rep, nil
+		}
 		o, err := l.Refresh(ctx, org, p.ID.String(), payments.SourceReconcile)
 		note(err)
 		if err == nil {
@@ -143,6 +168,9 @@ func (r *Reconciler) RunOrg(ctx context.Context, org uuid.UUID) (Report, error) 
 		org, openStatuses, payments.ProviderCash, now, now.Add(-r.StuckAfter)).
 		Order("created_at").Limit(r.Batch).Find(&stale).Error)
 	for _, p := range stale {
+		if !alive() {
+			return rep, nil
+		}
 		o, err := l.Cancel(ctx, org, p.ID.String(), "reconcile-expire:"+p.ID.String(), "expired")
 		rep.Cancelled++
 		if err != nil && !errors.Is(err, context.Canceled) {
@@ -162,6 +190,9 @@ func (r *Reconciler) RunOrg(ctx context.Context, org uuid.UUID) (Report, error) 
 	note(db.Where("organization_id = ? AND anomaly <> '' AND provider <> ?", org, payments.ProviderCash).
 		Order("updated_at").Limit(r.Batch).Find(&flagged).Error)
 	for _, p := range flagged {
+		if !alive() {
+			return rep, nil
+		}
 		o, err := l.Refresh(ctx, org, p.ID.String(), payments.SourceReconcile)
 		note(err)
 		if err == nil {
@@ -174,18 +205,28 @@ func (r *Reconciler) RunOrg(ctx context.Context, org uuid.UUID) (Report, error) 
 	note(db.Model(&paymentRow{}).Where("organization_id = ? AND provider <> ?", org, payments.ProviderCash).
 		Distinct("provider").Pluck("provider", &providers).Error)
 	for _, prov := range providers {
-		r.listProvider(ctx, org, prov, now, &rep)
+		if !alive() {
+			return rep, nil
+		}
+		r.listProvider(ctx, org, prov, now, &rep, alive)
+	}
+
+	// 5. refunds still pending at the provider.
+	if alive() {
+		n, err := l.recheckRefunds(ctx, org, uuid.Nil, r.MinAge, r.Batch)
+		rep.Refunds += n
+		note(err)
 	}
 	return rep, nil
 }
 
-func (r *Reconciler) listProvider(ctx context.Context, org uuid.UUID, provider string, now time.Time, rep *Report) {
+func (r *Reconciler) listProvider(ctx context.Context, org uuid.UUID, provider string, now time.Time, rep *Report, alive func() bool) {
 	l := r.Ledger
 	if l.cfg.Providers == nil {
 		return
 	}
 	cursor := ""
-	for page := 0; page < 50; page++ {
+	for page := 0; page < 50 && alive(); page++ {
 		in := map[string]any{"from": now.Add(-r.Window).Format(time.RFC3339), "to": now.Format(time.RFC3339), "limit": r.Batch}
 		if cursor != "" {
 			in["cursor"] = cursor
@@ -264,6 +305,14 @@ func (r *Reconciler) claim(ctx context.Context, org uuid.UUID) (bool, error) {
 	res := db.Model(&leaseRow{}).
 		Where("organization_id = ? AND (locked_until IS NULL OR locked_until < ? OR locked_by = ?)", org, now, r.Owner).
 		Updates(map[string]any{"locked_by": r.Owner, "locked_until": until})
+	return res.RowsAffected == 1, res.Error
+}
+
+// renew extends the lease this replica holds; false when it is not ours any
+// more.
+func (r *Reconciler) renew(ctx context.Context, org uuid.UUID) (bool, error) {
+	res := r.Ledger.db.WithContext(ctx).Model(&leaseRow{}).Where("organization_id = ? AND locked_by = ?", org, r.Owner).
+		Update("locked_until", r.Ledger.now().Add(r.Lease))
 	return res.RowsAffected == 1, res.Error
 }
 

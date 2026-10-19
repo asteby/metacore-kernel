@@ -26,7 +26,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   sobre el import `capability_query` existente (sin cambio de ABI ni de
   esquema del manifest). `Reconciler` (K3): re-lee pagos abiertos, cancela y
   marca `stuck` los vencidos, confirma anomalías, lista
-  `commerce.payments.reconcile` por proveedor (huérfanos), con lease por org.
+  `commerce.payments.reconcile` por proveedor (huérfanos), re-consulta los
+  reembolsos `pending` al proveedor con su llave, con lease por org que se
+  renueva durante la corrida. El estado del reembolso es monótono (un
+  `pending` tardío no regresa un `succeeded`), un reintento con la misma llave
+  vuelve a consultar, un webhook de reembolso ya no da por hecho un reembolso
+  propio por cobertura (se le pregunta al proveedor), los eventos duplicados
+  concurrentes se insertan con `ON CONFLICT DO NOTHING` y el pago guarda
+  `cancelled_from`.
 - `capability.Query.Caller`: la llave del addon que consulta, estampada por el
   host (el import `capability_query` la toma de la invocación, nunca del guest).
 
