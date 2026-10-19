@@ -401,6 +401,7 @@ Paquete `payments/ledger`. El host lo construye con `ledger.New(ctx, db, Config{
 
 | Llave | Quién la usa | Qué hace |
 |---|---|---|
+| `payments.settle` | POS, caja, kiosko | `payments.Settle` como contrato. Es puro: no necesita ledger ni organización y no escribe nada. Recibe `currency`, `total`, `already_paid`, `non_cash`, `cash` y `cash_tolerance`, y responde `due`, `applied`, `change`, `rounding`, `remaining` y `settled`. Los errores van con código: `exceeds_total`, `nothing_due`, `tender_mismatch`, `invalid_tolerance`, `negative_amount` y `not_quantized`. Es la única implementación de la regla del cobro mixto: los guests (solo stdlib) la consultan en lugar de copiarla. |
 | `payments.hold.acquire` / `payments.hold.release` | POS, caja, kiosko, tienda | Toma o renueva el hold de un documento (409 `in_payment` si es ajeno). El token se devuelve una sola vez y se guarda como hash. Un guest no puede forzar la liberación. |
 | `payments.charge.start` | Canales | Bajo el bloqueo del documento: `CheckCharge` del hold, `CheckReplay`, y un monto ≤ lo que falta. Luego `terminal.create` o `session` fijados al proveedor, o efectivo de cajón (`paid` en el acto). Un timeout queda `pending` con `indeterminate: true`. |
 | `payments.charge.refresh` | Canales (sondeo de la UI) | Re-lee con `commerce.payments.status` y registra. |

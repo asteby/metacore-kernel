@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`payments.settle`, contrato implementado por el host** (RFC §16). Es `payments.Settle` detrás del import `capability_query`, con la concesión `capability:query payments.settle`. Es puro: no usa ledger ni organización y no escribe nada. Los errores van con código (`exceeds_total`, `nothing_due`, `invalid_tolerance`...). Con esto, POS, caja y kiosko usan una sola implementación del cobro mixto (solo el efectivo da cambio, tolerancia y tope relativo de redondeo) en lugar de copiarla en cada guest.
 - **Estándar de pagos, fases K2 (ledger) y K3 (conciliación)** ([RFC §16](docs/RFC-PAYMENTS-STANDARD.md)).
   Paquete nuevo `payments/ledger`: escritor único de `commerce_payments`,
   `commerce_payment_events` (dedupe único por proveedor + evento),
