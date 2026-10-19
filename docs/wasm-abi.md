@@ -2506,3 +2506,78 @@ Pide una capacidad (`commerce.shipping.rates`, `commerce.tax.calculate`, …) si
 - Capacidad requerida: `capability:query <clave>` (admite glob, p. ej. `commerce.*`). Sin ella: `forbidden`.
 - Errores: `no_provider`, `ambiguous_provider`, `validation_error`, `provider_required`, `idempotency_required`, `not_query`, `capability_unavailable` (el host no lo configuró), `capability_depth` (anidamiento > 3), `capability_error`.
 - El anfitrión lo activa con `Host.WithCapabilityQuerier`.
+
+## 23. `approval_consume` — redeem a supervisor PIN grant (v1.15)
+
+A handler that writes a document line under a supervisor authorization (a sale
+line under the price floor, a discount over the cap) must not trust the
+`approval_id` the caller sent: it redeems it. `approval_consume` does that in
+one atomic host step, so the addon needs no write capability on the core
+`approval_requests` table.
+
+```
+approval_consume(reqPtr i32, reqLen i32) -> i64   // ptr<<32 | len (envelope)
+```
+
+Request (max 8 KiB):
+
+```json
+{
+  "approval_id": "<uuid of the kind=pin grant>",
+  "policy": "price_below_min",
+  "context_eq":  {"product_id": "<uuid>"},
+  "context_gte": {"unit_shortfall": 5.0}
+}
+```
+
+`organization_id` and the acting user are NEVER read from the guest: they come
+from the invocation. The grant is redeemable only when it is in the caller's
+org, `kind=pin` for `policy`, authorized (`applied`), requested by the acting
+user, unused, fresher than `dynamic.PINGrantMaxAge`, every `context_eq` key
+equals the context the supervisor authorized (numbers compare as numbers) and
+every `context_gte` key is >= the amount (one-cent tolerance; an absent key
+covers nothing). At least one `context_eq` / `context_gte` key is required.
+The request carries `model` (required) and optionally `record_id`: a grant
+issued with `addon_key`, `model_key` or `record_id` only redeems for the same
+addon / model / record. A grant that is not the acting user's answers
+`unknown grant` whatever its state. The redemption is a
+single conditional UPDATE: a second call, or two racing calls, lose, and a
+refused attempt does not burn the grant.
+
+Success: `{"success": true, "data": {"consumed": true}}`. Errors:
+`invalid_request`, `approvals_unavailable` (no `Host.WithApprovalConsumer`),
+`forbidden` (no `db:write` on `model`), `approval_invalid` (message names the
+failed condition: unknown grant, wrong policy, already used, expired, context
+mismatch, does not cover), `db_error` (database failure, never reported as
+`unknown grant`). Capability gate: `db:write` on `model`. Under
+`InvokeInTx` the redemption runs on the invocation's transaction, so a rollback
+leaves the grant unspent; outside it the redemption commits on its own (prefer
+a `columns[].grant` column, which redeems inside the write's transaction). Implementation: `runtime/wasm/approvalconsume.go`,
+`dynamic.Service.ConsumeApproval`.
+
+```go
+host.WithApprovalConsumer(dynamicService.ConsumeApproval)
+```
+
+All conditions (org, `kind=pin`, policy, `applied`, requester, freshness and the
+unused marker) are part of the WHERE of the single UPDATE that redeems the
+grant, not only checked on the row that was read, so a grant that changes
+between the read and the redemption cannot be consumed. A non-finite amount
+(`Infinity`, `NaN`) recorded in the grant's context covers nothing, and a
+non-finite required amount is refused.
+
+> **Requirement for the PIN UI (SDK modal).** `context_gte` / `context_eq` are
+> only a control if the supervisor SEES what they authorize: the PIN dialog
+> must show the product and the amount (the shortfall or discount) it is
+> granting, and the context recorded with the grant must be the one displayed.
+> A dialog that records a context the supervisor never saw turns the amount
+> check into a formality.
+
+### 23.1 `approval_required` from `data_mutate` / `data_batch`
+
+A declarative guard declared `on_violation: request_approval` that fails on the
+wasm write path still rolls the mutation (or the whole batch) back, but the
+envelope code is `approval_required` instead of `constraint_violation`, so the
+guest can tell "this needs a supervisor" from "this data is invalid" and ask
+for the authorization (PIN grant, redeemed with `approval_consume`) before
+retrying. Nothing is parked: a wasm write has no applier that could replay it.

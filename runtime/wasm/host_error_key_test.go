@@ -24,6 +24,7 @@ func TestHostErrorEnvelopesCarryMessageKey(t *testing.T) {
 		"event_emit":       eventEmitErr("a", "db_error", "boom", org, now),
 		"routing_resolve":  routingResolveErr("a", "db_error", "boom", org, now),
 		"approval_request": approvalRequestErr("a", "db_error", "boom", org, now),
+		"approval_consume": approvalConsumeErr("a", "db_error", "boom", org, now),
 		"db_exec":          dbExecErr("s", "db_error", "boom", 1),
 		"db_query":         dbQueryErr("s", "db_error", "boom", 1),
 	}
