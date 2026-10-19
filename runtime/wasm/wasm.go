@@ -82,6 +82,8 @@ type Host struct {
 	routingTable    RoutingTableFn
 	sequenceStamp   SequenceStampFn
 	createCheck     CreateCheckFn
+	createStamp     CreateStampFn
+	updateStamp     UpdateStampFn
 	ctxProvider     ContextProviderFn
 	mutationGuard   func(ctx context.Context, logicalTable string, row map[string]any) error
 	mutationCompute MutationComputeFn
@@ -301,6 +303,29 @@ func (h *Host) WithSequenceNext(f func(ctx context.Context, orgID uuid.UUID, mod
 // (legacy behaviour). See docs/wasm-abi.md § 14.10.
 func (h *Host) WithSequenceStamp(f SequenceStampFn) *Host {
 	h.sequenceStamp = f
+	return h
+}
+
+// WithCreateStamp injects the embedder's declarative stamp phase for
+// data_mutate / data_batch creates (docs/wasm-abi.md § 24): snapshot columns
+// copied from a related row, supervisor-grant redemption, and the formulas that
+// read them. It runs inside the write transaction, after the folio stamp and
+// before the create check and the INSERT, and overwrites whatever the guest
+// sent for the stamped columns. Wire it to dynamic.Service.CreateStamper. When
+// unset, creates are not stamped (previous behaviour).
+func (h *Host) WithCreateStamp(f CreateStampFn) *Host {
+	h.createStamp = f
+	return h
+}
+
+// WithUpdateStamp injects the embedder's declarative stamp phase for
+// data_mutate / data_batch UPDATES (docs/wasm-abi.md § 24): snapshots are
+// re-taken when their source column changes, and a change to anything a
+// supervisor grant covered drops the authorization (a new grant id in the patch
+// is redeemed on the write's transaction). Wire it to
+// dynamic.Service.UpdateStamper. When unset, updates are not stamped.
+func (h *Host) WithUpdateStamp(f UpdateStampFn) *Host {
+	h.updateStamp = f
 	return h
 }
 
@@ -759,6 +784,8 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		routingTable:      h.routingTable,
 		sequenceStamp:     h.sequenceStamp,
 		createCheck:       h.createCheck,
+		createStamp:       h.createStamp,
+		updateStamp:       h.updateStamp,
 		ctxProvider:       h.ctxProvider,
 		mutationGuard:     h.mutationGuard,
 		mutationCompute:   h.mutationCompute,

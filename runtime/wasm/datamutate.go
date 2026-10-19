@@ -226,11 +226,15 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		rollback()
 		return fail(code, sErr.Error())
 	}
+	if code, sErr := stampCreate(execCtx, inv, work, orgID, &req, data); sErr != nil {
+		rollback()
+		return fail(code, sErr.Error())
+	}
 	if code, cErr := checkCreate(execCtx, inv, work, orgID, &req, data); cErr != nil {
 		rollback()
 		return fail(code, cErr.Error())
 	}
-	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now, dynamic.ActorIDFromContext(ctx), dynamic.BranchIDFromContext(ctx), stageFor(inv, req.Table, req.Model), exts)
+	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now, dynamic.ActorIDFromContext(ctx), dynamic.BranchIDFromContext(ctx), stageFor(inv, req.Table, req.Model), exts, updateStampFor(execCtx, inv, work, orgID, &req))
 	if mErr != nil {
 		rollback()
 		return fail(code, mErr.Error())
@@ -375,7 +379,7 @@ func stageFor(inv *invocation, table, model string) *dynamic.StageMachine {
 	return inv.stageMachine(table, model)
 }
 
-func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]any, orgID uuid.UUID, tbl string, now time.Time, actorID, branchID string, stage *dynamic.StageMachine, exts []dynamic.ExtensionTable) (*mutationResult, string, error) {
+func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]any, orgID uuid.UUID, tbl string, now time.Time, actorID, branchID string, stage *dynamic.StageMachine, exts []dynamic.ExtensionTable, updStamp func(before, data, inc map[string]any) (string, error)) (*mutationResult, string, error) {
 	out := &mutationResult{rowID: req.ID}
 	// "<Ext>.<col>" leaves the owner INSERT/UPDATE and is written to the
 	// extension table after the owner row exists. Validation already proved
@@ -503,6 +507,14 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 				fmt.Errorf("row %s not found in %s for this organization", out.rowID, req.Table)
 		}
 		out.before = before
+		// Stamp phase: snapshots follow a changed source, a changed covered
+		// column drops the supervisor authorization. Before the UPDATE so the
+		// stamped columns ride the same statement.
+		if updStamp != nil {
+			if code, sErr := updStamp(before, data, inc); sErr != nil {
+				return nil, code, sErr
+			}
+		}
 		// Same transition list Service.Update enforces. A disallowed move
 		// never reaches the UPDATE.
 		if err := dynamic.GateWrite(stage, before, data, inc); err != nil {
@@ -913,6 +925,56 @@ func stampCreateSequences(ctx context.Context, inv *invocation, work *gorm.DB, o
 	}
 	if err := inv.sequenceStamp(ctx, work, orgID, req.Model, data); err != nil {
 		return "db_error", fmt.Errorf("sequence stamp: %w", err)
+	}
+	return "", nil
+}
+
+// CreateStampFn runs the declarative stamp phase (snapshots copied from a
+// related row, supervisor-grant redemption, the formulas that read them) on the
+// row of a create, on the open transaction. See Host.WithCreateStamp.
+type CreateStampFn func(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, model string, row map[string]any) error
+
+// UpdateStampFn re-stamps an UPDATE of row `id` of `model` on the open
+// transaction: before is the persisted row, data the patch and inc the additive
+// deltas (both mutated in place). See Host.WithUpdateStamp.
+type UpdateStampFn func(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, model, id string, before, data, inc map[string]any) error
+
+// stampErrCode maps a stamp failure to its envelope code.
+func stampErrCode(err error) string {
+	switch {
+	case errors.Is(err, dynamic.ErrApprovalConsume) || errors.Is(err, dynamic.ErrApprovalGrantRequired):
+		return "approval_invalid"
+	case errors.Is(err, dynamic.ErrInvalidInput):
+		return "validation_error"
+	}
+	return "db_error"
+}
+
+// updateStampFor binds the host's UpdateStampFn to one update, or nil.
+func updateStampFor(ctx context.Context, inv *invocation, work *gorm.DB, orgID uuid.UUID, req *dataMutateRequest) func(before, data, inc map[string]any) (string, error) {
+	if inv.updateStamp == nil || req.Op != "update" || req.Model == "" {
+		return nil
+	}
+	return func(before, data, inc map[string]any) (string, error) {
+		if err := inv.updateStamp(ctx, work, orgID, req.Model, req.ID, before, data, inc); err != nil {
+			return stampErrCode(err), err
+		}
+		return "", nil
+	}
+}
+
+// stampCreate runs the embedder's CreateStampFn for a create. A refused grant
+// (dynamic.ErrApprovalConsume) answers `approval_invalid`; anything else
+// `db_error`. ("", nil) when unset or not a create.
+func stampCreate(ctx context.Context, inv *invocation, work *gorm.DB, orgID uuid.UUID, req *dataMutateRequest, data map[string]any) (string, error) {
+	if inv.createStamp == nil || req.Op != "create" || req.Model == "" {
+		return "", nil
+	}
+	if err := inv.createStamp(ctx, work, orgID, req.Model, data); err != nil {
+		if code := stampErrCode(err); code != "db_error" {
+			return code, err
+		}
+		return "db_error", fmt.Errorf("create stamp: %w", err)
 	}
 	return "", nil
 }

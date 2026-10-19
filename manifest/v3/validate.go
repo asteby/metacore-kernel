@@ -1660,6 +1660,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 				errs = append(errs, fmt.Sprintf("%s.format %q: %v", where, sq.Format, err))
 			}
 		}
+		errs = append(errs, validateSnapshots(mi, mod, ownCols)...)
 		errs = append(errs, validateReasonRequired(&m, mi, mod)...)
 		// Static-option cascade guards + declarative Constraints on model columns.
 		for ci, c := range mod.Columns {
@@ -1667,6 +1668,9 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 				if _, ok := seqKeys[c.Sequence]; !ok {
 					errs = append(errs, fmt.Sprintf("models[%d].columns[%d].sequence %q is not a declared sequence key on the model", mi, ci, c.Sequence))
 				}
+			}
+			if c.Grant != nil {
+				errs = append(errs, validateGrant(fmt.Sprintf("models[%d].columns[%d].grant", mi, ci), c.Grant, mod, ownCols)...)
 			}
 			for cci, con := range c.Constraints {
 				cw := fmt.Sprintf("models[%d].columns[%d].constraints[%d]", mi, ci, cci)

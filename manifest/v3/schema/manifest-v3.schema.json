@@ -1156,6 +1156,13 @@
             "$ref": "#/$defs/Sequence"
           }
         },
+        "snapshots": {
+          "type": "array",
+          "description": "Columns the kernel fills on create by copying values from a related row (product cost and floor at the moment of sale, the parent order's branch and seller). Targets must be 'protected': the server overwrites whatever any write path supplied.",
+          "items": {
+            "$ref": "#/$defs/Snapshot"
+          }
+        },
         "document_forms": {
           "$ref": "#/$defs/DocumentForms"
         },
@@ -1458,6 +1465,9 @@
             "$ref": "#/$defs/Constraint"
           }
         },
+        "grant": {
+          "$ref": "#/$defs/GrantBinding"
+        },
         "sequence": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
@@ -1676,6 +1686,32 @@
             ]
           }
         }
+      }
+    },
+    "Snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "fields"],
+      "description": "Copies columns from a related row onto the new row at create time. 'from' is a ref column of the model; 'fields' maps source column -> protected target column.",
+      "properties": {
+        "from": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "fields": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+        }
+      }
+    },
+    "GrantBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "sets", "context_gte"],
+      "description": "Makes the column a supervisor-authorization slot: on create the kernel redeems the PIN grant it carries (single use) when the authorization is needed, and stamps the protected flag column 'sets' with 1.",
+      "properties": {
+        "policy": {"type": "string", "minLength": 1},
+        "sets": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "context_eq": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}},
+        "context_gte": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string", "minLength": 1}}
       }
     },
     "Sequence": {

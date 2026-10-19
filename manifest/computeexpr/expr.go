@@ -423,3 +423,11 @@ func ToFloat(v any) float64 {
 		return 0
 	}
 }
+
+// Idents returns the identifiers an arithmetic expression references, in order
+// of appearance (duplicates kept). It parses with the same strict allowlist as
+// Eval, so a malformed expression is an error.
+func Idents(src string) ([]string, error) {
+	_, ids, err := parseArith(src)
+	return ids, err
+}
