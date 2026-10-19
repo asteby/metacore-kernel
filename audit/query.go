@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -46,6 +47,40 @@ type QueryParams struct {
 	// TableName overrides the table read from (default DefaultTableName). Set it
 	// to match the table a host wired the Recorder to.
 	TableName string
+
+	// Redact, when set, is applied to every returned entry's before, after and
+	// changes (see RedactEntries). Wire it to the reader's column read gates,
+	// typically dynamic.Service.RedactRecord bound to the requesting user, so
+	// the trail never serves a column the reader may not read (read_permission).
+	Redact RecordRedactor
+}
+
+// RecordRedactor returns row (a record of model, or the per-column changes of
+// one) without the columns the reader may not read.
+type RecordRedactor func(ctx context.Context, model string, row map[string]any) map[string]any
+
+// RedactEntries rewrites the before / after / changes of each entry through
+// redact. changes is keyed by column, so a hidden column's diff disappears
+// with it. An entry whose JSON cannot be parsed loses that part entirely
+// (fail closed).
+func RedactEntries(ctx context.Context, entries []Entry, redact RecordRedactor) {
+	if redact == nil {
+		return
+	}
+	for i := range entries {
+		e := &entries[i]
+		for _, p := range []**string{&e.Before, &e.After, &e.Changes} {
+			if *p == nil {
+				continue
+			}
+			var row map[string]any
+			if err := json.Unmarshal([]byte(**p), &row); err != nil {
+				*p = nil
+				continue
+			}
+			*p = mapToJSONString(redact(ctx, e.Model, row))
+		}
+	}
 }
 
 const (
@@ -156,6 +191,7 @@ func (qs *Query) List(ctx context.Context, db *gorm.DB, params QueryParams) (ent
 		Find(&entries).Error; err != nil {
 		return nil, 0, fmt.Errorf("audit: fetch: %w", err)
 	}
+	RedactEntries(ctx, entries, params.Redact)
 
 	return entries, total, nil
 }
