@@ -20,6 +20,12 @@ const MaxScale = 6
 // Amount is an exact decimal parsed from the wire form ("1499.00"). The zero
 // value is 0. Every Amount has at most MaxScale decimals, so String never
 // loses precision.
+//
+// Amount is this package's internal decimal arithmetic, NOT the platform's
+// money type: records keep money as a decimal string next to its ISO 4217
+// currency, and that wire form is the contract. When the kernel's Money
+// type lands, Amount becomes a thin adapter over it (or an alias); the
+// records and the function signatures that take strings do not change.
 type Amount struct{ r big.Rat }
 
 // ParseAmount parses a decimal string (capability.ValidDecimal: no exponent,
@@ -115,6 +121,8 @@ func Sum(values ...string) (Amount, error) {
 }
 
 // minorUnits are the ISO 4217 currencies whose minor unit is not 2.
+// Provisional: when the kernel's currency catalog (Money) lands, MinorUnits
+// reads it and this table goes away. MinorUnits is the only seam.
 var minorUnits = map[string]int{
 	"BIF": 0, "CLP": 0, "DJF": 0, "GNF": 0, "ISK": 0, "JPY": 0, "KMF": 0, "KRW": 0, "PYG": 0,
 	"RWF": 0, "UGX": 0, "UYI": 0, "VND": 0, "VUV": 0, "XAF": 0, "XOF": 0, "XPF": 0,
