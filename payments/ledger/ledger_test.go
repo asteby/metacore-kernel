@@ -389,8 +389,12 @@ func TestRefunds(t *testing.T) {
 		if err != nil || !note.Refund.Complete() {
 			t.Fatalf("credit note: %+v %v", note, err)
 		}
-		// Pending at the provider; its webhook (amount_refunded) makes the
-		// ledger ask the provider about the refund, which confirms it.
+		// Pending at the provider; its webhook (amount_refunded) queues a
+		// read of the refund (commerce.payments.refund.status), which the
+		// reconciliation job runs and the provider confirms.
+		h.fake.on("mercadopago", capability.CommercePaymentsRefundStatus, func(in map[string]any) (any, error) {
+			return map[string]any{"refund_id": in["refund_id"], "status": "succeeded", "amount": "20", "currency": "MXN"}, nil
+		})
 		pend, err := h.l.CreateRefund(ctx, h.org, RefundRequest{PaymentID: p.ID, Amount: "20", Destination: payments.RefundToOriginal, IdempotencyKey: "ret-pending"})
 		if err != nil || pend.Refund.Status != payments.RefundPending {
 			t.Fatalf("pending refund: %+v %v", pend, err)
@@ -400,6 +404,12 @@ func TestRefunds(t *testing.T) {
 		obs, err := h.l.Observe(ctx, h.org, "mercadopago", "", o, payments.SourceWebhook)
 		if err != nil || obs.Payment.Status != payments.StatusRefunded {
 			t.Fatalf("refund webhook: %+v %v", obs, err)
+		}
+		if h.fake.count(capability.CommercePaymentsRefundStatus) != 0 {
+			t.Fatal("the webhook asked the provider itself")
+		}
+		if rep, err := (&Reconciler{Ledger: h.l, Owner: "r"}).RunOrg(ctx, h.org); err != nil || rep.Refunds != 1 {
+			t.Fatalf("queued recheck: %+v %v", rep, err)
 		}
 		doc, _ := h.l.Document(ctx, h.org, "sales_order", "SO-1")
 		for _, r := range doc.Refunds {

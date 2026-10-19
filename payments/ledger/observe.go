@@ -98,7 +98,6 @@ func (l *Ledger) observe(ctx context.Context, org uuid.UUID, provider string, o 
 	var publish bool
 	var anomaly *Anomaly
 	var stored paymentRow
-	var recheck *uuid.UUID
 	err := l.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		row, found, err := findPayment(forUpdate(tx), org, provider, o)
 		if err != nil {
@@ -174,10 +173,13 @@ func (l *Ledger) observe(ctx context.Context, org uuid.UUID, provider string, o 
 		}
 		if (decision.Decision == payments.Apply || corrected) &&
 			payments.MustAmount(norm(stored.AmountRefunded)).Cmp(payments.MustAmount(norm(row.AmountRefunded))) > 0 {
-			// The provider refunded more: ask it about OUR pending refunds
-			// (after commit). The total alone cannot tell which refund it
-			// was: one made in the provider's panel must not settle ours.
-			recheck = &stored.ID
+			// The provider refunded more: queue a re-query of OUR pending
+			// refunds (the reconciliation job runs it, never this webhook).
+			// The total alone cannot tell which refund it was: one made in
+			// the provider's panel must not settle ours.
+			if err := queueRefundRecheck(tx, org, stored.ID, now); err != nil {
+				return err
+			}
 		}
 		obs = Observation{Payment: stored.payment(), Decision: decision.Decision, Reason: decision.Reason, Corrected: corrected}
 		if decision.Decision == payments.Anomaly || corrected {
@@ -200,14 +202,6 @@ func (l *Ledger) observe(ctx context.Context, org uuid.UUID, provider string, o 
 	}
 	if publish {
 		l.publish(ctx, org, stored, o, source)
-	}
-	if recheck != nil {
-		if _, err := l.recheckRefunds(ctx, org, *recheck, 0); err != nil {
-			log.Printf("payments ledger: recheck refunds payment=%s: %v", recheck, err)
-		}
-		if p, err := l.Payment(ctx, org, recheck.String()); err == nil {
-			obs.Payment = p
-		}
 	}
 	return obs, nil
 }

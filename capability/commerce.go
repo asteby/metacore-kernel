@@ -31,9 +31,13 @@ const (
 // Payments standard (docs/RFC-PAYMENTS-STANDARD.md): cancel, provider
 // capabilities, reconciliation listing and the in-person terminal family.
 const (
-	CommercePaymentsCancel          = "commerce.payments.cancel"
-	CommercePaymentsCapabilities    = "commerce.payments.capabilities"
-	CommercePaymentsReconcile       = "commerce.payments.reconcile"
+	CommercePaymentsCancel       = "commerce.payments.cancel"
+	CommercePaymentsCapabilities = "commerce.payments.capabilities"
+	CommercePaymentsReconcile    = "commerce.payments.reconcile"
+	// CommercePaymentsRefundStatus re-reads a refund the provider already
+	// numbered (GET): the safe follow-up of commerce.payments.refund, never
+	// a new refund request.
+	CommercePaymentsRefundStatus    = "commerce.payments.refund.status"
 	CommercePaymentsTerminalCreate  = "commerce.payments.terminal.create"
 	CommercePaymentsTerminalDevices = "commerce.payments.terminal.devices"
 )
@@ -311,6 +315,7 @@ var PinnedContracts = map[string]bool{
 	// provider's terminal).
 	CommercePaymentsCapabilities:    true,
 	CommercePaymentsReconcile:       true,
+	CommercePaymentsRefundStatus:    true,
 	CommercePaymentsTerminalCreate:  true,
 	CommercePaymentsTerminalDevices: true,
 	CommerceTaxCommit:               true,
@@ -364,16 +369,21 @@ func commerceEvents() []EventContract {
 func commerceContracts() []Contract {
 	cs := commerceContractList()
 	// commerce.payments.status answers exactly what confirm answers.
-	var confirm *Schema
+	var confirm, refund *Schema
 	for _, c := range cs {
-		if c.Key == CommercePaymentsConfirm {
+		switch c.Key {
+		case CommercePaymentsConfirm:
 			confirm = c.Output
+		case CommercePaymentsRefund:
+			refund = c.Output
 		}
 	}
 	for i := range cs {
 		switch cs[i].Key {
 		case CommercePaymentsStatus:
 			cs[i].Output = confirm
+		case CommercePaymentsRefundStatus:
+			cs[i].Output = refund
 		case CommercePaymentsReconcile:
 			// Each listed payment is exactly a status answer.
 			for j, f := range cs[i].Output.Fields {
@@ -507,6 +517,17 @@ func commerceContractList() []Contract {
 				opt("provider_ref", TypeString, "provider payment id the refund belongs to"),
 				opt("provider_status", TypeString, "provider wording / code of the refund status, untranslated"),
 			),
+		},
+		{
+			Key: CommercePaymentsRefundStatus, Kind: KindQuery, Cardinality: One,
+			Doc: "re-read a refund by its provider refund id (read only; never refunds again); the output is a commerce.payments.refund output",
+			Input: schema(
+				req("refund_id", TypeString, "provider refund id (commerce.payments.refund output)"),
+				opt("provider_ref", TypeString, "provider payment id the refund belongs to"),
+				opt("idempotency_key", TypeString, "the refund's key, for providers that look it up by key"),
+			),
+			// Output is the commerce.payments.refund output (commerceContracts).
+			Output: schema(),
 		},
 		{
 			Key: CommercePaymentsCancel, Kind: KindQuery, Cardinality: One,

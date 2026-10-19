@@ -213,7 +213,7 @@ func (r *Reconciler) RunOrg(ctx context.Context, org uuid.UUID) (Report, error) 
 
 	// 5. refunds still pending at the provider.
 	if alive() {
-		n, err := l.recheckRefunds(ctx, org, uuid.Nil, r.MinAge, r.Batch)
+		n, err := l.recheckRefunds(ctx, org, r.Batch)
 		rep.Refunds += n
 		note(err)
 	}

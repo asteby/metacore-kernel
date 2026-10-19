@@ -625,6 +625,20 @@ Salida:
 | `provider_ref` | string |  | provider payment id the refund belongs to |
 | `provider_status` | string |  | provider wording / code of the refund status, untranslated |
 
+### `commerce.payments.refund.status`
+
+re-read a refund by its provider refund id (read only; never refunds again); the output is a commerce.payments.refund output. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `refund_id` | string | sí | provider refund id (commerce.payments.refund output) |
+| `provider_ref` | string |  | provider payment id the refund belongs to |
+| `idempotency_key` | string |  | the refund's key, for providers that look it up by key |
+
+Salida: la misma de `commerce.payments.refund`.
+
 ### `commerce.payments.session`
 
 create a payment session (checkout/preference/intent) for an order. Consulta · cardinalidad **one** · tiempo límite por proveedor **30s** · mutante (idempotente).

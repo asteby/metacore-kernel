@@ -46,6 +46,7 @@ func TestPaymentsStandardContracts(t *testing.T) {
 		{CommercePaymentsCancel, true, true},
 		{CommercePaymentsCapabilities, true, false},
 		{CommercePaymentsReconcile, true, false},
+		{CommercePaymentsRefundStatus, true, false},
 		{CommercePaymentsTerminalCreate, true, true},
 		{CommercePaymentsTerminalDevices, true, false},
 	}

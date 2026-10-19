@@ -86,10 +86,13 @@ type Refund struct {
 	// lower what counts as paid (DocumentPaid). A refund that does not touch
 	// the total (goodwill, a refund made in the provider panel) never
 	// reopens the document's debt, or a channel would charge it again.
-	AdjustsTotal  bool       `json:"adjusts_total,omitempty"`
-	CashSessionID string     `json:"cash_session_id,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	SettledAt     *time.Time `json:"settled_at,omitempty"`
+	AdjustsTotal  bool   `json:"adjusts_total,omitempty"`
+	CashSessionID string `json:"cash_session_id,omitempty"`
+	// NeedsReview: still pending where the ledger can no longer ask the
+	// provider safely; a human settles it (the amount stays reserved).
+	NeedsReview bool       `json:"needs_review,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	SettledAt   *time.Time `json:"settled_at,omitempty"`
 }
 
 // Complete reports whether nothing is left to do: money returned and, when

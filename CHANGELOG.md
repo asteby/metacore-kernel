@@ -30,8 +30,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   reembolsos `pending` al proveedor con su llave, con lease por org que se
   renueva durante la corrida. El estado del reembolso es monótono (un
   `pending` tardío no regresa un `succeeded`), un reintento con la misma llave
-  vuelve a consultar, un webhook de reembolso ya no da por hecho un reembolso
-  propio por cobertura (se le pregunta al proveedor), los eventos duplicados
+  vuelve a consultar (solo lectura con el contrato nuevo
+  `commerce.payments.refund.status` si el proveedor ya lo numeró; re-POST con
+  la misma llave solo dentro de `RefundRepostWindow`, 12 h por omisión;
+  después `needs_review` con anomalía `refund_needs_review`; backoff
+  exponencial entre intentos), un webhook de reembolso ya no da por hecho un
+  reembolso propio por cobertura (encola la re-consulta), los eventos duplicados
   concurrentes se insertan con `ON CONFLICT DO NOTHING` y el pago guarda
   `cancelled_from`.
 - `capability.Query.Caller`: la llave del addon que consulta, estampada por el
@@ -81,7 +85,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   y monto (dos reembolsos parciales sin `event_id` no colisionan);
   `Payment.CancelledFrom` evita que una cancelación rechazada pierda el
   `authorized`; `ObserveOutcome` no aplica una captura sin monto; el redondeo
-  de efectivo tiene además un tope relativo (`MaxRoundingShare`).
+  de efectivo tiene además un tope relativo (constante `MaxRoundingPercent`).
 
 - **manifest v3: `contributions.guides[]` (ayuda in-app por rol).** Guías cortas
   y tours guiados declarables por addon o preset: `key`, `title`, `roles[]`,

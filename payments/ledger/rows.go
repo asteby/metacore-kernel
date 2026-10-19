@@ -82,15 +82,19 @@ type refundRow struct {
 	SourceID           string    `gorm:"column:source_id"`
 	CreditNoteRequired bool      `gorm:"column:credit_note_required"`
 	// RefundApplicationFee is kept so a re-query sends the same request.
-	RefundApplicationFee bool       `gorm:"column:refund_application_fee"`
-	AdjustsTotal         bool       `gorm:"column:adjusts_total"`
-	CreditNoteID         string     `gorm:"column:credit_note_id"`
-	CashSessionID        string     `gorm:"column:cash_session_id"`
-	Instructions         string     `gorm:"column:instructions"`
-	CreatedBy            string     `gorm:"column:created_by"`
-	SettledAt            *time.Time `gorm:"column:settled_at"`
-	CreatedAt            time.Time  `gorm:"column:created_at"`
-	UpdatedAt            time.Time  `gorm:"column:updated_at"`
+	RefundApplicationFee bool `gorm:"column:refund_application_fee"`
+	// Automatic re-queries of a pending refund (recheckRefund).
+	RecheckAttempts int        `gorm:"column:recheck_attempts"`
+	NextRecheckAt   *time.Time `gorm:"column:next_recheck_at"`
+	NeedsReview     bool       `gorm:"column:needs_review"`
+	AdjustsTotal    bool       `gorm:"column:adjusts_total"`
+	CreditNoteID    string     `gorm:"column:credit_note_id"`
+	CashSessionID   string     `gorm:"column:cash_session_id"`
+	Instructions    string     `gorm:"column:instructions"`
+	CreatedBy       string     `gorm:"column:created_by"`
+	SettledAt       *time.Time `gorm:"column:settled_at"`
+	CreatedAt       time.Time  `gorm:"column:created_at"`
+	UpdatedAt       time.Time  `gorm:"column:updated_at"`
 }
 
 func (refundRow) TableName() string { return TableRefunds }
@@ -200,6 +204,7 @@ func (r refundRow) refund() payments.Refund {
 		Status: payments.RefundStatus(r.Status), Reason: r.Reason, IdempotencyKey: r.IdempotencyKey,
 		SourceType: r.SourceType, SourceID: r.SourceID, CreditNoteRequired: r.CreditNoteRequired,
 		AdjustsTotal: r.AdjustsTotal, CreditNoteID: r.CreditNoteID, CashSessionID: r.CashSessionID, CreatedAt: r.CreatedAt, SettledAt: r.SettledAt,
+		NeedsReview: r.NeedsReview,
 	}
 }
 

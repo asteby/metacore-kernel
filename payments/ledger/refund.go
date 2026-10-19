@@ -78,7 +78,8 @@ func (l *Ledger) CreateRefund(ctx context.Context, org uuid.UUID, req RefundRequ
 			res = RefundResult{Refund: *replay, Payment: p, Replay: true}
 			if replay.Status == payments.RefundPending && replay.Destination == payments.RefundToOriginal {
 				// A retry of a refund still pending at the provider asks it
-				// again (same key): a timeout or a lost webhook resolves here.
+				// again (recheckRefund: a read once numbered, the same key
+				// only inside the re-POST window).
 				var r refundRow
 				if err := tx.Where("organization_id = ? AND id = ?", org, replay.ID).Take(&r).Error; err != nil {
 					return err
@@ -109,7 +110,7 @@ func (l *Ledger) CreateRefund(ctx context.Context, org uuid.UUID, req RefundRequ
 		return nil
 	})
 	if err == nil && recheck != nil {
-		out, rerr := l.refundAtProvider(ctx, org, pay, *recheck, false)
+		out, rerr := l.recheckRefund(ctx, org, pay, *recheck)
 		out.Replay = true
 		if rerr != nil && ErrorCode(rerr) == CodeProvider {
 			// Still pending: the retry got its refund back, unresolved.
@@ -125,15 +126,11 @@ func (l *Ledger) CreateRefund(ctx context.Context, org uuid.UUID, req RefundRequ
 
 // refundAtProvider asks the payment's provider for refund r
 // (commerce.payments.refund, the refund's own idempotency key). first is the
-// original request; a re-query (first=false: a retry, the reconciliation)
+// original request; a re-POST (first=false, only through recheckRefund)
 // sends the same request and only moves the refund forward: an error there
 // never marks it failed, since the first request may have gone through.
 func (l *Ledger) refundAtProvider(ctx context.Context, org uuid.UUID, pay paymentRow, r refundRow, first bool) (RefundResult, error) {
 	p := pay.payment()
-	res := RefundResult{Refund: r.refund(), Payment: p}
-	if l.cfg.Providers == nil {
-		return res, failf(CodeUnavailable, "no provider querier configured")
-	}
 	input := map[string]any{
 		"provider_ref": p.ProviderRef, "amount": r.Amount, "currency": r.Currency, "order_ref": p.OrderRef,
 		"reason": r.Reason, "idempotency_key": r.IdempotencyKey,
@@ -142,7 +139,25 @@ func (l *Ledger) refundAtProvider(ctx context.Context, org uuid.UUID, pay paymen
 		input["seller"] = p.Seller
 		input["refund_application_fee"] = r.RefundApplicationFee
 	}
-	qr, err := l.cfg.Providers.Query(ctx, capability.Query{Org: org, Capability: capability.CommercePaymentsRefund, Input: input, Provider: p.Provider})
+	return l.askRefund(ctx, org, pay, r, capability.CommercePaymentsRefund, input, first)
+}
+
+// refundStatusAtProvider re-reads a refund the provider already numbered
+// (commerce.payments.refund.status, read only).
+func (l *Ledger) refundStatusAtProvider(ctx context.Context, org uuid.UUID, pay paymentRow, r refundRow) (RefundResult, error) {
+	input := map[string]any{"refund_id": r.ProviderRefundID, "provider_ref": pay.payment().ProviderRef, "idempotency_key": r.IdempotencyKey}
+	return l.askRefund(ctx, org, pay, r, capability.CommercePaymentsRefundStatus, input, false)
+}
+
+// askRefund runs one refund query and records the answer. Only the first
+// commerce.payments.refund request marks the refund failed on a definite
+// error; any later ask leaves it pending (CodeProvider).
+func (l *Ledger) askRefund(ctx context.Context, org uuid.UUID, pay paymentRow, r refundRow, key string, input map[string]any, first bool) (RefundResult, error) {
+	res := RefundResult{Refund: r.refund(), Payment: pay.payment()}
+	if l.cfg.Providers == nil {
+		return res, failf(CodeUnavailable, "no provider querier configured")
+	}
+	qr, err := l.cfg.Providers.Query(ctx, capability.Query{Org: org, Capability: key, Input: input, Provider: pay.Provider})
 	var raw json.RawMessage
 	var one capability.Result
 	if err == nil && len(qr.Results) > 0 {
@@ -153,8 +168,8 @@ func (l *Ledger) refundAtProvider(ctx context.Context, org uuid.UUID, pay paymen
 	}
 	if err != nil {
 		if one.Indeterminate() || !first {
-			// May have gone through: stays pending; a retry with the same
-			// key and the reconciliation job ask again.
+			// May have gone through: stays pending; the reconciliation job
+			// asks again (recheckRefund).
 			res.Indeterminate = true
 			if !first {
 				return res, fail(CodeProvider, err)
@@ -250,19 +265,99 @@ func (l *Ledger) updateRefund(ctx context.Context, org uuid.UUID, id uuid.UUID, 
 // be waiting for its first provider answer; re-queries leave it alone.
 const refundInFlight = time.Minute
 
-// recheckRefunds re-queries the provider about pending original-method
-// refunds (of one payment, or of the org when paymentID is uuid.Nil) last
-// touched more than minAge ago and not in flight. It returns how many it
-// asked about and how many left pending.
-func (l *Ledger) recheckRefunds(ctx context.Context, org uuid.UUID, paymentID uuid.UUID, minAge time.Duration, limit ...int) (int, error) {
-	now := l.now()
-	q := l.db.WithContext(ctx).Where("organization_id = ? AND status = ? AND destination = ? AND provider <> '' AND updated_at <= ? AND (provider_refund_id <> '' OR created_at < ?)",
-		org, string(payments.RefundPending), string(payments.RefundToOriginal), now.Add(-minAge), now.Add(-refundInFlight))
-	if paymentID != uuid.Nil {
-		q = q.Where("payment_id = ?", paymentID)
+// DefaultRefundRepostWindow is how long after a refund was first requested
+// the ledger may send the same commerce.payments.refund again (same
+// idempotency key) when the provider never numbered it. Providers expire
+// idempotency keys (Stripe: 24 h); past the window a re-POST could refund
+// twice, so the refund goes to manual review instead.
+const DefaultRefundRepostWindow = 12 * time.Hour
+
+// ReasonRefundNeedsReview: a refund still pending past the re-POST window
+// (or that the provider cannot be asked about); a human must settle it.
+const ReasonRefundNeedsReview = "refund_needs_review"
+
+// refundBackoff is the wait before the attempt-th automatic re-query
+// (1 min, 2, 4 ... capped at 1 h).
+func refundBackoff(attempt int) time.Duration {
+	if attempt > 6 {
+		return time.Hour
 	}
-	if len(limit) > 0 && limit[0] > 0 {
-		q = q.Limit(limit[0])
+	return time.Minute << attempt
+}
+
+func (l *Ledger) repostWindow(provider string) time.Duration {
+	if w, ok := l.cfg.RefundRepostWindow[provider]; ok && w > 0 {
+		return w
+	}
+	if l.cfg.DefaultRefundRepostWindow > 0 {
+		return l.cfg.DefaultRefundRepostWindow
+	}
+	return DefaultRefundRepostWindow
+}
+
+// queueRefundRecheck makes the pending original-method refunds of a payment
+// due for a re-query now (the reconciliation job runs it).
+func queueRefundRecheck(tx *gorm.DB, org, paymentID uuid.UUID, now time.Time) error {
+	return tx.Model(&refundRow{}).Where("organization_id = ? AND payment_id = ? AND status = ? AND destination = ? AND NOT needs_review",
+		org, paymentID, string(payments.RefundPending), string(payments.RefundToOriginal)).
+		Update("next_recheck_at", now).Error
+}
+
+// recheckRefund asks the provider about a pending original-method refund:
+//
+//   - numbered by the provider (provider_refund_id): only a read,
+//     commerce.payments.refund.status; never a second refund request;
+//   - not numbered, within the provider's re-POST window: the same
+//     commerce.payments.refund again, same idempotency key;
+//   - still pending past the window: needs_review (anomaly event), no more
+//     automatic asks.
+//
+// Otherwise a refund left pending is due again after an exponential backoff.
+func (l *Ledger) recheckRefund(ctx context.Context, org uuid.UUID, pay paymentRow, r refundRow) (RefundResult, error) {
+	res := RefundResult{Refund: r.refund(), Payment: pay.payment()}
+	if r.NeedsReview || r.Status != string(payments.RefundPending) {
+		return res, nil
+	}
+	now := l.now()
+	expired := now.Sub(r.CreatedAt) > l.repostWindow(r.Provider)
+	var err error
+	switch {
+	case r.ProviderRefundID != "":
+		res, err = l.refundStatusAtProvider(ctx, org, pay, r)
+	case !expired:
+		res, err = l.refundAtProvider(ctx, org, pay, r, false)
+	}
+	if res.Refund.Status != payments.RefundPending {
+		return res, err
+	}
+	updates := map[string]any{"recheck_attempts": r.RecheckAttempts + 1, "next_recheck_at": now.Add(refundBackoff(r.RecheckAttempts))}
+	if expired {
+		updates = map[string]any{"needs_review": true, "next_recheck_at": nil}
+	}
+	if uerr := l.db.WithContext(ctx).Model(&refundRow{}).Where("id = ? AND status = ?", r.ID, string(payments.RefundPending)).
+		Updates(updates).Error; uerr != nil {
+		return res, uerr
+	}
+	if expired {
+		res.Refund.NeedsReview = true
+		p := pay.payment()
+		l.raise(ctx, Anomaly{Org: org, PaymentID: p.ID, DocumentType: p.DocumentType, DocumentID: p.DocumentID,
+			Provider: r.Provider, ProviderRef: p.ProviderRef, OrderRef: p.OrderRef, Reason: ReasonRefundNeedsReview,
+			Stored: p.Status, Observed: p.Status, Amount: norm(r.Amount), Currency: r.Currency, Source: payments.SourceReconcile})
+	}
+	return res, err
+}
+
+// recheckRefunds runs recheckRefund on the pending original-method refunds
+// of the org that are due (backoff elapsed, not in flight, not in review).
+// It returns how many it looked at.
+func (l *Ledger) recheckRefunds(ctx context.Context, org uuid.UUID, limit int) (int, error) {
+	now := l.now()
+	q := l.db.WithContext(ctx).Where("organization_id = ? AND status = ? AND destination = ? AND provider <> '' AND NOT needs_review"+
+		" AND (next_recheck_at IS NULL OR next_recheck_at <= ?) AND (provider_refund_id <> '' OR created_at < ?)",
+		org, string(payments.RefundPending), string(payments.RefundToOriginal), now, now.Add(-refundInFlight))
+	if limit > 0 {
+		q = q.Limit(limit)
 	}
 	var rows []refundRow
 	if err := q.Order("created_at").Find(&rows).Error; err != nil {
@@ -272,7 +367,7 @@ func (l *Ledger) recheckRefunds(ctx context.Context, org uuid.UUID, paymentID uu
 	for _, r := range rows {
 		pay, err := l.paymentRow(l.db.WithContext(ctx), org, r.PaymentID.String())
 		if err == nil {
-			_, err = l.refundAtProvider(ctx, org, pay, r, false)
+			_, err = l.recheckRefund(ctx, org, pay, r)
 		}
 		if err != nil {
 			errs = append(errs, r.ID.String()+": "+err.Error())
@@ -373,6 +468,7 @@ func (l *Ledger) SettleRefund(ctx context.Context, org uuid.UUID, req SettleRequ
 				return failf(CodeInvalidTransition, "refund %s -> %s", cur, req.Status)
 			}
 			updates["status"] = string(req.Status)
+			updates["needs_review"] = false
 			if req.Status == payments.RefundSucceeded {
 				updates["settled_at"] = l.now()
 				succeeded = true

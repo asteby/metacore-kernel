@@ -107,6 +107,14 @@ type Config struct {
 	Now func() time.Time
 	// NewToken returns an unguessable hold token; nil = payments.NewHoldToken.
 	NewToken func() string
+	// RefundRepostWindow is, per provider, how long after a refund was
+	// requested the same commerce.payments.refund may be sent again (same
+	// idempotency key) while the provider has not numbered it. Keep it
+	// under the provider's idempotency-key lifetime.
+	RefundRepostWindow map[string]time.Duration
+	// DefaultRefundRepostWindow for providers not in RefundRepostWindow;
+	// 0 = DefaultRefundRepostWindow (12 h).
+	DefaultRefundRepostWindow time.Duration
 	// SkipMigrate skips Migrate in New.
 	SkipMigrate bool
 }

@@ -3,6 +3,7 @@ package payments
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -96,11 +97,14 @@ func MaxCashTolerance(currency string) Amount {
 	return MustAmount("1").Sub(MinorUnit(currency))
 }
 
-// MaxRoundingShare is the relative cap of a cash rounding: the shortfall
-// absorbed can be at most this share of what the cash had to cover. The
+// MaxRoundingPercent is the relative cap of a cash rounding: the shortfall
+// absorbed can be at most this percent of what the cash had to cover. The
 // absolute tolerance is about coins; this keeps it from settling a small
-// document with almost no cash (0.01 tendered on 0.50 due).
-var MaxRoundingShare = MustAmount("0.10")
+// document with almost no cash (0.01 tendered on 0.50 due). A constant: a
+// money rule is not a knob anyone can turn at run time.
+const MaxRoundingPercent = 10
+
+var maxRoundingShare = MustAmount(strconv.Itoa(MaxRoundingPercent)).Mul(MustAmount("0.01"))
 
 // CheckCashTolerance validates an organization's tolerance for currency.
 func CheckCashTolerance(tolerance, currency string) (Amount, error) {
@@ -133,7 +137,7 @@ type Collection struct {
 // Settle applies a collection. The non-cash part must fit in what is due
 // (ErrExceedsTotal otherwise: an overcharged card is never paid back in
 // cash). The cash part covers the rest: its excess is change (≤ cash
-// tendered) and a shortfall up to the tolerance, and up to MaxRoundingShare
+// tendered) and a shortfall up to the tolerance, and up to MaxRoundingPercent
 // of the cash part, is absorbed as rounding (cash cannot be split below the
 // smallest coin). A shortfall beyond the
 // tolerance leaves Remaining > 0: the caller decides whether partial
@@ -181,7 +185,7 @@ func Settle(c Collection) (Settlement, error) {
 	switch {
 	case cash.Cmp(rest) >= 0:
 		s.Applied, s.Change, s.Settled = s.Due, cash.Sub(rest), true
-	case cash.Sign() > 0 && rest.Sub(cash).Cmp(tol) <= 0 && rest.Sub(cash).Cmp(rest.Mul(MaxRoundingShare)) <= 0:
+	case cash.Sign() > 0 && rest.Sub(cash).Cmp(tol) <= 0 && rest.Sub(cash).Cmp(rest.Mul(maxRoundingShare)) <= 0:
 		s.Applied, s.Rounding, s.Settled = nonCash.Add(cash), rest.Sub(cash), true
 	default:
 		s.Applied = nonCash.Add(cash)

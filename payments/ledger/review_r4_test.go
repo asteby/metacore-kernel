@@ -48,8 +48,11 @@ func TestPendingRefundIsRechecked(t *testing.T) {
 		p := paidTerminal(t, h)
 		answers := map[string][]any{
 			"retry": {timeoutErr(), "succeeded"},
-			"recon": {timeoutErr(), "pending", "succeeded"},
+			"recon": {timeoutErr(), "pending"},
 		}
+		h.fake.on("mercadopago", capability.CommercePaymentsRefundStatus, func(in map[string]any) (any, error) {
+			return map[string]any{"refund_id": in["refund_id"], "status": "succeeded", "amount": "20", "currency": "MXN"}, nil
+		})
 		h.fake.on("mercadopago", capability.CommercePaymentsRefund, func(in map[string]any) (any, error) {
 			key := in["idempotency_key"].(string)
 			next := answers[key][0]
@@ -78,12 +81,16 @@ func TestPendingRefundIsRechecked(t *testing.T) {
 		if rep, err := rec.RunOrg(ctx, h.org); err != nil || rep.Refunds != 0 {
 			t.Fatalf("in-flight refund rechecked: %+v %v", rep, err)
 		}
+		// Not numbered, inside the window: the same request again (re-POST).
 		h.advance(2 * time.Minute)
-		if rep, err := rec.RunOrg(ctx, h.org); err != nil || rep.Refunds != 1 {
+		posts := h.fake.count(capability.CommercePaymentsRefund)
+		if rep, err := rec.RunOrg(ctx, h.org); err != nil || rep.Refunds != 1 || h.fake.count(capability.CommercePaymentsRefund) != posts+1 {
 			t.Fatalf("run 1: %+v %v", rep, err)
 		}
+		// Numbered now (rf-recon): only read, never POSTed again.
 		h.advance(time.Minute)
-		if rep, err := rec.RunOrg(ctx, h.org); err != nil || rep.Refunds != 1 {
+		if rep, err := rec.RunOrg(ctx, h.org); err != nil || rep.Refunds != 1 ||
+			h.fake.count(capability.CommercePaymentsRefund) != posts+1 || h.fake.count(capability.CommercePaymentsRefundStatus) != 1 {
 			t.Fatalf("run 2: %+v %v", rep, err)
 		}
 		pay, _ := h.l.Payment(ctx, h.org, p.ID)
@@ -264,4 +271,112 @@ func mustUUID(t *testing.T, s string) uuid.UUID {
 		t.Fatal(err)
 	}
 	return id
+}
+
+// r4 #512 I4: an unnumbered refund is re-POSTed only inside the provider's
+// window (keys expire); past it, it goes to manual review and is never asked
+// again. Between asks, exponential backoff.
+func TestRefundRepostWindowAndBackoff(t *testing.T) {
+	eachDialect(t, func(t *testing.T, db *gorm.DB) {
+		h := newHarness(t, db)
+		h.l.cfg.RefundRepostWindow = map[string]time.Duration{"mercadopago": 3 * time.Hour}
+		p := paidTerminal(t, h)
+		h.fake.on("mercadopago", capability.CommercePaymentsRefund, func(map[string]any) (any, error) {
+			return nil, timeoutErr()
+		})
+		if _, err := h.l.CreateRefund(ctx, h.org, RefundRequest{PaymentID: p.ID, Amount: "10", Destination: payments.RefundToOriginal, IdempotencyKey: "w-1"}); err != nil {
+			t.Fatal(err)
+		}
+		rec := &Reconciler{Ledger: h.l, Owner: "r"}
+		posts := func() int { return h.fake.count(capability.CommercePaymentsRefund) }
+		// Backoff: due after 1 min (in flight), then 1, 2, 4 ... min.
+		var asked []time.Duration
+		start := h.now
+		for h.now.Sub(start) < 40*time.Minute {
+			h.advance(30 * time.Second)
+			before := posts()
+			if _, err := rec.RunOrg(ctx, h.org); err != nil {
+				t.Fatal(err)
+			}
+			if posts() > before {
+				asked = append(asked, h.now.Sub(start))
+			}
+		}
+		want := []time.Duration{90 * time.Second, 150 * time.Second, 270 * time.Second, 510 * time.Second, 990 * time.Second, 1950 * time.Second}
+		if len(asked) != len(want) {
+			t.Fatalf("asked at %v, want %v", asked, want)
+		}
+		for i := range want {
+			if asked[i] != want[i] {
+				t.Fatalf("asked at %v, want %v", asked, want)
+			}
+		}
+		// Past the provider's window: needs_review, anomaly, no more POSTs.
+		h.advance(3 * time.Hour)
+		before := posts()
+		if _, err := rec.RunOrg(ctx, h.org); err != nil {
+			t.Fatal(err)
+		}
+		h.advance(2 * time.Hour)
+		if _, err := rec.RunOrg(ctx, h.org); err != nil {
+			t.Fatal(err)
+		}
+		if posts() != before {
+			t.Fatalf("re-POSTed past the window: %d -> %d", before, posts())
+		}
+		doc, _ := h.l.Document(ctx, h.org, "sales_order", "SO-1")
+		if !doc.Refunds[0].NeedsReview || doc.Refunds[0].Status != payments.RefundPending {
+			t.Fatalf("not in review: %+v", doc.Refunds[0])
+		}
+		raised := 0
+		for _, a := range h.anomalies {
+			if a.Reason == ReasonRefundNeedsReview {
+				raised++
+			}
+		}
+		if raised != 1 {
+			t.Fatalf("needs_review raised %d times", raised)
+		}
+		// A retry with the same key does not re-POST either.
+		if r, err := h.l.CreateRefund(ctx, h.org, RefundRequest{PaymentID: p.ID, Amount: "10", Destination: payments.RefundToOriginal, IdempotencyKey: "w-1"}); err != nil || !r.Replay || posts() != before {
+			t.Fatalf("retry past the window: %+v %v", r, err)
+		}
+		// A human settles it and the flag clears.
+		set, err := h.l.SettleRefund(ctx, h.org, SettleRequest{RefundID: doc.Refunds[0].ID, Status: payments.RefundFailed})
+		if err != nil || set.Refund.NeedsReview || set.Refund.Status != payments.RefundFailed {
+			t.Fatalf("manual settle: %+v %v", set.Refund, err)
+		}
+	})
+}
+
+// r4 #512 I4 (a): once the provider numbered a refund, a retry with the same
+// key reads it (refund.status) and never sends the refund again; a provider
+// without refund.status leaves it pending.
+func TestNumberedRefundIsOnlyRead(t *testing.T) {
+	eachDialect(t, func(t *testing.T, db *gorm.DB) {
+		h := newHarness(t, db)
+		p := paidTerminal(t, h)
+		h.fake.on("mercadopago", capability.CommercePaymentsRefund, func(map[string]any) (any, error) {
+			return map[string]any{"refund_id": "rf-9", "status": "pending", "amount": "10", "currency": "MXN"}, nil
+		})
+		req := RefundRequest{PaymentID: p.ID, Amount: "10", Destination: payments.RefundToOriginal, IdempotencyKey: "n-1"}
+		if _, err := h.l.CreateRefund(ctx, h.org, req); err != nil {
+			t.Fatal(err)
+		}
+		// No refund.status: still pending, no second POST.
+		r, err := h.l.CreateRefund(ctx, h.org, req)
+		if err != nil || !r.Replay || r.Refund.Status != payments.RefundPending || h.fake.count(capability.CommercePaymentsRefund) != 1 {
+			t.Fatalf("retry without refund.status: %+v %v", r, err)
+		}
+		h.fake.on("mercadopago", capability.CommercePaymentsRefundStatus, func(in map[string]any) (any, error) {
+			if in["refund_id"] != "rf-9" {
+				t.Errorf("refund.status input %v", in)
+			}
+			return map[string]any{"refund_id": "rf-9", "status": "succeeded", "amount": "10", "currency": "MXN"}, nil
+		})
+		r, err = h.l.CreateRefund(ctx, h.org, req)
+		if err != nil || r.Refund.Status != payments.RefundSucceeded || r.Payment.AmountRefunded != "10.00" || h.fake.count(capability.CommercePaymentsRefund) != 1 {
+			t.Fatalf("retry read: %+v %v", r, err)
+		}
+	})
 }
