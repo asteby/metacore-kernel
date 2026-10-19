@@ -37,15 +37,24 @@ type Asset struct {
 }
 
 // Manifest is the JSON body of GET /api/brand.
+//
+// AccentColor, Source, Version, Locked and Assets.Favicon are only emitted
+// by HandlerFrom while an instance brand overrides the product one; Handler
+// never sets them, so its JSON is unchanged.
 type Manifest struct {
-	Spec   int    `json:"spec"`
-	Key    string `json:"key"`
-	Name   string `json:"name"`
-	Color  string `json:"color,omitempty"`
-	Assets struct {
-		Icon Asset  `json:"icon"`
-		Logo *Asset `json:"logo,omitempty"`
-		OG   *Asset `json:"og,omitempty"`
+	Spec        int    `json:"spec"`
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	Color       string `json:"color,omitempty"`
+	AccentColor string `json:"accent_color,omitempty"`
+	Source      string `json:"source,omitempty"`
+	Version     int64  `json:"version,omitempty"`
+	Locked      bool   `json:"locked,omitempty"`
+	Assets      struct {
+		Icon    Asset  `json:"icon"`
+		Logo    *Asset `json:"logo,omitempty"`
+		Favicon *Asset `json:"favicon,omitempty"`
+		OG      *Asset `json:"og,omitempty"`
 	} `json:"assets"`
 }
 
