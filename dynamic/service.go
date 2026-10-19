@@ -417,6 +417,7 @@ type Service struct {
 	accessPolicies    AccessPolicyResolver
 	colCache          liveColsCache // live table columns (tablecols.go)
 	columnReadChecker ColumnReadChecker
+	modelAliases      sync.Map // canonical event ModelKey → model as invoked (column_read.go)
 
 	// Transactional-outbox state (outbox.go). outboxEnabled arms after the
 	// table migrates at New; outboxStop terminates the background relay.
@@ -845,7 +846,7 @@ func (s *Service) Get(ctx context.Context, model string, user modelbase.AuthUser
 	if err != nil {
 		return nil, err
 	}
-	return s.ColumnReadMask(ctx, model, user).RedactRow(row), nil
+	return s.redactFor(ctx, model, user, row)
 }
 
 // getRow is Get without the column read mask, for server-side consumers of
@@ -1098,7 +1099,7 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 
 	_ = s.hooks.runAfterCreate(ctx, hc, instance)
 	// The event keeps the full row; the caller gets what it may read.
-	return s.ColumnReadMask(ctx, model, user).RedactRow(after), nil
+	return s.redactFor(ctx, model, user, after)
 }
 
 // Update modifies a record by ID.
@@ -1432,7 +1433,7 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	// is already committed here).
 	_ = s.hooks.runAfterUpdate(ctx, HookContext{Model: model, User: user, DB: s.db}, instance)
 	// The event keeps the full row; the caller gets what it may read.
-	return s.ColumnReadMask(ctx, model, user).RedactRow(after), nil
+	return s.redactFor(ctx, model, user, after)
 }
 
 // Delete soft-deletes a record by ID.
@@ -1601,7 +1602,7 @@ func (s *Service) Restore(ctx context.Context, model string, user modelbase.Auth
 		return nil, err
 	}
 	s.publishCanonical(ctx, model, "updated", user, id.String(), nil, row)
-	return s.ColumnReadMask(ctx, model, user).RedactRow(row), nil
+	return s.redactFor(ctx, model, user, row)
 }
 
 // --- internal -----------------------------------------------------------

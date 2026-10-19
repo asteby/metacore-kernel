@@ -2,10 +2,12 @@ package dynamic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/asteby/metacore-kernel/metadata"
 	"github.com/asteby/metacore-kernel/modelbase"
 	"github.com/asteby/metacore-kernel/permission"
 	"github.com/asteby/metacore-kernel/query"
@@ -63,13 +65,16 @@ func (e *ColumnReadDeniedError) Unwrap() error { return ErrForbidden }
 type ReadMask struct {
 	model  string
 	denied map[string]struct{}
+	// all fails closed: the gates of the model could not be resolved, so
+	// every column but "id" is denied.
+	all bool
 	// related resolves the mask of a related model (preloads, relation
 	// filters). nil = related models are not masked.
 	related func(model string) *ReadMask
 }
 
 // Empty reports whether the mask hides nothing.
-func (m *ReadMask) Empty() bool { return m == nil || len(m.denied) == 0 }
+func (m *ReadMask) Empty() bool { return m == nil || (len(m.denied) == 0 && !m.all) }
 
 // Columns returns the denied column keys, sorted.
 func (m *ReadMask) Columns() []string {
@@ -86,12 +91,16 @@ func (m *ReadMask) Columns() []string {
 
 // Denied reports whether col may not be read. col may be a plain column, an
 // extension column ("<Ext>.<column>") or a jsonb path ("<column>.<key>"): the
-// full key and its first segment are both checked.
+// full key and its first segment are both checked. The comparison ignores
+// case: SQL folds unquoted identifiers, so "COST" reaches the cost column.
 func (m *ReadMask) Denied(col string) bool {
 	if m.Empty() || col == "" {
 		return false
 	}
-	col = strings.TrimSpace(col)
+	col = strings.ToLower(strings.TrimSpace(col))
+	if m.all {
+		return col != "id"
+	}
 	if _, ok := m.denied[col]; ok {
 		return true
 	}
@@ -184,7 +193,7 @@ func (m *ReadMask) RedactRow(row map[string]any) map[string]any {
 }
 
 func (m *ReadMask) redact(row map[string]any) (map[string]any, bool) {
-	if row == nil || m == nil || (len(m.denied) == 0 && m.related == nil) {
+	if row == nil || m == nil || (m.Empty() && m.related == nil) {
 		return row, false
 	}
 	var out map[string]any
@@ -260,7 +269,7 @@ func (m *ReadMask) redactNested(v any) (any, bool) {
 
 // RedactRows redacts every row (see RedactRow) into a new slice.
 func (m *ReadMask) RedactRows(rows []map[string]any) []map[string]any {
-	if m == nil || (len(m.denied) == 0 && m.related == nil) {
+	if m == nil || (m.Empty() && m.related == nil) {
 		return rows
 	}
 	out := make([]map[string]any, len(rows))
@@ -299,12 +308,37 @@ func (m *ReadMask) TableMeta(meta *modelbase.TableMetadata) *modelbase.TableMeta
 // the host's RequirePermissions choice decides, like checkPerm: every gated
 // column hidden when it fails closed, none otherwise. A nil user (public
 // options/search) never holds a column permission.
-func (s *Service) ColumnReadMask(ctx context.Context, model string, user modelbase.AuthUser) *ReadMask {
+//
+// It fails CLOSED: when the model's metadata cannot be read (any error but
+// "no metadata for this model", which declares no gate) it returns the error
+// together with a mask that denies every column but "id", so a caller that
+// keeps going still serves nothing gated.
+func (s *Service) ColumnReadMask(ctx context.Context, model string, user modelbase.AuthUser) (*ReadMask, error) {
 	meta, err := s.meta.GetTable(ctx, model)
 	if err != nil {
+		if !errors.Is(err, metadata.ErrModelNotFound) {
+			return &ReadMask{model: model, all: true}, fmt.Errorf("dynamic: column read gates of %s: %w", model, err)
+		}
 		meta = nil
 	}
-	return s.readMask(ctx, model, meta, user, 0)
+	return s.readMask(ctx, model, meta, user, 0), nil
+}
+
+// maskOf is ColumnReadMask for callers that only need a decision: on error
+// the returned mask already denies everything.
+func (s *Service) maskOf(ctx context.Context, model string, user modelbase.AuthUser) *ReadMask {
+	m, _ := s.ColumnReadMask(ctx, model, user)
+	return m
+}
+
+// redactFor serves row as user may read it, or the error when the gates
+// could not be resolved.
+func (s *Service) redactFor(ctx context.Context, model string, user modelbase.AuthUser, row map[string]any) (map[string]any, error) {
+	m, err := s.ColumnReadMask(ctx, model, user)
+	if err != nil {
+		return nil, err
+	}
+	return m.RedactRow(row), nil
 }
 
 // maxMaskDepth bounds the related-model chain resolved for nested preloads.
@@ -342,7 +376,7 @@ func (s *Service) readMask(ctx context.Context, model string, meta *modelbase.Ta
 				if m.denied == nil {
 					m.denied = map[string]struct{}{}
 				}
-				m.denied[col] = struct{}{}
+				m.denied[strings.ToLower(col)] = struct{}{}
 			}
 		}
 	}
@@ -384,7 +418,7 @@ func (s *Service) relatedMasks(ctx context.Context, model string, user modelbase
 		if r.Name == "" || r.Through == "" {
 			continue
 		}
-		targets[r.Name] = r.Through
+		targets[strings.ToLower(r.Name)] = r.Through
 		targets[toSnakeASCII(r.Name)] = r.Through
 	}
 	if len(targets) == 0 {
@@ -392,7 +426,7 @@ func (s *Service) relatedMasks(ctx context.Context, model string, user modelbase
 	}
 	memo := map[string]*ReadMask{}
 	return func(name string) *ReadMask {
-		through, ok := targets[name]
+		through, ok := targets[strings.ToLower(name)]
 		if !ok {
 			return nil
 		}
@@ -412,22 +446,30 @@ func (s *Service) relatedMasks(ctx context.Context, model string, user modelbase
 // user may read, for a host that forwards canonical events to a client
 // (websocket push, outbound webhook). A nil user — a delivery with no
 // principal, such as an org-level webhook — receives no gated column at all.
-// The original event is never mutated.
+// The original event is never mutated. When the gates cannot be resolved the
+// rows keep only their id (fail closed).
 func (s *Service) RedactEvent(ctx context.Context, ev *CanonicalEvent, user modelbase.AuthUser) *CanonicalEvent {
 	if ev == nil {
 		return nil
 	}
-	m := s.ColumnReadMask(ctx, ev.Model, user)
 	cp := *ev
+	if ev.Model == ApprovalModelKey {
+		// approval.* events carry the request; mask the record it copies.
+		cp.Before = s.redactApprovalMap(ctx, user, ev.Before)
+		cp.After = s.redactApprovalMap(ctx, user, ev.After)
+		return &cp
+	}
+	m := s.recordMask(ctx, ev.Model, user)
 	cp.Before = m.RedactRow(ev.Before)
 	cp.After = m.RedactRow(ev.After)
 	return &cp
 }
 
 // RedactRecord returns row as user may read it — the helper for host
-// endpoints that serve records of a dynamic model outside this package.
+// endpoints that serve records of a dynamic model outside this package. Fails
+// closed like RedactEvent.
 func (s *Service) RedactRecord(ctx context.Context, model string, user modelbase.AuthUser, row map[string]any) map[string]any {
-	return s.ColumnReadMask(ctx, model, user).RedactRow(row)
+	return s.recordMask(ctx, model, user).RedactRow(row)
 }
 
 // extensions returns exts without the denied extension columns, so the list
@@ -535,4 +577,122 @@ func maskOptionsConfig(m *ReadMask, cfg FieldOptionsConfig) FieldOptionsConfig {
 	}
 	cfg.ExtraColumns = m.Allowed(cfg.ExtraColumns)
 	return cfg
+}
+
+// approvalMasks returns the mask that gates the record an approval request
+// carries: the model as invoked (payload "model"), else its ModelKey.
+func (s *Service) approvalMasks(ctx context.Context, viewer modelbase.AuthUser, modelKey string, payload map[string]any) []*ReadMask {
+	model, _ := payload["model"].(string)
+	if model == "" {
+		model = modelKey
+	}
+	return []*ReadMask{s.recordMask(ctx, model, viewer)}
+}
+
+// rememberModelAlias records that canonical events name model as modelKey,
+// so a record later redacted by its event name finds the model's metadata.
+func (s *Service) rememberModelAlias(model, modelKey string) {
+	if model != "" && modelKey != "" && model != modelKey {
+		s.modelAliases.Store(modelKey, model)
+	}
+}
+
+// recordMask is the mask for a record that reached the caller outside the
+// CRUD paths (canonical event, audit entry, approval request), named by its
+// canonical ModelKey or by the model as invoked. Unlike ColumnReadMask it
+// also fails CLOSED when no metadata answers to that name: the record keeps
+// only its id rather than risk serving a gated column.
+func (s *Service) recordMask(ctx context.Context, model string, user modelbase.AuthUser) *ReadMask {
+	if _, ok := user.(systemPrincipal); ok {
+		return &ReadMask{model: model}
+	}
+	meta, err := s.meta.GetTable(ctx, model)
+	if errors.Is(err, metadata.ErrModelNotFound) {
+		if alias, ok := s.modelAliases.Load(model); ok {
+			model = alias.(string)
+			meta, err = s.meta.GetTable(ctx, model)
+		}
+	}
+	if err != nil {
+		return &ReadMask{model: model, all: true}
+	}
+	return s.readMask(ctx, model, meta, user, 0)
+}
+
+func redactAll(masks []*ReadMask, row map[string]any) map[string]any {
+	for _, m := range masks {
+		row = m.RedactRow(row)
+	}
+	return row
+}
+
+// redactApprovalParts masks the parts of an approval request that copy the
+// record: the snapshot of the row, the pending input / action payload and the
+// values of the violated guard ({price: 80, cost: 100}).
+func redactApprovalParts(masks []*ReadMask, payload, snapshot, violation map[string]any) (map[string]any, map[string]any, map[string]any) {
+	if len(masks) == 0 {
+		return payload, snapshot, violation
+	}
+	if payload != nil {
+		cp := make(map[string]any, len(payload))
+		for k, v := range payload {
+			cp[k] = v
+		}
+		for _, k := range []string{"input", "payload"} {
+			if in, ok := cp[k].(map[string]any); ok {
+				cp[k] = redactAll(masks, in)
+			}
+		}
+		payload = cp
+	}
+	snapshot = redactAll(masks, snapshot)
+	if violation != nil {
+		if vals, ok := violation["values"].(map[string]any); ok {
+			cp := make(map[string]any, len(violation))
+			for k, v := range violation {
+				cp[k] = v
+			}
+			cp["values"] = redactAll(masks, vals)
+			violation = cp
+		}
+	}
+	return payload, snapshot, violation
+}
+
+// ApprovalView is req.View as viewer may read it: the snapshot, the pending
+// input and the guard values lose the columns viewer may not read on the
+// target model. An approver holding the permission still sees them.
+func (s *Service) ApprovalView(ctx context.Context, viewer modelbase.AuthUser, req *ApprovalRequest, canDecide bool) ApprovalRequestView {
+	v := req.View(canDecide)
+	masks := s.approvalMasks(ctx, viewer, v.ModelKey, v.Payload)
+	v.Payload, v.Snapshot, v.Violation = redactApprovalParts(masks, v.Payload, v.Snapshot, v.Violation)
+	return v
+}
+
+// redactApprovalMap masks the ToMap shape of an approval request carried as
+// the After of an approval.* canonical event.
+func (s *Service) redactApprovalMap(ctx context.Context, viewer modelbase.AuthUser, m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	payload, _ := m["payload"].(map[string]any)
+	snapshot, _ := m["snapshot"].(map[string]any)
+	violation, _ := m["violation"].(map[string]any)
+	modelKey, _ := m["model_key"].(string)
+	masks := s.approvalMasks(ctx, viewer, modelKey, payload)
+	p, sn, vi := redactApprovalParts(masks, payload, snapshot, violation)
+	cp := make(map[string]any, len(m))
+	for k, v := range m {
+		cp[k] = v
+	}
+	if payload != nil {
+		cp["payload"] = p
+	}
+	if snapshot != nil {
+		cp["snapshot"] = sn
+	}
+	if violation != nil {
+		cp["violation"] = vi
+	}
+	return cp
 }

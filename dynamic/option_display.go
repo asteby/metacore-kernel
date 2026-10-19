@@ -343,7 +343,7 @@ func (s *Service) queryOptionMetric(ctx context.Context, user modelbase.AuthUser
 		return nil, nil
 	}
 	// An aggregate of a column the caller may not read is unavailable too.
-	if m.Column != "" && s.ColumnReadMask(ctx, m.Model, user).Denied(m.Column) {
+	if m.Column != "" && s.maskOf(ctx, m.Model, user).Denied(m.Column) {
 		return nil, nil
 	}
 	table, err := s.tableNameFor(ctx, m.Model, inst)

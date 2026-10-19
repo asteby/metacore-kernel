@@ -234,6 +234,60 @@ La escritura no cambia: el permiso es solo de lectura. La llave de la columna
 en la metadata (`ColumnDef.Key`) debe coincidir con la llave JSON del
 registro.
 
+**Mayúsculas.** SQL pliega los identificadores sin comillas, así que la
+máscara compara sin distinguir mayúsculas: `f_COST`, `sortBy=Cost`,
+`f_Supplier.REBATE`, `sum(COST)` en el copiloto, etc. reciben el mismo 403.
+
+**Columnas derivadas.** Una columna calculada de una con permiso le daría su
+valor a quien lee la derivada (`margin = price - cost` → `cost = price -
+margin`). La regla es explícita, no se hereda: el destino de una `formula`
+(tier 2), de una columna `generated`, de un `rollup` (`from` o `expr` sobre el
+hijo) o de un `snapshot` (cuando el modelo fuente está en el mismo manifest)
+debe declarar el **mismo** `read_permission` que cada fuente con permiso; dos
+fuentes con permisos distintos no pueden alimentar una columna. Un
+`search_key` no puede componer una columna con permiso. Se valida en v3 y en
+el plano legacy. Las fórmulas tier 3 (wasm) y las columnas derivadas de
+modelos Go no se pueden revisar: su autor pone el permiso a mano. En el
+copiloto, una búsqueda vectorial sobre un modelo cuyos `VectorFields`
+incluyen una columna que el usuario no puede leer se rechaza (el embedding ya
+la contiene).
+
+**Aprobaciones.** `ApprovalRequest` guarda la fila (`snapshot`), la mutación
+pendiente (`payload.input`) y los valores de la guarda violada
+(`violation.values`, p. ej. `{price: 80, cost: 100}`). `GET/List` de
+aprobaciones y las respuestas de decidir las sirven con
+`Service.ApprovalView(ctx, viewer, req, canDecide)`, que quita las columnas
+que el que mira no puede leer; un aprobador con el permiso las sigue viendo.
+`RedactEvent` hace lo mismo con los eventos `approval.*`.
+
+**Bitácora (`audit`).** `audit.QueryParams.Redact` (o `audit.RedactEntries`)
+pasa `before`, `after` y `changes` por un redactor; el host lo amarra a
+`svc.RedactRecord(ctx, model, user, row)` del usuario que pide la bitácora.
+
+**Falla cerrada.** Si la metadata del modelo no se puede leer,
+`ColumnReadMask` regresa el error y una máscara que solo deja `id`; Get,
+Create, Update, Options, Search, Facets, export y source lines responden con
+el error. `RedactEvent`/`RedactRecord`/`ApprovalView` también reducen el
+registro a su `id` cuando ningún modelo responde a ese nombre: los eventos
+nombran el modelo por su `ModelKey` y el servicio recuerda el alias
+`ModelKey → modelo` en cada publicación; tras un reinicio, el host debe pasar
+el nombre con el que registró la metadata.
+
+**`/options` y `/search`.** Un `value` con permiso no se puede ofrecer: 403.
+
+**Oráculos residuales (documentados, no cerrados).** Quien puede escribir el
+modelo puede inferir una columna con permiso a base de intentos:
+
+- una restricción `price >= cost` (rechazo o aprobación) responde distinto
+  según el valor oculto. El 422 y la solicitud de aprobación no llevan el
+  valor (lo enmascaran), pero la respuesta sí/no existe;
+- una regla `unique` sobre una columna con permiso, `/unique-violations` y la
+  importación con upsert por esa llave dicen si un valor existe.
+
+Si eso importa, no le des escritura sobre el modelo a ese rol o no uses la
+columna con permiso en restricciones/llaves únicas. La metadata servida y la
+plantilla de importación revelan que la columna existe, no su valor.
+
 ## Modelos singleton
 
 Un modelo singleton guarda **una fila por organización**, como la configuración

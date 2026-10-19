@@ -102,7 +102,7 @@ func (h *Handler) approvalsGet(c fiber.Ctx) error {
 	if err != nil {
 		return h.approvalError(c, err, req)
 	}
-	return c.JSON(fiber.Map{"success": true, "data": req.View(h.service.CanDecideApproval(c, u, req))})
+	return c.JSON(fiber.Map{"success": true, "data": h.service.ApprovalView(c, u, req, h.service.CanDecideApproval(c, u, req))})
 }
 
 // approvalDecisionBody is the approve/reject request body.
@@ -142,7 +142,7 @@ func (h *Handler) approvalsDecide(c fiber.Ctx, approve bool) error {
 	if err != nil {
 		return h.approvalError(c, err, req)
 	}
-	return c.JSON(fiber.Map{"success": true, "data": req.View(false)})
+	return c.JSON(fiber.Map{"success": true, "data": h.service.ApprovalView(c, u, req, false)})
 }
 
 type approvalPINBody struct {
@@ -173,7 +173,7 @@ func (h *Handler) approvalsApprovePIN(c fiber.Ctx) error {
 	if err != nil {
 		return h.approvalError(c, err, req)
 	}
-	return c.JSON(fiber.Map{"success": true, "data": req.View(false)})
+	return c.JSON(fiber.Map{"success": true, "data": h.service.ApprovalView(c, u, req, false)})
 }
 
 func (h *Handler) approvalsPINGrant(c fiber.Ctx) error {
@@ -192,7 +192,7 @@ func (h *Handler) approvalsPINGrant(c fiber.Ctx) error {
 	if err != nil {
 		return h.approvalError(c, err, nil)
 	}
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"success": true, "data": req.View(false)})
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"success": true, "data": h.service.ApprovalView(c, u, req, false)})
 }
 
 // approvalError maps approvals-specific failures onto the envelope. `req` (when
@@ -239,7 +239,7 @@ func (h *Handler) approvalError(c fiber.Ctx, err error, req *ApprovalRequest) er
 		"error":   fiber.Map{"code": code, "message": err.Error()},
 	}
 	if req != nil {
-		body["data"] = req.View(false)
+		body["data"] = h.service.ApprovalView(c, h.user(c), req, false)
 	}
 	return c.Status(status).JSON(body)
 }

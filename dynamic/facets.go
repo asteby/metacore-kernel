@@ -76,7 +76,11 @@ func (s *Service) Facets(ctx context.Context, user modelbase.AuthUser, q FacetsQ
 	}
 	// The distinct values of a column ARE its contents: refused when the
 	// caller may not read it (ReadPermission).
-	if err := s.ColumnReadMask(ctx, q.Model, user).Check(q.Field, "facet"); err != nil {
+	mask, err := s.ColumnReadMask(ctx, q.Model, user)
+	if err != nil {
+		return nil, err
+	}
+	if err := mask.Check(q.Field, "facet"); err != nil {
 		return nil, err
 	}
 	var (

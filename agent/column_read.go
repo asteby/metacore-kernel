@@ -45,7 +45,7 @@ func (s *CRUDService) readMask(identity *AgentIdentity, m ModelMeta) columnMask 
 			if out == nil {
 				out = columnMask{}
 			}
-			out[col] = struct{}{}
+			out[strings.ToLower(col)] = struct{}{}
 		}
 	}
 	return out
@@ -55,7 +55,8 @@ func (m columnMask) denied(col string) bool {
 	if len(m) == 0 {
 		return false
 	}
-	_, ok := m[strings.TrimSpace(col)]
+	// SQL folds unquoted identifiers: "COST" and "Cost" reach the cost column.
+	_, ok := m[strings.ToLower(strings.TrimSpace(col))]
 	return ok
 }
 
@@ -83,8 +84,13 @@ func (m columnMask) allowed(cols []string) []string {
 
 // redact deletes the hidden columns from a record in place.
 func (m columnMask) redact(row map[string]any) {
-	for c := range m {
-		delete(row, c)
+	if len(m) == 0 {
+		return
+	}
+	for k := range row {
+		if m.denied(k) {
+			delete(row, k)
+		}
 	}
 }
 

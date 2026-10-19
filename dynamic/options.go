@@ -130,11 +130,19 @@ func (s *Service) Options(ctx context.Context, user modelbase.AuthUser, q Option
 	case "dynamic":
 		// Column read gate on the SOURCE model: the picker neither filters by,
 		// orders by nor projects a column the caller may not read.
-		srcMask := s.ColumnReadMask(ctx, fieldCfg.Source, user)
+		srcMask, err := s.ColumnReadMask(ctx, fieldCfg.Source, user)
+		if err != nil {
+			return nil, err
+		}
 		if q.FilterValue != "" {
 			if err := srcMask.Check(fieldCfg.FilterBy, "filter"); err != nil {
 				return nil, err
 			}
+		}
+		// The value is what the picker stores and serves: a gated value column
+		// cannot be offered at all.
+		if err := srcMask.Check(fieldCfg.Value, "value"); err != nil {
+			return nil, err
 		}
 		fieldCfg = maskOptionsConfig(srcMask, fieldCfg)
 		items, rows, err := s.queryDynamicOptions(ctx, user, fieldCfg, q)
@@ -451,7 +459,7 @@ func (s *Service) labelRefMatchIDs(ctx context.Context, user modelbase.AuthUser,
 		return nil, err
 	}
 	labelCol := deriveLabelColumn(refInstance)
-	if labelCol == "" || !safeColumn.MatchString(labelCol) || s.ColumnReadMask(ctx, fieldCfg.LabelRef, user).Denied(labelCol) {
+	if labelCol == "" || !safeColumn.MatchString(labelCol) || s.maskOf(ctx, fieldCfg.LabelRef, user).Denied(labelCol) {
 		return nil, nil
 	}
 	escaped := strings.NewReplacer("%", `\%`, "_", `\_`).Replace(q)
@@ -507,7 +515,7 @@ func (s *Service) enrichOptionsFromRef(ctx context.Context, user modelbase.AuthU
 		return err
 	}
 	labelCol := deriveLabelColumn(refInstance)
-	if s.ColumnReadMask(ctx, fieldCfg.LabelRef, user).Denied(labelCol) {
+	if s.maskOf(ctx, fieldCfg.LabelRef, user).Denied(labelCol) {
 		return nil // the caller may not read the ref model's label column
 	}
 	if labelCol == "" || !safeColumn.MatchString(labelCol) {

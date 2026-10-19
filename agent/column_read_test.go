@@ -138,6 +138,23 @@ func TestAgentColumnRead_FilterOrderAggregateRejected(t *testing.T) {
 			_, err := fx.s.Aggregate(id, AggregateRequest{Model: "products", Function: "count", Filters: map[string]any{"cost": 777}})
 			return err
 		},
+		// SQL folds unquoted identifiers: every casing reaches the column.
+		"aggregate COST": func(id *AgentIdentity) error {
+			_, err := fx.s.Aggregate(id, AggregateRequest{Model: "products", Function: "sum", Field: "COST"})
+			return err
+		},
+		"group_by Cost": func(id *AgentIdentity) error {
+			_, err := fx.s.Aggregate(id, AggregateRequest{Model: "products", Function: "count", GroupBy: "Cost"})
+			return err
+		},
+		"filter COST": func(id *AgentIdentity) error {
+			_, err := fx.s.Query(id, QueryRequest{Model: "products", Filters: map[string]any{"COST": 777}})
+			return err
+		},
+		"order COST": func(id *AgentIdentity) error {
+			_, err := fx.s.Query(id, QueryRequest{Model: "products", OrderBy: "COST desc"})
+			return err
+		},
 	}
 	for name, run := range checks {
 		if err := run(fx.cashier); err == nil || !strings.Contains(err.Error(), "not readable") {
@@ -193,5 +210,19 @@ func TestAgentColumnRead_FailClosedWithoutChecker(t *testing.T) {
 	dev := newColFixture(t, func(c *CRUDConfig) { c.ColumnPermissions = nil; c.DevAllowAll = true })
 	if res, _ := dev.s.Query(dev.cashier, QueryRequest{Model: "products"}); res.Records[0]["cost"] == nil {
 		t.Fatalf("DevAllowAll reads everything: %v", res.Records[0])
+	}
+}
+
+func TestAgentColumnRead_VectorFieldGatedRefused(t *testing.T) {
+	fx := newColFixture(t, func(c *CRUDConfig) {
+		cat := c.Catalog.(fakeCatalog)
+		cat.models[0].VectorFields = []string{"name", "Cost"}
+		c.Catalog = cat
+	})
+	if _, err := fx.s.VectorSearch(fx.cashier, "products", "widget", 5); err == nil || !strings.Contains(err.Error(), "not readable") {
+		t.Fatalf("cashier vector search over a gated field: %v", err)
+	}
+	if _, err := fx.s.VectorSearch(fx.manager, "products", "widget", 5); err != nil {
+		t.Fatalf("manager vector search: %v", err)
 	}
 }

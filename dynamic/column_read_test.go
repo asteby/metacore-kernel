@@ -285,6 +285,13 @@ func TestColumnRead_FilterSortGroupAggregateRejected(t *testing.T) {
 		"/dynamic/cr_products?aggregate=sum(cost)",
 		"/dynamic/cr_products?f_supplier.rebate=gt:1",
 		"/dynamic/cr_products/export?f_cost=gt:100",
+		// SQL folds unquoted identifiers: any casing reaches the column.
+		"/dynamic/cr_products?f_COST=gt:100",
+		"/dynamic/cr_products?sortBy=Cost&order=asc",
+		"/dynamic/cr_products?group_by=COST",
+		"/dynamic/cr_products?aggregate=sum(COST)",
+		"/dynamic/cr_products?f_Supplier.REBATE=12.5",
+		"/dynamic/cr_products/facets?field=COST",
 	} {
 		st, env, raw := fx.get(t, "cashier", path)
 		if st != fiber.StatusForbidden || env["code"] != "column_read_denied" {
@@ -540,21 +547,21 @@ func TestColumnRead_MaskDecisions(t *testing.T) {
 
 	t.Run("system caller reads everything", func(t *testing.T) {
 		fx := newCRFixture(t, nil)
-		if m := fx.svc.ColumnReadMask(ctx, "cr_products", NewSystemCaller(fx.org)); !m.Empty() {
+		if m := fx.svc.maskOf(ctx, "cr_products", NewSystemCaller(fx.org)); !m.Empty() {
 			t.Fatalf("system caller mask: %v", m.Columns())
 		}
 	})
 	t.Run("no permission service fails open by default", func(t *testing.T) {
 		registerCRModels()
 		svc := New(Config{DB: setupTestDB(t), Metadata: metadata.New(metadata.Config{CacheTTL: -1})})
-		if m := svc.ColumnReadMask(ctx, "cr_products", &fakeUser{id: uuid.New(), orgID: uuid.New()}); !m.Empty() {
+		if m := svc.maskOf(ctx, "cr_products", &fakeUser{id: uuid.New(), orgID: uuid.New()}); !m.Empty() {
 			t.Fatalf("mask: %v", m.Columns())
 		}
 	})
 	t.Run("RequirePermissions without a service hides gated columns", func(t *testing.T) {
 		registerCRModels()
 		svc := New(Config{DB: setupTestDB(t), Metadata: metadata.New(metadata.Config{CacheTTL: -1}), RequirePermissions: true})
-		m := svc.ColumnReadMask(ctx, "cr_products", &fakeUser{id: uuid.New(), orgID: uuid.New()})
+		m := svc.maskOf(ctx, "cr_products", &fakeUser{id: uuid.New(), orgID: uuid.New()})
 		if !m.Denied("cost") || m.Denied("price") {
 			t.Fatalf("mask: %v", m.Columns())
 		}
@@ -565,10 +572,10 @@ func TestColumnRead_MaskDecisions(t *testing.T) {
 				return u.GetRole() == "cashier" && perm == permViewCost
 			}
 		})
-		if m := fx.svc.ColumnReadMask(ctx, "cr_products", fx.cashier); m.Denied("cost") {
+		if m := fx.svc.maskOf(ctx, "cr_products", fx.cashier); m.Denied("cost") {
 			t.Fatal("custom checker granted cost to the cashier")
 		}
-		if m := fx.svc.ColumnReadMask(ctx, "cr_products", fx.manager); !m.Denied("cost") {
+		if m := fx.svc.maskOf(ctx, "cr_products", fx.manager); !m.Denied("cost") {
 			t.Fatal("custom checker denied cost to the manager")
 		}
 	})
@@ -585,7 +592,7 @@ func TestColumnRead_MaskDecisions(t *testing.T) {
 				}}}
 			}
 		})
-		m := fx.svc.ColumnReadMask(ctx, "cr_products", fx.cashier)
+		m := fx.svc.maskOf(ctx, "cr_products", fx.cashier)
 		if !m.Denied("Tire.landed_cost") || m.Denied("Tire.size") {
 			t.Fatalf("extension mask: %v", m.Columns())
 		}
@@ -602,7 +609,7 @@ func TestColumnRead_MaskDecisions(t *testing.T) {
 		fx := newCRFixture(t, nil)
 		meta, _ := fx.svc.TableMetadata(ctx, "cr_products")
 		meta.DefaultSortBy = "cost"
-		got := fx.svc.ColumnReadMask(ctx, "cr_products", fx.cashier).TableMeta(meta)
+		got := fx.svc.maskOf(ctx, "cr_products", fx.cashier).TableMeta(meta)
 		for _, c := range got.Columns {
 			if c.Key == "cost" {
 				t.Fatal("masked metadata kept cost")
@@ -684,5 +691,124 @@ func TestColumnRead_RestoreResponseHidesColumn(t *testing.T) {
 	last := bus.events[len(bus.events)-1]
 	if _, ok := last.After["number"]; !ok {
 		t.Fatalf("restore event must keep the full row: %v", last.After)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Review r1: fail closed, gated value column, approvals
+// ---------------------------------------------------------------------------
+
+func TestColumnRead_FailsClosedWhenMetadataFails(t *testing.T) {
+	fx := newCRFixture(t, nil)
+	ctx := context.Background()
+	id := uuid.MustParse(fx.product)
+	boom := errors.New("transformer down")
+	fx.svc.meta.WithTableTransformer(func(_ context.Context, model string, _ *modelbase.TableMetadata) error {
+		if model == "cr_suppliers" {
+			return boom
+		}
+		return nil
+	})
+	m, err := fx.svc.ColumnReadMask(ctx, "cr_suppliers", fx.manager)
+	if !errors.Is(err, boom) || !m.Denied("rebate") || !m.Denied("name") || m.Denied("id") {
+		t.Fatalf("mask on metadata failure: err=%v cols=%v", err, m)
+	}
+	if got := fx.svc.RedactRecord(ctx, "cr_suppliers", fx.manager, map[string]any{"id": "x", "name": "Acme", "rebate": 1}); len(got) != 1 || got["id"] != "x" {
+		t.Fatalf("RedactRecord must keep only the id: %v", got)
+	}
+	// An unknown model name (no metadata, no alias) also keeps only the id.
+	if got := fx.svc.RedactRecord(ctx, "Nope", fx.manager, map[string]any{"id": "x", "cost": 1}); len(got) != 1 {
+		t.Fatalf("unknown model: %v", got)
+	}
+	// The product itself still reads (its metadata answers).
+	if _, err := fx.svc.Get(ctx, "cr_products", fx.cashier, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestColumnRead_EventAliasResolvesModelKey(t *testing.T) {
+	fx := newCRFixture(t, func(c *Config) {
+		c.ModelKeyForModel = func(_ context.Context, model string) string {
+			if model == "cr_products" {
+				return "CrProduct"
+			}
+			return ""
+		}
+	})
+	ctx := context.Background()
+	if _, err := fx.svc.Create(ctx, "cr_products", fx.manager, map[string]any{"name": "A", "cost": 3}); err != nil {
+		t.Fatal(err)
+	}
+	ev := &CanonicalEvent{Model: "CrProduct", After: map[string]any{"id": "1", "name": "A", "cost": 3}}
+	out := fx.svc.RedactEvent(ctx, ev, fx.cashier)
+	if _, ok := out.After["cost"]; ok || out.After["name"] != "A" {
+		t.Fatalf("event by ModelKey: %v", out.After)
+	}
+	if out := fx.svc.RedactEvent(ctx, ev, fx.manager); out.After["cost"] == nil {
+		t.Fatalf("manager event by ModelKey: %v", out.After)
+	}
+}
+
+func TestColumnRead_GatedValueColumnRejected(t *testing.T) {
+	fx := newCRFixture(t, func(c *Config) {
+		c.OptionsConfigResolver = func(_ context.Context, model string, _ any) (*OptionsConfig, error) {
+			return &OptionsConfig{Fields: map[string]FieldOptionsConfig{
+				"by_cost_value": {Type: "dynamic", Source: "cr_products", Value: "Cost", Label: "name"},
+			}}, nil
+		}
+		c.SearchConfigResolver = func(_ context.Context, model string, _ any) (*SearchConfig, error) {
+			return &SearchConfig{SearchIn: []string{"name"}, Value: "cost", Label: "name"}, nil
+		}
+	})
+	ctx := context.Background()
+	if _, err := fx.svc.Options(ctx, fx.cashier, OptionsQuery{Model: "cr_products", Field: "by_cost_value"}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("options value over cost: %v", err)
+	}
+	if _, err := fx.svc.Search(ctx, fx.cashier, SearchQuery{Model: "cr_products", Q: "W"}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("search value over cost: %v", err)
+	}
+	if _, err := fx.svc.Options(ctx, fx.manager, OptionsQuery{Model: "cr_products", Field: "by_cost_value"}); err != nil {
+		t.Fatalf("manager options value: %v", err)
+	}
+}
+
+func TestColumnRead_ApprovalViewAndEventMasked(t *testing.T) {
+	fx := newCRFixture(t, nil)
+	ctx := context.Background()
+	req := &ApprovalRequest{
+		ID: uuid.New(), OrganizationID: fx.org, ModelKey: "CrProduct", Kind: ApprovalKindConstraint,
+		Payload:   mustJSON(map[string]any{"op": "update", "model": "cr_products", "input": map[string]any{"price": 80, "cost": 100}}),
+		Snapshot:  mustJSON(map[string]any{"id": fx.product, "name": "Widget", "cost": 777, "price": 1000}),
+		Violation: mustJSON(map[string]any{"expr": "price >= cost", "error_key": "below_cost", "values": map[string]any{"price": 80, "cost": 100}}),
+	}
+	leaks := func(v any) bool {
+		raw, _ := json.Marshal(v)
+		return strings.Contains(string(raw), `"cost"`)
+	}
+	v := fx.svc.ApprovalView(ctx, fx.cashier, req, false)
+	if leaks(v.Snapshot) || leaks(v.Payload) || leaks(v.Violation["values"]) {
+		t.Fatalf("cashier approval view leaked cost: %+v", v)
+	}
+	if v.Snapshot["price"] == nil || v.Violation["expr"] != "price >= cost" {
+		t.Fatalf("cashier approval view lost readable parts: %+v", v)
+	}
+	if v := fx.svc.ApprovalView(ctx, fx.manager, req, true); !leaks(v.Snapshot) || !leaks(v.Violation["values"]) || !leaks(v.Payload) {
+		t.Fatalf("an approver holding the permission must see the cost: %+v", v)
+	}
+	// The stored request is untouched.
+	if !strings.Contains(req.Snapshot, "777") {
+		t.Fatal("ApprovalView mutated the request")
+	}
+
+	ev := &CanonicalEvent{Model: ApprovalModelKey, Action: "requested", After: req.ToMap(false)}
+	out := fx.svc.RedactEvent(ctx, ev, fx.cashier)
+	if leaks(out.After["snapshot"]) || leaks(out.After["payload"]) || leaks(out.After["violation"]) {
+		t.Fatalf("approval event leaked cost: %v", out.After)
+	}
+	if !leaks(ev.After["snapshot"]) {
+		t.Fatal("RedactEvent mutated the approval event")
+	}
+	if out := fx.svc.RedactEvent(ctx, ev, fx.manager); !leaks(out.After["snapshot"]) {
+		t.Fatalf("manager approval event: %v", out.After)
 	}
 }

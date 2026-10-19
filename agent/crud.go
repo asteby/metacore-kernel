@@ -281,11 +281,21 @@ func (s *CRUDService) VectorSearch(identity *AgentIdentity, model, query string,
 	if s.cfg.Index == nil {
 		return nil, fmt.Errorf("semantic pipeline not available")
 	}
+	// The embedding already contains every vector field: when one of them is
+	// a column the caller may not read, the similarity ranking itself would
+	// leak it, so the search is refused instead of only redacting the rows.
+	mask := s.readMaskFor(identity, model)
+	if m, ok := s.cfg.Catalog.Lookup(model); ok {
+		for _, f := range m.VectorFields {
+			if err := mask.check(model, f, "vector search"); err != nil {
+				return nil, err
+			}
+		}
+	}
 	results, err := s.cfg.Index.VectorSearch(model, query, identity.OrganizationID, limit)
 	if err != nil {
 		return nil, err
 	}
-	mask := s.readMaskFor(identity, model)
 	for i := range results {
 		mask.redact(results[i].Data)
 	}
