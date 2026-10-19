@@ -2542,7 +2542,7 @@ refused attempt does not burn the grant.
 Success: `{"success": true, "data": {"consumed": true}}`. Errors:
 `invalid_request`, `approvals_unavailable` (no `Host.WithApprovalConsumer`),
 `approval_invalid` (message names the failed condition: unknown grant, wrong
-policy, requested by someone else, already used, expired, context mismatch,
+policy, already used, expired, context mismatch,
 does not cover), `db_error`. No capability gate: the grant itself is the
 authorization. Implementation: `runtime/wasm/approvalconsume.go`,
 `dynamic.Service.ConsumeApproval`.

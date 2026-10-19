@@ -63,7 +63,8 @@ func (s *Service) ConsumeApproval(ctx context.Context, in ConsumeInput) error {
 	case row.Status != ApprovalStatusApplied || row.DecidedAt == nil:
 		return refuse("not authorized")
 	case row.RequestedBy != in.RequestedBy:
-		return refuse("requested by someone else")
+		// Same wording as "unknown grant": do not reveal that the id exists in this org.
+		return refuse("unknown grant")
 	case row.AppliedEventID != "":
 		return refuse("already used")
 	case time.Since(*row.DecidedAt) > PINGrantMaxAge:
@@ -73,7 +74,7 @@ func (s *Service) ConsumeApproval(ctx context.Context, in ConsumeInput) error {
 	// it on the read row is sound.
 	recorded, _ := row.PayloadMap()["context"].(map[string]any)
 	for k, want := range in.ContextEq {
-		if got := fmt.Sprint(recorded[k]); recorded[k] == nil || got != want {
+		if !contextEquals(recorded[k], want) {
 			return refuse("context mismatch: " + k)
 		}
 	}
@@ -121,4 +122,19 @@ func numberOf(v any) float64 {
 		}
 	}
 	return 0
+}
+
+// contextEquals compares a recorded context value with its expected text. When
+// both sides are finite numbers they compare as numbers, so a float64 recorded
+// as 1e6 matches "1000000" (fmt.Sprint would print "1e+06").
+func contextEquals(recorded any, want string) bool {
+	if recorded == nil {
+		return false
+	}
+	if rn, ok := recorded.(float64); ok {
+		if wn, err := strconv.ParseFloat(strings.TrimSpace(want), 64); err == nil && !math.IsNaN(wn) && !math.IsInf(wn, 0) && !math.IsNaN(rn) && !math.IsInf(rn, 0) {
+			return rn == wn
+		}
+	}
+	return fmt.Sprint(recorded) == want
 }

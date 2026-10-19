@@ -262,3 +262,17 @@ func TestConsumeApprovalRechecksStateAtomically(t *testing.T) {
 		t.Fatalf("una autorización revocada tras la lectura no debe canjearse: %v", err)
 	}
 }
+
+func TestConsumeApprovalContextEqNumeric(t *testing.T) {
+	svc, cashier, _ := pinFixture(t)
+	ctx := context.Background()
+	req, err := svc.GrantPINApproval(ctx, cashier, PINGrantInput{PolicyKey: "p", Reason: "r", PIN: "4321",
+		Context: map[string]any{"qty": 1000000.0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ConsumeApproval(ctx, ConsumeInput{OrgID: cashier.orgID, ApprovalID: req.ID, Policy: "p",
+		RequestedBy: cashier.id, ContextEq: map[string]string{"qty": "1000000"}}); err != nil {
+		t.Fatalf("1e6 debe empatar con \"1000000\": %v", err)
+	}
+}
