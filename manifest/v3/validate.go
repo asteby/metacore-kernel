@@ -1208,8 +1208,27 @@ func validatePipelineRuntime(m *Manifest) []string {
 			}
 		}
 	}
+	// edge:command <device_key>.<command_kind>: the device class must be one
+	// of this addon's edge_devices (the host only lets an addon drive its own
+	// devices) and the kind a command name or a glob.
+	for ci, c := range m.Capabilities {
+		if c.Kind != "edge:command" {
+			continue
+		}
+		dev, kind, ok := strings.Cut(c.Target, ".")
+		switch {
+		case !ok || dev == "" || kind == "" || !edgeCommandKindRe.MatchString(kind):
+			errs = append(errs, fmt.Sprintf("capabilities[%d].target %q must be \"<device_key>.<command_kind>\" (kind may be *)", ci, c.Target))
+		default:
+			if _, declared := seenDevice[dev]; !declared {
+				errs = append(errs, fmt.Sprintf("capabilities[%d].target %q names device %q, which is not one of this addon's edge_devices", ci, c.Target, dev))
+			}
+		}
+	}
 	return errs
 }
+
+var edgeCommandKindRe = regexp.MustCompile(`^(\*|[a-z][a-z0-9_]*(\.\*)?)$`)
 
 // validateDesktopClients enforces unique keys, closed auth set, https
 // download_url, and bare installer filenames. Empty is a no-op. Allowed on

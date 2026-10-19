@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Import wasm `edge_command` (ABI 1.15) y capacidad `edge:command <device_key>.<command_kind>`.** Un guest manda un comando a un dispositivo físico de su organización (un CashDro, una impresora…) por la conexión de su `ops-edge-agent` y recibe la respuesta que el host transportó. Así ya no tiene que confiar en una copia que reenvió el navegador. Solo aplica a clases de dispositivo del propio addon (`edge_devices[]`, el validador del manifest lo exige) y a los kinds concedidos. Es idempotente por llave, con timeout de 10 s por omisión y tope de 60 s, y la espera no consume el presupuesto del guest. El embebedor lo conecta con `Host.WithEdgeCommander` (`Device` + `Send`, auditoría e idempotencia de su lado). docs/wasm-abi.md § 23.
 - **Estándar de pagos, fases K2 (ledger) y K3 (conciliación)** ([RFC §16](docs/RFC-PAYMENTS-STANDARD.md)).
   Paquete nuevo `payments/ledger`: escritor único de `commerce_payments`,
   `commerce_payment_events` (dedupe único por proveedor + evento),
