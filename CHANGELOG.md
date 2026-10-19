@@ -145,6 +145,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     las referencias `./assets/...` de cualquier default (por ejemplo los assets
     del tema de un `kiosk_profile`) se materializan y se reescriben igual que
     las de branding. `bundle.Read` estricto exige que todas existan.
+- **preset: endurecimiento del overlay (revisión r1 de #508).**
+  - **Escalada por overlay:** `Flatten` rechaza (`ErrRoleEscalation`) los roles
+    del overlay con comodines, con campos fuera del contrato del rol (flags de
+    sistema o admin) o que tocan roles de sistema: quitarlos con `_remove`,
+    cambiar sus permisos o crear uno con nombre reservado
+    (`SystemRoleNames`, comodín o flag `system`/`is_system`/`admin`).
+    `FlattenWithOptions(..., FlattenOptions{KnownPermission})` exige además que
+    cada permiso agregado lo declare el set resuelto
+    (`preset.DeclaredPermissions(addons...)`).
+  - `preset.ResolveChain(top, files, fetch, opts)` resuelve la cadena
+    `extends` de arriba abajo, acotada por `MaxLineage`, con detección de
+    visitados (A→B→A da `ErrCyclicExtends`) y verificación de clave y rango de
+    cada base.
+  - **SVG:** `preset.ValidateSVG` (allowlist portada de ops#1977) y
+    `bundle.Read` valida cada `assets/**.svg`. El host además debe servir los
+    assets con `Content-Security-Policy: sandbox` y
+    `X-Content-Type-Options: nosniff`.
+  - **Cadena de versiones:** `manifest.APIVersion` pasa a `3.1.0`. Un manifest
+    con `metadata.visibility` o `preset.extends` debe requerir
+    `kernel >=3.1.0` (`v3.OverlayMinKernel`), así un host 3.0.x lo rechaza en
+    la compatibilidad. `docs/spec/v3/manifest-v3.schema.json` vuelve a ser
+    idéntico al embebido.
+  - **Menores:** `combineRanges` rechaza rangos sin versión en común;
+    `DefaultsWarnings` avisa de un `extends` sin tope y de una clave inline
+    que tapa su `*_file` (van a `ValidationWarnings`); `Write`,
+    `FlattenWithOptions` y `Read` rechazan rutas de preset sucias, con `\` o
+    con `%`, y `Read` rechaza `\` en cualquier entrada; las refs
+    `./assets/...` sucias se reportan; `mergeKeyed` usa identidad estable
+    (campo + JSON), identidad alternativa para roles (`key`, `name`, `slug`),
+    no copia `-perm` a un ítem nuevo y un `_remove` seguido de la misma
+    identidad crea un ítem nuevo en vez de revivir el de la base.
 
 ### Fixed
 

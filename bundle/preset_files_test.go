@@ -84,3 +84,50 @@ func TestWrite_PresetFilesRoundTrip(t *testing.T) {
 		t.Fatal("Write must reject a preset file outside defaults/ or assets/")
 	}
 }
+
+// r1 on #508: SVG assets are validated, unsafe paths are rejected early, and
+// unclean ./assets/ refs and shadowed *_file keys are reported.
+func TestRead_PresetHardening(t *testing.T) {
+	evil := pitslinePresetEntries(t)
+	evil["assets/logo.svg"] = []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`)
+	if _, err := Read(packBundle(t, evil), 0); err == nil || !strings.Contains(err.Error(), "assets/logo.svg") {
+		t.Fatalf("malicious svg (strict): %v", err)
+	}
+	b, err := ReadWithOptions(packBundle(t, evil), 0, ReadOptions{})
+	if err != nil || !strings.Contains(strings.Join(b.ValidationWarnings, ";"), "svg not allowed") {
+		t.Fatalf("malicious svg (lenient): %v %v", err, b)
+	}
+	ok := pitslinePresetEntries(t)
+	ok["assets/logo.svg"] = []byte(`<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>`)
+	if _, err := Read(packBundle(t, ok), 0); err != nil {
+		t.Fatalf("clean svg: %v", err)
+	}
+
+	for _, name := range []string{`assets\logo.svg`, "assets/%2e%2e/x.svg", `frontend\x.js`} {
+		e := pitslinePresetEntries(t)
+		e[name] = []byte("x")
+		if _, err := ReadWithOptions(packBundle(t, e), 0, ReadOptions{}); err == nil {
+			t.Errorf("%q must be rejected even when lenient", name)
+		}
+	}
+
+	unclean := pitslinePresetEntries(t)
+	unclean["defaults/dashboards.json"] = []byte(`[{"key": "k", "image": "./assets/../manifest.json"}]`)
+	if _, err := Read(packBundle(t, unclean), 0); err == nil || !strings.Contains(err.Error(), "not a valid ./assets/ path") {
+		t.Fatalf("unclean ref: %v", err)
+	}
+}
+
+func TestWrite_RejectsEscapingPresetFile(t *testing.T) {
+	src, err := Read(packBundle(t, pitslinePresetEntries(t)), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"assets/../x", "assets/%2e%2e/x", `assets\x`} {
+		b := *src
+		b.PresetFiles = map[string][]byte{k: []byte("x")}
+		if err := Write(&bytes.Buffer{}, &b); err == nil {
+			t.Errorf("Write accepted %q", k)
+		}
+	}
+}

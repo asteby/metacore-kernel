@@ -3,6 +3,8 @@ package v3
 import (
 	"strings"
 	"testing"
+
+	"github.com/Masterminds/semver/v3"
 )
 
 func presetManifest(preset map[string]interface{}) map[string]interface{} {
@@ -13,7 +15,39 @@ func presetManifest(preset map[string]interface{}) map[string]interface{} {
 	md := m["metadata"].(map[string]interface{})
 	md["key"] = "sieteleguas"
 	m["preset"] = preset
+	setKernel(m, ">=3.1.0 <4.0.0")
 	return m
+}
+
+func setKernel(m map[string]interface{}, r string) {
+	m["compatibility"] = map[string]interface{}{"requires": []interface{}{map[string]interface{}{"key": "kernel", "version": r}}}
+}
+
+// An overlay or a manifest with visibility must require a kernel that
+// understands them, so a 3.0.x host rejects it instead of half-installing it.
+func TestValidate_OverlayGatedByKernelRange(t *testing.T) {
+	overlay := presetManifest(map[string]interface{}{
+		"extends": map[string]interface{}{"key": "pitsline", "version": ">=0.9.1 <1.0.0"},
+		"addons":  []interface{}{},
+	})
+	setKernel(overlay, ">=3.0.0 <4.0.0")
+	if err := Validate(mustJSON(t, overlay)); err == nil || !strings.Contains(err.Error(), "preset.extends needs compatibility.requires kernel") {
+		t.Fatalf("overlay admitting kernel 3.0.0: %v", err)
+	}
+	addon := baseValid()
+	addon["metadata"].(map[string]interface{})["visibility"] = "private"
+	if err := Validate(mustJSON(t, addon)); err == nil || !strings.Contains(err.Error(), "metadata.visibility needs") {
+		t.Fatalf("visibility with an old kernel range: %v", err)
+	}
+	setKernel(addon, ">=3.1.0 <4.0.0")
+	if err := Validate(mustJSON(t, addon)); err != nil {
+		t.Fatalf("visibility with kernel >=3.1.0: %v", err)
+	}
+	// A standalone public preset is unaffected (published presets keep >=3.0.0).
+	plain := baseValid()
+	if err := Validate(mustJSON(t, plain)); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestValidate_PresetOverlayAccepted(t *testing.T) {
@@ -71,5 +105,11 @@ func TestValidate_MetadataVisibilityEnum(t *testing.T) {
 	m["metadata"].(map[string]interface{})["visibility"] = "secret"
 	if err := Validate(mustJSON(t, m)); err == nil {
 		t.Fatal("expected error for an unknown visibility")
+	}
+}
+
+func TestOverlayMinKernelIsAValidVersion(t *testing.T) {
+	if _, err := semver.NewVersion(OverlayMinKernel); err != nil {
+		t.Fatal(err)
 	}
 }

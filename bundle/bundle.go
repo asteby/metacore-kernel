@@ -196,6 +196,11 @@ func ReadWithOptions(r io.Reader, maxBytes int64, ropts ReadOptions) (*Bundle, e
 				return nil, fmt.Errorf("bundle: path traversal in %q", h.Name)
 			}
 		}
+		// A backslash is a separator on Windows (appliance): reject it so a
+		// host materializing files cannot be walked out of its directory.
+		if strings.Contains(h.Name, "\\") {
+			return nil, fmt.Errorf("bundle: backslash in path %q", h.Name)
+		}
 		// Size is enforced against bytes ACTUALLY READ, not the self-reported
 		// header (which a crafted tar can lie about). Cap each entry to the
 		// remaining budget so a single bomb cannot saturate RAM.
@@ -246,6 +251,9 @@ func ReadWithOptions(r io.Reader, maxBytes int64, ropts ReadOptions) (*Bundle, e
 			// because `data` aliases a reused read buffer.
 			b.Templates[h.Name] = append([]byte(nil), data...)
 		case strings.HasPrefix(h.Name, "defaults/") || strings.HasPrefix(h.Name, "assets/"):
+			if !preset.ValidFilePath(h.Name) {
+				return nil, fmt.Errorf("bundle: invalid preset file path %q", h.Name)
+			}
 			b.PresetFiles[h.Name] = append([]byte(nil), data...)
 		case h.Name == "README.md":
 			b.Readme = string(data)
@@ -276,7 +284,9 @@ func ReadWithOptions(r io.Reader, maxBytes int64, ropts ReadOptions) (*Bundle, e
 	if len(b.Locales) > 0 && len(b.RawManifest) > 0 {
 		hydrateManifestI18n(&b.Manifest, b.RawManifest, b.Locales)
 	}
-	if problems := presetBundleProblems(b.RawManifest, b.PresetFiles); len(problems) > 0 {
+	problems, warnings := presetBundleProblems(b.RawManifest, b.PresetFiles)
+	b.ValidationWarnings = append(b.ValidationWarnings, warnings...)
+	if len(problems) > 0 {
 		if ropts.Strict {
 			return nil, fmt.Errorf("bundle: preset: %s", strings.Join(problems, "; "))
 		}
@@ -293,18 +303,19 @@ func (b *Bundle) ReadPresetFile(p string) ([]byte, error) {
 
 // presetBundleProblems checks what manifest validation cannot see for a
 // standalone or overlay kind:Preset: every "*_file" default resolves to a
-// JSON file under defaults/ or assets/, the (inlined) branding is valid and
-// every "./assets/..." any default references is in the bundle. Non-presets return nil.
-func presetBundleProblems(rawManifest []byte, files map[string][]byte) []string {
+// JSON file under defaults/ or assets/, the (inlined) branding is valid, every
+// "./assets/..." any default references is a clean path present in the
+// bundle, and every assets/**.svg passes preset.ValidateSVG. warnings are
+// non-fatal (preset.DefaultsWarnings). Non-presets return nothing.
+func presetBundleProblems(rawManifest []byte, files map[string][]byte) (problems, warnings []string) {
 	if len(rawManifest) == 0 {
-		return nil
+		return nil, nil
 	}
 	m, _, err := v3.ParseWithOptions(rawManifest, v3.Options{})
 	if err != nil || m == nil || m.Kind != v3.KindPreset || m.Preset == nil {
-		return nil
+		return nil, nil
 	}
 	defaults, missing := preset.InlineFiles(m.Preset.Defaults, preset.ReadFileFrom(files))
-	var problems []string
 	for _, k := range missing {
 		problems = append(problems, fmt.Sprintf("preset.defaults.%s %v is not a JSON file in the bundle", k, m.Preset.Defaults[k]))
 	}
@@ -315,7 +326,22 @@ func presetBundleProblems(rawManifest []byte, files map[string][]byte) []string 
 			problems = append(problems, fmt.Sprintf("preset.defaults references ./%s, which is not in the bundle", p))
 		}
 	}
-	return problems
+	for _, ref := range preset.UncleanAssetRefs(defaults) {
+		problems = append(problems, fmt.Sprintf("preset.defaults has %q, which is not a valid ./assets/ path", ref))
+	}
+	svgs := make([]string, 0)
+	for p := range files {
+		if strings.HasPrefix(p, "assets/") && strings.EqualFold(path.Ext(p), ".svg") {
+			svgs = append(svgs, p)
+		}
+	}
+	sort.Strings(svgs)
+	for _, p := range svgs {
+		if err := preset.ValidateSVG(files[p]); err != nil {
+			problems = append(problems, fmt.Sprintf("%s: %v", p, err))
+		}
+	}
+	return problems, preset.DefaultsWarnings(m)
 }
 
 // hydrateManifestI18n loads the locale JSON files referenced by a v3 manifest's
@@ -530,8 +556,8 @@ func Write(w io.Writer, b *Bundle) error {
 	}
 	sort.Strings(pkeys)
 	for _, k := range pkeys {
-		if !strings.HasPrefix(k, "defaults/") && !strings.HasPrefix(k, "assets/") {
-			return fmt.Errorf("bundle: preset file %q must live under defaults/ or assets/", k)
+		if !preset.ValidFilePath(k) {
+			return fmt.Errorf("bundle: preset file %q must be a clean path under defaults/ or assets/", k)
 		}
 		if err := write(k, b.PresetFiles[k]); err != nil {
 			return err

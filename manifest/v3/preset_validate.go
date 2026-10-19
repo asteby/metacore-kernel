@@ -7,6 +7,10 @@ import (
 	"github.com/Masterminds/semver/v3"
 )
 
+// OverlayMinKernel is the kernel contract version (manifest.APIVersion) that
+// understands preset.extends and metadata.visibility.
+const OverlayMinKernel = "3.1.0"
+
 // validateMetadataVisibility rejects a visibility outside public|private.
 // Empty means public.
 func validateMetadataVisibility(m *Manifest) []string {
@@ -15,6 +19,36 @@ func validateMetadataVisibility(m *Manifest) []string {
 		return nil
 	}
 	return []string{fmt.Sprintf("metadata.visibility %q is not one of public|private", m.Metadata.Visibility)}
+}
+
+// validateOverlayKernelGate: a manifest that declares metadata.visibility or
+// preset.extends must require a kernel that understands them (compatibility
+// requires kernel, excluding 3.0.x). A 3.0.x host then reports the manifest
+// incompatible (EvaluateCompatibility) and a marketplace does not serve it,
+// instead of installing an overlay as if it were the whole preset.
+func validateOverlayKernelGate(m *Manifest) []string {
+	extends := m.Preset != nil && m.Preset.Extends != nil
+	if m.Metadata.Visibility == "" && !extends {
+		return nil
+	}
+	what := "metadata.visibility"
+	if extends {
+		what = "preset.extends"
+	}
+	for _, r := range m.Compatibility.Requires {
+		if r.Key != "kernel" {
+			continue
+		}
+		c, err := semver.NewConstraint(r.Version)
+		if err != nil {
+			return nil // reported by the compatibility rules
+		}
+		if c.Check(semver.MustParse("3.0.0")) || !c.Check(semver.MustParse(OverlayMinKernel)) {
+			return []string{fmt.Sprintf("%s needs compatibility.requires kernel \">=%s\" (got %q): older hosts do not understand it", what, OverlayMinKernel, r.Version)}
+		}
+		return nil
+	}
+	return []string{fmt.Sprintf("%s needs compatibility.requires kernel \">=%s\": older hosts do not understand it", what, OverlayMinKernel)}
 }
 
 // validatePresetBlock checks the preset block of a kind=Preset manifest:

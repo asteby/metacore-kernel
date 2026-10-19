@@ -183,7 +183,7 @@ func bundleAssetPath(ref string) (string, bool) {
 		return "", false
 	}
 	rel := strings.TrimPrefix(ref, "./")
-	if path.Clean(rel) != rel || strings.Contains(rel, "\\") || rel == "assets" {
+	if path.Clean(rel) != rel || strings.ContainsAny(rel, "\\%") || rel == "assets" {
 		return "", false
 	}
 	return rel, true

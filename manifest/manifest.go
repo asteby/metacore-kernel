@@ -15,7 +15,11 @@ import (
 // the kernel now satisfies v3 addons' `kernel: ">=3.0.0 <4.0.0"` requirement.
 // Legacy v2 addons declare no range (checkKernelRange skips them) so they are
 // unaffected.
-const APIVersion = "3.0.0"
+//
+// 3.1.0 adds kind:Preset overlays (preset.extends) and metadata.visibility. A
+// manifest using them must require kernel >=3.1.0 (v3.OverlayMinKernel), so a
+// 3.0.x host rejects it at compatibility time instead of installing half of it.
+const APIVersion = "3.1.0"
 
 // Manifest describes everything an addon provides: metadata, extension points,
 // data model, navigation, permissions and distribution info.

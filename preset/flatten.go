@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -68,6 +69,10 @@ func BaseOf(m *v3.Manifest) *v3.PresetExtends {
 //     plus the overlay. Files are the base's (FlattenWithFiles adds the
 //     overlay's).
 func Flatten(base Resolved, overlay *v3.Manifest) (Resolved, error) {
+	return flatten(base, overlay, FlattenOptions{})
+}
+
+func flatten(base Resolved, overlay *v3.Manifest, opts FlattenOptions) (Resolved, error) {
 	ext := BaseOf(overlay)
 	if ext == nil {
 		return Resolved{}, ErrNotPreset
@@ -98,6 +103,9 @@ func Flatten(base Resolved, overlay *v3.Manifest) (Resolved, error) {
 
 	addons, err := mergeAddons(base.Addons, overlay.Preset.Addons, overlay.Preset.RemoveAddons)
 	if err != nil {
+		return Resolved{}, err
+	}
+	if err := checkOverlayRoles(base.Defaults["roles"], overlay.Preset.Defaults["roles"], opts.KnownPermission); err != nil {
 		return Resolved{}, err
 	}
 
@@ -182,10 +190,48 @@ func combineRanges(a, b string) (string, error) {
 		return "", fmt.Errorf("cannot combine %q with %q", a, b)
 	}
 	combined := a + ", " + b
-	if _, err := semver.NewConstraint(combined); err != nil {
+	c, err := semver.NewConstraint(combined)
+	if err != nil {
 		return "", err
 	}
+	if !satisfiable(c, a, b) {
+		return "", fmt.Errorf("%q and %q have no version in common", a, b)
+	}
 	return combined, nil
+}
+
+var versionLiteral = regexp.MustCompile(`v?\d+(\.\d+){0,2}`)
+
+// satisfiable probes c with the versions the ranges are built from (and their
+// next patch/minor/major): an intersection of ranges, when non-empty, always
+// contains one of them. Good enough to reject ">=2.0.0, <1.0.0" at flatten
+// time instead of at install time.
+func satisfiable(c *semver.Constraints, ranges ...string) bool {
+	probe := []*semver.Version{semver.MustParse("0.0.0")}
+	for _, r := range ranges {
+		for _, lit := range versionLiteral.FindAllString(r, -1) {
+			v, err := semver.NewVersion(lit)
+			if err != nil {
+				continue
+			}
+			p, mi, ma := v.IncPatch(), v.IncMinor(), v.IncMajor()
+			probe = append(probe, v, &p, &mi, &ma)
+		}
+	}
+	for _, v := range probe {
+		if c.Check(v) {
+			return true
+		}
+	}
+	return false
+}
+
+// Unbounded reports whether a version range has no upper bound ("*",
+// ">=1.0.0"): an overlay extending such a range silently follows every major
+// release of its base.
+func Unbounded(versionRange string) bool {
+	c, err := semver.NewConstraint(versionRange)
+	return err == nil && c.Check(semver.MustParse("999999.0.0"))
 }
 
 func unionStrings(a, b []string) []string {
@@ -225,6 +271,11 @@ type Strategy struct {
 	Kind        StrategyKind
 	KeyFields   []string
 	UnionFields []string
+	// AltKeyFields are identities tried, in order, when an item lacks
+	// KeyFields (roles: key, then name, then slug — the published roles.json
+	// files use different ones). An overlay item matches the base item that
+	// shares its first identity present in the base.
+	AltKeyFields [][]string
 }
 
 // MergeStrategies is the single table hosts, the marketplace and manifest
@@ -239,7 +290,7 @@ var MergeStrategies = map[string]Strategy{
 	"settings":           {Kind: MergePatch},
 	"appliance":          {Kind: MergePatch},
 	"onboarding":         {Kind: MergeReplace},
-	"roles":              {Kind: MergeKeyed, KeyFields: []string{"name"}, UnionFields: []string{"permissions"}},
+	"roles":              {Kind: MergeKeyed, KeyFields: []string{"key"}, AltKeyFields: [][]string{{"name"}, {"slug"}}, UnionFields: []string{"permissions"}},
 	"categories":         {Kind: MergeKeyed, KeyFields: []string{"name"}},
 	"sidebar_templates":  {Kind: MergeKeyed, KeyFields: []string{"key"}},
 	"dashboards":         {Kind: MergeKeyed, KeyFields: []string{"key"}},
@@ -325,29 +376,52 @@ func mergeKeyed(base, overlay []interface{}, st Strategy) []interface{} {
 	out := make([]interface{}, 0, len(base)+len(overlay))
 	index := map[string]int{}
 	for _, item := range base {
-		if id, ok := identity(item, st.KeyFields); ok {
-			index[id] = len(out)
+		for _, id := range identities(item, st) {
+			if _, dup := index[id]; !dup {
+				index[id] = len(out)
+			}
 		}
 		out = append(out, deepCopy(item))
 	}
 	removed := map[int]bool{}
 	for _, item := range overlay {
 		om, isObj := item.(map[string]interface{})
-		id, ok := identity(item, st.KeyFields)
-		if !isObj || !ok {
+		ids := identities(item, st)
+		if !isObj || len(ids) == 0 {
 			out = append(out, deepCopy(item))
 			continue
 		}
-		i, exists := index[id]
+		i, exists := -1, false
+		for _, id := range ids {
+			if j, ok := index[id]; ok {
+				i, exists = j, true
+				break
+			}
+		}
 		if r, _ := om["_remove"].(bool); r {
 			if exists {
 				removed[i] = true
+				// Forget the identity: a later item with it in the same list
+				// is a NEW item, not a resurrection merged with the base one.
+				for id, j := range index {
+					if j == i {
+						delete(index, id)
+					}
+				}
 			}
 			continue
 		}
-		if !exists {
-			index[id] = len(out)
-			out = append(out, deepCopy(item))
+		if !exists || removed[i] {
+			fresh := deepCopyMap(om)
+			for _, f := range st.UnionFields {
+				if ov, ok := om[f]; ok {
+					fresh[f] = unionList(nil, ov) // a "-x" entry has nothing to remove here
+				}
+			}
+			for _, id := range ids {
+				index[id] = len(out)
+			}
+			out = append(out, fresh)
 			continue
 		}
 		bm, _ := out[i].(map[string]interface{})
@@ -358,7 +432,6 @@ func mergeKeyed(base, overlay []interface{}, st Strategy) []interface{} {
 			}
 		}
 		out[i] = merged
-		delete(removed, i)
 	}
 	if len(removed) == 0 {
 		return out
@@ -443,6 +516,8 @@ func mergeRecords(base, overlay map[string]interface{}) map[string]interface{} {
 	return out
 }
 
+// identity is the stable identity of item over fields: field names and
+// JSON-encoded values, so 1 and "1" never collide.
 func identity(item interface{}, fields []string) (string, bool) {
 	m, ok := item.(map[string]interface{})
 	if !ok || len(fields) == 0 {
@@ -454,9 +529,25 @@ func identity(item interface{}, fields []string) (string, bool) {
 		if !ok || v == nil {
 			return "", false
 		}
-		parts = append(parts, fmt.Sprint(v))
+		enc, err := json.Marshal(v)
+		if err != nil {
+			return "", false
+		}
+		parts = append(parts, f+"="+string(enc))
 	}
 	return strings.Join(parts, "\x00"), true
+}
+
+// identities lists every identity item has under st (KeyFields first, then
+// AltKeyFields), in order.
+func identities(item interface{}, st Strategy) []string {
+	var out []string
+	for _, fields := range append([][]string{st.KeyFields}, st.AltKeyFields...) {
+		if id, ok := identity(item, fields); ok {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func deepCopy(v interface{}) interface{} {

@@ -49,6 +49,12 @@ func ResolveWithFiles(m *v3.Manifest, files map[string][]byte) (Resolved, []stri
 // overlay asset at the same path wins. The []string lists the overlay's
 // "*_file" keys that could not be resolved.
 func FlattenWithFiles(base Resolved, overlay *v3.Manifest, overlayFiles map[string][]byte) (Resolved, []string, error) {
+	return FlattenWithOptions(base, overlay, overlayFiles, FlattenOptions{})
+}
+
+// FlattenWithOptions is FlattenWithFiles with the overlay checks tuned by opts
+// (KnownPermission: only permissions the resolved addon set declares).
+func FlattenWithOptions(base Resolved, overlay *v3.Manifest, overlayFiles map[string][]byte, opts FlattenOptions) (Resolved, []string, error) {
 	if BaseOf(overlay) == nil {
 		return Resolved{}, nil, ErrNotPreset
 	}
@@ -57,7 +63,12 @@ func FlattenWithFiles(base Resolved, overlay *v3.Manifest, overlayFiles map[stri
 	p := *overlay.Preset
 	p.Defaults = defaults
 	m.Preset = &p
-	r, err := Flatten(base, &m)
+	for k := range overlayFiles {
+		if !validPresetFilePath(k) {
+			return Resolved{}, nil, fmt.Errorf("preset: invalid bundle file path %q", k)
+		}
+	}
+	r, err := flatten(base, &m, opts)
 	if err != nil {
 		return Resolved{}, nil, err
 	}
@@ -172,4 +183,62 @@ func walkStrings(v interface{}, fn func(string) string) {
 			walkStrings(c, fn)
 		}
 	}
+}
+
+// ValidFilePath reports whether p is a valid preset bundle file key: a clean
+// path under defaults/ or assets/ with no backslash or percent-encoding (so a
+// host using it as a storage key or URL path cannot be walked out of the
+// directory, e.g. "assets/%2e%2e/x").
+func ValidFilePath(p string) bool { return validPresetFilePath(p) }
+
+func validPresetFilePath(p string) bool {
+	if !strings.HasPrefix(p, "defaults/") && !strings.HasPrefix(p, "assets/") {
+		return false
+	}
+	return path.Clean(p) == p && !strings.ContainsAny(p, "\\%") && !strings.HasSuffix(p, "/")
+}
+
+// UncleanAssetRefs returns the strings under defaults that start with
+// "./assets/" but are not a valid asset reference ("./assets/../x",
+// "./assets/a\b", "./assets/%2e%2e/x", a directory). AssetRefs skips them,
+// so they would reach the host unrewritten; bundle.Read reports them.
+func UncleanAssetRefs(defaults map[string]interface{}) []string {
+	seen := map[string]struct{}{}
+	walkStrings(deepCopyMap(defaults), func(s string) string {
+		if strings.HasPrefix(s, v3.BrandingAssetPrefix) {
+			if _, ok := v3.BundleAssetPath(s); !ok || strings.HasSuffix(s, "/") {
+				seen[s] = struct{}{}
+			}
+		}
+		return s
+	})
+	out := make([]string, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// DefaultsWarnings returns non-fatal findings about a preset manifest: an
+// inline "<name>" that shadows its "<name>_file" (the file is ignored), and a
+// preset.extends range without an upper bound (the overlay silently follows
+// every major release of its base).
+func DefaultsWarnings(m *v3.Manifest) []string {
+	if m == nil || m.Preset == nil {
+		return nil
+	}
+	var out []string
+	for k := range m.Preset.Defaults {
+		if name := strings.TrimSuffix(k, "_file"); name != k && name != "" {
+			if _, inline := m.Preset.Defaults[name]; inline {
+				out = append(out, fmt.Sprintf("preset.defaults.%s is inline and also in %s: the file is ignored", name, k))
+			}
+		}
+	}
+	if ext := m.Preset.Extends; ext != nil && Unbounded(ext.Version) {
+		out = append(out, fmt.Sprintf("preset.extends.version %q has no upper bound: the overlay follows every major release of %s", ext.Version, ext.Key))
+	}
+	sort.Strings(out)
+	return out
 }
