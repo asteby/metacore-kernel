@@ -127,6 +127,9 @@ func ValidDecimal(s string) bool { return decimalRe.MatchString(s) }
 // ValidCountry reports whether s is an upper-case ISO 3166-1 alpha-2 code.
 func ValidCountry(s string) bool { return countryRe.MatchString(s) }
 
+// ValidCurrency reports whether s is an upper-case ISO 4217 code.
+func ValidCurrency(s string) bool { return currencyRe.MatchString(s) }
+
 // Validate checks a decoded JSON object against the schema and returns one
 // message per problem (path-qualified, sorted for stable output). A nil
 // schema accepts anything.

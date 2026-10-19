@@ -593,6 +593,11 @@ type Query struct {
 	// (/webhooks/payments/{addon}). Empty on other contracts = normal
 	// selection (market, default, only provider).
 	Provider string
+	// Caller is the addon key that issued the query, stamped by the host
+	// (the wasm capability_query import sets it from the invocation, never
+	// from the guest). Empty = the host itself. Provider selection ignores
+	// it; host-implemented contracts (payments ledger) authorize on it.
+	Caller string
 }
 
 // ProviderSource lists the providers of a capability installed and enabled
