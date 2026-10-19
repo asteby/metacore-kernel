@@ -70,7 +70,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `Consume` solo sobre un hold vigente; `DecodeConfirmed` exige `isProvider` y
   `ConfirmedFor`; `EmitPolicy` aplica `commerce.payments` como enforce aun en
   modo warn; el manifest rechaza `seller`/`refund_application_fee` desde
-  `payload.*`; `cash.rounding` en el contrato.
+  `payload.*`; `cash.rounding` en el contrato. `DerivedEventID` incluye moneda
+  y monto (dos reembolsos parciales sin `event_id` no colisionan);
+  `Payment.CancelledFrom` evita que una cancelación rechazada pierda el
+  `authorized`; `ObserveOutcome` no aplica una captura sin monto; el redondeo
+  de efectivo tiene además un tope relativo (`MaxRoundingShare`).
+
+- **manifest v3: `contributions.guides[]` (ayuda in-app por rol).** Guías cortas
+  y tours guiados declarables por addon o preset: `key`, `title`, `roles[]`,
+  `permission`, `trigger` (`manual` | `first_visit`), `route` (obligatoria con
+  `first_visit`), `order` y `steps[]` (reusa `AgentGuideStep`: `target` de UI o
+  paso `concept`). Validación de claves y pasos únicos en `v3.Validate`.
 
 ### Fixed
 

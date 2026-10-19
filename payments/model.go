@@ -90,7 +90,10 @@ type Payment struct {
 	// the document) and reused on every retry.
 	IdempotencyKey string `json:"idempotency_key"`
 
-	Status         Status `json:"status"`
+	Status Status `json:"status"`
+	// CancelledFrom is the open status the payment was in when cancelling
+	// was requested; a refused cancellation never goes back past it.
+	CancelledFrom  Status `json:"cancelled_from,omitempty"`
 	Amount         string `json:"amount"`
 	Currency       string `json:"currency"`
 	AmountRefunded string `json:"amount_refunded,omitempty"`
@@ -136,6 +139,9 @@ func (p Payment) Validate() []string {
 	}
 	if !p.Status.Valid() {
 		bad("status %q is unknown", p.Status)
+	}
+	if p.CancelledFrom != "" && (!p.CancelledFrom.Open() || p.CancelledFrom == StatusCancelling) {
+		bad("cancelled_from %q must be the open status cancelling was requested from", p.CancelledFrom)
 	}
 	if !capability.ValidCurrency(p.Currency) {
 		bad("currency %q is not ISO 4217", p.Currency)

@@ -20,13 +20,18 @@ const (
 // status (Observe) AND money. It is what a ledger applies; Observe(Status,
 // Status) is its status-only core.
 //
-//   - another currency, another provider_ref        → Anomaly
+//   - another currency, another provider_ref        → Anomaly (a stored
+//     payment without provider_ref yet learns it from the first re-read)
+//   - an authorization or capture (kind payment) without amount → Anomaly
+//     invalid_outcome
 //   - an authorization or capture (paid / partially_refunded / refunded) of
 //     another amount than the payment's (kind payment) → Anomaly amount_mismatch
 //   - refunded total above the amount               → Anomaly amount_mismatch
 //   - refunded total below the stored one           → Anomaly refund_reversed
 //   - partially_refunded again with the same total  → Ignore duplicate
 //   - partially_refunded again with a larger total  → Apply
+//   - cancelling, observed as an open status older than the one the
+//     cancellation was requested from (CancelledFrom) → Ignore stale
 //   - otherwise                                     → Observe(stored.Status, o.Status)
 //
 // The refunded total of the outcome is o.AmountRefunded; for status refunded
@@ -50,7 +55,11 @@ func ObserveOutcome(stored Payment, o Outcome) Observation {
 	if kind == "" {
 		kind = KindPayment
 	}
-	if kind == KindPayment && (o.Status.Captured() || o.Status == StatusAuthorized) && o.Amount != "" {
+	if kind == KindPayment && (o.Status.Captured() || o.Status == StatusAuthorized) {
+		if strings.TrimSpace(o.Amount) == "" {
+			// A capture without its amount cannot be checked: never applied.
+			return Observation{Anomaly, ReasonInvalidOutcome}
+		}
 		got, err := ParseAmount(o.Amount)
 		if err != nil {
 			return Observation{Anomaly, ReasonInvalidOutcome}
@@ -87,7 +96,23 @@ func ObserveOutcome(stored Payment, o Outcome) Observation {
 			}
 		}
 	}
+	if staleAfterCancelling(stored, o.Status) {
+		return Observation{Ignore, ReasonStale}
+	}
 	return Observe(stored.Status, o.Status)
+}
+
+// staleAfterCancelling reports whether observed is an open status older than
+// the one a cancelling payment was in when the cancellation was requested: a
+// refused cancellation goes back to that status (or a newer one), never to an
+// older one (authorized → cancelling → at_device would drop the
+// authorization).
+func staleAfterCancelling(stored Payment, observed Status) bool {
+	from := stored.CancelledFrom
+	if stored.Status != StatusCancelling || !from.Open() || from == StatusCancelling {
+		return false
+	}
+	return observed.Open() && observed != StatusCancelling && observed != from && openRank[observed] <= openRank[from]
 }
 
 // observedRefunded is the refunded total an outcome reports (known=false when

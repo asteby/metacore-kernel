@@ -1516,6 +1516,12 @@ type Contributions struct {
 	// Optional. See AgentCapability.
 	AgentCapabilities []AgentCapability `json:"agent_capabilities,omitempty"`
 
+	// Guides declares in-app help for the host's help center: short guides and
+	// guided tours whose steps point at UI elements, aimed at one or more
+	// roles and optionally auto-started the first time a user reaches a
+	// route. Optional. See HelpGuide.
+	Guides []HelpGuide `json:"guides,omitempty"`
+
 	Subscriptions []Subscription `json:"subscriptions,omitempty"`
 
 	// Notifications declares in-app bell notifications the host should emit
@@ -2626,6 +2632,28 @@ type AgentGuideStep struct {
 // AgentGuideAdvance declares the DOM event that auto-advances a guide step.
 type AgentGuideAdvance struct {
 	Event string `json:"event"` // click|change|input
+}
+
+// HelpGuide is one in-app help entry (contributions.guides[]): a short guide
+// or guided tour for the host's help center. Steps reuse AgentGuideStep (a
+// step targets a UI element, or is a "concept" step without spotlight), so the
+// same runner that drives copilot walkthroughs drives these. Roles scopes the
+// guide to the role keys of the org (empty = every user); Trigger "first_visit"
+// makes the host start the guide automatically the first time a user opens
+// Route, while "manual" (default) only lists it in the help center. Title,
+// Description and step copy are i18n keys or literal text, translated by the
+// host like the rest of the manifest.
+type HelpGuide struct {
+	Key         string           `json:"key"`
+	Title       string           `json:"title"`
+	Description string           `json:"description,omitempty"`
+	Icon        string           `json:"icon,omitempty"`
+	Roles       []string         `json:"roles,omitempty"`
+	Permission  string           `json:"permission,omitempty"`
+	Trigger     string           `json:"trigger,omitempty"` // manual (default) | first_visit
+	Route       string           `json:"route,omitempty"`   // required when trigger=first_visit
+	Order       int              `json:"order,omitempty"`
+	Steps       []AgentGuideStep `json:"steps"`
 }
 
 // Subscription is an event handler. Must be backed by an event:subscribe capability.
