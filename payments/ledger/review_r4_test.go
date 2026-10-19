@@ -380,3 +380,65 @@ func TestNumberedRefundIsOnlyRead(t *testing.T) {
 		}
 	})
 }
+
+// r4 #512: the re-POST window never freezes a numbered refund. A refund the
+// provider numbered stays pending 13 h (SPEI) and is still read with
+// backoff; when the provider answers succeeded, it settles and the
+// reservation is released.
+func TestNumberedRefundReadPastWindow(t *testing.T) {
+	eachDialect(t, func(t *testing.T, db *gorm.DB) {
+		h := newHarness(t, db)
+		p := paidTerminal(t, h)
+		h.fake.on("mercadopago", capability.CommercePaymentsRefund, func(map[string]any) (any, error) {
+			return map[string]any{"refund_id": "rf-spei", "status": "pending", "amount": "60", "currency": "MXN"}, nil
+		})
+		status := "pending"
+		h.fake.on("mercadopago", capability.CommercePaymentsRefundStatus, func(in map[string]any) (any, error) {
+			return map[string]any{"refund_id": in["refund_id"], "status": status, "amount": "60", "currency": "MXN"}, nil
+		})
+		if _, err := h.l.CreateRefund(ctx, h.org, RefundRequest{PaymentID: p.ID, Amount: "60", Destination: payments.RefundToOriginal, IdempotencyKey: "spei"}); err != nil {
+			t.Fatal(err)
+		}
+		rec := &Reconciler{Ledger: h.l, Owner: "r"}
+		for i := 0; i < 13; i++ {
+			h.advance(time.Hour)
+			if _, err := rec.RunOrg(ctx, h.org); err != nil {
+				t.Fatal(err)
+			}
+		}
+		doc, _ := h.l.Document(ctx, h.org, "sales_order", "SO-1")
+		if r := doc.Refunds[0]; r.Status != payments.RefundPending || r.NeedsReview {
+			t.Fatalf("numbered refund frozen after 13 h: %+v", r)
+		}
+		reads := h.fake.count(capability.CommercePaymentsRefundStatus)
+		if reads < 13 || h.fake.count(capability.CommercePaymentsRefund) != 1 {
+			t.Fatalf("reads=%d posts=%d", reads, h.fake.count(capability.CommercePaymentsRefund))
+		}
+		// Reserved while pending: only 40 left.
+		if _, err := h.l.CreateRefund(ctx, h.org, RefundRequest{PaymentID: p.ID, Amount: "40.01", Destination: payments.RefundToCash, IdempotencyKey: "x"}); ErrorCode(err) != CodeRefundExceeds {
+			t.Fatalf("reservation: %v", err)
+		}
+		status = "succeeded"
+		h.advance(time.Hour)
+		if _, err := rec.RunOrg(ctx, h.org); err != nil {
+			t.Fatal(err)
+		}
+		doc, _ = h.l.Document(ctx, h.org, "sales_order", "SO-1")
+		pay, _ := h.l.Payment(ctx, h.org, p.ID)
+		if doc.Refunds[0].Status != payments.RefundSucceeded || pay.AmountRefunded != "60.00" {
+			t.Fatalf("not settled: %+v %+v", doc.Refunds[0], pay)
+		}
+		// The reservation became the refund: exactly 40 more can be refunded.
+		if _, err := h.l.CreateRefund(ctx, h.org, RefundRequest{PaymentID: p.ID, Amount: "40", Destination: payments.RefundToCash, IdempotencyKey: "y"}); err != nil {
+			t.Fatalf("remaining 40: %v", err)
+		}
+	})
+}
+
+func TestRefundBackoffCap(t *testing.T) {
+	for i, want := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 16 * time.Minute, 32 * time.Minute, time.Hour, time.Hour, time.Hour} {
+		if got := refundBackoff(i); got != want {
+			t.Fatalf("backoff(%d) = %v, want %v", i, got, want)
+		}
+	}
+}

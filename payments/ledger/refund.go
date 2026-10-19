@@ -279,7 +279,7 @@ const ReasonRefundNeedsReview = "refund_needs_review"
 // refundBackoff is the wait before the attempt-th automatic re-query
 // (1 min, 2, 4 ... capped at 1 h).
 func refundBackoff(attempt int) time.Duration {
-	if attempt > 6 {
+	if attempt >= 6 { // 1 min << 6 = 64 min: past the cap
 		return time.Hour
 	}
 	return time.Minute << attempt
@@ -309,8 +309,8 @@ func queueRefundRecheck(tx *gorm.DB, org, paymentID uuid.UUID, now time.Time) er
 //     commerce.payments.refund.status; never a second refund request;
 //   - not numbered, within the provider's re-POST window: the same
 //     commerce.payments.refund again, same idempotency key;
-//   - still pending past the window: needs_review (anomaly event), no more
-//     automatic asks.
+//   - not numbered, past the window: needs_review (anomaly event), no more
+//     automatic asks. A numbered refund never goes to review on its own.
 //
 // Otherwise a refund left pending is due again after an exponential backoff.
 func (l *Ledger) recheckRefund(ctx context.Context, org uuid.UUID, pay paymentRow, r refundRow) (RefundResult, error) {
@@ -319,7 +319,9 @@ func (l *Ledger) recheckRefund(ctx context.Context, org uuid.UUID, pay paymentRo
 		return res, nil
 	}
 	now := l.now()
-	expired := now.Sub(r.CreatedAt) > l.repostWindow(r.Provider)
+	// The window bounds re-POSTs only: a numbered refund is read (GET) with
+	// backoff for as long as it takes (SPEI, a slow provider).
+	expired := r.ProviderRefundID == "" && now.Sub(r.CreatedAt) > l.repostWindow(r.Provider)
 	var err error
 	switch {
 	case r.ProviderRefundID != "":
