@@ -4824,7 +4824,8 @@
                 "density": { "type": ["string", "null"] },
                 "pwa_name": { "type": ["string", "null"] },
                 "pwa_short_name": { "type": ["string", "null"] },
-                "email_from_name": { "type": ["string", "null"] }
+                "email_from_name": { "type": ["string", "null"] },
+                "fonts": { "type": ["array", "null"], "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 ]{0,59}$" } }
               }
             },
             "branding_file": { "type": "string", "description": "Bundle path (./defaults/...) of a JSON file with the branding object." }

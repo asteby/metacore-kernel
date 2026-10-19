@@ -59,6 +59,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `InlineFiles` desenvuelve un archivo cuyo único campo es su propio nombre
     (`{"roles": [...]}` en `roles.json`, la forma del appliance), y los `roles`
     se unen por `name`, la identidad que usa ops.
+  - `v3.Branding.Fonts`: familias de fuente adicionales (nombres de Google
+    Fonts, por ejemplo `Barlow`) que el host carga para las superficies propias
+    de la org (kiosko, pantalla de cliente, documentos), aparte del token `font`
+    de la UI.
+  - `preset.AssetRefs(defaults)` y `preset.RewriteAssetRefs(defaults, urls)`:
+    las referencias `./assets/...` de cualquier default (por ejemplo los assets
+    del tema de un `kiosk_profile`) se materializan y se reescriben igual que
+    las de branding. `bundle.Read` estricto exige que todas existan.
 
 ### Fixed
 

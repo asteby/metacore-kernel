@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"sort"
 	"strings"
 
 	v3 "github.com/asteby/metacore-kernel/manifest/v3"
@@ -113,4 +114,62 @@ func mergeFiles(base, overlay map[string][]byte) map[string][]byte {
 		out[k] = v
 	}
 	return out
+}
+
+// AssetRefs returns every bundle path ("assets/...") referenced by a
+// "./assets/..." string anywhere in defaults (branding, kiosk or display
+// profiles, records...), sorted and de-duplicated. Hosts materialize these
+// from Resolved.Files and then call RewriteAssetRefs.
+func AssetRefs(defaults map[string]interface{}) []string {
+	seen := map[string]struct{}{}
+	walkStrings(defaults, func(s string) string {
+		if p, ok := v3.BundleAssetPath(s); ok {
+			seen[p] = struct{}{}
+		}
+		return s
+	})
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// RewriteAssetRefs returns a copy of defaults with every "./assets/..." string
+// whose bundle path is in urls replaced by urls[path]. Other values, and refs
+// not in urls, are kept.
+func RewriteAssetRefs(defaults map[string]interface{}, urls map[string]string) map[string]interface{} {
+	out := deepCopyMap(defaults)
+	walkStrings(out, func(s string) string {
+		if p, ok := v3.BundleAssetPath(s); ok {
+			if u, found := urls[p]; found {
+				return u
+			}
+		}
+		return s
+	})
+	return out
+}
+
+// walkStrings calls fn on every string value (not key) under v, in place.
+func walkStrings(v interface{}, fn func(string) string) {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		for k, c := range t {
+			if s, ok := c.(string); ok {
+				t[k] = fn(s)
+				continue
+			}
+			walkStrings(c, fn)
+		}
+	case []interface{}:
+		for i, c := range t {
+			if s, ok := c.(string); ok {
+				t[i] = fn(s)
+				continue
+			}
+			walkStrings(c, fn)
+		}
+	}
 }

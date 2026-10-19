@@ -158,3 +158,28 @@ func TestInlineFiles_UnwrapsSelfNamedObject(t *testing.T) {
 		t.Fatalf("branding (not wrapped) changed: %#v", out["branding"])
 	}
 }
+
+func TestAssetRefsAndRewrite(t *testing.T) {
+	defaults := map[string]interface{}{
+		"branding": map[string]interface{}{"logo_url": "./assets/logo.svg"},
+		"kiosk_profile": map[string]interface{}{"profile": map[string]interface{}{
+			"theme": map[string]interface{}{"assets": map[string]interface{}{"logo": "./assets/k.svg", "background": "https://cdn/x.jpg"}},
+			"steps": []interface{}{map[string]interface{}{"props": map[string]interface{}{"image": "./assets/logo.svg"}}, "./assets/../x"},
+		}},
+	}
+	if got := AssetRefs(defaults); !reflect.DeepEqual(got, []string{"assets/k.svg", "assets/logo.svg"}) {
+		t.Fatalf("AssetRefs = %v", got)
+	}
+	out := RewriteAssetRefs(defaults, map[string]string{"assets/logo.svg": "https://s3/logo.svg"})
+	prof := out["kiosk_profile"].(map[string]interface{})["profile"].(map[string]interface{})
+	step := prof["steps"].([]interface{})[0].(map[string]interface{})["props"].(map[string]interface{})
+	if step["image"] != "https://s3/logo.svg" || out["branding"].(map[string]interface{})["logo_url"] != "https://s3/logo.svg" {
+		t.Fatalf("rewrite: %v", out)
+	}
+	if prof["theme"].(map[string]interface{})["assets"].(map[string]interface{})["logo"] != "./assets/k.svg" {
+		t.Fatal("unmapped ref must stay")
+	}
+	if defaults["branding"].(map[string]interface{})["logo_url"] != "./assets/logo.svg" {
+		t.Fatal("RewriteAssetRefs mutated its input")
+	}
+}

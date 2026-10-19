@@ -294,7 +294,7 @@ func (b *Bundle) ReadPresetFile(p string) ([]byte, error) {
 // presetBundleProblems checks what manifest validation cannot see for a
 // standalone or overlay kind:Preset: every "*_file" default resolves to a
 // JSON file under defaults/ or assets/, the (inlined) branding is valid and
-// every "./assets/..." it references is in the bundle. Non-presets return nil.
+// every "./assets/..." any default references is in the bundle. Non-presets return nil.
 func presetBundleProblems(rawManifest []byte, files map[string][]byte) []string {
 	if len(rawManifest) == 0 {
 		return nil
@@ -308,8 +308,14 @@ func presetBundleProblems(rawManifest []byte, files map[string][]byte) []string 
 	for _, k := range missing {
 		problems = append(problems, fmt.Sprintf("preset.defaults.%s %v is not a JSON file in the bundle", k, m.Preset.Defaults[k]))
 	}
-	_, brand := preset.Resolved{Defaults: defaults, Files: files}.Branding()
-	return append(problems, brand...)
+	_, brand := preset.Resolved{Defaults: defaults}.Branding()
+	problems = append(problems, brand...)
+	for _, p := range preset.AssetRefs(defaults) {
+		if _, ok := files[p]; !ok {
+			problems = append(problems, fmt.Sprintf("preset.defaults references ./%s, which is not in the bundle", p))
+		}
+	}
+	return problems
 }
 
 // hydrateManifestI18n loads the locale JSON files referenced by a v3 manifest's

@@ -42,6 +42,9 @@ func TestRead_PresetMissingAssetOrFile(t *testing.T) {
 		"dashboards_file":          func(e map[string][]byte) { delete(e, "defaults/dashboards.json") },
 		"branding.primary_color":   func(e map[string][]byte) { e["defaults/branding.json"] = []byte(`{"primary_color": "rojo"}`) },
 		"unknown field \"slogan\"": func(e map[string][]byte) { e["defaults/branding.json"] = []byte(`{"slogan": "x"}`) },
+		"./assets/kiosk.png": func(e map[string][]byte) {
+			e["defaults/dashboards.json"] = []byte(`[{"key": "k", "image": "./assets/kiosk.png"}]`)
+		},
 	}
 	for want, mutate := range cases {
 		entries := pitslinePresetEntries(t)

@@ -38,6 +38,10 @@ type Branding struct {
 	ThemeKey string `json:"theme_key,omitempty"`
 	Font     string `json:"font,omitempty"`
 	Density  string `json:"density,omitempty"`
+	// Fonts are extra font families (Google Fonts names, e.g. "Barlow") the
+	// host loads for the organization's own surfaces (kiosk, customer
+	// display, documents) besides the UI Font token.
+	Fonts []string `json:"fonts,omitempty"`
 	// PWAName and PWAShortName feed the web app manifest. Empty = PlatformName.
 	PWAName      string `json:"pwa_name,omitempty"`
 	PWAShortName string `json:"pwa_short_name,omitempty"`
@@ -47,6 +51,8 @@ type Branding struct {
 
 // BrandingAssetPrefix is the bundle directory branding assets live in.
 const BrandingAssetPrefix = "./assets/"
+
+var fontFamily = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ]{0,59}$`)
 
 var hexColor = regexp.MustCompile(`^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
 
@@ -85,6 +91,11 @@ func (b Branding) Validate() []string {
 		}
 		if _, ok := bundleAssetPath(*a.v); !ok {
 			errs = append(errs, fmt.Sprintf("branding.%s %q must be an http(s) URL or a %s... path inside the bundle", a.name, *a.v, BrandingAssetPrefix))
+		}
+	}
+	for _, f := range b.Fonts {
+		if !fontFamily.MatchString(f) {
+			errs = append(errs, fmt.Sprintf("branding.fonts %q is not a font family name (letters, digits and spaces)", f))
 		}
 	}
 	if b.SupportEmail != "" {
@@ -160,6 +171,10 @@ func (b *Branding) assetFields() []brandingAssetField {
 func isHTTPURL(s string) bool {
 	return strings.HasPrefix(s, "https://") || strings.HasPrefix(s, "http://")
 }
+
+// BundleAssetPath maps a "./assets/..." reference to its bundle path
+// ("assets/..."); ok is false for anything else (URLs, other dirs, escapes).
+func BundleAssetPath(ref string) (string, bool) { return bundleAssetPath(ref) }
 
 // bundleAssetPath maps "./assets/x/logo.svg" to "assets/x/logo.svg". It rejects
 // anything outside ./assets/ (including ".." escapes) and the bare directory.

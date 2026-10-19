@@ -93,3 +93,16 @@ func TestValidate_PresetInlineBranding(t *testing.T) {
 		t.Fatalf("valid inline branding: %v", err)
 	}
 }
+
+func TestBranding_Fonts(t *testing.T) {
+	if errs := (Branding{Fonts: []string{"Barlow", "Barlow Condensed"}}).Validate(); len(errs) != 0 {
+		t.Fatalf("valid fonts: %v", errs)
+	}
+	if errs := (Branding{Fonts: []string{"Barlow;}</style>"}}).Validate(); len(errs) != 1 {
+		t.Fatalf("want one fonts error, got %v", errs)
+	}
+	b, errs := ParseBranding(map[string]interface{}{"fonts": []interface{}{"Barlow"}})
+	if len(errs) != 0 || len(b.Fonts) != 1 || b.ToMap()["fonts"] == nil {
+		t.Fatalf("parse fonts: %v %+v", errs, b)
+	}
+}
