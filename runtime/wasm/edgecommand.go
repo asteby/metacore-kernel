@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// edge_command host import limits (docs/wasm-abi.md § 23).
+// edge_command host import limits (docs/wasm-abi.md § 25).
 const (
 	edgeCommandMaxReqBytes      = 64 * 1024
 	edgeCommandDefaultTimeout   = 10 * time.Second

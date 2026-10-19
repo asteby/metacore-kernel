@@ -77,6 +77,14 @@ type Resolved struct {
 	Name     string
 	Addons   []Addon
 	Defaults map[string]interface{}
+	// Lineage is the chain of presets this result was built from, base
+	// first: one entry for a standalone preset, base + overlay after Flatten.
+	Lineage []LineageEntry
+	// Files are the preset bundle's defaults/** and assets/** files keyed by
+	// bundle path ("assets/logo.svg"), set by ResolveWithFiles and
+	// FlattenWithFiles (overlay files win). Nil when resolved from a bare
+	// manifest.
+	Files map[string][]byte
 }
 
 // Required returns just the non-optional addons, preserving order. These are
@@ -120,6 +128,9 @@ func ResolveFromManifest(m *v3.Manifest) (Resolved, error) {
 	if m == nil || m.Kind != v3.KindPreset || m.Preset == nil {
 		return Resolved{}, ErrNotPreset
 	}
+	if m.Preset.Extends != nil {
+		return Resolved{}, fmt.Errorf("%w (%s extends %s %s)", ErrNeedsBase, m.Metadata.Key, m.Preset.Extends.Key, m.Preset.Extends.Version)
+	}
 	required := make([]Addon, 0, len(m.Preset.Addons))
 	optional := make([]Addon, 0)
 	for _, a := range m.Preset.Addons {
@@ -151,6 +162,7 @@ func ResolveFromManifest(m *v3.Manifest) (Resolved, error) {
 		Name:     m.Metadata.Name,
 		Addons:   sorted,
 		Defaults: m.Preset.Defaults,
+		Lineage:  []LineageEntry{{Key: m.Metadata.Key, Version: m.Metadata.Version}},
 	}, nil
 }
 

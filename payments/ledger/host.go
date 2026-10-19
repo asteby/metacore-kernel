@@ -76,6 +76,7 @@ func hostContracts() []capability.Contract {
 			Input: input, Output: output, Idempotent: mutating}
 	}
 	return []capability.Contract{
+		settleContract(),
 		q(HoldAcquire, "take or renew the charge hold of a document before a physical charge (one live hold per document across POS, kiosk, cash desk, storefront)",
 			in(append(append([]capability.Field{}, doc...),
 				r("holder", capability.TypeString, "point of sale shown to others: pos:<register>, kiosk:<station>"),
@@ -150,7 +151,8 @@ func (h HostQuerier) Query(ctx context.Context, q capability.Query) (capability.
 	}
 	res := capability.QueryResult{Capability: q.Capability, Market: q.Market.Code}
 	c, ok := capability.Lookup(q.Capability)
-	if !ok || h.Ledger == nil {
+	// payments.settle is a pure rule: answered with or without a ledger.
+	if !ok || (h.Ledger == nil && q.Capability != SettleKey) {
 		return res, fmt.Errorf("%w: unknown ledger contract %q", capability.ErrNotQuery, q.Capability)
 	}
 	if problems := c.CheckInput(q.Input); len(problems) > 0 {
@@ -170,6 +172,9 @@ func (h HostQuerier) Query(ctx context.Context, q capability.Query) (capability.
 
 func (h HostQuerier) dispatch(ctx context.Context, q capability.Query) (any, error) {
 	l, org, in := h.Ledger, q.Org, q.Input
+	if q.Capability == SettleKey {
+		return settle(in)
+	}
 	if org == uuid.Nil {
 		return nil, failf(CodeInvalidInput, "no organization")
 	}
