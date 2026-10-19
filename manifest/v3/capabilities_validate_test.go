@@ -85,3 +85,24 @@ func TestCapabilityQueryProviderWithCountries(t *testing.T) {
 		t.Fatalf("countries = %v", got)
 	}
 }
+
+// r4 I6: marketplace routing and commission are server-derived; a payments
+// handler never maps them from a payload (the buyer would set the fee).
+func TestPaymentsSellerNeverFromPayload(t *testing.T) {
+	cases := map[string]string{
+		"consumer maps seller fee": `"contributions": {"actions": [{"key": "a", "label": "A", "handler": {"type": "capability", "capability": "commerce.payments.session", "input": {"seller.application_fee": "payload.fee"}}}]}`,
+		"consumer maps seller":     `"contributions": {"actions": [{"key": "a", "label": "A", "handler": {"type": "capability", "capability": "commerce.payments.session", "input": {"seller": "payload.seller"}}}]}`,
+		"provider maps refund fee": `"provides_capabilities": [{"key": "commerce.payments.refund", "handler": {"type": "wasm", "function": "a"}, "input": {"refund_application_fee": "payload.refund_application_fee"}}]`,
+	}
+	for name, extra := range cases {
+		_, err := Parse(capabilityManifest("xaddon", extra))
+		if err == nil || !strings.Contains(err.Error(), "server-derived") {
+			t.Errorf("%s: want server-derived error, got %v", name, err)
+		}
+	}
+	// From the stored record it is fine.
+	ok := `"contributions": {"actions": [{"key": "a", "label": "A", "handler": {"type": "capability", "capability": "commerce.payments.session", "input": {"seller": "record.seller"}}}]}`
+	if _, err := Parse(capabilityManifest("xaddon", ok)); err != nil && strings.Contains(err.Error(), "server-derived") {
+		t.Fatalf("record-derived seller rejected: %v", err)
+	}
+}

@@ -22,7 +22,7 @@ mercado (PLAN-HEADLESS H12/H13).
 | **Coordenadas** | `latitude` / `longitude`: número JSON en grados decimales WGS84, en `[-90, 90]` / `[-180, 180]`; nunca cadena. Ver [capabilities-geo.md](capabilities-geo.md). |
 | **Entrada** | Abierta: campos no declarados pasan tal cual (el mapeo del proveedor puede leerlos); los declarados se validan por tipo y los requeridos deben venir y no estar vacíos. |
 | **Salida** | Cerrada: tipos, enums y requeridos se validan; campos desconocidos se rechazan salvo extensiones con prefijo `x_` (p. ej. `x_init_point`). Una salida inválida cuenta como error de ese proveedor (`invalid_output`) y no se entrega. |
-| **Estados normalizados** | Pago: `pending, requires_action, authorized, paid, failed, cancelled, expired, refunded, partially_refunded`. Rastreo: `created, picked_up, in_transit, out_for_delivery, delivered, exception, returned, cancelled`. |
+| **Estados normalizados** | Pago: `pending, requires_action, authorized, paid, failed, cancelled, expired, refunded, partially_refunded`, y desde el estándar de pagos `at_device` (el monto está en una terminal o reciclador esperando al comprador) y `cancelling` (cancelación aceptada sin confirmar: todavía puede cobrarse). Un consumidor que no conoce un estado lo trata como **no final**. Transiciones válidas y reglas en [RFC-PAYMENTS-STANDARD](RFC-PAYMENTS-STANDARD.md) y en el paquete `payments`. Canal (`channel`): `terminal, online, qr, link, cash`. Rastreo: `created, picked_up, in_transit, out_for_delivery, delivered, exception, returned, cancelled`. |
 
 ## Resolución por mercado: `(organización, mercado, capacidad) → addon`
 
@@ -124,6 +124,17 @@ Payload (`CommercePaymentsConfirmed`):
 |---|---|---|---|
 | `provider` | string | sí | clave del addon proveedor (informativa: el suscriptor confía en `emitter`) |
 | `result` | object ([salida de confirm](#commercepaymentsconfirm)) | sí | `kind` distingue pago, reembolso y disputa |
+| `organization_id` | string |  | informativo (el bus lleva la org) |
+| `occurred_at` | string |  | RFC 3339 de la observación |
+| `source` | string: webhook \| poll \| reconcile \| staff |  | cómo se observó |
+| `payment_id` | string |  | id canónico en el ledger de pagos, cuando ya está registrado |
+| `document_type`, `document_id` | string |  | documento pagado en OPS |
+
+Un suscriptor en Go valida la entrega con `payments.DecodeConfirmed`: contrato,
+`emitter` estampado presente e igual a `provider` (un proveedor no habla por
+otro). Un proveedor solo de terminal (`commerce.payments.terminal.*`, p. ej. el
+reciclador de efectivo) también es proveedor del dominio y puede emitirlo; un
+canal de venta (POS, caja, kiosko) no.
 
 Payload (`CommerceShippingTrackingUpdated`, `capability.TrackingUpdatedSchema`):
 
@@ -279,6 +290,24 @@ consulta); siempre hay un proveedor por omisión instalado (`search_basic`,
 | `phone` | string |  |  |
 | `tax_id` | string |  | RFC / VAT id |
 
+### Card
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `type` | string: credit \| debit \| prepaid \| other |  | fiscal payment form follows it (credit vs debit) |
+| `brand` | string |  | visa / master / amex / debmaster / ... |
+| `last4` | string |  | last four digits, as a string (keeps leading zeros) |
+| `auth_code` | string |  | issuer authorization code |
+| `entry_mode` | string |  | chip / contactless / swipe / manual / online |
+
+### CashTender
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `tendered` | decimal |  | cash the buyer inserted / handed over |
+| `change` | decimal |  | change returned |
+| `operation_id` | string |  | device operation id (e.g. the cash recycler operation), kept for reconciliation |
+
 ### Line
 
 | Campo | Tipo | Req. | Notas |
@@ -302,6 +331,14 @@ consulta); siempre hay un proveedor por omisión instalado (`search_basic`,
 | `height_cm` | decimal |  |  |
 | `quantity` | integer |  | identical parcels (default 1) |
 | `content` | string |  | content description (customs/carrier) |
+
+### Seller
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `account_ref` | string | sí | seller account id at the provider (OAuth-linked account / connected account) |
+| `seller_id` | string |  | seller id in OPS |
+| `application_fee` | decimal |  | platform commission retained from this payment, in the payment currency |
 
 ### ShipItem
 
@@ -417,6 +454,63 @@ Salida:
 | `tracking_url` | string |  |  |
 | `message` | string |  | reason when on_hold/rejected |
 
+### `commerce.payments.cancel`
+
+cancel a payment that is not captured yet (open session, terminal order, authorization); re-read the status afterwards. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **30s** · mutante (idempotente).
+
+Códigos de error del proveedor: `not_found`.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `provider_ref` | string |  | provider payment / terminal order id (one of provider_ref or session_id) |
+| `session_id` | string |  | provider session id when no payment exists yet |
+| `order_ref` | string |  |  |
+| `device_id` | string |  | terminal holding the order, when the provider needs it |
+| `reason` | string |  |  |
+| `idempotency_key` | string | sí | required; stable per business operation (reuse it on every retry); the provider must dedupe on it |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `status` | string: cancelled \| cancelling \| not_cancellable | sí | cancelling: accepted but not confirmed (the device may still capture it): poll commerce.payments.status |
+| `payment_status` | string: pending \| requires_action \| authorized \| paid \| failed \| cancelled \| expired \| refunded \| partially_refunded \| at_device \| cancelling |  | normalized payment status after the call |
+| `message` | string |  | why it could not be cancelled |
+
+### `commerce.payments.capabilities`
+
+what this provider supports (channels, refunds, cancellation, limits, marketplace); channels read it instead of hard-coding a provider. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `market` | string |  | market code, when support differs per market |
+| `channel` | string: terminal \| online \| qr \| link \| cash |  | restrict the answer to one channel |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `channels` | array<string> | sí | subset of terminal / online / qr / link / cash |
+| `methods` | array<string> |  | method families: card / msi / oxxo / spei / wallet / bnpl / bank_transfer / cash |
+| `currencies` | array<string> |  | ISO 4217 codes |
+| `min_amount` | decimal |  | smallest chargeable amount (e.g. a terminal minimum) |
+| `max_amount` | decimal |  |  |
+| `partial_refunds` | boolean |  |  |
+| `multiple_refunds` | boolean |  | several partial refunds on one payment |
+| `refund_window_days` | integer |  | 0 = no limit |
+| `cancel` | boolean |  | commerce.payments.cancel is supported |
+| `cancel_is_async` | boolean |  | cancellation may answer cancelling (confirmed later) |
+| `installments` | boolean |  | interest-free installments (MSI) |
+| `terminal_expires_seconds` | integer |  | lifetime of a terminal order when not paid |
+| `reconcile` | boolean |  | commerce.payments.reconcile is supported |
+| `marketplace_split` | boolean |  | charges on behalf of a seller account (SellerSchema) |
+| `seller_oauth` | boolean |  | seller accounts are linked through the provider OAuth |
+| `test_mode` | boolean |  | the configured credentials are sandbox credentials |
+
 ### `commerce.payments.confirm`
 
 verify and normalize a provider webhook/notification into a payment status. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
@@ -435,7 +529,7 @@ Salida:
 | Campo | Tipo | Req. | Notas |
 |---|---|---|---|
 | `order_ref` | string | sí | the order_ref sent to commerce.payments.session |
-| `status` | string: pending \| requires_action \| authorized \| paid \| failed \| cancelled \| expired \| refunded \| partially_refunded | sí |  |
+| `status` | string: pending \| requires_action \| authorized \| paid \| failed \| cancelled \| expired \| refunded \| partially_refunded \| at_device \| cancelling | sí |  |
 | `amount` | decimal | sí | amount of this status (paid/refunded) |
 | `currency` | currency | sí |  |
 | `provider_ref` | string | sí | provider payment id |
@@ -449,6 +543,58 @@ Salida:
 | `fee` | decimal |  | provider fee |
 | `net_amount` | decimal |  | amount minus fee |
 | `test_mode` | boolean |  | event from the provider sandbox |
+| `channel` | string: terminal \| online \| qr \| link \| cash |  | how the buyer paid; default online |
+| `session_id` | string |  | session / preference / terminal order id the payment belongs to |
+| `device_id` | string |  | terminal / cash recycler that took the payment |
+| `card` | Card |  | card details when the method is a card |
+| `cash` | CashTender |  | cash device details |
+| `seller` | Seller |  | marketplace seller the payment was charged for |
+| `provider_status` | string |  | provider wording / code of the status, untranslated |
+| `status_detail` | string |  | provider reason (rejection code, expiry, ...) |
+
+### `commerce.payments.reconcile`
+
+list the provider's payments updated in a time window (reconciliation job); items are commerce.payments.status outputs. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `from` | string | sí | RFC 3339, inclusive |
+| `to` | string | sí | RFC 3339, exclusive |
+| `cursor` | string |  | next_cursor of the previous page |
+| `limit` | integer |  | page size hint |
+| `seller` | Seller |  | marketplace: only this seller's payments |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `payments` | array<object> | sí | normalized payments, any order |
+| `payments[].order_ref` | string | sí | the order_ref sent to commerce.payments.session |
+| `payments[].status` | string: pending \| requires_action \| authorized \| paid \| failed \| cancelled \| expired \| refunded \| partially_refunded \| at_device \| cancelling | sí |  |
+| `payments[].amount` | decimal | sí | amount of this status (paid/refunded) |
+| `payments[].currency` | currency | sí |  |
+| `payments[].provider_ref` | string | sí | provider payment id |
+| `payments[].event_id` | string |  | provider event id (dedupe on provider+event_id) |
+| `payments[].kind` | string: payment \| refund \| dispute |  | default payment |
+| `payments[].method` | string |  | card / msi / oxxo / spei / wallet / bnpl / bank_transfer / cash |
+| `payments[].installments` | integer |  |  |
+| `payments[].paid_at` | string |  | RFC 3339 |
+| `payments[].occurred_at` | string |  | RFC 3339 |
+| `payments[].amount_refunded` | decimal |  |  |
+| `payments[].fee` | decimal |  | provider fee |
+| `payments[].net_amount` | decimal |  | amount minus fee |
+| `payments[].test_mode` | boolean |  | event from the provider sandbox |
+| `payments[].channel` | string: terminal \| online \| qr \| link \| cash |  | how the buyer paid; default online |
+| `payments[].session_id` | string |  | session / preference / terminal order id the payment belongs to |
+| `payments[].device_id` | string |  | terminal / cash recycler that took the payment |
+| `payments[].card` | Card |  | card details when the method is a card |
+| `payments[].cash` | CashTender |  | cash device details |
+| `payments[].seller` | Seller |  | marketplace seller the payment was charged for |
+| `payments[].provider_status` | string |  | provider wording / code of the status, untranslated |
+| `payments[].status_detail` | string |  | provider reason (rejection code, expiry, ...) |
+| `next_cursor` | string |  | absent on the last page |
 
 ### `commerce.payments.refund`
 
@@ -464,6 +610,8 @@ Entrada:
 | `order_ref` | string |  |  |
 | `reason` | string |  |  |
 | `idempotency_key` | string | sí | required; stable per business operation (reuse it on every retry); the provider must dedupe on it |
+| `seller` | Seller |  | marketplace: the seller the payment was charged for |
+| `refund_application_fee` | boolean |  | marketplace: also return the platform commission |
 
 Salida:
 
@@ -474,6 +622,22 @@ Salida:
 | `amount` | decimal | sí |  |
 | `currency` | currency | sí |  |
 | `instructions` | string |  | what the merchant must do when manual_required |
+| `provider_ref` | string |  | provider payment id the refund belongs to |
+| `provider_status` | string |  | provider wording / code of the refund status, untranslated |
+
+### `commerce.payments.refund.status`
+
+re-read a refund by its provider refund id (read only; never refunds again); the output is a commerce.payments.refund output. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `refund_id` | string | sí | provider refund id (commerce.payments.refund output) |
+| `provider_ref` | string |  | provider payment id the refund belongs to |
+| `idempotency_key` | string |  | the refund's key, for providers that look it up by key |
+
+Salida: la misma de `commerce.payments.refund`.
 
 ### `commerce.payments.session`
 
@@ -505,6 +669,8 @@ Entrada:
 | `expires_at` | string |  | RFC 3339 |
 | `idempotency_key` | string | sí | required; stable per business operation (reuse it on every retry); the provider must dedupe on it |
 | `metadata` | object |  |  |
+| `channel` | string: terminal \| online \| qr \| link \| cash |  | online (default), qr or link; terminals use commerce.payments.terminal.create |
+| `seller` | Seller |  | marketplace: charge on behalf of this seller |
 
 Salida:
 
@@ -520,6 +686,8 @@ Salida:
 | `provider_ref` | string |  | payment id when known already |
 | `instructions` | object |  | offline payment instructions (OXXO reference, SPEI CLABE, barcode_url, deadline) |
 | `test_mode` | boolean |  | session created against the provider sandbox |
+| `qr_data` | string |  | payload to render as a QR (channel qr) |
+| `qr_image_url` | string |  | ready-made QR image |
 
 ### `commerce.payments.status`
 
@@ -538,7 +706,7 @@ Salida:
 | Campo | Tipo | Req. | Notas |
 |---|---|---|---|
 | `order_ref` | string | sí | the order_ref sent to commerce.payments.session |
-| `status` | string: pending \| requires_action \| authorized \| paid \| failed \| cancelled \| expired \| refunded \| partially_refunded | sí |  |
+| `status` | string: pending \| requires_action \| authorized \| paid \| failed \| cancelled \| expired \| refunded \| partially_refunded \| at_device \| cancelling | sí |  |
 | `amount` | decimal | sí | amount of this status (paid/refunded) |
 | `currency` | currency | sí |  |
 | `provider_ref` | string | sí | provider payment id |
@@ -552,6 +720,70 @@ Salida:
 | `fee` | decimal |  | provider fee |
 | `net_amount` | decimal |  | amount minus fee |
 | `test_mode` | boolean |  | event from the provider sandbox |
+| `channel` | string: terminal \| online \| qr \| link \| cash |  | how the buyer paid; default online |
+| `session_id` | string |  | session / preference / terminal order id the payment belongs to |
+| `device_id` | string |  | terminal / cash recycler that took the payment |
+| `card` | Card |  | card details when the method is a card |
+| `cash` | CashTender |  | cash device details |
+| `seller` | Seller |  | marketplace seller the payment was charged for |
+| `provider_status` | string |  | provider wording / code of the status, untranslated |
+| `status_detail` | string |  | provider reason (rejection code, expiry, ...) |
+
+### `commerce.payments.terminal.create`
+
+send an amount to an in-person device (card terminal, cash recycler); the result is followed with commerce.payments.status. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **30s** · mutante (idempotente).
+
+Códigos de error del proveedor: `amount_below_minimum`, `device_not_found`, `device_offline`, `device_busy`, `invalid_input`.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `device_id` | string | sí | provider device id (payment_terminals / cash_recyclers record) |
+| `order_ref` | string | sí | document id/number in OPS (external_reference) |
+| `amount` | decimal | sí | amount to collect |
+| `currency` | currency | sí |  |
+| `description` | string |  | text shown on the device / statement |
+| `installments` | integer |  | interest-free installments; a provider that cannot preset them retries without and says so in message |
+| `card_type` | string: credit \| debit \| prepaid \| other |  | preselect credit / debit when the device supports it |
+| `expires_in_seconds` | integer |  | order lifetime on the device (provider default when absent) |
+| `print_ticket` | boolean |  | ask the device to print its voucher |
+| `idempotency_key` | string | sí | required; stable per business operation (reuse it on every retry); the provider must dedupe on it |
+| `metadata` | object |  |  |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `provider_ref` | string | sí | provider terminal order / payment id; pin follow-ups to it |
+| `status` | string: pending \| at_device \| failed | sí | pending (queued), at_device (shown on the device) or failed |
+| `device_id` | string |  |  |
+| `expires_at` | string |  | RFC 3339 |
+| `installments` | integer |  | installments actually preset (0/1 when the provider dropped them) |
+| `message` | string |  | provider message (e.g. installments not accepted, retried without) |
+| `test_mode` | boolean |  |  |
+
+### `commerce.payments.terminal.devices`
+
+list the provider account's in-person devices (to link a payment_terminals record without typing ids). Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `device_id` | string |  | only this device |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `devices` | array<object> | sí |  |
+| `devices[].device_id` | string | sí |  |
+| `devices[].name` | string |  |  |
+| `devices[].model` | string |  |  |
+| `devices[].mode` | string |  | provider operating mode (e.g. integrated / standalone) |
+| `devices[].status` | string: online \| offline \| busy \| unknown |  |  |
+| `devices[].test_mode` | boolean |  |  |
 
 ### `commerce.search.query`
 
@@ -631,7 +863,7 @@ Entrada:
 | `label_format` | string: pdf \| zpl \| png |  |  |
 | `label_size` | string |  | 4x6 / letter |
 | `cod_amount` | decimal |  |  |
-| `idempotency_key` | string | sí | required; stable per business operation (reuse it on every retry); the provider must dedupe on it |
+| `idempotency_key` | string | sí | stable per shipment; a duplicate label costs money |
 
 Salida:
 

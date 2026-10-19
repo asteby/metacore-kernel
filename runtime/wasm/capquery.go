@@ -88,6 +88,7 @@ func executeCapabilityQuery(ctx context.Context, inv *invocation, reqJSON []byte
 		Capability: req.Capability,
 		Input:      req.Input,
 		Provider:   strings.TrimSpace(req.Provider),
+		Caller:     addonKey,
 	})
 	if err != nil {
 		return fail(capQueryErrorCode(err), err.Error())

@@ -49,11 +49,12 @@ func TestCapabilityQueryGate(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	ok, d := capEnv(t, executeCapabilityQuery(ctx, inv, []byte(`{"capability":"commerce.shipping.rates","market":"mx","input":{"a":1}}`)))
+	ok, d := capEnv(t, executeCapabilityQuery(ctx, inv, []byte(`{"capability":"commerce.shipping.rates","market":"mx","caller":"evil","input":{"a":1}}`)))
 	if !ok || d["capability"] != "commerce.shipping.rates" {
 		t.Fatalf("allowed query failed: %v", d)
 	}
-	if q.got.Org != org || q.got.Market.Code != "mx" || q.got.Capability != "commerce.shipping.rates" {
+	// Caller is the invoking addon, never what the guest wrote.
+	if q.got.Org != org || q.got.Market.Code != "mx" || q.got.Capability != "commerce.shipping.rates" || q.got.Caller != "storefront_cart" {
 		t.Fatalf("querier got %+v", q.got)
 	}
 
