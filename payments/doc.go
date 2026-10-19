@@ -9,7 +9,9 @@
 // Rules the package encodes:
 //
 //   - Money is an exact decimal string next to an ISO 4217 currency; it is
-//     parsed with math/big, never with float64.
+//     parsed with math/big, never with float64. Amount is only the internal
+//     arithmetic over that wire form, not a platform money type; it aligns
+//     with the kernel's Money type when that lands (see Amount, MinorUnits).
 //   - The provider is the source of truth. A status is applied only after it
 //     was re-read from the provider (commerce.payments.status); Observe
 //     classifies such a re-read against the stored status (apply, ignore a
