@@ -15,8 +15,9 @@ las fórmulas y los guards.
 
 `from` es una columna con `ref`; `fields` va de columna origen a columna destino.
 Los destinos DEBEN ser `protected: true`: el cliente no los escribe y, en wasm,
-el valor del servidor pisa lo que mande el guest. La lectura se acota a la org
-del que escribe cuando la tabla origen tiene `organization_id`. Solo al crear:
+el valor del servidor pisa lo que mande el guest. La lectura SIEMPRE filtra por
+`organization_id` del que escribe; sin org, o con una tabla origen sin
+`organization_id`, la escritura falla cerrado (nunca copia sin acotar). Solo al crear:
 el snapshot congela el valor del momento (el costo y el piso de la venta no
 cambian si el producto se edita después).
 

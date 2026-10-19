@@ -170,3 +170,69 @@ func TestServiceCreateRunsStampPhase(t *testing.T) {
 		t.Fatalf("price = %v, want the snapshot 50", out["price"])
 	}
 }
+
+// Multi-org: the same product id exists in two orgs with different costs. Each
+// writer gets ONLY its own org's value, and a foreign id copies nothing.
+func TestStampSnapshotMultiOrgNeverCrossesTenants(t *testing.T) {
+	db := setupTestDB(t)
+	if err := db.Exec(`CREATE TABLE stamp_products (
+		id TEXT, organization_id TEXT, min_price REAL, cost_price REAL, deleted_at DATETIME)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	a, b := uuid.New(), uuid.New()
+	for _, r := range []struct {
+		id   string
+		org  uuid.UUID
+		cost float64
+	}{{"shared", a, 10}, {"shared", b, 777}, {"only-b", b, 888}} {
+		if err := db.Exec(`INSERT INTO stamp_products (id, organization_id, min_price, cost_price) VALUES (?,?,?,?)`,
+			r.id, r.org.String(), 1, r.cost).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	st := itemStamps()
+	noConsume := func(context.Context, ConsumeInput) error { return nil }
+	for org, want := range map[uuid.UUID]float64{a: 10, b: 777} {
+		row := map[string]any{"product_id": "shared", "unit_price": 5.0}
+		if err := st.apply(context.Background(), db, org, uuid.New(), row, noConsume); err != nil {
+			t.Fatal(err)
+		}
+		if row["unit_cost"] != want {
+			t.Fatalf("org %s: unit_cost=%v, quiero %v", org, row["unit_cost"], want)
+		}
+	}
+	// Org A referencing a product that only exists in org B: nothing is copied,
+	// even if the client forged the target.
+	row := map[string]any{"product_id": "only-b", "unit_price": 5.0, "unit_cost": 1.0}
+	if err := st.apply(context.Background(), db, a, uuid.New(), row, noConsume); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := row["unit_cost"]; ok {
+		t.Fatalf("fuga entre orgs: unit_cost=%v", v)
+	}
+}
+
+// Without a tenant, or with a source table that cannot be scoped, the stamp
+// refuses to run instead of copying unscoped.
+func TestStampSnapshotFailsClosedWithoutTenantScope(t *testing.T) {
+	db, org, _ := stampDB(t)
+	st := itemStamps()
+	noConsume := func(context.Context, ConsumeInput) error { return nil }
+	row := map[string]any{"product_id": "p-other", "unit_price": 5.0}
+	if err := st.apply(context.Background(), db, uuid.Nil, uuid.New(), row, noConsume); !errors.Is(err, ErrTenantScopeUnavailable) {
+		t.Fatalf("org nula debe fallar cerrado: %v", err)
+	}
+	if _, ok := row["unit_cost"]; ok {
+		t.Fatalf("no debe copiar sin org: %v", row)
+	}
+
+	if err := db.Exec(`CREATE TABLE stamp_global (id TEXT PRIMARY KEY, cost_price REAL)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	db.Exec(`INSERT INTO stamp_global VALUES ('g1', 5)`)
+	st.RefTables["product_id"] = "stamp_global"
+	row = map[string]any{"product_id": "g1", "unit_price": 5.0}
+	if err := st.apply(context.Background(), db, org, uuid.New(), row, noConsume); err == nil {
+		t.Fatalf("tabla sin organization_id debe rechazarse; row=%v", row)
+	}
+}

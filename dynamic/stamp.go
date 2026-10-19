@@ -179,10 +179,17 @@ func (st *ModelStamps) applySnapshots(ctx context.Context, db *gorm.DB, orgID uu
 			}
 			cols = append(cols, quoteIdent(src))
 		}
-		q := db.WithContext(ctx).Table(table).Select(strings.Join(cols, ", ")).Where("id = ?", id)
-		if orgID != uuid.Nil && tableHasOrgID(db, table) {
-			q = q.Where("organization_id = ?", orgID)
+		// Tenant isolation is not optional: a snapshot NEVER reads without
+		// organization_id = <writer's org>. A missing org or a source table that
+		// cannot be scoped fails the write instead of copying a foreign row.
+		if orgID == uuid.Nil {
+			return ErrTenantScopeUnavailable
 		}
+		if !tableHasOrgID(db, table) {
+			return fmt.Errorf("dynamic: snapshot source %s has no organization_id: refusing an unscoped copy", table)
+		}
+		q := db.WithContext(ctx).Table(table).Select(strings.Join(cols, ", ")).
+			Where("id = ? AND organization_id = ?", id, orgID)
 		var out map[string]any
 		if err := q.Take(&out).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
