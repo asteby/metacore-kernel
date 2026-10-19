@@ -442,3 +442,42 @@ func TestRefundBackoffCap(t *testing.T) {
 		}
 	}
 }
+
+// r4 #512: a late provider answer numbers the refund between the selection
+// and the needs_review update: the update does not apply and no review is
+// raised; the refund is read from then on.
+func TestNeedsReviewLosesToLateRef(t *testing.T) {
+	eachDialect(t, func(t *testing.T, db *gorm.DB) {
+		h := newHarness(t, db)
+		p := paidTerminal(t, h)
+		h.fake.on("mercadopago", capability.CommercePaymentsRefund, func(map[string]any) (any, error) {
+			return nil, timeoutErr()
+		})
+		res, err := h.l.CreateRefund(ctx, h.org, RefundRequest{PaymentID: p.ID, Amount: "10", Destination: payments.RefundToOriginal, IdempotencyKey: "late"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var stale refundRow
+		if err := db.Where("id = ?", res.Refund.ID).Take(&stale).Error; err != nil {
+			t.Fatal(err)
+		}
+		// The late synchronous answer lands after the row was read.
+		if _, err := h.l.updateRefund(ctx, h.org, stale.ID, payments.RefundPending, "rf-late", "", ""); err != nil {
+			t.Fatal(err)
+		}
+		h.advance(13 * time.Hour)
+		pay, err := h.l.paymentRow(db, h.org, p.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := h.l.recheckRefund(ctx, h.org, pay, stale)
+		if err != nil || out.Refund.NeedsReview || out.Refund.ProviderRefundID != "rf-late" {
+			t.Fatalf("review over a numbered refund: %+v %v", out.Refund, err)
+		}
+		for _, a := range h.anomalies {
+			if a.Reason == ReasonRefundNeedsReview {
+				t.Fatalf("needs_review raised: %+v", a)
+			}
+		}
+	})
+}

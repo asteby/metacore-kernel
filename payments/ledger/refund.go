@@ -336,9 +336,18 @@ func (l *Ledger) recheckRefund(ctx context.Context, org uuid.UUID, pay paymentRo
 	if expired {
 		updates = map[string]any{"needs_review": true, "next_recheck_at": nil}
 	}
-	if uerr := l.db.WithContext(ctx).Model(&refundRow{}).Where("id = ? AND status = ?", r.ID, string(payments.RefundPending)).
-		Updates(updates).Error; uerr != nil {
-		return res, uerr
+	q := l.db.WithContext(ctx).Model(&refundRow{}).Where("id = ? AND status = ?", r.ID, string(payments.RefundPending))
+	if expired {
+		// A late provider answer may have numbered it meanwhile: then it is
+		// read with backoff, never sent to review.
+		q = q.Where("provider_refund_id = ''")
+	}
+	upd := q.Updates(updates)
+	if upd.Error != nil {
+		return res, upd.Error
+	}
+	if expired && upd.RowsAffected == 0 {
+		return l.refundResult(ctx, org, r.ID, res)
 	}
 	if expired {
 		res.Refund.NeedsReview = true
