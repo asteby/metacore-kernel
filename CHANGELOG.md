@@ -33,6 +33,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`brand` — signed instance brand pack (minor).** `brand.Sign` / `brand.Verify`
+  implement the hub's BRAND-PACK-CONTRACT: envelope `{spec,version,sha256,pack,sig}`,
+  Ed25519 over `sha256("metacore-brand-pack/v1\n" || raw)` (domain-separated from
+  release signatures), raw bytes never canonicalized. Typed errors
+  (`ErrBadSignature`, `ErrSpec`, `ErrMalformed`, `ErrAssetDigest`, `ErrAssetInvalid`,
+  `ErrTooLarge`, `ErrRollback`, `ErrCustomerMismatch`): `spec > 1` rejected, strictly
+  increasing version, `customer_id` must match the license, asset sha256 recomputed,
+  PNG/SVG-only with the hub's SVG sanitizer rules, logo 256 KiB / icon 128 KiB /
+  favicon 64 KiB / pack 600 KiB. Golden vector shared with the hub in
+  `brand/testdata/brand_pack_vector.json`. `brand.Cascade` / `Layer` / `LayerFromPack`
+  and `brand.HandlerFrom(provider, product)` let the platform-issued instance brand
+  replace the product identity on `/api/brand` (ETag, 304, `max-age=300`, plus
+  `/api/brand/favicon`); without an override it answers exactly like `Handler`,
+  which is unchanged. Tenant branding never reaches `/api/brand`.
+- **`licensing` host hooks.** `Config.OnRenew` (exported `RenewResponse` with the raw
+  `Brand` envelope; nil from an old hub), `Config.RenewExtra` (extra renew fields such
+  as `brand_version`, signed with the body; core fields win), `Config.AfterRefresh`
+  (every `RefreshNow`, renew or not) and `(*Service).SignedPost` for other signed hub
+  calls (`POST /v1/licenses/brand`). All optional: with nil hooks the renew body and
+  behaviour are byte-for-byte the previous ones. `brand` and `licensing` stay
+  independent packages.
 - **`stages[].locked`: a record in a locked stage is read-only.** New opt-in
   flag on a v3 stage (schema, `manifest.StageDef.Locked`, `FromV3`). With it,
   `Service.Update` refuses (422 `record_locked`, per changed field) any change
