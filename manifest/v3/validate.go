@@ -196,6 +196,62 @@ var (
 	}
 )
 
+var helpGuideTriggers = map[string]struct{}{"manual": {}, "first_visit": {}}
+
+// validateGuides enforces the cross-field rules of contributions.guides[]
+// that the JSON schema cannot express: unique keys, unique step ids per
+// guide, and a route for first_visit guides (the host needs to know where the
+// guide starts). Every error is prefixed with the guide key.
+func validateGuides(m *Manifest) []string {
+	if m.Contributions == nil || len(m.Contributions.Guides) == 0 {
+		return nil
+	}
+	var errs []string
+	seen := make(map[string]struct{}, len(m.Contributions.Guides))
+	for i, g := range m.Contributions.Guides {
+		id := g.Key
+		if id == "" {
+			id = fmt.Sprintf("#%d", i)
+		}
+		where := fmt.Sprintf("contributions.guides[%s]", id)
+		if g.Key == "" {
+			errs = append(errs, fmt.Sprintf("%s.key is required", where))
+		} else if _, dup := seen[g.Key]; dup {
+			errs = append(errs, fmt.Sprintf("%s.key %q is duplicated within the addon", where, g.Key))
+		} else {
+			seen[g.Key] = struct{}{}
+		}
+		if g.Title == "" {
+			errs = append(errs, fmt.Sprintf("%s.title is required", where))
+		}
+		if len(g.Steps) == 0 {
+			errs = append(errs, fmt.Sprintf("%s.steps needs at least one step", where))
+		}
+		if g.Trigger != "" {
+			if _, ok := helpGuideTriggers[g.Trigger]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.trigger %q is not one of manual|first_visit", where, g.Trigger))
+			}
+		}
+		if g.Trigger == "first_visit" && g.Route == "" {
+			errs = append(errs, fmt.Sprintf("%s.route is required when trigger is first_visit", where))
+		}
+		if g.Route != "" && !strings.HasPrefix(g.Route, "/") {
+			errs = append(errs, fmt.Sprintf("%s.route %q must start with \"/\"", where, g.Route))
+		}
+		steps := make(map[string]struct{}, len(g.Steps))
+		for _, st := range g.Steps {
+			if _, dup := steps[st.ID]; dup {
+				errs = append(errs, fmt.Sprintf("%s.steps id %q is duplicated", where, st.ID))
+			}
+			steps[st.ID] = struct{}{}
+			if st.Kind != "concept" && st.Target == "" {
+				errs = append(errs, fmt.Sprintf("%s.steps[%s].target is required unless kind is concept", where, st.ID))
+			}
+		}
+	}
+	return errs
+}
+
 // validateDashboard enforces the §1 cross-field rules of the dashboard-widget
 // contract that the JSON schema cannot express (kind-conditional requirements).
 // Each error is prefixed with the offending widget's key so an author can find
@@ -1662,6 +1718,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 
 	if m.Contributions != nil {
 		errs = append(errs, validateDashboard(&m)...)
+		errs = append(errs, validateGuides(&m)...)
 		errs = append(errs, validateNavViewTypes(&m)...)
 		errs = append(errs, validateDocuments(&m, colsByModel)...)
 		errs = append(errs, validatePublicRoutes(&m)...)
