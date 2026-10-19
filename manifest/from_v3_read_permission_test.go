@@ -58,3 +58,30 @@ func TestValidateColumnExtensions_ReadPermission(t *testing.T) {
 		}
 	}
 }
+
+// The legacy plane applies the derived-column rule too.
+func TestValidateDerivedReadPermissions_Legacy(t *testing.T) {
+	product := ModelDefinition{TableName: "products", ModelKey: "Product", Columns: []ColumnDef{
+		{Name: "price"}, {Name: "cost", ReadPermission: "inv.product.view_cost"}, {Name: "margin"},
+	}}
+	line := ModelDefinition{TableName: "lines", ModelKey: "Line", Columns: []ColumnDef{
+		{Name: "product_id", Ref: "inventory.Product"}, {Name: "unit_cost"},
+	}}
+	all := []ModelDefinition{product, line}
+
+	p := product
+	p.Formulas = []Formula{{Target: "margin", Expr: "price - cost"}}
+	if err := validateDerivedReadPermissions(p, all); err == nil || !strings.Contains(err.Error(), "read_permission") {
+		t.Fatalf("formula: %v", err)
+	}
+	p.Columns = []ColumnDef{{Name: "price"}, {Name: "cost", ReadPermission: "inv.product.view_cost"}, {Name: "margin", ReadPermission: "inv.product.view_cost"}}
+	if err := validateDerivedReadPermissions(p, all); err != nil {
+		t.Fatalf("gated formula target: %v", err)
+	}
+
+	l := line
+	l.Snapshots = []SnapshotDef{{From: "product_id", Fields: map[string]string{"cost": "unit_cost"}}}
+	if err := validateDerivedReadPermissions(l, all); err == nil || !strings.Contains(err.Error(), "snapshots[0]") {
+		t.Fatalf("snapshot of a gated column: %v", err)
+	}
+}

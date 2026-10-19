@@ -1789,6 +1789,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	errs = append(errs, validateExtends(&m, rls)...)
 	errs = append(errs, validateSearchable(&m)...)
 	errs = append(errs, validateSearchKeys(&m)...)
+	errs = append(errs, validateDerivedReadPermissions(&m)...)
 	errs = append(errs, validateAttributeClasses(&m)...)
 
 	modelByKey := make(map[string]Model, len(m.Models))
