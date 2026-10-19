@@ -61,13 +61,20 @@ const (
 	// ReasonOrphan: the provider reports a payment the ledger does not know
 	// (money without a document).
 	ReasonOrphan = "orphan"
-	// ReasonAmountMismatch: the provider captured another amount or currency
-	// than the payment was created for.
-	ReasonAmountMismatch = "amount_mismatch"
+	// ReasonAmountMismatch: the provider captured another amount than the
+	// payment was created for (payments.ObserveOutcome).
+	ReasonAmountMismatch = payments.ReasonAmountMismatch
 	// ReasonStuck: an open payment the provider would not resolve past its
 	// expiry.
 	ReasonStuck = "stuck"
 )
+
+// moneyMismatch are anomalies a second consistent read never corrects on
+// its own: the re-read is not about this payment's money, a human decides.
+var moneyMismatch = map[string]bool{
+	payments.ReasonAmountMismatch: true, payments.ReasonCurrencyMismatch: true,
+	payments.ReasonProviderRefMismatch: true, payments.ReasonInvalidOutcome: true,
+}
 
 // AnomalyEvent is the host event published (as "kernel") for every anomaly,
 // so rules and notifications can react without knowing the ledger.
@@ -98,7 +105,7 @@ type Config struct {
 	IsPaymentsProvider func(ctx context.Context, org uuid.UUID, addon string) (bool, error)
 	// Now is the clock; nil = time.Now.
 	Now func() time.Time
-	// NewToken returns an unguessable hold token; nil = random UUID.
+	// NewToken returns an unguessable hold token; nil = payments.NewHoldToken.
 	NewToken func() string
 	// SkipMigrate skips Migrate in New.
 	SkipMigrate bool
@@ -119,7 +126,7 @@ func New(ctx context.Context, db *gorm.DB, cfg Config) (*Ledger, error) {
 		cfg.Now = time.Now
 	}
 	if cfg.NewToken == nil {
-		cfg.NewToken = func() string { return uuid.NewString() + uuid.NewString() }
+		cfg.NewToken = payments.NewHoldToken
 	}
 	if !cfg.SkipMigrate {
 		if err := Migrate(ctx, db); err != nil {
@@ -141,6 +148,7 @@ const (
 	CodeExceedsDue        = "exceeds_due"
 	CodeNotRefundable     = "not_refundable"
 	CodeRefundExceeds     = "refund_exceeds"
+	CodeIdempotency       = "idempotency_conflict"
 	CodeForbidden         = "forbidden"
 	CodeProvider          = "provider_error"
 	CodeUnavailable       = "unavailable"
@@ -312,6 +320,10 @@ type Document struct {
 	Refunds      []payments.Refund  `json:"refunds"`
 	// NetPaid is the sum of NetCaptured over the payments.
 	NetPaid string `json:"net_paid"`
+	// Paid is what counts toward the document total (payments.DocumentPaid):
+	// captured minus only the refunds that reduced the total. A refund that
+	// did not touch the total never reopens the debt.
+	Paid string `json:"paid"`
 	// Open reports a payment still open (do not charge again).
 	Open bool `json:"open"`
 	// Hold is the live hold, without its token.
@@ -356,6 +368,11 @@ func (l *Ledger) document(tx *gorm.DB, org uuid.UUID, docType, docID string) (Do
 			d.Refunds = append(d.Refunds, r.refund())
 		}
 	}
+	paid, err := payments.DocumentPaid(d.Payments, d.Refunds)
+	if err != nil {
+		return d, err
+	}
+	d.Paid = paid.String()
 	hold, err := activeHold(tx, org, docType, docID)
 	if err != nil {
 		return d, err

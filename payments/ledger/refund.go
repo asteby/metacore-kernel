@@ -23,6 +23,10 @@ type RefundRequest struct {
 	SourceType         string
 	SourceID           string
 	CreditNoteRequired bool
+	// AdjustsTotal: the refund comes with a matching reduction of the
+	// document total (a return, a credit note); only then does it lower what
+	// counts as paid (payments.Refund.AdjustsTotal).
+	AdjustsTotal bool
 	// RefundApplicationFee (marketplace) also returns the platform commission.
 	RefundApplicationFee bool
 	Caller               string
@@ -65,6 +69,8 @@ func (l *Ledger) CreateRefund(ctx context.Context, org uuid.UUID, req RefundRequ
 		switch {
 		case errors.Is(err, payments.ErrRefundExceeds):
 			return fail(CodeRefundExceeds, err)
+		case errors.Is(err, payments.ErrIdempotencyConflict):
+			return fail(CodeIdempotency, err)
 		case err != nil:
 			return fail(CodeNotRefundable, err)
 		case replay != nil:
@@ -79,7 +85,7 @@ func (l *Ledger) CreateRefund(ctx context.Context, org uuid.UUID, req RefundRequ
 			ID: uuid.New(), OrganizationID: org, PaymentID: row.ID, Destination: string(req.Destination),
 			Amount: norm(req.Amount), Currency: p.Currency, Status: string(payments.RefundPending), Reason: req.Reason,
 			IdempotencyKey: req.IdempotencyKey, SourceType: req.SourceType, SourceID: req.SourceID,
-			CreditNoteRequired: req.CreditNoteRequired, CreatedBy: req.Caller, CreatedAt: now, UpdatedAt: now,
+			CreditNoteRequired: req.CreditNoteRequired, AdjustsTotal: req.AdjustsTotal, CreatedBy: req.Caller, CreatedAt: now, UpdatedAt: now,
 		}
 		if req.Destination == payments.RefundToOriginal {
 			r.Provider = p.Provider

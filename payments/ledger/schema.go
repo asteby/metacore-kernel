@@ -125,6 +125,7 @@ func Schema(dialect string) []string {
 			source_type          TEXT NOT NULL DEFAULT '',
 			source_id            TEXT NOT NULL DEFAULT '',
 			credit_note_required ` + boolT + ` NOT NULL DEFAULT FALSE,
+			adjusts_total        ` + boolT + ` NOT NULL DEFAULT FALSE,
 			credit_note_id       TEXT NOT NULL DEFAULT '',
 			cash_session_id      TEXT NOT NULL DEFAULT '',
 			instructions         TEXT NOT NULL DEFAULT '',

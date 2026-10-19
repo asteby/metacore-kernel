@@ -97,7 +97,7 @@ func (l *Ledger) StartCharge(ctx context.Context, org uuid.UUID, req ChargeReque
 		}
 		// The key is unique per provider: a key reused with another provider
 		// is still this attempt.
-		verdict, existing, err := payments.CheckReplay(doc.Payments, req.IdempotencyKey, doc.NetPaid, req.DocumentTotal)
+		verdict, existing, err := payments.CheckReplay(doc.Payments, doc.Refunds, req.IdempotencyKey, req.DocumentTotal)
 		if err != nil {
 			return fail(CodeInvalidInput, err)
 		}
@@ -108,7 +108,7 @@ func (l *Ledger) StartCharge(ctx context.Context, org uuid.UUID, req ChargeReque
 			}
 			return nil
 		}
-		due := payments.MustAmount(req.DocumentTotal).Sub(payments.MustAmount(doc.NetPaid))
+		due := payments.MustAmount(req.DocumentTotal).Sub(payments.MustAmount(doc.Paid))
 		if payments.MustAmount(req.Amount).Cmp(due) > 0 {
 			return failf(CodeExceedsDue, "amount %s exceeds the %s still due", req.Amount, due)
 		}
@@ -159,7 +159,7 @@ func (l *Ledger) settleDocument(tx *gorm.DB, org uuid.UUID, docType, docID, tota
 	if err != nil {
 		return err
 	}
-	if payments.MustAmount(doc.NetPaid).Cmp(payments.MustAmount(total)) < 0 {
+	if payments.MustAmount(doc.Paid).Cmp(payments.MustAmount(total)) < 0 {
 		return nil
 	}
 	return tx.Model(&holdRow{}).Where("organization_id = ? AND document_type = ? AND document_id = ? AND status = ?",

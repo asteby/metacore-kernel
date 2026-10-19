@@ -80,6 +80,7 @@ type refundRow struct {
 	SourceType         string     `gorm:"column:source_type"`
 	SourceID           string     `gorm:"column:source_id"`
 	CreditNoteRequired bool       `gorm:"column:credit_note_required"`
+	AdjustsTotal       bool       `gorm:"column:adjusts_total"`
 	CreditNoteID       string     `gorm:"column:credit_note_id"`
 	CashSessionID      string     `gorm:"column:cash_session_id"`
 	Instructions       string     `gorm:"column:instructions"`
@@ -194,7 +195,7 @@ func (r refundRow) refund() payments.Refund {
 		Provider: r.Provider, ProviderRefundID: r.ProviderRefundID, Amount: norm(r.Amount), Currency: r.Currency,
 		Status: payments.RefundStatus(r.Status), Reason: r.Reason, IdempotencyKey: r.IdempotencyKey,
 		SourceType: r.SourceType, SourceID: r.SourceID, CreditNoteRequired: r.CreditNoteRequired,
-		CreditNoteID: r.CreditNoteID, CashSessionID: r.CashSessionID, CreatedAt: r.CreatedAt, SettledAt: r.SettledAt,
+		AdjustsTotal: r.AdjustsTotal, CreditNoteID: r.CreditNoteID, CashSessionID: r.CashSessionID, CreatedAt: r.CreatedAt, SettledAt: r.SettledAt,
 	}
 }
 

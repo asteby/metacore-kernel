@@ -121,16 +121,12 @@ func (l *Ledger) observe(ctx context.Context, org uuid.UUID, provider string, o 
 		}
 		ev.PaymentID = &row.ID
 		p := row.payment()
-		decision := payments.Observe(p.Status, o.Status)
-		// Money must match: a capture of another amount or currency is not
-		// this payment's (refund updates carry the refunded amount instead).
-		if decision.Decision == payments.Apply && o.Kind == payments.KindPayment && o.Status.Counts() &&
-			(o.Currency != p.Currency || payments.MustAmount(o.Amount).Cmp(payments.MustAmount(p.Amount)) != 0) {
-			decision = payments.Observation{Decision: payments.Anomaly, Reason: ReasonAmountMismatch}
-		}
+		// Status AND money: another amount, currency, provider_ref or a
+		// refunded total that went down is an anomaly (payments.ObserveOutcome).
+		decision := payments.ObserveOutcome(p, o)
 		corrected := false
 		if decision.Decision == payments.Anomaly && source == payments.SourceReconcile &&
-			row.Anomaly == decision.Reason && row.AnomalyStatus == string(o.Status) && decision.Reason != ReasonAmountMismatch {
+			row.Anomaly == decision.Reason && row.AnomalyStatus == string(o.Status) && !moneyMismatch[decision.Reason] {
 			// Second consistent read: the provider decides. Audited correction.
 			corrected = true
 		}
