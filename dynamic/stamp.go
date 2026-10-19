@@ -313,7 +313,7 @@ func (st *ModelStamps) prepareUpdate(ctx context.Context, db *gorm.DB, orgID, ac
 	}
 	newGrant := false
 	for _, g := range st.Grants {
-		if valueToString(changes[g.Column]) != "" {
+		if grantPresented(before, changes, g.Column) {
 			newGrant = true
 		}
 	}
@@ -330,7 +330,7 @@ func (st *ModelStamps) prepareUpdate(ctx context.Context, db *gorm.DB, orgID, ac
 	// Only a grant id presented in THIS patch can authorize: the one stored on
 	// the row was spent by the write that created it.
 	for _, g := range st.Grants {
-		if valueToString(changes[g.Column]) == "" {
+		if !grantPresented(before, changes, g.Column) {
 			// nil, not "": the column may be a uuid and "" is not a valid one
 			// (invalid UUID length: 0 / Postgres 22P02). A spent grant is NULL.
 			merged[g.Column] = nil
@@ -369,6 +369,18 @@ func (st *ModelStamps) prepareUpdate(ctx context.Context, db *gorm.DB, orgID, ac
 		}
 	}
 	return pend, nil
+}
+
+// grantPresented reports whether the patch presents a NEW grant id in col: a
+// non-empty, non-zero id different from the one stored on the row. A full form
+// that resends the stored (already spent) id is not a new grant: it is neither
+// redeemed again nor does it keep an authorization whose covered values changed.
+func grantPresented(before, changes map[string]any, col string) bool {
+	v := valueToString(changes[col])
+	if v == "" || v == uuid.Nil.String() {
+		return false
+	}
+	return !sameStampValue(before[col], changes[col])
 }
 
 // sameStampValue compares a persisted value with an incoming one (numbers as

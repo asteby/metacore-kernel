@@ -10,6 +10,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - **Un grant gastado se limpia con `NULL`, no con `""`, en el update (`StampUpdate` / `UpdateStamper` / `Host.WithUpdateStamp`).** Al re-estampar un update, la columna `columns[].grant` cuyo id ya se gastó recibía una cadena vacía: en una columna `uuid` fallaba (`invalid UUID length: 0` en `mapToStruct`; en Postgres el UPDATE del camino wasm lo rechazaba con `invalid input syntax for type uuid`). Ahora el patch lleva `nil`, y `dynamic.Service.Update` también pone en cero el campo del modelo (un `null` JSON no toca un campo no puntero). El create no estaba afectado. Cubierto con pruebas unitarias y una con columna `uuid` real en Postgres.
+- **Reenviar el grant guardado ya no cuenta como grant nuevo en el update (`StampUpdate`).** Un formulario completo que reenvía el `columns[].grant` con el que se creó la línea (ya gastado) intentaba canjearlo otra vez y el update fallaba. Ahora un id igual al guardado, vacío o el UUID cero no es un grant presentado: no se canjea; la autorización se conserva si no cambia lo que cubría y cae (hace falta un grant nuevo) si cambia.
 
 ### Added
 

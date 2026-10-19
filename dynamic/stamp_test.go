@@ -518,3 +518,60 @@ func TestStampUpdateClearsSpentGrantWithNil(t *testing.T) {
 		t.Fatalf("el grant gastado debe ir como nil en el patch, got %#v (present=%v)", v, ok)
 	}
 }
+
+// Un formulario completo reenvía el grant guardado (ya gastado): no es un grant
+// nuevo. No se intenta canjear; si no cambia lo cubierto, la autorización se
+// queda; si cambia, cae (hace falta otro grant). El UUID cero cuenta como vacío.
+func TestStampUpdateResentStoredGrantIsNotNew(t *testing.T) {
+	db, org, _ := stampDB(t)
+	st := itemStamps()
+	calls := 0
+	consume := func(context.Context, ConsumeInput) error { calls++; return ErrApprovalConsume }
+	stored := uuid.New()
+	before := func() map[string]any {
+		return map[string]any{"product_id": "p1", "quantity": 2.0, "unit_price": 45.0, "min_price_at_sale": 50.0,
+			"unit_cost": 30.0, "price_authorized": 1.0, "price_shortfall": 0.0, "price_approval_id": stored}
+	}
+
+	// 1. Reenvío + cambio no cubierto (cantidad): nada que estampar, sin canje.
+	patch := map[string]any{"quantity": 4.0, "price_approval_id": stored.String()}
+	pend, err := st.prepareUpdate(context.Background(), db, org, uuid.New(), "items", "line1", before(), patch, nil, consume)
+	if err != nil || len(pend) != 0 || calls != 0 {
+		t.Fatalf("reenvío sin cambio cubierto: err=%v pend=%v calls=%d", err, pend, calls)
+	}
+	if _, set := patch["price_authorized"]; set {
+		t.Fatalf("la autorización se conserva (el patch no la toca): %v", patch)
+	}
+
+	// 2. Reenvío + cambio cubierto (precio): sin canje, la autorización cae.
+	patch = map[string]any{"unit_price": 40.0, "price_approval_id": stored.String()}
+	pend, err = st.prepareUpdate(context.Background(), db, org, uuid.New(), "items", "line1", before(), patch, nil, consume)
+	if err != nil || len(pend) != 0 || calls != 0 {
+		t.Fatalf("reenvío con precio nuevo: err=%v pend=%v calls=%d", err, pend, calls)
+	}
+	if computeexprFloat(patch["price_authorized"]) != 0 || patch["price_approval_id"] != nil {
+		t.Fatalf("cambiar lo cubierto tira la autorización: %v", patch)
+	}
+
+	// 3. El UUID cero no es un grant.
+	patch = map[string]any{"unit_price": 40.0, "price_approval_id": uuid.Nil.String()}
+	if _, err := st.prepareUpdate(context.Background(), db, org, uuid.New(), "items", "line1", before(), patch, nil, consume); err != nil || calls != 0 {
+		t.Fatalf("uuid cero: err=%v calls=%d", err, calls)
+	}
+
+	// 4. Un id distinto sí es un grant nuevo: se valida (aquí lo rechaza).
+	patch = map[string]any{"unit_price": 40.0, "price_approval_id": uuid.NewString()}
+	if _, err := st.prepareUpdate(context.Background(), db, org, uuid.New(), "items", "line1", before(), patch, nil, consume); err == nil || calls == 0 {
+		t.Fatalf("grant nuevo debe validarse: err=%v calls=%d", err, calls)
+	}
+}
+
+func computeexprFloat(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	}
+	return -1
+}
