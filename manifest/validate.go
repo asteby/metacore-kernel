@@ -805,6 +805,10 @@ func validateColumnExtensions(col ColumnDef) error {
 	if col.OptionsSource != "" && !optionsSourceRe.MatchString(col.OptionsSource) {
 		return fmt.Errorf("options_source %q must match %s", col.OptionsSource, optionsSourceRe)
 	}
+	// ReadPermission: the same dotted key shape the v3 schema enforces.
+	if col.ReadPermission != "" && !v3.PermissionKeyRe.MatchString(col.ReadPermission) {
+		return fmt.Errorf("read_permission %q must match %s", col.ReadPermission, v3.PermissionKeyRe)
+	}
 	if col.Validation != nil {
 		if err := col.Validation.validate(); err != nil {
 			return fmt.Errorf("validation: %w", err)

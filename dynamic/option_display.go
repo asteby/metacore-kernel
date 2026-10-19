@@ -120,7 +120,7 @@ func OptionContextFromQuery(c fiber.Ctx) map[string]string {
 
 // applyOptionDisplay stamps Display on every option of a page. rows are the
 // source rows the options were projected from (index-aligned with items).
-func (s *Service) applyOptionDisplay(ctx context.Context, user modelbase.AuthUser, source string, rows reflect.Value, items []Option, qctx map[string]string) {
+func (s *Service) applyOptionDisplay(ctx context.Context, user modelbase.AuthUser, source string, rows reflect.Value, items []Option, qctx map[string]string, mask *ReadMask) {
 	if s.optionDisplays == nil || len(items) == 0 || !rows.IsValid() || rows.Len() != len(items) {
 		return
 	}
@@ -203,7 +203,12 @@ func (s *Service) applyOptionDisplay(ctx context.Context, user modelbase.AuthUse
 	for i := range items {
 		row := rowAt(i)
 		id := optionRowID(row)
-		col := func(name string) any { return displayScalar(fieldValue(row, name)) }
+		col := func(name string) any {
+			if mask.Denied(name) {
+				return nil // ReadPermission: never rendered, tested or templated
+			}
+			return displayScalar(fieldValue(row, name))
+		}
 		dv := &OptionDisplayValue{}
 		if d.Title != "" {
 			dv.Title = renderOptionTemplate(d.Title, col)
@@ -335,6 +340,10 @@ func (s *Service) queryOptionMetric(ctx context.Context, user modelbase.AuthUser
 		return nil, fmt.Errorf("model %q not found", m.Model)
 	}
 	if err := s.checkAccess(ctx, user, m.Model, inst, modelbase.AccessList); err != nil {
+		return nil, nil
+	}
+	// An aggregate of a column the caller may not read is unavailable too.
+	if m.Column != "" && s.ColumnReadMask(ctx, m.Model, user).Denied(m.Column) {
 		return nil, nil
 	}
 	table, err := s.tableNameFor(ctx, m.Model, inst)

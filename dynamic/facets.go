@@ -74,6 +74,11 @@ func (s *Service) Facets(ctx context.Context, user modelbase.AuthUser, q FacetsQ
 	if err := s.checkAccess(ctx, user, q.Model, instance, modelbase.AccessList); err != nil {
 		return nil, err
 	}
+	// The distinct values of a column ARE its contents: refused when the
+	// caller may not read it (ReadPermission).
+	if err := s.ColumnReadMask(ctx, q.Model, user).Check(q.Field, "facet"); err != nil {
+		return nil, err
+	}
 	var (
 		db         *gorm.DB
 		expr       string

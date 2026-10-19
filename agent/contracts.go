@@ -91,8 +91,16 @@ type ModelMeta struct {
 	VectorEnabled bool
 	VectorFields  []string
 	// Schema is the host-rendered payload describe_model returns (columns,
-	// fields, search_in, filters...). Opaque to the runtime.
+	// fields, search_in, filters...). Opaque to the runtime, except that the
+	// column lists under "columns", "fields", "search_in" and "filters" are
+	// pruned of the columns the caller may not read (ReadPermissions).
 	Schema map[string]any
+	// ReadPermissions maps a column to the permission a caller must hold to
+	// read it (manifest columns[].read_permission). Without it the copilot
+	// never sees the column: it is stripped from query/get/vector results and
+	// a filter, order, group or aggregate over it is refused. Checked with
+	// CRUDConfig.ColumnPermissions.
+	ReadPermissions map[string]string
 }
 
 // ModelCatalog is the registry port behind CRUD, model-key resolution and

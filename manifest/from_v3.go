@@ -631,6 +631,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// bypass; only a declared Action's own write path (data_mutate)
 				// can change it.
 				Protected: c.Protected,
+				// ReadPermission rides through so the dynamic runtime strips the
+				// column from every read of a caller lacking the permission.
+				ReadPermission: c.ReadPermission,
 				// RejectDeletedRef rides through so a create pointing at a
 				// soft-deleted ref target is refused (opt-in, VEN-N08).
 				RejectDeletedRef: c.RejectDeletedRef,

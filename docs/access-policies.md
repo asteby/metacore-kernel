@@ -18,6 +18,7 @@ addon) y a [`dynamic-api.md`](dynamic-api.md) (contrato HTTP del CRUD).
   - [De dónde salen los roles: `RoleResolver`](#de-dónde-salen-los-roles-roleresolver)
   - [Qué rutas cubre](#qué-rutas-cubre)
   - [Respuesta 403](#respuesta-403)
+- [Permisos de lectura por columna](#permisos-de-lectura-por-columna)
 - [Modelos singleton](#modelos-singleton)
 - [Validación por campo desde modelos Go](#validación-por-campo-desde-modelos-go)
 - [Resolvers del CRUD en `host.AppConfig`](#resolvers-del-crud-en-hostappconfig)
@@ -159,6 +160,80 @@ secundarios.
 
 En Go, el error es un `*dynamic.AccessDeniedError` que envuelve `dynamic.ErrForbidden`.
 
+## Permisos de lectura por columna
+
+Una columna puede exigir un permiso para leerse. Sirve para ocultar costos o
+márgenes a un kiosko, a la caja o a un rol de BI que sí puede leer el resto del
+registro.
+
+```json
+{ "name": "cost", "type": "numeric", "read_permission": "inventory.product.view_cost" }
+```
+
+En un modelo Go se declara en la metadata:
+`modelbase.ColumnDef{Key: "cost", ReadPermission: "inventory.product.view_cost"}`.
+
+**Validación del manifest.** `read_permission` debe tener la forma de una
+llave de permiso con puntos (el mismo patrón que `rbac.permissions[].key`). Si
+la llave empieza con la llave del propio addon (`inventory.` en el addon
+`inventory`), tiene que estar declarada en `rbac.permissions`. Las llaves de
+otro addon o del host solo se validan por forma, porque se resuelven en
+tiempo de ejecución.
+
+**Qué hace el servidor.** Cada camino de lectura pide una sola máscara,
+`dynamic.Service.ColumnReadMask(ctx, model, user)`, y pasa por ella su salida y
+la forma de su consulta (`dynamic/column_read.go`). Si el usuario no tiene el
+permiso:
+
+| Camino | Comportamiento |
+| --- | --- |
+| `List`, `Get`, respuestas de `Create`/`Update`/`Restore`, singleton (`/current`) | La columna no viene en el registro |
+| Relaciones embebidas (`?with=`) | Se quitan las columnas ocultas del modelo relacionado (con su propia máscara) |
+| Extensiones 1:1 (`<Ext>.<columna>`) | Igual que una columna propia |
+| `f_<col>`, `f_<rel>.<col>`, `sortBy`, `group_by`, `aggregate` | **403** `column_read_denied` |
+| Búsqueda libre (`search`) y búsqueda por relación (`SearchRefs`) | No busca en la columna |
+| Total del pie (`/aggregate`) | No suma la columna |
+| Export CSV | La columna no se exporta (ni el encabezado) |
+| Facets (`field=<col>`) | **403** `column_read_denied` |
+| `/options`: `label`, `description`, `image`, `extra_columns`, `option_display`, métricas, `label_ref` | No se proyecta; una etiqueta oculta cae a la columna de valor |
+| `/options` con `filter_by` oculto y `filter_value` | **403** `column_read_denied` |
+| `/search`: `searchIn`, proyección, `orderBy`, `allowFilters` | No busca, no proyecta, no ordena; filtro → **403** |
+| Source lines («crear desde») | La columna no viene en los renglones |
+| Herramientas de IA (`agent.CRUDService`: query, get, aggregate, vector, list/describe models) | Se quita del resultado; filtro/orden/agregado → error |
+
+```json
+{ "success": false, "code": "column_read_denied", "model": "products", "column": "cost",
+  "message": "permission denied: column \"cost\" of products is not readable (filter)" }
+```
+
+El 403 es intencional: ignorar el filtro en silencio dejaría adivinar el valor
+oculto («¿hay algún producto con costo > 100?»).
+
+**Quién decide.** Por defecto `Config.Permissions.Check(user, <permiso>)`;
+`Config.ColumnReadChecker` lo reemplaza si el host resuelve permisos por otro
+lado. El llamador de sistema (`NewSystemCaller`) ve todo. Sin servicio de
+permisos manda `RequirePermissions`: falla cerrado (oculta) o abierto (como
+el resto del CRUD). Un usuario nulo (opciones públicas) nunca tiene el
+permiso.
+
+**Lo que cablea el host.**
+
+- **Eventos hacia el cliente.** El bus interno conserva la fila completa
+  (los suscriptores son del servidor: addons, auditoría, dispatch). Antes de
+  reenviar un `CanonicalEvent` por websocket o webhook saliente, pásalo por
+  `svc.RedactEvent(ctx, ev, user)`; con `user == nil` (webhook de la
+  organización) no sale ninguna columna con permiso.
+- **Metadata.** `ReadMask.TableMeta(meta)` devuelve la metadata sin las
+  columnas ocultas para que la UI no pinte una columna vacía.
+- **Endpoints propios** que sirvan registros dinámicos: `svc.RedactRecord`.
+- **IA.** Llena `agent.ModelMeta.ReadPermissions` desde el manifest y
+  `CRUDConfig.ColumnPermissions`; sin ese checker las columnas con permiso
+  quedan ocultas para el copiloto.
+
+La escritura no cambia: el permiso es solo de lectura. La llave de la columna
+en la metadata (`ColumnDef.Key`) debe coincidir con la llave JSON del
+registro.
+
 ## Modelos singleton
 
 Un modelo singleton guarda **una fila por organización**, como la configuración
@@ -249,7 +324,7 @@ Campos nuevos, todos opcionales:
 | `ValidationSchemaResolver` | Reglas declarativas por columna (manifest)                         |
 | `ValidateModelMetadata`    | Aplica también las reglas de la metadata Go (va detrás del anterior) |
 | `CustomValidatorResolver`  | Validadores con nombre (`ValidationRule.Custom`)                   |
-| `ConfigureDynamic`         | Recibe el `*dynamic.Config` antes de `dynamic.New` (cualquier otro resolver) |
+| `ConfigureDynamic`         | Recibe el `*dynamic.Config` antes de `dynamic.New` (cualquier otro resolver, p. ej. `ColumnReadChecker`) |
 
 ## Compatibilidad
 

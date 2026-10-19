@@ -1669,6 +1669,12 @@ type ColumnDef struct {
 	// compatible).
 	Protected bool `json:"protected,omitempty"`
 
+	// ReadPermission carries the v3 Column.read_permission through the v3 →
+	// host conversion onto modelbase.ColumnDef.ReadPermission: a caller
+	// without this permission never receives the column and cannot filter,
+	// sort or aggregate by it (dynamic.ReadMask). Empty = no column gate.
+	ReadPermission string `json:"read_permission,omitempty"`
+
 	// RejectDeletedRef carries the v3 Column.reject_deleted_ref opt-in: a
 	// create whose Ref points at a soft-deleted row is rejected. See
 	// manifest/v3.Column.RejectDeletedRef.

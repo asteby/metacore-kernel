@@ -1678,6 +1678,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 				errs = append(errs, validateConstraintApproval(cw, con)...)
 			}
 			cwhere := fmt.Sprintf("models[%d].columns[%d]", mi, ci)
+			errs = append(errs, validateReadPermission(&m, cwhere, c.ReadPermission)...)
 			errs = append(errs, validateOptionFilter(cwhere, c.OptionFilter)...)
 			errs = append(errs, validateExtraColumns(cwhere, c.Options.Dynamic, colsByModel[c.Options.Dynamic.sourceOrEmpty()])...)
 			if c.Options.Len() == 0 {
@@ -2022,6 +2023,37 @@ func validateRoutes(m *Manifest) []string {
 // permissionActionRe is a data-gate action: a builtin (index/show/create/
 // update/delete/export/import) or a custom action key.
 var permissionActionRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// PermissionKeyRe is the shape of a dotted permission key — the same pattern
+// the schema enforces on rbac.permissions[].key and columns[].read_permission
+// ("inventory.product.view_cost").
+var PermissionKeyRe = regexp.MustCompile(`^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_:]*)+$`)
+
+// validateReadPermission checks a column's read_permission: a dotted permission
+// key, and — when it lives under THIS addon's own prefix — one declared in
+// rbac.permissions, so a typo cannot hide the column from every role. A key of
+// another addon or of the host is only shape-checked: it is resolved by the
+// permission service at runtime.
+func validateReadPermission(m *Manifest, where, perm string) []string {
+	if perm == "" {
+		return nil
+	}
+	if !PermissionKeyRe.MatchString(perm) {
+		return []string{fmt.Sprintf("%s.read_permission %q is not a valid permission key (want e.g. \"<addon>.<resource>.<action>\")", where, perm)}
+	}
+	own := m.Metadata.Key
+	if own == "" || !strings.HasPrefix(perm, own+".") {
+		return nil
+	}
+	if m.RBAC != nil {
+		for _, p := range m.RBAC.Permissions {
+			if p.Key == perm {
+				return nil
+			}
+		}
+	}
+	return []string{fmt.Sprintf("%s.read_permission %q is not declared in rbac.permissions", where, perm)}
+}
 
 // validatePermissionModels checks rbac.permissions[].models: every entry names
 // a model and at least one action. A bare model, or one qualified with THIS

@@ -30,6 +30,10 @@ type CRUDConfig struct {
 	// is written (for example turning an LLM "increment" line into a signed
 	// delta). Optional; it must return v unchanged when it has nothing to do.
 	NormalizeValue func(model, key string, v any) any
+	// ColumnPermissions checks the permission a column declares in
+	// ModelMeta.ReadPermissions. nil with a model that declares any = those
+	// columns are hidden from every agent call (fail closed).
+	ColumnPermissions NamedPermissionChecker
 	// DevAllowAll skips permission checks. Never enable it in production.
 	DevAllowAll bool
 }
@@ -135,8 +139,8 @@ func (s *CRUDService) ListModels(identity *AgentIdentity) ([]map[string]any, err
 			// Human title: LLMs copy raw i18n keys as model=.
 			"title": ModelLabel(s.cfg.Catalog, listKey),
 		}
-		if len(m.Columns) > 0 {
-			entry["columns"] = m.Columns
+		if cols := s.readMask(identity, m).allowed(m.Columns); len(cols) > 0 {
+			entry["columns"] = cols
 		}
 		if m.ModelKey != "" && m.ModelKey != listKey {
 			entry["model_key"] = m.ModelKey
@@ -160,8 +164,9 @@ func (s *CRUDService) DescribeModel(identity *AgentIdentity, modelKey string) (m
 		return nil, fmt.Errorf("model '%s' not found", modelKey)
 	}
 	result := map[string]any{"model": modelKey, "title": ModelLabel(s.cfg.Catalog, modelKey)}
+	mask := s.readMask(identity, m)
 	for k, v := range m.Schema {
-		result[k] = v
+		result[k] = mask.pruneSchemaValue(k, v)
 	}
 	if m.VectorEnabled {
 		result["vectorizable"] = true
@@ -184,6 +189,17 @@ func (s *CRUDService) Query(identity *AgentIdentity, req QueryRequest) (*QueryRe
 	if table == "" {
 		return nil, fmt.Errorf("model '%s' not found", req.Model)
 	}
+	mask := s.readMaskFor(identity, req.Model)
+	for k := range req.Filters {
+		if err := mask.check(req.Model, k, "filter"); err != nil {
+			return nil, err
+		}
+	}
+	if f := strings.Fields(req.OrderBy); len(f) > 0 {
+		if err := mask.check(req.Model, f[0], "order"); err != nil {
+			return nil, err
+		}
+	}
 
 	limit := req.Limit
 	if limit <= 0 || limit > 50 {
@@ -202,7 +218,7 @@ func (s *CRUDService) Query(identity *AgentIdentity, req QueryRequest) (*QueryRe
 	}
 
 	if req.Search != "" {
-		if cols := s.searchColumns(req.Model); len(cols) > 0 {
+		if cols := mask.allowed(s.searchColumns(req.Model)); len(cols) > 0 {
 			var conds []string
 			var args []any
 			for _, col := range cols {
@@ -230,6 +246,7 @@ func (s *CRUDService) Query(identity *AgentIdentity, req QueryRequest) (*QueryRe
 	}
 	for i := range records {
 		stripSensitive(records[i])
+		mask.redact(records[i])
 	}
 	return &QueryResult{Model: req.Model, Count: len(records), Records: records}, nil
 }
@@ -251,6 +268,7 @@ func (s *CRUDService) GetRecord(identity *AgentIdentity, model, recordID string)
 		return nil, fmt.Errorf("record not found: %w", err)
 	}
 	stripSensitive(row)
+	s.readMaskFor(identity, model).redact(row)
 	return row, nil
 }
 
@@ -263,7 +281,15 @@ func (s *CRUDService) VectorSearch(identity *AgentIdentity, model, query string,
 	if s.cfg.Index == nil {
 		return nil, fmt.Errorf("semantic pipeline not available")
 	}
-	return s.cfg.Index.VectorSearch(model, query, identity.OrganizationID, limit)
+	results, err := s.cfg.Index.VectorSearch(model, query, identity.OrganizationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	mask := s.readMaskFor(identity, model)
+	for i := range results {
+		mask.redact(results[i].Data)
+	}
+	return results, nil
 }
 
 // Aggregate performs count/sum/avg/min/max (permission-checked).
@@ -279,6 +305,19 @@ func (s *CRUDService) Aggregate(identity *AgentIdentity, req AggregateRequest) (
 	table := s.tableName(req.Model)
 	if table == "" {
 		return nil, fmt.Errorf("model '%s' not found", req.Model)
+	}
+
+	mask := s.readMaskFor(identity, req.Model)
+	for k := range req.Filters {
+		if err := mask.check(req.Model, k, "filter"); err != nil {
+			return nil, err
+		}
+	}
+	if err := mask.check(req.Model, req.Field, "aggregate"); err != nil {
+		return nil, err
+	}
+	if err := mask.check(req.Model, req.GroupBy, "group_by"); err != nil {
+		return nil, err
 	}
 
 	q := s.cfg.DB.Table(table).

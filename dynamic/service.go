@@ -328,6 +328,12 @@ type Config struct {
 	// a cashier can get an approval on the spot (see approvals_pin.go). The host
 	// owns PIN storage; nil disables the PIN routes (501).
 	ApprovalPINVerifier ApprovalPINVerifier
+
+	// ColumnReadChecker decides whether a caller holds the permission a column
+	// declares in ReadPermission (manifest columns[].read_permission). nil
+	// asks Config.Permissions for the permission as a capability. See
+	// column_read.go for every read surface the column gate covers.
+	ColumnReadChecker ColumnReadChecker
 }
 
 // ActorRolesResolver returns the org role keys a user holds (lower-cased or
@@ -404,6 +410,7 @@ type Service struct {
 	optionDisplays    OptionDisplayResolver
 	accessPolicies    AccessPolicyResolver
 	colCache          liveColsCache // live table columns (tablecols.go)
+	columnReadChecker ColumnReadChecker
 
 	// Transactional-outbox state (outbox.go). outboxEnabled arms after the
 	// table migrates at New; outboxStop terminates the background relay.
@@ -497,6 +504,7 @@ func New(cfg Config) *Service {
 		extensions:        cfg.ExtensionResolver,
 		optionDisplays:    cfg.OptionDisplayResolver,
 		accessPolicies:    cfg.AccessPolicyResolver,
+		columnReadChecker: cfg.ColumnReadChecker,
 
 		actorRolesResolver:        cfg.ActorRolesResolver,
 		approvalRequesterResolver: cfg.ApprovalRequesterResolver,
@@ -572,7 +580,7 @@ const maxRefSearchColumns = 4
 // (plain) search columns. A ref that cannot be resolved, or whose model has no
 // search columns, is skipped — the list never fails because of it. Skipped
 // entirely when there is no search term (no lookups on plain list requests).
-func (s *Service) refSearchFor(ctx context.Context, tableMeta *modelbase.TableMetadata, term string) map[string]query.RefSearch {
+func (s *Service) refSearchFor(ctx context.Context, tableMeta *modelbase.TableMetadata, term string, user modelbase.AuthUser) map[string]query.RefSearch {
 	if tableMeta == nil || len(tableMeta.SearchRefs) == 0 || strings.TrimSpace(term) == "" {
 		return nil
 	}
@@ -596,8 +604,11 @@ func (s *Service) refSearchFor(ctx context.Context, tableMeta *modelbase.TableMe
 		if err != nil || table == "" {
 			continue
 		}
+		// The referenced model's own read mask: a search through the fk must
+		// never match a column the caller may not read on that model.
+		refMask := s.readMask(ctx, model, refMeta, user, maxMaskDepth)
 		cols := make([]string, 0, maxRefSearchColumns)
-		for _, c := range refMeta.SearchColumns {
+		for _, c := range refMask.Allowed(refMeta.SearchColumns) {
 			if strings.Contains(c, ".") {
 				continue // one hop only
 			}
@@ -640,6 +651,14 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	if err := s.authorize(ctx, user, model, instance, modelbase.AccessList); err != nil {
 		return nil, query.PageMeta{}, err
 	}
+	// Column read gate: refuse a filter/sort/group/aggregate over a column the
+	// caller may not read, and bind the builder to the masked metadata so the
+	// search never reaches one either.
+	mask := s.readMask(ctx, model, tableMeta, user, 0)
+	if err := mask.CheckParams(params); err != nil {
+		return nil, query.PageMeta{}, err
+	}
+	tableMeta = mask.TableMeta(tableMeta)
 
 	sliceType := reflect.SliceOf(reflect.TypeOf(instance))
 	results := reflect.New(sliceType).Interface()
@@ -657,9 +676,9 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	// get an empty relation set — the new query features are no-ops.
 	exts := s.resolveExtensions(ctx, model)
 	builder := query.New(tableMeta, s.listBuilderOpts()...).WithTableName(tableName).
-		WithRefSearch(s.refSearchFor(ctx, tableMeta, params.Search)).
+		WithRefSearch(s.refSearchFor(ctx, tableMeta, params.Search, user)).
 		WithUUIDColumns(uuidColumnsOf(instance)).
-		WithExtensions(queryExtensions(exts))
+		WithExtensions(queryExtensions(mask.extensions(exts)))
 	if rels, ok := instance.(modelbase.HasRelations); ok {
 		builder = builder.WithRelations(rels.DefineRelations())
 	}
@@ -689,6 +708,7 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	if err := s.mergeExtensions(ctx, exts, items); err != nil {
 		return nil, query.PageMeta{}, err
 	}
+	items = mask.RedactRows(items)
 	items = query.ProjectMaps(items, params.Fields)
 	if params.SkipCount {
 		meta := builder.PageMeta(int64(len(items)), params)
@@ -716,6 +736,18 @@ func (s *Service) Aggregate(ctx context.Context, model string, user modelbase.Au
 	}
 	if err := s.authorize(ctx, user, model, instance, modelbase.AccessList); err != nil {
 		return nil, err
+	}
+	// Column read gate: a footer total over a hidden column (the sum of the
+	// costs) is dropped like an unknown column; a client filter over one is
+	// refused.
+	mask := s.readMask(ctx, model, tableMeta, user, 0)
+	if err := mask.CheckParams(params); err != nil {
+		return nil, err
+	}
+	tableMeta = mask.TableMeta(tableMeta)
+	columns = mask.Allowed(columns)
+	if len(columns) == 0 {
+		return map[string]any{}, nil
 	}
 
 	tableName, err := s.tableNameFor(ctx, model, instance)
@@ -746,9 +778,9 @@ func (s *Service) Aggregate(ctx context.Context, model string, user modelbase.Au
 
 	exts := s.resolveExtensions(ctx, model)
 	builder := query.New(tableMeta, s.listBuilderOpts()...).WithTableName(tableName).
-		WithRefSearch(s.refSearchFor(ctx, tableMeta, params.Search)).
+		WithRefSearch(s.refSearchFor(ctx, tableMeta, params.Search, user)).
 		WithUUIDColumns(uuidColumnsOf(instance)).
-		WithExtensions(queryExtensions(exts))
+		WithExtensions(queryExtensions(mask.extensions(exts)))
 	if rels, ok := instance.(modelbase.HasRelations); ok {
 		builder = builder.WithRelations(rels.DefineRelations())
 	}
@@ -799,8 +831,19 @@ func (s *Service) ImportSpec(ctx context.Context, model string) (modelbase.Impor
 	return modelbase.ResolveImportSpec(definer, *modal), nil
 }
 
-// Get returns a single record by ID.
+// Get returns a single record by ID, without the columns the caller may not
+// read (ReadPermission).
 func (s *Service) Get(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID) (map[string]any, error) {
+	row, err := s.getRow(ctx, model, user, id)
+	if err != nil {
+		return nil, err
+	}
+	return s.ColumnReadMask(ctx, model, user).RedactRow(row), nil
+}
+
+// getRow is Get without the column read mask, for server-side consumers of
+// the record (action dispatch, state gates, canonical events).
+func (s *Service) getRow(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID) (map[string]any, error) {
 	instance, _, err := s.resolveModel(ctx, model)
 	if err != nil {
 		return nil, err
@@ -1020,7 +1063,8 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	s.publishCanonical(ctx, model, "created", user, idStr, nil, after)
 
 	_ = s.hooks.runAfterCreate(ctx, hc, instance)
-	return after, nil
+	// The event keeps the full row; the caller gets what it may read.
+	return s.ColumnReadMask(ctx, model, user).RedactRow(after), nil
 }
 
 // Update modifies a record by ID.
@@ -1324,7 +1368,8 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	// After-hooks fire post-commit against the standalone handle (the tx, if any,
 	// is already committed here).
 	_ = s.hooks.runAfterUpdate(ctx, HookContext{Model: model, User: user, DB: s.db}, instance)
-	return after, nil
+	// The event keeps the full row; the caller gets what it may read.
+	return s.ColumnReadMask(ctx, model, user).RedactRow(after), nil
 }
 
 // Delete soft-deletes a record by ID.
@@ -1488,12 +1533,12 @@ func (s *Service) Restore(ctx context.Context, model string, user modelbase.Auth
 	if res.RowsAffected == 0 {
 		return nil, ErrRecordNotFound
 	}
-	row, err := s.Get(ctx, model, user, id)
+	row, err := s.getRow(ctx, model, user, id)
 	if err != nil {
 		return nil, err
 	}
 	s.publishCanonical(ctx, model, "updated", user, id.String(), nil, row)
-	return row, nil
+	return s.ColumnReadMask(ctx, model, user).RedactRow(row), nil
 }
 
 // --- internal -----------------------------------------------------------

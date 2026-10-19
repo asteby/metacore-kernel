@@ -1225,6 +1225,19 @@ type Column struct {
 	// the value. Optional; defaults false (fully backward compatible).
 	Protected bool `json:"protected,omitempty"`
 
+	// ReadPermission makes the column readable only by callers holding this
+	// permission (e.g. "inventory.product.view_cost"). Without it the server
+	// REMOVES the column from every read surface — list, get, export,
+	// options/search projections, related-model expansions, AI data tools and
+	// the payloads the host forwards to clients — and rejects a filter, sort,
+	// group or aggregate over it with 403 (code "column_read_denied"). Use it
+	// to hide costs or margins from a kiosk, a POS cashier or a BI role that
+	// may still read the rest of the record. Writes are unaffected. The value
+	// is a dotted permission key (the rbac.permissions[].key shape); a key
+	// under this addon's own prefix must be declared in rbac.permissions.
+	// Empty = readable by whoever may read the record (backward compatible).
+	ReadPermission string `json:"read_permission,omitempty"`
+
 	// RejectDeletedRef, on a column with a Ref, makes a CREATE fail when the
 	// referenced row exists but is soft-deleted (deleted_at set): a NEW sale
 	// line must not point at a product removed from the catalog (QA 7Leguas
