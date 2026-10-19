@@ -1,0 +1,18 @@
+{
+  "description": "Vector golden del brand pack (docs/BRAND-PACK-CONTRACT.md). sig = Ed25519(seed, sha256(domain || pack_json bytes)); sha256 = hex(sha256(pack_json bytes)); pack_b64url = base64url sin relleno de pack_json. Verificar sobre los bytes crudos, sin re-serializar.",
+  "seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "public_key_hex": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+  "domain": "metacore-brand-pack/v1\n",
+  "pack_json": "{\"spec\":1,\"kind\":\"brand-pack\",\"customer_id\":\"22222222-2222-4222-8222-222222222222\",\"version\":3,\"issued_at\":\"2026-10-18T12:00:00Z\",\"name\":\"God's Nutrition\",\"primary_color\":\"#0a7d3b\",\"accent_color\":\"#f5b700\",\"mascot_name\":\"Nutri\",\"locked\":true,\"assets\":{\"logo\":{\"type\":\"image/svg+xml\",\"sha256\":\"d913ce46f8b7252543b1028606391c953a7302336eb17906870dd177d7ca8b94\",\"width\":64,\"height\":64,\"data\":\"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PGNpcmNsZSBjeD0iMzIiIGN5PSIzMiIgcj0iMzAiIGZpbGw9IiMwYTdkM2IiLz48L3N2Zz4=\"}}}",
+  "pack_b64url": "eyJzcGVjIjoxLCJraW5kIjoiYnJhbmQtcGFjayIsImN1c3RvbWVyX2lkIjoiMjIyMjIyMjItMjIyMi00MjIyLTgyMjItMjIyMjIyMjIyMjIyIiwidmVyc2lvbiI6MywiaXNzdWVkX2F0IjoiMjAyNi0xMC0xOFQxMjowMDowMFoiLCJuYW1lIjoiR29kJ3MgTnV0cml0aW9uIiwicHJpbWFyeV9jb2xvciI6IiMwYTdkM2IiLCJhY2NlbnRfY29sb3IiOiIjZjViNzAwIiwibWFzY290X25hbWUiOiJOdXRyaSIsImxvY2tlZCI6dHJ1ZSwiYXNzZXRzIjp7ImxvZ28iOnsidHlwZSI6ImltYWdlL3N2Zyt4bWwiLCJzaGEyNTYiOiJkOTEzY2U0NmY4YjcyNTI1NDNiMTAyODYwNjM5MWM5NTNhNzMwMjMzNmViMTc5MDY4NzBkZDE3N2Q3Y2E4Yjk0Iiwid2lkdGgiOjY0LCJoZWlnaHQiOjY0LCJkYXRhIjoiUEhOMlp5QjRiV3h1Y3owaWFIUjBjRG92TDNkM2R5NTNNeTV2Y21jdk1qQXdNQzl6ZG1jaUlIWnBaWGRDYjNnOUlqQWdNQ0EyTkNBMk5DSStQR05wY21Oc1pTQmplRDBpTXpJaUlHTjVQU0l6TWlJZ2NqMGlNekFpSUdacGJHdzlJaU13WVRka00ySWlMejQ4TDNOMlp6ND0ifX19",
+  "sha256": "16dcae176c91a929f6b623d409a664dd152899f9d6650ef00202395a0753b943",
+  "signed_digest_hex": "5080c3e388e43ef0d02ce634c4fa50109acc9d8aba8b2cfe0c50b69983f42e04",
+  "sig_b64url": "gyFGq-VGigyB8HIfTkLYzFRajMOmteyJh5lSrnodegAFyjw_a0aeSe9aY9rKR1fbZnnGdMnD06_qsSkPmqx-DA",
+  "envelope": {
+    "spec": 1,
+    "version": 3,
+    "sha256": "16dcae176c91a929f6b623d409a664dd152899f9d6650ef00202395a0753b943",
+    "pack": "eyJzcGVjIjoxLCJraW5kIjoiYnJhbmQtcGFjayIsImN1c3RvbWVyX2lkIjoiMjIyMjIyMjItMjIyMi00MjIyLTgyMjItMjIyMjIyMjIyMjIyIiwidmVyc2lvbiI6MywiaXNzdWVkX2F0IjoiMjAyNi0xMC0xOFQxMjowMDowMFoiLCJuYW1lIjoiR29kJ3MgTnV0cml0aW9uIiwicHJpbWFyeV9jb2xvciI6IiMwYTdkM2IiLCJhY2NlbnRfY29sb3IiOiIjZjViNzAwIiwibWFzY290X25hbWUiOiJOdXRyaSIsImxvY2tlZCI6dHJ1ZSwiYXNzZXRzIjp7ImxvZ28iOnsidHlwZSI6ImltYWdlL3N2Zyt4bWwiLCJzaGEyNTYiOiJkOTEzY2U0NmY4YjcyNTI1NDNiMTAyODYwNjM5MWM5NTNhNzMwMjMzNmViMTc5MDY4NzBkZDE3N2Q3Y2E4Yjk0Iiwid2lkdGgiOjY0LCJoZWlnaHQiOjY0LCJkYXRhIjoiUEhOMlp5QjRiV3h1Y3owaWFIUjBjRG92TDNkM2R5NTNNeTV2Y21jdk1qQXdNQzl6ZG1jaUlIWnBaWGRDYjNnOUlqQWdNQ0EyTkNBMk5DSStQR05wY21Oc1pTQmplRDBpTXpJaUlHTjVQU0l6TWlJZ2NqMGlNekFpSUdacGJHdzlJaU13WVRka00ySWlMejQ4TDNOMlp6ND0ifX19",
+    "sig": "gyFGq-VGigyB8HIfTkLYzFRajMOmteyJh5lSrnodegAFyjw_a0aeSe9aY9rKR1fbZnnGdMnD06_qsSkPmqx-DA"
+  }
+}
