@@ -239,7 +239,7 @@ var MergeStrategies = map[string]Strategy{
 	"settings":           {Kind: MergePatch},
 	"appliance":          {Kind: MergePatch},
 	"onboarding":         {Kind: MergeReplace},
-	"roles":              {Kind: MergeKeyed, KeyFields: []string{"slug"}, UnionFields: []string{"permissions"}},
+	"roles":              {Kind: MergeKeyed, KeyFields: []string{"name"}, UnionFields: []string{"permissions"}},
 	"categories":         {Kind: MergeKeyed, KeyFields: []string{"name"}},
 	"sidebar_templates":  {Kind: MergeKeyed, KeyFields: []string{"key"}},
 	"dashboards":         {Kind: MergeKeyed, KeyFields: []string{"key"}},
@@ -487,7 +487,8 @@ func deepCopyMap(m map[string]interface{}) map[string]interface{} {
 
 // InlineFiles resolves the top-level "<name>_file" keys of preset.defaults
 // (e.g. "roles_file": "./defaults/roles.json") by reading the JSON file from
-// the preset bundle and setting "<name>" to its decoded value. An inline
+// the preset bundle and setting "<name>" to its decoded value (a file whose
+// only key is "<name>" is unwrapped). An inline
 // "<name>" already present wins and the file is not read. The "_file" key is
 // kept, so a re-run is a no-op. read receives the path without a leading "./".
 // It returns the keys it could not resolve (missing or invalid file) in
@@ -519,6 +520,14 @@ func InlineFiles(defaults map[string]interface{}, read func(path string) ([]byte
 		if err := json.Unmarshal(raw, &decoded); err != nil {
 			failed = append(failed, k)
 			continue
+		}
+		// A file may wrap its value under its own name ({"roles": [...]} in
+		// roles.json, the appliance shape): unwrap it so both shapes inline
+		// to the same value.
+		if obj, ok := decoded.(map[string]interface{}); ok && len(obj) == 1 {
+			if inner, wrapped := obj[name]; wrapped {
+				decoded = inner
+			}
 		}
 		out[name] = decoded
 	}

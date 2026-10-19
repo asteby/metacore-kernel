@@ -13,7 +13,7 @@ import (
 func pitslineBundleFiles() map[string][]byte {
 	return map[string][]byte{
 		"defaults/branding.json": []byte(`{"platform_name": "Pitsline", "logo_url": "./assets/logo.svg", "favicon_url": "./assets/logo.svg", "primary_color": "#EB2221", "mascot_name": "Llantonio"}`),
-		"defaults/roles.json":    []byte(`[{"slug": "cajero", "name": "Cajero", "permissions": ["pos.session.open"]}]`),
+		"defaults/roles.json":    []byte(`[{"name": "cajero", "label": "Cajero", "permissions": ["pos.session.open"]}]`),
 		"assets/logo.svg":        []byte(`<svg id="pitsline"/>`),
 	}
 }
@@ -136,5 +136,25 @@ func TestFlattenWithFiles_BrandingAndAssets(t *testing.T) {
 	}
 	if overlay.Preset.Defaults["branding"] != nil {
 		t.Fatal("FlattenWithFiles mutated the overlay manifest")
+	}
+}
+
+func TestInlineFiles_UnwrapsSelfNamedObject(t *testing.T) {
+	files := map[string][]byte{
+		"defaults/roles.json":    []byte(`{"roles": [{"name": "fleet_manager"}]}`),
+		"defaults/branding.json": []byte(`{"platform_name": "P"}`),
+	}
+	out, missing := InlineFiles(map[string]interface{}{
+		"roles_file":    "./defaults/roles.json",
+		"branding_file": "./defaults/branding.json",
+	}, ReadFileFrom(files))
+	if len(missing) != 0 {
+		t.Fatalf("missing = %v", missing)
+	}
+	if roles, ok := out["roles"].([]interface{}); !ok || len(roles) != 1 {
+		t.Fatalf("roles not unwrapped: %#v", out["roles"])
+	}
+	if b, ok := out["branding"].(map[string]interface{}); !ok || b["platform_name"] != "P" {
+		t.Fatalf("branding (not wrapped) changed: %#v", out["branding"])
 	}
 }

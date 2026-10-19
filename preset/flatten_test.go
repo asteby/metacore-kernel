@@ -28,8 +28,8 @@ func pitslineBase(t *testing.T) Resolved {
 				"ui_theme": {"theme_key": "classic", "font": "manrope"},
 				"onboarding": {"context": "llantera", "chips": [{"label": "a"}]},
 				"roles": [
-					{"slug": "cajero", "name": "Cajero", "permissions": ["pos.session.open", "sales.salesorder.delete"]},
-					{"slug": "fleet_manager", "name": "Flotillas"}
+					{"name": "cajero", "label": "Cajero", "permissions": ["pos.session.open", "sales.salesorder.delete"]},
+					{"name": "fleet_manager", "label": "Flotillas"}
 				],
 				"records": {"kiosk.KioskProfile": {"key": "code", "rows": [{"code": "retail", "name": "Retail"}]}}
 			}`),
@@ -169,9 +169,9 @@ func TestMergeDefaults(t *testing.T) {
 		"branding": {"platform_name": "Siete Leguas", "primary_color": "#C8102E", "support_email": null},
 		"onboarding": {"context": "siete leguas"},
 		"roles": [
-			{"slug": "cajero", "icon": "Wallet", "permissions": ["caja.cashcut.create", "-sales.salesorder.delete"]},
-			{"slug": "vendedor", "name": "Vendedor"},
-			{"slug": "fleet_manager", "_remove": true}
+			{"name": "cajero", "icon": "Wallet", "permissions": ["caja.cashcut.create", "-sales.salesorder.delete"]},
+			{"name": "vendedor", "label": "Vendedor"},
+			{"name": "fleet_manager", "_remove": true}
 		],
 		"records": {"kiosk.KioskProfile": {"rows": [{"code": "retail", "name": "Mostrador"}, {"code": "llantera", "name": "Llantera"}]}},
 		"terminology": {"es": {"sales.SalesOrder": "Orden"}}
@@ -185,8 +185,8 @@ func TestMergeDefaults(t *testing.T) {
 		"ui_theme": {"theme_key": "classic", "font": "manrope"},
 		"onboarding": {"context": "siete leguas"},
 		"roles": [
-			{"slug": "cajero", "name": "Cajero", "icon": "Wallet", "permissions": ["pos.session.open", "caja.cashcut.create"]},
-			{"slug": "vendedor", "name": "Vendedor"}
+			{"name": "cajero", "label": "Cajero", "icon": "Wallet", "permissions": ["pos.session.open", "caja.cashcut.create"]},
+			{"name": "vendedor", "label": "Vendedor"}
 		],
 		"records": {"kiosk.KioskProfile": {"key": "code", "rows": [{"code": "retail", "name": "Mostrador"}, {"code": "llantera", "name": "Llantera"}]}},
 		"terminology": {"es": {"sales.SalesOrder": "Orden"}}
@@ -203,7 +203,7 @@ func TestMergeDefaults(t *testing.T) {
 
 func TestInlineFiles(t *testing.T) {
 	files := map[string]string{
-		"defaults/roles.json": `[{"slug": "cajero"}]`,
+		"defaults/roles.json": `[{"name": "cajero"}]`,
 		"defaults/bad.json":   `{`,
 	}
 	read := func(p string) ([]byte, error) {
@@ -221,7 +221,7 @@ func TestInlineFiles(t *testing.T) {
 		"branding_file": "./defaults/bad.json"
 	}`)
 	out, failed := InlineFiles(in, read)
-	if !reflect.DeepEqual(out["roles"], []interface{}{map[string]interface{}{"slug": "cajero"}}) {
+	if !reflect.DeepEqual(out["roles"], []interface{}{map[string]interface{}{"name": "cajero"}}) {
 		t.Fatalf("roles = %v", out["roles"])
 	}
 	if out["onboarding"].(map[string]interface{})["context"] != "inline wins" {

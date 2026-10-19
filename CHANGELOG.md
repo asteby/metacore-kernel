@@ -56,6 +56,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     ruta. `Resolved.Branding()` devuelve el kit efectivo (con `theme_key`,
     `font` y `density` de `ui_theme` como respaldo) y reporta los assets que
     faltan.
+  - `InlineFiles` desenvuelve un archivo cuyo único campo es su propio nombre
+    (`{"roles": [...]}` en `roles.json`, la forma del appliance), y los `roles`
+    se unen por `name`, la identidad que usa ops.
 
 ### Fixed
 
