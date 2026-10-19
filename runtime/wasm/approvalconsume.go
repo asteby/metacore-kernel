@@ -9,6 +9,7 @@ import (
 
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // approval_consume host import limits (docs/wasm-abi.md § 23).
@@ -26,6 +27,11 @@ const ApprovalConsumeEnvelopeVersion = 1
 type approvalConsumePayload struct {
 	ApprovalID string `json:"approval_id"`
 	Policy     string `json:"policy"`
+	// Model is the logical model the grant pays a write on. Required: it is the
+	// target of the db:write capability gate and anchors the grant to the model
+	// it was issued for. RecordID anchors it to one document when known.
+	Model    string `json:"model"`
+	RecordID string `json:"record_id"`
 	// ContextEq / ContextGte constrain the context the supervisor authorized
 	// (see dynamic.ConsumeInput).
 	ContextEq  map[string]string  `json:"context_eq"`
@@ -63,8 +69,15 @@ func executeApprovalConsume(ctx context.Context, inv *invocation, reqJSON []byte
 		return fail("invalid_request", "malformed request JSON: "+err.Error())
 	}
 	id, err := uuid.Parse(req.ApprovalID)
-	if err != nil || req.Policy == "" {
-		return fail("invalid_request", "approval_id (uuid) and policy are required")
+	if err != nil || req.Policy == "" || req.Model == "" {
+		return fail("invalid_request", "approval_id (uuid), policy and model are required")
+	}
+	// Capability gate: the addon may only redeem a grant for a model it can
+	// write (same db:write policy as data_mutate / db_exec).
+	if inv.enforcer != nil {
+		if err := inv.enforcer.CheckCapability(addonKey, "db:write", req.Model); err != nil {
+			return fail("forbidden", err.Error())
+		}
 	}
 	actor, err := uuid.Parse(dynamic.ActorIDFromContext(ctx))
 	if err != nil {
@@ -75,6 +88,10 @@ func executeApprovalConsume(ctx context.Context, inv *invocation, reqJSON []byte
 	err = inv.approvalConsumer(execCtx, dynamic.ConsumeInput{
 		OrgID: orgID, ApprovalID: id, Policy: req.Policy, RequestedBy: actor,
 		ContextEq: req.ContextEq, ContextGte: req.ContextGte,
+		AddonKey: addonKey, ModelKey: req.Model, RecordID: req.RecordID,
+		// The invocation's open transaction (InvokeInTx) so a rollback leaves the
+		// grant unspent; otherwise the standalone connection.
+		DB: consumeDB(inv),
 	})
 	if err != nil {
 		if errors.Is(err, dynamic.ErrApprovalConsume) || errors.Is(err, dynamic.ErrApprovalGrantRequired) {
@@ -88,6 +105,13 @@ func executeApprovalConsume(ctx context.Context, inv *invocation, reqJSON []byte
 		"meta":    approvalConsumeMeta(addonKey, orgID, start),
 	})
 	return env
+}
+
+func consumeDB(inv *invocation) *gorm.DB {
+	if inv.tx != nil {
+		return inv.tx
+	}
+	return inv.db
 }
 
 func approvalConsumeMeta(addonKey string, orgID uuid.UUID, start time.Time) map[string]any {

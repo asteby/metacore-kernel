@@ -2534,17 +2534,25 @@ Request (max 8 KiB):
 from the invocation. The grant is redeemable only when it is in the caller's
 org, `kind=pin` for `policy`, authorized (`applied`), requested by the acting
 user, unused, fresher than `dynamic.PINGrantMaxAge`, every `context_eq` key
-equals the context the supervisor authorized (compared as text) and every
-`context_gte` key is >= the amount (one-cent tolerance). The redemption is a
+equals the context the supervisor authorized (numbers compare as numbers) and
+every `context_gte` key is >= the amount (one-cent tolerance; an absent key
+covers nothing). At least one `context_eq` / `context_gte` key is required.
+The request carries `model` (required) and optionally `record_id`: a grant
+issued with `addon_key`, `model_key` or `record_id` only redeems for the same
+addon / model / record. A grant that is not the acting user's answers
+`unknown grant` whatever its state. The redemption is a
 single conditional UPDATE: a second call, or two racing calls, lose, and a
 refused attempt does not burn the grant.
 
 Success: `{"success": true, "data": {"consumed": true}}`. Errors:
 `invalid_request`, `approvals_unavailable` (no `Host.WithApprovalConsumer`),
-`approval_invalid` (message names the failed condition: unknown grant, wrong
-policy, already used, expired, context mismatch,
-does not cover), `db_error`. No capability gate: the grant itself is the
-authorization. Implementation: `runtime/wasm/approvalconsume.go`,
+`forbidden` (no `db:write` on `model`), `approval_invalid` (message names the
+failed condition: unknown grant, wrong policy, already used, expired, context
+mismatch, does not cover), `db_error` (database failure, never reported as
+`unknown grant`). Capability gate: `db:write` on `model`. Under
+`InvokeInTx` the redemption runs on the invocation's transaction, so a rollback
+leaves the grant unspent; outside it the redemption commits on its own (prefer
+a `columns[].grant` column, which redeems inside the write's transaction). Implementation: `runtime/wasm/approvalconsume.go`,
 `dynamic.Service.ConsumeApproval`.
 
 ```go

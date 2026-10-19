@@ -200,7 +200,7 @@ func TestConsumeApproval(t *testing.T) {
 	}
 	for name, mod := range cases {
 		fresh := grant("price_below_min", map[string]any{"product_id": "p1", "unit_shortfall": 7.5})
-		if err := svc.ConsumeApproval(ctx, mod(in(fresh))); !errors.Is(err, ErrApprovalConsume) && name != "otra org" {
+		if err := svc.ConsumeApproval(ctx, mod(in(fresh))); !errors.Is(err, ErrApprovalConsume) {
 			t.Errorf("%s: %v", name, err)
 		}
 		// A refused attempt must not burn the grant.
@@ -242,7 +242,7 @@ func TestConsumeApprovalNonFiniteAmountsCoverNothing(t *testing.T) {
 func TestConsumeApprovalRechecksStateAtomically(t *testing.T) {
 	svc, cashier, _ := pinFixture(t)
 	ctx := context.Background()
-	req, err := svc.GrantPINApproval(ctx, cashier, PINGrantInput{PolicyKey: "p", Reason: "r", PIN: "4321"})
+	req, err := svc.GrantPINApproval(ctx, cashier, PINGrantInput{PolicyKey: "p", Reason: "r", PIN: "4321", Context: map[string]any{"k": "v"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,5 +274,108 @@ func TestConsumeApprovalContextEqNumeric(t *testing.T) {
 	if err := svc.ConsumeApproval(ctx, ConsumeInput{OrgID: cashier.orgID, ApprovalID: req.ID, Policy: "p",
 		RequestedBy: cashier.id, ContextEq: map[string]string{"qty": "1000000"}}); err != nil {
 		t.Fatalf("1e6 debe empatar con \"1000000\": %v", err)
+	}
+}
+
+func TestConsumeApprovalRequiresContext(t *testing.T) {
+	svc, cashier, _ := pinFixture(t)
+	ctx := context.Background()
+	req, _ := svc.GrantPINApproval(ctx, cashier, PINGrantInput{PolicyKey: "p", Reason: "r", PIN: "4321"})
+	err := svc.ConsumeApproval(ctx, ConsumeInput{OrgID: cashier.orgID, ApprovalID: req.ID, Policy: "p", RequestedBy: cashier.id})
+	if !errors.Is(err, ErrApprovalConsume) {
+		t.Fatalf("contexto vacío debe rechazarse: %v", err)
+	}
+}
+
+// A grant anchored to addon / model / record only redeems for the same ones.
+func TestConsumeApprovalAnchors(t *testing.T) {
+	svc, cashier, _ := pinFixture(t)
+	ctx := context.Background()
+	req, err := svc.GrantPINApproval(ctx, cashier, PINGrantInput{PolicyKey: "p", Reason: "r", PIN: "4321",
+		AddonKey: "pos", ModelKey: "sale_items", RecordID: "r1", Context: map[string]any{"k": "v"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := ConsumeInput{OrgID: cashier.orgID, ApprovalID: req.ID, Policy: "p", RequestedBy: cashier.id,
+		ContextEq: map[string]string{"k": "v"}, AddonKey: "pos", ModelKey: "sale_items", RecordID: "r1"}
+	for name, mod := range map[string]func(*ConsumeInput){
+		"otro addon":    func(c *ConsumeInput) { c.AddonKey = "other" },
+		"sin addon":     func(c *ConsumeInput) { c.AddonKey = "" },
+		"otro modelo":   func(c *ConsumeInput) { c.ModelKey = "orders" },
+		"otro registro": func(c *ConsumeInput) { c.RecordID = "r2" },
+		"sin registro":  func(c *ConsumeInput) { c.RecordID = "" },
+	} {
+		c := base
+		mod(&c)
+		if err := svc.ConsumeApproval(ctx, c); !errors.Is(err, ErrApprovalConsume) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if err := svc.ConsumeApproval(ctx, base); err != nil {
+		t.Fatalf("los rechazos no queman y el ancla correcta canjea: %v", err)
+	}
+}
+
+// A grant of someone else in the same org is indistinguishable from a missing one,
+// whatever its state (wrong policy, used, ...).
+func TestConsumeApprovalNoOracleForOthersGrants(t *testing.T) {
+	svc, cashier, _ := pinFixture(t)
+	ctx := context.Background()
+	req, _ := svc.GrantPINApproval(ctx, cashier, PINGrantInput{PolicyKey: "p", Reason: "r", PIN: "4321", Context: map[string]any{"k": "v"}})
+	other := uuid.New()
+	mk := func(id uuid.UUID, policy string) ConsumeInput {
+		return ConsumeInput{OrgID: cashier.orgID, ApprovalID: id, Policy: policy, RequestedBy: other, ContextEq: map[string]string{"k": "v"}}
+	}
+	missing := svc.ConsumeApproval(ctx, mk(uuid.New(), "p"))
+	for _, policy := range []string{"p", "wrong"} {
+		got := svc.ConsumeApproval(ctx, mk(req.ID, policy))
+		if got == nil || missing == nil || got.Error() != missing.Error() {
+			t.Fatalf("policy=%s: %v != %v", policy, got, missing)
+		}
+	}
+}
+
+func TestConsumeApprovalAbsentContextKeyCoversNothing(t *testing.T) {
+	svc, cashier, _ := pinFixture(t)
+	ctx := context.Background()
+	req, _ := svc.GrantPINApproval(ctx, cashier, PINGrantInput{PolicyKey: "p", Reason: "r", PIN: "4321", Context: map[string]any{"other": 9.0}})
+	err := svc.ConsumeApproval(ctx, ConsumeInput{OrgID: cashier.orgID, ApprovalID: req.ID, Policy: "p", RequestedBy: cashier.id,
+		ContextGte: map[string]float64{"unit_shortfall": 0}})
+	if !errors.Is(err, ErrApprovalConsume) {
+		t.Fatalf("clave ausente no es 0: %v", err)
+	}
+}
+
+// A database failure is an internal error, not "unknown grant".
+func TestConsumeApprovalDBErrorIsNotARefusal(t *testing.T) {
+	svc, cashier, _ := pinFixture(t)
+	if err := svc.ensureApprovalTable(); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.db.Exec("DROP TABLE approval_requests").Error; err != nil {
+		t.Fatal(err)
+	}
+	err := svc.ConsumeApproval(context.Background(), ConsumeInput{OrgID: cashier.orgID, ApprovalID: uuid.New(), Policy: "p",
+		RequestedBy: cashier.id, ContextEq: map[string]string{"k": "v"}})
+	if err == nil || errors.Is(err, ErrApprovalConsume) {
+		t.Fatalf("un fallo de DB no es un rechazo: %v", err)
+	}
+}
+
+// Redeeming on the caller's transaction: a rollback leaves the grant unspent.
+func TestConsumeApprovalRollsBackWithTx(t *testing.T) {
+	svc, cashier, _ := pinFixture(t)
+	ctx := context.Background()
+	req, _ := svc.GrantPINApproval(ctx, cashier, PINGrantInput{PolicyKey: "p", Reason: "r", PIN: "4321", Context: map[string]any{"k": "v"}})
+	in := ConsumeInput{OrgID: cashier.orgID, ApprovalID: req.ID, Policy: "p", RequestedBy: cashier.id, ContextEq: map[string]string{"k": "v"}}
+	tx := svc.db.Begin()
+	in.DB = tx
+	if err := svc.ConsumeApproval(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	tx.Rollback()
+	in.DB = nil
+	if err := svc.ConsumeApproval(ctx, in); err != nil {
+		t.Fatalf("tras rollback la autorización debe seguir vigente: %v", err)
 	}
 }
