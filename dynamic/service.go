@@ -339,6 +339,16 @@ type Config struct {
 	// asks Config.Permissions for the permission as a capability. See
 	// column_read.go for every read surface the column gate covers.
 	ColumnReadChecker ColumnReadChecker
+
+	// ModelForModelKey is the inverse of ModelKeyForModel: the model name the
+	// metadata service knows for a canonical ModelKey ("Product" →
+	// "products"). Records that reach a client named by their ModelKey
+	// (canonical events, audit entries, approval requests) resolve their
+	// column gates through it. Optional: the kernel also matches the
+	// registered model keys ignoring case and through ModelKeyForModel, but a
+	// host whose addon models live outside the modelbase registry should wire
+	// it — without a match those records are reduced to their id.
+	ModelForModelKey func(ctx context.Context, modelKey string) string
 }
 
 // ActorRolesResolver returns the org role keys a user holds (lower-cased or
@@ -417,6 +427,7 @@ type Service struct {
 	accessPolicies    AccessPolicyResolver
 	colCache          liveColsCache // live table columns (tablecols.go)
 	columnReadChecker ColumnReadChecker
+	modelForModelKey  func(ctx context.Context, modelKey string) string
 	modelAliases      sync.Map // canonical event ModelKey → model as invoked (column_read.go)
 
 	// Transactional-outbox state (outbox.go). outboxEnabled arms after the
@@ -513,6 +524,7 @@ func New(cfg Config) *Service {
 		optionDisplays:    cfg.OptionDisplayResolver,
 		accessPolicies:    cfg.AccessPolicyResolver,
 		columnReadChecker: cfg.ColumnReadChecker,
+		modelForModelKey:  cfg.ModelForModelKey,
 
 		actorRolesResolver:        cfg.ActorRolesResolver,
 		approvalRequesterResolver: cfg.ApprovalRequesterResolver,

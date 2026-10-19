@@ -130,8 +130,8 @@ func newCRFixture(t *testing.T, cfg func(*Config)) *crFixture {
 		return out
 	}
 	store := permission.NewInMemoryStore(map[permission.Role][]permission.Capability{
-		"cashier": crud("cr_products", "cr_suppliers"),
-		"manager": append(crud("cr_products", "cr_suppliers"), permViewCost, permViewRebate),
+		"cashier": crud("cr_products", "cr_suppliers", "cr_products_rel"),
+		"manager": append(crud("cr_products", "cr_suppliers", "cr_products_rel"), permViewCost, permViewRebate),
 	}, nil)
 	bus := &capturingBus{}
 	c := Config{
@@ -811,4 +811,104 @@ func TestColumnRead_ApprovalViewAndEventMasked(t *testing.T) {
 	if out := fx.svc.RedactEvent(ctx, ev, fx.manager); !leaks(out.After["snapshot"]) {
 		t.Fatalf("manager approval event: %v", out.After)
 	}
+}
+
+// crProductRel is crProduct whose Supplier relation names its target with
+// crRelThrough, to exercise how the related model's gates are resolved.
+type crProductRel struct{ crProduct }
+
+var crRelThrough = "cr_suppliers"
+
+func (crProductRel) DefineRelations() []modelbase.RelationDef {
+	return []modelbase.RelationDef{{Name: "Supplier", Kind: "belongs_to", Through: crRelThrough, ForeignKey: "supplier_id"}}
+}
+
+func TestColumnRead_RelatedMaskResolvesThroughIgnoringCase(t *testing.T) {
+	for _, tc := range []struct {
+		through string
+		// resolved: the target's own gates apply (name readable, rebate not);
+		// otherwise the relation fails closed (only id).
+		resolved bool
+	}{{"CR_SUPPLIERS", true}, {"Cr_Suppliers", true}, {"nope_model", false}} {
+		crRelThrough = tc.through
+		fx := newCRFixture(t, nil)
+		modelbase.Register("cr_products_rel", func() modelbase.ModelDefiner { return &crProductRel{} })
+
+		st, env, raw := fx.get(t, "cashier", "/dynamic/cr_products_rel?f_Supplier.rebate=12.5")
+		if st != fiber.StatusForbidden || env["code"] != "column_read_denied" {
+			t.Fatalf("%s: relation filter over rebate: %d %s", tc.through, st, raw)
+		}
+		st, _, raw = fx.get(t, "cashier", "/dynamic/cr_products_rel?f_Supplier.name=Acme")
+		if tc.resolved == (st == fiber.StatusForbidden) {
+			t.Fatalf("%s: relation filter over name: %d %s", tc.through, st, raw)
+		}
+
+		m := fx.svc.maskOf(context.Background(), "cr_products_rel", fx.cashier)
+		row := m.RedactRow(map[string]any{"id": "p", "name": "W", "supplier": map[string]any{"id": "s", "name": "Acme", "rebate": 12.5}})
+		sup, _ := row["supplier"].(map[string]any)
+		if _, leaked := sup["rebate"]; leaked || sup["id"] != "s" {
+			t.Fatalf("%s: embedded supplier: %v", tc.through, sup)
+		}
+		if _, kept := sup["name"]; kept != tc.resolved {
+			t.Fatalf("%s: embedded supplier name kept=%v want %v", tc.through, kept, tc.resolved)
+		}
+		if tc.resolved {
+			mm := fx.svc.maskOf(context.Background(), "cr_products_rel", fx.manager)
+			r := mm.RedactRow(map[string]any{"supplier": map[string]any{"id": "s", "rebate": 12.5}})
+			if r["supplier"].(map[string]any)["rebate"] != 12.5 {
+				t.Fatalf("%s: manager embedded supplier: %v", tc.through, r)
+			}
+		}
+	}
+	crRelThrough = "cr_suppliers"
+}
+
+// A fresh Service (a restarted process or another replica) has published
+// nothing: records named by their ModelKey still resolve their gates.
+func TestColumnRead_ModelKeyResolutionSurvivesRestart(t *testing.T) {
+	ctx := context.Background()
+	ev := &CanonicalEvent{Model: "CrProduct", After: map[string]any{"id": "1", "name": "A", "cost": 3}}
+	check := func(t *testing.T, fx *crFixture) {
+		t.Helper()
+		fx.svc.modelAliases = sync.Map{} // nothing remembered from publications
+		if out := fx.svc.RedactEvent(ctx, ev, fx.cashier); out.After["cost"] != nil || out.After["name"] != "A" {
+			t.Fatalf("cashier: %v", out.After)
+		}
+		if out := fx.svc.RedactEvent(ctx, ev, fx.manager); out.After["cost"] != 3 {
+			t.Fatalf("manager keeps the cost: %v", out.After)
+		}
+		if got := fx.svc.RedactRecord(ctx, "CrProduct", fx.manager, ev.After); got["cost"] != 3 {
+			t.Fatalf("audit-style redaction for the manager: %v", got)
+		}
+	}
+	t.Run("registry through ModelKeyForModel", func(t *testing.T) {
+		check(t, newCRFixture(t, func(c *Config) {
+			c.ModelKeyForModel = func(_ context.Context, m string) string {
+				if m == "cr_products" {
+					return "CrProduct"
+				}
+				return ""
+			}
+		}))
+	})
+	t.Run("host inverse ModelForModelKey", func(t *testing.T) {
+		check(t, newCRFixture(t, func(c *Config) {
+			c.ModelForModelKey = func(_ context.Context, k string) string {
+				if k == "CrProduct" {
+					return "cr_products"
+				}
+				return ""
+			}
+		}))
+	})
+	t.Run("case-insensitive registry key", func(t *testing.T) {
+		fx := newCRFixture(t, nil)
+		fx.svc.modelAliases = sync.Map{}
+		if got := fx.svc.RedactRecord(ctx, "CR_PRODUCTS", fx.manager, ev.After); got["cost"] != 3 {
+			t.Fatalf("manager: %v", got)
+		}
+		if got := fx.svc.RedactRecord(ctx, "CR_PRODUCTS", fx.cashier, ev.After); got["cost"] != nil || got["name"] != "A" {
+			t.Fatalf("cashier: %v", got)
+		}
+	})
 }

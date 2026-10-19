@@ -433,8 +433,11 @@ func (s *Service) relatedMasks(ctx context.Context, model string, user modelbase
 		if rm, ok := memo[through]; ok {
 			return rm
 		}
-		var rm *ReadMask
-		if refModel, _, refMeta := s.resolveRefModel(ctx, through); refMeta != nil {
+		// A declared relation whose target cannot be resolved fails CLOSED:
+		// SQL may still reach the table (it folds the identifier), so a
+		// filter on it is refused and an embedded record keeps only its id.
+		rm := &ReadMask{model: through, all: true}
+		if refModel, refMeta, ok := s.resolveGateModel(ctx, through); ok {
 			rm = s.readMask(ctx, refModel, refMeta, user, depth+1)
 		}
 		memo[through] = rm
@@ -606,17 +609,74 @@ func (s *Service) recordMask(ctx context.Context, model string, user modelbase.A
 	if _, ok := user.(systemPrincipal); ok {
 		return &ReadMask{model: model}
 	}
-	meta, err := s.meta.GetTable(ctx, model)
-	if errors.Is(err, metadata.ErrModelNotFound) {
-		if alias, ok := s.modelAliases.Load(model); ok {
-			model = alias.(string)
-			meta, err = s.meta.GetTable(ctx, model)
-		}
-	}
-	if err != nil {
+	resolved, meta, ok := s.resolveGateModel(ctx, model)
+	if !ok {
 		return &ReadMask{model: model, all: true}
 	}
-	return s.readMask(ctx, model, meta, user, 0)
+	return s.readMask(ctx, resolved, meta, user, 0)
+}
+
+// resolveGateModel finds the metadata that declares the column gates of a
+// model named by a relation's Through, a column Ref, a canonical event
+// ModelKey or the model as invoked. Resolution is deterministic — it never
+// depends on what this process happened to publish before:
+//
+//  1. the name as given;
+//  2. Config.ModelForModelKey (the host's inverse of ModelKeyForModel);
+//  3. the last segment of an addon-qualified name ("addon.Model");
+//  4. the registered model keys (modelbase registry), matched ignoring case
+//     or through ModelKeyForModel.
+//
+// The alias remembered at publish time is only tried last. ok=false when no
+// candidate answers or the metadata fails to load (callers fail closed).
+func (s *Service) resolveGateModel(ctx context.Context, name string) (string, *modelbase.TableMetadata, bool) {
+	if strings.TrimSpace(name) == "" {
+		return "", nil, false
+	}
+	tried := map[string]bool{}
+	try := func(cand string) (*modelbase.TableMetadata, bool, bool) {
+		if cand == "" || tried[cand] {
+			return nil, false, false
+		}
+		tried[cand] = true
+		meta, err := s.meta.GetTable(ctx, cand)
+		if err == nil && meta != nil {
+			return meta, true, false
+		}
+		return nil, false, err != nil && !errors.Is(err, metadata.ErrModelNotFound)
+	}
+	cands := []string{name}
+	if s.modelForModelKey != nil {
+		cands = append(cands, s.modelForModelKey(ctx, name))
+	}
+	if i := strings.LastIndex(name, "."); i >= 0 && i < len(name)-1 {
+		cands = append(cands, name[i+1:])
+	}
+	short := cands[len(cands)-1]
+	for _, k := range modelbase.Keys() {
+		if strings.EqualFold(k, name) || strings.EqualFold(k, short) {
+			cands = append(cands, k)
+			continue
+		}
+		if s.modelKeyForModel != nil {
+			if mk := s.modelKeyForModel(ctx, k); mk != "" && (strings.EqualFold(mk, name) || strings.EqualFold(mk, short)) {
+				cands = append(cands, k)
+			}
+		}
+	}
+	if alias, ok := s.modelAliases.Load(name); ok {
+		cands = append(cands, alias.(string))
+	}
+	for _, c := range cands {
+		meta, ok, failed := try(c)
+		if failed {
+			return "", nil, false // metadata broken: never fall through to a looser match
+		}
+		if ok {
+			return c, meta, true
+		}
+	}
+	return "", nil, false
 }
 
 func redactAll(masks []*ReadMask, row map[string]any) map[string]any {

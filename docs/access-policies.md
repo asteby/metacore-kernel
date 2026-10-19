@@ -269,9 +269,15 @@ pasa `before`, `after` y `changes` por un redactor; el host lo amarra a
 Create, Update, Options, Search, Facets, export y source lines responden con
 el error. `RedactEvent`/`RedactRecord`/`ApprovalView` también reducen el
 registro a su `id` cuando ningún modelo responde a ese nombre: los eventos
-nombran el modelo por su `ModelKey` y el servicio recuerda el alias
-`ModelKey → modelo` en cada publicación; tras un reinicio, el host debe pasar
-el nombre con el que registró la metadata.
+nombran el modelo por su `ModelKey`, que se resuelve de forma determinista:
+el nombre tal cual, `Config.ModelForModelKey` (inverso de
+`ModelKeyForModel`, que el host debe cablear si sus modelos de addon no están
+en el registro `modelbase`), el último segmento de `addon.Model` y las llaves
+del registro comparadas sin mayúsculas o a través de `ModelKeyForModel`. No
+depende de lo que el proceso haya publicado antes. Una relación declarada
+cuyo `Through` no resuelve (comparado sin mayúsculas) falla cerrada: filtrar
+por cualquier columna del relacionado da 403 y el registro incrustado queda
+en su `id`.
 
 **`/options` y `/search`.** Un `value` con permiso no se puede ofrecer: 403.
 
@@ -284,6 +290,8 @@ modelo puede inferir una columna con permiso a base de intentos:
 - una regla `unique` sobre una columna con permiso, `/unique-violations` y la
   importación con upsert por esa llave dicen si un valor existe.
 
+`Manifest.ValidateAdvisory` avisa (warning, no error) de cada restricción
+que lee una columna con permiso y de cada columna `unique` con permiso.
 Si eso importa, no le des escritura sobre el modelo a ese rol o no uses la
 columna con permiso en restricciones/llaves únicas. La metadata servida y la
 plantilla de importación revelan que la columna existe, no su valor.
