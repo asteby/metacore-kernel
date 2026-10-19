@@ -32,6 +32,8 @@ keep them in sync.
 | 1.12    | proposal | when the embedder wires `Host.WithStageMachine`, `data_mutate` / `data_batch` refuse a create or update that is not a declared stage transition (`invalid_transition`), the same rule as `dynamic.Service` Create/Update. Incrementing the lifecycle column is refused. Unwired hosts keep the previous behaviour. See § 14.11. |
 | 1.13    | proposal | when the embedder wires `Host.WithExtensions`, `data_mutate` / `data_batch` / `data_query` accept `"<Ext>.<column>"` (and a nested object under the extension key) and read or write the 1:1 extension table instead of the owner table. Unwired hosts still reject a dotted column name. See § 14.12 and § 15.9. |
 | 1.14    | proposal | `data_mutate` / `data_query` / `data_batch` copy `dynamic.CorrelationIDFromContext` onto `meta.correlation_id` and, on failure, onto `error.correlation_id`. The field is absent when the invocation context has no id. `envelopeVersion` stays `1`. See § 14.13. |
+| 1.15    | proposal | adds `approval_consume` (redeem a supervisor PIN grant in one atomic host step), `approval_required` from `data_mutate` / `data_batch` guards, and the create stamp phase (`Host.WithCreateStamp`: snapshots and grant columns). See § 23 and § 24. |
+| 1.16    | proposal | adds `edge_command`: a guest sends a command to a physical device of its org (CashDro, printer...) and gets back the answer the host carried over the device agent's authenticated connection, not a copy relayed by the browser. It is gated by `edge:command <device_key>.<command_kind>`, and only for device classes from the addon's own `edge_devices[]`. Idempotent per key, with a timeout capped at 60 s, and the device wait does not count against the guest's budget. See § 25. |
 | 1.10    | proposal | `http_fetch` / `http_request` responses whose body is **not valid UTF-8** now travel as `body_base64` (standard base64) with `body_is_base64: true` and an EMPTY `body`; UTF-8 bodies are unchanged. Fixes silent corruption of every binary response (PDF / ZIP / image / XLSX): `encoding/json` rewrites each invalid byte as U+FFFD, so guests received corrupt bytes with a 200 status and no error. See § 3.1. |
 | 1.6     | proposal | adds `http_request` (outbound HTTP with caller-supplied request headers as a JSON object — enables `Authorization`/`Accept` for authenticated third-party calls; same `http:fetch` capability + SSRF guard + 30 s timeout + 8 MiB cap as `http_fetch`, which is left unchanged and now delegates to the shared path with empty headers) and `connector_get` (resolves one org's credentials for a declared connector — the v3 `connectors` block — returning a JSON object; gated by `connector:read <key>` and tenant-scoped by the invocation `orgID`). Guests built against 1.0 – 1.5 keep working. |
 
@@ -2581,3 +2583,61 @@ envelope code is `approval_required` instead of `constraint_violation`, so the
 guest can tell "this needs a supervisor" from "this data is invalid" and ask
 for the authorization (PIN grant, redeemed with `approval_consume`) before
 retrying. Nothing is parked: a wasm write has no applier that could replay it.
+
+## 24. Create stamp phase on `data_mutate` / `data_batch` (Host.WithCreateStamp)
+
+Creates through the wasm ABI run the same declarative stamp phase as
+`dynamic.Service.Create`, inside the write transaction, after the folio stamp
+and before the create check and the INSERT:
+
+1. **Snapshots** (`Model.snapshots`): columns copied from a related row
+   (`from` = a `ref` column of the model, `fields` = source column -> target).
+   The targets are `protected` and the server value ALWAYS overwrites what the
+   guest sent. A missing source row or an empty ref clears the targets.
+2. **Grants** (`Column.grant`): the column carries a PIN-grant id; when the
+   authorization is needed (a `context_gte` expression is positive) the kernel
+   redeems it (see § 23) and stamps the protected flag column `sets` with 1.
+   A refused grant answers `approval_invalid` and nothing is written.
+3. The Tier-2 formulas that read a stamped column are re-evaluated (so
+   `price_shortfall = (min_price_at_sale - unit_price) * (1 - price_authorized)`
+   is correct on this path too).
+
+The guest must name the `model` in the mutation (a table-only create is not
+stamped). Wire with `host.WithCreateStamp(dynamicService.CreateStamper())`.
+
+## 25. `edge_command`: commands to edge devices (v1.16)
+
+```
+edge_command(reqPtr i32, reqLen i32) -> i64          [v1.16]
+```
+
+Sends a command to a physical device of the organization (for example a CashDro on the store LAN) through the connection of its `ops-edge-agent`, and returns the answer **the host transported**. With this, the guest gets the device's answer directly, without trusting a copy that a browser relayed.
+
+**Request** (≤ 64 KiB):
+
+```json
+{"device_id":"<uuid>","kind":"cashdro","payload":{"operation":"askOperation","params":{"operationId":"812"}},
+ "idempotency_key":"op-1:ask:3","timeout_ms":10000}
+```
+
+- `kind` is the agent's command kind (`cashdro`, `print`, `terminal`, ...). `payload` is any JSON.
+- `idempotency_key` (optional, ≤ 200 characters) makes delivery at-most-once per (org, addon, device, key): a repeat returns the recorded answer with `replay:true` and does not send the command again. The same key with another `kind`/`payload` returns `idempotency_conflict`. Use one key per logical step, not per poll.
+- `timeout_ms`: 10 s by default, capped at 60 s. The device wait does not count against the guest's CPU budget, but it does count against the invocation's hard cap.
+
+**Response:** envelope v1 `{success, data, meta}` with `data = {command_id, device_id, ok, error?, data?, replay?, received_at, nonce}`. `nonce` is a random value per delivery that the host passes to the embedder (`EdgeCommandRequest.Nonce`) to carry in the command frame. Together with `command_id`, it is what a future device signature would cover (option B). `ok:false` is the agent's error (the device answered with a failure). `data` is the agent's answer verbatim, capped at 1 MiB.
+
+**Authorization**, both checks before sending anything:
+1. The device belongs to the invocation's org, and its class (`edge_devices[].key`) is declared by **the calling addon** (`forbidden` otherwise; one addon does not drive another addon's devices).
+2. Capability `edge:command <device_key>.<command_kind>`, glob allowed on the kind (`cashdro.*`). The manifest validator requires `device_key` to be one of the addon's `edge_devices`.
+
+**Limits:**
+- 50 commands per invocation and 120 per (org, addon, device) per minute (`Host.WithEdgeCommandLimits`). Beyond that: `rate_limited`.
+- The timeout is the lowest of the requested value, 60 s, and what is left of the invocation's hard cap minus 1 s. When not even 1 s is left: `timeout` without sending.
+- Inside a transactional invocation (`InvokeInTx`) the import answers `in_transaction`: waiting for a device never holds an action's locks.
+- `EdgeCommandRequest.MaxResponseBytes` (1 MiB) tells the embedder not to store more than that.
+
+**Errors:** `invalid_request`, `in_transaction`, `rate_limited`, `no_active_org`, `forbidden`, `device_not_found`, `device_offline`, `timeout` (the command MAY have run: retry with the same key), `idempotency_conflict`, `response_too_large`, `edge_unavailable` (the host does not configure it), `edge_error`.
+
+**Embedder:** `Host.WithEdgeCommander(EdgeCommander)` with `Device(ctx, org, id)` (resolves the device's class) and `Send(ctx, EdgeCommandRequest)` (delivers through the agent's session, records the audit row and applies idempotency). Org and addon always come from the invocation.
+
+**Trust:** the answer is as trustworthy as the agent's connection (device token issued at pairing, TLS). The agent does not sign the device answers; that is an open decision (see the PR).

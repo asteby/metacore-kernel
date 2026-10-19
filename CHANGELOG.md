@@ -10,7 +10,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - **Permisos de lectura por columna** ([docs](docs/access-policies.md#permisos-de-lectura-por-columna)). Una columna del manifest declara `read_permission: "<permiso>"` (v3 `columns[].read_permission` → `manifest.ColumnDef.ReadPermission` → `modelbase.ColumnDef.ReadPermission`, también declarable en modelos Go). Si el usuario no tiene el permiso, el servidor quita la columna de list, get, respuestas de create/update/restore, export, relaciones embebidas (`?with=`), extensiones, source lines, `/options` (etiqueta, descripción, imagen, `extra_columns`, `option_display`, métricas) y `/search`, no busca por ella (búsqueda libre y por relación) ni la suma en el pie, y rechaza con 403 `column_read_denied` un filtro, orden, `group_by`, `aggregate` o facet sobre ella. Todo pasa por una sola máscara: `dynamic.Service.ColumnReadMask`. Para el host: `RedactEvent` (eventos que se reenvían a clientes), `RedactRecord`, `ReadMask.TableMeta` y `Config.ColumnReadChecker`. El copiloto (`agent.CRUDService`) aplica lo mismo con `ModelMeta.ReadPermissions` y `CRUDConfig.ColumnPermissions` (sin checker, falla cerrado). Validación: llave de permiso con puntos; si es del propio addon, declarada en `rbac.permissions`. Esquema JSON v3 actualizado.
-
+- **Import wasm `edge_command` (ABI 1.16) y capacidad `edge:command <device_key>.<command_kind>`.** Un guest manda un comando a un dispositivo físico de su organización (un CashDro, una impresora…) por la conexión de su `ops-edge-agent` y recibe la respuesta que el host transportó. Así ya no tiene que confiar en una copia que reenvió el navegador. Solo aplica a clases de dispositivo del propio addon (`edge_devices[]`, el validador del manifest lo exige) y a los kinds concedidos. Es idempotente por llave, con timeout de 10 s por omisión y tope de 60 s, y la espera no consume el presupuesto del guest. El embebedor lo conecta con `Host.WithEdgeCommander` (`Device` + `Send`, auditoría e idempotencia de su lado). docs/wasm-abi.md § 25. Hay límites de tasa: 50 por invocación y 120 por dispositivo por minuto (`rate_limited`, configurable con `Host.WithEdgeCommandLimits`). El timeout se acota a lo que queda del hard cap, el import se rechaza dentro de `InvokeInTx` (`in_transaction`), y cada entrega lleva un `nonce` (firmable junto con `command_id`) y el tope de respuesta (`MaxResponseBytes`).
 - **`payments.settle`, contrato implementado por el host** (RFC §16). Es `payments.Settle` detrás del import `capability_query`, con la concesión `capability:query payments.settle`. Es puro: no usa ledger ni organización y no escribe nada. Los errores van con código (`exceeds_total`, `nothing_due`, `invalid_tolerance`...). Con esto, POS, caja y kiosko usan una sola implementación del cobro mixto (solo el efectivo da cambio, tolerancia y tope relativo de redondeo) en lugar de copiarla en cada guest.
 - **Estándar de pagos, fases K2 (ledger) y K3 (conciliación)** ([RFC §16](docs/RFC-PAYMENTS-STANDARD.md)).
   Paquete nuevo `payments/ledger`: escritor único de `commerce_payments`,
@@ -95,6 +95,107 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `permission`, `trigger` (`manual` | `first_visit`), `route` (obligatoria con
   `first_visit`), `order` y `steps[]` (reusa `AgentGuideStep`: `target` de UI o
   paso `concept`). Validación de claves y pasos únicos en `v3.Validate`.
+- **preset: presets que extienden a otro (`preset.extends`) y visibilidad
+  privada.** Base del RFC `docs/rfcs/RFC-PRESETS-DE-EMPRESA-Y-DISTRIBUCION.md`.
+  - Manifest v3: `metadata.visibility` (`public|private`), `metadata.owner`,
+    `preset.extends {key, version}` y `preset.remove_addons`. `preset.addons`
+    puede ir vacío cuando hay `extends`. El schema embebido lo acepta, así que
+    hub y manifestcheck deben subir a esta versión antes de publicar un preset
+    que lo use.
+  - `preset.Flatten(base, overlay)` une un preset con su base. Los addons se
+    unen por clave, con rangos combinados (deben cumplirse los dos), `optional`
+    del overlay y `requires` unidos; `remove_addons` se aplica al final. Los
+    `defaults` se unen con la tabla `preset.MergeStrategies` (merge-patch,
+    reemplazo, listas por identidad con `_remove` y unión de `permissions`, y
+    `records` por modelo).
+  - `Resolved.Lineage` registra la cadena (base primero). `ResolveFromManifest`
+    devuelve `ErrNeedsBase` para un overlay, así un host viejo falla en vez de
+    instalar solo las diferencias.
+  - `preset.InlineFiles` resuelve las claves `*_file` de `preset.defaults`
+    desde el bundle. Hoy nadie las lee, por eso los roles, categorías, branding
+    y dashboards de los presets por archivo no se aplican en SaaS.
+- **preset: brand kit tipado y archivos del bundle de un preset.**
+  - `bundle.Bundle.PresetFiles` conserva todo `defaults/**` y `assets/**` (antes
+    `Read` los descartaba) y `Write` los emite. `(*Bundle).ReadPresetFile` lee
+    uno por ruta (acepta `./`).
+  - `v3.Branding` tipa `preset.defaults.branding` con los campos de hoy
+    (`platform_name`, `logo_url`, `favicon_url`, `primary_color`,
+    `accent_color`, `support_email`, `support_url`, `mascot_name`,
+    `mascot_skin`) más `logo_dark_url`, `logo_mark_url`, `login_background_url`,
+    `theme_key`, `font`, `density`, `pwa_name`, `pwa_short_name` y
+    `email_from_name`. Todos son opcionales. Los colores deben ser hex y los
+    assets una URL http(s) o una ruta `./assets/...`. Las claves desconocidas
+    son error. Los helpers son `ParseBranding`, `Validate`, `AssetPaths`,
+    `WithAssetURLs` y `ToMap`.
+  - Validación: el branding inline se valida en `v3.Validate` (y en el schema).
+    `bundle.Read` estricto además resuelve los `*_file`, valida el branding que
+    viene de `branding_file` y exige que cada `./assets/...` exista en el bundle.
+    En modo no estricto, esto queda como `ValidationWarnings`.
+  - `preset.ResolveWithFiles` y `preset.FlattenWithFiles` hacen inline de los
+    `*_file` desde los archivos del bundle y llenan `Resolved.Files`. El
+    branding del overlay se une por merge-patch y sus assets ganan en la misma
+    ruta. `Resolved.Branding()` devuelve el kit efectivo (con `theme_key`,
+    `font` y `density` de `ui_theme` como respaldo) y reporta los assets que
+    faltan.
+  - `InlineFiles` desenvuelve un archivo cuyo único campo es su propio nombre
+    (`{"roles": [...]}` en `roles.json`, la forma del appliance), y los `roles`
+    se unen por `name`, la identidad que usa ops.
+  - `v3.Branding.Fonts`: familias de fuente adicionales (nombres de Google
+    Fonts, por ejemplo `Barlow`) que el host carga para las superficies propias
+    de la org (kiosko, pantalla de cliente, documentos), aparte del token `font`
+    de la UI.
+  - `preset.AssetRefs(defaults)` y `preset.RewriteAssetRefs(defaults, urls)`:
+    las referencias `./assets/...` de cualquier default (por ejemplo los assets
+    del tema de un `kiosk_profile`) se materializan y se reescriben igual que
+    las de branding. `bundle.Read` estricto exige que todas existan.
+- **preset: endurecimiento del overlay (revisión r1 de #508).**
+  - **Escalada por overlay:** `Flatten` rechaza (`ErrRoleEscalation`) los roles
+    del overlay con comodines, con campos fuera del contrato del rol (flags de
+    sistema o admin) o que tocan roles de sistema: quitarlos con `_remove`,
+    cambiar sus permisos o crear uno con nombre reservado
+    (`SystemRoleNames`, comodín o flag `system`/`is_system`/`admin`).
+    `FlattenWithOptions(..., FlattenOptions{KnownPermission})` exige además que
+    cada permiso agregado lo declare el set resuelto
+    (`preset.DeclaredPermissions(addons...)`).
+  - `preset.ResolveChain(top, files, fetch, opts)` resuelve la cadena
+    `extends` de arriba abajo, acotada por `MaxLineage`, con detección de
+    visitados (A→B→A da `ErrCyclicExtends`) y verificación de clave y rango de
+    cada base.
+  - **SVG:** `preset.ValidateSVG` (allowlist portada de ops#1977) y
+    `bundle.Read` valida cada `assets/**.svg`. El host además debe servir los
+    assets con `Content-Security-Policy: sandbox` y
+    `X-Content-Type-Options: nosniff`.
+  - **Cadena de versiones:** `manifest.APIVersion` pasa a `3.1.0`. Un manifest
+    con `metadata.visibility` o `preset.extends` debe requerir
+    `kernel >=3.1.0` (`v3.OverlayMinKernel`), así un host 3.0.x lo rechaza en
+    la compatibilidad. `docs/spec/v3/manifest-v3.schema.json` vuelve a ser
+    idéntico al embebido.
+  - **Menores:** `combineRanges` rechaza rangos sin versión en común;
+    `DefaultsWarnings` avisa de un `extends` sin tope y de una clave inline
+    que tapa su `*_file` (van a `ValidationWarnings`); `Write`,
+    `FlattenWithOptions` y `Read` rechazan rutas de preset sucias, con `\` o
+    con `%`, y `Read` rechaza `\` en cualquier entrada; las refs
+    `./assets/...` sucias se reportan; `mergeKeyed` usa identidad estable
+    (campo + JSON), identidad alternativa para roles (`key`, `name`, `slug`),
+    no copia `-perm` a un ítem nuevo y un `_remove` seguido de la misma
+    identidad crea un ítem nuevo en vez de revivir el de la base.
+- **Columnas snapshot y autorizaciones declarativas (`models[].snapshots`,
+  `columns[].grant`; docs/snapshots.md).** Al crear, el servidor copia columnas
+  desde una fila relacionada (costo y piso del producto al vender, sucursal y
+  vendedor del pedido) a columnas `protected`, y canjea una autorización PIN
+  de un solo uso estampando un flag protegido que leen las fórmulas y los
+  guards (`price_shortfall`). Corre igual en `/data`, `data_mutate`/`data_batch`
+  (`Host.WithCreateStamp`, ABI § 24) y acciones; el valor del servidor pisa lo
+  que mande el cliente o el guest. `dynamic.Config.StampResolver`,
+  `Service.StampCreate` / `CreateStamper`. La lectura SIEMPRE filtra por
+  `organization_id` (falla cerrado sin org o sin esa columna) e ignora filas
+  con `deleted_at`; un origen inexistente rechaza la escritura
+  (`ErrSnapshotSource`). El stamp también corre en update (`StampUpdate`,
+  `UpdateStamper`, `Host.WithUpdateStamp`): re-snapshot si cambia la fuente y
+  una autorización cae si cambia lo que cubría (hace falta una grant nueva).
+  El canje se hace con el INSERT/UPDATE, en su transacción y después de los
+  guards (`StampPending.Redeem`).
+
 - **runtime/wasm: import `approval_consume` y `Host.WithApprovalConsumer`
   (docs/wasm-abi.md § 23).** Un handler que escribe una línea bajo una
   autorización de supervisor (precio bajo el piso, descuento fuera de regla)

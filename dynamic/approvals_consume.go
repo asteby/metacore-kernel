@@ -45,6 +45,12 @@ type ConsumeInput struct {
 	// write the grant pays for, so a rollback leaves the grant unspent. nil =
 	// the service's own connection (the redemption commits on its own).
 	DB *gorm.DB
+	// DryRun validates every condition without spending the grant.
+	DryRun bool
+	// Declarative marks a redemption named by an installed manifest
+	// (columns[].grant), not by a guest: only the record anchor is compared (the
+	// context_eq keys already pin the product / document).
+	Declarative bool
 }
 
 // ConsumeApproval redeems a kind=pin grant for ONE use, atomically. It is the
@@ -98,9 +104,7 @@ func (s *Service) ConsumeApproval(ctx context.Context, in ConsumeInput) error {
 		return refuse("already used")
 	case time.Since(*row.DecidedAt) > PINGrantMaxAge:
 		return refuse("expired")
-	case row.AddonKey != "" && row.AddonKey != in.AddonKey,
-		row.ModelKey != "" && row.ModelKey != in.ModelKey,
-		row.RecordID != "" && row.RecordID != in.RecordID:
+	case anchoredElsewhere(&row, in):
 		return refuse("grant anchored to another document")
 	}
 	// The recorded context is immutable once the grant is applied, so checking
@@ -120,6 +124,9 @@ func (s *Service) ConsumeApproval(ctx context.Context, in ConsumeInput) error {
 		if !ok || got < min-0.01 {
 			return refuse("grant does not cover: " + k)
 		}
+	}
+	if in.DryRun {
+		return nil
 	}
 	// Atomic single use. Org, kind, policy, status, owner, freshness and the unused
 	// marker are all in the WHERE: only a row that STILL satisfies every condition
@@ -187,4 +194,17 @@ func contextEquals(recorded any, want string) bool {
 func hasLeadingZero(s string) bool {
 	s = strings.TrimLeft(strings.TrimSpace(s), "+-")
 	return len(s) > 1 && s[0] == '0' && s[1] != '.'
+}
+
+// anchoredElsewhere reports a grant anchored (addon / model / record) to
+// something other than what is being redeemed. Strict for a guest redemption: a
+// grant that carries an anchor needs the caller to present the same one.
+// Declarative redemptions compare only what the stamp knows.
+func anchoredElsewhere(row *ApprovalRequest, in ConsumeInput) bool {
+	if in.Declarative {
+		return row.RecordID != "" && in.RecordID != "" && row.RecordID != in.RecordID
+	}
+	return (row.AddonKey != "" && row.AddonKey != in.AddonKey) ||
+		(row.ModelKey != "" && row.ModelKey != in.ModelKey) ||
+		(row.RecordID != "" && row.RecordID != in.RecordID)
 }

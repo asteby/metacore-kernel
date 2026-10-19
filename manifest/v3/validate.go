@@ -1208,8 +1208,27 @@ func validatePipelineRuntime(m *Manifest) []string {
 			}
 		}
 	}
+	// edge:command <device_key>.<command_kind>: the device class must be one
+	// of this addon's edge_devices (the host only lets an addon drive its own
+	// devices) and the kind a command name or a glob.
+	for ci, c := range m.Capabilities {
+		if c.Kind != "edge:command" {
+			continue
+		}
+		dev, kind, ok := strings.Cut(c.Target, ".")
+		switch {
+		case !ok || dev == "" || kind == "" || !edgeCommandKindRe.MatchString(kind):
+			errs = append(errs, fmt.Sprintf("capabilities[%d].target %q must be \"<device_key>.<command_kind>\" (kind may be *)", ci, c.Target))
+		default:
+			if _, declared := seenDevice[dev]; !declared {
+				errs = append(errs, fmt.Sprintf("capabilities[%d].target %q names device %q, which is not one of this addon's edge_devices", ci, c.Target, dev))
+			}
+		}
+	}
 	return errs
 }
+
+var edgeCommandKindRe = regexp.MustCompile(`^(\*|[a-z][a-z0-9_]*(\.\*)?)$`)
 
 // validateDesktopClients enforces unique keys, closed auth set, https
 // download_url, and bare installer filenames. Empty is a no-op. Allowed on
@@ -1467,6 +1486,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 		if m.Lifecycle != nil {
 			errs = append(errs, "kind=Preset must not declare a lifecycle block")
 		}
+		errs = append(errs, validatePresetBlock(&m)...)
 	case KindTheme:
 		if m.Theme == nil {
 			errs = append(errs, "kind=Theme requires a theme block")
@@ -1478,6 +1498,8 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	}
 
 	errs = append(errs, validatePermissionModels(&m)...)
+	errs = append(errs, validateMetadataVisibility(&m)...)
+	errs = append(errs, validateOverlayKernelGate(&m)...)
 
 	// Index every model's declared columns by model KEY so rollup/formula
 	// cross-field checks can resolve targets/identifiers on the PARENT (the
@@ -1657,6 +1679,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 				errs = append(errs, fmt.Sprintf("%s.format %q: %v", where, sq.Format, err))
 			}
 		}
+		errs = append(errs, validateSnapshots(mi, mod, ownCols)...)
 		errs = append(errs, validateReasonRequired(&m, mi, mod)...)
 		// Static-option cascade guards + declarative Constraints on model columns.
 		for ci, c := range mod.Columns {
@@ -1664,6 +1687,9 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 				if _, ok := seqKeys[c.Sequence]; !ok {
 					errs = append(errs, fmt.Sprintf("models[%d].columns[%d].sequence %q is not a declared sequence key on the model", mi, ci, c.Sequence))
 				}
+			}
+			if c.Grant != nil {
+				errs = append(errs, validateGrant(fmt.Sprintf("models[%d].columns[%d].grant", mi, ci), c.Grant, mod, ownCols)...)
 			}
 			for cci, con := range c.Constraints {
 				cw := fmt.Sprintf("models[%d].columns[%d].constraints[%d]", mi, ci, cci)

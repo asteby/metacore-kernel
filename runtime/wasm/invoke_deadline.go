@@ -40,6 +40,17 @@ func withGuestDeadline(parent context.Context, budget, hardCap time.Duration) (c
 	}
 }
 
+// hardRemaining is what is left of the invocation's hard cap (excluded waits
+// never extend it). ok=false when there is no deadline (tests, direct calls).
+func (d *guestDeadline) hardRemaining() (time.Duration, bool) {
+	if d == nil {
+		return 0, false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return time.Until(d.hard), true
+}
+
 // excluding runs fn (a blocking outbound call) with the budget PAUSED: the
 // clock stops while fn waits and resumes with what was left, never past the
 // hard cap (which keeps counting).
