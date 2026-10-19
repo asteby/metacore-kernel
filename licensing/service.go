@@ -1,6 +1,7 @@
 package licensing
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -73,6 +74,23 @@ type Config struct {
 	Logger  *slog.Logger
 	// Now overrides the clock (tests). Nil → time.Now().UTC.
 	Now func() time.Time
+
+	// OnRenew, when set, receives every successful (200) renew response,
+	// including optional extras such as the signed brand pack envelope
+	// (RenewResponse.Brand, nil when the hub sends none). Called
+	// synchronously from RefreshNow after the renewed token was handed to
+	// persist (even if persisting it failed); a panic is recovered and
+	// logged.
+	OnRenew func(ctx context.Context, resp RenewResponse)
+	// RenewExtra, when set, adds fields to the renew body (e.g.
+	// {"brand_version": 3}). The core fields instance_id and version
+	// always win over extras with the same key. The signature covers the
+	// exact bytes sent, extras included.
+	RenewExtra func() map[string]any
+	// AfterRefresh, when set, runs at the end of every RefreshNow, whether
+	// or not a renew happened (e.g. to poll POST /v1/licenses/brand with
+	// SignedPost). A panic is recovered and logged.
+	AfterRefresh func(ctx context.Context)
 }
 
 // Service loads, verifies, caches, re-checks and renews the instance license.
@@ -95,6 +113,10 @@ type Service struct {
 	bootstrapSource string
 
 	now func() time.Time
+
+	onRenew      func(ctx context.Context, resp RenewResponse)
+	renewExtra   func() map[string]any
+	afterRefresh func(ctx context.Context)
 
 	mu        sync.RWMutex
 	pubKeyHex string
@@ -147,6 +169,9 @@ func New(cfg Config) *Service {
 		bootstrapSource: src,
 		pubKeyHex:       strings.TrimSpace(cfg.PubKeyHex),
 		now:             now,
+		onRenew:         cfg.OnRenew,
+		renewExtra:      cfg.RenewExtra,
+		afterRefresh:    cfg.AfterRefresh,
 	}
 	// Seed an empty snapshot so Current() never returns nil before Boot.
 	s.store2(&State{Enforced: s.enforce, Status: "missing", Entitlements: []string{}})
@@ -213,16 +238,34 @@ func (s *Service) RefreshNow(ctx context.Context) {
 		s.log.Warn("licensing: refresh load failed", "err", err)
 	}
 	if row != nil && s.shouldRenew(row) {
-		if renewed, rerr := s.renew(ctx); rerr != nil {
+		if resp, rerr := s.renew(ctx); rerr != nil {
 			s.log.Info("licensing: renew skipped/failed", "err", rerr)
-		} else if renewed != "" {
-			if updated, perr := s.persist(ctx, renewed, "renew"); perr == nil {
-				row = updated
-				s.log.Info("licensing: license renewed", "expires_at", row.ExpiresAt)
+		} else {
+			if renewed := strings.TrimSpace(resp.LicenseToken); renewed != "" {
+				if updated, perr := s.persist(ctx, renewed, "renew"); perr == nil {
+					row = updated
+					s.log.Info("licensing: license renewed", "expires_at", row.ExpiresAt)
+				}
+			}
+			if s.onRenew != nil {
+				s.safeHook("OnRenew", func() { s.onRenew(ctx, *resp) })
 			}
 		}
 	}
 	s.recompute(ctx, row)
+	if s.afterRefresh != nil {
+		s.safeHook("AfterRefresh", func() { s.afterRefresh(ctx) })
+	}
+}
+
+// safeHook runs a host hook so a panic never kills the refresh loop.
+func (s *Service) safeHook(name string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.log.Error("licensing: hook panicked", "hook", name, "panic", r)
+		}
+	}()
+	fn()
 }
 
 // Activate verifies a pasted token, persists it on success, and republishes
@@ -475,53 +518,96 @@ func (s *Service) shouldRenew(row *Record) bool {
 	return s.now().Add(renewThreshold).After(*row.ExpiresAt)
 }
 
-// renewResponse mirrors the hub POST /v1/licenses/renew contract (see
+// RenewResponse mirrors the hub POST /v1/licenses/renew contract (see
 // docs/licensing.md). The instance signs the request with its Ed25519 key so
 // the hub authenticates it via the durable instance-signature path.
-type renewResponse struct {
-	LicenseToken string     `json:"license_token"`
-	ExpiresAt    *time.Time `json:"expires_at"`
+//
+// Brand is the optional signed brand pack envelope (hub
+// BRAND-PACK-CONTRACT §3a), passed through raw so this package never
+// depends on brand: the host decodes it into brand.Envelope and verifies it.
+// It is nil when the hub sent none (old hub, no newer pack, or the host did
+// not report brand_version).
+type RenewResponse struct {
+	LicenseToken string          `json:"license_token"`
+	ExpiresAt    *time.Time      `json:"expires_at"`
+	Brand        json.RawMessage `json:"brand,omitempty"`
 }
 
-func (s *Service) renew(ctx context.Context) (string, error) {
+// ErrNotLinked is returned by renew and SignedPost when the instance has no
+// identity (InstanceID + InstancePriv) to sign with.
+var ErrNotLinked = errors.New("licensing: instance not linked (no instance key)")
+
+func (s *Service) renew(ctx context.Context) (*RenewResponse, error) {
 	if s.instancePriv == nil || s.instanceID == uuid.Nil {
-		return "", errors.New("instance not linked (no instance key); cannot renew")
+		return nil, fmt.Errorf("%w; cannot renew", ErrNotLinked)
 	}
 	// Body matches the hub's renewLicenseRequest: the instance names itself
 	// (verified against the signature) and reports its build version so the
-	// hub's check-in registry can track the fleet's version spread.
-	payload := map[string]string{
-		"instance_id": s.instanceID.String(),
+	// hub's check-in registry can track the fleet's version spread. Host
+	// extras (RenewExtra, e.g. brand_version) ride along; core keys win.
+	payload := map[string]any{}
+	if s.renewExtra != nil {
+		for k, v := range s.renewExtra() {
+			payload[k] = v
+		}
 	}
+	payload["instance_id"] = s.instanceID.String()
 	if s.version != "" {
 		payload["version"] = s.version
+	} else {
+		delete(payload, "version")
 	}
-	body, err := json.Marshal(payload)
+	resp, err := s.SignedPost(ctx, "/v1/licenses/renew", payload)
 	if err != nil {
-		return "", err
-	}
-	url := s.hubBase + "/v1/licenses/renew"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(body)))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	s.signRequest(req, body)
-
-	resp, err := s.http.Do(req)
-	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("hub renew status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		return nil, fmt.Errorf("hub renew status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
-	var out renewResponse
+	var out RenewResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
+		return nil, err
 	}
-	return strings.TrimSpace(out.LicenseToken), nil
+	if len(out.Brand) == 0 || string(out.Brand) == "null" {
+		out.Brand = nil
+	}
+	return &out, nil
+}
+
+// SignedPost POSTs body as JSON to the hub (HubBaseURL + path) signed with
+// the instance key exactly like renew (X-Signature over the exact bytes
+// sent, X-Signature-Timestamp, X-Instance-Pubkey). body may be []byte or
+// json.RawMessage (sent verbatim) or any value (json.Marshal'd). The caller
+// owns resp.Body and interprets the status (e.g. 200/204/404 of
+// POST /v1/licenses/brand).
+func (s *Service) SignedPost(ctx context.Context, path string, body any) (*http.Response, error) {
+	if s.instancePriv == nil || s.instanceID == uuid.Nil {
+		return nil, ErrNotLinked
+	}
+	var raw []byte
+	switch b := body.(type) {
+	case []byte:
+		raw = b
+	case json.RawMessage:
+		raw = b
+	default:
+		var err error
+		if raw, err = json.Marshal(body); err != nil {
+			return nil, err
+		}
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.hubBase+path, bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	s.signRequest(req, raw)
+	return s.http.Do(req)
 }
 
 // signRequest adds the instance-signature headers over the exact body bytes,

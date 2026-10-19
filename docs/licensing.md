@@ -88,6 +88,25 @@ expiry. The hub re-issues the same entitlement with a fresh window (`iat`
 re-stamped) and records the check-in. Offline appliances leave the instance key
 unset and run on their local window (issue them with `moh: 0`).
 
+### Host hooks (optional; nil = previous behaviour)
+
+- `Config.RenewExtra func() map[string]any` adds fields to the renew body
+  (ops: `{"brand_version": n}`). `instance_id`/`version` always win; the
+  signature covers the exact bytes sent.
+- `Config.OnRenew func(ctx, RenewResponse)` receives every 200 renew response.
+  `RenewResponse.Brand` is the raw signed brand-pack envelope
+  (`json.RawMessage`, nil when the hub sends none, e.g. an old hub); the host
+  decodes it into `brand.Envelope` and checks it with `brand.Verify`. This
+  package never imports `brand`.
+- `Config.AfterRefresh func(ctx)` runs at the end of every `RefreshNow`, renew or
+  not — the place to poll `POST /v1/licenses/brand` every cycle without turning
+  annual licenses into rolling ones.
+- `(*Service).SignedPost(ctx, path, body)` POSTs to the hub signed exactly like
+  renew; the caller reads the status (200/204/404 …) and closes the body.
+  Returns `ErrNotLinked` without an instance key.
+
+Hook panics are recovered and logged; they never stop the refresh loop.
+
 ## Embedding
 
 ```go
