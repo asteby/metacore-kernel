@@ -53,6 +53,10 @@ func TestSettle(t *testing.T) {
 		{"cash rounding", "100.49", "", "", "100", "0.50", true, "100.00", "0.00", "0.49", "0.00", nil},
 		{"cash rounding at limit", "100.50", "", "", "100", "0.50", true, "100.00", "0.00", "0.50", "0.00", nil},
 		{"cash short", "100.51", "", "", "100", "0.50", false, "100.00", "0.00", "0.00", "0.51", nil},
+		// r4 M3: the tolerance does not settle a small document with a coin.
+		{"rounding above share", "0.50", "", "", "0.01", "0.99", false, "0.01", "0.00", "0.00", "0.49", nil},
+		{"rounding within share", "5.40", "", "", "5", "0.50", true, "5.00", "0.00", "0.40", "0.00", nil},
+		{"rounding share of the cash part", "100.40", "", "99", "1", "0.50", false, "100.00", "0.00", "0.00", "0.40", nil},
 		{"card never rounds", "100.49", "", "100", "", "0.50", false, "100.00", "0.00", "0.00", "0.49", nil},
 		{"tolerance off", "100.49", "", "", "100", "0", false, "100.00", "0.00", "0.00", "0.49", nil},
 		{"second tender", "300", "200", "100", "", "", true, "100.00", "0.00", "0.00", "0.00", nil},

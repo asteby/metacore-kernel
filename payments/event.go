@@ -56,12 +56,29 @@ func DedupeKey(provider, eventID string) string { return provider + "\x1f" + eve
 
 // DerivedEventID is the event id of an update the provider did not number (a
 // poll or reconciliation answer): the same observed state always derives the
-// same id, so re-polling an unchanged payment is a duplicate.
-func DerivedEventID(kind EventKind, providerRef string, status Status, amountRefunded string) string {
+// same id, so re-polling an unchanged payment is a duplicate. The amount is
+// part of the state: two partial refunds of a payment reported without an
+// event id nor a refunded total (30, then 20) are two updates, not one.
+// Amounts are normalized ("20.0" and "20.00" derive the same id).
+func DerivedEventID(kind EventKind, providerRef string, status Status, currency, amount, amountRefunded string) string {
 	if kind == "" {
 		kind = KindPayment
 	}
-	return strings.Join([]string{"derived", string(kind), providerRef, string(status), amountRefunded}, "|")
+	return strings.Join([]string{"derived", string(kind), strings.TrimSpace(providerRef), string(status),
+		strings.ToUpper(strings.TrimSpace(currency)), canonicalAmount(amount), canonicalAmount(amountRefunded)}, "|")
+}
+
+// canonicalAmount is the wire form of a decimal, or the trimmed input when it
+// does not parse (the outcome is then rejected elsewhere).
+func canonicalAmount(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if a, err := ParseAmount(s); err == nil {
+		return a.String()
+	}
+	return s
 }
 
 // Confirmed is a decoded commerce.payments.confirmed delivery.
@@ -111,7 +128,7 @@ func (o Outcome) DedupeEventID() string {
 	if o.EventID != "" {
 		return o.EventID
 	}
-	return DerivedEventID(o.Kind, o.ProviderRef, o.Status, o.AmountRefunded)
+	return DerivedEventID(o.Kind, o.ProviderRef, o.Status, o.Currency, o.Amount, o.AmountRefunded)
 }
 
 // ErrUntrustedConfirmation is wrapped by every DecodeConfirmed rejection.

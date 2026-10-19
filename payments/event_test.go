@@ -36,7 +36,7 @@ func TestDecodeConfirmed(t *testing.T) {
 		t.Fatalf("terminal payload: %+v %v", c, err)
 	}
 	// Re-polling an unchanged payment derives the same id: a duplicate.
-	if c.Result.DedupeEventID() != DerivedEventID(KindPayment, "tx9", StatusPaid, "") {
+	if c.Result.DedupeEventID() != DerivedEventID(KindPayment, "tx9", StatusPaid, "MXN", "80", "") {
 		t.Fatalf("derived id %q", c.Result.DedupeEventID())
 	}
 	for name, bad := range map[string]string{
@@ -85,7 +85,33 @@ func TestDedupeKey(t *testing.T) {
 	if e.DedupeKey() == DedupeKey("clip", "1") || e.DedupeKey() != DedupeKey("mercadopago", "1") {
 		t.Fatal("dedupe key must be per provider")
 	}
-	if DerivedEventID("", "r", StatusPartiallyRefunded, "10.00") == DerivedEventID("", "r", StatusPartiallyRefunded, "20.00") {
+	if DerivedEventID("", "r", StatusPartiallyRefunded, "MXN", "", "10.00") == DerivedEventID("", "r", StatusPartiallyRefunded, "MXN", "", "20.00") {
 		t.Fatal("a second partial refund must not dedupe against the first")
+	}
+	if DerivedEventID("", "r", StatusPaid, "MXN", "20.0", "") != DerivedEventID(KindPayment, "r", StatusPaid, "mxn", "20.00", "") {
+		t.Fatal("the same state must derive the same id")
+	}
+}
+
+// r4 #507 I1: two partial refunds without event id nor refunded total (30,
+// then 20) are two updates; the refunded total ends at 50.
+func TestDerivedEventIDPartialRefundsByAmount(t *testing.T) {
+	stored := Payment{Status: StatusPaid, Amount: "100.00", Currency: "MXN", ProviderRef: "ORD10"}
+	seen := map[string]bool{}
+	for _, amount := range []string{"30", "20", "20.00"} {
+		o := Outcome{OrderRef: "SO-10", Kind: KindRefund, Status: StatusPartiallyRefunded, Amount: amount, Currency: "MXN", ProviderRef: "ORD10"}
+		id := DedupeKey("mercadopago", o.DedupeEventID())
+		if seen[id] {
+			continue // the re-poll of the second refund
+		}
+		seen[id] = true
+		if obs := ObserveOutcome(stored, o); obs.Decision != Apply {
+			t.Fatalf("refund %s: %+v", amount, obs)
+		}
+		done := MustAmount(orZero(stored.AmountRefunded)).Add(MustAmount(amount))
+		stored.AmountRefunded, stored.Status = done.String(), StatusPartiallyRefunded
+	}
+	if stored.AmountRefunded != "50.00" || len(seen) != 2 {
+		t.Fatalf("amount_refunded %s after %d updates, want 50.00 after 2", stored.AmountRefunded, len(seen))
 	}
 }

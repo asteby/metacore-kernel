@@ -73,6 +73,13 @@ func (a Amount) Sub(b Amount) Amount {
 	return out
 }
 
+// Mul returns a × b (exact; quantize before storing).
+func (a Amount) Mul(b Amount) Amount {
+	var out Amount
+	out.r.Mul(&a.r, &b.r)
+	return out
+}
+
 // Max returns the larger of a and b.
 func Max(a, b Amount) Amount {
 	if a.Cmp(b) >= 0 {
