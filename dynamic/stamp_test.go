@@ -500,3 +500,21 @@ func TestServiceUpdateRunsStampPhase(t *testing.T) {
 		t.Fatalf("origen ajeno: %v", err)
 	}
 }
+
+// Un grant gastado se limpia con NULL (nil), nunca con "": la columna puede ser
+// uuid y "" no es un uuid válido.
+func TestStampUpdateClearsSpentGrantWithNil(t *testing.T) {
+	db, org, _ := stampDB(t)
+	st := itemStamps()
+	consume := func(context.Context, ConsumeInput) error { return nil }
+	before := map[string]any{"product_id": "p1", "unit_price": 45.0, "min_price_at_sale": 50.0, "unit_cost": 30.0,
+		"price_authorized": 1.0, "price_shortfall": 0.0, "price_approval_id": uuid.NewString()}
+	patch := map[string]any{"unit_price": 60.0}
+	if _, err := st.prepareUpdate(context.Background(), db, org, uuid.New(), "items", "line1", before, patch, nil, consume); err != nil {
+		t.Fatal(err)
+	}
+	v, ok := patch["price_approval_id"]
+	if !ok || v != nil {
+		t.Fatalf("el grant gastado debe ir como nil en el patch, got %#v (present=%v)", v, ok)
+	}
+}

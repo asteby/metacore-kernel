@@ -331,7 +331,9 @@ func (st *ModelStamps) prepareUpdate(ctx context.Context, db *gorm.DB, orgID, ac
 	// the row was spent by the write that created it.
 	for _, g := range st.Grants {
 		if valueToString(changes[g.Column]) == "" {
-			merged[g.Column] = ""
+			// nil, not "": the column may be a uuid and "" is not a valid one
+			// (invalid UUID length: 0 / Postgres 22P02). A spent grant is NULL.
+			merged[g.Column] = nil
 		}
 	}
 	// Snapshots are re-taken only for sources the patch changed; the rest stay

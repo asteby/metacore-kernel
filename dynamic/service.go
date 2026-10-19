@@ -1260,6 +1260,15 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		if err := mapToStruct(input, instance); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidInput, err)
 		}
+		// A JSON null leaves a non-pointer field untouched (a string grant would
+		// keep its spent id): zero the cleared grant columns explicitly.
+		if stampSt := s.resolveStamps(ctx, model); stampSt != nil {
+			for _, g := range stampSt.Grants {
+				if v, ok := input[g.Column]; ok && v == nil {
+					zeroFieldByJSONName(instance, g.Column)
+				}
+			}
+		}
 
 		// The Go model's own validation runs on the persisted row merged
 		// with the changes (inside the lock when locking).
@@ -1653,4 +1662,24 @@ func toMapSlice(slicePtr any) []map[string]any {
 		result[i] = toMap(v.Index(i).Addr().Interface())
 	}
 	return result
+}
+
+// zeroFieldByJSONName sets the struct field of target whose json tag is name to
+// its zero value (nil for a pointer column, which GORM writes as NULL).
+func zeroFieldByJSONName(target any, name string) {
+	v := reflect.ValueOf(target)
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		return
+	}
+	v = v.Elem()
+	if v.Kind() != reflect.Struct {
+		return
+	}
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		if strings.Split(t.Field(i).Tag.Get("json"), ",")[0] == name && v.Field(i).CanSet() {
+			v.Field(i).Set(reflect.Zero(t.Field(i).Type))
+			return
+		}
+	}
 }

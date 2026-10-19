@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Un grant gastado se limpia con `NULL`, no con `""`, en el update (`StampUpdate` / `UpdateStamper` / `Host.WithUpdateStamp`).** Al re-estampar un update, la columna `columns[].grant` cuyo id ya se gastó recibía una cadena vacía: en una columna `uuid` fallaba (`invalid UUID length: 0` en `mapToStruct`; en Postgres el UPDATE del camino wasm lo rechazaba con `invalid input syntax for type uuid`). Ahora el patch lleva `nil`, y `dynamic.Service.Update` también pone en cero el campo del modelo (un `null` JSON no toca un campo no puntero). El create no estaba afectado. Cubierto con pruebas unitarias y una con columna `uuid` real en Postgres.
+
 ### Added
 
 - **Import wasm `edge_command` (ABI 1.16) y capacidad `edge:command <device_key>.<command_kind>`.** Un guest manda un comando a un dispositivo físico de su organización (un CashDro, una impresora…) por la conexión de su `ops-edge-agent` y recibe la respuesta que el host transportó. Así ya no tiene que confiar en una copia que reenvió el navegador. Solo aplica a clases de dispositivo del propio addon (`edge_devices[]`, el validador del manifest lo exige) y a los kinds concedidos. Es idempotente por llave, con timeout de 10 s por omisión y tope de 60 s, y la espera no consume el presupuesto del guest. El embebedor lo conecta con `Host.WithEdgeCommander` (`Device` + `Send`, auditoría e idempotencia de su lado). docs/wasm-abi.md § 25. Hay límites de tasa: 50 por invocación y 120 por dispositivo por minuto (`rate_limited`, configurable con `Host.WithEdgeCommandLimits`). El timeout se acota a lo que queda del hard cap, el import se rechaza dentro de `InvokeInTx` (`in_transaction`), y cada entrega lleva un `nonce` (firmable junto con `command_id`) y el tope de respuesta (`MaxResponseBytes`).
