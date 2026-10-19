@@ -83,6 +83,7 @@ type Host struct {
 	sequenceStamp   SequenceStampFn
 	createCheck     CreateCheckFn
 	createStamp     CreateStampFn
+	updateStamp     UpdateStampFn
 	ctxProvider     ContextProviderFn
 	mutationGuard   func(ctx context.Context, logicalTable string, row map[string]any) error
 	mutationCompute MutationComputeFn
@@ -314,6 +315,17 @@ func (h *Host) WithSequenceStamp(f SequenceStampFn) *Host {
 // unset, creates are not stamped (previous behaviour).
 func (h *Host) WithCreateStamp(f CreateStampFn) *Host {
 	h.createStamp = f
+	return h
+}
+
+// WithUpdateStamp injects the embedder's declarative stamp phase for
+// data_mutate / data_batch UPDATES (docs/wasm-abi.md § 24): snapshots are
+// re-taken when their source column changes, and a change to anything a
+// supervisor grant covered drops the authorization (a new grant id in the patch
+// is redeemed on the write's transaction). Wire it to
+// dynamic.Service.UpdateStamper. When unset, updates are not stamped.
+func (h *Host) WithUpdateStamp(f UpdateStampFn) *Host {
+	h.updateStamp = f
 	return h
 }
 
@@ -773,6 +785,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		sequenceStamp:     h.sequenceStamp,
 		createCheck:       h.createCheck,
 		createStamp:       h.createStamp,
+		updateStamp:       h.updateStamp,
 		ctxProvider:       h.ctxProvider,
 		mutationGuard:     h.mutationGuard,
 		mutationCompute:   h.mutationCompute,

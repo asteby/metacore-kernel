@@ -923,7 +923,10 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	// Stamp phase (snapshots + supervisor grants): server-owned columns copied
 	// from a related row, overwriting whatever the caller sent, BEFORE the
 	// formulas (before-create hooks) and guards that read them.
-	if err := s.stampCreateRow(ctx, model, user, input); err != nil {
+	// Grants are only VALIDATED here (the guards read their flag); they are
+	// spent with the INSERT, after every guard passed.
+	pendingGrants, err := s.StampCreatePrepare(ctx, s.db, orgIDFromUser(user), user.GetID(), model, input)
+	if err != nil {
 		return nil, err
 	}
 
@@ -981,10 +984,27 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 			if err := EvalCrossRecordRules(ctx, tx, mc.Rules, tableName, user.GetOrganizationID(), row, nil, s.parentTableFn(ctx)); err != nil {
 				return err
 			}
+			if err := pendingGrants.Redeem(ctx, tx, s.ConsumeApproval); err != nil {
+				return err
+			}
 			return s.writeDB(ctx, tx, tableName, instance, input).Create(instance).Error
 		}); err != nil {
 			err = uniqueIndexViolation(err, tableName, mc.Rules)
-			if errors.Is(err, ErrConstraintViolation) || errors.Is(err, ErrInvalidInput) {
+			if errors.Is(err, ErrConstraintViolation) || errors.Is(err, ErrInvalidInput) || errors.Is(err, ErrApprovalConsume) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("dynamic: create: %w", err)
+		}
+	} else if len(pendingGrants) > 0 {
+		// The redemption and the INSERT share one transaction: a failed INSERT
+		// leaves the grant unspent.
+		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := pendingGrants.Redeem(ctx, tx, s.ConsumeApproval); err != nil {
+				return err
+			}
+			return s.writeDB(ctx, tx, tableName, instance, input).Create(instance).Error
+		}); err != nil {
+			if errors.Is(err, ErrApprovalConsume) {
 				return nil, err
 			}
 			return nil, fmt.Errorf("dynamic: create: %w", err)
@@ -1183,6 +1203,16 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		// Normalize string-encoded typed fields before merging into the record.
 		coerceInputToStruct(input, instance)
 
+		// Stamp phase: server-owned snapshot / authorization columns follow the
+		// patch. A change to what a grant covered (unit_price, product_id, ...)
+		// drops the authorization; a new grant id in the patch is validated here
+		// and spent with the write, after the guards.
+		pendingGrants, stampErr := s.StampUpdate(ctx, execDB, orgIDFromUser(user), user.GetID(), model, id.String(), before, input, nil)
+		if stampErr != nil {
+			return stampErr
+		}
+		redeem := func(db *gorm.DB) error { return pendingGrants.Redeem(ctx, db, s.ConsumeApproval) }
+
 		hc := HookContext{Model: model, User: user, DB: execDB}
 		if err := s.hooks.runBeforeUpdate(ctx, hc, id.String(), input); err != nil {
 			return err
@@ -1245,6 +1275,9 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		// transaction, so save + hooks run directly on execDB.
 		runHooksInTx := stageChanged && len(sm.MatchingHooks(fromStage, toStage)) > 0
 		if inTx {
+			if err := redeem(execDB); err != nil {
+				return err
+			}
 			if err := s.writeDB(ctx, execDB, tableName, instance, input).Save(instance).Error; err != nil {
 				return fmt.Errorf("dynamic: update: %w", err)
 			}
@@ -1256,11 +1289,27 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		}
 		if runHooksInTx {
 			return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := redeem(tx); err != nil {
+					return err
+				}
 				if err := s.writeDB(ctx, tx, tableName, instance, input).Save(instance).Error; err != nil {
 					return fmt.Errorf("dynamic: update: %w", err)
 				}
 				after = toMap(instance)
 				return s.runTransitionHooks(ctx, model, user, tx, sm, fromStage, toStage, before, after)
+			})
+		}
+		if len(pendingGrants) > 0 {
+			// The redemption and the UPDATE share one transaction.
+			return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := redeem(tx); err != nil {
+					return err
+				}
+				if err := s.writeDB(ctx, tx, tableName, instance, input).Save(instance).Error; err != nil {
+					return fmt.Errorf("dynamic: update: %w", err)
+				}
+				after = toMap(instance)
+				return nil
 			})
 		}
 		if err := s.writeDB(ctx, s.db.WithContext(ctx), tableName, instance, input).Save(instance).Error; err != nil {

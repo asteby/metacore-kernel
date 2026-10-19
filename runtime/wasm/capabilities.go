@@ -85,6 +85,8 @@ type invocation struct {
 	// createStamp is the embedder-injected stamp phase (Host.WithCreateStamp)
 	// data_mutate / data_batch run on every create, after the folio stamp.
 	createStamp CreateStampFn
+	// updateStamp is the update-side stamp phase (Host.WithUpdateStamp).
+	updateStamp UpdateStampFn
 	// ctxProvider is the embedder-injected execution-context port the ctx_get
 	// import calls (Host.WithContextProvider). nil = context_unavailable.
 	ctxProvider ContextProviderFn

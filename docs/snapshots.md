@@ -51,3 +51,25 @@ necesita, el id se ignora y no se quema. `sets` debe ser `protected`.
 
 Negativo = holgura sobre el piso; autorizada = 0. El cliente no puede escribir
 ninguna de las columnas involucradas.
+
+## Ciclo de vida (create y update)
+
+- **Origen inexistente = escritura rechazada.** Si `from` trae valor y la fila
+  no existe en la org del que escribe (id ajeno, inexistente o con
+  `deleted_at`), la escritura falla (`ErrSnapshotSource`, 422 /
+  `validation_error`); nunca se limpian los destinos, porque un destino vacío
+  saltaría los controles que lo leen (el piso de precio).
+- **Update.** El stamp también corre al actualizar (`PATCH /data`, `data_mutate`
+  y `data_batch` con `Host.WithUpdateStamp`). Los destinos y los `sets` nunca
+  vienen del cliente. Si el parche cambia una columna `from`, el snapshot se
+  vuelve a tomar; si cambia algo que cubría una autorización (`product_id`,
+  `unit_price`, o cualquier columna que lean `context_eq` / `context_gte`, aun
+  vía fórmula), el flag `sets` vuelve a 0 y hace falta un id de autorización
+  NUEVO en el parche: el que traía la fila ya se gastó con los valores
+  anteriores. Un parche que no toca nada de eso conserva la autorización.
+- **El canje se hace al final.** El stamp solo VALIDA la grant (el guard lee el
+  flag); se gasta dentro de la misma transacción que el INSERT/UPDATE, después
+  de los guards. Un guard que rechaza o estaciona la escritura (`request_approval`)
+  no quema nada y el replay puede canjear; un rollback deja la grant vigente.
+- `context_gte` se evalúa sobre la fila ya con las columnas derivadas
+  recalculadas (con el flag en 0, es decir, el faltante real).

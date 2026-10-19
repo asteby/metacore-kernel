@@ -22,7 +22,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   guards (`price_shortfall`). Corre igual en `/data`, `data_mutate`/`data_batch`
   (`Host.WithCreateStamp`, ABI § 24) y acciones; el valor del servidor pisa lo
   que mande el cliente o el guest. `dynamic.Config.StampResolver`,
-  `Service.StampCreate` / `CreateStamper`.
+  `Service.StampCreate` / `CreateStamper`. La lectura SIEMPRE filtra por
+  `organization_id` (falla cerrado sin org o sin esa columna) e ignora filas
+  con `deleted_at`; un origen inexistente rechaza la escritura
+  (`ErrSnapshotSource`). El stamp también corre en update (`StampUpdate`,
+  `UpdateStamper`, `Host.WithUpdateStamp`): re-snapshot si cambia la fuente y
+  una autorización cae si cambia lo que cubría (hace falta una grant nueva).
+  El canje se hace con el INSERT/UPDATE, en su transacción y después de los
+  guards (`StampPending.Redeem`).
 
 - **runtime/wasm: import `approval_consume` y `Host.WithApprovalConsumer`
   (docs/wasm-abi.md § 23).** Un handler que escribe una línea bajo una
