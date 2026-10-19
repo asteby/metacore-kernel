@@ -11,6 +11,7 @@ import (
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type fakeEdge struct {
@@ -111,5 +112,83 @@ func TestEdgeCommand(t *testing.T) {
 	e.res.Data = json.RawMessage(`"` + strings.Repeat("x", edgeCommandMaxResponseBytes) + `"`)
 	if ok, d := capEnv(t, executeEdgeCommand(ctx, inv, []byte(`{"device_id":"dev-1","kind":"cashdro"}`))); ok || d["code"] != "response_too_large" {
 		t.Fatalf("oversized: %v", d)
+	}
+}
+
+func TestEdgeCommandLimitsAndGuards(t *testing.T) {
+	org := uuid.New()
+	e := &fakeEdge{
+		devices: map[string]EdgeDevice{"dev-1": {ID: "dev-1", AddonKey: "cash_recycler", DeviceKey: "cashdro"}, "dev-2": {ID: "dev-2", AddonKey: "cash_recycler", DeviceKey: "cashdro"}},
+		res:     EdgeCommandResult{CommandID: "c", OK: true},
+	}
+	ctx := context.Background()
+	req := []byte(`{"device_id":"dev-1","kind":"cashdro"}`)
+
+	// Nonce and response cap reach the embedder; the nonce comes back.
+	inv := edgeInv(org, e, "cashdro.*")
+	ok, d := capEnv(t, executeEdgeCommand(ctx, inv, req))
+	if !ok || e.got.Nonce == "" || len(e.got.Nonce) != 32 || d["nonce"] != e.got.Nonce || e.got.MaxResponseBytes != edgeCommandMaxResponseBytes {
+		t.Fatalf("nonce/cap: %v %+v", d, e.got)
+	}
+	capEnv(t, executeEdgeCommand(ctx, inv, req))
+	if first := e.got.Nonce; first == d["nonce"] {
+		t.Fatal("nonce reused across deliveries")
+	}
+
+	// Inside a transactional invocation: refused before anything is sent.
+	txInv := edgeInv(org, e, "cashdro.*")
+	txInv.tx = &gorm.DB{}
+	e.got = nil
+	if ok, d := capEnv(t, executeEdgeCommand(ctx, txInv, req)); ok || d["code"] != "in_transaction" || e.got != nil {
+		t.Fatalf("in tx: %v", d)
+	}
+
+	// Per invocation.
+	lim := newEdgeLimiter(3, 1000)
+	inv = edgeInv(org, e, "cashdro.*")
+	inv.edgeLimits = lim
+	for i := 0; i < 3; i++ {
+		if ok, d := capEnv(t, executeEdgeCommand(ctx, inv, req)); !ok {
+			t.Fatalf("command %d: %v", i, d)
+		}
+	}
+	if ok, d := capEnv(t, executeEdgeCommand(ctx, inv, req)); ok || d["code"] != "rate_limited" {
+		t.Fatalf("4th in one invocation: %v", d)
+	}
+
+	// Per device per minute, across invocations; another device is apart.
+	lim = newEdgeLimiter(100, 2)
+	for i := 0; i < 2; i++ {
+		inv = edgeInv(org, e, "cashdro.*")
+		inv.edgeLimits = lim
+		capEnv(t, executeEdgeCommand(ctx, inv, req))
+	}
+	inv = edgeInv(org, e, "cashdro.*")
+	inv.edgeLimits = lim
+	if ok, d := capEnv(t, executeEdgeCommand(ctx, inv, req)); ok || d["code"] != "rate_limited" {
+		t.Fatalf("3rd per minute: %v", d)
+	}
+	if ok, _ := capEnv(t, executeEdgeCommand(ctx, inv, []byte(`{"device_id":"dev-2","kind":"cashdro"}`))); !ok {
+		t.Fatal("another device was limited")
+	}
+	if lim.allow(org, "cash_recycler", "dev-1", time.Now().Add(61*time.Second)) != true {
+		t.Fatal("window did not slide")
+	}
+
+	// The timeout never passes the invocation's hard cap.
+	dctx, d2, cancel := withGuestDeadline(ctx, 5*time.Second, 6*time.Second)
+	defer cancel()
+	inv = edgeInv(org, e, "cashdro.*")
+	inv.deadline = d2
+	capEnv(t, executeEdgeCommand(dctx, inv, []byte(`{"device_id":"dev-1","kind":"cashdro","timeout_ms":60000}`)))
+	if e.got.Timeout > 5*time.Second || e.got.Timeout < 4*time.Second {
+		t.Fatalf("timeout %v not clamped to the hard cap", e.got.Timeout)
+	}
+	_, d3, cancel3 := withGuestDeadline(ctx, time.Second, 1500*time.Millisecond)
+	defer cancel3()
+	inv.deadline = d3
+	e.got = nil
+	if ok, d := capEnv(t, executeEdgeCommand(dctx, inv, req)); ok || d["code"] != "timeout" || e.got != nil {
+		t.Fatalf("no time left: %v", d)
 	}
 }

@@ -125,6 +125,10 @@ type invocation struct {
 	// edgeCommander delivers edge_command to a device's agent
 	// (Host.WithEdgeCommander). nil = unavailable.
 	edgeCommander EdgeCommander
+	// edgeLimits / edgeSent: edge_command rate limits (host-wide windows)
+	// and this invocation's count.
+	edgeLimits *edgeLimiter
+	edgeSent   int
 	// emitPolicy gates event_emit by event name (Host.WithEmitPolicy). nil =
 	// no policy (pre-policy behaviour).
 	emitPolicy EmitPolicyFunc

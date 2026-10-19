@@ -2527,13 +2527,19 @@ Sends a command to a physical device of the organization (for example a CashDro 
 - `idempotency_key` (optional, ≤ 200 characters) makes delivery at-most-once per (org, addon, device, key): a repeat returns the recorded answer with `replay:true` and does not send the command again. The same key with another `kind`/`payload` returns `idempotency_conflict`. Use one key per logical step, not per poll.
 - `timeout_ms`: 10 s by default, capped at 60 s. The device wait does not count against the guest's CPU budget, but it does count against the invocation's hard cap.
 
-**Response:** envelope v1 `{success, data, meta}` with `data = {command_id, device_id, ok, error?, data?, replay?, received_at}`. `ok:false` is the agent's error (the device answered with a failure). `data` is the agent's answer verbatim, capped at 1 MiB.
+**Response:** envelope v1 `{success, data, meta}` with `data = {command_id, device_id, ok, error?, data?, replay?, received_at, nonce}`. `nonce` is a random value per delivery that the host passes to the embedder (`EdgeCommandRequest.Nonce`) to carry in the command frame. Together with `command_id`, it is what a future device signature would cover (option B). `ok:false` is the agent's error (the device answered with a failure). `data` is the agent's answer verbatim, capped at 1 MiB.
 
 **Authorization**, both checks before sending anything:
 1. The device belongs to the invocation's org, and its class (`edge_devices[].key`) is declared by **the calling addon** (`forbidden` otherwise; one addon does not drive another addon's devices).
 2. Capability `edge:command <device_key>.<command_kind>`, glob allowed on the kind (`cashdro.*`). The manifest validator requires `device_key` to be one of the addon's `edge_devices`.
 
-**Errors:** `invalid_request`, `no_active_org`, `forbidden`, `device_not_found`, `device_offline`, `timeout` (the command MAY have run: retry with the same key), `idempotency_conflict`, `response_too_large`, `edge_unavailable` (the host does not configure it), `edge_error`.
+**Limits:**
+- 50 commands per invocation and 120 per (org, addon, device) per minute (`Host.WithEdgeCommandLimits`). Beyond that: `rate_limited`.
+- The timeout is the lowest of the requested value, 60 s, and what is left of the invocation's hard cap minus 1 s. When not even 1 s is left: `timeout` without sending.
+- Inside a transactional invocation (`InvokeInTx`) the import answers `in_transaction`: waiting for a device never holds an action's locks.
+- `EdgeCommandRequest.MaxResponseBytes` (1 MiB) tells the embedder not to store more than that.
+
+**Errors:** `invalid_request`, `in_transaction`, `rate_limited`, `no_active_org`, `forbidden`, `device_not_found`, `device_offline`, `timeout` (the command MAY have run: retry with the same key), `idempotency_conflict`, `response_too_large`, `edge_unavailable` (the host does not configure it), `edge_error`.
 
 **Embedder:** `Host.WithEdgeCommander(EdgeCommander)` with `Device(ctx, org, id)` (resolves the device's class) and `Send(ctx, EdgeCommandRequest)` (delivers through the agent's session, records the audit row and applies idempotency). Org and addon always come from the invocation.
 

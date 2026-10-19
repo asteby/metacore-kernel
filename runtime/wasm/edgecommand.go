@@ -2,10 +2,13 @@ package wasm
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,6 +22,13 @@ const (
 	edgeCommandMaxKeyLen        = 200
 	EdgeCommandEnvelopeVersion  = 1
 	edgeCommandMaxResponseBytes = 1 << 20
+	// Default rate limits (Host.WithEdgeCommandLimits): commands one
+	// invocation may send, and commands per (org, addon, device) per minute.
+	defaultEdgeCommandsPerInvocation = 50
+	defaultEdgeCommandsPerDeviceMin  = 120
+	// edgeCommandMinTimeout: below this the hard cap is too close to wait
+	// for a device at all.
+	edgeCommandMinTimeout = time.Second
 )
 
 // Edge command errors the embedder's EdgeCommander returns (wrapped is fine).
@@ -30,6 +40,9 @@ var (
 	// ErrEdgeTimeout: the agent did not answer in time. The command MAY have
 	// run on the device: retry with the same idempotency key.
 	ErrEdgeTimeout = errors.New("edge command timed out")
+	// ErrEdgeIndeterminate: an earlier delivery of the key never got an
+	// answer (timeout, crash): it may have run; never sent again.
+	ErrEdgeIndeterminate = errors.New("edge command outcome unknown")
 	// ErrEdgeIdempotencyConflict: the key was used with another command.
 	ErrEdgeIdempotencyConflict = errors.New("edge command idempotency key reused with another command")
 )
@@ -55,6 +68,13 @@ type EdgeCommandRequest struct {
 	// sending the command again.
 	IdempotencyKey string
 	Timeout        time.Duration
+	// MaxResponseBytes caps the device answer the host stores and returns
+	// (the embedder must not record more).
+	MaxResponseBytes int
+	// Nonce is a fresh random value per delivery. With CommandID it is what a
+	// device-side signature would cover (option B: the agent signs
+	// command_id + nonce + data); the embedder carries it in the command frame.
+	Nonce string
 }
 
 // EdgeCommandResult is the agent's answer as the host transported it.
@@ -69,6 +89,8 @@ type EdgeCommandResult struct {
 	// Replay: an earlier delivery with the same idempotency key.
 	Replay     bool      `json:"replay,omitempty"`
 	ReceivedAt time.Time `json:"received_at"`
+	// Nonce echoes the delivery's nonce (EdgeCommandRequest.Nonce).
+	Nonce string `json:"nonce,omitempty"`
 }
 
 // EdgeCommander is the embedder port of the edge_command import: Device
@@ -129,6 +151,11 @@ func executeEdgeCommand(ctx context.Context, inv *invocation, reqJSON []byte) []
 	if inv.edgeCommander == nil {
 		return fail("edge_unavailable", "host has no edge commander configured")
 	}
+	if inv.tx != nil {
+		// Waiting for a device (up to the timeout) inside the action's
+		// transaction would hold its locks: refused, never silently slow.
+		return fail("in_transaction", "edge_command cannot run inside a transactional invocation (InvokeInTx)")
+	}
 	dev, err := inv.edgeCommander.Device(ctx, orgID, req.DeviceID)
 	if err != nil {
 		return fail(edgeErrorCode(err), err.Error())
@@ -137,7 +164,7 @@ func executeEdgeCommand(ctx context.Context, inv *invocation, reqJSON []byte) []
 	// was granted: a payment addon cannot drive another addon's printer.
 	if dev.AddonKey != addonKey {
 		inv.logf("audit edge_command addon=%s device=%s kind=%s org=%s decision=denied: device class of %s", addonKey, req.DeviceID, req.Kind, orgID, dev.AddonKey)
-		return fail("forbidden", fmt.Sprintf("device %s belongs to addon %q", req.DeviceID, dev.AddonKey))
+		return fail("forbidden", fmt.Sprintf("device %s is not a device of addon %q", req.DeviceID, addonKey))
 	}
 	if err := inv.caps.CanSendEdgeCommand(dev.DeviceKey, req.Kind); err != nil {
 		inv.logf("audit edge_command addon=%s device=%s kind=%s org=%s decision=denied: %v", addonKey, req.DeviceID, req.Kind, orgID, err)
@@ -150,17 +177,38 @@ func executeEdgeCommand(ctx context.Context, inv *invocation, reqJSON []byte) []
 	if timeout > edgeCommandMaxTimeout {
 		timeout = edgeCommandMaxTimeout
 	}
+	// Never past the invocation's hard cap: the answer must come back as a
+	// clean timeout (with its audit row), not as a killed guest.
+	if left, ok := inv.deadline.hardRemaining(); ok {
+		if left-edgeCommandMinTimeout < timeout {
+			timeout = left - edgeCommandMinTimeout
+		}
+		if timeout < edgeCommandMinTimeout {
+			return fail("timeout", "not enough invocation time left to wait for the device")
+		}
+	}
+	if !inv.takeEdgeCommand() {
+		return fail("rate_limited", fmt.Sprintf("an invocation may send at most %d edge commands", inv.edgeLimits.perInvocation()))
+	}
+	if !inv.edgeLimits.allow(orgID, addonKey, req.DeviceID, time.Now()) {
+		return fail("rate_limited", fmt.Sprintf("device %s: more than %d commands per minute", req.DeviceID, inv.edgeLimits.perDevice()))
+	}
 	inv.logf("audit edge_command addon=%s device=%s device_key=%s kind=%s org=%s key=%q decision=allowed", addonKey, req.DeviceID, dev.DeviceKey, req.Kind, orgID, req.IdempotencyKey)
 	var res EdgeCommandResult
+	nonce := newEdgeNonce()
 	// The wait on the device does not count against the guest's CPU budget.
 	inv.deadline.excluding(func() {
 		res, err = inv.edgeCommander.Send(ctx, EdgeCommandRequest{
 			Org: orgID, Addon: addonKey, DeviceID: req.DeviceID, Kind: req.Kind, Payload: req.Payload,
 			IdempotencyKey: req.IdempotencyKey, Timeout: timeout,
+			MaxResponseBytes: edgeCommandMaxResponseBytes, Nonce: nonce,
 		})
 	})
 	if err != nil {
 		return fail(edgeErrorCode(err), err.Error())
+	}
+	if res.Nonce == "" {
+		res.Nonce = nonce
 	}
 	if len(res.Data) > edgeCommandMaxResponseBytes {
 		return fail("response_too_large", fmt.Sprintf("device answer exceeds %d bytes", edgeCommandMaxResponseBytes))
@@ -179,6 +227,8 @@ func edgeErrorCode(err error) string {
 		return "timeout"
 	case errors.Is(err, ErrEdgeIdempotencyConflict):
 		return "idempotency_conflict"
+	case errors.Is(err, ErrEdgeIndeterminate):
+		return "timeout"
 	}
 	return "edge_error"
 }
@@ -191,10 +241,91 @@ func edgeCommandMeta(addonKey string, orgID uuid.UUID, start time.Time) map[stri
 	return meta
 }
 
+func newEdgeNonce() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// edgeLimiter bounds edge_command per invocation and per (org, addon,
+// device) per minute, so a guest (or a storm of event handlers) cannot flood
+// a device. In-process: one window per host replica.
+type edgeLimiter struct {
+	perInv, perMin int
+	mu             sync.Mutex
+	windows        map[string][]time.Time
+}
+
+func newEdgeLimiter(perInvocation, perDevicePerMinute int) *edgeLimiter {
+	if perInvocation <= 0 {
+		perInvocation = defaultEdgeCommandsPerInvocation
+	}
+	if perDevicePerMinute <= 0 {
+		perDevicePerMinute = defaultEdgeCommandsPerDeviceMin
+	}
+	return &edgeLimiter{perInv: perInvocation, perMin: perDevicePerMinute, windows: map[string][]time.Time{}}
+}
+
+func (l *edgeLimiter) perInvocation() int {
+	if l == nil {
+		return defaultEdgeCommandsPerInvocation
+	}
+	return l.perInv
+}
+
+func (l *edgeLimiter) perDevice() int {
+	if l == nil {
+		return defaultEdgeCommandsPerDeviceMin
+	}
+	return l.perMin
+}
+
+// allow records one command for the device and reports whether it fits in
+// the last minute's budget.
+func (l *edgeLimiter) allow(org uuid.UUID, addon, device string, now time.Time) bool {
+	if l == nil {
+		return true
+	}
+	key := org.String() + "|" + addon + "|" + device
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cut := now.Add(-time.Minute)
+	w := l.windows[key][:0]
+	for _, t := range l.windows[key] {
+		if t.After(cut) {
+			w = append(w, t)
+		}
+	}
+	if len(w) >= l.perMin {
+		l.windows[key] = w
+		return false
+	}
+	l.windows[key] = append(w, now)
+	return true
+}
+
+// takeEdgeCommand counts one command against the invocation's budget.
+func (i *invocation) takeEdgeCommand() bool {
+	i.edgeSent++
+	return i.edgeSent <= i.edgeLimits.perInvocation()
+}
+
+// WithEdgeCommandLimits overrides the edge_command rate limits (0 keeps the
+// default: 50 per invocation, 120 per device per minute).
+func (h *Host) WithEdgeCommandLimits(perInvocation, perDevicePerMinute int) *Host {
+	h.edgeLimits = newEdgeLimiter(perInvocation, perDevicePerMinute)
+	return h
+}
+
 // WithEdgeCommander injects the embedder's EdgeCommander for the
 // `metacore_host.edge_command` import. Unset = the import answers
 // `edge_unavailable`.
 func (h *Host) WithEdgeCommander(c EdgeCommander) *Host {
 	h.edgeCommander = c
+	if h.edgeLimits == nil {
+		h.edgeLimits = newEdgeLimiter(0, 0)
+	}
 	return h
 }
