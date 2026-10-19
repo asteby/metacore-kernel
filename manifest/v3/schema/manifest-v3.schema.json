@@ -4800,7 +4800,35 @@
         "defaults": {
           "type": "object",
           "description": "Map of '<addon_key>.<setting_key>' to default value applied at install time.",
-          "additionalProperties": true
+          "additionalProperties": true,
+          "properties": {
+            "branding": {
+              "type": ["object", "null"],
+              "description": "Brand kit (v3.Branding). Asset fields take an http(s) URL or a ./assets/... path that must exist in the bundle. null in an overlay removes the base's branding; a null field removes that field.",
+              "additionalProperties": false,
+              "properties": {
+                "platform_name": { "type": ["string", "null"] },
+                "logo_url": { "type": ["string", "null"], "pattern": "^(https?://|\\./assets/)" },
+                "logo_dark_url": { "type": ["string", "null"], "pattern": "^(https?://|\\./assets/)" },
+                "logo_mark_url": { "type": ["string", "null"], "pattern": "^(https?://|\\./assets/)" },
+                "favicon_url": { "type": ["string", "null"], "pattern": "^(https?://|\\./assets/)" },
+                "login_background_url": { "type": ["string", "null"], "pattern": "^(https?://|\\./assets/)" },
+                "primary_color": { "type": ["string", "null"], "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$" },
+                "accent_color": { "type": ["string", "null"], "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$" },
+                "support_email": { "type": ["string", "null"] },
+                "support_url": { "type": ["string", "null"] },
+                "mascot_name": { "type": ["string", "null"] },
+                "mascot_skin": { "type": ["string", "null"] },
+                "theme_key": { "type": ["string", "null"] },
+                "font": { "type": ["string", "null"] },
+                "density": { "type": ["string", "null"] },
+                "pwa_name": { "type": ["string", "null"] },
+                "pwa_short_name": { "type": ["string", "null"] },
+                "email_from_name": { "type": ["string", "null"] }
+              }
+            },
+            "branding_file": { "type": "string", "description": "Bundle path (./defaults/...) of a JSON file with the branding object." }
+          }
         }
       }
     },

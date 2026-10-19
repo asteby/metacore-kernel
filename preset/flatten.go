@@ -65,7 +65,8 @@ func BaseOf(m *v3.Manifest) *v3.PresetExtends {
 //     re-sorted on requires, so removing an addon another one requires fails.
 //   - Defaults: merged per key with MergeStrategies (MergeDefaults).
 //   - Key, Version and Name are the overlay's; Lineage is the base's lineage
-//     plus the overlay.
+//     plus the overlay. Files are the base's (FlattenWithFiles adds the
+//     overlay's).
 func Flatten(base Resolved, overlay *v3.Manifest) (Resolved, error) {
 	ext := BaseOf(overlay)
 	if ext == nil {
@@ -107,6 +108,7 @@ func Flatten(base Resolved, overlay *v3.Manifest) (Resolved, error) {
 		Addons:   addons,
 		Defaults: MergeDefaults(base.Defaults, overlay.Preset.Defaults),
 		Lineage:  append(append([]LineageEntry(nil), lineage...), LineageEntry{Key: overlay.Metadata.Key, Version: overlay.Metadata.Version}),
+		Files:    mergeFiles(base.Files, nil),
 	}
 	return out, nil
 }

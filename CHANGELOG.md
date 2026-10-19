@@ -33,6 +33,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `preset.InlineFiles` resuelve las claves `*_file` de `preset.defaults`
     desde el bundle. Hoy nadie las lee, por eso los roles, categorías, branding
     y dashboards de los presets por archivo no se aplican en SaaS.
+- **preset: brand kit tipado y archivos del bundle de un preset.**
+  - `bundle.Bundle.PresetFiles` conserva todo `defaults/**` y `assets/**` (antes
+    `Read` los descartaba) y `Write` los emite. `(*Bundle).ReadPresetFile` lee
+    uno por ruta (acepta `./`).
+  - `v3.Branding` tipa `preset.defaults.branding` con los campos de hoy
+    (`platform_name`, `logo_url`, `favicon_url`, `primary_color`,
+    `accent_color`, `support_email`, `support_url`, `mascot_name`,
+    `mascot_skin`) más `logo_dark_url`, `logo_mark_url`, `login_background_url`,
+    `theme_key`, `font`, `density`, `pwa_name`, `pwa_short_name` y
+    `email_from_name`. Todos son opcionales. Los colores deben ser hex y los
+    assets una URL http(s) o una ruta `./assets/...`. Las claves desconocidas
+    son error. Los helpers son `ParseBranding`, `Validate`, `AssetPaths`,
+    `WithAssetURLs` y `ToMap`.
+  - Validación: el branding inline se valida en `v3.Validate` (y en el schema).
+    `bundle.Read` estricto además resuelve los `*_file`, valida el branding que
+    viene de `branding_file` y exige que cada `./assets/...` exista en el bundle.
+    En modo no estricto, esto queda como `ValidationWarnings`.
+  - `preset.ResolveWithFiles` y `preset.FlattenWithFiles` hacen inline de los
+    `*_file` desde los archivos del bundle y llenan `Resolved.Files`. El
+    branding del overlay se une por merge-patch y sus assets ganan en la misma
+    ruta. `Resolved.Branding()` devuelve el kit efectivo (con `theme_key`,
+    `font` y `density` de `ui_theme` como respaldo) y reporta los assets que
+    faltan.
 
 ### Fixed
 

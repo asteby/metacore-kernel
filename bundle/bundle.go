@@ -8,6 +8,8 @@
 //   frontend/remoteEntry.js    (optional — federated UI)
 //   frontend/assets/*          (optional — static assets)
 //   templates/*.html           (optional — printable documents)
+//   defaults/**                (optional — kind:Preset defaults files)
+//   assets/**                  (optional — kind:Preset brand assets)
 //   README.md                  (optional)
 //
 // Bundles are self-describing and may be hosted by any marketplace, or even
@@ -31,6 +33,7 @@ import (
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/manifest"
 	v3 "github.com/asteby/metacore-kernel/manifest/v3"
+	"github.com/asteby/metacore-kernel/preset"
 )
 
 // parseManifest ingests a raw manifest.json into the legacy manifest.Manifest
@@ -101,6 +104,11 @@ type Bundle struct {
 	// (e.g. "templates/cash-cut-80mm.html"). Hosts persist these next to
 	// the manifest so org-level Plantillas overlays have a default to read.
 	Templates map[string][]byte
+	// PresetFiles holds every defaults/** and assets/** file keyed by
+	// bundle-relative path (e.g. "defaults/branding.json", "assets/logo.svg"):
+	// the files a kind:Preset manifest's "*_file" defaults and brand kit
+	// reference. preset.ResolveWithFiles / FlattenWithFiles take this map.
+	PresetFiles map[string][]byte
 	// Readme is the raw README.md content, if any.
 	Readme string
 	// RawSize is the total decompressed byte count (useful for quotas).
@@ -163,6 +171,7 @@ func ReadWithOptions(r io.Reader, maxBytes int64, ropts ReadOptions) (*Bundle, e
 		Backend:      map[string][]byte{},
 		Locales:      map[string][]byte{},
 		Templates:    map[string][]byte{},
+		PresetFiles:  map[string][]byte{},
 		EntryDigests: map[string]string{},
 	}
 	var total int64
@@ -236,6 +245,8 @@ func ReadWithOptions(r io.Reader, maxBytes int64, ropts ReadOptions) (*Bundle, e
 			// Printable document defaults (POS tickets, cash cuts, POs). Copy
 			// because `data` aliases a reused read buffer.
 			b.Templates[h.Name] = append([]byte(nil), data...)
+		case strings.HasPrefix(h.Name, "defaults/") || strings.HasPrefix(h.Name, "assets/"):
+			b.PresetFiles[h.Name] = append([]byte(nil), data...)
 		case h.Name == "README.md":
 			b.Readme = string(data)
 		}
@@ -265,7 +276,40 @@ func ReadWithOptions(r io.Reader, maxBytes int64, ropts ReadOptions) (*Bundle, e
 	if len(b.Locales) > 0 && len(b.RawManifest) > 0 {
 		hydrateManifestI18n(&b.Manifest, b.RawManifest, b.Locales)
 	}
+	if problems := presetBundleProblems(b.RawManifest, b.PresetFiles); len(problems) > 0 {
+		if ropts.Strict {
+			return nil, fmt.Errorf("bundle: preset: %s", strings.Join(problems, "; "))
+		}
+		b.ValidationWarnings = append(b.ValidationWarnings, problems...)
+	}
 	return b, nil
+}
+
+// ReadPresetFile returns a PresetFiles entry by bundle path; a leading "./"
+// is accepted ("./assets/logo.svg"). A missing path is fs.ErrNotExist.
+func (b *Bundle) ReadPresetFile(p string) ([]byte, error) {
+	return preset.ReadFileFrom(b.PresetFiles)(p)
+}
+
+// presetBundleProblems checks what manifest validation cannot see for a
+// standalone or overlay kind:Preset: every "*_file" default resolves to a
+// JSON file under defaults/ or assets/, the (inlined) branding is valid and
+// every "./assets/..." it references is in the bundle. Non-presets return nil.
+func presetBundleProblems(rawManifest []byte, files map[string][]byte) []string {
+	if len(rawManifest) == 0 {
+		return nil
+	}
+	m, _, err := v3.ParseWithOptions(rawManifest, v3.Options{})
+	if err != nil || m == nil || m.Kind != v3.KindPreset || m.Preset == nil {
+		return nil
+	}
+	defaults, missing := preset.InlineFiles(m.Preset.Defaults, preset.ReadFileFrom(files))
+	var problems []string
+	for _, k := range missing {
+		problems = append(problems, fmt.Sprintf("preset.defaults.%s %v is not a JSON file in the bundle", k, m.Preset.Defaults[k]))
+	}
+	_, brand := preset.Resolved{Defaults: defaults, Files: files}.Branding()
+	return append(problems, brand...)
 }
 
 // hydrateManifestI18n loads the locale JSON files referenced by a v3 manifest's
@@ -355,7 +399,8 @@ var epoch = time.Unix(0, 0).UTC()
 // Write serializes a Bundle into a deterministic tar.gz stream.
 //
 // Entries are emitted in a stable order: manifest.json, migrations/* (sorted
-// by Version), frontend/*, backend/*, locales/*, templates/*, README.md.
+// by Version), frontend/*, backend/*, locales/*, templates/*, defaults/* and
+// assets/* (PresetFiles), README.md.
 // All entries use a fixed mtime (unix 0) so identical inputs produce
 // byte-identical outputs.
 func Write(w io.Writer, b *Bundle) error {
@@ -472,7 +517,22 @@ func Write(w io.Writer, b *Bundle) error {
 		}
 	}
 
-	// 7. README.md
+	// 7. preset files — defaults/** and assets/**, sorted by path.
+	pkeys := make([]string, 0, len(b.PresetFiles))
+	for k := range b.PresetFiles {
+		pkeys = append(pkeys, k)
+	}
+	sort.Strings(pkeys)
+	for _, k := range pkeys {
+		if !strings.HasPrefix(k, "defaults/") && !strings.HasPrefix(k, "assets/") {
+			return fmt.Errorf("bundle: preset file %q must live under defaults/ or assets/", k)
+		}
+		if err := write(k, b.PresetFiles[k]); err != nil {
+			return err
+		}
+	}
+
+	// 8. README.md
 	if b.Readme != "" {
 		if err := write("README.md", []byte(b.Readme)); err != nil {
 			return err

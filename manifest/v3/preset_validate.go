@@ -55,5 +55,25 @@ func validatePresetBlock(m *Manifest) []string {
 			errs = append(errs, fmt.Sprintf("preset.remove_addons removes %q which preset.addons also lists", k))
 		}
 	}
+	errs = append(errs, validatePresetBranding(p.Defaults)...)
+	return errs
+}
+
+// validatePresetBranding checks an inline preset.defaults.branding. A
+// branding_file is checked when the bundle is read (bundle.Read), where both
+// the file and the assets it references are available. A null branding is an
+// overlay removing the base's and is valid.
+func validatePresetBranding(defaults map[string]interface{}) []string {
+	v, ok := defaults["branding"]
+	if !ok || v == nil {
+		return nil
+	}
+	b, errs := ParseBranding(v)
+	if len(errs) == 0 {
+		errs = b.Validate()
+	}
+	for i, e := range errs {
+		errs[i] = "preset.defaults." + e
+	}
 	return errs
 }
