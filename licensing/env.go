@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/asteby/metacore-kernel/licensing/sigv2"
 	"github.com/google/uuid"
 )
 
@@ -26,12 +27,19 @@ import (
 //	OPS_INSTANCE_PRIV_KEY   hex Ed25519 private key (renew handshake)
 //	OPS_VERSION             build version reported on each check-in
 //	HUB_BASE_URL            hub base (default https://hub.asteby.com)
+//	LICENSING_REQUIRE_V2    "1"|"true"|… → refuse the legacy key-less token
+//	                        format (downgrade protection; default off)
+//	LICENSING_LEASE_COUNTER "1"|"true"|… → renew echoes the lease counter so the
+//	                        hub can flag cloned identities (default off)
 func NewConfigFromEnv() Config {
 	cfg := Config{
 		Enforce:    isTruthy(os.Getenv("LICENSING_ENFORCE")),
 		HubBaseURL: strings.TrimSpace(os.Getenv("HUB_BASE_URL")),
 		PubKeyHex:  strings.TrimSpace(os.Getenv("OPS_LICENSE_PUBKEY")),
 		Version:    strings.TrimSpace(os.Getenv("OPS_VERSION")),
+
+		RequireV2:    isTruthy(os.Getenv("LICENSING_REQUIRE_V2")),
+		LeaseCounter: isTruthy(os.Getenv("LICENSING_LEASE_COUNTER")),
 	}
 	if v := strings.TrimSpace(os.Getenv("LICENSING_GRACE_DAYS")); v != "" {
 		if d, err := strconv.Atoi(v); err == nil && d >= 0 {
@@ -75,4 +83,23 @@ func isTruthy(v string) bool {
 		return true
 	}
 	return false
+}
+
+// StatusTrackerConfigFromEnv reads the revocation-list policy from the
+// environment (keys must be supplied by the caller):
+//
+//	LICENSING_STATUS_STALE_POLICY  warn (default) | readonly | block | ignore
+//	LICENSING_STATUS_MARGIN_HOURS  hours past valid_until still treated as
+//	                               fresh (default 168 = 7 days; 0 → default)
+func StatusTrackerConfigFromEnv(keys sigv2.Keyring) sigv2.TrackerConfig {
+	cfg := sigv2.TrackerConfig{
+		Keys:   keys,
+		Policy: sigv2.ParseStalePolicy(os.Getenv("LICENSING_STATUS_STALE_POLICY")),
+	}
+	if v := strings.TrimSpace(os.Getenv("LICENSING_STATUS_MARGIN_HOURS")); v != "" {
+		if h, err := strconv.Atoi(v); err == nil && h > 0 {
+			cfg.Margin = time.Duration(h) * time.Hour
+		}
+	}
+	return cfg
 }

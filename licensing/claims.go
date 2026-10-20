@@ -41,6 +41,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/asteby/metacore-kernel/licensing/sigv2"
 	"github.com/google/uuid"
 )
 
@@ -80,6 +81,11 @@ type Claims struct {
 	// MaxOfflineHours is the LEASE: max hours without a successful check-in
 	// (renew re-stamps iat) before the license goes stale. 0 = no lease.
 	MaxOfflineHours int `json:"moh,omitempty"`
+	// Counter is the monotonic LEASE counter the hub stamps on each renewal
+	// when clone detection is enabled (0 = absent, the legacy shape). The
+	// instance echoes it on its next renew; a mismatch reveals two copies of
+	// the same identity. Additive: verifiers that do not know it ignore it.
+	Counter uint64 `json:"ctr,omitempty"`
 }
 
 // Errors callers branch on. ErrExpired is distinct so the service can apply a
@@ -92,6 +98,13 @@ var (
 	ErrNoPubKey    = errors.New("licensing: no trusted hub public key configured")
 	ErrVersion     = errors.New("licensing: unsupported token version")
 	ErrWrongType   = errors.New("licensing: token is not an instance license")
+)
+
+// v2 sentinels, re-exported so embedders need not import sigv2 to branch on them.
+var (
+	ErrUnknownKID  = sigv2.ErrUnknownKID
+	ErrWrongDomain = sigv2.ErrWrongDomain
+	ErrDowngrade   = sigv2.ErrDowngrade
 )
 
 var enc = base64.RawURLEncoding
@@ -180,6 +193,15 @@ func (c *Claims) LeaseExpired(now time.Time) bool {
 // (sig valid) so the caller can decide grace policy — the only way to reach a
 // non-nil Claims is a cryptographically authentic token.
 func decodeAndVerifySig(token, pubKeyHex string) (*Claims, error) {
+	ring, err := legacyRing(pubKeyHex)
+	if err != nil {
+		return nil, err
+	}
+	return decodeAndVerifyWith(token, ring, sigv2.Policy{}, time.Now().UTC())
+}
+
+// legacyRing builds a keyring holding the single hub key given as hex.
+func legacyRing(pubKeyHex string) (sigv2.Keyring, error) {
 	pubKeyHex = strings.TrimSpace(pubKeyHex)
 	if pubKeyHex == "" {
 		return nil, ErrNoPubKey
@@ -188,23 +210,22 @@ func decodeAndVerifySig(token, pubKeyHex string) (*Claims, error) {
 	if err != nil || len(pub) != ed25519.PublicKeySize {
 		return nil, fmt.Errorf("%w: trusted key is not %d-byte ed25519 hex", ErrMalformed, ed25519.PublicKeySize)
 	}
+	return sigv2.NewStaticKeyring().AddLegacy(ed25519.PublicKey(pub)), nil
+}
 
-	parts := strings.Split(strings.TrimSpace(token), ".")
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("%w: expected <claims>.<sig>", ErrMalformed)
+// decodeAndVerifyWith accepts BOTH wire formats: the legacy
+// <claims>.<sig> token (verified as kid "legacy") and the v2 "asteby1."
+// envelope (kid + domain). The v2 instance token is a LEASE message
+// (sigv2.DomLease). pol.RequireV2 refuses the legacy form.
+func decodeAndVerifyWith(token string, keys sigv2.Keyring, pol sigv2.Policy, now time.Time) (*Claims, error) {
+	if keys == nil {
+		return nil, ErrNoPubKey
 	}
-	claimsBytes, err := enc.DecodeString(parts[0])
+	o, err := sigv2.Open(token, sigv2.DomLease, keys, pol, now)
 	if err != nil {
-		return nil, fmt.Errorf("%w: claims not base64url: %v", ErrMalformed, err)
+		return nil, mapSigErr(err)
 	}
-	sig, err := enc.DecodeString(parts[1])
-	if err != nil || len(sig) != ed25519.SignatureSize {
-		return nil, fmt.Errorf("%w: signature not %d-byte base64url ed25519", ErrMalformed, ed25519.SignatureSize)
-	}
-	if !ed25519.Verify(ed25519.PublicKey(pub), claimsBytes, sig) {
-		return nil, ErrBadSig
-	}
-
+	claimsBytes := o.Payload
 	var c Claims
 	if err := json.Unmarshal(claimsBytes, &c); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
@@ -224,6 +245,19 @@ func decodeAndVerifySig(token, pubKeyHex string) (*Claims, error) {
 	return &c, nil
 }
 
+// mapSigErr keeps the package's historical sentinels for the cases that
+// existed before v2 and passes the new ones (unknown kid, wrong domain,
+// downgrade) through unchanged so callers can branch on them.
+func mapSigErr(err error) error {
+	switch {
+	case errors.Is(err, sigv2.ErrBadSig):
+		return ErrBadSig
+	case errors.Is(err, sigv2.ErrMalformed):
+		return fmt.Errorf("%w: %v", ErrMalformed, err)
+	}
+	return err
+}
+
 // Verify checks the signature AND the validity window at `now`, returning the
 // decoded claims only when the token is authentic and currently valid.
 // ErrExpired is returned (with non-nil claims) so the caller may still read
@@ -233,6 +267,21 @@ func Verify(token, pubKeyHex string, now time.Time) (*Claims, error) {
 	if err != nil {
 		return nil, err
 	}
+	return checkWindow(c, now)
+}
+
+// VerifyWith is Verify over an explicit keyring and policy: it accepts both
+// wire formats (legacy key-less and the v2 "asteby1." envelope), resolves the
+// signing key by kid, and honours pol.RequireV2 (downgrade protection).
+func VerifyWith(token string, keys sigv2.Keyring, pol sigv2.Policy, now time.Time) (*Claims, error) {
+	c, err := decodeAndVerifyWith(token, keys, pol, now)
+	if err != nil {
+		return nil, err
+	}
+	return checkWindow(c, now)
+}
+
+func checkWindow(c *Claims, now time.Time) (*Claims, error) {
 	if !c.IssuedAt.IsZero() && now.Before(c.IssuedAt.Add(-5*time.Minute)) {
 		return c, ErrNotYetValid
 	}

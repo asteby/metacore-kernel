@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/asteby/metacore-kernel/licensing/sigv2"
 	"github.com/google/uuid"
 )
 
@@ -63,6 +64,18 @@ type Config struct {
 	BootstrapSource string
 	// Version is the build version reported on each check-in (fleet tracking).
 	Version string
+
+	// Keys are EXTRA trusted keys (typically a sigv2.KeySet) used to verify
+	// v2 "asteby1." tokens whose kid is not the legacy hub key. Nil → only the
+	// legacy hub key (PubKeyHex) is trusted, exactly as before.
+	Keys sigv2.Keyring
+	// RequireV2 refuses the legacy key-less token format (downgrade
+	// protection). Default false: both formats verify.
+	RequireV2 bool
+	// LeaseCounter makes renew echo the monotonic lease counter carried by the
+	// current token (field "lease_ctr"), so the hub can detect two copies of
+	// one identity. Default false: the renew body is byte-identical to before.
+	LeaseCounter bool
 	// Store persists the singleton license Record. Required in practice; a nil
 	// store yields a verify-only service that never persists.
 	Store LicenseStore
@@ -93,6 +106,10 @@ type Service struct {
 
 	bootstrapToken  string
 	bootstrapSource string
+
+	extraKeys    sigv2.Keyring
+	pol          sigv2.Policy
+	leaseCounter bool
 
 	now func() time.Time
 
@@ -146,6 +163,9 @@ func New(cfg Config) *Service {
 		bootstrapToken:  strings.TrimSpace(cfg.BootstrapToken),
 		bootstrapSource: src,
 		pubKeyHex:       strings.TrimSpace(cfg.PubKeyHex),
+		extraKeys:       cfg.Keys,
+		pol:             sigv2.Policy{RequireV2: cfg.RequireV2},
+		leaseCounter:    cfg.LeaseCounter,
 		now:             now,
 	}
 	// Seed an empty snapshot so Current() never returns nil before Boot.
@@ -239,7 +259,7 @@ func (s *Service) Activate(ctx context.Context, token string) (*State, error) {
 	// Accept a currently-valid token; also accept an already-expired but
 	// signature-authentic token (an admin may paste a renewal that the clock
 	// or a stale copy makes look expired) — the snapshot will show its status.
-	if _, verr := Verify(token, pub, s.now()); verr != nil && !errors.Is(verr, ErrExpired) {
+	if _, verr := s.verify(token, pub, s.now()); verr != nil && !errors.Is(verr, ErrExpired) {
 		return nil, verr
 	}
 	row, err := s.persist(ctx, token, "admin")
@@ -270,7 +290,7 @@ func (s *Service) recompute(ctx context.Context, row *Record) {
 		s.store2(st)
 		return
 	}
-	claims, verr := Verify(row.Token, pub, now)
+	claims, verr := s.verify(row.Token, pub, now)
 	switch {
 	case verr == nil:
 		s.fillValid(st, claims, now)
@@ -386,7 +406,7 @@ func (s *Service) persist(ctx context.Context, token, source string) (*Record, e
 	if err != nil {
 		return nil, err
 	}
-	claims, verr := decodeAndVerifySig(token, pub)
+	claims, verr := s.decode(token, pub)
 	if verr != nil {
 		return nil, verr
 	}
@@ -421,6 +441,40 @@ func (s *Service) markValidated(ctx context.Context, row *Record, now time.Time)
 	if err := s.store.Save(ctx, row); err != nil {
 		s.log.Debug("licensing: mark validated failed", "err", err)
 	}
+}
+
+// ---- verification (both wire formats) ----
+
+// ring builds the keyring for one verification: the extra keys first (a kid in
+// the key set decides), then the legacy hub key.
+func (s *Service) ring(pubKeyHex string) (sigv2.Keyring, error) {
+	legacy, err := legacyRing(pubKeyHex)
+	if err != nil {
+		if s.extraKeys != nil && errors.Is(err, ErrNoPubKey) {
+			return s.extraKeys, nil
+		}
+		return nil, err
+	}
+	if s.extraKeys == nil {
+		return legacy, nil
+	}
+	return sigv2.Rings{s.extraKeys, legacy}, nil
+}
+
+func (s *Service) verify(token, pubKeyHex string, now time.Time) (*Claims, error) {
+	r, err := s.ring(pubKeyHex)
+	if err != nil {
+		return nil, err
+	}
+	return VerifyWith(token, r, s.pol, now)
+}
+
+func (s *Service) decode(token, pubKeyHex string) (*Claims, error) {
+	r, err := s.ring(pubKeyHex)
+	if err != nil {
+		return nil, err
+	}
+	return decodeAndVerifyWith(token, r, s.pol, s.now())
 }
 
 // ---- pubkey resolution ----
@@ -496,7 +550,20 @@ func (s *Service) renew(ctx context.Context) (string, error) {
 	if s.version != "" {
 		payload["version"] = s.version
 	}
-	body, err := json.Marshal(payload)
+	var body []byte
+	var err error
+	if s.leaseCounter {
+		// Additive and opt-in: the counter lives in the SIGNED claims of the
+		// token we hold, so no host store has to learn a new column.
+		withCtr := map[string]any{"instance_id": payload["instance_id"]}
+		if v, ok := payload["version"]; ok {
+			withCtr["version"] = v
+		}
+		withCtr["lease_ctr"] = s.currentLeaseCounter(ctx)
+		body, err = json.Marshal(withCtr)
+	} else {
+		body, err = json.Marshal(payload)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -522,6 +589,24 @@ func (s *Service) renew(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(out.LicenseToken), nil
+}
+
+// currentLeaseCounter reads the counter from the persisted token's claims (0
+// when absent or unreadable: an unknown counter is reported as 0).
+func (s *Service) currentLeaseCounter(ctx context.Context) uint64 {
+	row, err := s.load(ctx)
+	if err != nil || row == nil || row.Token == "" {
+		return 0
+	}
+	pub, err := s.pubKey(ctx)
+	if err != nil {
+		return 0
+	}
+	c, err := s.decode(row.Token, pub)
+	if err != nil || c == nil {
+		return 0
+	}
+	return c.Counter
 }
 
 // signRequest adds the instance-signature headers over the exact body bytes,
