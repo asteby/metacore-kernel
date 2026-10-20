@@ -128,6 +128,23 @@ func (s *Service) Options(ctx context.Context, user modelbase.AuthUser, q Option
 		}
 		return &OptionsResult{Type: "static", Options: opts}, nil
 	case "dynamic":
+		// Column read gate on the SOURCE model: the picker neither filters by,
+		// orders by nor projects a column the caller may not read.
+		srcMask, err := s.ColumnReadMask(ctx, fieldCfg.Source, user)
+		if err != nil {
+			return nil, err
+		}
+		if q.FilterValue != "" {
+			if err := srcMask.Check(fieldCfg.FilterBy, "filter"); err != nil {
+				return nil, err
+			}
+		}
+		// The value is what the picker stores and serves: a gated value column
+		// cannot be offered at all.
+		if err := srcMask.Check(fieldCfg.Value, "value"); err != nil {
+			return nil, err
+		}
+		fieldCfg = maskOptionsConfig(srcMask, fieldCfg)
 		items, rows, err := s.queryDynamicOptions(ctx, user, fieldCfg, q)
 		if err != nil {
 			return nil, err
@@ -141,7 +158,7 @@ func (s *Service) Options(ctx context.Context, user modelbase.AuthUser, q Option
 		// subtitle, image, trailing metrics (own columns + values other addons
 		// contribute, one grouped query per metric for the whole page) and
 		// badges. No display declared = options unchanged.
-		s.applyOptionDisplay(ctx, user, fieldCfg.Source, rows, items, q.Context)
+		s.applyOptionDisplay(ctx, user, fieldCfg.Source, rows, items, q.Context, srcMask)
 		if len(q.IDs) > 0 {
 			// Several source rows can share one value (a LabelRef ledger keyed
 			// by product_id): resolve mode answers one option per id.
@@ -350,7 +367,7 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 		// column instead (a uuid foreign id) never found a name and, under the
 		// Postgres unaccent clause, failed outright with 42883 — the transfer
 		// picker answered "Sin resultados" for an existing product.
-		sub, err := s.labelRefMatchIDs(ctx, fieldCfg, q.Q)
+		sub, err := s.labelRefMatchIDs(ctx, user, fieldCfg, q.Q)
 		if err != nil {
 			return nil, none, err
 		}
@@ -432,7 +449,7 @@ func (s *Service) queryDynamicOptions(ctx context.Context, user modelbase.AuthUs
 // matches q (same match clause as the options label filter), or nil when the
 // ref model has no usable label column. Not org-scoped on purpose: it only
 // narrows source rows the caller is already scoped to.
-func (s *Service) labelRefMatchIDs(ctx context.Context, fieldCfg FieldOptionsConfig, q string) (*gorm.DB, error) {
+func (s *Service) labelRefMatchIDs(ctx context.Context, user modelbase.AuthUser, fieldCfg FieldOptionsConfig, q string) (*gorm.DB, error) {
 	refInstance, ok := s.lookupModel(ctx, fieldCfg.LabelRef)
 	if !ok {
 		return nil, ErrSourceModelNotFound
@@ -442,7 +459,7 @@ func (s *Service) labelRefMatchIDs(ctx context.Context, fieldCfg FieldOptionsCon
 		return nil, err
 	}
 	labelCol := deriveLabelColumn(refInstance)
-	if labelCol == "" || !safeColumn.MatchString(labelCol) {
+	if labelCol == "" || !safeColumn.MatchString(labelCol) || s.maskOf(ctx, fieldCfg.LabelRef, user).Denied(labelCol) {
 		return nil, nil
 	}
 	escaped := strings.NewReplacer("%", `\%`, "_", `\_`).Replace(q)
@@ -498,6 +515,9 @@ func (s *Service) enrichOptionsFromRef(ctx context.Context, user modelbase.AuthU
 		return err
 	}
 	labelCol := deriveLabelColumn(refInstance)
+	if s.maskOf(ctx, fieldCfg.LabelRef, user).Denied(labelCol) {
+		return nil // the caller may not read the ref model's label column
+	}
 	if labelCol == "" || !safeColumn.MatchString(labelCol) {
 		// No usable label column on the ref model — nothing to enrich with.
 		return nil

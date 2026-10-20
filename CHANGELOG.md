@@ -37,6 +37,225 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Un grant gastado se limpia con `NULL`, no con `""`, en el update (`StampUpdate` / `UpdateStamper` / `Host.WithUpdateStamp`).** Al re-estampar un update, la columna `columns[].grant` cuyo id ya se gastó recibía una cadena vacía: en una columna `uuid` fallaba (`invalid UUID length: 0` en `mapToStruct`; en Postgres el UPDATE del camino wasm lo rechazaba con `invalid input syntax for type uuid`). Ahora el patch lleva `nil`, y `dynamic.Service.Update` también pone en cero el campo del modelo (un `null` JSON no toca un campo no puntero). El create no estaba afectado. Cubierto con pruebas unitarias y una con columna `uuid` real en Postgres.
+- **Reenviar el grant guardado ya no cuenta como grant nuevo en el update (`StampUpdate`).** Un formulario completo que reenvía el `columns[].grant` con el que se creó la línea (ya gastado) intentaba canjearlo otra vez y el update fallaba. Ahora un id igual al guardado, vacío o el UUID cero no es un grant presentado: no se canjea; la autorización se conserva si no cambia lo que cubría y cae (hace falta un grant nuevo) si cambia.
+
+### Added
+
+- **`money/`: tipo `Money` exacto (solo biblioteca estándar).** Importe en
+  unidades menores `int64` + `Spec` (código, `MinorUnits`, `CashIncrementMinor`,
+  `Scope`) con tabla ISO 4217 (`ISO`), `Decimal` sobre `math/big`
+  (`ParseDecimal` sin exponentes, separadores ni NaN), seis `RoundingMode`
+  (`HalfAwayFromZero` por defecto = `math.Round`), `Parse` (`ErrPrecision`),
+  `ParseRound`, `Add/Sub/Neg/Cmp` (`ErrCurrencyMismatch`, `ErrOverflow` con
+  `math/bits`), `MulDecimal`, `Allocate` por resto mayor (las partes suman el
+  total), `RoundCash`, `Rate` (QUOTE por 1 de BASE) con `Inverse` (escala 12,
+  `HalfEven`) y `Convert`. JSON `{"amount":"1899.00","currency_code":"MXN"}`.
+  Vectores compartidos con `@asteby/metacore-lib` en `money/testdata/golden.json`
+  (fijado por sha256) y pruebas de propiedades y fuzz.
+- **Permisos de lectura por columna** ([docs](docs/access-policies.md#permisos-de-lectura-por-columna)). Una columna del manifest declara `read_permission: "<permiso>"` (v3 `columns[].read_permission` → `manifest.ColumnDef.ReadPermission` → `modelbase.ColumnDef.ReadPermission`, también declarable en modelos Go). Si el usuario no tiene el permiso, el servidor quita la columna de list, get, respuestas de create/update/restore, export, relaciones embebidas (`?with=`), extensiones, source lines, `/options` (etiqueta, descripción, imagen, `extra_columns`, `option_display`, métricas) y `/search`, no busca por ella (búsqueda libre y por relación) ni la suma en el pie, y rechaza con 403 `column_read_denied` un filtro, orden, `group_by`, `aggregate` o facet sobre ella. Todo pasa por una sola máscara: `dynamic.Service.ColumnReadMask`. Para el host: `RedactEvent` (eventos que se reenvían a clientes), `RedactRecord`, `ReadMask.TableMeta` y `Config.ColumnReadChecker`. El copiloto (`agent.CRUDService`) aplica lo mismo con `ModelMeta.ReadPermissions` y `CRUDConfig.ColumnPermissions` (sin checker, falla cerrado). Validación: llave de permiso con puntos; si es del propio addon, declarada en `rbac.permissions`. Esquema JSON v3 actualizado. La máscara no distingue mayúsculas, falla cerrada si la metadata no se lee, rechaza un `value` con permiso en `/options` y `/search` y enmascara aprobaciones (`Service.ApprovalView`, eventos `approval.*`). El manifest exige que fórmulas, columnas `generated`, rollups y snapshots declaren el mismo `read_permission` que sus fuentes y prohíbe `search_keys` sobre columnas con permiso. `audit.QueryParams.Redact`/`RedactEntries` enmascaran la bitácora. El copiloto rechaza búsquedas vectoriales cuyos `VectorFields` incluyen una columna oculta.
+- **Import wasm `edge_command` (ABI 1.16) y capacidad `edge:command <device_key>.<command_kind>`.** Un guest manda un comando a un dispositivo físico de su organización (un CashDro, una impresora…) por la conexión de su `ops-edge-agent` y recibe la respuesta que el host transportó. Así ya no tiene que confiar en una copia que reenvió el navegador. Solo aplica a clases de dispositivo del propio addon (`edge_devices[]`, el validador del manifest lo exige) y a los kinds concedidos. Es idempotente por llave, con timeout de 10 s por omisión y tope de 60 s, y la espera no consume el presupuesto del guest. El embebedor lo conecta con `Host.WithEdgeCommander` (`Device` + `Send`, auditoría e idempotencia de su lado). docs/wasm-abi.md § 25. Hay límites de tasa: 50 por invocación y 120 por dispositivo por minuto (`rate_limited`, configurable con `Host.WithEdgeCommandLimits`). El timeout se acota a lo que queda del hard cap, el import se rechaza dentro de `InvokeInTx` (`in_transaction`), y cada entrega lleva un `nonce` (firmable junto con `command_id`) y el tope de respuesta (`MaxResponseBytes`).
+- **`payments.settle`, contrato implementado por el host** (RFC §16). Es `payments.Settle` detrás del import `capability_query`, con la concesión `capability:query payments.settle`. Es puro: no usa ledger ni organización y no escribe nada. Los errores van con código (`exceeds_total`, `nothing_due`, `invalid_tolerance`...). Con esto, POS, caja y kiosko usan una sola implementación del cobro mixto (solo el efectivo da cambio, tolerancia y tope relativo de redondeo) en lugar de copiarla en cada guest.
+- **Estándar de pagos, fases K2 (ledger) y K3 (conciliación)** ([RFC §16](docs/RFC-PAYMENTS-STANDARD.md)).
+  Paquete nuevo `payments/ledger`: escritor único de `commerce_payments`,
+  `commerce_payment_events` (dedupe único por proveedor + evento),
+  `commerce_refunds`, `commerce_payment_holds` (un hold vivo por documento,
+  token guardado como hash) y `commerce_payment_reconcile_leases`, con
+  `Migrate`/`Schema` idempotentes (Postgres y SQLite). `StartCharge` (hold +
+  replay bajo bloqueo del documento, luego `terminal.create` o `session` del
+  proveedor, o efectivo de cajón), `Refresh`, `Cancel` (siempre re-lee),
+  `Observe` (solo el proveedor dueño del pago; `payments.Observe`, dedupe,
+  monto distinto = anomalía, corrección auditada con una segunda lectura),
+  `CreateRefund`/`SettleRefund` y `Document`. Cada cambio aplicado publica
+  `commerce.payments.confirmed` con el proveedor como emisor; cada anomalía va
+  a un `AnomalySink` y al evento `kernel.payments.anomaly`.
+  `HostQuerier` expone el ledger a los addons como contratos `payments.*`
+  sobre el import `capability_query` existente (sin cambio de ABI ni de
+  esquema del manifest). `Reconciler` (K3): re-lee pagos abiertos, cancela y
+  marca `stuck` los vencidos, confirma anomalías, lista
+  `commerce.payments.reconcile` por proveedor (huérfanos), re-consulta los
+  reembolsos `pending` al proveedor con su llave, con lease por org que se
+  renueva durante la corrida. El estado del reembolso es monótono (un
+  `pending` tardío no regresa un `succeeded`), un reintento con la misma llave
+  vuelve a consultar (solo lectura con el contrato nuevo
+  `commerce.payments.refund.status` si el proveedor ya lo numeró; re-POST con
+  la misma llave solo dentro de `RefundRepostWindow`, 12 h por omisión;
+  después `needs_review` con anomalía `refund_needs_review`; backoff
+  exponencial entre intentos), un webhook de reembolso ya no da por hecho un
+  reembolso propio por cobertura (encola la re-consulta), los eventos duplicados
+  concurrentes se insertan con `ON CONFLICT DO NOTHING` y el pago guarda
+  `cancelled_from`.
+- `capability.Query.Caller`: la llave del addon que consulta, estampada por el
+  host (el import `capability_query` la toma de la invocación, nunca del guest).
+
+### Added
+
+- **Estándar de pagos de la plataforma, fase K1: contrato** ([RFC](docs/RFC-PAYMENTS-STANDARD.md)).
+  Paquete nuevo `payments` (Go puro, sin base de datos): los registros canónicos
+  `Payment`, `Refund` y `PaymentEvent`, el ciclo de vida normalizado con la
+  tabla de transiciones válidas (`Transition` para comandos locales,
+  `Observe` para estados re-leídos del proveedor: aplicar, ignorar un
+  duplicado o una lectura fuera de orden, o anomalía como `late_capture`), el
+  hold de cobro por documento con TTL y token (`Acquire`, `CheckCharge`,
+  `Release`, `Consume`), el replay idempotente (`CheckReplay`), las reglas del
+  cobro (`CheckTenders`, `CheckLinesTotal`, `Settle` con tolerancia de
+  redondeo de efectivo por organización), lo reembolsable (`Refundable`,
+  `CheckRefund`, `ApplySucceededRefunds`, nota de crédito obligatoria en
+  `Refund.Complete`) y `DecodeConfirmed`, que exige `emitter == provider` en
+  `commerce.payments.confirmed`. El dinero se opera con `math/big`, nunca con
+  `float64`.
+  `capability`: los estados `at_device` y `cancelling` (al final del enum), los
+  vocabularios `PaymentChannels` (`terminal|online|qr|link|cash`), `CardTypes`,
+  `RefundStatuses`, `CancelOutcomes` y `PaymentEventSources`, las formas
+  `Card`, `Seller` (marketplace) y `CashTender`, y los contratos
+  `commerce.payments.cancel`, `.capabilities`, `.reconcile`,
+  `.terminal.create` y `.terminal.devices` (todos fijados al proveedor;
+  `cancel` y `terminal.create` mutantes). Campos opcionales nuevos en
+  `session`, `confirm`/`status`, `refund` y en el payload del evento neutral
+  (`organization_id`, `occurred_at`, `source`, `payment_id`, documento).
+  `ValidCurrency`. Retrocompatible: los 4 contratos de pago conservan sus
+  requeridos de entrada y salida (prueba incluida).
+  Reglas de dinero endurecidas en la revisión: `Settle(Collection)` separa
+  la parte no efectivo (nunca excede lo debido) del efectivo (el único que da
+  cambio, nunca mayor que lo entregado) y acota la tolerancia de redondeo a
+  `MaxCashTolerance` (menos de una unidad de la moneda); `Refundable` respeta
+  el `amount_refunded` del proveedor; `CheckRefund` da
+  `ErrIdempotencyConflict` si la llave se reusa con otros datos;
+  `ObserveOutcome` compara monto, moneda, `provider_ref` y total reembolsado;
+  la máquina de estados es monótona (`authorized → at_device` es `stale`) y
+  `Command` limita los comandos locales por canal; montos cuantizados por
+  moneda (`ParseMoney`) con escala máxima `MaxScale`; `NewHoldToken` y
+  `Consume` solo sobre un hold vigente; `DecodeConfirmed` exige `isProvider` y
+  `ConfirmedFor`; `EmitPolicy` aplica `commerce.payments` como enforce aun en
+  modo warn; el manifest rechaza `seller`/`refund_application_fee` desde
+  `payload.*`; `cash.rounding` en el contrato. `DerivedEventID` incluye moneda
+  y monto (dos reembolsos parciales sin `event_id` no colisionan);
+  `Payment.CancelledFrom` evita que una cancelación rechazada pierda el
+  `authorized`; `ObserveOutcome` no aplica una captura sin monto; el redondeo
+  de efectivo tiene además un tope relativo (constante `MaxRoundingPercent`).
+
+- **manifest v3: `contributions.guides[]` (ayuda in-app por rol).** Guías cortas
+  y tours guiados declarables por addon o preset: `key`, `title`, `roles[]`,
+  `permission`, `trigger` (`manual` | `first_visit`), `route` (obligatoria con
+  `first_visit`), `order` y `steps[]` (reusa `AgentGuideStep`: `target` de UI o
+  paso `concept`). Validación de claves y pasos únicos en `v3.Validate`.
+- **preset: presets que extienden a otro (`preset.extends`) y visibilidad
+  privada.** Base del RFC `docs/rfcs/RFC-PRESETS-DE-EMPRESA-Y-DISTRIBUCION.md`.
+  - Manifest v3: `metadata.visibility` (`public|private`), `metadata.owner`,
+    `preset.extends {key, version}` y `preset.remove_addons`. `preset.addons`
+    puede ir vacío cuando hay `extends`. El schema embebido lo acepta, así que
+    hub y manifestcheck deben subir a esta versión antes de publicar un preset
+    que lo use.
+  - `preset.Flatten(base, overlay)` une un preset con su base. Los addons se
+    unen por clave, con rangos combinados (deben cumplirse los dos), `optional`
+    del overlay y `requires` unidos; `remove_addons` se aplica al final. Los
+    `defaults` se unen con la tabla `preset.MergeStrategies` (merge-patch,
+    reemplazo, listas por identidad con `_remove` y unión de `permissions`, y
+    `records` por modelo).
+  - `Resolved.Lineage` registra la cadena (base primero). `ResolveFromManifest`
+    devuelve `ErrNeedsBase` para un overlay, así un host viejo falla en vez de
+    instalar solo las diferencias.
+  - `preset.InlineFiles` resuelve las claves `*_file` de `preset.defaults`
+    desde el bundle. Hoy nadie las lee, por eso los roles, categorías, branding
+    y dashboards de los presets por archivo no se aplican en SaaS.
+- **preset: brand kit tipado y archivos del bundle de un preset.**
+  - `bundle.Bundle.PresetFiles` conserva todo `defaults/**` y `assets/**` (antes
+    `Read` los descartaba) y `Write` los emite. `(*Bundle).ReadPresetFile` lee
+    uno por ruta (acepta `./`).
+  - `v3.Branding` tipa `preset.defaults.branding` con los campos de hoy
+    (`platform_name`, `logo_url`, `favicon_url`, `primary_color`,
+    `accent_color`, `support_email`, `support_url`, `mascot_name`,
+    `mascot_skin`) más `logo_dark_url`, `logo_mark_url`, `login_background_url`,
+    `theme_key`, `font`, `density`, `pwa_name`, `pwa_short_name` y
+    `email_from_name`. Todos son opcionales. Los colores deben ser hex y los
+    assets una URL http(s) o una ruta `./assets/...`. Las claves desconocidas
+    son error. Los helpers son `ParseBranding`, `Validate`, `AssetPaths`,
+    `WithAssetURLs` y `ToMap`.
+  - Validación: el branding inline se valida en `v3.Validate` (y en el schema).
+    `bundle.Read` estricto además resuelve los `*_file`, valida el branding que
+    viene de `branding_file` y exige que cada `./assets/...` exista en el bundle.
+    En modo no estricto, esto queda como `ValidationWarnings`.
+  - `preset.ResolveWithFiles` y `preset.FlattenWithFiles` hacen inline de los
+    `*_file` desde los archivos del bundle y llenan `Resolved.Files`. El
+    branding del overlay se une por merge-patch y sus assets ganan en la misma
+    ruta. `Resolved.Branding()` devuelve el kit efectivo (con `theme_key`,
+    `font` y `density` de `ui_theme` como respaldo) y reporta los assets que
+    faltan.
+  - `InlineFiles` desenvuelve un archivo cuyo único campo es su propio nombre
+    (`{"roles": [...]}` en `roles.json`, la forma del appliance), y los `roles`
+    se unen por `name`, la identidad que usa ops.
+  - `v3.Branding.Fonts`: familias de fuente adicionales (nombres de Google
+    Fonts, por ejemplo `Barlow`) que el host carga para las superficies propias
+    de la org (kiosko, pantalla de cliente, documentos), aparte del token `font`
+    de la UI.
+  - `preset.AssetRefs(defaults)` y `preset.RewriteAssetRefs(defaults, urls)`:
+    las referencias `./assets/...` de cualquier default (por ejemplo los assets
+    del tema de un `kiosk_profile`) se materializan y se reescriben igual que
+    las de branding. `bundle.Read` estricto exige que todas existan.
+- **preset: endurecimiento del overlay (revisión r1 de #508).**
+  - **Escalada por overlay:** `Flatten` rechaza (`ErrRoleEscalation`) los roles
+    del overlay con comodines, con campos fuera del contrato del rol (flags de
+    sistema o admin) o que tocan roles de sistema: quitarlos con `_remove`,
+    cambiar sus permisos o crear uno con nombre reservado
+    (`SystemRoleNames`, comodín o flag `system`/`is_system`/`admin`).
+    `FlattenWithOptions(..., FlattenOptions{KnownPermission})` exige además que
+    cada permiso agregado lo declare el set resuelto
+    (`preset.DeclaredPermissions(addons...)`).
+  - `preset.ResolveChain(top, files, fetch, opts)` resuelve la cadena
+    `extends` de arriba abajo, acotada por `MaxLineage`, con detección de
+    visitados (A→B→A da `ErrCyclicExtends`) y verificación de clave y rango de
+    cada base.
+  - **SVG:** `preset.ValidateSVG` (allowlist portada de ops#1977) y
+    `bundle.Read` valida cada `assets/**.svg`. El host además debe servir los
+    assets con `Content-Security-Policy: sandbox` y
+    `X-Content-Type-Options: nosniff`.
+  - **Cadena de versiones:** `manifest.APIVersion` pasa a `3.1.0`. Un manifest
+    con `metadata.visibility` o `preset.extends` debe requerir
+    `kernel >=3.1.0` (`v3.OverlayMinKernel`), así un host 3.0.x lo rechaza en
+    la compatibilidad. `docs/spec/v3/manifest-v3.schema.json` vuelve a ser
+    idéntico al embebido.
+  - **Menores:** `combineRanges` rechaza rangos sin versión en común;
+    `DefaultsWarnings` avisa de un `extends` sin tope y de una clave inline
+    que tapa su `*_file` (van a `ValidationWarnings`); `Write`,
+    `FlattenWithOptions` y `Read` rechazan rutas de preset sucias, con `\` o
+    con `%`, y `Read` rechaza `\` en cualquier entrada; las refs
+    `./assets/...` sucias se reportan; `mergeKeyed` usa identidad estable
+    (campo + JSON), identidad alternativa para roles (`key`, `name`, `slug`),
+    no copia `-perm` a un ítem nuevo y un `_remove` seguido de la misma
+    identidad crea un ítem nuevo en vez de revivir el de la base.
+- **Columnas snapshot y autorizaciones declarativas (`models[].snapshots`,
+  `columns[].grant`; docs/snapshots.md).** Al crear, el servidor copia columnas
+  desde una fila relacionada (costo y piso del producto al vender, sucursal y
+  vendedor del pedido) a columnas `protected`, y canjea una autorización PIN
+  de un solo uso estampando un flag protegido que leen las fórmulas y los
+  guards (`price_shortfall`). Corre igual en `/data`, `data_mutate`/`data_batch`
+  (`Host.WithCreateStamp`, ABI § 24) y acciones; el valor del servidor pisa lo
+  que mande el cliente o el guest. `dynamic.Config.StampResolver`,
+  `Service.StampCreate` / `CreateStamper`. La lectura SIEMPRE filtra por
+  `organization_id` (falla cerrado sin org o sin esa columna) e ignora filas
+  con `deleted_at`; un origen inexistente rechaza la escritura
+  (`ErrSnapshotSource`). El stamp también corre en update (`StampUpdate`,
+  `UpdateStamper`, `Host.WithUpdateStamp`): re-snapshot si cambia la fuente y
+  una autorización cae si cambia lo que cubría (hace falta una grant nueva).
+  El canje se hace con el INSERT/UPDATE, en su transacción y después de los
+  guards (`StampPending.Redeem`).
+
+- **runtime/wasm: import `approval_consume` y `Host.WithApprovalConsumer`
+  (docs/wasm-abi.md § 23).** Un handler que escribe una línea bajo una
+  autorización de supervisor (precio bajo el piso, descuento fuera de regla)
+  canjea el grant PIN de un solo uso en un paso atómico del host, sin necesitar
+  escritura sobre la tabla `approval_requests`. `dynamic.Service.ConsumeApproval`
+  valida org, política, solicitante, vigencia, uso único y el contexto
+  autorizado (`context_eq` / `context_gte`); un intento rechazado no quema el
+  grant. Org y usuario salen de la invocación, nunca del guest.
+- **runtime/wasm: un guard `on_violation: request_approval` que falla en
+  `data_mutate` / `data_batch` responde `approval_required`** (antes
+  `constraint_violation`), para que el guest distinga "requiere supervisor" de
+  "dato inválido". Sigue haciendo rollback y no estaciona nada (no hay applier
+  que reejecute una escritura wasm).
+
+### Fixed
+
 - **dataload: correcciones de la revisión de la integración con ops.**
   (1) Una fila aprobada (o rechazada) y sin aplicar pasa a `superseded` cuando
   una corrida posterior ya cargó esa identidad sin revisión; `ApplyApproved` ya

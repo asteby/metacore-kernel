@@ -45,10 +45,12 @@ var HostFunctions = map[string]struct{}{
 	"data_batch":       {},
 	"data_query":       {},
 	"approval_request": {},
+	"approval_consume": {},
 	"sequence_next":    {},
 	"ctx_get":          {},
 	"capability_query": {},
 	"routing_resolve":  {},
+	"edge_command":     {},
 }
 
 // WASIFunctions is the closed set of WASI imports a guest may declare:

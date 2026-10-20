@@ -29,6 +29,7 @@ type Capabilities struct {
 	connRead []string        // connector keys: "github", "*" for any
 	ctxScope map[string]bool // ctx_get slices: "user", "roles", "org_config"
 	capQuery []string        // capability keys (globs) the addon may query via capability_query
+	edgeCmd  []string        // "<device_key>.<command_kind>" globs the addon may send via edge_command
 }
 
 // Compile turns a manifest's declarations into a Capabilities policy.
@@ -54,6 +55,8 @@ func Compile(addonKey string, caps []manifest.Capability) *Capabilities {
 			c.connRead = append(c.connRead, cap.Target)
 		case "capability:query":
 			c.capQuery = append(c.capQuery, cap.Target)
+		case "edge:command":
+			c.edgeCmd = append(c.edgeCmd, cap.Target)
 		case "ctx:user", "ctx:roles", "ctx:org_config":
 			// The target is ignored: each kind IS the slice. Kept as a set so
 			// the ctx_get import can answer "which slices may this addon see".
@@ -266,6 +269,21 @@ func (c *Capabilities) CanQueryCapability(key string) error {
 		addon = c.addonKey
 	}
 	return fmt.Errorf("addon %q lacks capability:query %q", addon, key)
+}
+
+// CanSendEdgeCommand returns nil if the addon declared
+// `edge:command <device_key>.<command_kind>` (glob allowed on the kind, e.g.
+// `cashdro.*`) for a command of kind to a device of class deviceKey. The host
+// separately requires the device class to belong to the addon.
+func (c *Capabilities) CanSendEdgeCommand(deviceKey, kind string) error {
+	if c != nil && strings.TrimSpace(deviceKey) != "" && matchAny(c.edgeCmd, deviceKey+"."+kind) {
+		return nil
+	}
+	addon := ""
+	if c != nil {
+		addon = c.addonKey
+	}
+	return fmt.Errorf("addon %q lacks edge:command %q", addon, deviceKey+"."+kind)
 }
 
 // CanReadContext returns nil if the addon declared the `ctx:<scope>` capability

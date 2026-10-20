@@ -104,6 +104,9 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			// OptionFilter hides ineligible options of the relation picker; the
 			// SDK evaluates it over the extra columns /options returns.
 			OptionFilter: toOptionFilter(c.OptionFilter),
+			// ReadPermission rides through: the dynamic runtime strips the
+			// column from the reads of a caller lacking the permission.
+			ReadPermission: c.ReadPermission,
 		}
 		// Stage machine: when this column is the model's stage_field and the
 		// model declares stages, derive a `status` display + the option list

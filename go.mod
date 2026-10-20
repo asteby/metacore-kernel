@@ -21,7 +21,7 @@ require (
 	github.com/prometheus/client_model v0.6.3
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/tetratelabs/wazero v1.12.0
-	github.com/valyala/fasthttp v1.75.0
+	github.com/valyala/fasthttp v1.76.0
 	github.com/xuri/excelize/v2 v2.11.0
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sync v0.24.0

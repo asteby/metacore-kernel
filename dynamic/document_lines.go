@@ -371,7 +371,12 @@ func (s *Service) SourceLines(ctx context.Context, model string, user modelbase.
 			return nil, err
 		}
 	}
-	return pendingLines(rows, consumed, *src), nil
+	// Served to the caller: without the line model's unreadable columns.
+	mask, err := s.ColumnReadMask(ctx, src.LinesModel, user)
+	if err != nil {
+		return nil, err
+	}
+	return mask.RedactRows(pendingLines(rows, consumed, *src)), nil
 }
 
 // consumedByJSONLines sums, per source line, the quantity of the json lines of

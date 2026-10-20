@@ -202,6 +202,12 @@ type ColumnDef struct {
 	// the host projects it so form derivation excludes it from create and marks
 	// it read-only in edit. The column still renders in tables/detail. Pure UI.
 	Readonly bool `json:"readonly,omitempty"`
+
+	// ReadPermission, when set, is the permission a caller must hold to read
+	// this column. The dynamic runtime removes it from every read of a caller
+	// without it and rejects filters/sorts over it (dynamic.ReadMask); hosts
+	// can prune the served metadata with dynamic.ReadMask.TableMeta.
+	ReadPermission string `json:"readPermission,omitempty"`
 	// Ref is the foreign-key target model the column points at (e.g.
 	// "customers", "addon_tickets.comments"). When populated, the SDK
 	// resolves the column's options against `/api/options/:Ref?field=id`

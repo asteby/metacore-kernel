@@ -573,6 +573,18 @@ func (h *Handler) handleError(c fiber.Ctx, err error) error {
 			"action":  ade.Action,
 		}))
 	}
+	// Filter/sort/group/aggregate over a column the caller may not read
+	// (ReadPermission): 403 with a machine-readable code and the column.
+	var cre *ColumnReadDeniedError
+	if errors.As(err, &cre) {
+		return c.Status(fiber.StatusForbidden).JSON(withCorrelation(c, fiber.Map{
+			"success": false,
+			"message": cre.Error(),
+			"code":    "column_read_denied",
+			"model":   cre.Model,
+			"column":  cre.Column,
+		}))
+	}
 	// Second create on a singleton model: 409 with the existing row id.
 	var se *SingletonExistsError
 	if errors.As(err, &se) {

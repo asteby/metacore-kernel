@@ -1153,7 +1153,7 @@ func (s *Service) ListApprovals(ctx context.Context, user modelbase.AuthUser, q 
 	out := make([]ApprovalRequestView, 0, len(rows))
 	for i := range rows {
 		r := &rows[i]
-		out = append(out, r.View(r.Status == ApprovalStatusPending && rolesIntersect(roles, r.RoleList())))
+		out = append(out, s.ApprovalView(ctx, user, r, r.Status == ApprovalStatusPending && rolesIntersect(roles, r.RoleList())))
 	}
 	return out, total, nil
 }

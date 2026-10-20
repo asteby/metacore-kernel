@@ -56,6 +56,23 @@ func (s *Service) Search(ctx context.Context, user modelbase.AuthUser, q SearchQ
 	if cfg == nil {
 		return nil, ErrNoSearchConfig
 	}
+	// Column read gate: a client filter over a column the caller may not read
+	// is refused; the search neither matches, orders by nor projects one.
+	mask, err := s.ColumnReadMask(ctx, q.Model, user)
+	if err != nil {
+		return nil, err
+	}
+	for _, col := range cfg.AllowFilters {
+		if v, ok := q.Filters[col]; ok && v != "" {
+			if err := mask.Check(col, "filter"); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := mask.Check(cfg.Value, "value"); err != nil {
+		return nil, err
+	}
+	cfg = maskSearchConfig(mask, cfg)
 
 	tableName, err := s.tableNameFor(ctx, q.Model, instance)
 	if err != nil {

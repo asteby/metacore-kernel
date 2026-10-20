@@ -1,0 +1,3282 @@
+{
+  "version": 1,
+  "generated": "2026-10-19",
+  "description": "Vectores compartidos de Money: kernel Go (money/testdata/golden.json) y @asteby/metacore-lib (src/__fixtures__/money.golden.json). Mismo archivo, comparado por sha256. Importes como string decimal canónico con exactamente minor_units decimales; tasas = unidades de QUOTE por 1 de BASE.",
+  "rounding_modes": [
+    "halfAwayFromZero",
+    "halfEven",
+    "towardZero",
+    "awayFromZero",
+    "floor",
+    "ceil"
+  ],
+  "error_codes": [
+    "currency_mismatch",
+    "overflow",
+    "precision",
+    "invalid"
+  ],
+  "iso": [
+    {
+      "code": "AED",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "AFN",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "ALL",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "AMD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "ANG",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "AOA",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "ARS",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "AUD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "AWG",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "AZN",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "BAM",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "BBD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "BDT",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "BGN",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "BHD",
+      "minor_units": 3,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "BIF",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "BMD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "BND",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "BOB",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "BOV",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "BRL",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "BSD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "BTN",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "BWP",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "BYN",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "BZD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "CAD",
+      "minor_units": 2,
+      "cash_increment_minor": 5
+    },
+    {
+      "code": "CDF",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "CHE",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "CHF",
+      "minor_units": 2,
+      "cash_increment_minor": 5
+    },
+    {
+      "code": "CHW",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "CLF",
+      "minor_units": 4,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "CLP",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "CNY",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "COP",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "COU",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "CRC",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "CUC",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "CUP",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "CVE",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "CZK",
+      "minor_units": 2,
+      "cash_increment_minor": 100
+    },
+    {
+      "code": "DJF",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "DKK",
+      "minor_units": 2,
+      "cash_increment_minor": 50
+    },
+    {
+      "code": "DOP",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "DZD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "EGP",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "ERN",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "ETB",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "EUR",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "FJD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "FKP",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "GBP",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "GEL",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "GHS",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "GIP",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "GMD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "GNF",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "GTQ",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "GYD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "HKD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "HNL",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "HTG",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "HUF",
+      "minor_units": 2,
+      "cash_increment_minor": 100
+    },
+    {
+      "code": "IDR",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "ILS",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "INR",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "IQD",
+      "minor_units": 3,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "IRR",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "ISK",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "JMD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "JOD",
+      "minor_units": 3,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "JPY",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "KES",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "KGS",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "KHR",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "KMF",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "KPW",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "KRW",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "KWD",
+      "minor_units": 3,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "KYD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "KZT",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "LAK",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "LBP",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "LKR",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "LRD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "LSL",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "LYD",
+      "minor_units": 3,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "MAD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "MDL",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "MGA",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "MKD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "MMK",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "MNT",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "MOP",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "MRU",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "MUR",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "MVR",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "MWK",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "MXN",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "MXV",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "MYR",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "MZN",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "NAD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "NGN",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "NIO",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "NOK",
+      "minor_units": 2,
+      "cash_increment_minor": 100
+    },
+    {
+      "code": "NPR",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "NZD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "OMR",
+      "minor_units": 3,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "PAB",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "PEN",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "PGK",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "PHP",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "PKR",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "PLN",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "PYG",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "QAR",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "RON",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "RSD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "RUB",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "RWF",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "SAR",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "SBD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "SCR",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "SDG",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "SEK",
+      "minor_units": 2,
+      "cash_increment_minor": 100
+    },
+    {
+      "code": "SGD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "SHP",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "SLE",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "SLL",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "SOS",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "SRD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "SSP",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "STN",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "SVC",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "SYP",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "SZL",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "THB",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "TJS",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "TMT",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "TND",
+      "minor_units": 3,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "TOP",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "TRY",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "TTD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "TWD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "TZS",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "UAH",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "UGX",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "USD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "USN",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "UYI",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "UYU",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "UYW",
+      "minor_units": 4,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "UZS",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "VED",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "VES",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "VND",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "VUV",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "WST",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "XAF",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "XCD",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "XCG",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "XOF",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "XPF",
+      "minor_units": 0,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "YER",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "ZAR",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "ZMW",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "ZWG",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    },
+    {
+      "code": "ZWL",
+      "minor_units": 2,
+      "cash_increment_minor": 0
+    }
+  ],
+  "cases": {
+    "parse_decimal": [
+      {
+        "input": "0",
+        "string": "0"
+      },
+      {
+        "input": "-12.50",
+        "string": "-12.50"
+      },
+      {
+        "input": "+3",
+        "string": "3"
+      },
+      {
+        "input": "0.155",
+        "string": "0.155"
+      },
+      {
+        "input": "17.2345",
+        "string": "17.2345"
+      },
+      {
+        "input": "-0",
+        "string": "0"
+      },
+      {
+        "input": "-0.00",
+        "string": "0.00"
+      },
+      {
+        "input": "007.10",
+        "string": "7.10"
+      },
+      {
+        "input": "123456789012345678901234567890.123456789",
+        "string": "123456789012345678901234567890.123456789"
+      },
+      {
+        "input": "",
+        "error": "invalid"
+      },
+      {
+        "input": " 1",
+        "error": "invalid"
+      },
+      {
+        "input": "1 ",
+        "error": "invalid"
+      },
+      {
+        "input": "1e3",
+        "error": "invalid"
+      },
+      {
+        "input": "1E3",
+        "error": "invalid"
+      },
+      {
+        "input": "1,000",
+        "error": "invalid"
+      },
+      {
+        "input": "1,000.00",
+        "error": "invalid"
+      },
+      {
+        "input": "1.000,00",
+        "error": "invalid"
+      },
+      {
+        "input": "NaN",
+        "error": "invalid"
+      },
+      {
+        "input": "nan",
+        "error": "invalid"
+      },
+      {
+        "input": "Infinity",
+        "error": "invalid"
+      },
+      {
+        "input": "-Infinity",
+        "error": "invalid"
+      },
+      {
+        "input": "--1",
+        "error": "invalid"
+      },
+      {
+        "input": "+-1",
+        "error": "invalid"
+      },
+      {
+        "input": "-+1",
+        "error": "invalid"
+      },
+      {
+        "input": "++1",
+        "error": "invalid"
+      },
+      {
+        "input": ".5",
+        "error": "invalid"
+      },
+      {
+        "input": "5.",
+        "error": "invalid"
+      },
+      {
+        "input": "-",
+        "error": "invalid"
+      },
+      {
+        "input": "+",
+        "error": "invalid"
+      },
+      {
+        "input": ".",
+        "error": "invalid"
+      },
+      {
+        "input": "1.2.3",
+        "error": "invalid"
+      },
+      {
+        "input": "0x10",
+        "error": "invalid"
+      },
+      {
+        "input": "1_000",
+        "error": "invalid"
+      },
+      {
+        "input": "١٢",
+        "error": "invalid"
+      },
+      {
+        "input": "12a",
+        "error": "invalid"
+      },
+      {
+        "input": "$12",
+        "error": "invalid"
+      }
+    ],
+    "parse": [
+      {
+        "name": "mxn canonical",
+        "currency_code": "MXN",
+        "input": "1899.00",
+        "amount": "1899.00",
+        "minor": "189900"
+      },
+      {
+        "name": "mxn integer",
+        "currency_code": "MXN",
+        "input": "1899",
+        "amount": "1899.00",
+        "minor": "189900"
+      },
+      {
+        "name": "mxn one decimal",
+        "currency_code": "MXN",
+        "input": "0.5",
+        "amount": "0.50",
+        "minor": "50"
+      },
+      {
+        "name": "mxn negative",
+        "currency_code": "MXN",
+        "input": "-0.5",
+        "amount": "-0.50",
+        "minor": "-50"
+      },
+      {
+        "name": "mxn negative zero",
+        "currency_code": "MXN",
+        "input": "-0.00",
+        "amount": "0.00",
+        "minor": "0"
+      },
+      {
+        "name": "mxn trailing zeros ok",
+        "currency_code": "MXN",
+        "input": "10.5000",
+        "amount": "10.50",
+        "minor": "1050"
+      },
+      {
+        "name": "mxn 1.005 precision",
+        "currency_code": "MXN",
+        "input": "1.005",
+        "error": "precision"
+      },
+      {
+        "name": "jpy integer",
+        "currency_code": "JPY",
+        "input": "1000",
+        "amount": "1000",
+        "minor": "1000"
+      },
+      {
+        "name": "jpy 10.0 ok",
+        "currency_code": "JPY",
+        "input": "10.0",
+        "amount": "10",
+        "minor": "10"
+      },
+      {
+        "name": "jpy 10.5 precision",
+        "currency_code": "JPY",
+        "input": "10.5",
+        "error": "precision"
+      },
+      {
+        "name": "kwd three decimals",
+        "currency_code": "KWD",
+        "input": "10.000",
+        "amount": "10.000",
+        "minor": "10000"
+      },
+      {
+        "name": "kwd four decimals precision",
+        "currency_code": "KWD",
+        "input": "1.2345",
+        "error": "precision"
+      },
+      {
+        "name": "clf four decimals",
+        "currency_code": "CLF",
+        "input": "1.2345",
+        "amount": "1.2345",
+        "minor": "12345"
+      },
+      {
+        "name": "ves 1e12",
+        "currency_code": "VES",
+        "input": "1000000000000.00",
+        "amount": "1000000000000.00",
+        "minor": "100000000000000"
+      },
+      {
+        "name": "mxn max int64",
+        "currency_code": "MXN",
+        "input": "92233720368547758.07",
+        "amount": "92233720368547758.07",
+        "minor": "9223372036854775807"
+      },
+      {
+        "name": "mxn min int64",
+        "currency_code": "MXN",
+        "input": "-92233720368547758.08",
+        "amount": "-92233720368547758.08",
+        "minor": "-9223372036854775808"
+      },
+      {
+        "name": "mxn overflow",
+        "currency_code": "MXN",
+        "input": "92233720368547758.08",
+        "error": "overflow"
+      },
+      {
+        "name": "mxn overflow negative",
+        "currency_code": "MXN",
+        "input": "-92233720368547758.09",
+        "error": "overflow"
+      },
+      {
+        "name": "mxn exponent",
+        "currency_code": "MXN",
+        "input": "1e3",
+        "error": "invalid"
+      },
+      {
+        "name": "mxn thousands",
+        "currency_code": "MXN",
+        "input": "1,899.00",
+        "error": "invalid"
+      },
+      {
+        "name": "mxn nan",
+        "currency_code": "MXN",
+        "input": "NaN",
+        "error": "invalid"
+      },
+      {
+        "name": "mxn double sign",
+        "currency_code": "MXN",
+        "input": "--1",
+        "error": "invalid"
+      }
+    ],
+    "parse_round": [
+      {
+        "name": "1.005 half away",
+        "currency_code": "MXN",
+        "input": "1.005",
+        "mode": "halfAwayFromZero",
+        "amount": "1.01"
+      },
+      {
+        "name": "1.005 half even",
+        "currency_code": "MXN",
+        "input": "1.005",
+        "mode": "halfEven",
+        "amount": "1.00"
+      },
+      {
+        "name": "1.015 half even",
+        "currency_code": "MXN",
+        "input": "1.015",
+        "mode": "halfEven",
+        "amount": "1.02"
+      },
+      {
+        "name": "-0.005 half away",
+        "currency_code": "MXN",
+        "input": "-0.005",
+        "mode": "halfAwayFromZero",
+        "amount": "-0.01"
+      },
+      {
+        "name": "-0.005 half even",
+        "currency_code": "MXN",
+        "input": "-0.005",
+        "mode": "halfEven",
+        "amount": "0.00"
+      },
+      {
+        "name": "2.5 half even",
+        "currency_code": "JPY",
+        "input": "2.5",
+        "mode": "halfEven",
+        "amount": "2"
+      },
+      {
+        "name": "3.5 half even",
+        "currency_code": "JPY",
+        "input": "3.5",
+        "mode": "halfEven",
+        "amount": "4"
+      },
+      {
+        "name": "-0.5 half away",
+        "currency_code": "JPY",
+        "input": "-0.5",
+        "mode": "halfAwayFromZero",
+        "amount": "-1"
+      },
+      {
+        "name": "-0.5 half even",
+        "currency_code": "JPY",
+        "input": "-0.5",
+        "mode": "halfEven",
+        "amount": "0"
+      },
+      {
+        "name": "jpy 10.5 rounds",
+        "currency_code": "JPY",
+        "input": "10.5",
+        "mode": "halfAwayFromZero",
+        "amount": "11"
+      },
+      {
+        "name": "kwd 1.23456",
+        "currency_code": "KWD",
+        "input": "1.23456",
+        "mode": "halfAwayFromZero",
+        "amount": "1.235"
+      },
+      {
+        "name": "matrix 2.5 halfAwayFromZero",
+        "currency_code": "JPY",
+        "input": "2.5",
+        "mode": "halfAwayFromZero",
+        "amount": "3"
+      },
+      {
+        "name": "matrix 2.5 halfEven",
+        "currency_code": "JPY",
+        "input": "2.5",
+        "mode": "halfEven",
+        "amount": "2"
+      },
+      {
+        "name": "matrix 2.5 towardZero",
+        "currency_code": "JPY",
+        "input": "2.5",
+        "mode": "towardZero",
+        "amount": "2"
+      },
+      {
+        "name": "matrix 2.5 awayFromZero",
+        "currency_code": "JPY",
+        "input": "2.5",
+        "mode": "awayFromZero",
+        "amount": "3"
+      },
+      {
+        "name": "matrix 2.5 floor",
+        "currency_code": "JPY",
+        "input": "2.5",
+        "mode": "floor",
+        "amount": "2"
+      },
+      {
+        "name": "matrix 2.5 ceil",
+        "currency_code": "JPY",
+        "input": "2.5",
+        "mode": "ceil",
+        "amount": "3"
+      },
+      {
+        "name": "matrix 3.5 halfAwayFromZero",
+        "currency_code": "JPY",
+        "input": "3.5",
+        "mode": "halfAwayFromZero",
+        "amount": "4"
+      },
+      {
+        "name": "matrix 3.5 halfEven",
+        "currency_code": "JPY",
+        "input": "3.5",
+        "mode": "halfEven",
+        "amount": "4"
+      },
+      {
+        "name": "matrix 3.5 towardZero",
+        "currency_code": "JPY",
+        "input": "3.5",
+        "mode": "towardZero",
+        "amount": "3"
+      },
+      {
+        "name": "matrix 3.5 awayFromZero",
+        "currency_code": "JPY",
+        "input": "3.5",
+        "mode": "awayFromZero",
+        "amount": "4"
+      },
+      {
+        "name": "matrix 3.5 floor",
+        "currency_code": "JPY",
+        "input": "3.5",
+        "mode": "floor",
+        "amount": "3"
+      },
+      {
+        "name": "matrix 3.5 ceil",
+        "currency_code": "JPY",
+        "input": "3.5",
+        "mode": "ceil",
+        "amount": "4"
+      },
+      {
+        "name": "matrix -2.5 halfAwayFromZero",
+        "currency_code": "JPY",
+        "input": "-2.5",
+        "mode": "halfAwayFromZero",
+        "amount": "-3"
+      },
+      {
+        "name": "matrix -2.5 halfEven",
+        "currency_code": "JPY",
+        "input": "-2.5",
+        "mode": "halfEven",
+        "amount": "-2"
+      },
+      {
+        "name": "matrix -2.5 towardZero",
+        "currency_code": "JPY",
+        "input": "-2.5",
+        "mode": "towardZero",
+        "amount": "-2"
+      },
+      {
+        "name": "matrix -2.5 awayFromZero",
+        "currency_code": "JPY",
+        "input": "-2.5",
+        "mode": "awayFromZero",
+        "amount": "-3"
+      },
+      {
+        "name": "matrix -2.5 floor",
+        "currency_code": "JPY",
+        "input": "-2.5",
+        "mode": "floor",
+        "amount": "-3"
+      },
+      {
+        "name": "matrix -2.5 ceil",
+        "currency_code": "JPY",
+        "input": "-2.5",
+        "mode": "ceil",
+        "amount": "-2"
+      },
+      {
+        "name": "matrix -3.5 halfAwayFromZero",
+        "currency_code": "JPY",
+        "input": "-3.5",
+        "mode": "halfAwayFromZero",
+        "amount": "-4"
+      },
+      {
+        "name": "matrix -3.5 halfEven",
+        "currency_code": "JPY",
+        "input": "-3.5",
+        "mode": "halfEven",
+        "amount": "-4"
+      },
+      {
+        "name": "matrix -3.5 towardZero",
+        "currency_code": "JPY",
+        "input": "-3.5",
+        "mode": "towardZero",
+        "amount": "-3"
+      },
+      {
+        "name": "matrix -3.5 awayFromZero",
+        "currency_code": "JPY",
+        "input": "-3.5",
+        "mode": "awayFromZero",
+        "amount": "-4"
+      },
+      {
+        "name": "matrix -3.5 floor",
+        "currency_code": "JPY",
+        "input": "-3.5",
+        "mode": "floor",
+        "amount": "-4"
+      },
+      {
+        "name": "matrix -3.5 ceil",
+        "currency_code": "JPY",
+        "input": "-3.5",
+        "mode": "ceil",
+        "amount": "-3"
+      },
+      {
+        "name": "matrix -0.5 halfAwayFromZero",
+        "currency_code": "JPY",
+        "input": "-0.5",
+        "mode": "halfAwayFromZero",
+        "amount": "-1"
+      },
+      {
+        "name": "matrix -0.5 halfEven",
+        "currency_code": "JPY",
+        "input": "-0.5",
+        "mode": "halfEven",
+        "amount": "0"
+      },
+      {
+        "name": "matrix -0.5 towardZero",
+        "currency_code": "JPY",
+        "input": "-0.5",
+        "mode": "towardZero",
+        "amount": "0"
+      },
+      {
+        "name": "matrix -0.5 awayFromZero",
+        "currency_code": "JPY",
+        "input": "-0.5",
+        "mode": "awayFromZero",
+        "amount": "-1"
+      },
+      {
+        "name": "matrix -0.5 floor",
+        "currency_code": "JPY",
+        "input": "-0.5",
+        "mode": "floor",
+        "amount": "-1"
+      },
+      {
+        "name": "matrix -0.5 ceil",
+        "currency_code": "JPY",
+        "input": "-0.5",
+        "mode": "ceil",
+        "amount": "0"
+      },
+      {
+        "name": "matrix 0.5 halfAwayFromZero",
+        "currency_code": "JPY",
+        "input": "0.5",
+        "mode": "halfAwayFromZero",
+        "amount": "1"
+      },
+      {
+        "name": "matrix 0.5 halfEven",
+        "currency_code": "JPY",
+        "input": "0.5",
+        "mode": "halfEven",
+        "amount": "0"
+      },
+      {
+        "name": "matrix 0.5 towardZero",
+        "currency_code": "JPY",
+        "input": "0.5",
+        "mode": "towardZero",
+        "amount": "0"
+      },
+      {
+        "name": "matrix 0.5 awayFromZero",
+        "currency_code": "JPY",
+        "input": "0.5",
+        "mode": "awayFromZero",
+        "amount": "1"
+      },
+      {
+        "name": "matrix 0.5 floor",
+        "currency_code": "JPY",
+        "input": "0.5",
+        "mode": "floor",
+        "amount": "0"
+      },
+      {
+        "name": "matrix 0.5 ceil",
+        "currency_code": "JPY",
+        "input": "0.5",
+        "mode": "ceil",
+        "amount": "1"
+      },
+      {
+        "name": "matrix 1.4 halfAwayFromZero",
+        "currency_code": "JPY",
+        "input": "1.4",
+        "mode": "halfAwayFromZero",
+        "amount": "1"
+      },
+      {
+        "name": "matrix 1.4 halfEven",
+        "currency_code": "JPY",
+        "input": "1.4",
+        "mode": "halfEven",
+        "amount": "1"
+      },
+      {
+        "name": "matrix 1.4 towardZero",
+        "currency_code": "JPY",
+        "input": "1.4",
+        "mode": "towardZero",
+        "amount": "1"
+      },
+      {
+        "name": "matrix 1.4 awayFromZero",
+        "currency_code": "JPY",
+        "input": "1.4",
+        "mode": "awayFromZero",
+        "amount": "2"
+      },
+      {
+        "name": "matrix 1.4 floor",
+        "currency_code": "JPY",
+        "input": "1.4",
+        "mode": "floor",
+        "amount": "1"
+      },
+      {
+        "name": "matrix 1.4 ceil",
+        "currency_code": "JPY",
+        "input": "1.4",
+        "mode": "ceil",
+        "amount": "2"
+      },
+      {
+        "name": "matrix -1.4 halfAwayFromZero",
+        "currency_code": "JPY",
+        "input": "-1.4",
+        "mode": "halfAwayFromZero",
+        "amount": "-1"
+      },
+      {
+        "name": "matrix -1.4 halfEven",
+        "currency_code": "JPY",
+        "input": "-1.4",
+        "mode": "halfEven",
+        "amount": "-1"
+      },
+      {
+        "name": "matrix -1.4 towardZero",
+        "currency_code": "JPY",
+        "input": "-1.4",
+        "mode": "towardZero",
+        "amount": "-1"
+      },
+      {
+        "name": "matrix -1.4 awayFromZero",
+        "currency_code": "JPY",
+        "input": "-1.4",
+        "mode": "awayFromZero",
+        "amount": "-2"
+      },
+      {
+        "name": "matrix -1.4 floor",
+        "currency_code": "JPY",
+        "input": "-1.4",
+        "mode": "floor",
+        "amount": "-2"
+      },
+      {
+        "name": "matrix -1.4 ceil",
+        "currency_code": "JPY",
+        "input": "-1.4",
+        "mode": "ceil",
+        "amount": "-1"
+      },
+      {
+        "name": "matrix 1.6 halfAwayFromZero",
+        "currency_code": "JPY",
+        "input": "1.6",
+        "mode": "halfAwayFromZero",
+        "amount": "2"
+      },
+      {
+        "name": "matrix 1.6 halfEven",
+        "currency_code": "JPY",
+        "input": "1.6",
+        "mode": "halfEven",
+        "amount": "2"
+      },
+      {
+        "name": "matrix 1.6 towardZero",
+        "currency_code": "JPY",
+        "input": "1.6",
+        "mode": "towardZero",
+        "amount": "1"
+      },
+      {
+        "name": "matrix 1.6 awayFromZero",
+        "currency_code": "JPY",
+        "input": "1.6",
+        "mode": "awayFromZero",
+        "amount": "2"
+      },
+      {
+        "name": "matrix 1.6 floor",
+        "currency_code": "JPY",
+        "input": "1.6",
+        "mode": "floor",
+        "amount": "1"
+      },
+      {
+        "name": "matrix 1.6 ceil",
+        "currency_code": "JPY",
+        "input": "1.6",
+        "mode": "ceil",
+        "amount": "2"
+      },
+      {
+        "name": "matrix -1.6 halfAwayFromZero",
+        "currency_code": "JPY",
+        "input": "-1.6",
+        "mode": "halfAwayFromZero",
+        "amount": "-2"
+      },
+      {
+        "name": "matrix -1.6 halfEven",
+        "currency_code": "JPY",
+        "input": "-1.6",
+        "mode": "halfEven",
+        "amount": "-2"
+      },
+      {
+        "name": "matrix -1.6 towardZero",
+        "currency_code": "JPY",
+        "input": "-1.6",
+        "mode": "towardZero",
+        "amount": "-1"
+      },
+      {
+        "name": "matrix -1.6 awayFromZero",
+        "currency_code": "JPY",
+        "input": "-1.6",
+        "mode": "awayFromZero",
+        "amount": "-2"
+      },
+      {
+        "name": "matrix -1.6 floor",
+        "currency_code": "JPY",
+        "input": "-1.6",
+        "mode": "floor",
+        "amount": "-2"
+      },
+      {
+        "name": "matrix -1.6 ceil",
+        "currency_code": "JPY",
+        "input": "-1.6",
+        "mode": "ceil",
+        "amount": "-1"
+      },
+      {
+        "name": "matrix 2.51 halfAwayFromZero",
+        "currency_code": "JPY",
+        "input": "2.51",
+        "mode": "halfAwayFromZero",
+        "amount": "3"
+      },
+      {
+        "name": "matrix 2.51 halfEven",
+        "currency_code": "JPY",
+        "input": "2.51",
+        "mode": "halfEven",
+        "amount": "3"
+      },
+      {
+        "name": "matrix 2.51 towardZero",
+        "currency_code": "JPY",
+        "input": "2.51",
+        "mode": "towardZero",
+        "amount": "2"
+      },
+      {
+        "name": "matrix 2.51 awayFromZero",
+        "currency_code": "JPY",
+        "input": "2.51",
+        "mode": "awayFromZero",
+        "amount": "3"
+      },
+      {
+        "name": "matrix 2.51 floor",
+        "currency_code": "JPY",
+        "input": "2.51",
+        "mode": "floor",
+        "amount": "2"
+      },
+      {
+        "name": "matrix 2.51 ceil",
+        "currency_code": "JPY",
+        "input": "2.51",
+        "mode": "ceil",
+        "amount": "3"
+      },
+      {
+        "name": "matrix -2.51 halfAwayFromZero",
+        "currency_code": "JPY",
+        "input": "-2.51",
+        "mode": "halfAwayFromZero",
+        "amount": "-3"
+      },
+      {
+        "name": "matrix -2.51 halfEven",
+        "currency_code": "JPY",
+        "input": "-2.51",
+        "mode": "halfEven",
+        "amount": "-3"
+      },
+      {
+        "name": "matrix -2.51 towardZero",
+        "currency_code": "JPY",
+        "input": "-2.51",
+        "mode": "towardZero",
+        "amount": "-2"
+      },
+      {
+        "name": "matrix -2.51 awayFromZero",
+        "currency_code": "JPY",
+        "input": "-2.51",
+        "mode": "awayFromZero",
+        "amount": "-3"
+      },
+      {
+        "name": "matrix -2.51 floor",
+        "currency_code": "JPY",
+        "input": "-2.51",
+        "mode": "floor",
+        "amount": "-3"
+      },
+      {
+        "name": "matrix -2.51 ceil",
+        "currency_code": "JPY",
+        "input": "-2.51",
+        "mode": "ceil",
+        "amount": "-2"
+      },
+      {
+        "name": "matrix -0.4 halfAwayFromZero",
+        "currency_code": "JPY",
+        "input": "-0.4",
+        "mode": "halfAwayFromZero",
+        "amount": "0"
+      },
+      {
+        "name": "matrix -0.4 halfEven",
+        "currency_code": "JPY",
+        "input": "-0.4",
+        "mode": "halfEven",
+        "amount": "0"
+      },
+      {
+        "name": "matrix -0.4 towardZero",
+        "currency_code": "JPY",
+        "input": "-0.4",
+        "mode": "towardZero",
+        "amount": "0"
+      },
+      {
+        "name": "matrix -0.4 awayFromZero",
+        "currency_code": "JPY",
+        "input": "-0.4",
+        "mode": "awayFromZero",
+        "amount": "-1"
+      },
+      {
+        "name": "matrix -0.4 floor",
+        "currency_code": "JPY",
+        "input": "-0.4",
+        "mode": "floor",
+        "amount": "-1"
+      },
+      {
+        "name": "matrix -0.4 ceil",
+        "currency_code": "JPY",
+        "input": "-0.4",
+        "mode": "ceil",
+        "amount": "0"
+      },
+      {
+        "name": "matrix 0 halfAwayFromZero",
+        "currency_code": "JPY",
+        "input": "0",
+        "mode": "halfAwayFromZero",
+        "amount": "0"
+      },
+      {
+        "name": "matrix 0 halfEven",
+        "currency_code": "JPY",
+        "input": "0",
+        "mode": "halfEven",
+        "amount": "0"
+      },
+      {
+        "name": "matrix 0 towardZero",
+        "currency_code": "JPY",
+        "input": "0",
+        "mode": "towardZero",
+        "amount": "0"
+      },
+      {
+        "name": "matrix 0 awayFromZero",
+        "currency_code": "JPY",
+        "input": "0",
+        "mode": "awayFromZero",
+        "amount": "0"
+      },
+      {
+        "name": "matrix 0 floor",
+        "currency_code": "JPY",
+        "input": "0",
+        "mode": "floor",
+        "amount": "0"
+      },
+      {
+        "name": "matrix 0 ceil",
+        "currency_code": "JPY",
+        "input": "0",
+        "mode": "ceil",
+        "amount": "0"
+      },
+      {
+        "name": "matrix 7 halfAwayFromZero",
+        "currency_code": "JPY",
+        "input": "7",
+        "mode": "halfAwayFromZero",
+        "amount": "7"
+      },
+      {
+        "name": "matrix 7 halfEven",
+        "currency_code": "JPY",
+        "input": "7",
+        "mode": "halfEven",
+        "amount": "7"
+      },
+      {
+        "name": "matrix 7 towardZero",
+        "currency_code": "JPY",
+        "input": "7",
+        "mode": "towardZero",
+        "amount": "7"
+      },
+      {
+        "name": "matrix 7 awayFromZero",
+        "currency_code": "JPY",
+        "input": "7",
+        "mode": "awayFromZero",
+        "amount": "7"
+      },
+      {
+        "name": "matrix 7 floor",
+        "currency_code": "JPY",
+        "input": "7",
+        "mode": "floor",
+        "amount": "7"
+      },
+      {
+        "name": "matrix 7 ceil",
+        "currency_code": "JPY",
+        "input": "7",
+        "mode": "ceil",
+        "amount": "7"
+      },
+      {
+        "name": "matrix 1.005 halfAwayFromZero",
+        "currency_code": "MXN",
+        "input": "1.005",
+        "mode": "halfAwayFromZero",
+        "amount": "1.01"
+      },
+      {
+        "name": "matrix 1.005 halfEven",
+        "currency_code": "MXN",
+        "input": "1.005",
+        "mode": "halfEven",
+        "amount": "1.00"
+      },
+      {
+        "name": "matrix 1.005 towardZero",
+        "currency_code": "MXN",
+        "input": "1.005",
+        "mode": "towardZero",
+        "amount": "1.00"
+      },
+      {
+        "name": "matrix 1.005 awayFromZero",
+        "currency_code": "MXN",
+        "input": "1.005",
+        "mode": "awayFromZero",
+        "amount": "1.01"
+      },
+      {
+        "name": "matrix 1.005 floor",
+        "currency_code": "MXN",
+        "input": "1.005",
+        "mode": "floor",
+        "amount": "1.00"
+      },
+      {
+        "name": "matrix 1.005 ceil",
+        "currency_code": "MXN",
+        "input": "1.005",
+        "mode": "ceil",
+        "amount": "1.01"
+      },
+      {
+        "name": "matrix -1.005 halfAwayFromZero",
+        "currency_code": "MXN",
+        "input": "-1.005",
+        "mode": "halfAwayFromZero",
+        "amount": "-1.01"
+      },
+      {
+        "name": "matrix -1.005 halfEven",
+        "currency_code": "MXN",
+        "input": "-1.005",
+        "mode": "halfEven",
+        "amount": "-1.00"
+      },
+      {
+        "name": "matrix -1.005 towardZero",
+        "currency_code": "MXN",
+        "input": "-1.005",
+        "mode": "towardZero",
+        "amount": "-1.00"
+      },
+      {
+        "name": "matrix -1.005 awayFromZero",
+        "currency_code": "MXN",
+        "input": "-1.005",
+        "mode": "awayFromZero",
+        "amount": "-1.01"
+      },
+      {
+        "name": "matrix -1.005 floor",
+        "currency_code": "MXN",
+        "input": "-1.005",
+        "mode": "floor",
+        "amount": "-1.01"
+      },
+      {
+        "name": "matrix -1.005 ceil",
+        "currency_code": "MXN",
+        "input": "-1.005",
+        "mode": "ceil",
+        "amount": "-1.00"
+      },
+      {
+        "name": "matrix 0.125 halfAwayFromZero",
+        "currency_code": "MXN",
+        "input": "0.125",
+        "mode": "halfAwayFromZero",
+        "amount": "0.13"
+      },
+      {
+        "name": "matrix 0.125 halfEven",
+        "currency_code": "MXN",
+        "input": "0.125",
+        "mode": "halfEven",
+        "amount": "0.12"
+      },
+      {
+        "name": "matrix 0.125 towardZero",
+        "currency_code": "MXN",
+        "input": "0.125",
+        "mode": "towardZero",
+        "amount": "0.12"
+      },
+      {
+        "name": "matrix 0.125 awayFromZero",
+        "currency_code": "MXN",
+        "input": "0.125",
+        "mode": "awayFromZero",
+        "amount": "0.13"
+      },
+      {
+        "name": "matrix 0.125 floor",
+        "currency_code": "MXN",
+        "input": "0.125",
+        "mode": "floor",
+        "amount": "0.12"
+      },
+      {
+        "name": "matrix 0.125 ceil",
+        "currency_code": "MXN",
+        "input": "0.125",
+        "mode": "ceil",
+        "amount": "0.13"
+      },
+      {
+        "name": "matrix -0.125 halfAwayFromZero",
+        "currency_code": "MXN",
+        "input": "-0.125",
+        "mode": "halfAwayFromZero",
+        "amount": "-0.13"
+      },
+      {
+        "name": "matrix -0.125 halfEven",
+        "currency_code": "MXN",
+        "input": "-0.125",
+        "mode": "halfEven",
+        "amount": "-0.12"
+      },
+      {
+        "name": "matrix -0.125 towardZero",
+        "currency_code": "MXN",
+        "input": "-0.125",
+        "mode": "towardZero",
+        "amount": "-0.12"
+      },
+      {
+        "name": "matrix -0.125 awayFromZero",
+        "currency_code": "MXN",
+        "input": "-0.125",
+        "mode": "awayFromZero",
+        "amount": "-0.13"
+      },
+      {
+        "name": "matrix -0.125 floor",
+        "currency_code": "MXN",
+        "input": "-0.125",
+        "mode": "floor",
+        "amount": "-0.13"
+      },
+      {
+        "name": "matrix -0.125 ceil",
+        "currency_code": "MXN",
+        "input": "-0.125",
+        "mode": "ceil",
+        "amount": "-0.12"
+      },
+      {
+        "name": "matrix 0.135 halfAwayFromZero",
+        "currency_code": "MXN",
+        "input": "0.135",
+        "mode": "halfAwayFromZero",
+        "amount": "0.14"
+      },
+      {
+        "name": "matrix 0.135 halfEven",
+        "currency_code": "MXN",
+        "input": "0.135",
+        "mode": "halfEven",
+        "amount": "0.14"
+      },
+      {
+        "name": "matrix 0.135 towardZero",
+        "currency_code": "MXN",
+        "input": "0.135",
+        "mode": "towardZero",
+        "amount": "0.13"
+      },
+      {
+        "name": "matrix 0.135 awayFromZero",
+        "currency_code": "MXN",
+        "input": "0.135",
+        "mode": "awayFromZero",
+        "amount": "0.14"
+      },
+      {
+        "name": "matrix 0.135 floor",
+        "currency_code": "MXN",
+        "input": "0.135",
+        "mode": "floor",
+        "amount": "0.13"
+      },
+      {
+        "name": "matrix 0.135 ceil",
+        "currency_code": "MXN",
+        "input": "0.135",
+        "mode": "ceil",
+        "amount": "0.14"
+      },
+      {
+        "name": "matrix 2.675 halfAwayFromZero",
+        "currency_code": "MXN",
+        "input": "2.675",
+        "mode": "halfAwayFromZero",
+        "amount": "2.68"
+      },
+      {
+        "name": "matrix 2.675 halfEven",
+        "currency_code": "MXN",
+        "input": "2.675",
+        "mode": "halfEven",
+        "amount": "2.68"
+      },
+      {
+        "name": "matrix 2.675 towardZero",
+        "currency_code": "MXN",
+        "input": "2.675",
+        "mode": "towardZero",
+        "amount": "2.67"
+      },
+      {
+        "name": "matrix 2.675 awayFromZero",
+        "currency_code": "MXN",
+        "input": "2.675",
+        "mode": "awayFromZero",
+        "amount": "2.68"
+      },
+      {
+        "name": "matrix 2.675 floor",
+        "currency_code": "MXN",
+        "input": "2.675",
+        "mode": "floor",
+        "amount": "2.67"
+      },
+      {
+        "name": "matrix 2.675 ceil",
+        "currency_code": "MXN",
+        "input": "2.675",
+        "mode": "ceil",
+        "amount": "2.68"
+      },
+      {
+        "name": "matrix 1.0049999 halfAwayFromZero",
+        "currency_code": "MXN",
+        "input": "1.0049999",
+        "mode": "halfAwayFromZero",
+        "amount": "1.00"
+      },
+      {
+        "name": "matrix 1.0049999 halfEven",
+        "currency_code": "MXN",
+        "input": "1.0049999",
+        "mode": "halfEven",
+        "amount": "1.00"
+      },
+      {
+        "name": "matrix 1.0049999 towardZero",
+        "currency_code": "MXN",
+        "input": "1.0049999",
+        "mode": "towardZero",
+        "amount": "1.00"
+      },
+      {
+        "name": "matrix 1.0049999 awayFromZero",
+        "currency_code": "MXN",
+        "input": "1.0049999",
+        "mode": "awayFromZero",
+        "amount": "1.01"
+      },
+      {
+        "name": "matrix 1.0049999 floor",
+        "currency_code": "MXN",
+        "input": "1.0049999",
+        "mode": "floor",
+        "amount": "1.00"
+      },
+      {
+        "name": "matrix 1.0049999 ceil",
+        "currency_code": "MXN",
+        "input": "1.0049999",
+        "mode": "ceil",
+        "amount": "1.01"
+      },
+      {
+        "name": "round overflow",
+        "currency_code": "MXN",
+        "input": "92233720368547758.075",
+        "mode": "halfAwayFromZero",
+        "error": "overflow"
+      }
+    ],
+    "add": [
+      {
+        "name": "three lines",
+        "a": {
+          "amount": "3.33",
+          "currency_code": "MXN"
+        },
+        "b": {
+          "amount": "6.66",
+          "currency_code": "MXN"
+        },
+        "amount": "9.99"
+      },
+      {
+        "name": "negative",
+        "a": {
+          "amount": "-10.00",
+          "currency_code": "MXN"
+        },
+        "b": {
+          "amount": "2.50",
+          "currency_code": "MXN"
+        },
+        "amount": "-7.50"
+      },
+      {
+        "name": "jpy",
+        "a": {
+          "amount": "333",
+          "currency_code": "JPY"
+        },
+        "b": {
+          "amount": "667",
+          "currency_code": "JPY"
+        },
+        "amount": "1000"
+      },
+      {
+        "name": "kwd",
+        "a": {
+          "amount": "0.001",
+          "currency_code": "KWD"
+        },
+        "b": {
+          "amount": "1.549",
+          "currency_code": "KWD"
+        },
+        "amount": "1.550"
+      },
+      {
+        "name": "max",
+        "a": {
+          "amount": "92233720368547758.06",
+          "currency_code": "MXN"
+        },
+        "b": {
+          "amount": "0.01",
+          "currency_code": "MXN"
+        },
+        "amount": "92233720368547758.07"
+      },
+      {
+        "name": "overflow",
+        "a": {
+          "amount": "92233720368547758.07",
+          "currency_code": "MXN"
+        },
+        "b": {
+          "amount": "0.01",
+          "currency_code": "MXN"
+        },
+        "error": "overflow"
+      },
+      {
+        "name": "overflow negative",
+        "a": {
+          "amount": "-92233720368547758.08",
+          "currency_code": "MXN"
+        },
+        "b": {
+          "amount": "-0.01",
+          "currency_code": "MXN"
+        },
+        "error": "overflow"
+      },
+      {
+        "name": "mismatch",
+        "a": {
+          "amount": "1.00",
+          "currency_code": "MXN"
+        },
+        "b": {
+          "amount": "1.00",
+          "currency_code": "USD"
+        },
+        "error": "currency_mismatch"
+      }
+    ],
+    "sub": [
+      {
+        "name": "simple",
+        "a": {
+          "amount": "10.00",
+          "currency_code": "MXN"
+        },
+        "b": {
+          "amount": "0.01",
+          "currency_code": "MXN"
+        },
+        "amount": "9.99"
+      },
+      {
+        "name": "to negative",
+        "a": {
+          "amount": "1.00",
+          "currency_code": "USD"
+        },
+        "b": {
+          "amount": "2.50",
+          "currency_code": "USD"
+        },
+        "amount": "-1.50"
+      },
+      {
+        "name": "overflow",
+        "a": {
+          "amount": "-92233720368547758.08",
+          "currency_code": "MXN"
+        },
+        "b": {
+          "amount": "0.01",
+          "currency_code": "MXN"
+        },
+        "error": "overflow"
+      },
+      {
+        "name": "overflow min",
+        "a": {
+          "amount": "0.00",
+          "currency_code": "MXN"
+        },
+        "b": {
+          "amount": "-92233720368547758.08",
+          "currency_code": "MXN"
+        },
+        "error": "overflow"
+      },
+      {
+        "name": "mismatch",
+        "a": {
+          "amount": "1",
+          "currency_code": "JPY"
+        },
+        "b": {
+          "amount": "1",
+          "currency_code": "KRW"
+        },
+        "error": "currency_mismatch"
+      }
+    ],
+    "neg": [
+      {
+        "name": "positive",
+        "money": {
+          "amount": "1.50",
+          "currency_code": "MXN"
+        },
+        "amount": "-1.50"
+      },
+      {
+        "name": "zero",
+        "money": {
+          "amount": "0.00",
+          "currency_code": "MXN"
+        },
+        "amount": "0.00"
+      },
+      {
+        "name": "max",
+        "money": {
+          "amount": "92233720368547758.07",
+          "currency_code": "MXN"
+        },
+        "amount": "-92233720368547758.07"
+      },
+      {
+        "name": "min overflows",
+        "money": {
+          "amount": "-92233720368547758.08",
+          "currency_code": "MXN"
+        },
+        "error": "overflow"
+      }
+    ],
+    "mul_decimal": [
+      {
+        "name": "kwd 10.000 x 0.155",
+        "money": {
+          "amount": "10.000",
+          "currency_code": "KWD"
+        },
+        "factor": "0.155",
+        "mode": "halfAwayFromZero",
+        "amount": "1.550"
+      },
+      {
+        "name": "iva 16%",
+        "money": {
+          "amount": "1899.00",
+          "currency_code": "MXN"
+        },
+        "factor": "0.16",
+        "mode": "halfAwayFromZero",
+        "amount": "303.84"
+      },
+      {
+        "name": "1.005 half away",
+        "money": {
+          "amount": "0.67",
+          "currency_code": "MXN"
+        },
+        "factor": "1.5",
+        "mode": "halfAwayFromZero",
+        "amount": "1.01"
+      },
+      {
+        "name": "1.005 half even",
+        "money": {
+          "amount": "0.67",
+          "currency_code": "MXN"
+        },
+        "factor": "1.5",
+        "mode": "halfEven",
+        "amount": "1.00"
+      },
+      {
+        "name": "negative half away",
+        "money": {
+          "amount": "-0.67",
+          "currency_code": "MXN"
+        },
+        "factor": "1.5",
+        "mode": "halfAwayFromZero",
+        "amount": "-1.01"
+      },
+      {
+        "name": "negative floor",
+        "money": {
+          "amount": "-0.67",
+          "currency_code": "MXN"
+        },
+        "factor": "1.5",
+        "mode": "floor",
+        "amount": "-1.01"
+      },
+      {
+        "name": "negative ceil",
+        "money": {
+          "amount": "-0.67",
+          "currency_code": "MXN"
+        },
+        "factor": "1.5",
+        "mode": "ceil",
+        "amount": "-1.00"
+      },
+      {
+        "name": "jpy third",
+        "money": {
+          "amount": "1000",
+          "currency_code": "JPY"
+        },
+        "factor": "0.3333333333",
+        "mode": "halfAwayFromZero",
+        "amount": "333"
+      },
+      {
+        "name": "quantity",
+        "money": {
+          "amount": "19.99",
+          "currency_code": "USD"
+        },
+        "factor": "3",
+        "mode": "halfAwayFromZero",
+        "amount": "59.97"
+      },
+      {
+        "name": "negative factor",
+        "money": {
+          "amount": "10.00",
+          "currency_code": "USD"
+        },
+        "factor": "-0.125",
+        "mode": "halfEven",
+        "amount": "-1.25"
+      },
+      {
+        "name": "overflow",
+        "money": {
+          "amount": "92233720368547758.07",
+          "currency_code": "MXN"
+        },
+        "factor": "2",
+        "mode": "halfAwayFromZero",
+        "error": "overflow"
+      }
+    ],
+    "allocate": [
+      {
+        "name": "100.00 in thirds",
+        "money": {
+          "amount": "100.00",
+          "currency_code": "MXN"
+        },
+        "weights": [
+          1,
+          1,
+          1
+        ],
+        "parts": [
+          "33.34",
+          "33.33",
+          "33.33"
+        ]
+      },
+      {
+        "name": "jpy 1000 in thirds",
+        "money": {
+          "amount": "1000",
+          "currency_code": "JPY"
+        },
+        "weights": [
+          1,
+          1,
+          1
+        ],
+        "parts": [
+          "334",
+          "333",
+          "333"
+        ]
+      },
+      {
+        "name": "negative thirds",
+        "money": {
+          "amount": "-100.00",
+          "currency_code": "MXN"
+        },
+        "weights": [
+          1,
+          1,
+          1
+        ],
+        "parts": [
+          "-33.34",
+          "-33.33",
+          "-33.33"
+        ]
+      },
+      {
+        "name": "largest remainder wins",
+        "money": {
+          "amount": "0.05",
+          "currency_code": "MXN"
+        },
+        "weights": [
+          3,
+          7
+        ],
+        "parts": [
+          "0.02",
+          "0.03"
+        ]
+      },
+      {
+        "name": "zero weight",
+        "money": {
+          "amount": "10.00",
+          "currency_code": "MXN"
+        },
+        "weights": [
+          0,
+          1,
+          1
+        ],
+        "parts": [
+          "0.00",
+          "5.00",
+          "5.00"
+        ]
+      },
+      {
+        "name": "one cent to four",
+        "money": {
+          "amount": "0.01",
+          "currency_code": "USD"
+        },
+        "weights": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "parts": [
+          "0.01",
+          "0.00",
+          "0.00",
+          "0.00"
+        ]
+      },
+      {
+        "name": "percentages",
+        "money": {
+          "amount": "1899.00",
+          "currency_code": "MXN"
+        },
+        "weights": [
+          16,
+          84
+        ],
+        "parts": [
+          "303.84",
+          "1595.16"
+        ]
+      },
+      {
+        "name": "kwd",
+        "money": {
+          "amount": "1.000",
+          "currency_code": "KWD"
+        },
+        "weights": [
+          1,
+          2
+        ],
+        "parts": [
+          "0.333",
+          "0.667"
+        ]
+      },
+      {
+        "name": "min int64 single",
+        "money": {
+          "amount": "-92233720368547758.08",
+          "currency_code": "MXN"
+        },
+        "weights": [
+          1
+        ],
+        "parts": [
+          "-92233720368547758.08"
+        ]
+      },
+      {
+        "name": "max int64 halves",
+        "money": {
+          "amount": "92233720368547758.07",
+          "currency_code": "MXN"
+        },
+        "weights": [
+          1,
+          1
+        ],
+        "parts": [
+          "46116860184273879.04",
+          "46116860184273879.03"
+        ]
+      },
+      {
+        "name": "no weights",
+        "money": {
+          "amount": "1.00",
+          "currency_code": "MXN"
+        },
+        "weights": [],
+        "error": "invalid"
+      },
+      {
+        "name": "all zero",
+        "money": {
+          "amount": "1.00",
+          "currency_code": "MXN"
+        },
+        "weights": [
+          0,
+          0
+        ],
+        "error": "invalid"
+      },
+      {
+        "name": "negative weight",
+        "money": {
+          "amount": "1.00",
+          "currency_code": "MXN"
+        },
+        "weights": [
+          2,
+          -1
+        ],
+        "error": "invalid"
+      }
+    ],
+    "round_cash": [
+      {
+        "name": "chf 12.32",
+        "money": {
+          "amount": "12.32",
+          "currency_code": "CHF"
+        },
+        "mode": "halfAwayFromZero",
+        "amount": "12.30"
+      },
+      {
+        "name": "chf 12.33",
+        "money": {
+          "amount": "12.33",
+          "currency_code": "CHF"
+        },
+        "mode": "halfAwayFromZero",
+        "amount": "12.35"
+      },
+      {
+        "name": "chf 12.37",
+        "money": {
+          "amount": "12.37",
+          "currency_code": "CHF"
+        },
+        "mode": "halfAwayFromZero",
+        "amount": "12.35"
+      },
+      {
+        "name": "chf 12.38",
+        "money": {
+          "amount": "12.38",
+          "currency_code": "CHF"
+        },
+        "mode": "halfAwayFromZero",
+        "amount": "12.40"
+      },
+      {
+        "name": "chf exact",
+        "money": {
+          "amount": "12.35",
+          "currency_code": "CHF"
+        },
+        "mode": "halfAwayFromZero",
+        "amount": "12.35"
+      },
+      {
+        "name": "chf negative",
+        "money": {
+          "amount": "-12.33",
+          "currency_code": "CHF"
+        },
+        "mode": "halfAwayFromZero",
+        "amount": "-12.35"
+      },
+      {
+        "name": "chf floor",
+        "money": {
+          "amount": "12.34",
+          "currency_code": "CHF"
+        },
+        "mode": "floor",
+        "amount": "12.30"
+      },
+      {
+        "name": "chf ceil",
+        "money": {
+          "amount": "12.31",
+          "currency_code": "CHF"
+        },
+        "mode": "ceil",
+        "amount": "12.35"
+      },
+      {
+        "name": "chf towardZero",
+        "money": {
+          "amount": "-12.34",
+          "currency_code": "CHF"
+        },
+        "mode": "towardZero",
+        "amount": "-12.30"
+      },
+      {
+        "name": "cad",
+        "money": {
+          "amount": "1.02",
+          "currency_code": "CAD"
+        },
+        "mode": "halfAwayFromZero",
+        "amount": "1.00"
+      },
+      {
+        "name": "sek whole",
+        "money": {
+          "amount": "10.50",
+          "currency_code": "SEK"
+        },
+        "mode": "halfAwayFromZero",
+        "amount": "11.00"
+      },
+      {
+        "name": "sek whole half even",
+        "money": {
+          "amount": "10.50",
+          "currency_code": "SEK"
+        },
+        "mode": "halfEven",
+        "amount": "10.00"
+      },
+      {
+        "name": "dkk",
+        "money": {
+          "amount": "10.30",
+          "currency_code": "DKK"
+        },
+        "mode": "halfAwayFromZero",
+        "amount": "10.50"
+      },
+      {
+        "name": "dkk tie half away",
+        "money": {
+          "amount": "10.25",
+          "currency_code": "DKK"
+        },
+        "mode": "halfAwayFromZero",
+        "amount": "10.50"
+      },
+      {
+        "name": "dkk tie half even",
+        "money": {
+          "amount": "10.25",
+          "currency_code": "DKK"
+        },
+        "mode": "halfEven",
+        "amount": "10.00"
+      },
+      {
+        "name": "mxn no increment",
+        "money": {
+          "amount": "12.33",
+          "currency_code": "MXN"
+        },
+        "mode": "halfAwayFromZero",
+        "amount": "12.33"
+      },
+      {
+        "name": "jpy no increment",
+        "money": {
+          "amount": "7",
+          "currency_code": "JPY"
+        },
+        "mode": "halfAwayFromZero",
+        "amount": "7"
+      }
+    ],
+    "sum_round_cash": [
+      {
+        "name": "three lines of 3.33",
+        "currency_code": "CHF",
+        "lines": [
+          "3.33",
+          "3.33",
+          "3.33"
+        ],
+        "mode": "halfAwayFromZero",
+        "sum": "9.99",
+        "cash": "10.00"
+      }
+    ],
+    "decimal_quo": [
+      {
+        "a": "1",
+        "b": "17.2345",
+        "scale": 12,
+        "mode": "halfEven",
+        "result": "0.058023151237"
+      },
+      {
+        "a": "1",
+        "b": "3",
+        "scale": 4,
+        "mode": "halfEven",
+        "result": "0.3333"
+      },
+      {
+        "a": "2",
+        "b": "3",
+        "scale": 4,
+        "mode": "halfAwayFromZero",
+        "result": "0.6667"
+      },
+      {
+        "a": "-2",
+        "b": "3",
+        "scale": 4,
+        "mode": "floor",
+        "result": "-0.6667"
+      },
+      {
+        "a": "-2",
+        "b": "3",
+        "scale": 4,
+        "mode": "towardZero",
+        "result": "-0.6666"
+      },
+      {
+        "a": "1",
+        "b": "8",
+        "scale": 2,
+        "mode": "halfEven",
+        "result": "0.12"
+      },
+      {
+        "a": "3",
+        "b": "8",
+        "scale": 2,
+        "mode": "halfEven",
+        "result": "0.38"
+      },
+      {
+        "a": "10",
+        "b": "4",
+        "scale": 0,
+        "mode": "halfEven",
+        "result": "2"
+      },
+      {
+        "a": "10",
+        "b": "4",
+        "scale": 0,
+        "mode": "halfAwayFromZero",
+        "result": "3"
+      },
+      {
+        "a": "-10",
+        "b": "4",
+        "scale": 0,
+        "mode": "halfEven",
+        "result": "-2"
+      },
+      {
+        "a": "1.5",
+        "b": "0.5",
+        "scale": 3,
+        "mode": "halfEven",
+        "result": "3.000"
+      },
+      {
+        "a": "1",
+        "b": "0",
+        "scale": 2,
+        "mode": "halfEven",
+        "error": "invalid"
+      },
+      {
+        "a": "1",
+        "b": "0.000",
+        "scale": 2,
+        "mode": "halfEven",
+        "error": "invalid"
+      }
+    ],
+    "decimal_mul": [
+      {
+        "a": "10.000",
+        "b": "0.155",
+        "result": "1.550000"
+      },
+      {
+        "a": "-1.5",
+        "b": "2",
+        "result": "-3.0"
+      },
+      {
+        "a": "17.2345",
+        "b": "0.058023151237",
+        "result": "0.9999999999940765"
+      }
+    ],
+    "inverse": [
+      {
+        "value": "17.2345",
+        "scale": 12,
+        "inverse": "0.058023151237"
+      },
+      {
+        "value": "36.50",
+        "scale": 12,
+        "inverse": "0.027397260274"
+      },
+      {
+        "value": "40.00",
+        "scale": 12,
+        "inverse": "0.025000000000"
+      },
+      {
+        "value": "0.058023151237",
+        "scale": 12,
+        "inverse": "17.234500000102"
+      },
+      {
+        "value": "1",
+        "scale": 12,
+        "inverse": "1.000000000000"
+      },
+      {
+        "value": "3",
+        "scale": 12,
+        "inverse": "0.333333333333"
+      },
+      {
+        "value": "0",
+        "scale": 12,
+        "error": "invalid"
+      },
+      {
+        "value": "-1",
+        "scale": 12,
+        "error": "invalid"
+      },
+      {
+        "value": "10000000000000",
+        "scale": 12,
+        "error": "precision"
+      }
+    ],
+    "convert": [
+      {
+        "name": "usd to mxn",
+        "money": {
+          "amount": "100.00",
+          "currency_code": "USD"
+        },
+        "rate": {
+          "base": "USD",
+          "quote": "MXN",
+          "value": "17.2345"
+        },
+        "to": "MXN",
+        "mode": "halfAwayFromZero",
+        "amount": "1723.45"
+      },
+      {
+        "name": "usd cents to mxn",
+        "money": {
+          "amount": "0.01",
+          "currency_code": "USD"
+        },
+        "rate": {
+          "base": "USD",
+          "quote": "MXN",
+          "value": "17.2345"
+        },
+        "to": "MXN",
+        "mode": "halfAwayFromZero",
+        "amount": "0.17"
+      },
+      {
+        "name": "mxn back to usd with inverse",
+        "money": {
+          "amount": "1723.45",
+          "currency_code": "MXN"
+        },
+        "rate": {
+          "base": "MXN",
+          "quote": "USD",
+          "value": "0.058023151237"
+        },
+        "to": "USD",
+        "mode": "halfAwayFromZero",
+        "amount": "100.00"
+      },
+      {
+        "name": "mxn to usd with inverse",
+        "money": {
+          "amount": "1000.00",
+          "currency_code": "MXN"
+        },
+        "rate": {
+          "base": "MXN",
+          "quote": "USD",
+          "value": "0.058023151237"
+        },
+        "to": "USD",
+        "mode": "halfAwayFromZero",
+        "amount": "58.02"
+      },
+      {
+        "name": "mxn to usd half even",
+        "money": {
+          "amount": "1899.00",
+          "currency_code": "MXN"
+        },
+        "rate": {
+          "base": "MXN",
+          "quote": "USD",
+          "value": "0.058023151237"
+        },
+        "to": "USD",
+        "mode": "halfEven",
+        "amount": "110.19"
+      },
+      {
+        "name": "negative refund",
+        "money": {
+          "amount": "-19.99",
+          "currency_code": "USD"
+        },
+        "rate": {
+          "base": "USD",
+          "quote": "MXN",
+          "value": "17.2345"
+        },
+        "to": "MXN",
+        "mode": "halfAwayFromZero",
+        "amount": "-344.52"
+      },
+      {
+        "name": "ves official",
+        "money": {
+          "amount": "100.00",
+          "currency_code": "USD"
+        },
+        "rate": {
+          "base": "USD",
+          "quote": "VES",
+          "value": "36.50"
+        },
+        "to": "VES",
+        "mode": "halfAwayFromZero",
+        "amount": "3650.00"
+      },
+      {
+        "name": "ves parallel",
+        "money": {
+          "amount": "100.00",
+          "currency_code": "USD"
+        },
+        "rate": {
+          "base": "USD",
+          "quote": "VES",
+          "value": "40.00"
+        },
+        "to": "VES",
+        "mode": "halfAwayFromZero",
+        "amount": "4000.00"
+      },
+      {
+        "name": "ves 1e12 to usd",
+        "money": {
+          "amount": "1000000000000.00",
+          "currency_code": "VES"
+        },
+        "rate": {
+          "base": "VES",
+          "quote": "USD",
+          "value": "0.027397260274"
+        },
+        "to": "USD",
+        "mode": "halfAwayFromZero",
+        "amount": "27397260274.00"
+      },
+      {
+        "name": "usd to jpy",
+        "money": {
+          "amount": "10.00",
+          "currency_code": "USD"
+        },
+        "rate": {
+          "base": "USD",
+          "quote": "JPY",
+          "value": "151.235"
+        },
+        "to": "JPY",
+        "mode": "halfAwayFromZero",
+        "amount": "1512"
+      },
+      {
+        "name": "jpy to kwd",
+        "money": {
+          "amount": "1000",
+          "currency_code": "JPY"
+        },
+        "rate": {
+          "base": "JPY",
+          "quote": "KWD",
+          "value": "0.00203"
+        },
+        "to": "KWD",
+        "mode": "halfAwayFromZero",
+        "amount": "2.030"
+      },
+      {
+        "name": "base mismatch",
+        "money": {
+          "amount": "1.00",
+          "currency_code": "EUR"
+        },
+        "rate": {
+          "base": "USD",
+          "quote": "MXN",
+          "value": "17.2345"
+        },
+        "to": "MXN",
+        "mode": "halfAwayFromZero",
+        "error": "currency_mismatch"
+      },
+      {
+        "name": "quote mismatch",
+        "money": {
+          "amount": "1.00",
+          "currency_code": "USD"
+        },
+        "rate": {
+          "base": "USD",
+          "quote": "MXN",
+          "value": "17.2345"
+        },
+        "to": "EUR",
+        "mode": "halfAwayFromZero",
+        "error": "currency_mismatch"
+      },
+      {
+        "name": "zero rate",
+        "money": {
+          "amount": "1.00",
+          "currency_code": "USD"
+        },
+        "rate": {
+          "base": "USD",
+          "quote": "MXN",
+          "value": "0"
+        },
+        "to": "MXN",
+        "mode": "halfAwayFromZero",
+        "error": "invalid"
+      },
+      {
+        "name": "overflow",
+        "money": {
+          "amount": "92233720368547758.07",
+          "currency_code": "USD"
+        },
+        "rate": {
+          "base": "USD",
+          "quote": "MXN",
+          "value": "17.2345"
+        },
+        "to": "MXN",
+        "mode": "halfAwayFromZero",
+        "error": "overflow"
+      }
+    ],
+    "json": [
+      {
+        "money": {
+          "amount": "1899.00",
+          "currency_code": "MXN"
+        },
+        "json": "{\"amount\":\"1899.00\",\"currency_code\":\"MXN\"}"
+      },
+      {
+        "money": {
+          "amount": "1000",
+          "currency_code": "JPY"
+        },
+        "json": "{\"amount\":\"1000\",\"currency_code\":\"JPY\"}"
+      },
+      {
+        "money": {
+          "amount": "1.550",
+          "currency_code": "KWD"
+        },
+        "json": "{\"amount\":\"1.550\",\"currency_code\":\"KWD\"}"
+      },
+      {
+        "money": {
+          "amount": "-0.50",
+          "currency_code": "USD"
+        },
+        "json": "{\"amount\":\"-0.50\",\"currency_code\":\"USD\"}"
+      }
+    ],
+    "json_decode": [
+      {
+        "json": "{\"amount\":\"1899.5\",\"currency_code\":\"MXN\"}",
+        "amount": "1899.50",
+        "currency_code": "MXN"
+      },
+      {
+        "json": "{\"amount\":\"1.005\",\"currency_code\":\"MXN\"}",
+        "error": "precision"
+      },
+      {
+        "json": "{\"amount\":\"10.5\",\"currency_code\":\"JPY\"}",
+        "error": "precision"
+      },
+      {
+        "json": "{\"amount\":\"1\",\"currency_code\":\"ZZZ\"}",
+        "error": "invalid"
+      },
+      {
+        "json": "{\"amount\":1899.5,\"currency_code\":\"MXN\"}",
+        "error": "invalid"
+      },
+      {
+        "json": "{\"amount\":\"1e3\",\"currency_code\":\"MXN\"}",
+        "error": "invalid"
+      }
+    ]
+  }
+}

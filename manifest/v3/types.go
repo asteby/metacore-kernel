@@ -585,7 +585,24 @@ type Metadata struct {
 	// stay the default/fallback copy; the hub serves the localized variant
 	// when the catalog is browsed in that locale, falling back to the default.
 	I18n map[string]MetadataLocale `json:"i18n,omitempty"`
+	// Visibility is the author's assertion of who may see and install the
+	// bundle: "public" (default when empty) or "private". The marketplace
+	// enforces it at publish time — a bundle declared private is never listed
+	// publicly. WHO is granted access to a private bundle is NOT part of the
+	// signed manifest (it changes without republishing); the marketplace owns
+	// that allowlist.
+	Visibility string `json:"visibility,omitempty"`
+	// Owner is the informative slug of the account that owns a private bundle
+	// (e.g. the company a private preset belongs to). The marketplace remains
+	// the authority on ownership.
+	Owner string `json:"owner,omitempty"`
 }
+
+// Metadata visibility values.
+const (
+	VisibilityPublic  = "public"
+	VisibilityPrivate = "private"
+)
 
 // MetadataLocale is one locale's catalog copy. Every field is optional so an
 // author can localize just the description, and the renderer falls back to the
@@ -728,6 +745,15 @@ type Model struct {
 	// automatically on create; a wasm handler can also pull one via the
 	// `sequence_next` host import. Optional — models without folios omit it.
 	Sequences []Sequence `json:"sequences,omitempty"`
+
+	// Snapshots declare columns the kernel fills on CREATE by copying values from
+	// a related row (the product's cost and floor price at the moment of sale,
+	// the parent order's branch and seller on each line). Every target column is
+	// system-owned: it MUST be declared `protected`, and the kernel overwrites
+	// whatever any write path supplied (generic /data, wasm data_mutate and
+	// data_batch, actions), so the value cannot be forged and survives later
+	// edits of the source. Optional. See Snapshot.
+	Snapshots []Snapshot `json:"snapshots,omitempty"`
 
 	// FormLayout declares declarative grouping for the model's native create/edit
 	// form — collapsible sections on one scroll (mode "sections") or a step
@@ -1136,6 +1162,11 @@ type Column struct {
 	// arithmetic allowlist as Formula.Expr governs each side of the comparison.
 	Constraints []Constraint `json:"constraints,omitempty"`
 
+	// Grant redeems a supervisor authorization carried by THIS column (an id the
+	// POS obtained with a PIN) on create, and records the result in a protected
+	// flag column the model's formulas / guards read. See GrantBinding.
+	Grant *GrantBinding `json:"grant,omitempty"`
+
 	// Sequence binds this column to one of the owning Model.Sequences by key: on
 	// create, when the column is empty, the kernel stamps the next formatted
 	// folio value automatically. The column is treated as system-generated (like
@@ -1224,6 +1255,19 @@ type Column struct {
 	// requires_state gate, its handler code) remains the sole way to change
 	// the value. Optional; defaults false (fully backward compatible).
 	Protected bool `json:"protected,omitempty"`
+
+	// ReadPermission makes the column readable only by callers holding this
+	// permission (e.g. "inventory.product.view_cost"). Without it the server
+	// REMOVES the column from every read surface — list, get, export,
+	// options/search projections, related-model expansions, AI data tools and
+	// the payloads the host forwards to clients — and rejects a filter, sort,
+	// group or aggregate over it with 403 (code "column_read_denied"). Use it
+	// to hide costs or margins from a kiosk, a POS cashier or a BI role that
+	// may still read the rest of the record. Writes are unaffected. The value
+	// is a dotted permission key (the rbac.permissions[].key shape); a key
+	// under this addon's own prefix must be declared in rbac.permissions.
+	// Empty = readable by whoever may read the record (backward compatible).
+	ReadPermission string `json:"read_permission,omitempty"`
 
 	// RejectDeletedRef, on a column with a Ref, makes a CREATE fail when the
 	// referenced row exists but is soft-deleted (deleted_at set): a NEW sale
@@ -1362,6 +1406,44 @@ type Sequence struct {
 	// exactly one `{seq}` or zero-padded `{seq:0N}` placeholder (e.g. "A-{seq:06}"
 	// → "A-000042"). Any other text is emitted verbatim.
 	Format string `json:"format"`
+}
+
+// Snapshot copies columns from a related row onto the new row at CREATE time.
+//
+//	{"from": "product_id", "fields": {"min_price": "min_price_at_sale", "cost_price": "unit_cost"}}
+//
+// From names a column of the same model that carries a `ref` (the related
+// table); Fields maps a source column of that table to the target column on
+// this model. The lookup is scoped to the writer's organization when the source
+// table is tenant-scoped. A missing source row or an empty ref leaves the
+// targets unset (the write is not refused). Targets must be declared
+// `protected`. Snapshots run before the model's formulas, so a formula or guard
+// can read the copied values (price_shortfall = f(min_price_at_sale, ...)).
+type Snapshot struct {
+	// From is the ref column on this model identifying the source row.
+	From string `json:"from"`
+	// Fields maps source column -> target column on this model.
+	Fields map[string]string `json:"fields"`
+}
+
+// GrantBinding turns the column it sits on into a supervisor-authorization slot.
+// When the column holds an approval id on create, the kernel redeems that PIN
+// grant (single use; same org, kind=pin of Policy, requested by the writer, still
+// fresh) — but only when the authorization is actually needed, i.e. some
+// ContextGte expression is positive. On success the numeric flag column Sets is
+// stamped 1; on failure the write is refused (approval_invalid). When no
+// authorization is needed the id is ignored and Sets stays 0.
+type GrantBinding struct {
+	// Policy is the PIN policy the grant must have been issued for.
+	Policy string `json:"policy"`
+	// Sets is the protected numeric column stamped 1 on a redeemed grant.
+	Sets string `json:"sets"`
+	// ContextEq maps a key of the grant's recorded context to a column of this
+	// row whose value must equal it (anchors the grant to a product, ...).
+	ContextEq map[string]string `json:"context_eq,omitempty"`
+	// ContextGte maps a context key to an arithmetic expression over this row:
+	// the amount the grant must cover (e.g. the per-unit shortfall).
+	ContextGte map[string]string `json:"context_gte,omitempty"`
 }
 
 // Constraint is one declarative GUARD predicate on a column: a boolean
@@ -1515,6 +1597,12 @@ type Contributions struct {
 	// targets; mutating capabilities declare risk and confirmation policy.
 	// Optional. See AgentCapability.
 	AgentCapabilities []AgentCapability `json:"agent_capabilities,omitempty"`
+
+	// Guides declares in-app help for the host's help center: short guides and
+	// guided tours whose steps point at UI elements, aimed at one or more
+	// roles and optionally auto-started the first time a user reaches a
+	// route. Optional. See HelpGuide.
+	Guides []HelpGuide `json:"guides,omitempty"`
 
 	Subscriptions []Subscription `json:"subscriptions,omitempty"`
 
@@ -2628,6 +2716,28 @@ type AgentGuideAdvance struct {
 	Event string `json:"event"` // click|change|input
 }
 
+// HelpGuide is one in-app help entry (contributions.guides[]): a short guide
+// or guided tour for the host's help center. Steps reuse AgentGuideStep (a
+// step targets a UI element, or is a "concept" step without spotlight), so the
+// same runner that drives copilot walkthroughs drives these. Roles scopes the
+// guide to the role keys of the org (empty = every user); Trigger "first_visit"
+// makes the host start the guide automatically the first time a user opens
+// Route, while "manual" (default) only lists it in the help center. Title,
+// Description and step copy are i18n keys or literal text, translated by the
+// host like the rest of the manifest.
+type HelpGuide struct {
+	Key         string           `json:"key"`
+	Title       string           `json:"title"`
+	Description string           `json:"description,omitempty"`
+	Icon        string           `json:"icon,omitempty"`
+	Roles       []string         `json:"roles,omitempty"`
+	Permission  string           `json:"permission,omitempty"`
+	Trigger     string           `json:"trigger,omitempty"` // manual (default) | first_visit
+	Route       string           `json:"route,omitempty"`   // required when trigger=first_visit
+	Order       int              `json:"order,omitempty"`
+	Steps       []AgentGuideStep `json:"steps"`
+}
+
 // Subscription is an event handler. Must be backed by an event:subscribe capability.
 type Subscription struct {
 	Event   string  `json:"event"`
@@ -2837,8 +2947,25 @@ type MeteredEvent struct {
 
 // Preset block for kind: "Preset" manifests.
 type Preset struct {
-	Addons   []PresetAddon          `json:"addons"`
-	Defaults map[string]interface{} `json:"defaults,omitempty"`
+	// Extends names the preset this one builds on (e.g. a company's private
+	// preset over a public vertical). The host resolves the base, then
+	// flattens this manifest on top of it (preset.Flatten): Addons are added or
+	// patched by key, RemoveAddons drops base entries and Defaults are merged
+	// per key strategy. Nil = a standalone preset.
+	Extends *PresetExtends `json:"extends,omitempty"`
+	// Addons may be empty when Extends is set (an overlay that only changes
+	// defaults); a standalone preset must list at least one.
+	Addons []PresetAddon `json:"addons"`
+	// RemoveAddons drops addons the base preset lists. Only valid with Extends.
+	RemoveAddons []string               `json:"remove_addons,omitempty"`
+	Defaults     map[string]interface{} `json:"defaults,omitempty"`
+}
+
+// PresetExtends references the base preset by key and semver range. The host
+// picks the highest published version that satisfies Version.
+type PresetExtends struct {
+	Key     string `json:"key"`
+	Version string `json:"version"`
 }
 
 // PresetAddon is one entry in a preset's bundle list.

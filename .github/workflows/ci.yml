@@ -53,3 +53,5 @@ jobs:
       # data_mutate sobre tabla sin columnas de auditoría (legacy), Postgres real.
       - run: go test -count=1 -v -run 'Postgres' ./runtime/wasm/
       - run: go test -count=1 -race -v -run '/Postgres' ./idempotency/ ./outbox/
+      # Ledger de pagos: holds y cobros concurrentes, índices parciales, NUMERIC.
+      - run: go test -count=1 -race -v -run '/Postgres' ./payments/ledger/

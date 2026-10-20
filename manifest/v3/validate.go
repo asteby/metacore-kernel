@@ -196,6 +196,62 @@ var (
 	}
 )
 
+var helpGuideTriggers = map[string]struct{}{"manual": {}, "first_visit": {}}
+
+// validateGuides enforces the cross-field rules of contributions.guides[]
+// that the JSON schema cannot express: unique keys, unique step ids per
+// guide, and a route for first_visit guides (the host needs to know where the
+// guide starts). Every error is prefixed with the guide key.
+func validateGuides(m *Manifest) []string {
+	if m.Contributions == nil || len(m.Contributions.Guides) == 0 {
+		return nil
+	}
+	var errs []string
+	seen := make(map[string]struct{}, len(m.Contributions.Guides))
+	for i, g := range m.Contributions.Guides {
+		id := g.Key
+		if id == "" {
+			id = fmt.Sprintf("#%d", i)
+		}
+		where := fmt.Sprintf("contributions.guides[%s]", id)
+		if g.Key == "" {
+			errs = append(errs, fmt.Sprintf("%s.key is required", where))
+		} else if _, dup := seen[g.Key]; dup {
+			errs = append(errs, fmt.Sprintf("%s.key %q is duplicated within the addon", where, g.Key))
+		} else {
+			seen[g.Key] = struct{}{}
+		}
+		if g.Title == "" {
+			errs = append(errs, fmt.Sprintf("%s.title is required", where))
+		}
+		if len(g.Steps) == 0 {
+			errs = append(errs, fmt.Sprintf("%s.steps needs at least one step", where))
+		}
+		if g.Trigger != "" {
+			if _, ok := helpGuideTriggers[g.Trigger]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.trigger %q is not one of manual|first_visit", where, g.Trigger))
+			}
+		}
+		if g.Trigger == "first_visit" && g.Route == "" {
+			errs = append(errs, fmt.Sprintf("%s.route is required when trigger is first_visit", where))
+		}
+		if g.Route != "" && !strings.HasPrefix(g.Route, "/") {
+			errs = append(errs, fmt.Sprintf("%s.route %q must start with \"/\"", where, g.Route))
+		}
+		steps := make(map[string]struct{}, len(g.Steps))
+		for _, st := range g.Steps {
+			if _, dup := steps[st.ID]; dup {
+				errs = append(errs, fmt.Sprintf("%s.steps id %q is duplicated", where, st.ID))
+			}
+			steps[st.ID] = struct{}{}
+			if st.Kind != "concept" && st.Target == "" {
+				errs = append(errs, fmt.Sprintf("%s.steps[%s].target is required unless kind is concept", where, st.ID))
+			}
+		}
+	}
+	return errs
+}
+
 // validateDashboard enforces the §1 cross-field rules of the dashboard-widget
 // contract that the JSON schema cannot express (kind-conditional requirements).
 // Each error is prefixed with the offending widget's key so an author can find
@@ -1152,8 +1208,27 @@ func validatePipelineRuntime(m *Manifest) []string {
 			}
 		}
 	}
+	// edge:command <device_key>.<command_kind>: the device class must be one
+	// of this addon's edge_devices (the host only lets an addon drive its own
+	// devices) and the kind a command name or a glob.
+	for ci, c := range m.Capabilities {
+		if c.Kind != "edge:command" {
+			continue
+		}
+		dev, kind, ok := strings.Cut(c.Target, ".")
+		switch {
+		case !ok || dev == "" || kind == "" || !edgeCommandKindRe.MatchString(kind):
+			errs = append(errs, fmt.Sprintf("capabilities[%d].target %q must be \"<device_key>.<command_kind>\" (kind may be *)", ci, c.Target))
+		default:
+			if _, declared := seenDevice[dev]; !declared {
+				errs = append(errs, fmt.Sprintf("capabilities[%d].target %q names device %q, which is not one of this addon's edge_devices", ci, c.Target, dev))
+			}
+		}
+	}
 	return errs
 }
+
+var edgeCommandKindRe = regexp.MustCompile(`^(\*|[a-z][a-z0-9_]*(\.\*)?)$`)
 
 // validateDesktopClients enforces unique keys, closed auth set, https
 // download_url, and bare installer filenames. Empty is a no-op. Allowed on
@@ -1411,6 +1486,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 		if m.Lifecycle != nil {
 			errs = append(errs, "kind=Preset must not declare a lifecycle block")
 		}
+		errs = append(errs, validatePresetBlock(&m)...)
 	case KindTheme:
 		if m.Theme == nil {
 			errs = append(errs, "kind=Theme requires a theme block")
@@ -1422,6 +1498,8 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	}
 
 	errs = append(errs, validatePermissionModels(&m)...)
+	errs = append(errs, validateMetadataVisibility(&m)...)
+	errs = append(errs, validateOverlayKernelGate(&m)...)
 
 	// Index every model's declared columns by model KEY so rollup/formula
 	// cross-field checks can resolve targets/identifiers on the PARENT (the
@@ -1601,6 +1679,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 				errs = append(errs, fmt.Sprintf("%s.format %q: %v", where, sq.Format, err))
 			}
 		}
+		errs = append(errs, validateSnapshots(mi, mod, ownCols)...)
 		errs = append(errs, validateReasonRequired(&m, mi, mod)...)
 		// Static-option cascade guards + declarative Constraints on model columns.
 		for ci, c := range mod.Columns {
@@ -1608,6 +1687,9 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 				if _, ok := seqKeys[c.Sequence]; !ok {
 					errs = append(errs, fmt.Sprintf("models[%d].columns[%d].sequence %q is not a declared sequence key on the model", mi, ci, c.Sequence))
 				}
+			}
+			if c.Grant != nil {
+				errs = append(errs, validateGrant(fmt.Sprintf("models[%d].columns[%d].grant", mi, ci), c.Grant, mod, ownCols)...)
 			}
 			for cci, con := range c.Constraints {
 				cw := fmt.Sprintf("models[%d].columns[%d].constraints[%d]", mi, ci, cci)
@@ -1622,6 +1704,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 				errs = append(errs, validateConstraintApproval(cw, con)...)
 			}
 			cwhere := fmt.Sprintf("models[%d].columns[%d]", mi, ci)
+			errs = append(errs, validateReadPermission(&m, cwhere, c.ReadPermission)...)
 			errs = append(errs, validateOptionFilter(cwhere, c.OptionFilter)...)
 			errs = append(errs, validateExtraColumns(cwhere, c.Options.Dynamic, colsByModel[c.Options.Dynamic.sourceOrEmpty()])...)
 			if c.Options.Len() == 0 {
@@ -1662,6 +1745,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 
 	if m.Contributions != nil {
 		errs = append(errs, validateDashboard(&m)...)
+		errs = append(errs, validateGuides(&m)...)
 		errs = append(errs, validateNavViewTypes(&m)...)
 		errs = append(errs, validateDocuments(&m, colsByModel)...)
 		errs = append(errs, validatePublicRoutes(&m)...)
@@ -1705,6 +1789,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	errs = append(errs, validateExtends(&m, rls)...)
 	errs = append(errs, validateSearchable(&m)...)
 	errs = append(errs, validateSearchKeys(&m)...)
+	errs = append(errs, validateDerivedReadPermissions(&m)...)
 	errs = append(errs, validateAttributeClasses(&m)...)
 
 	modelByKey := make(map[string]Model, len(m.Models))
@@ -1966,6 +2051,37 @@ func validateRoutes(m *Manifest) []string {
 // update/delete/export/import) or a custom action key.
 var permissionActionRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
+// PermissionKeyRe is the shape of a dotted permission key — the same pattern
+// the schema enforces on rbac.permissions[].key and columns[].read_permission
+// ("inventory.product.view_cost").
+var PermissionKeyRe = regexp.MustCompile(`^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_:]*)+$`)
+
+// validateReadPermission checks a column's read_permission: a dotted permission
+// key, and — when it lives under THIS addon's own prefix — one declared in
+// rbac.permissions, so a typo cannot hide the column from every role. A key of
+// another addon or of the host is only shape-checked: it is resolved by the
+// permission service at runtime.
+func validateReadPermission(m *Manifest, where, perm string) []string {
+	if perm == "" {
+		return nil
+	}
+	if !PermissionKeyRe.MatchString(perm) {
+		return []string{fmt.Sprintf("%s.read_permission %q is not a valid permission key (want e.g. \"<addon>.<resource>.<action>\")", where, perm)}
+	}
+	own := m.Metadata.Key
+	if own == "" || !strings.HasPrefix(perm, own+".") {
+		return nil
+	}
+	if m.RBAC != nil {
+		for _, p := range m.RBAC.Permissions {
+			if p.Key == perm {
+				return nil
+			}
+		}
+	}
+	return []string{fmt.Sprintf("%s.read_permission %q is not declared in rbac.permissions", where, perm)}
+}
+
 // validatePermissionModels checks rbac.permissions[].models: every entry names
 // a model and at least one action. A bare model, or one qualified with THIS
 // addon's key, must exist in the manifest; a model qualified with another
@@ -2178,6 +2294,9 @@ func validateCapabilities(m *Manifest) []string {
 			}
 		}
 	}
+	for i, pc := range m.ProvidesCapabilities {
+		errs = append(errs, serverDerivedPaymentInputs(fmt.Sprintf("provides_capabilities[%d]", i), pc.Key, pc.Input)...)
+	}
 	check := func(where string, h Handler) {
 		if h.Type != "capability" {
 			if h.Capability != "" || len(h.Input) > 0 {
@@ -2198,6 +2317,7 @@ func validateCapabilities(m *Manifest) []string {
 		for _, e := range capability.ValidateInput(h.Input, contract) {
 			errs = append(errs, where+".handler."+e)
 		}
+		errs = append(errs, serverDerivedPaymentInputs(where+".handler", h.Capability, h.Input)...)
 	}
 	if m.Contributions != nil {
 		for i, a := range m.Contributions.Actions {
@@ -2265,4 +2385,25 @@ func auditColumnTypeProblem(name, typ string) string {
 		}
 	}
 	return ""
+}
+
+// paymentServerDerived are payment inputs the host derives (marketplace
+// routing and commission): mapping them from a payload would let whoever
+// fills the payload (a buyer, a channel) set the platform's commission or
+// the seller's account.
+var paymentServerDerived = map[string]bool{"seller": true, "refund_application_fee": true}
+
+func serverDerivedPaymentInputs(where, key string, input map[string]string) []string {
+	if !strings.HasPrefix(key, "commerce.payments.") {
+		return nil
+	}
+	var errs []string
+	for target, src := range input {
+		root := strings.SplitN(target, ".", 2)[0]
+		if paymentServerDerived[root] && strings.HasPrefix(src, "payload.") {
+			errs = append(errs, fmt.Sprintf("%s.input[%q] maps %s from %q: it is server-derived (marketplace configuration), never taken from a payload", where, target, root, src))
+		}
+	}
+	sort.Strings(errs)
+	return errs
 }

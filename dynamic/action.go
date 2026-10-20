@@ -135,7 +135,8 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 		trig = &manifest.ActionTrigger{Type: "webhook"}
 	}
 
-	row, err := s.Get(ctx, model, user, id)
+	// Unmasked: the state gate and the dispatcher are server-side.
+	row, err := s.getRow(ctx, model, user, id)
 	if err != nil {
 		return ActionResult{}, err
 	}

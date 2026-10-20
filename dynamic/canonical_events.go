@@ -200,6 +200,7 @@ func (s *Service) publishCanonical(ctx context.Context, model, action string, us
 			modelKey = mk
 		}
 	}
+	s.rememberModelAlias(model, modelKey)
 	payload := &CanonicalEvent{
 		ID:            id,
 		OccurrenceID:  uuid.NewString(),

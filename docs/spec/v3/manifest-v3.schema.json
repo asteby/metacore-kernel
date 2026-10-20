@@ -786,6 +786,18 @@
           "additionalProperties": {
             "$ref": "#/$defs/MetadataLocale"
           }
+        },
+        "visibility": {
+          "type": "string",
+          "enum": [
+            "public",
+            "private"
+          ],
+          "description": "Who may see and install the bundle. Empty = public. The marketplace enforces it at publish; the allowlist of a private bundle lives in the marketplace, not in the manifest."
+        },
+        "owner": {
+          "type": "string",
+          "description": "Informative slug of the account that owns a private bundle. The marketplace is the authority on ownership."
         }
       },
       "examples": [
@@ -948,6 +960,7 @@
             "http:fetch",
             "connector:read",
             "capability:query",
+            "edge:command",
             "ctx:user",
             "ctx:roles",
             "ctx:org_config",
@@ -961,7 +974,7 @@
             "file-storage:write",
             "time:wallclock"
           ],
-          "description": "Closed set of capability kinds the runtime enforces. `capability:query <key>` grants the capability_query host import for one capability key (glob allowed, e.g. `commerce.shipping.rates`): the addon asks for a capability and the host resolves the provider per organization and market. `connector:read <key>` grants connector_get for one connector key: an addon implicitly reads the connectors it declares in its own `connectors` block, so this kind is what an addon uses to read a connector DECLARED BY ANOTHER ADDON (e.g. waybill-cartaporte reading fiscal_mexico's `factura_com` so the org configures the PAC credentials once). `ctx:user` / `ctx:roles` / `ctx:org_config` grant the matching slice of the ctx_get host import (acting user id+email / the user's role keys / the org's currency, tax, locale and timezone settings); the target is ignored and conventionally `*`."
+          "description": "Closed set of capability kinds the runtime enforces. `capability:query <key>` grants the capability_query host import for one capability key (glob allowed, e.g. `commerce.shipping.rates`): the addon asks for a capability and the host resolves the provider per organization and market. `connector:read <key>` grants connector_get for one connector key: an addon implicitly reads the connectors it declares in its own `connectors` block, so this kind is what an addon uses to read a connector DECLARED BY ANOTHER ADDON (e.g. waybill-cartaporte reading fiscal_mexico's `factura_com` so the org configures the PAC credentials once). `edge:command <device_key>.<command_kind>` grants the edge_command host import: send that command kind (glob allowed, e.g. `cashdro.*`) to a physical device of the org whose class is the addon's own `edge_devices[].key`, and receive the answer the host transported from the device's agent. `ctx:user` / `ctx:roles` / `ctx:org_config` grant the matching slice of the ctx_get host import (acting user id+email / the user's role keys / the org's currency, tax, locale and timezone settings); the target is ignored and conventionally `*`."
         },
         "target": {
           "type": "string",
@@ -1142,6 +1155,13 @@
           "description": "Atomic folio counters the kernel maintains per org (or branch) for this model — invoice folios, remission numbers, tickets. A column binds to one via 'sequence' for auto-stamping on create; a wasm handler pulls one via the sequence_next host import.",
           "items": {
             "$ref": "#/$defs/Sequence"
+          }
+        },
+        "snapshots": {
+          "type": "array",
+          "description": "Columns the kernel fills on create by copying values from a related row (product cost and floor at the moment of sale, the parent order's branch and seller). Targets must be 'protected': the server overwrites whatever any write path supplied.",
+          "items": {
+            "$ref": "#/$defs/Snapshot"
           }
         },
         "document_forms": {
@@ -1431,6 +1451,14 @@
           "type": "boolean",
           "description": "SERVER-ENFORCED write gate (unlike 'readonly', which is UI-only guidance): a generic create/update against the model's HTTP endpoint always rejects this column when present in the caller's input, regardless of role or update permission. Use for a state-machine field or any column whose only valid mutation is a declared business action (e.g. a return's refund_outcome, settable only by its approve/reject action, never a bare attribute edit that skips the action's gate). A declared Action is unaffected: action handlers write through the wasm data_mutate host import, a path the generic gate never intercepts. Defaults false."
         },
+        "read_permission": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_:]*)+$",
+          "description": "SERVER-ENFORCED read gate: only callers holding this permission receive the column. For everyone else the server removes it from list, get, export, options/search projections, related-model expansions, AI data tools and the event payloads the host forwards to clients, and rejects a filter, sort, group or aggregate over it with 403 (code 'column_read_denied'). Use it to hide costs or margins from a kiosk, POS or BI role that may still read the rest of the record. Writes are unaffected. Dotted permission key (same shape as rbac.permissions[].key); a key under this addon's own prefix must be declared in rbac.permissions.",
+          "examples": [
+            "inventory.product.view_cost"
+          ]
+        },
         "reject_deleted_ref": {
           "type": "boolean",
           "description": "On a column with a 'ref': a CREATE fails when the referenced row exists but is soft-deleted (deleted_at set), on the generic create (422 not_found) and on the wasm data_mutate/data_batch create path when the host wires the create check (invalid_reference). Opt-in for NEW documents that must reference live catalog rows (a sale line's product); leave it unset on documents that legitimately point at history (a return or credit-note line). Updates are never affected. Defaults false."
@@ -1445,6 +1473,9 @@
           "items": {
             "$ref": "#/$defs/Constraint"
           }
+        },
+        "grant": {
+          "$ref": "#/$defs/GrantBinding"
         },
         "sequence": {
           "type": "string",
@@ -1664,6 +1695,32 @@
             ]
           }
         }
+      }
+    },
+    "Snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "fields"],
+      "description": "Copies columns from a related row onto the new row at create time. 'from' is a ref column of the model; 'fields' maps source column -> protected target column.",
+      "properties": {
+        "from": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "fields": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+        }
+      }
+    },
+    "GrantBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "sets", "context_gte"],
+      "description": "Makes the column a supervisor-authorization slot: on create the kernel redeems the PIN grant it carries (single use) when the authorization is needed, and stamps the protected flag column 'sets' with 1.",
+      "properties": {
+        "policy": {"type": "string", "minLength": 1},
+        "sets": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "context_eq": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}},
+        "context_gte": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string", "minLength": 1}}
       }
     },
     "Sequence": {
@@ -2011,6 +2068,13 @@
             "$ref": "#/$defs/AgentCapability"
           }
         },
+        "guides": {
+          "type": "array",
+          "description": "In-app help for the host help center: short guides and guided tours aimed at roles, optionally auto-started the first time a user opens a route.",
+          "items": {
+            "$ref": "#/$defs/HelpGuide"
+          }
+        },
         "subscriptions": {
           "type": "array",
           "description": "Event handlers. Each subscription must be backed by an 'event:subscribe' capability.",
@@ -2176,6 +2240,66 @@
             "minLength": 1
           },
           "uniqueItems": true
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/AgentGuideStep"
+          }
+        }
+      }
+    },
+    "HelpGuide": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "title",
+        "steps"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "description": "Role keys the guide is aimed at. Empty or omitted = every user.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "permission": {
+          "type": "string",
+          "description": "Capability the viewer must hold to see the guide."
+        },
+        "trigger": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "first_visit"
+          ],
+          "description": "manual (default) only lists the guide; first_visit starts it the first time the user opens `route`."
+        },
+        "route": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "Route that auto-starts the guide for trigger=first_visit; it is only the trigger (each step may carry its own route)."
+        },
+        "order": {
+          "type": "integer"
         },
         "steps": {
           "type": "array",
@@ -4659,9 +4783,36 @@
       ],
       "description": "Preset-specific block: which addons to install in which order with which defaults.",
       "properties": {
+        "extends": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "version"
+          ],
+          "description": "Base preset this one overlays. The host resolves the highest published version in range and flattens this manifest on top of it.",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "remove_addons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true,
+          "description": "Addon keys of the base preset to drop. Only valid with extends."
+        },
         "addons": {
           "type": "array",
-          "minItems": 1,
+          "description": "Addons to install. May be empty when extends is set (an overlay that only changes defaults); a standalone preset must list at least one.",
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -4694,7 +4845,36 @@
         "defaults": {
           "type": "object",
           "description": "Map of '<addon_key>.<setting_key>' to default value applied at install time.",
-          "additionalProperties": true
+          "additionalProperties": true,
+          "properties": {
+            "branding": {
+              "type": ["object", "null"],
+              "description": "Brand kit (v3.Branding). Asset fields take an http(s) URL or a ./assets/... path that must exist in the bundle. null in an overlay removes the base's branding; a null field removes that field.",
+              "additionalProperties": false,
+              "properties": {
+                "platform_name": { "type": ["string", "null"] },
+                "logo_url": { "type": ["string", "null"], "pattern": "^(https?://|\\./assets/)" },
+                "logo_dark_url": { "type": ["string", "null"], "pattern": "^(https?://|\\./assets/)" },
+                "logo_mark_url": { "type": ["string", "null"], "pattern": "^(https?://|\\./assets/)" },
+                "favicon_url": { "type": ["string", "null"], "pattern": "^(https?://|\\./assets/)" },
+                "login_background_url": { "type": ["string", "null"], "pattern": "^(https?://|\\./assets/)" },
+                "primary_color": { "type": ["string", "null"], "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$" },
+                "accent_color": { "type": ["string", "null"], "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$" },
+                "support_email": { "type": ["string", "null"] },
+                "support_url": { "type": ["string", "null"] },
+                "mascot_name": { "type": ["string", "null"] },
+                "mascot_skin": { "type": ["string", "null"] },
+                "theme_key": { "type": ["string", "null"] },
+                "font": { "type": ["string", "null"] },
+                "density": { "type": ["string", "null"] },
+                "pwa_name": { "type": ["string", "null"] },
+                "pwa_short_name": { "type": ["string", "null"] },
+                "email_from_name": { "type": ["string", "null"] },
+                "fonts": { "type": ["array", "null"], "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 ]{0,59}$" } }
+              }
+            },
+            "branding_file": { "type": "string", "description": "Bundle path (./defaults/...) of a JSON file with the branding object." }
+          }
         }
       }
     },

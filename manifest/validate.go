@@ -260,11 +260,63 @@ func (m *Manifest) ValidateAdvisory(kernelVersion string) ([]string, error) {
 			"is accepted but installation will fail with "+
 			"runtime_not_implemented")
 	}
+	warnings = append(warnings, readPermissionOracleWarnings(m.ModelDefinitions)...)
 	if err := m.validateStrict(kernelVersion); err != nil {
 		return warnings, err
 	}
 	return warnings, nil
 }
+
+// readPermissionOracleWarnings flags guards that let a writer infer a column
+// gated by read_permission by trial: a constraint whose expression reads it
+// (the write is accepted or refused depending on the hidden value) and a
+// unique column (a duplicate answer says the value exists). They stay valid —
+// "price >= cost, ask for approval" is the motivating POS case — but the
+// author should not give write access on the model to roles without the
+// permission. See docs/access-policies.md "Oráculos residuales".
+func readPermissionOracleWarnings(defs []ModelDefinition) []string {
+	var out []string
+	for _, md := range defs {
+		gated := map[string]string{}
+		for _, c := range md.Columns {
+			if c.ReadPermission != "" {
+				gated[c.Name] = c.ReadPermission
+			}
+		}
+		if len(gated) == 0 {
+			continue
+		}
+		for _, c := range md.Columns {
+			if c.Unique && gated[c.Name] != "" {
+				out = append(out, fmt.Sprintf("model_definitions[%s].columns[%s]: unique on a column gated by read_permission %q lets a writer probe whether a value exists", md.ModelKey, c.Name, gated[c.Name]))
+			}
+			for _, con := range c.Constraints {
+				for _, id := range constraintIdents(con.Expr) {
+					if p := gated[id]; p != "" {
+						out = append(out, fmt.Sprintf("model_definitions[%s].columns[%s].constraints[%s]: the guard reads %q (read_permission %q); a writer without the permission can infer it from accept/refuse", md.ModelKey, c.Name, con.ErrorKey, id, p))
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// constraintIdents returns the column identifiers of a guard expression
+// ("price >= cost * 1.1" → price, cost), deduplicated.
+func constraintIdents(expr string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, tok := range constraintIdentRe.FindAllString(expr, -1) {
+		if !seen[tok] {
+			seen[tok] = true
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+var constraintIdentRe = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
 
 // Validate performs a full structural + semantic check of the manifest.
 // It is cheap and side-effect free; callers should run it before install.
@@ -343,6 +395,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 			}
 		}
 		if err := validateRelations(md.Relations); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
+		}
+		if err := validateDerivedReadPermissions(md, m.ModelDefinitions); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
 		if err := validateSeed(md.Seed, md.Columns); err != nil {
@@ -804,6 +859,10 @@ func validateColumnExtensions(col ColumnDef) error {
 	// planes stay in agreement.
 	if col.OptionsSource != "" && !optionsSourceRe.MatchString(col.OptionsSource) {
 		return fmt.Errorf("options_source %q must match %s", col.OptionsSource, optionsSourceRe)
+	}
+	// ReadPermission: the same dotted key shape the v3 schema enforces.
+	if col.ReadPermission != "" && !v3.PermissionKeyRe.MatchString(col.ReadPermission) {
+		return fmt.Errorf("read_permission %q must match %s", col.ReadPermission, v3.PermissionKeyRe)
 	}
 	if col.Validation != nil {
 		if err := col.Validation.validate(); err != nil {
@@ -1745,6 +1804,86 @@ func validateDocumentForms(df *DocumentFormsDef, cols map[string]struct{}) error
 		}
 		if t.CreateModel != "" && (len(t.Fields) > 0 || t.Lines != nil || t.Endpoint != "" || t.SubmitAction != "") {
 			return fmt.Errorf("document_forms.types[%d].create_model %q delegates the create: fields/lines/endpoint/submit_action are not allowed", ti, t.CreateModel)
+		}
+	}
+	return nil
+}
+
+// validateDerivedReadPermissions is the legacy-plane twin of the v3 rule
+// (v3.DerivedReadPermissionError): a formula/generated/rollup/snapshot target
+// must declare the same read_permission as every gated column it reads.
+func validateDerivedReadPermissions(md ModelDefinition, all []ModelDefinition) error {
+	perms := func(d ModelDefinition) map[string]string {
+		out := make(map[string]string, len(d.Columns))
+		for _, c := range d.Columns {
+			out[c.Name] = c.ReadPermission
+		}
+		return out
+	}
+	own := perms(md)
+	byKey := map[string]map[string]string{}
+	for _, d := range all {
+		p := perms(d)
+		byKey[d.ModelKey], byKey[d.TableName] = p, p
+	}
+	srcs := func(ids []string, p map[string]string) map[string]string {
+		out := make(map[string]string, len(ids))
+		for _, id := range ids {
+			out[id] = p[id]
+		}
+		return out
+	}
+	for j, c := range md.Columns {
+		if strings.TrimSpace(c.Generated) == "" {
+			continue
+		}
+		if ids, err := computeexpr.Idents(c.Generated); err == nil {
+			if msg := v3.DerivedReadPermissionError(c.Name, c.ReadPermission, srcs(ids, own)); msg != "" {
+				return fmt.Errorf("columns[%d].generated: %s", j, msg)
+			}
+		}
+	}
+	for j, f := range md.Formulas {
+		if f.Tier == 3 || strings.TrimSpace(f.Expr) == "" {
+			continue
+		}
+		if ids, err := computeexpr.Idents(f.Expr); err == nil {
+			if msg := v3.DerivedReadPermissionError(f.Target, own[f.Target], srcs(ids, own)); msg != "" {
+				return fmt.Errorf("formulas[%d]: %s", j, msg)
+			}
+		}
+	}
+	for ri, r := range md.Relations {
+		child := byKey[r.Through]
+		for ki, rl := range r.Rollups {
+			var ids []string
+			if rl.From != "" {
+				ids = []string{rl.From}
+			} else if rl.Expr != "" {
+				ids, _ = computeexpr.Idents(rl.Expr)
+			}
+			if msg := v3.DerivedReadPermissionError(rl.Target, own[rl.Target], srcs(ids, child)); msg != "" {
+				return fmt.Errorf("relations[%d].rollups[%d]: %s", ri, ki, msg)
+			}
+		}
+	}
+	refOf := map[string]string{}
+	for _, c := range md.Columns {
+		refOf[c.Name] = c.Ref
+	}
+	for si, sn := range md.Snapshots {
+		ref := refOf[sn.From]
+		if i := strings.LastIndex(ref, "."); i >= 0 {
+			ref = ref[i+1:]
+		}
+		src := byKey[ref]
+		if src == nil {
+			continue
+		}
+		for from, to := range sn.Fields {
+			if msg := v3.DerivedReadPermissionError(to, own[to], map[string]string{from: src[from]}); msg != "" {
+				return fmt.Errorf("snapshots[%d]: %s", si, msg)
+			}
 		}
 	}
 	return nil

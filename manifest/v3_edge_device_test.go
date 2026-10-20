@@ -191,3 +191,36 @@ func TestValidate_EdgeDevice_Rejections(t *testing.T) {
 		})
 	}
 }
+
+// edge:command grants the edge_command host import for the addon's OWN
+// device classes: "<device_key>.<command_kind>", kind may be a glob.
+func TestParse_EdgeCommandCapability(t *testing.T) {
+	with := func(target string) []byte {
+		return []byte(strings.Replace(edgeDeviceManifestJSON, `"edge_devices": [`,
+			`"capabilities": [{ "kind": "edge:command", "target": "`+target+`" }],
+  "edge_devices": [`, 1))
+	}
+	for _, ok := range []string{"cashdro.cashdro", "cashdro.*", "cashdro.open_session"} {
+		if _, err := v3.Parse(with(ok)); err != nil {
+			t.Errorf("%s rejected: %v", ok, err)
+		}
+	}
+	for target, want := range map[string]string{
+		"printer.print": "not one of this addon's edge_devices",
+		"cashdro":       "<device_key>.<command_kind>",
+		"cashdro.Bad!":  "<device_key>.<command_kind>",
+	} {
+		_, err := v3.Parse(with(target))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", target, err, want)
+		}
+	}
+	m, err := v3.Parse(with("cashdro.cashdro"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := manifest.FromV3(m)
+	if err := legacy.Validate("3.5.0"); err != nil {
+		t.Fatalf("install surface rejected edge:command: %v", err)
+	}
+}

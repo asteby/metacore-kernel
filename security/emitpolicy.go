@@ -38,6 +38,11 @@ import (
 // METACORE_EVENT_EMIT_DECLARED. Both default to warn: a violation is logged,
 // reported (OnViolation: metric, kernel.event_emit.violation) and the publish
 // proceeds.
+//
+// Exception: money domains (EnforcedDomains, default commerce.payments) are
+// always enforced by rules 2 and facts_unavailable while the reserved group
+// is not off: a non-provider can never publish a payment confirmation, not
+// even during the warn rollout, and an unverifiable emitter fails closed.
 
 // EmitRule names the rule a violation broke.
 type EmitRule string
@@ -224,9 +229,29 @@ type EmitPolicy struct {
 	// OnViolation, when set, is called for every violation in any mode
 	// (metrics, alerting). Called synchronously; keep it cheap.
 	OnViolation func(ctx context.Context, v EmitViolation)
+	// EnforcedDomains are reserved capability domains whose rule-2 (and
+	// facts_unavailable) violations are denied in warn mode too. nil =
+	// DefaultEnforcedDomains; an empty non-nil slice disables the exception.
+	EnforcedDomains []string
 
 	reserved atomic.Int32
 	declared atomic.Int32
+}
+
+// DefaultEnforcedDomains: payment confirmations move money.
+var DefaultEnforcedDomains = []string{"commerce.payments"}
+
+func (p *EmitPolicy) enforcedDomain(domain string) bool {
+	domains := p.EnforcedDomains
+	if domains == nil {
+		domains = DefaultEnforcedDomains
+	}
+	for _, d := range domains {
+		if d == domain {
+			return true
+		}
+	}
+	return false
 }
 
 // NewEmitPolicy builds a policy with the group modes read from
@@ -330,6 +355,9 @@ func (p *EmitPolicy) Check(ctx context.Context, org uuid.UUID, emitter, event st
 		}
 		if mode == EmitModeOff {
 			continue
+		}
+		if (v.Rule == EmitRuleContract || v.Rule == EmitRuleUnverified) && p.enforcedDomain(v.Owner) {
+			mode = EmitModeEnforce
 		}
 		v.Group = v.Rule.Group()
 		v.Mode = mode.String()

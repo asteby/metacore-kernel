@@ -631,6 +631,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// bypass; only a declared Action's own write path (data_mutate)
 				// can change it.
 				Protected: c.Protected,
+				// ReadPermission rides through so the dynamic runtime strips the
+				// column from every read of a caller lacking the permission.
+				ReadPermission: c.ReadPermission,
 				// RejectDeletedRef rides through so a create pointing at a
 				// soft-deleted ref target is refused (opt-in, VEN-N08).
 				RejectDeletedRef: c.RejectDeletedRef,
@@ -640,6 +643,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// Sequence binds the column to a model folio counter (auto-stamped
 				// on create).
 				Sequence: c.Sequence,
+				Grant:    mapColumnGrant(c.Grant),
 				// Generated rides through so the DDL builder emits the column as
 				// `GENERATED ALWAYS AS (<expr>) STORED` (Postgres-maintained).
 				Generated: c.Generated,
@@ -730,6 +734,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		def.NoAudit = m.Audit != nil && !*m.Audit
 		def.Rules = mapModelRules(m.Rules)
 		def.Sequences = mapModelSequences(m.Sequences)
+		def.Snapshots = mapModelSnapshots(m.Snapshots)
 		// FormLayout rides through so the host projects the create/edit form
 		// grouping (collapsible sections or step wizard) onto the served metadata.
 		// Nil = a flat form (legacy). Pure UI.
@@ -1896,4 +1901,24 @@ func copyStringMap(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// mapModelSnapshots folds a v3 model's snapshots onto the legacy slice.
+func mapModelSnapshots(in []v3.Snapshot) []SnapshotDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]SnapshotDef, 0, len(in))
+	for _, s := range in {
+		out = append(out, SnapshotDef{From: s.From, Fields: s.Fields})
+	}
+	return out
+}
+
+// mapColumnGrant projects a v3 Column.grant (nil when absent).
+func mapColumnGrant(g *v3.GrantBinding) *GrantDef {
+	if g == nil {
+		return nil
+	}
+	return &GrantDef{Policy: g.Policy, Sets: g.Sets, ContextEq: g.ContextEq, ContextGte: g.ContextGte}
 }

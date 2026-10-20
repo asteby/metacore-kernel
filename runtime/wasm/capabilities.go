@@ -82,6 +82,11 @@ type invocation struct {
 	// (Host.WithCreateCheck) data_mutate / data_batch run on every create,
 	// inside the transaction. nil = no check.
 	createCheck CreateCheckFn
+	// createStamp is the embedder-injected stamp phase (Host.WithCreateStamp)
+	// data_mutate / data_batch run on every create, after the folio stamp.
+	createStamp CreateStampFn
+	// updateStamp is the update-side stamp phase (Host.WithUpdateStamp).
+	updateStamp UpdateStampFn
 	// ctxProvider is the embedder-injected execution-context port the ctx_get
 	// import calls (Host.WithContextProvider). nil = context_unavailable.
 	ctxProvider ContextProviderFn
@@ -111,6 +116,10 @@ type invocation struct {
 	// (Host.WithApprovals) the `approval_request` import calls. nil = the
 	// import answers `approvals_unavailable`.
 	approvalRequester func(ctx context.Context, in dynamic.ApprovalInput) (*dynamic.ApprovalRequest, error)
+	// approvalConsumer is the embedder-injected dynamic.Service.ConsumeApproval
+	// (Host.WithApprovalConsumer) the `approval_consume` import calls. nil = the
+	// import answers `approvals_unavailable`.
+	approvalConsumer func(ctx context.Context, in dynamic.ConsumeInput) error
 	// execSchema overrides the schema db_exec scopes bare names to via
 	// search_path (Host.WithExecSchema). nil = AddonSchema(addonKey). The
 	// capability gate still authorises against AddonSchema regardless.
@@ -122,6 +131,13 @@ type invocation struct {
 	// capQuerier resolves and runs capability queries for the
 	// capability_query import (Host.WithCapabilityQuerier). nil = unavailable.
 	capQuerier capability.Querier
+	// edgeCommander delivers edge_command to a device's agent
+	// (Host.WithEdgeCommander). nil = unavailable.
+	edgeCommander EdgeCommander
+	// edgeLimits / edgeSent: edge_command rate limits (host-wide windows)
+	// and this invocation's count.
+	edgeLimits *edgeLimiter
+	edgeSent   int
 	// emitPolicy gates event_emit by event name (Host.WithEmitPolicy). nil =
 	// no policy (pre-policy behaviour).
 	emitPolicy EmitPolicyFunc
@@ -524,6 +540,25 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 		}).
 		Export("approval_request")
 
+	// approval_consume(reqPtr, reqLen) -> i64 (ptr|len envelope)
+	// Redeems a supervisor PIN grant for ONE use, atomically. Org and acting
+	// user come from the invocation context, never from the guest. No
+	// capability gate: the grant itself is the authorization, and the host
+	// refuses anything that is not the caller's own, fresh, unused grant.
+	// See docs/wasm-abi.md § 25.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			reqPtr, reqLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			req := readBytes(mod, reqPtr, reqLen)
+			env := executeApprovalConsume(ctx, inv, req)
+			return writeToGuest(ctx, mod, env)
+		}).
+		Export("approval_consume")
+
 	// sequence_next(reqPtr, reqLen) -> i64 (ptr|len envelope)
 	// Issues the next formatted folio value for a model's declared sequence,
 	// atomically per org (or branch). Tenant scope comes from the invocation
@@ -593,6 +628,24 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 			return writeToGuest(ctx, mod, env)
 		}).
 		Export("routing_resolve")
+
+	// edge_command(reqPtr, reqLen) -> i64 (ptr|len envelope)
+	// Sends a command to a physical device of the org (a CashDro, a
+	// printer…) through its agent connection and returns the answer the host
+	// transported. Gated by `edge:command <device_key>.<kind>` and by the
+	// device class belonging to the caller. See docs/wasm-abi.md § 25.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			reqPtr, reqLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			req := readBytes(mod, reqPtr, reqLen)
+			env := executeEdgeCommand(ctx, inv, req)
+			return writeToGuest(ctx, mod, env)
+		}).
+		Export("edge_command")
 
 	if _, err := b.Instantiate(ctx); err != nil {
 		return fmt.Errorf("instantiate metacore_host: %w", err)

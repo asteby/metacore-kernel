@@ -82,6 +82,8 @@ type Host struct {
 	routingTable    RoutingTableFn
 	sequenceStamp   SequenceStampFn
 	createCheck     CreateCheckFn
+	createStamp     CreateStampFn
+	updateStamp     UpdateStampFn
 	ctxProvider     ContextProviderFn
 	mutationGuard   func(ctx context.Context, logicalTable string, row map[string]any) error
 	mutationCompute MutationComputeFn
@@ -99,8 +101,12 @@ type Host struct {
 	// the `approval_request` import calls (Host.WithApprovals). nil = import
 	// answers `approvals_unavailable`.
 	approvalRequester func(ctx context.Context, in dynamic.ApprovalInput) (*dynamic.ApprovalRequest, error)
+	// approvalConsumer backs the `approval_consume` import (Host.WithApprovalConsumer).
+	approvalConsumer func(ctx context.Context, in dynamic.ConsumeInput) error
 	connectors        *connectors.Resolver
 	capQuerier        capability.Querier
+	edgeCommander     EdgeCommander
+	edgeLimits        *edgeLimiter
 	emitPolicy        EmitPolicyFunc
 	logger            *log.Logger
 	compiled          sync.Map // addonKey -> *compiledEntry
@@ -302,6 +308,29 @@ func (h *Host) WithSequenceStamp(f SequenceStampFn) *Host {
 	return h
 }
 
+// WithCreateStamp injects the embedder's declarative stamp phase for
+// data_mutate / data_batch creates (docs/wasm-abi.md § 24): snapshot columns
+// copied from a related row, supervisor-grant redemption, and the formulas that
+// read them. It runs inside the write transaction, after the folio stamp and
+// before the create check and the INSERT, and overwrites whatever the guest
+// sent for the stamped columns. Wire it to dynamic.Service.CreateStamper. When
+// unset, creates are not stamped (previous behaviour).
+func (h *Host) WithCreateStamp(f CreateStampFn) *Host {
+	h.createStamp = f
+	return h
+}
+
+// WithUpdateStamp injects the embedder's declarative stamp phase for
+// data_mutate / data_batch UPDATES (docs/wasm-abi.md § 24): snapshots are
+// re-taken when their source column changes, and a change to anything a
+// supervisor grant covered drops the authorization (a new grant id in the patch
+// is redeemed on the write's transaction). Wire it to
+// dynamic.Service.UpdateStamper. When unset, updates are not stamped.
+func (h *Host) WithUpdateStamp(f UpdateStampFn) *Host {
+	h.updateStamp = f
+	return h
+}
+
 // WithCreateCheck injects the embedder's pre-INSERT check for data_mutate /
 // data_batch creates. It runs inside the write transaction after the folio
 // stamp and before the INSERT; a non-nil error rolls the mutation (or the
@@ -387,6 +416,18 @@ func (h *Host) WithMutationCompute(f MutationComputeFn) *Host {
 // import answers `approvals_unavailable`.
 func (h *Host) WithApprovals(f func(ctx context.Context, in dynamic.ApprovalInput) (*dynamic.ApprovalRequest, error)) *Host {
 	h.approvalRequester = f
+	return h
+}
+
+// WithApprovalConsumer injects the embedder's dynamic.Service.ConsumeApproval
+// for the `metacore_host.approval_consume` import (docs/wasm-abi.md § 23). A
+// handler that writes a document line under a supervisor authorization (price
+// under the floor, discount over the cap) redeems the PIN grant through it:
+// the host checks org, policy, requester, freshness, single use and the
+// recorded context in one atomic step. When unset, the import answers
+// `approvals_unavailable`.
+func (h *Host) WithApprovalConsumer(f func(ctx context.Context, in dynamic.ConsumeInput) error) *Host {
+	h.approvalConsumer = f
 	return h
 }
 
@@ -745,6 +786,8 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		routingTable:      h.routingTable,
 		sequenceStamp:     h.sequenceStamp,
 		createCheck:       h.createCheck,
+		createStamp:       h.createStamp,
+		updateStamp:       h.updateStamp,
 		ctxProvider:       h.ctxProvider,
 		mutationGuard:     h.mutationGuard,
 		mutationCompute:   h.mutationCompute,
@@ -752,8 +795,11 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		stageMachine:      h.stageMachine,
 		extensions:        h.extensions,
 		approvalRequester: h.approvalRequester,
+		approvalConsumer:  h.approvalConsumer,
 		connectors:        h.connectors,
 		capQuerier:        h.capQuerier,
+		edgeCommander:     h.edgeCommander,
+		edgeLimits:        h.edgeLimits,
 		emitPolicy:        h.emitPolicy,
 		metrics:           h.metrics,
 		logger:            h.logger,

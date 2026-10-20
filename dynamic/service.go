@@ -230,6 +230,11 @@ type Config struct {
 	// backend) resolves a counter by (model, key). nil = no folios.
 	SequenceResolver SequenceResolver
 
+	// StampResolver returns the create-time stamp configuration of a model:
+	// snapshots copied from a related row and supervisor-grant slots (manifest
+	// Model.snapshots / Column.grant). nil disables the phase (back-compat).
+	StampResolver StampResolver
+
 	// AuthUserExtractor optionally lets the Handler pull the authenticated
 	// principal from the request context using the narrow AuthUserProvider
 	// contract instead of the legacy UserResolver (which forces apps to
@@ -328,6 +333,22 @@ type Config struct {
 	// a cashier can get an approval on the spot (see approvals_pin.go). The host
 	// owns PIN storage; nil disables the PIN routes (501).
 	ApprovalPINVerifier ApprovalPINVerifier
+
+	// ColumnReadChecker decides whether a caller holds the permission a column
+	// declares in ReadPermission (manifest columns[].read_permission). nil
+	// asks Config.Permissions for the permission as a capability. See
+	// column_read.go for every read surface the column gate covers.
+	ColumnReadChecker ColumnReadChecker
+
+	// ModelForModelKey is the inverse of ModelKeyForModel: the model name the
+	// metadata service knows for a canonical ModelKey ("Product" →
+	// "products"). Records that reach a client named by their ModelKey
+	// (canonical events, audit entries, approval requests) resolve their
+	// column gates through it. Optional: the kernel also matches the
+	// registered model keys ignoring case and through ModelKeyForModel, but a
+	// host whose addon models live outside the modelbase registry should wire
+	// it — without a match those records are reduced to their id.
+	ModelForModelKey func(ctx context.Context, modelKey string) string
 }
 
 // ActorRolesResolver returns the org role keys a user holds (lower-cased or
@@ -395,6 +416,7 @@ type Service struct {
 	validationSchema  ValidationSchemaResolver
 	customValidators  validate.Resolver
 	sequences         SequenceResolver
+	stamps            StampResolver
 	authExtractor     adapters.AuthUserExtractor
 	selfOptions       bool
 	fileDeleter       FileDeleter
@@ -404,6 +426,9 @@ type Service struct {
 	optionDisplays    OptionDisplayResolver
 	accessPolicies    AccessPolicyResolver
 	colCache          liveColsCache // live table columns (tablecols.go)
+	columnReadChecker ColumnReadChecker
+	modelForModelKey  func(ctx context.Context, modelKey string) string
+	modelAliases      sync.Map // canonical event ModelKey → model as invoked (column_read.go)
 
 	// Transactional-outbox state (outbox.go). outboxEnabled arms after the
 	// table migrates at New; outboxStop terminates the background relay.
@@ -489,6 +514,7 @@ func New(cfg Config) *Service {
 		validationSchema:  cfg.ValidationSchemaResolver,
 		customValidators:  cfg.CustomValidatorResolver,
 		sequences:         cfg.SequenceResolver,
+		stamps:            cfg.StampResolver,
 		authExtractor:     cfg.AuthUserExtractor,
 		selfOptions:       cfg.EnableSelfOptions,
 		fileDeleter:       cfg.FileDeleter,
@@ -497,6 +523,8 @@ func New(cfg Config) *Service {
 		extensions:        cfg.ExtensionResolver,
 		optionDisplays:    cfg.OptionDisplayResolver,
 		accessPolicies:    cfg.AccessPolicyResolver,
+		columnReadChecker: cfg.ColumnReadChecker,
+		modelForModelKey:  cfg.ModelForModelKey,
 
 		actorRolesResolver:        cfg.ActorRolesResolver,
 		approvalRequesterResolver: cfg.ApprovalRequesterResolver,
@@ -572,7 +600,7 @@ const maxRefSearchColumns = 4
 // (plain) search columns. A ref that cannot be resolved, or whose model has no
 // search columns, is skipped — the list never fails because of it. Skipped
 // entirely when there is no search term (no lookups on plain list requests).
-func (s *Service) refSearchFor(ctx context.Context, tableMeta *modelbase.TableMetadata, term string) map[string]query.RefSearch {
+func (s *Service) refSearchFor(ctx context.Context, tableMeta *modelbase.TableMetadata, term string, user modelbase.AuthUser) map[string]query.RefSearch {
 	if tableMeta == nil || len(tableMeta.SearchRefs) == 0 || strings.TrimSpace(term) == "" {
 		return nil
 	}
@@ -596,8 +624,11 @@ func (s *Service) refSearchFor(ctx context.Context, tableMeta *modelbase.TableMe
 		if err != nil || table == "" {
 			continue
 		}
+		// The referenced model's own read mask: a search through the fk must
+		// never match a column the caller may not read on that model.
+		refMask := s.readMask(ctx, model, refMeta, user, maxMaskDepth)
 		cols := make([]string, 0, maxRefSearchColumns)
-		for _, c := range refMeta.SearchColumns {
+		for _, c := range refMask.Allowed(refMeta.SearchColumns) {
 			if strings.Contains(c, ".") {
 				continue // one hop only
 			}
@@ -640,6 +671,14 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	if err := s.authorize(ctx, user, model, instance, modelbase.AccessList); err != nil {
 		return nil, query.PageMeta{}, err
 	}
+	// Column read gate: refuse a filter/sort/group/aggregate over a column the
+	// caller may not read, and bind the builder to the masked metadata so the
+	// search never reaches one either.
+	mask := s.readMask(ctx, model, tableMeta, user, 0)
+	if err := mask.CheckParams(params); err != nil {
+		return nil, query.PageMeta{}, err
+	}
+	tableMeta = mask.TableMeta(tableMeta)
 
 	sliceType := reflect.SliceOf(reflect.TypeOf(instance))
 	results := reflect.New(sliceType).Interface()
@@ -657,9 +696,9 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	// get an empty relation set — the new query features are no-ops.
 	exts := s.resolveExtensions(ctx, model)
 	builder := query.New(tableMeta, s.listBuilderOpts()...).WithTableName(tableName).
-		WithRefSearch(s.refSearchFor(ctx, tableMeta, params.Search)).
+		WithRefSearch(s.refSearchFor(ctx, tableMeta, params.Search, user)).
 		WithUUIDColumns(uuidColumnsOf(instance)).
-		WithExtensions(queryExtensions(exts))
+		WithExtensions(queryExtensions(mask.extensions(exts)))
 	if rels, ok := instance.(modelbase.HasRelations); ok {
 		builder = builder.WithRelations(rels.DefineRelations())
 	}
@@ -689,6 +728,7 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	if err := s.mergeExtensions(ctx, exts, items); err != nil {
 		return nil, query.PageMeta{}, err
 	}
+	items = mask.RedactRows(items)
 	items = query.ProjectMaps(items, params.Fields)
 	if params.SkipCount {
 		meta := builder.PageMeta(int64(len(items)), params)
@@ -716,6 +756,18 @@ func (s *Service) Aggregate(ctx context.Context, model string, user modelbase.Au
 	}
 	if err := s.authorize(ctx, user, model, instance, modelbase.AccessList); err != nil {
 		return nil, err
+	}
+	// Column read gate: a footer total over a hidden column (the sum of the
+	// costs) is dropped like an unknown column; a client filter over one is
+	// refused.
+	mask := s.readMask(ctx, model, tableMeta, user, 0)
+	if err := mask.CheckParams(params); err != nil {
+		return nil, err
+	}
+	tableMeta = mask.TableMeta(tableMeta)
+	columns = mask.Allowed(columns)
+	if len(columns) == 0 {
+		return map[string]any{}, nil
 	}
 
 	tableName, err := s.tableNameFor(ctx, model, instance)
@@ -746,9 +798,9 @@ func (s *Service) Aggregate(ctx context.Context, model string, user modelbase.Au
 
 	exts := s.resolveExtensions(ctx, model)
 	builder := query.New(tableMeta, s.listBuilderOpts()...).WithTableName(tableName).
-		WithRefSearch(s.refSearchFor(ctx, tableMeta, params.Search)).
+		WithRefSearch(s.refSearchFor(ctx, tableMeta, params.Search, user)).
 		WithUUIDColumns(uuidColumnsOf(instance)).
-		WithExtensions(queryExtensions(exts))
+		WithExtensions(queryExtensions(mask.extensions(exts)))
 	if rels, ok := instance.(modelbase.HasRelations); ok {
 		builder = builder.WithRelations(rels.DefineRelations())
 	}
@@ -799,8 +851,19 @@ func (s *Service) ImportSpec(ctx context.Context, model string) (modelbase.Impor
 	return modelbase.ResolveImportSpec(definer, *modal), nil
 }
 
-// Get returns a single record by ID.
+// Get returns a single record by ID, without the columns the caller may not
+// read (ReadPermission).
 func (s *Service) Get(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID) (map[string]any, error) {
+	row, err := s.getRow(ctx, model, user, id)
+	if err != nil {
+		return nil, err
+	}
+	return s.redactFor(ctx, model, user, row)
+}
+
+// getRow is Get without the column read mask, for server-side consumers of
+// the record (action dispatch, state gates, canonical events).
+func (s *Service) getRow(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID) (map[string]any, error) {
 	instance, _, err := s.resolveModel(ctx, model)
 	if err != nil {
 		return nil, err
@@ -913,6 +976,16 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 
 	coerceInputToStruct(input, instance)
 
+	// Stamp phase (snapshots + supervisor grants): server-owned columns copied
+	// from a related row, overwriting whatever the caller sent, BEFORE the
+	// formulas (before-create hooks) and guards that read them.
+	// Grants are only VALIDATED here (the guards read their flag); they are
+	// spent with the INSERT, after every guard passed.
+	pendingGrants, err := s.StampCreatePrepare(ctx, s.db, orgIDFromUser(user), user.GetID(), model, input)
+	if err != nil {
+		return nil, err
+	}
+
 	hc := HookContext{Model: model, User: user, DB: s.db}
 	if err := s.hooks.runBeforeCreate(ctx, hc, input); err != nil {
 		return nil, err
@@ -967,10 +1040,27 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 			if err := EvalCrossRecordRules(ctx, tx, mc.Rules, tableName, user.GetOrganizationID(), row, nil, s.parentTableFn(ctx)); err != nil {
 				return err
 			}
+			if err := pendingGrants.Redeem(ctx, tx, s.ConsumeApproval); err != nil {
+				return err
+			}
 			return s.writeDB(ctx, tx, tableName, instance, input).Create(instance).Error
 		}); err != nil {
 			err = uniqueIndexViolation(err, tableName, mc.Rules)
-			if errors.Is(err, ErrConstraintViolation) || errors.Is(err, ErrInvalidInput) {
+			if errors.Is(err, ErrConstraintViolation) || errors.Is(err, ErrInvalidInput) || errors.Is(err, ErrApprovalConsume) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("dynamic: create: %w", err)
+		}
+	} else if len(pendingGrants) > 0 {
+		// The redemption and the INSERT share one transaction: a failed INSERT
+		// leaves the grant unspent.
+		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := pendingGrants.Redeem(ctx, tx, s.ConsumeApproval); err != nil {
+				return err
+			}
+			return s.writeDB(ctx, tx, tableName, instance, input).Create(instance).Error
+		}); err != nil {
+			if errors.Is(err, ErrApprovalConsume) {
 				return nil, err
 			}
 			return nil, fmt.Errorf("dynamic: create: %w", err)
@@ -1020,7 +1110,8 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	s.publishCanonical(ctx, model, "created", user, idStr, nil, after)
 
 	_ = s.hooks.runAfterCreate(ctx, hc, instance)
-	return after, nil
+	// The event keeps the full row; the caller gets what it may read.
+	return s.redactFor(ctx, model, user, after)
 }
 
 // Update modifies a record by ID.
@@ -1169,6 +1260,16 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		// Normalize string-encoded typed fields before merging into the record.
 		coerceInputToStruct(input, instance)
 
+		// Stamp phase: server-owned snapshot / authorization columns follow the
+		// patch. A change to what a grant covered (unit_price, product_id, ...)
+		// drops the authorization; a new grant id in the patch is validated here
+		// and spent with the write, after the guards.
+		pendingGrants, stampErr := s.StampUpdate(ctx, execDB, orgIDFromUser(user), user.GetID(), model, id.String(), before, input, nil)
+		if stampErr != nil {
+			return stampErr
+		}
+		redeem := func(db *gorm.DB) error { return pendingGrants.Redeem(ctx, db, s.ConsumeApproval) }
+
 		hc := HookContext{Model: model, User: user, DB: execDB}
 		if err := s.hooks.runBeforeUpdate(ctx, hc, id.String(), input); err != nil {
 			return err
@@ -1216,6 +1317,15 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		if err := mapToStruct(input, instance); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidInput, err)
 		}
+		// A JSON null leaves a non-pointer field untouched (a string grant would
+		// keep its spent id): zero the cleared grant columns explicitly.
+		if stampSt := s.resolveStamps(ctx, model); stampSt != nil {
+			for _, g := range stampSt.Grants {
+				if v, ok := input[g.Column]; ok && v == nil {
+					zeroFieldByJSONName(instance, g.Column)
+				}
+			}
+		}
 
 		// The Go model's own validation runs on the persisted row merged
 		// with the changes (inside the lock when locking).
@@ -1231,6 +1341,9 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		// transaction, so save + hooks run directly on execDB.
 		runHooksInTx := stageChanged && len(sm.MatchingHooks(fromStage, toStage)) > 0
 		if inTx {
+			if err := redeem(execDB); err != nil {
+				return err
+			}
 			if err := s.writeDB(ctx, execDB, tableName, instance, input).Save(instance).Error; err != nil {
 				return fmt.Errorf("dynamic: update: %w", err)
 			}
@@ -1242,11 +1355,27 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		}
 		if runHooksInTx {
 			return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := redeem(tx); err != nil {
+					return err
+				}
 				if err := s.writeDB(ctx, tx, tableName, instance, input).Save(instance).Error; err != nil {
 					return fmt.Errorf("dynamic: update: %w", err)
 				}
 				after = toMap(instance)
 				return s.runTransitionHooks(ctx, model, user, tx, sm, fromStage, toStage, before, after)
+			})
+		}
+		if len(pendingGrants) > 0 {
+			// The redemption and the UPDATE share one transaction.
+			return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := redeem(tx); err != nil {
+					return err
+				}
+				if err := s.writeDB(ctx, tx, tableName, instance, input).Save(instance).Error; err != nil {
+					return fmt.Errorf("dynamic: update: %w", err)
+				}
+				after = toMap(instance)
+				return nil
 			})
 		}
 		if err := s.writeDB(ctx, s.db.WithContext(ctx), tableName, instance, input).Save(instance).Error; err != nil {
@@ -1324,7 +1453,8 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	// After-hooks fire post-commit against the standalone handle (the tx, if any,
 	// is already committed here).
 	_ = s.hooks.runAfterUpdate(ctx, HookContext{Model: model, User: user, DB: s.db}, instance)
-	return after, nil
+	// The event keeps the full row; the caller gets what it may read.
+	return s.redactFor(ctx, model, user, after)
 }
 
 // Delete soft-deletes a record by ID.
@@ -1488,12 +1618,12 @@ func (s *Service) Restore(ctx context.Context, model string, user modelbase.Auth
 	if res.RowsAffected == 0 {
 		return nil, ErrRecordNotFound
 	}
-	row, err := s.Get(ctx, model, user, id)
+	row, err := s.getRow(ctx, model, user, id)
 	if err != nil {
 		return nil, err
 	}
 	s.publishCanonical(ctx, model, "updated", user, id.String(), nil, row)
-	return row, nil
+	return s.redactFor(ctx, model, user, row)
 }
 
 // --- internal -----------------------------------------------------------
@@ -1590,4 +1720,24 @@ func toMapSlice(slicePtr any) []map[string]any {
 		result[i] = toMap(v.Index(i).Addr().Interface())
 	}
 	return result
+}
+
+// zeroFieldByJSONName sets the struct field of target whose json tag is name to
+// its zero value (nil for a pointer column, which GORM writes as NULL).
+func zeroFieldByJSONName(target any, name string) {
+	v := reflect.ValueOf(target)
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		return
+	}
+	v = v.Elem()
+	if v.Kind() != reflect.Struct {
+		return
+	}
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		if strings.Split(t.Field(i).Tag.Get("json"), ",")[0] == name && v.Field(i).CanSet() {
+			v.Field(i).Set(reflect.Zero(t.Field(i).Type))
+			return
+		}
+	}
 }

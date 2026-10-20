@@ -287,6 +287,21 @@ func resolveExportColumns(c fiber.Ctx, h *Handler, model string) ([]exportCol, e
 		}
 	}
 	applyClientColumnLabels(c.Query("column_labels"), out)
+	// A column the caller may not read (ReadPermission) is not exported at
+	// all — not even as an empty header the reader could ask about.
+	mask, err := h.service.ColumnReadMask(c, model, h.user(c))
+	if err != nil {
+		return nil, err
+	}
+	if !mask.Empty() {
+		kept := out[:0]
+		for _, ec := range out {
+			if !mask.Denied(ec.Key) {
+				kept = append(kept, ec)
+			}
+		}
+		out = kept
+	}
 	return out, nil
 }
 
