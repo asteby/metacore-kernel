@@ -72,7 +72,9 @@ Casos reales:
 `Select` decide el proveedor de una llamada **nueva** (crear sesión de pago,
 comprar guía, emitir factura). Todo lo que sigue sobre algo que un proveedor ya
 creó va **fijado a ese proveedor** con `Query.Provider` (llave del addon):
-`payments.confirm`, `payments.status`, `payments.refund`, `shipping.cancel`,
+`payments.confirm`, `payments.status`, `payments.refund`, `payments.submit`,
+`payments.client`, `payments.notification.inspect`, `payments.notification.resolve`,
+`payments.health`, `shipping.cancel`,
 `shipping.track`, `fulfillment.cancel`, `fiscal.invoice.cancel`, `tax.commit` y
 `tax.reverse` (`Contract.PinRequired`). Sin `Provider`, `Engine.Query` responde
 `ErrProviderRequired` sin invocar a nadie. El proveedor fijado debe estar
@@ -87,13 +89,48 @@ Reglas para el host:
 
 ## Operaciones mutantes: idempotencia obligatoria
 
-`payments.session`, `payments.refund`, `shipping.label`, `fulfillment.create`,
+`payments.session`, `payments.submit`, `payments.refund`, `shipping.label`, `fulfillment.create`,
 `fiscal.invoice.create`, `tax.commit` y `tax.reverse` mueven dinero o tienen
 efectos irreversibles (`Contract.Idempotent`):
 
 - `idempotency_key` es **requerida** (cadena no vacía, estable por operación de negocio, p. ej. `ship-{order_ref}`); el Executor rechaza la llamada con `ErrIdempotencyRequired` sin invocar. Se entrega al proveedor en la entrada mapeada y en `Call.IdempotencyKey`; el proveedor debe deduplicar con ella y devolver el resultado original en un reintento.
 - Plazo por omisión **30 s** (`MutatingTimeout`), no 8 s.
 - Si vence el plazo (o el llamador cancela con la llamada en vuelo) el resultado es **indeterminado**: el error envuelve `ErrTimeout` (o el error del contexto) y `ErrIndeterminate`, `Result.Indeterminate()` es `true` y el sobre JSON lleva `"indeterminate": true`. La llamada al proveedor puede seguir y terminar con éxito. El host no reintenta con otra llave ni da la operación por fallida: concilia con `payments.status` / `shipping.track` o reintenta con la **misma** llave.
+
+## Pago integrado (flujo embebido): `session.flow`, `client` y `submit`
+
+El comprador paga **en la página de la tienda**, sin salir a la página del
+proveedor. Es aditivo: una tienda que no manda `flow` obtiene exactamente lo de
+siempre (redirección), y un proveedor que no declara `client` ni `submit` sigue
+sirviendo solo ese flujo.
+
+Secuencia (`flow = embedded`):
+
+1. **Pintar.** Antes de crear nada, el host llama `commerce.payments.client` **a cada proveedor candidato por su nombre** (`Query.Provider`; no es fan-out: una llamada por proveedor, cada una con su plazo). La salida dice qué opciones existen (`card`, `cash`, `wallet`, `credits`), cuáles salen de la página (`redirect: true`), la `public_key` y el `sdk_url` del SDK del proveedor, los puntos de efectivo, el tope de cuotas, los orígenes para la CSP (`csp`) y el mercado y modo (`market`, `test_mode`). Solo datos **públicos**: el contrato no tiene ningún campo para un secreto.
+2. **Crear la sesión.** `commerce.payments.session` con `flow = embedded` (y `method_hint` = la opción elegida). La selección del proveedor es la de siempre: el elegido para ese mercado, luego el de la organización, luego el único. El proveedor contesta con `flow` (el que **realmente** atendió; ausente = `redirect`, un proveedor anterior al flujo) y `client`. `instructions.brick` y `redirect_url` se conservan, y sirven de respaldo si el SDK no carga.
+3. **Cobrar.** `commerce.payments.submit`, **fijado** al proveedor dueño de la sesión (`PinRequired`) e **idempotente**. El navegador solo aporta `provider_data` (lo que el SDK del proveedor le entregó: token de tarjeta, id del método, emisor, cuotas, punto de efectivo; nunca un número de tarjeta). **El monto y la moneda los pone el host** desde su propio documento; el proveedor rechaza (`price_mismatch`) cualquier otro monto que venga dentro de `provider_data`, valida el método y las cuotas contra la configuración del mercado (`method_not_allowed`, `installments_exceeded`) y usa la configuración del `market` recibido.
+
+Salida de `submit`: la de `confirm` (`status`, `provider_ref`, `amount`, `currency`, `status_detail`…) más:
+
+| Campo | Qué hace la tienda |
+|---|---|
+| `action.type = none` | nada: lee `status` |
+| `action.type = challenge` | muestra el reto del banco (3DS) **dentro** de la página con `action.challenge`, y sigue con `payments.status` |
+| `action.type = voucher` | muestra la ficha (`action.voucher`: punto, referencia, código de barras, CLABE, vencimiento) |
+| `action.type = redirect` | abre `action.redirect_url` |
+| `decline_code` | motivo neutro de un rechazo (`DeclineCodes`): la tienda tiene el texto; nunca se muestra el código crudo del proveedor |
+| `retryable` | el comprador puede intentar de nuevo en el mismo checkout |
+
+Reglas:
+
+- **Idempotencia.** `idempotency_key` es obligatoria y es **una por intento** (no por checkout): un reintento del mismo intento (red caída, doble clic) reusa la llave y obtiene la respuesta original sin cobrar dos veces; otra tarjeta es otro intento y lleva otra llave. Como todo contrato mutante: plazo de 30 s, y un plazo vencido es **indeterminado** (se concilia con `payments.status`, no se reintenta con otra llave).
+- **Sin cobro confirmado no hay pedido.** La respuesta de `submit` es una lectura del proveedor (`PaymentEventSources` gana `submit`), pero un `pending`, un `requires_action` o una ficha **no** son un cobro: solo `paid` (verificado como cualquier `confirm`) cierra el pago. Los avisos posteriores (webhook, barrido) siguen siendo la red de seguridad.
+- **Política de eventos de dinero, sin cambios.** `commerce.payments.confirmed` lo siguen emitiendo solo quienes proveen alguna capacidad `commerce.payments.*`; los contratos nuevos están en ese mismo dominio y no abren otro camino de emisión.
+- **Evolución.** La llave no lleva sufijo de versión (el registro no versiona por llave: `@1` no es una llave válida). Un contrato evoluciona **solo** con campos opcionales de entrada o salida, valores de enum añadidos al final y contratos nuevos; nunca se quita, renombra, cambia de tipo ni se vuelve requerido un campo. Así un proveedor construido contra la forma de hoy sigue validando.
+
+### Salud y notificaciones de pago
+
+`commerce.payments.notification.inspect` (pura: sin red ni escritura) dice si la firma de un aviso es válida (`firma_ok`, `firma_invalida`, `sin_firma`, `sin_secreto`) y qué recurso nombra. `commerce.payments.notification.resolve` lee ese recurso **por id** en la API del proveedor (el cuerpo del aviso nunca se cree) y responde la salida de `status`; valida que el id tenga la forma de los del proveedor (`invalid_input` si no, `not_found` si no existe). `commerce.payments.health` devuelve el autodiagnóstico del conector (`checks[]` con `key`, `ok`, `level`, `message`), sin revelar secretos. Los tres van fijados al proveedor de la ruta del webhook. El diario de avisos, los reintentos y las incidencias viven en el paquete `payments/inbox`, no en `capability`.
 
 ## Reglas de `commerce.payments.confirm` (webhooks)
 
@@ -511,6 +548,50 @@ Salida:
 | `seller_oauth` | boolean |  | seller accounts are linked through the provider OAuth |
 | `test_mode` | boolean |  | the configured credentials are sandbox credentials |
 
+### `commerce.payments.client`
+
+what this provider declares so the storefront paints its payment in the page (options, public key, SDK, CSP origins, market, mode); read only, no secrets. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `market` | string | sí | market code |
+| `currency` | currency | sí |  |
+| `amount` | decimal |  | cart total, when the options depend on it (installments) |
+| `locale` | string |  | preferred locale (es-MX) |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `kind` | string | sí | storefront adapter that knows the provider SDK (e.g. mercadopago_bricks, stripe_elements) |
+| `sdk_url` | string |  | SDK script to load, https; absent when the options need no script |
+| `public_key` | string |  | public key / publishable identifier of the SDK |
+| `locale` | string |  | locale the SDK is painted in (es-MX) |
+| `market` | string |  | market code the answer is for |
+| `options` | array<object> | sí | payment options, in the order to paint them |
+| `options[].key` | string: card \| cash \| wallet \| credits | sí | which option |
+| `options[].family` | string |  | method family as in commerce.payments.capabilities methods (card, msi, oxxo, spei, wallet, bnpl...) |
+| `options[].redirect` | boolean | sí | true: the option leaves the page (create the session with flow redirect and method_hint = key) |
+| `options[].label` | string |  | provider default label; the storefront owns the final text |
+| `options[].max_installments` | integer |  | card: highest installment count offered (the provider re-checks it on submit) |
+| `options[].points` | array<object> |  | cash: selectable points |
+| `options[].points[].id` | string | sí | stable id of the row the buyer picks |
+| `options[].points[].payment_method_id` | string | sí | provider method id sent back in submit provider_data |
+| `options[].points[].payment_point` | string |  | provider point id when several points share one method id; absent when the method is the point |
+| `options[].points[].label` | string | sí | name shown to the buyer |
+| `options[].points[].logo_url` | string |  |  |
+| `options[].points[].group` | string: main \| more |  | main (default): first list; more: behind the 'more' toggle |
+| `options[].label_max` | string |  | credits: the provider's own wording of the maximum term, when it knows it |
+| `csp` | object |  | origins the SDK needs |
+| `csp.script` | array<string> |  | script-src origins |
+| `csp.frame` | array<string> |  | frame-src origins |
+| `csp.connect` | array<string> |  | connect-src origins |
+| `csp.img` | array<string> |  | img-src origins |
+| `csp.form` | array<string> |  | form-action origins |
+| `test_mode` | boolean |  | the public key belongs to the provider sandbox |
+
 ### `commerce.payments.confirm`
 
 verify and normalize a provider webhook/notification into a payment status. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
@@ -551,6 +632,95 @@ Salida:
 | `seller` | Seller |  | marketplace seller the payment was charged for |
 | `provider_status` | string |  | provider wording / code of the status, untranslated |
 | `status_detail` | string |  | provider reason (rejection code, expiry, ...) |
+| `also_captured` | array<string> |  | provider refs of OTHER captured payments of the same order_ref (double charge); the one answered stays in provider_ref |
+
+### `commerce.payments.health`
+
+connector self-diagnosis (credentials, mode, webhook secret, notification URL) without revealing any secret. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `market` | string |  | market code, when the configuration differs per market |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `checks` | array<object> | sí |  |
+| `checks[].key` | string | sí | stable check id (credentials, mode, webhook_secret, notification_url...) |
+| `checks[].ok` | boolean | sí |  |
+| `checks[].level` | string: info \| warning \| critical |  | severity when ok is false (default warning) |
+| `checks[].message` | string |  | what is wrong or how to fix it; never a secret |
+| `test_mode` | boolean |  | the configured credentials are sandbox credentials |
+
+### `commerce.payments.notification.inspect`
+
+read a provider notification WITHOUT network or writes: verdict on its signature and which resource it names; the host calls it right after persisting the notification. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `method` | string | sí | HTTP method of the notification |
+| `query` | object |  | query-string parameters |
+| `headers` | object |  | request headers, lowercase keys |
+| `raw_body_b64` | string |  | exact body bytes, base64 (the signature may cover them) |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `auth` | string: firma_ok \| firma_invalida \| sin_firma \| sin_secreto | sí | signature verdict |
+| `auth_reason` | string |  | why (signature_mismatch, timestamp_out_of_tolerance, matched_previous...) |
+| `resource_kind` | string |  | what the notification names (payment, refund, dispute...) |
+| `resource_id` | string |  | id of that resource at the provider |
+| `event_id` | string |  | provider event id (dedupe) |
+| `livemode` | boolean |  | false = sandbox notification |
+
+### `commerce.payments.notification.resolve`
+
+read the resource a notification names through the provider API, by id (the notification body is never trusted); same output as commerce.payments.status; the host rate-limits and dedupes it when auth is not firma_ok. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
+
+Códigos de error del proveedor: `invalid_input`, `not_found`.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `resource_kind` | string | sí | as inspect answered |
+| `resource_id` | string | sí | must have the shape of the provider's ids, else invalid_input |
+| `auth` | string: firma_ok \| firma_invalida \| sin_firma \| sin_secreto |  | inspect verdict, for the provider's own logging |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `order_ref` | string | sí | the order_ref sent to commerce.payments.session |
+| `status` | string: pending \| requires_action \| authorized \| paid \| failed \| cancelled \| expired \| refunded \| partially_refunded \| at_device \| cancelling | sí |  |
+| `amount` | decimal | sí | amount of this status (paid/refunded) |
+| `currency` | currency | sí |  |
+| `provider_ref` | string | sí | provider payment id |
+| `event_id` | string |  | provider event id (dedupe on provider+event_id) |
+| `kind` | string: payment \| refund \| dispute |  | default payment |
+| `method` | string |  | card / msi / oxxo / spei / wallet / bnpl / bank_transfer / cash |
+| `installments` | integer |  |  |
+| `paid_at` | string |  | RFC 3339 |
+| `occurred_at` | string |  | RFC 3339 |
+| `amount_refunded` | decimal |  |  |
+| `fee` | decimal |  | provider fee |
+| `net_amount` | decimal |  | amount minus fee |
+| `test_mode` | boolean |  | event from the provider sandbox |
+| `channel` | string: terminal \| online \| qr \| link \| cash |  | how the buyer paid; default online |
+| `session_id` | string |  | session / preference / terminal order id the payment belongs to |
+| `device_id` | string |  | terminal / cash recycler that took the payment |
+| `card` | Card |  | card details when the method is a card |
+| `cash` | CashTender |  | cash device details |
+| `seller` | Seller |  | marketplace seller the payment was charged for |
+| `provider_status` | string |  | provider wording / code of the status, untranslated |
+| `status_detail` | string |  | provider reason (rejection code, expiry, ...) |
+| `also_captured` | array<string> |  | provider refs of OTHER captured payments of the same order_ref (double charge); the one answered stays in provider_ref |
 
 ### `commerce.payments.reconcile`
 
@@ -594,6 +764,7 @@ Salida:
 | `payments[].seller` | Seller |  | marketplace seller the payment was charged for |
 | `payments[].provider_status` | string |  | provider wording / code of the status, untranslated |
 | `payments[].status_detail` | string |  | provider reason (rejection code, expiry, ...) |
+| `payments[].also_captured` | array<string> |  | provider refs of OTHER captured payments of the same order_ref (double charge); the one answered stays in provider_ref |
 | `next_cursor` | string |  | absent on the last page |
 
 ### `commerce.payments.refund`
@@ -655,7 +826,8 @@ Entrada:
 | `notify_url` | string |  | webhook URL the host exposes for commerce.payments.confirm |
 | `buyer` | Buyer |  |  |
 | `methods` | array<string> |  | allowed method families: card / msi / oxxo / spei / wallet / bnpl / bank_transfer / cash |
-| `method_hint` | string |  | preselected method family |
+| `method_hint` | string |  | preselected method family or option (card, cash, wallet and credits are the embedded-payment options) |
+| `flow` | string: redirect \| embedded |  | redirect (default): hosted checkout, the buyer leaves the page; embedded: the provider declares in client what the storefront paints and the host charges with commerce.payments.submit. A provider that does not support embedded answers redirect |
 | `breakdown` | object |  | amount components (all decimals) |
 | `breakdown.subtotal` | decimal |  |  |
 | `breakdown.shipping` | decimal |  |  |
@@ -688,6 +860,8 @@ Salida:
 | `test_mode` | boolean |  | session created against the provider sandbox |
 | `qr_data` | string |  | payload to render as a QR (channel qr) |
 | `qr_image_url` | string |  | ready-made QR image |
+| `flow` | string: redirect \| embedded |  | flow the provider actually honored; absent = redirect (a provider that predates embedded payment) |
+| `client` | object |  | public data to paint the provider form in the storefront (same shape as commerce.payments.client; provider extras allowed); instructions.brick stays for older stores |
 
 ### `commerce.payments.status`
 
@@ -728,6 +902,82 @@ Salida:
 | `seller` | Seller |  | marketplace seller the payment was charged for |
 | `provider_status` | string |  | provider wording / code of the status, untranslated |
 | `status_detail` | string |  | provider reason (rejection code, expiry, ...) |
+| `also_captured` | array<string> |  | provider refs of OTHER captured payments of the same order_ref (double charge); the one answered stays in provider_ref |
+
+### `commerce.payments.submit`
+
+charge what the buyer's browser tokenized with the provider SDK (embedded payment); the host sets amount and currency, the provider rejects any other amount; pinned to the session's provider and idempotent. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **30s** · mutante (idempotente).
+
+Códigos de error del proveedor: `invalid_input`, `price_mismatch`, `method_not_allowed`, `installments_exceeded`.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `session_id` | string | sí | commerce.payments.session session_id |
+| `order_ref` | string | sí | order id/number in OPS (external_reference) |
+| `amount` | decimal | sí | total to charge, set by the host from its own document |
+| `currency` | currency | sí |  |
+| `method` | string: card \| cash \| bank_transfer | sí | family the buyer chose |
+| `provider_data` | object | sí | opaque: what the provider SDK handed the browser (card token, method id, issuer, installments, payer id, cash point). Never a card number |
+| `idempotency_key` | string | sí | required; stable per business operation (reuse it on every retry); the provider must dedupe on it; one per attempt, not per checkout |
+| `device_session_id` | string |  | anti-fraud device fingerprint from the provider SDK; pass through, never store or log |
+| `buyer` | Buyer |  | from the host's record, not the browser |
+| `shipping_address` | Address |  | from the host's record, not the browser |
+| `lines` | array<Line> |  |  |
+| `market` | string |  | market code the order was placed in; the provider uses that market's configuration |
+| `metadata` | object |  |  |
+| `metadata.checkout_id` | string |  | checkout id in OPS |
+| `metadata.attempt` | integer |  | attempt number of the checkout |
+| `expires_at` | string |  | RFC 3339 expiry of a cash / transfer voucher |
+| `return_url` | string |  | where a challenge returns the buyer |
+| `notify_url` | string |  | webhook URL the host exposes (as in commerce.payments.session) |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `order_ref` | string | sí | the order_ref sent to commerce.payments.session |
+| `status` | string: pending \| requires_action \| authorized \| paid \| failed \| cancelled \| expired \| refunded \| partially_refunded \| at_device \| cancelling | sí |  |
+| `amount` | decimal | sí | amount of this status (paid/refunded) |
+| `currency` | currency | sí |  |
+| `provider_ref` | string | sí | provider payment id |
+| `event_id` | string |  | provider event id (dedupe on provider+event_id) |
+| `kind` | string: payment \| refund \| dispute |  | default payment |
+| `method` | string |  | card / msi / oxxo / spei / wallet / bnpl / bank_transfer / cash |
+| `installments` | integer |  |  |
+| `paid_at` | string |  | RFC 3339 |
+| `occurred_at` | string |  | RFC 3339 |
+| `amount_refunded` | decimal |  |  |
+| `fee` | decimal |  | provider fee |
+| `net_amount` | decimal |  | amount minus fee |
+| `test_mode` | boolean |  | event from the provider sandbox |
+| `channel` | string: terminal \| online \| qr \| link \| cash |  | how the buyer paid; default online |
+| `session_id` | string |  | session / preference / terminal order id the payment belongs to |
+| `device_id` | string |  | terminal / cash recycler that took the payment |
+| `card` | Card |  | card details when the method is a card |
+| `cash` | CashTender |  | cash device details |
+| `seller` | Seller |  | marketplace seller the payment was charged for |
+| `provider_status` | string |  | provider wording / code of the status, untranslated |
+| `status_detail` | string |  | provider reason (rejection code, expiry, ...) |
+| `also_captured` | array<string> |  | provider refs of OTHER captured payments of the same order_ref (double charge); the one answered stays in provider_ref |
+| `action` | object |  | what the storefront does next; absent = none |
+| `action.type` | string: none \| challenge \| voucher \| redirect | sí | none: nothing to do; challenge: show the bank challenge (3DS) inside the page; voucher: show the cash / transfer voucher; redirect: send the buyer to redirect_url |
+| `action.challenge` | object |  | type challenge: what the provider's SDK needs to mount the bank challenge |
+| `action.challenge.url` | string |  | challenge URL (external_resource_url) |
+| `action.challenge.creq` | string |  | challenge request, as the provider returns it |
+| `action.voucher` | object |  | type voucher: the offline payment slip (never a card number) |
+| `action.voucher.payment_point` | string |  | cash point or bank (oxxo, 7eleven, spei...) |
+| `action.voucher.reference` | string |  | payment reference to give at the point |
+| `action.voucher.voucher_url` | string |  | hosted voucher page (https) |
+| `action.voucher.barcode` | string |  | barcode content |
+| `action.voucher.clabe` | string |  | bank transfer account (CLABE) |
+| `action.voucher.amount` | decimal |  | exact amount to pay |
+| `action.voucher.currency` | currency |  |  |
+| `action.voucher.expires_at` | string |  | RFC 3339; after it the voucher no longer pays |
+| `action.redirect_url` | string |  | type redirect: hosted page the buyer must open |
+| `decline_code` | string: insufficient_funds \| invalid_cvc \| invalid_expiry \| invalid_card_data \| call_issuer \| card_disabled \| duplicate \| max_attempts \| authentication_failed \| declined |  | neutral rejection reason when status is failed |
+| `retryable` | boolean |  | failed: the buyer may try again with the same checkout (another card, fixing a field) |
 
 ### `commerce.payments.terminal.create`
 

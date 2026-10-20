@@ -42,6 +42,32 @@ const (
 	CommercePaymentsTerminalDevices = "commerce.payments.terminal.devices"
 )
 
+// Embedded payment (docs/capabilities-commerce.md, "Pago integrado"): the
+// buyer pays on the storefront page itself. The host creates the session with
+// flow=embedded, reads what the provider declares to paint the form with
+// commerce.payments.client, and charges with commerce.payments.submit. All
+// additive: a store that never sends flow keeps the redirect flow untouched.
+const (
+	// CommercePaymentsSubmit charges what the buyer's browser tokenized with
+	// the provider's own SDK. Idempotent and pinned to the provider that owns
+	// the session; the amount is set by the host, never by the browser.
+	CommercePaymentsSubmit = "commerce.payments.submit"
+	// CommercePaymentsClient is what a provider declares so the storefront can
+	// paint its payment options before any checkout exists. A pinned query
+	// without effects; the cart asks every candidate provider by name.
+	CommercePaymentsClient = "commerce.payments.client"
+)
+
+// Payment-notification health (docs/DISENO-PAGOS-A-PRUEBA-DE-FALLOS §13.2):
+// the host persists every provider notification, asks the provider to inspect
+// it (pure) and to resolve the resource through the provider API, and reports
+// the connector health. The journal itself lives in payments/inbox.
+const (
+	CommercePaymentsNotificationInspect = "commerce.payments.notification.inspect"
+	CommercePaymentsNotificationResolve = "commerce.payments.notification.resolve"
+	CommercePaymentsHealth              = "commerce.payments.health"
+)
+
 // CommercePaymentsConfirmed is the normalized payment-update event every
 // payment provider emits from its own webhook (or staff action, for manual
 // payments): {provider, result}, where result is the output of
@@ -88,7 +114,46 @@ var (
 	// CardTypes classify a card payment (fiscal payment form: credit vs debit).
 	CardTypes = []string{"credit", "debit", "prepaid", "other"}
 	// PaymentEventSources tell how an update was observed.
-	PaymentEventSources = []string{"webhook", "poll", "reconcile", "staff"}
+	//
+	// submit (the response of commerce.payments.submit), hint (a
+	// notification whose signature could not be trusted: only the
+	// resource id was used, to read the API) and return (the buyer came
+	// back to the storefront) were added by the embedded-payment
+	// contracts; appended, so the original four keep their order.
+	PaymentEventSources = []string{"webhook", "poll", "reconcile", "staff", "submit", "hint", "return"}
+	// PaymentFlows is how the buyer completes the payment: redirect (default;
+	// hosted checkout, the buyer leaves the storefront) or embedded (the
+	// provider's form is painted in the storefront page).
+	PaymentFlows = []string{"redirect", "embedded"}
+	// SubmitMethods are the families commerce.payments.submit charges:
+	// a tokenized card, a cash voucher (OXXO, 7 Eleven...) or a bank
+	// transfer (SPEI).
+	SubmitMethods = []string{"card", "cash", "bank_transfer"}
+	// PaymentActionTypes is what the storefront must do after a submit:
+	// nothing, show the bank challenge (3DS) inside the page, show the
+	// voucher, or send the buyer to a hosted page.
+	PaymentActionTypes = []string{"none", "challenge", "voucher", "redirect"}
+	// DeclineCodes are the neutral rejection reasons every provider maps
+	// its own codes onto, so the storefront owns the buyer-facing text and
+	// never shows a raw provider code. A provider that cannot tell uses
+	// declined; risk rejections are always declined (never reveal why).
+	DeclineCodes = []string{
+		"insufficient_funds", "invalid_cvc", "invalid_expiry", "invalid_card_data",
+		"call_issuer", "card_disabled", "duplicate", "max_attempts",
+		"authentication_failed", "declined",
+	}
+	// ClientOptionKeys are the payment options a provider declares to the
+	// storefront: card (form in the page), cash (voucher), wallet (the
+	// provider's account) and credits (the provider's installment credit).
+	// wallet and credits normally leave the page (redirect=true).
+	ClientOptionKeys = []string{"card", "cash", "wallet", "credits"}
+	// ClientPointGroups place a cash point on the first list or behind "more".
+	ClientPointGroups = []string{"main", "more"}
+	// NotificationAuths is the verdict of commerce.payments.notification.inspect
+	// on the signature of a notification.
+	NotificationAuths = []string{"firma_ok", "firma_invalida", "sin_firma", "sin_secreto"}
+	// HealthLevels is the severity of a failed health check.
+	HealthLevels = []string{"info", "warning", "critical"}
 	// RefundStatuses is the normalized refund lifecycle.
 	RefundStatuses = []string{"pending", "succeeded", "failed", "manual_required"}
 	// CancelOutcomes answer commerce.payments.cancel: cancelled (confirmed),
@@ -293,6 +358,8 @@ var IdempotentContracts = map[string]bool{
 	CommercePaymentsSession: true,
 	CommercePaymentsRefund:  true,
 	CommercePaymentsCancel:  true,
+	// A duplicated submit charges the buyer twice.
+	CommercePaymentsSubmit: true,
 	// A duplicated terminal order charges the buyer twice.
 	CommercePaymentsTerminalCreate: true,
 	CommerceTaxCommit:              true,
@@ -318,12 +385,20 @@ var PinnedContracts = map[string]bool{
 	CommercePaymentsRefundStatus:    true,
 	CommercePaymentsTerminalCreate:  true,
 	CommercePaymentsTerminalDevices: true,
-	CommerceTaxCommit:               true,
-	CommerceTaxReverse:              true,
-	CommerceShippingCancel:          true,
-	CommerceShippingTrack:           true,
-	CommerceFulfillmentCancel:       true,
-	FiscalInvoiceCancel:             true,
+	// Submit belongs to the provider that owns the session; client, inspect,
+	// resolve and health are asked of a named provider (webhook route, store
+	// listing every candidate): selection never answers for another provider.
+	CommercePaymentsSubmit:              true,
+	CommercePaymentsClient:              true,
+	CommercePaymentsNotificationInspect: true,
+	CommercePaymentsNotificationResolve: true,
+	CommercePaymentsHealth:              true,
+	CommerceTaxCommit:                   true,
+	CommerceTaxReverse:                  true,
+	CommerceShippingCancel:              true,
+	CommerceShippingTrack:               true,
+	CommerceFulfillmentCancel:           true,
+	FiscalInvoiceCancel:                 true,
 }
 
 func init() {
@@ -367,7 +442,7 @@ func commerceEvents() []EventContract {
 }
 
 func commerceContracts() []Contract {
-	cs := commerceContractList()
+	cs := append(commerceContractList(), embeddedPaymentContracts()...)
 	// commerce.payments.status answers exactly what confirm answers.
 	var confirm, refund *Schema
 	for _, c := range cs {
@@ -380,8 +455,11 @@ func commerceContracts() []Contract {
 	}
 	for i := range cs {
 		switch cs[i].Key {
-		case CommercePaymentsStatus:
+		case CommercePaymentsStatus, CommercePaymentsNotificationResolve:
 			cs[i].Output = confirm
+		case CommercePaymentsSubmit:
+			// submit answers the confirm shape plus what to do next.
+			cs[i].Output = submitOutput(confirm)
 		case CommercePaymentsRefundStatus:
 			cs[i].Output = refund
 		case CommercePaymentsReconcile:
@@ -418,7 +496,8 @@ func commerceContractList() []Contract {
 				opt("notify_url", TypeString, "webhook URL the host exposes for commerce.payments.confirm"),
 				obj(opt("buyer", TypeObject, ""), BuyerSchema),
 				strs(opt("methods", TypeArray, "allowed method families: card / msi / oxxo / spei / wallet / bnpl / bank_transfer / cash")),
-				opt("method_hint", TypeString, "preselected method family"),
+				opt("method_hint", TypeString, "preselected method family or option (card, cash, wallet and credits are the embedded-payment options)"),
+				enum(opt("flow", TypeString, "redirect (default): hosted checkout, the buyer leaves the page; embedded: the provider declares in client what the storefront paints and the host charges with commerce.payments.submit. A provider that does not support embedded answers redirect"), PaymentFlows),
 				obj(opt("breakdown", TypeObject, "amount components (all decimals)"), schema(
 					opt("subtotal", TypeDecimal, ""),
 					opt("shipping", TypeDecimal, ""),
@@ -449,6 +528,8 @@ func commerceContractList() []Contract {
 				opt("test_mode", TypeBoolean, "session created against the provider sandbox"),
 				opt("qr_data", TypeString, "payload to render as a QR (channel qr)"),
 				opt("qr_image_url", TypeString, "ready-made QR image"),
+				enum(opt("flow", TypeString, "flow the provider actually honored; absent = redirect (a provider that predates embedded payment)"), PaymentFlows),
+				obj(opt("client", TypeObject, "public data to paint the provider form in the storefront (same shape as commerce.payments.client; provider extras allowed); instructions.brick stays for older stores"), openSchema(ClientSchema)),
 			),
 		},
 		{
@@ -484,6 +565,7 @@ func commerceContractList() []Contract {
 				obj(opt("seller", TypeObject, "marketplace seller the payment was charged for"), SellerSchema),
 				opt("provider_status", TypeString, "provider wording / code of the status, untranslated"),
 				opt("status_detail", TypeString, "provider reason (rejection code, expiry, ...)"),
+				strs(opt("also_captured", TypeArray, "provider refs of OTHER captured payments of the same order_ref (double charge); the one answered stays in provider_ref")),
 			),
 		},
 		{

@@ -9,6 +9,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Contratos del pago integrado (`capability`).** Ver
+  `docs/capabilities-commerce.md`, «Pago integrado». Aditivo y retrocompatible:
+  no cambia ningún campo requerido de `commerce.payments.session/confirm/status/
+  refund/cancel/reconcile`.
+  - `commerce.payments.submit`: cobro idempotente, fijado al proveedor de la
+    sesión (`IdempotentContracts` + `PinnedContracts`, plazo 30 s). Entrada con
+    `session_id`, `order_ref`, `amount`, `currency`, `method`
+    (`card|cash|bank_transfer`), `provider_data` opaco e `idempotency_key`
+    (+ `device_session_id`, `buyer`, `shipping_address`, `lines`, `market`,
+    `metadata`, `expires_at`, `return_url`, `notify_url`). Salida = `confirm` +
+    `action` (`none|challenge|voucher|redirect`), `decline_code`
+    (`DeclineCodes`) y `retryable`.
+  - `commerce.payments.client` (consulta fijada, sin efectos): opciones
+    (`card|cash|wallet|credits`), `public_key`, `sdk_url`, puntos de efectivo,
+    `csp` por origen, `market`, `test_mode`. Sin campo alguno para secretos.
+  - `commerce.payments.session`: entrada `flow` (`redirect|embedded`),
+    `method_hint` documenta `card|cash|wallet|credits`; salida `flow` y `client`.
+  - `commerce.payments.notification.inspect`, `.notification.resolve` y
+    `.health` (contratos para el diario y la salud del conector de DPF; el
+    diario vive en `payments/inbox`). `status`/`confirm`/`reconcile` ganan la
+    salida opcional `also_captured`.
+  - `PaymentEventSources` añade `submit`, `hint` y `return` al final; nuevas
+    listas `PaymentFlows`, `SubmitMethods`, `PaymentActionTypes`,
+    `DeclineCodes`, `ClientOptionKeys`, `ClientPointGroups`,
+    `NotificationAuths`, `HealthLevels` y esquemas `ClientSchema`,
+    `PaymentActionSchema`. Propuesta de versión: **v0.225.0** (minor).
+
 - **Coherencia de cachés (`cachecoherence`, `database/staleplan`).** Ver
   `docs/CACHE-COHERENCE.md`.
   - `cachecoherence.Bump(reason, WithOrg, WithAddon)`: épocas por
