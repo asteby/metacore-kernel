@@ -36,6 +36,28 @@ const (
 	ReviewProfile               = "legacybridge"
 )
 
+type invalidErr struct{ err error }
+
+func (e invalidErr) Error() string { return e.err.Error() }
+func (e invalidErr) Unwrap() error { return e.err }
+
+// Invalid marca un error del Sink que es del dato y no de la infraestructura
+// (una columna que no se puede convertir, una FK que no es un id externo, una
+// llave única que choca): el envelope va a revisión y el lote sigue, en lugar
+// de detener el cursor reintentando para siempre una fila envenenada.
+func Invalid(err error) error {
+	if err == nil {
+		return nil
+	}
+	return invalidErr{err}
+}
+
+// IsInvalid reporta si err se marcó con Invalid.
+func IsInvalid(err error) bool {
+	var e invalidErr
+	return errors.As(err, &e)
+}
+
 // Write es lo que el host escribe por un envelope ya resuelto.
 type Write struct {
 	Org      string
@@ -218,6 +240,9 @@ func (a *Applier) Apply(ctx context.Context, org string, env Envelope) Result {
 	if err != nil {
 		if errors.Is(err, ErrRefConflict) {
 			return a.review(ctx, org, env.Source, env, ReviewCodeRefConflict, err.Error())
+		}
+		if IsInvalid(err) {
+			return a.review(ctx, org, env.Source, env, ReviewCodeInvalid, err.Error())
 		}
 		a.cfg.Logger.Error("aplicar envelope", "org", org, "entity", env.Entity, "external_id", env.ExternalID, "err", err)
 		return Result{Entity: env.Entity, ExternalID: env.ExternalID, Outcome: OutcomeError, Detail: err.Error()}
