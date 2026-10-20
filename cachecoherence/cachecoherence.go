@@ -254,6 +254,24 @@ func (r *Registry) Epoch(orgID, addonKey string) Epoch {
 	return e
 }
 
+// ViewEpoch is the epoch of "everything an organization's UI is built from":
+// the global component, the organization's, and the SUM of every addon's. Any
+// bump that can change what that organization sees (global, its own, or any
+// addon's) moves it, which is what a single X-Cache-Epoch response header for
+// the whole SPA needs; the sum is monotonic because every counter is.
+func (r *Registry) ViewEpoch(orgID string) Epoch {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	e := Epoch{Global: r.global}
+	if orgID != "" {
+		e.Org = r.orgs[orgID]
+	}
+	for _, v := range r.addons {
+		e.Addon += v
+	}
+	return e
+}
+
 // Bump invalidates every derived cache for the given scope, in order, and then
 // publishes the new epoch. It never returns an error to the mutation path that
 // called it (a cache problem must not fail an install); use [Registry.BumpContext]
@@ -518,6 +536,9 @@ func Register(name string, order int, fn InvalidateFunc) (unregister func()) {
 
 // Subscribe attaches to [Default].
 func Subscribe(fn func(Event)) (cancel func()) { return Default.Subscribe(fn) }
+
+// ViewEpoch is [Registry.ViewEpoch] on [Default].
+func ViewEpoch(orgID string) Epoch { return Default.ViewEpoch(orgID) }
 
 // CurrentEpoch is [Registry.Epoch] on [Default].
 func CurrentEpoch(orgID, addonKey string) Epoch { return Default.Epoch(orgID, addonKey) }

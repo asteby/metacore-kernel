@@ -202,3 +202,26 @@ func TestStartEpochDiffersAcrossRegistries(t *testing.T) {
 		t.Fatal("global epoch must start non-zero")
 	}
 }
+
+func TestViewEpochMovesOnAnyBumpThatCanChangeTheOrgsView(t *testing.T) {
+	r := NewRegistry()
+	v0 := r.ViewEpoch("A")
+	r.Bump("addon-only", WithAddon("crm"))
+	v1 := r.ViewEpoch("A")
+	if v1 == v0 {
+		t.Fatal("an addon bump must move every organization's view")
+	}
+	r.Bump("other-org", WithOrg("B"))
+	if r.ViewEpoch("A") != v1 {
+		t.Fatal("another organization's bump moved this organization's view")
+	}
+	r.Bump("mine", WithOrg("A"))
+	v2 := r.ViewEpoch("A")
+	if v2 == v1 {
+		t.Fatal("own bump did not move the view")
+	}
+	r.Bump("global")
+	if r.ViewEpoch("A") == v2 {
+		t.Fatal("global bump did not move the view")
+	}
+}
