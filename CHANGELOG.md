@@ -60,6 +60,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `Reconcile`: recorre la tabla por llave contra `bridge_refs`; reemite lo
     que falta o cambió sin tocar `updated_at` y emite `op=delete` de las llaves
     borradas en duro (comprobando antes que de verdad no existan).
+  - `key_type` (`integer` por omisión, o `text`): una llave de texto se ordena y
+    compara en binario (`BINARY` / `COLLATE "C"` / `COLLATE BINARY`), igual que
+    el desempate del cursor, así una collation que no es binaria no lo atasca.
+    Un cursor que no avanza es `ErrCursorStalled` en `StreamReport.Error`, no un
+    bucle silencioso.
 
 ### Fixed
 

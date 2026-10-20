@@ -61,7 +61,7 @@ func (s *Source) Sync(ctx context.Context, org string, cursors CursorReader, ing
 		if err != nil {
 			rep.Error = err.Error()
 		}
-		if t, _, ok, _ := decodeCursor(rep.Cursor); ok {
+		if t, _, ok, _ := decodeCursor(st, rep.Cursor); ok {
 			rep.Lag = s.now().Sub(t)
 		}
 		out = append(out, rep)
@@ -89,6 +89,10 @@ func (s *Source) syncStream(ctx context.Context, org string, st Stream, cursors 
 		res, err := ing.Ingest(ctx, org, b)
 		if err != nil {
 			return err
+		}
+		if !res.Advanced && lb.CompareCursors(res.Cursor, b.Cursor) < 0 && res.Counts[lb.OutcomeError] == 0 {
+			// Ni este lote ni otra corrida movieron el cursor hasta el del lote.
+			return fmt.Errorf("%w: %s quedó en %s y el lote llegaba a %s", ErrCursorStalled, st.Name, res.Cursor, b.Cursor)
 		}
 		rep.Batches++
 		for k, v := range res.Counts {
@@ -135,7 +139,7 @@ func (s *Source) Reconcile(ctx context.Context, org, stream string, refs RefRead
 	}
 	rep := ReconcileReport{Stream: st.Name}
 	d := s.Dialect
-	key := d.quote(st.Key)
+	key := d.keyExpr(st)
 	page := s.pageSize()
 	pending := lb.Batch{Source: s.Profile.System, Stream: st.Name}
 	flush := func(force bool) error {
@@ -231,7 +235,7 @@ func (s *Source) Reconcile(ctx context.Context, org, stream string, refs RefRead
 func (s *Source) exists(ctx context.Context, st Stream, key string) (bool, error) {
 	ph := &placeholders{d: s.Dialect}
 	rows, err := s.query(ctx, "SELECT "+s.Dialect.quote(st.Key)+" FROM "+s.Dialect.quote(st.Table)+
-		" WHERE "+s.Dialect.quote(st.Key)+" = "+ph.next()+" LIMIT 1", key)
+		" WHERE "+s.Dialect.keyExpr(st)+" = "+ph.next()+" LIMIT 1", key)
 	if err != nil {
 		return false, err
 	}

@@ -30,6 +30,23 @@ func (d Dialect) quote(ident string) string {
 	return `"` + ident + `"`
 }
 
+// keyExpr es la llave del flujo como expresión de orden y comparación. Una
+// llave de texto va en orden binario (bytes), el mismo que strings.Compare.
+func (d Dialect) keyExpr(st Stream) string {
+	k := d.quote(st.Key)
+	if st.KeyType != KeyText {
+		return k
+	}
+	switch d {
+	case MySQL:
+		return "BINARY " + k
+	case Postgres:
+		return k + ` COLLATE "C"`
+	default:
+		return k + " COLLATE BINARY"
+	}
+}
+
 // placeholders numera los parámetros ($1… en Postgres, ? en los demás).
 type placeholders struct {
 	d Dialect
@@ -143,21 +160,32 @@ func (s *Source) timeParam(wall time.Time) any {
 
 const keyPad = 20
 
-// encodeCursor: "<instante RFC3339Nano>#<llave>" con la llave numérica rellena
-// de ceros, para que lb.CompareCursors ordene igual que la consulta.
-func encodeCursor(instant time.Time, key any) string {
-	return instant.UTC().Format(time.RFC3339Nano) + "#" + encodeKey(key)
-}
-
-func encodeKey(key any) string {
-	k := valueString(key)
-	if n, err := strconv.ParseInt(k, 10, 64); err == nil && n >= 0 {
-		return fmt.Sprintf("%0*d", keyPad, n)
+// encodeCursor: "<instante RFC3339Nano>#<llave>". Una llave entera va rellena
+// de ceros y una de texto tal cual: en los dos casos lb.CompareCursors ordena
+// igual que la consulta (Dialect.keyExpr).
+func encodeCursor(st Stream, instant time.Time, key any) (string, error) {
+	k, err := encodeKey(st, key)
+	if err != nil {
+		return "", err
 	}
-	return k
+	return instant.UTC().Format(time.RFC3339Nano) + "#" + k, nil
 }
 
-func decodeCursor(c string) (time.Time, any, bool, error) {
+func encodeKey(st Stream, key any) (string, error) {
+	k := valueString(key)
+	if st.KeyType == KeyText {
+		return k, nil
+	}
+	n, err := strconv.ParseInt(k, 10, 64)
+	if err != nil || n < 0 {
+		return "", fmt.Errorf("sqlpoll: %s.%s = %q no es un entero no negativo (declara key_type \"text\")", st.Table, st.Key, k)
+	}
+	return fmt.Sprintf("%0*d", keyPad, n), nil
+}
+
+// decodeCursor devuelve el instante y la llave del cursor en el tipo de la
+// llave del flujo.
+func decodeCursor(st Stream, c string) (time.Time, any, bool, error) {
 	if c == "" {
 		return time.Time{}, nil, false, nil
 	}
@@ -166,13 +194,21 @@ func decodeCursor(c string) (time.Time, any, bool, error) {
 	if err != nil {
 		return time.Time{}, nil, false, fmt.Errorf("sqlpoll: cursor %q ilegible: %w", c, err)
 	}
-	if len(key) == keyPad {
-		if n, err := strconv.ParseInt(key, 10, 64); err == nil {
-			return t, n, true, nil
-		}
+	if st.KeyType == KeyText {
+		return t, key, true, nil
 	}
-	return t, key, true, nil
+	n, err := strconv.ParseInt(key, 10, 64)
+	if err != nil {
+		return time.Time{}, nil, false, fmt.Errorf("sqlpoll: cursor %q con llave no entera para %s", c, st.Name)
+	}
+	return t, n, true, nil
 }
+
+// ErrCursorStalled: la consulta devolvió un lote cuyo último cursor no es
+// mayor que el de partida. Nunca debería pasar con keyExpr; si pasa (una
+// collation o un tipo de llave mal declarado), el flujo se detiene con error
+// en vez de releer el mismo lote para siempre.
+var ErrCursorStalled = errors.New("sqlpoll: el cursor no avanza (el orden de la base no coincide con el del cursor; revisa key_type)")
 
 // --- lectura -------------------------------------------------------------------
 
@@ -228,12 +264,12 @@ func (s *Source) Poll(ctx context.Context, stream, cursor string) (lb.Batch, err
 	if st.UpdatedAt == "" {
 		return lb.Batch{}, fmt.Errorf("sqlpoll: el flujo %q no tiene updated_at; se sincroniza con Reconcile", stream)
 	}
-	after, afterKey, hasCursor, err := decodeCursor(cursor)
+	after, afterKey, hasCursor, err := decodeCursor(st, cursor)
 	if err != nil {
 		return lb.Batch{}, err
 	}
 	d, ph := s.Dialect, &placeholders{d: s.Dialect}
-	upd, key := d.quote(st.UpdatedAt), d.quote(st.Key)
+	upd, key := d.quote(st.UpdatedAt), d.keyExpr(st)
 	bound := s.toWall(s.now().Add(-s.settle()))
 	where := upd + " IS NOT NULL AND " + upd + " <= " + ph.next()
 	args := []any{s.timeParam(bound)}
@@ -263,7 +299,12 @@ func (s *Source) Poll(ctx context.Context, stream, cursor string) (lb.Batch, err
 		if err != nil {
 			return lb.Batch{}, err
 		}
-		b.Cursor = encodeCursor(t, last[st.Key])
+		if b.Cursor, err = encodeCursor(st, t, last[st.Key]); err != nil {
+			return lb.Batch{}, err
+		}
+		if hasCursor && lb.CompareCursors(b.Cursor, cursor) <= 0 {
+			return lb.Batch{}, fmt.Errorf("%w: %s de %s a %s", ErrCursorStalled, st.Name, cursor, b.Cursor)
+		}
 	} else {
 		b.Cursor = cursor
 	}

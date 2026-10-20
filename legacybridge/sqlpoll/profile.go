@@ -43,6 +43,12 @@ const (
 	KindConst = "const"
 )
 
+// Tipos de llave.
+const (
+	KeyInteger = "integer"
+	KeyText    = "text"
+)
+
 // Profile es el mapeo de un legado.
 type Profile struct {
 	// System es el prefijo de los external_id ("7l" → "7l:products:12").
@@ -59,6 +65,11 @@ type Stream struct {
 	Entity string `json:"entity"`
 	// Key es la llave primaria de una sola columna (por omisión "id").
 	Key string `json:"key,omitempty"`
+	// KeyType es "integer" (por omisión: enteros no negativos) o "text". Una
+	// llave de texto se ordena y compara byte a byte (BINARY en MySQL, COLLATE
+	// "C" en Postgres, BINARY en SQLite), igual que el desempate del cursor:
+	// con la collation por omisión de la tabla el orden no coincidiría.
+	KeyType string `json:"key_type,omitempty"`
 	// UpdatedAt es la columna de última modificación. Vacía: el flujo solo se
 	// sincroniza por Reconcile.
 	UpdatedAt string `json:"updated_at,omitempty"`
@@ -135,6 +146,13 @@ func (s Stream) normalize() (Stream, error) {
 	}
 	if s.Name == "" {
 		s.Name = s.Table
+	}
+	switch s.KeyType {
+	case "":
+		s.KeyType = KeyInteger
+	case KeyInteger, KeyText:
+	default:
+		return s, fmt.Errorf("sqlpoll: key_type %q (integer|text)", s.KeyType)
 	}
 	if s.BranchTable == "" {
 		s.BranchTable = "branches"
