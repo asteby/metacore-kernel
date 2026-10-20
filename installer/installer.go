@@ -54,6 +54,8 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/asteby/metacore-kernel/bundle"
+	"github.com/asteby/metacore-kernel/cachecoherence"
+	"github.com/asteby/metacore-kernel/database/staleplan"
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/i18n"
 	"github.com/asteby/metacore-kernel/lifecycle"
@@ -346,6 +348,18 @@ type Installer struct {
 	// verified revocation list has ever been obtained. Default false: fail closed.
 	RevocationsFailOpenWhenUnknown bool
 
+	// Coherence is the registry bumped after every install / upgrade / enable
+	// / disable / uninstall. Nil = cachecoherence.Default, which is what every
+	// kernel cache registers with.
+	Coherence *cachecoherence.Registry
+
+	// StrictBackendExports makes Install/Upgrade fail when, even after one
+	// automatic reload, the loaded module lacks exports the manifest declares.
+	// Default false: the mismatch is logged, counted (wasm_export_drift_total)
+	// and left to the operator, which is what installs did before the check
+	// existed.
+	StrictBackendExports bool
+
 	// installFailpoint is a test seam: called after each Install step with the
 	// step name; a non-nil return aborts the install at that point so the
 	// compensation of every step can be exercised.
@@ -467,6 +481,12 @@ func New(db *gorm.DB, kernelVersion string) *Installer {
 	// escape hatch (verifySignature only honours AllowUnsigned when
 	// PublicKeys is empty — see signature_gate_test.go).
 	pubs = loadCentralPubKeyIfNeeded(pubs, allowUnsigned)
+	// The installer's own writes (and every migration it runs) go through db:
+	// make sure a stale prepared plan is retried once instead of failing every
+	// later query (no-op for non-Postgres and when already installed).
+	if err := staleplan.Install(db); err != nil {
+		slog.Warn("installer.staleplan_install_failed", "err", err.Error())
+	}
 	return &Installer{
 		DB:             db,
 		KernelVersion:  kernelVersion,
@@ -584,7 +604,17 @@ func envFlag(name string) bool {
 //     logged and do NOT roll back the install.
 //
 // Returns the per-installation secret (caller shares only with the addon).
-func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, []byte, error) {
+func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (inst *Installation, secret []byte, err error) {
+	// Whatever happened, migrations or lifecycle hooks may have touched the
+	// schema and the registries: flush every derived cache (see
+	// cachecoherence) so nothing keeps serving the world before this install.
+	// The success path bumps just before it announces the change (announce);
+	// this covers the failed one.
+	defer func() {
+		if b != nil && err != nil {
+			i.coherenceBump("addon.install.failed", orgID, b.Manifest.Key)
+		}
+	}()
 	if err := i.verifySignature(b); err != nil {
 		return nil, nil, err
 	}
@@ -632,7 +662,7 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, [
 	}
 	ensureLastErrorColumn(i.DB)
 	t := i.beginInstallTxn(orgID, b)
-	inst, secret, err := i.installSteps(orgID, b, t)
+	inst, secret, err = i.installSteps(orgID, b, t)
 	if err != nil {
 		if rbErr := t.rollback(err); rbErr != nil {
 			err = fmt.Errorf("%w (compensation incomplete: %v)", err, rbErr)
@@ -871,6 +901,9 @@ func (i *Installer) installSteps(orgID uuid.UUID, b *bundle.Bundle, t *installTx
 		if err := loader.LoadFromBundle(context.Background(), b); err != nil {
 			return nil, nil, fmt.Errorf("LoadBackendRuntime: %w", err)
 		}
+		if err := i.verifyBackendExports(context.Background(), loader, b); err != nil {
+			return nil, nil, fmt.Errorf("LoadBackendRuntime: %w", err)
+		}
 		if u, ok := loader.(BackendRuntimeUnloader); ok && t.fresh {
 			t.add("backend_runtime", func() error {
 				// The compiled module is per addon, shared by every org:
@@ -924,7 +957,7 @@ func (i *Installer) installSteps(orgID uuid.UUID, b *bundle.Bundle, t *installTx
 		action = ChangeActionUpgrade
 	}
 	assetPaths, contentHash := frontendAssetDigest(b)
-	maybeBroadcastManifestChange(context.Background(), i.Broadcaster, ManifestChangeEvent{
+	i.announce(context.Background(), "addon.install", ManifestChangeEvent{
 		OrgID:       orgID,
 		AddonKey:    b.Manifest.Key,
 		OldHash:     prevHash,
@@ -1055,7 +1088,12 @@ func (i *Installer) RotateSecret(orgID uuid.UUID, addonKey string) ([]byte, erro
 }
 
 // Enable marks an existing installation as enabled and fires OnEnable.
-func (i *Installer) Enable(orgID uuid.UUID, addonKey string) error {
+func (i *Installer) Enable(orgID uuid.UUID, addonKey string) (err error) {
+	defer func() {
+		if err == nil {
+			i.coherenceBump("addon.enable", orgID, addonKey)
+		}
+	}()
 	// A revoked version must never be (re-)enabled. The installed version is
 	// the one on the row; an unknown row falls through to the existing flow.
 	if i.Revocations != nil {
@@ -1096,7 +1134,12 @@ func (i *Installer) Enable(orgID uuid.UUID, addonKey string) error {
 }
 
 // Disable flips the row to disabled and fires OnDisable.
-func (i *Installer) Disable(orgID uuid.UUID, addonKey string) error {
+func (i *Installer) Disable(orgID uuid.UUID, addonKey string) (err error) {
+	defer func() {
+		if err == nil {
+			i.coherenceBump("addon.disable", orgID, addonKey)
+		}
+	}()
 	lc, ok := i.Lifecycles.Get(addonKey)
 	if !ok {
 		return fmt.Errorf("addon %q not registered", addonKey)
@@ -1136,7 +1179,14 @@ func (i *Installer) Disable(orgID uuid.UUID, addonKey string) error {
 // For schema-per-tenant addons the per-org schema is always dropped (the
 // only way to reclaim storage); for shared addons the global schema is only
 // dropped when no org still has the addon installed.
-func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool) error {
+func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool) (err error) {
+	// Bumped once before the uninstall is announced (announce) and once more
+	// here, after a possible DROP SCHEMA has run.
+	defer func() {
+		if err == nil {
+			i.coherenceBump("addon.uninstall.done", orgID, addonKey)
+		}
+	}()
 	lc, ok := i.Lifecycles.Get(addonKey)
 	var installation Installation
 	_ = i.DB.Where("organization_id = ? AND addon_key = ?", orgID, addonKey).Take(&installation).Error
@@ -1196,7 +1246,7 @@ func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool)
 	// bundle in hand here (uninstall takes only an addon key), so we fire
 	// the event with empty AssetPaths/ContentHash — the Action="uninstall"
 	// is sufficient signal for the consumer to evict.
-	maybeBroadcastManifestChange(context.Background(), i.Broadcaster, ManifestChangeEvent{
+	i.announce(context.Background(), "addon.uninstall", ManifestChangeEvent{
 		OrgID:     orgID,
 		AddonKey:  addonKey,
 		OldHash:   "",
@@ -1276,7 +1326,14 @@ func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool)
 // Upgrade does NOT change the per-installation secret. Rotation is an
 // orthogonal concern — call RotateSecret if the new bundle introduces new
 // signed-webhook endpoints that need a fresh key.
-func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bundle.Bundle) (*Installation, error) {
+func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bundle.Bundle) (inst *Installation, err error) {
+	// Migrations run before the version row is committed, so even a failed
+	// upgrade may have changed the schema: always flush.
+	defer func() {
+		if newBundle != nil && err != nil {
+			i.coherenceBump("addon.upgrade.failed", orgID, newBundle.Manifest.Key)
+		}
+	}()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1413,6 +1470,9 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 		if err := loader.LoadFromBundle(ctx, newBundle); err != nil {
 			return nil, fmt.Errorf("installer.Upgrade: LoadBackendRuntime: %w", err)
 		}
+		if err := i.verifyBackendExports(ctx, loader, newBundle); err != nil {
+			return nil, fmt.Errorf("installer.Upgrade: LoadBackendRuntime: %w", err)
+		}
 	}
 	if newBundle.Manifest.NativeService != nil {
 		runtime := i.NativeRuntime
@@ -1482,7 +1542,7 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	}
 
 	upgradeAssets, upgradeHash := frontendAssetDigest(newBundle)
-	maybeBroadcastManifestChange(ctx, i.Broadcaster, ManifestChangeEvent{
+	i.announce(ctx, "addon.upgrade", ManifestChangeEvent{
 		OrgID:       orgID,
 		AddonKey:    newBundle.Manifest.Key,
 		OldHash:     prevHash,

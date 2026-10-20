@@ -84,6 +84,10 @@ type ManifestChangeEvent struct {
 	Action      ChangeAction
 	AssetPaths  []string
 	ContentHash string
+	// CacheEpoch is the cachecoherence token (Epoch.Token) for the org/addon
+	// AFTER every derived cache was flushed. Clients that revalidate on seeing
+	// a token newer than the one they hold are guaranteed fresh data.
+	CacheEpoch string
 }
 
 // ManifestChangeBroadcaster is the abstract publisher the installer calls when

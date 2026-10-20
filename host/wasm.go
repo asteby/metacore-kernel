@@ -65,6 +65,47 @@ func (l *wasmBackendLoader) LoadFromBundle(ctx context.Context, b *bundle.Bundle
 	return l.host.LoadWASMFromBundle(ctx, b)
 }
 
+// VerifyLoaded implements installer.BackendRuntimeVerifier: the declared
+// exports the freshly loaded module does not provide.
+func (l *wasmBackendLoader) VerifyLoaded(ctx context.Context, b *bundle.Bundle) ([]string, error) {
+	if l == nil || l.host == nil || l.host.WASM == nil {
+		return nil, nil
+	}
+	missing, loaded := l.host.WASM.MissingExports(b.Manifest.Key)
+	if !loaded {
+		return nil, fmt.Errorf("host: wasm module for %q is not loaded", b.Manifest.Key)
+	}
+	return missing, nil
+}
+
+// ReloadFromBundle implements installer.BackendRuntimeReloader: drop the
+// cached module and compile the bundle's bytes again.
+func (l *wasmBackendLoader) ReloadFromBundle(ctx context.Context, b *bundle.Bundle) error {
+	if l == nil || l.host == nil || l.host.WASM == nil {
+		return fmt.Errorf("wasmBackendLoader: runtime not enabled")
+	}
+	m := &b.Manifest
+	if m.Backend == nil || m.Backend.Runtime != "wasm" {
+		return nil
+	}
+	entry := m.Backend.Entry
+	if entry == "" {
+		entry = "backend/backend.wasm"
+	}
+	wasmBytes, ok := b.Backend[entry]
+	if !ok {
+		return fmt.Errorf("host: bundle missing %q for addon %q", entry, m.Key)
+	}
+	return l.host.WASM.Reload(ctx, m.Key, wasmBytes, m.Backend)
+}
+
+// NoteDrift implements installer.BackendDriftNotifier.
+func (l *wasmBackendLoader) NoteDrift(addonKey, outcome string) {
+	if l != nil && l.host != nil && l.host.WASM != nil {
+		l.host.WASM.NoteDrift(addonKey, outcome)
+	}
+}
+
 // UnloadAddon implements installer.BackendRuntimeUnloader: it drops every
 // instance of the addon and its compiled module from the wasm runtime. A
 // no-op when the runtime is not enabled.

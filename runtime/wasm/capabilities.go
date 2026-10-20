@@ -14,6 +14,7 @@ import (
 
 	"github.com/asteby/metacore-kernel/capability"
 	"github.com/asteby/metacore-kernel/connectors"
+	"github.com/asteby/metacore-kernel/database/staleplan"
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/runtime/wasm/importpolicy"
@@ -424,7 +425,9 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 			}
 			sqlText := readString(mod, sqlPtr, sqlLen)
 			argsJSON := readBytes(mod, argsPtr, argsLen)
-			env := executeDBQuery(ctx, inv.db, inv.addonKey, inv.enforcer, sqlText, argsJSON)
+			env := staleplan.RetryEnvelope(inv.db, "db_query", func() []byte {
+				return executeDBQuery(ctx, inv.db, inv.addonKey, inv.enforcer, sqlText, argsJSON)
+			})
 			return writeToGuest(ctx, mod, env)
 		}).
 		Export("db_query")
@@ -454,7 +457,15 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 					searchSchema = s
 				}
 			}
-			env := executeDBExec(ctx, inv.tx, inv.db, inv.addonKey, searchSchema, inv.enforcer, sqlText, argsJSON)
+			run := func() []byte {
+				return executeDBExec(ctx, inv.tx, inv.db, inv.addonKey, searchSchema, inv.enforcer, sqlText, argsJSON)
+			}
+			// Inside a caller-owned transaction the failed statement aborted
+			// it: nothing can be re-run here, the error must reach the caller.
+			env := run()
+			if inv.tx == nil {
+				env = staleplan.RetryEnvelope(inv.db, "db_exec", run)
+			}
 			return writeToGuest(ctx, mod, env)
 		}).
 		Export("db_exec")
@@ -474,7 +485,7 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 				return 0
 			}
 			req := readBytes(mod, reqPtr, reqLen)
-			env := executeDataMutate(ctx, inv, req)
+			env := staleplan.RetryEnvelope(inv.db, "data_mutate", func() []byte { return executeDataMutate(ctx, inv, req) })
 			return writeToGuest(ctx, mod, env)
 		}).
 		Export("data_mutate")
@@ -494,7 +505,7 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 				return 0
 			}
 			req := readBytes(mod, reqPtr, reqLen)
-			env := executeDataBatch(ctx, inv, req)
+			env := staleplan.RetryEnvelope(inv.db, "data_batch", func() []byte { return executeDataBatch(ctx, inv, req) })
 			return writeToGuest(ctx, mod, env)
 		}).
 		Export("data_batch")
@@ -515,7 +526,7 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 				return 0
 			}
 			req := readBytes(mod, reqPtr, reqLen)
-			env := executeDataQueryRecords(ctx, inv, req)
+			env := staleplan.RetryEnvelope(inv.db, "data_query", func() []byte { return executeDataQueryRecords(ctx, inv, req) })
 			return writeToGuest(ctx, mod, env)
 		}).
 		Export("data_query")

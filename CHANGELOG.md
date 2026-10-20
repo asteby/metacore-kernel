@@ -9,6 +9,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Coherencia de cachés (`cachecoherence`, `database/staleplan`).** Ver
+  `docs/CACHE-COHERENCE.md`.
+  - `cachecoherence.Bump(reason, WithOrg, WithAddon)`: épocas por
+    global/organización/addon, invalidadores ordenados (`Register`), publicación
+    de la época tras el vaciado, `Watcher`, `Status` y `ApplyRemote`. El
+    instalador la llama en install/upgrade/enable/disable/uninstall antes de
+    anunciar el cambio (`ManifestChangeEvent.CacheEpoch`).
+  - `staleplan`: reintento único y seguro ante SQLSTATE 0A000 «cached plan must
+    not change result type» / 26000 / 42P05 (envoltura del `ConnPool` de GORM con
+    reinicio de transacciones cuyo prefijo es solo `SET LOCAL`, `RetryTx`,
+    `RetryEnvelope`), reset de handles preparados en cada `Bump`, `Dialector`
+    con `DEALLOCATE ALL` por conexión y métricas
+    `metacore_staleplan_*`. Los imports de datos del host wasm lo instalan solos.
+  - Capas existentes registradas: `dynamic.schema` (columnas vivas y flags
+    `deleted_at`/`organization_id`, antes eternos), `permission.capabilities`,
+    `metadata.tables`.
+  - wasm: `Host.MissingExports/ExportDrift/Reload`; el instalador verifica los
+    `exports` declarados tras cargar, recarga una vez y avisa
+    (`wasm_export_drift_total`, `Installer.StrictBackendExports`).
+  - `bridge.WireCacheEpochBroadcast`: mensaje WS `CACHE_EPOCH_CHANGED`.
+
 - **legacybridge: motor genérico de coexistencia con un sistema legado.**
   Paquete nuevo (`bridge/` ya es la costura host-kernel). Sirve para operar el
   host y el ERP anterior a la vez durante una migración por fases, sin nada de

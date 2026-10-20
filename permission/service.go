@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/asteby/metacore-kernel/cachecoherence"
 	"time"
 
 	"github.com/asteby/metacore-kernel/modelbase"
@@ -63,11 +64,20 @@ func New(config Config) *Service {
 		superSet[NormalizeRole(r.String())] = struct{}{}
 	}
 
-	return &Service{
+	svc := &Service{
 		store:      config.Store,
 		cache:      newCapCache(ttl),
 		superRoles: superSet,
 	}
+	// Grants derive from installed addons (their roles / capabilities): any
+	// cache-coherence bump drops every cached capability list. One entry per
+	// Service, so a host with several keeps all of them coherent.
+	cachecoherence.Register(fmt.Sprintf("permission.capabilities#%p", svc), cachecoherence.OrderPermission,
+		func(context.Context, cachecoherence.Event) error {
+			svc.InvalidateAll()
+			return nil
+		})
+	return svc
 }
 
 // Check returns nil iff user holds the capability cap. Returns ErrNoUser

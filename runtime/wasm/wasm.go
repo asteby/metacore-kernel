@@ -33,6 +33,7 @@ import (
 
 	"github.com/asteby/metacore-kernel/capability"
 	"github.com/asteby/metacore-kernel/connectors"
+	"github.com/asteby/metacore-kernel/database/staleplan"
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/manifest"
@@ -247,6 +248,11 @@ func (h *Host) WithBus(b *events.Bus) *Host {
 // search_path without leaking state between invocations.
 func (h *Host) WithDB(db *gorm.DB) *Host {
 	h.db = db
+	// Guests query through db: a prepared plan outdated by an addon migration
+	// must cost one retry, not every later call (no-op off Postgres).
+	if err := staleplan.Install(db); err != nil && h.logger != nil {
+		h.logger.Printf("metacore.wasm WARN staleplan install: %v", err)
+	}
 	return h
 }
 
@@ -512,6 +518,11 @@ func (h *Host) Load(ctx context.Context, addonKey string, wasmBytes []byte, spec
 				// call) so a new concurrency applies without an addon upgrade.
 				h.closePools(addonKey, uuid.Nil, evictReplaced)
 			}
+			// The spec moved but the binary did not: the exact way a manifest
+			// gets ahead of its module.
+			if m := missingExports(p); len(m) > 0 {
+				h.warnDrift(addonKey, m)
+			}
 			return nil
 		}
 	}
@@ -539,6 +550,9 @@ func (h *Host) Load(ctx context.Context, addonKey string, wasmBytes []byte, spec
 		if p, _ := prev.(*compiledEntry); p != nil {
 			_ = p.mod.Close(ctx)
 		}
+	}
+	if m := missingExports(entry); len(m) > 0 {
+		h.warnDrift(addonKey, m)
 	}
 	return nil
 }

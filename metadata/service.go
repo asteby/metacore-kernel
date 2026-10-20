@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/asteby/metacore-kernel/cachecoherence"
 	"github.com/asteby/metacore-kernel/i18n"
 	"github.com/asteby/metacore-kernel/modelbase"
 )
@@ -115,12 +116,20 @@ func New(cfg Config) *Service {
 	if ttl < 0 {
 		ttl = 0 // disable
 	}
-	return &Service{
+	svc := &Service{
 		cfg:           Config{CacheTTL: ttl, ModelResolver: cfg.ModelResolver},
 		cache:         newCache(ttl),
 		startedAt:     time.Now(),
 		modelResolver: cfg.ModelResolver,
 	}
+	// Dynamic-model metadata is derived from installed manifests and live
+	// schema: drop it, and move its version token, on every coherence bump.
+	cachecoherence.Register(fmt.Sprintf("metadata.tables#%p", svc), cachecoherence.OrderMetadata,
+		func(context.Context, cachecoherence.Event) error {
+			svc.InvalidateCache()
+			return nil
+		})
+	return svc
 }
 
 // WithTableTransformer appends a TableTransformer to the chain. Returns the

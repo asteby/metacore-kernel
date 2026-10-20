@@ -59,3 +59,31 @@ type NoopBackendRuntimeLoader struct{}
 func (NoopBackendRuntimeLoader) LoadFromBundle(context.Context, *bundle.Bundle) error {
 	return nil
 }
+
+// BackendRuntimeVerifier is the optional second half of a loader: after
+// LoadFromBundle it lets the installer ask whether the loaded module really
+// provides what the manifest declared (backend.exports). A host whose loader
+// is the wasm adapter gets it for free.
+//
+// Why it exists: Load keeps a compiled module when the bytes are unchanged and
+// only swaps the manifest spec, so a manifest that gained exports (new API
+// routes, new triggers) can end up in front of a module that lacks them. The
+// symptom is a 501 "route handler is not available" on every new route until
+// the addon is reinstalled. The installer now detects it right after the load.
+type BackendRuntimeVerifier interface {
+	// VerifyLoaded returns the declared exports the loaded module lacks
+	// (empty = coherent).
+	VerifyLoaded(ctx context.Context, b *bundle.Bundle) (missing []string, err error)
+}
+
+// BackendRuntimeReloader forces a fresh compile of the bundle's module,
+// discarding the cached one. Used once per load when verification fails.
+type BackendRuntimeReloader interface {
+	ReloadFromBundle(ctx context.Context, b *bundle.Bundle) error
+}
+
+// BackendDriftNotifier receives the outcome of a drift check ("reloaded" or
+// "persisting"), for metrics.
+type BackendDriftNotifier interface {
+	NoteDrift(addonKey, outcome string)
+}

@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/asteby/metacore-kernel/cachecoherence"
 	"github.com/asteby/metacore-kernel/installer"
 	"github.com/asteby/metacore-kernel/obs"
 	"github.com/asteby/metacore-kernel/ws"
@@ -142,6 +143,7 @@ func manifestChangedPayload(evt installer.ManifestChangeEvent) map[string]any {
 		"action":      action,
 		"assetPaths":  assets,
 		"contentHash": evt.ContentHash,
+		"cacheEpoch":  evt.CacheEpoch,
 	}
 }
 
@@ -164,4 +166,62 @@ func defaultUsersForOrg(db *gorm.DB) UsersForOrgFn {
 		}
 		return ids, nil
 	}
+}
+
+// WSCacheEpochChangedType is the ws.MessageType emitted on every
+// cachecoherence bump. Payload: {epoch, reason, orgId?, addonKey?, seq}.
+// Clients compare `epoch` with the X-Cache-Epoch they last saw and revalidate
+// (i18n, manifests, nav, permissions, react-query keys) when it differs.
+const WSCacheEpochChangedType ws.MessageType = "CACHE_EPOCH_CHANGED"
+
+// WireCacheEpochBroadcast forwards every cachecoherence bump on reg (nil =
+// cachecoherence.Default) over the hub: to the org's users when the bump is
+// org-scoped, to every connected user otherwise. Returns the unsubscribe func.
+// It publishes only after the invalidators ran (cachecoherence guarantees it),
+// so a client that reacts is answered from clean caches.
+func WireCacheEpochBroadcast(hub *ws.Hub, db *gorm.DB, usersFn UsersForOrgFn, reg *cachecoherence.Registry) func() {
+	if hub == nil {
+		panic("bridge: WireCacheEpochBroadcast requires a non-nil ws.Hub")
+	}
+	if usersFn == nil {
+		usersFn = defaultUsersForOrg(db)
+	}
+	if reg == nil {
+		reg = cachecoherence.Default
+	}
+	return reg.Subscribe(func(ev cachecoherence.Event) {
+		publishCacheEpoch(context.Background(), ev, usersFn, hub.ConnectedUsers, hub.SendToUsers)
+	})
+}
+
+func publishCacheEpoch(ctx context.Context, ev cachecoherence.Event, usersFn UsersForOrgFn,
+	connected func() []uuid.UUID, send func([]uuid.UUID, ws.Message)) {
+	var users []uuid.UUID
+	if ev.OrgID != "" {
+		org, err := uuid.Parse(ev.OrgID)
+		if err == nil {
+			users, err = usersFn(ctx, org)
+		}
+		if err != nil {
+			obs.Warn(ctx, "bridge.cache_epoch.users_failed", slog.String("org_id", ev.OrgID), slog.String("err", err.Error()))
+			return
+		}
+	} else {
+		users = connected()
+	}
+	if len(users) == 0 {
+		return
+	}
+	payload := map[string]any{
+		"epoch":  ev.Epoch.Token(),
+		"reason": ev.Reason,
+		"seq":    ev.Seq,
+	}
+	if ev.OrgID != "" {
+		payload["orgId"] = ev.OrgID
+	}
+	if ev.AddonKey != "" {
+		payload["addonKey"] = ev.AddonKey
+	}
+	send(users, ws.Message{Type: WSCacheEpochChangedType, Payload: payload})
 }

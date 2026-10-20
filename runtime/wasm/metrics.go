@@ -28,6 +28,7 @@ type hostMetrics struct {
 	instantiate *prometheus.CounterVec
 	instances   *prometheus.GaugeVec
 	emitViolate *prometheus.CounterVec
+	exportDrift *prometheus.CounterVec
 }
 
 func registerOrGet[T prometheus.Collector](reg *prometheus.Registry, c T) T {
@@ -90,6 +91,10 @@ func newHostMetrics(r *kmetrics.Registry) *hostMetrics {
 			Name: "wasm_event_emit_violations_total",
 			Help: "event_emit calls that broke the emit policy, by addon, rule and action (warned|denied).",
 		}, []string{"addon", "rule", "action"})),
+		exportDrift: registerOrGet(p, prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "wasm_export_drift_total",
+			Help: "Loads where the manifest declares exports the compiled module lacks, by addon and outcome (reloaded|persisting).",
+		}, []string{"addon", "outcome"})),
 	}
 }
 
@@ -140,5 +145,11 @@ func (m *hostMetrics) instantiated(addon string) {
 	if m != nil {
 		m.instantiate.WithLabelValues(addon).Inc()
 		m.instances.WithLabelValues(addon).Inc()
+	}
+}
+
+func (m *hostMetrics) drift(addon, outcome string) {
+	if m != nil {
+		m.exportDrift.WithLabelValues(addon, outcome).Inc()
 	}
 }

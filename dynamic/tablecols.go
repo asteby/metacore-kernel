@@ -2,6 +2,8 @@ package dynamic
 
 import (
 	"context"
+
+	"github.com/asteby/metacore-kernel/cachecoherence"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,7 +40,29 @@ var columnsGen atomic.Uint64
 // InvalidateTableColumns drops every cached table-column set (all Services).
 // Hosts that alter a table's columns by their own DDL may call it to make the
 // runtime see the change immediately; otherwise it is seen within the TTL.
-func InvalidateTableColumns() { columnsGen.Add(1) }
+func InvalidateTableColumns() {
+	columnsGen.Add(1)
+	resetTableFlagCaches()
+}
+
+// resetTableFlagCaches forgets the per-table "has deleted_at" / "has
+// organization_id" answers (liverefs.go). They were cached for the life of the
+// process, so an addon migration that ADDED either column left the kernel
+// treating the table as before until a restart.
+func resetTableFlagCaches() {
+	softDeleteCols.Range(func(k, _ any) bool { softDeleteCols.Delete(k); return true })
+	orgScopedTables.Range(func(k, _ any) bool { orgScopedTables.Delete(k); return true })
+}
+
+func init() {
+	// Every cachecoherence.Bump (addon install/upgrade/uninstall, migrations)
+	// drops the schema-introspection caches, right after the statement pool.
+	cachecoherence.Register("dynamic.schema", cachecoherence.OrderSchema,
+		func(context.Context, cachecoherence.Event) error {
+			InvalidateTableColumns()
+			return nil
+		})
+}
 
 type liveColsEntry struct {
 	cols map[string]struct{} // nil = unknown
