@@ -1,5 +1,7 @@
 package modelbase
 
+import "github.com/asteby/metacore-kernel/manifest/inputrules"
+
 // This file holds the public, framework-agnostic metadata shapes that the
 // frontend DynamicTable / DynamicModal / DynamicSearch components consume via
 // JSON. The JSON tags are load-bearing and MUST NOT drift from the frontend
@@ -350,6 +352,10 @@ type FieldDef struct {
 	Nullable bool `json:"nullable,omitempty"`
 
 	Validation     *ValidationRule `json:"validation,omitempty"`
+	// InputRules: declarative input constraints of an action-modal field
+	// (manifest v3 ActionField.input_rules): trim, pattern, format, lengths,
+	// forbid_patterns and autofill hints the SDK can run live.
+	InputRules *inputrules.Rules `json:"input_rules,omitempty"`
 	Options        []OptionDef     `json:"options,omitempty"`
 	DefaultValue   interface{}     `json:"defaultValue,omitempty"`
 	HideInView     bool            `json:"hideInView,omitempty"`

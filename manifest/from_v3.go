@@ -283,6 +283,7 @@ func mapCredentials(in []v3.Setting) []CredentialDef {
 			Secret:        s.Type == "secret",
 			OptionsSource: s.OptionsSource,
 			Section:       s.Section,
+			InputRules:    s.InputRules,
 		})
 	}
 	return out
@@ -1107,10 +1108,11 @@ func mapNavItems(in []v3.NavItem, modelTable map[string]string) []NavItem {
 // default,options} → legacy {Key,Type,Label,DefaultValue,Options}. v3 has no
 // Secret flag, so legacy Secret stays false.
 //
-// v3 Setting.Description has no legacy SettingDef slot, so it intentionally does
-// NOT round-trip here — consumers read it off the v3-served metadata. We do not
-// grow legacy SettingDef for it. (v3 Setting.Type "number" likewise carries
-// across as the raw type string; no special-casing is needed.)
+// Description and InputRules ride along so the host settings form can show
+// the help text and validate the value like a connector credential (the
+// description used to be dropped, which left settings forms without help).
+// (v3 Setting.Type "number" carries across as the raw type string; no
+// special-casing is needed.)
 func mapSettings(in []v3.Setting) []SettingDef {
 	if len(in) == 0 {
 		return nil
@@ -1123,6 +1125,8 @@ func mapSettings(in []v3.Setting) []SettingDef {
 			Type:         s.Type,
 			DefaultValue: s.Default,
 			Scope:        s.Scope,
+			Description:  s.Description,
+			InputRules:   s.InputRules,
 		}
 		for _, o := range s.Options {
 			def.Options = append(def.Options, Option{Value: o.Value, Label: o.Label})
@@ -1464,6 +1468,9 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 			// Validation rides through so the kernel enforces regex/min/max/custom
 			// on the action payload and the SDK pre-flights the same codes.
 			Validation: mapFieldValidation(f.Validation),
+			// InputRules forward the declarative input constraints (trim,
+			// pattern, format, lengths, forbid_patterns, autofill hints).
+			InputRules: f.InputRules,
 		}
 		// Options is EITHER the static value/label list (array form) OR the
 		// dynamic dependent-source object (DynamicOptions). The static list rides

@@ -1500,6 +1500,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	errs = append(errs, validatePermissionModels(&m)...)
 	errs = append(errs, validateMetadataVisibility(&m)...)
 	errs = append(errs, validateOverlayKernelGate(&m)...)
+	errs = append(errs, validateInputRules(&m)...)
 
 	// Index every model's declared columns by model KEY so rollup/formula
 	// cross-field checks can resolve targets/identifiers on the PARENT (the

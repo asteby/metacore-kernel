@@ -310,6 +310,10 @@ type CredentialDef struct {
 	OptionsSource string `json:"options_source,omitempty"`
 	// Section binds the credential to a ConnectorDef.FormLayout section/step.
 	Section string `json:"section,omitempty"`
+	// InputRules carries the v3 credential input_rules (trim, pattern, format,
+	// lengths, forbid_patterns, autofill hints) so the host can validate the
+	// value server-side and the connect form can run the same rules live.
+	InputRules *v3.InputRules `json:"input_rules,omitempty"`
 }
 
 // ScheduleDef is the host/runtime projection of a v3 Schedule: a cron job the
@@ -685,6 +689,11 @@ type SettingDef struct {
 	// Scope is "org" (default, "" = org) or "branch": each branch may override
 	// the org value. See ResolveSetting.
 	Scope string `json:"scope,omitempty"`
+	// Description is the help text (i18n key) of the setting. It used to be
+	// dropped by the projection, so settings forms rendered no help at all.
+	Description string `json:"description,omitempty"`
+	// InputRules carries the v3 setting input_rules (see CredentialDef).
+	InputRules *v3.InputRules `json:"input_rules,omitempty"`
 }
 
 // ReasonRequiredDef is the legacy projection of v3 ReasonRequired.
@@ -1008,6 +1017,10 @@ type FieldDef struct {
 	// lands on the served action metadata; the host then materialises the
 	// value/label list from its provider registry. Empty = static/no options.
 	OptionsSource string `json:"options_source,omitempty"`
+	// InputRules forwards the v3 ActionField.input_rules (trim, pattern,
+	// format, lengths, forbid_patterns, autofill hints) to the served action
+	// metadata.
+	InputRules *v3.InputRules `json:"input_rules,omitempty"`
 
 	// Upload-field properties forwarded verbatim from manifest/v3 ActionField
 	// for a field with type "upload". Accept is the file-picker allow-list,

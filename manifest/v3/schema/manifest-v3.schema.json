@@ -3378,6 +3378,9 @@
       ],
       "description": "One input in an action modal's declarative form. Mirrors the SDK ActionFieldDef.",
       "properties": {
+        "input_rules": {
+          "$ref": "#/$defs/InputRules"
+        },
         "key": {
           "type": "string"
         },
@@ -3829,6 +3832,103 @@
         }
       }
     },
+    "InputRules": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional declarative input constraints the host applies when collecting the value (connector credential form, addon settings, action modal): trim, pattern/format/length checks, wrong-value detection (forbid_patterns) and autofill hints. The host server re-checks them on save (source of truth); the UI runs them live. Hubs/hosts on metacore-kernel < 0.223.0 reject this block (closed schema).",
+      "properties": {
+        "trim": {
+          "type": "boolean",
+          "default": true,
+          "description": "Strip leading/trailing whitespace (incl. CR/LF, NBSP, zero-width) before validating and when storing."
+        },
+        "pattern": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "description": "Regex in the common subset of RE2 and ECMAScript (no inline flags, no \\A \\z \\Q \\E \\C \\p \\P, no nested unbounded quantifiers). Anchor it with ^...$ to match the whole value."
+        },
+        "pattern_hint": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "i18n key of the addon (or literal text) describing the expected format; shown under the field and with pattern errors."
+        },
+        "examples": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "description": "Valid sample values; the validator checks they pass every rule."
+        },
+        "min_length": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4096
+        },
+        "max_length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "uuid",
+            "url",
+            "url_https",
+            "email",
+            "hex",
+            "numeric",
+            "alnum"
+          ]
+        },
+        "autocomplete": {
+          "type": "string",
+          "enum": [
+            "off",
+            "new-password"
+          ],
+          "description": "Browser autofill hint. Secret fields always get new-password."
+        },
+        "mask": {
+          "type": "string",
+          "enum": [
+            "none",
+            "full"
+          ],
+          "description": "none = plain text input; full = password input with show/hide. Default: full for secrets, none otherwise."
+        },
+        "forbid_patterns": {
+          "type": "array",
+          "maxItems": 10,
+          "description": "Reject a value with the shape of something else (e.g. a public key pasted into the access-token field).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "pattern",
+              "message"
+            ],
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "description": "Regex in the common subset of RE2 and ECMAScript (no inline flags, no \\A \\z \\Q \\E \\C \\p \\P, no nested unbounded quantifiers). Anchor it with ^...$ to match the whole value."
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "description": "i18n key of the addon or literal text shown when the value matches."
+              }
+            }
+          }
+        }
+      }
+    },
     "Tool": {
       "type": "object",
       "additionalProperties": false,
@@ -4254,6 +4354,9 @@
         "type"
       ],
       "properties": {
+        "input_rules": {
+          "$ref": "#/$defs/InputRules"
+        },
         "key": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]+$"

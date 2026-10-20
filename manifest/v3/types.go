@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/asteby/metacore-kernel/manifest/inputrules"
 	"github.com/asteby/metacore-kernel/runtime/native"
 )
 
@@ -2313,6 +2314,9 @@ type ActionField struct {
 	Multiple       bool             `json:"multiple,omitempty"`
 	SearchEndpoint string           `json:"search_endpoint,omitempty"`
 	Validation     *FieldValidation `json:"validation,omitempty"`
+	// InputRules: same declarative input constraints as Setting.InputRules
+	// (trim, pattern, format, lengths, forbid_patterns, autofill hints).
+	InputRules *InputRules `json:"input_rules,omitempty"`
 	// DefaultFromRecord siembra el campo con una columna (o la primera no vacía
 	// de una lista) del registro sobre el que se abrió la acción: el SDK ya lo
 	// lee (action-modal-dispatcher scalarDefaultFromRecord) pero el kernel lo
@@ -2919,6 +2923,13 @@ type Setting struct {
 	// Validation is an optional constraint hint (e.g. a regex or a named rule)
 	// the host applies when collecting the value. Used by connector credentials.
 	Validation string `json:"validation,omitempty"`
+	// InputRules are optional, declarative input constraints the host applies
+	// when COLLECTING the value (connector credential form, addon settings
+	// form): trim, pattern / format / length checks, "this looks like the
+	// wrong value" detection (forbid_patterns) and browser autofill hints. The
+	// host server is the source of truth (it re-checks on save); the UI runs
+	// the same rules live. Nil = no extra rules (today's behaviour).
+	InputRules *InputRules `json:"input_rules,omitempty"`
 	// Scope says at which level the value lives. "org" (default) is one value
 	// per organization. "branch" lets each branch override it: the effective
 	// value for a branch is its own override, else the org value, else Default
@@ -2926,6 +2937,16 @@ type Setting struct {
 	// one store and a permissive one in another (POS-1).
 	Scope string `json:"scope,omitempty"`
 }
+
+// InputRules is the declarative input-validation block of a Setting (and so
+// of a connector credential) or of an ActionField. It is defined in the
+// dependency-free runtime package manifest/inputrules (which also checks
+// values against it) and aliased here so the manifest grammar and the
+// runtime checker can never drift. See docs/connector-input-rules.md.
+type InputRules = inputrules.Rules
+
+// ForbidPattern is one entry of InputRules.ForbidPatterns.
+type ForbidPattern = inputrules.ForbidPattern
 
 // SettingOption is a value/label pair for select-typed settings.
 type SettingOption struct {
