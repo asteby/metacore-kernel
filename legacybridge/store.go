@@ -128,8 +128,11 @@ type PendingStore interface {
 	PutPending(ctx context.Context, p PendingEnvelope) error
 	GetPending(ctx context.Context, org, system, entity, externalID string) (PendingEnvelope, bool, error)
 	DeletePending(ctx context.Context, org, system, entity, externalID string) error
-	// DuePending lista hasta limit envelopes con NextAttempt <= now, los más viejos primero.
-	DuePending(ctx context.Context, now time.Time, limit int) ([]PendingEnvelope, error)
+	// DuePending lista hasta limit envelopes de (org, system) con NextAttempt
+	// <= now, los más viejos primero. Es por origen a propósito: una cola global
+	// dejaría al frente los pendientes de un origen sin configuración y, con
+	// limit llenos, los demás no se reintentarían nunca.
+	DuePending(ctx context.Context, org, system string, now time.Time, limit int) ([]PendingEnvelope, error)
 	CountPending(ctx context.Context, org, system string) (int64, error)
 }
 

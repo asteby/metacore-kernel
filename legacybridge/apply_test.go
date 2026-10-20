@@ -144,7 +144,7 @@ func TestApply_WaitsForDependenciesThenAppliesOrGoesToReview(t *testing.T) {
 			t.Fatal("nunca se escribe sin el padre (sin filas fantasma)")
 		}
 		// Aún no vence: RetryWaiting no lo toma.
-		if res, _ := e.ap.RetryWaiting(ctx, 10); len(res) != 0 {
+		if res, _ := e.ap.RetryWaiting(ctx, org, "erp", 10); len(res) != 0 {
 			t.Fatalf("reintentó antes de tiempo: %+v", res)
 		}
 		// Llega el cliente por el puente.
@@ -154,7 +154,7 @@ func TestApply_WaitsForDependenciesThenAppliesOrGoesToReview(t *testing.T) {
 			t.Fatalf("cliente = %s", got.Outcome)
 		}
 		e.clk.Add(2 * time.Minute)
-		res, err := e.ap.RetryWaiting(ctx, 10)
+		res, err := e.ap.RetryWaiting(ctx, org, "erp", 10)
 		if err != nil || len(res) != 1 || res[0].Outcome != OutcomeApplied {
 			t.Fatalf("reintento = %+v, %v", res, err)
 		}
@@ -167,7 +167,7 @@ func TestApply_WaitsForDependenciesThenAppliesOrGoesToReview(t *testing.T) {
 		lost.Requires = []Dependency{{Entity: "products", ExternalID: "erp:products:404"}}
 		e.ap.Apply(ctx, org, lost)
 		e.clk.Add(25 * time.Hour)
-		res, _ = e.ap.RetryWaiting(ctx, 10)
+		res, _ = e.ap.RetryWaiting(ctx, org, "erp", 10)
 		if len(res) != 1 || res[0].Outcome != OutcomeReview {
 			t.Fatalf("vencido = %+v", res)
 		}

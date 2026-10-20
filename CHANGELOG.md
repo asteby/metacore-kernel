@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **legacybridge: `PendingStore.DuePending` y `Applier.RetryWaiting` son por
+  origen `(org, system)`.** La cola global ordenada por `next_attempt` dejaba al
+  frente los pendientes de un origen sin configuración y, con 200 o más, los de
+  las demás organizaciones no se reintentaban. Índice nuevo
+  `idx_bridge_pending_org_due (org_id, system, next_attempt)` en `Schema`.
+
 ### Added
 
 - **legacybridge: motor genérico de coexistencia con un sistema legado.**
