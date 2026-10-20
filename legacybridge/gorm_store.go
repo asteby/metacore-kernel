@@ -126,6 +126,7 @@ func Schema(dialect string) []string {
 			PRIMARY KEY (org_id, system, entity, external_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_bridge_pending_due ON ` + TablePending + ` (next_attempt)`,
+		`CREATE INDEX IF NOT EXISTS idx_bridge_pending_org_due ON ` + TablePending + ` (org_id, system, next_attempt)`,
 		`CREATE TABLE IF NOT EXISTS ` + TableCommands + ` (
 			id              TEXT NOT NULL PRIMARY KEY,
 			org_id          TEXT NOT NULL,
@@ -419,10 +420,11 @@ func (s *GormStore) DeletePending(ctx context.Context, org, system, entity, ext 
 		org, system, entity, ext).Error
 }
 
-func (s *GormStore) DuePending(ctx context.Context, now time.Time, limit int) ([]PendingEnvelope, error) {
+func (s *GormStore) DuePending(ctx context.Context, org, system string, now time.Time, limit int) ([]PendingEnvelope, error) {
 	var rows []pendingRow
-	if err := s.conn(ctx).Raw(`SELECT `+pendingCols+` FROM `+TablePending+` WHERE next_attempt <= ? ORDER BY next_attempt LIMIT ?`,
-		now.UTC(), limit).Scan(&rows).Error; err != nil {
+	if err := s.conn(ctx).Raw(`SELECT `+pendingCols+` FROM `+TablePending+
+		` WHERE org_id = ? AND system = ? AND next_attempt <= ? ORDER BY next_attempt LIMIT ?`,
+		org, system, now.UTC(), limit).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]PendingEnvelope, 0, len(rows))
