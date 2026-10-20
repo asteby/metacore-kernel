@@ -95,3 +95,10 @@ manifest que declare `input_rules`. Por eso el orden es:
 ```
 
 Un addon sin `input_rules` no necesita nada de esto.
+
+## Lint de traducciones
+
+`go run github.com/asteby/metacore-kernel/cmd/manifest-i18ncheck [-literals] <dir-addon>...`
+falla si alguna clave i18n de ajustes, credenciales, secciones del asistente,
+acciones o de `input_rules` (`pattern_hint`, `forbid_patterns[].message`) falta
+en alguno de los locales declarados (paquete `manifest/i18ncheck`).
