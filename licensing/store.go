@@ -34,6 +34,11 @@ type Record struct {
 	ValidatedAt *time.Time `json:"validated_at,omitempty"`
 	// Source records where the token came from: "env", "file", "admin", "renew".
 	Source string `json:"source,omitempty"`
+	// RevokedAt is when the hub FIRST answered a renew with "license revoked".
+	// It anchors the revoke grace window and survives restarts so a reboot
+	// cannot reset the clock. A successful renew or a newly activated token
+	// persists a fresh Record without it, which clears the revocation.
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
 }
 
 // Wildcard reports whether the persisted entitlement set grants "*".

@@ -26,6 +26,18 @@ import (
 // warning. Overridable via Config.Grace / LICENSING_GRACE_DAYS.
 const DefaultGrace = 14 * 24 * time.Hour
 
+// DefaultRevokeGrace is how long an instance keeps operating after the hub
+// first refuses a renew as "license revoked", before it turns read-only. It
+// protects a customer from a mistaken revocation (the issuer can fix it within
+// the window) without leaving revocation toothless. Overridable via
+// Config.RevokeGrace / LICENSING_REVOKE_GRACE_HOURS.
+const DefaultRevokeGrace = 72 * time.Hour
+
+// ErrRevoked is returned by the renew handshake when the hub refuses the
+// license as revoked. Distinct from any other renew failure (network, bad
+// signature, instance not paired), which never starts the revoke clock.
+var ErrRevoked = errors.New("licensing: license revoked by the hub")
+
 // DefaultRecheck is the background re-verification + renew cadence — the
 // heartbeat that doubles as fleet telemetry and makes remote revocation
 // effective within one lease window.
@@ -63,6 +75,17 @@ type Config struct {
 	BootstrapSource string
 	// Version is the build version reported on each check-in (fleet tracking).
 	Version string
+	// RevokeEnforce makes a hub revocation take effect: after RevokeGrace the
+	// State becomes status "revoked" (not Valid, not InGrace), which with
+	// Enforce on blocks writes (read-only). Off by default: the revocation is
+	// still recorded and exposed on State (Revoked, RevokedAt,
+	// RevokeGraceUntil) but nothing changes for the instance.
+	RevokeEnforce bool
+	// RevokeGrace is the window from the first observed revocation to
+	// read-only. Zero → DefaultRevokeGrace, unless RevokeGraceSet is true
+	// (then zero means "read-only immediately").
+	RevokeGrace    time.Duration
+	RevokeGraceSet bool
 	// Store persists the singleton license Record. Required in practice; a nil
 	// store yields a verify-only service that never persists.
 	Store LicenseStore
@@ -83,9 +106,11 @@ type Service struct {
 	http    *http.Client
 	hubBase string
 
-	enforce bool
-	grace   time.Duration
-	recheck time.Duration
+	enforce       bool
+	grace         time.Duration
+	recheck       time.Duration
+	revokeEnforce bool
+	revokeGrace   time.Duration
 
 	instanceID   uuid.UUID
 	instancePriv ed25519.PrivateKey
@@ -99,6 +124,10 @@ type Service struct {
 	mu        sync.RWMutex
 	pubKeyHex string
 	state     *State
+	// revokedMem mirrors Record.RevokedAt for stores that do not persist it
+	// (an embedder not yet updated for the field): the anchor then survives
+	// every refresh cycle of THIS process, and only a restart resets it.
+	revokedMem *time.Time
 }
 
 // New builds a Service from Config, filling defaults. It does not touch the
@@ -124,6 +153,10 @@ func New(cfg Config) *Service {
 	if recheck <= 0 {
 		recheck = DefaultRecheck
 	}
+	revokeGrace := cfg.RevokeGrace
+	if revokeGrace <= 0 && !cfg.RevokeGraceSet {
+		revokeGrace = DefaultRevokeGrace
+	}
 	base := strings.TrimSpace(cfg.HubBaseURL)
 	if base == "" {
 		base = DefaultHubBaseURL
@@ -140,6 +173,8 @@ func New(cfg Config) *Service {
 		enforce:         cfg.Enforce,
 		grace:           grace,
 		recheck:         recheck,
+		revokeEnforce:   cfg.RevokeEnforce,
+		revokeGrace:     revokeGrace,
 		instanceID:      cfg.InstanceID,
 		instancePriv:    cfg.InstancePriv,
 		version:         strings.TrimSpace(cfg.Version),
@@ -214,7 +249,11 @@ func (s *Service) RefreshNow(ctx context.Context) {
 	}
 	if row != nil && s.shouldRenew(row) {
 		if renewed, rerr := s.renew(ctx); rerr != nil {
-			s.log.Info("licensing: renew skipped/failed", "err", rerr)
+			if errors.Is(rerr, ErrRevoked) {
+				row = s.markRevoked(ctx, row)
+			} else {
+				s.log.Info("licensing: renew skipped/failed", "err", rerr)
+			}
 		} else if renewed != "" {
 			if updated, perr := s.persist(ctx, renewed, "renew"); perr == nil {
 				row = updated
@@ -252,13 +291,19 @@ func (s *Service) Activate(ctx context.Context, token string) (*State, error) {
 
 // recompute verifies row's token and swaps in a fresh snapshot.
 func (s *Service) recompute(ctx context.Context, row *Record) {
+	st := s.compute(ctx, row)
+	s.applyRevocation(st, row)
+	s.store2(st)
+}
+
+// compute builds the snapshot for row from its token alone (no revocation).
+func (s *Service) compute(ctx context.Context, row *Record) *State {
 	now := s.now()
 	st := &State{Enforced: s.enforce, Entitlements: []string{}, LastCheckedAt: &now}
 	if row == nil || row.Token == "" {
 		st.Status = "missing"
 		st.Reason = "no license installed"
-		s.store2(st)
-		return
+		return st
 	}
 	pub, err := s.pubKey(ctx)
 	if err != nil {
@@ -267,8 +312,7 @@ func (s *Service) recompute(ctx context.Context, row *Record) {
 		// its last decoded claims (signature was checked at persist time).
 		s.log.Warn("licensing: pubkey unavailable, using persisted snapshot", "err", err)
 		s.fillFromRow(st, row, now)
-		s.store2(st)
-		return
+		return st
 	}
 	claims, verr := Verify(row.Token, pub, now)
 	switch {
@@ -281,7 +325,69 @@ func (s *Service) recompute(ctx context.Context, row *Record) {
 		st.Status = "invalid"
 		st.Reason = verr.Error()
 	}
-	s.store2(st)
+	return st
+}
+
+// markRevoked records the FIRST observed revocation on the persisted Record
+// (never moves it later: the grace clock must not reset on every cycle or on a
+// restart) and returns the updated row.
+func (s *Service) markRevoked(ctx context.Context, row *Record) *Record {
+	if row == nil {
+		return row
+	}
+	if row.RevokedAt == nil {
+		s.mu.RLock()
+		mem := s.revokedMem
+		s.mu.RUnlock()
+		if mem != nil {
+			row.RevokedAt = mem
+			return row
+		}
+		now := s.now()
+		s.mu.Lock()
+		s.revokedMem = &now
+		s.mu.Unlock()
+		row.RevokedAt = &now
+		s.log.Warn("licensing: hub refused the renew as revoked", "revoke_grace", s.revokeGrace.String(), "enforced", s.revokeEnforce)
+		if s.store != nil {
+			if err := s.store.Save(ctx, row); err != nil {
+				s.log.Warn("licensing: persist revocation failed", "err", err)
+			}
+		}
+	}
+	return row
+}
+
+// applyRevocation overlays the revocation onto a computed snapshot. The
+// informational fields are always filled; the posture (Status/Valid/InGrace)
+// only changes when the revoke policy is enforced AND the revoke grace elapsed.
+func (s *Service) applyRevocation(st *State, row *Record) {
+	if row != nil && row.RevokedAt == nil {
+		s.mu.RLock()
+		row.RevokedAt = s.revokedMem // store without the field: use the in-process anchor
+		s.mu.RUnlock()
+	}
+	if row == nil || row.RevokedAt == nil || !st.Configured {
+		return
+	}
+	revokedAt := *row.RevokedAt
+	until := revokedAt.Add(s.revokeGrace)
+	st.Revoked = true
+	st.RevokedAt = &revokedAt
+	st.RevokeGraceUntil = &until
+	if !s.revokeEnforce {
+		return
+	}
+	if s.now().Before(until) {
+		// Warning window: still operable, but the UI must say so.
+		st.Reason = "license revoked by the issuer; read-only from " + until.UTC().Format(time.RFC3339)
+		return
+	}
+	st.Valid = false
+	st.InGrace = false
+	st.Stale = false
+	st.Status = "revoked"
+	st.Reason = "license revoked by the issuer"
 }
 
 // fillCommon copies the identity + entitlement fields shared by every posture.
@@ -410,6 +516,10 @@ func (s *Service) persist(ctx context.Context, token, source string) (*Record, e
 	if err := s.store.Save(ctx, row); err != nil {
 		return nil, err
 	}
+	// A freshly accepted token (renew or activation) lifts any revocation.
+	s.mu.Lock()
+	s.revokedMem = nil
+	s.mu.Unlock()
 	return row, nil
 }
 
@@ -472,6 +582,11 @@ func (s *Service) shouldRenew(row *Record) bool {
 	if st := s.Current(); st != nil && (st.Stale || st.MaxOfflineHours > 0) {
 		return true
 	}
+	// With the revoke policy on, check in every cycle: a revocation must be
+	// noticed within one recheck even if the token window is still far away.
+	if s.revokeEnforce {
+		return true
+	}
 	return s.now().Add(renewThreshold).After(*row.ExpiresAt)
 }
 
@@ -515,6 +630,9 @@ func (s *Service) renew(ctx context.Context) (string, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if resp.StatusCode == http.StatusForbidden && isRevokedBody(b) {
+			return "", ErrRevoked
+		}
 		return "", fmt.Errorf("hub renew status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	var out renewResponse
@@ -522,6 +640,24 @@ func (s *Service) renew(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(out.LicenseToken), nil
+}
+
+// isRevokedBody tells a revocation 403 from the other 403s the renew can
+// return (instance not paired, id mismatch). The current hub sends
+// {"code":"license_revoked"}; older hubs only say "license revoked; renewal
+// refused" in the error text.
+func isRevokedBody(b []byte) bool {
+	var body struct {
+		Code  string `json:"code"`
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(b, &body) == nil {
+		if body.Code == "license_revoked" {
+			return true
+		}
+		return strings.Contains(strings.ToLower(body.Error), "license revoked")
+	}
+	return strings.Contains(strings.ToLower(string(b)), "license revoked")
 }
 
 // signRequest adds the instance-signature headers over the exact body bytes,

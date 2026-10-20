@@ -65,6 +65,7 @@ swaps it atomically. Postures and what enforcement blocks:
 | `stale` | Lease expired (`now > iat + moh`); still inside the window. Operable but degraded — renew required. | ✅ | ✅ | ✅ |
 | `grace` | Past `exp`, within `exp + grace`. Degraded; renew required. | ✅ | ✅ | ✅ |
 | `expired` | Past `exp + grace`. | ✅ | ⛔ | ⛔ |
+| `revoked` | The hub refused a renew as revoked and `RevokeGrace` elapsed (**only** with `RevokeEnforce`). | ✅ | ⛔ | ⛔ |
 | `missing` | No token installed. | ✅ | ⛔ | ⛔ |
 | `invalid` | Signature/version/type check failed. | ✅ | ⛔ | ⛔ |
 
@@ -76,6 +77,27 @@ every posture so an operator can always paste a fresh token.
 
 Cutting the hub off does **not** evade revocation: without renews a leased
 license goes `stale` within `moh` hours and lapses at `exp + grace`.
+
+## Revocation
+
+A renew answered with `403` and `{"code":"license_revoked"}` (older hubs: the
+text `license revoked`) starts the **revoke clock**: `Record.RevokedAt` is set
+once, on the first refusal, and persisted so a restart cannot reset it. Any other
+403 (instance not paired, id mismatch) or network error never starts it.
+
+| Setting | Env | Default |
+|---------|-----|---------|
+| `RevokeEnforce` | `LICENSING_REVOKE_ENFORCE` | **off** |
+| `RevokeGrace` | `LICENSING_REVOKE_GRACE_HOURS` | 72 h |
+
+* Always (flag or not): `State.Revoked`, `RevokedAt` and `RevokeGraceUntil` are
+  filled, so the UI can show the state.
+* Only with `RevokeEnforce`: inside the grace the instance keeps operating with a
+  warning `Reason`; after it the status becomes `revoked` (read-only when
+  `Enforce` is also on), and the instance checks in on every cycle so a
+  revocation is noticed within one recheck even for a long-lived token.
+* A successful renew (or a freshly activated token) clears the revocation, so an
+  issuer can reinstate a license by fixing it on the hub.
 
 ## Renewal = mandatory check-in
 

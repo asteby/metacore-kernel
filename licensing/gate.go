@@ -17,7 +17,7 @@ type State struct {
 	Configured bool `json:"configured"`
 	// Valid is true only when a token verified AND is within its window.
 	Valid bool `json:"valid"`
-	// Status is the coarse posture: valid | stale | grace | expired | missing | invalid.
+	// Status is the coarse posture: valid | stale | grace | expired | revoked | missing | invalid.
 	Status string `json:"status"`
 	// Reason carries the verification error for missing/invalid/expired.
 	Reason string `json:"reason,omitempty"`
@@ -43,6 +43,16 @@ type State struct {
 	GraceUntil    *time.Time `json:"grace_until,omitempty"`
 	DaysRemaining int        `json:"days_remaining"`
 	LastCheckedAt *time.Time `json:"last_checked_at,omitempty"`
+
+	// Revoked reports that the hub refused the last renew as "license
+	// revoked". It is INFORMATIONAL unless the revoke policy is enforced
+	// (Config.RevokeEnforce): the status and the gates only change with it.
+	Revoked bool `json:"revoked"`
+	// RevokedAt is when the revocation was first observed.
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+	// RevokeGraceUntil is when the instance turns read-only after a revocation
+	// (RevokedAt + the revoke grace). The UI uses it for the warning banner.
+	RevokeGraceUntil *time.Time `json:"revoke_grace_until,omitempty"`
 }
 
 // Entitles reports whether the current snapshot covers addonKey. Wildcard

@@ -19,6 +19,11 @@ import (
 //
 //	LICENSING_ENFORCE       "1"|"true"|"yes"|"on" → gates active (default off)
 //	LICENSING_GRACE_DAYS    integer days of post-expiry grace (default 14)
+//	LICENSING_REVOKE_ENFORCE "1"|"true"|"yes"|"on" → a hub revocation turns the
+//	                        instance read-only after the revoke grace (default
+//	                        off: a revocation is only recorded and surfaced)
+//	LICENSING_REVOKE_GRACE_HOURS  integer hours between the first observed
+//	                        revocation and read-only (default 72)
 //	OPS_LICENSE_PUBKEY      hub Ed25519 license pubkey (hex); else fetched
 //	OPS_LICENSE_TOKEN       bootstrap token (env source)
 //	OPS_LICENSE_FILE        path to a file holding a bootstrap token
@@ -32,6 +37,13 @@ func NewConfigFromEnv() Config {
 		HubBaseURL: strings.TrimSpace(os.Getenv("HUB_BASE_URL")),
 		PubKeyHex:  strings.TrimSpace(os.Getenv("OPS_LICENSE_PUBKEY")),
 		Version:    strings.TrimSpace(os.Getenv("OPS_VERSION")),
+	}
+	cfg.RevokeEnforce = isTruthy(os.Getenv("LICENSING_REVOKE_ENFORCE"))
+	if v := strings.TrimSpace(os.Getenv("LICENSING_REVOKE_GRACE_HOURS")); v != "" {
+		if h, err := strconv.Atoi(v); err == nil && h >= 0 {
+			cfg.RevokeGrace = time.Duration(h) * time.Hour
+			cfg.RevokeGraceSet = true
+		}
 	}
 	if v := strings.TrimSpace(os.Getenv("LICENSING_GRACE_DAYS")); v != "" {
 		if d, err := strconv.Atoi(v); err == nil && d >= 0 {
