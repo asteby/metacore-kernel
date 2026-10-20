@@ -326,6 +326,16 @@ func TestIngest_CursorAdvancesOnlyWithoutInfraErrors(t *testing.T) {
 		if got, _ := e.ap.Ingest(ctx, org, failing); !got.Advanced || got.Counts[OutcomeApplied] != 1 {
 			t.Fatalf("reintento: %+v", got)
 		}
+		// Un error del dato (Invalid) va a revisión y no detiene el cursor.
+		e.sink.fail = Invalid(errors.New("columna x: valor ilegible"))
+		poison := Batch{Source: "erp", Cursor: ver(30, ""), Envelopes: []Envelope{order("erp:orders:4", 4, "a")}}
+		if got, _ := e.ap.Ingest(ctx, org, poison); !got.Advanced || got.Counts[OutcomeReview] != 1 {
+			t.Fatalf("fila envenenada: %+v", got)
+		}
+		if reviewCodes(t, e.review)["erp|erp:orders:4"] != ReviewCodeInvalid {
+			t.Fatalf("revisión = %v", reviewCodes(t, e.review))
+		}
+		e.sink.fail = nil
 		// Un envelope de otro origen dentro del lote va a revisión.
 		mixed := Batch{Source: "erp", Envelopes: []Envelope{{Source: "otro", Entity: "x", ExternalID: "1", Op: OpDelete, SourceVersion: "v"}}}
 		if got, _ := e.ap.Ingest(ctx, org, mixed); got.Counts[OutcomeReview] != 1 {

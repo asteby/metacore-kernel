@@ -41,6 +41,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Límites: `MaxBatchEnvelopes`, `MaxFacets`, `MaxRequires` y largo de ids,
     versión, stream y cursor.
   - `RefStore.ListRefs` (paginado por external_id, para la reconciliación).
+  - `Invalid(err)`: el Sink marca un error del dato (no de infraestructura); el
+    envelope va a revisión y el cursor sigue, sin quedar atorado en una fila
+    envenenada.
   - `Outbound.RetryDead`/`Discard` reciben la organización: un comando de otra
     org responde `ErrCommandNotFound`.
 - **legacybridge/sqlpoll: adaptador de origen `sql_poll`.** Lee por consulta
