@@ -126,6 +126,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     encendido, para que el hub detecte clonado en modo solo alerta.
     `StatusTrackerConfigFromEnv` lee `LICENSING_STATUS_STALE_POLICY` y
     `LICENSING_STATUS_MARGIN_HOURS`.
+  - El renew ANUNCIA `token_formats: ["asteby1"]` (aditivo): el hub solo emite
+    el sobre v2 a quien lo anuncia; un kernel sin este campo sigue recibiendo el
+    token de dos partes. `Config.RetireLegacyKey` / `LICENSING_RETIRE_LEGACY_KEY`
+    (con `Keys`) deja de confiar en la clave legada del hub para que una
+    rotación por key set pueda retirarla. `Tracker.Restore` ya no baja el piso
+    anti-rollback y `IsRevoked` acepta ids publicados como `sigv2.HashedID`.
 
 - **legacybridge: motor genérico de coexistencia con un sistema legado.**
   Paquete nuevo (`bridge/` ya es la costura host-kernel). Sirve para operar el

@@ -174,7 +174,36 @@ func TestRenew_LeaseCounterIsOptIn(t *testing.T) {
 	if _, err := renewService(t, srv2, pubHex, tok, true).renew(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if f, _ := on["token_formats"].([]any); len(f) != 1 || f[0] != "asteby1" {
+		t.Fatalf("renew must announce the v2 envelope via token_formats, got %v", on)
+	}
 	if v, ok := on["lease_ctr"].(float64); !ok || v != 7 {
 		t.Fatalf("flag on: lease_ctr must echo the signed counter (7), got %v", on)
+	}
+}
+
+// A key-set rotation can actually retire the hub's legacy key.
+func TestService_RetireLegacyKeyStopsTrustingHubKey(t *testing.T) {
+	priv, pubHex := testKeypair(t)
+	newPub, newPriv, _ := ed25519.GenerateKey(rand.Reader)
+	extra := sigv2.NewStaticKeyring().Add("lease-2027", newPub, "lease")
+	now := time.Now().UTC()
+	oldTok := mintV2(t, priv, sigv2.LegacyKID, sigv2.DomLease, baseClaims())
+	newTok := mintV2(t, newPriv, "lease-2027", sigv2.DomLease, baseClaims())
+
+	svc := newTestService(pubHex, true, DefaultGrace, now)
+	svc.extraKeys = extra
+	svc.recompute(context.Background(), persistedRow(oldTok))
+	if st := svc.Current(); !st.Valid {
+		t.Fatalf("without retirement the legacy key keeps verifying: %+v", st)
+	}
+	svc.retireLegacy = true
+	svc.recompute(context.Background(), persistedRow(oldTok))
+	if st := svc.Current(); st.Valid {
+		t.Fatalf("retired legacy key still verifies: %+v", st)
+	}
+	svc.recompute(context.Background(), persistedRow(newTok))
+	if st := svc.Current(); !st.Valid {
+		t.Fatalf("key-set key must keep verifying after retirement: %+v", st)
 	}
 }

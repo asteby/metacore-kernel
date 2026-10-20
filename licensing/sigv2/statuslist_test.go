@@ -161,3 +161,34 @@ func TestParseStalePolicy_TypoNeverLocksOut(t *testing.T) {
 		t.Fatal("known values not parsed")
 	}
 }
+
+// Restore after Offer must not lower the anti-rollback floor.
+func TestStatus_RestoreCannotLowerSeqFloor(t *testing.T) {
+	mk, ring := statusFixture(t)
+	tr := NewTracker(TrackerConfig{Keys: ring, Now: func() time.Time { return t0 }})
+	if err := tr.Offer(mk(9, t0, t0.Add(24*time.Hour), RevokedItem{Kind: KindLicense, ID: "bad"})); err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.Restore(mk(3, t0, t0.Add(24*time.Hour))); !errors.Is(err, ErrStatusRollback) {
+		t.Fatalf("restore of an older list must be refused: %v", err)
+	}
+	if tr.Seq() != 9 || !tr.IsRevoked(KindLicense, "bad", "") {
+		t.Fatal("restore lowered the floor / dropped a revocation")
+	}
+}
+
+// The public list carries HashedID, not the raw license id.
+func TestStatus_HashedIDMatches(t *testing.T) {
+	mk, ring := statusFixture(t)
+	tr := NewTracker(TrackerConfig{Keys: ring, Now: func() time.Time { return t0 }})
+	if err := tr.Offer(mk(1, t0, t0.Add(time.Hour), RevokedItem{Kind: KindLicense, ID: HashedID(KindLicense, "lic-9")})); err != nil {
+		t.Fatal(err)
+	}
+	if !tr.IsRevoked(KindLicense, "lic-9", "") || tr.IsRevoked(KindLicense, "lic-8", "") {
+		t.Fatal("hashed id lookup wrong")
+	}
+	// golden vector shared with the hub (internal/license/statuslist_test.go)
+	if got := HashedID(KindLicense, "lic-9"); got != "c8a9c101c0d96ee9658f3222cb2a50aae07137ae7656d8cde2088a126c720464" {
+		t.Fatalf("golden hashed id changed: %s", got)
+	}
+}

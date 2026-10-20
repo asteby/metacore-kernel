@@ -38,8 +38,9 @@ func NewConfigFromEnv() Config {
 		PubKeyHex:  strings.TrimSpace(os.Getenv("OPS_LICENSE_PUBKEY")),
 		Version:    strings.TrimSpace(os.Getenv("OPS_VERSION")),
 
-		RequireV2:    isTruthy(os.Getenv("LICENSING_REQUIRE_V2")),
-		LeaseCounter: isTruthy(os.Getenv("LICENSING_LEASE_COUNTER")),
+		RequireV2:       isTruthy(os.Getenv("LICENSING_REQUIRE_V2")),
+		RetireLegacyKey: isTruthy(os.Getenv("LICENSING_RETIRE_LEGACY_KEY")),
+		LeaseCounter:    isTruthy(os.Getenv("LICENSING_LEASE_COUNTER")),
 	}
 	if v := strings.TrimSpace(os.Getenv("LICENSING_GRACE_DAYS")); v != "" {
 		if d, err := strconv.Atoi(v); err == nil && d >= 0 {

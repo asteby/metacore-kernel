@@ -10,6 +10,8 @@ package sigv2
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -217,6 +219,11 @@ func (t *Tracker) Restore(token string) error {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// Same monotonicity as Offer: a Restore after an Offer must not lower the
+	// anti-rollback floor.
+	if t.doc != nil && (d.Seq < t.doc.Seq || (d.Seq == t.doc.Seq && d.ValidUntil.Before(t.doc.ValidUntil))) {
+		return fmt.Errorf("%w (have seq %d, got %d)", ErrStatusRollback, t.doc.Seq, d.Seq)
+	}
 	t.doc, t.token = d, strings.TrimSpace(token)
 	return nil
 }
@@ -240,7 +247,10 @@ func (t *Tracker) IsRevoked(kind, id, version string) bool {
 		return false
 	}
 	for _, r := range t.doc.Revoked {
-		if r.Kind != kind || r.ID != id {
+		// The hub publishes HashedID(kind, id) instead of the raw id (a public
+		// list must not enumerate every revoked license); the raw form is still
+		// honoured for lists that carry it.
+		if r.Kind != kind || (r.ID != id && r.ID != HashedID(kind, id)) {
 			continue
 		}
 		if r.Version == "" || r.Version == "*" || r.Version == version {
@@ -271,4 +281,12 @@ func (t *Tracker) Evaluate(now time.Time) Verdict {
 		return Verdict{Action: ActionAllow, Reason: reason}
 	}
 	return Verdict{Action: ActionWarn, Reason: reason}
+}
+
+// HashedID is the opaque form under which a revoked id is published:
+// hex(sha256("asteby/status/id/v1\n" + kind + "\n" + id)). The hub and the
+// kernel share it through a golden test.
+func HashedID(kind, id string) string {
+	sum := sha256.Sum256([]byte("asteby/status/id/v1\n" + kind + "\n" + id))
+	return hex.EncodeToString(sum[:])
 }

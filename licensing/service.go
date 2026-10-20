@@ -76,6 +76,12 @@ type Config struct {
 	// current token (field "lease_ctr"), so the hub can detect two copies of
 	// one identity. Default false: the renew body is byte-identical to before.
 	LeaseCounter bool
+	// RetireLegacyKey, together with Keys, stops trusting the hub's legacy
+	// pubkey (kid "legacy" / its derived kid): only the key set verifies. This
+	// is what lets a key-set rotation actually retire the old hub key. Without
+	// Keys it is ignored (there would be nothing left to trust). Default false:
+	// the legacy key keeps verifying behind the key set, as before.
+	RetireLegacyKey bool
 	// Store persists the singleton license Record. Required in practice; a nil
 	// store yields a verify-only service that never persists.
 	Store LicenseStore
@@ -110,6 +116,7 @@ type Service struct {
 	extraKeys    sigv2.Keyring
 	pol          sigv2.Policy
 	leaseCounter bool
+	retireLegacy bool
 
 	now func() time.Time
 
@@ -166,6 +173,7 @@ func New(cfg Config) *Service {
 		extraKeys:       cfg.Keys,
 		pol:             sigv2.Policy{RequireV2: cfg.RequireV2},
 		leaseCounter:    cfg.LeaseCounter,
+		retireLegacy:    cfg.RetireLegacyKey && cfg.Keys != nil,
 		now:             now,
 	}
 	// Seed an empty snapshot so Current() never returns nil before Boot.
@@ -448,6 +456,9 @@ func (s *Service) markValidated(ctx context.Context, row *Record, now time.Time)
 // ring builds the keyring for one verification: the extra keys first (a kid in
 // the key set decides), then the legacy hub key.
 func (s *Service) ring(pubKeyHex string) (sigv2.Keyring, error) {
+	if s.retireLegacy && s.extraKeys != nil {
+		return s.extraKeys, nil
+	}
 	legacy, err := legacyRing(pubKeyHex)
 	if err != nil {
 		if s.extraKeys != nil && errors.Is(err, ErrNoPubKey) {
@@ -529,6 +540,10 @@ func (s *Service) shouldRenew(row *Record) bool {
 	return s.now().Add(renewThreshold).After(*row.ExpiresAt)
 }
 
+// TokenFormatEnvelopeV2 is the token_formats value announcing that this kernel
+// verifies the v2 "asteby1." envelope (sent on every renew).
+const TokenFormatEnvelopeV2 = "asteby1"
+
 // renewResponse mirrors the hub POST /v1/licenses/renew contract (see
 // docs/licensing.md). The instance signs the request with its Ed25519 key so
 // the hub authenticates it via the durable instance-signature path.
@@ -544,8 +559,12 @@ func (s *Service) renew(ctx context.Context) (string, error) {
 	// Body matches the hub's renewLicenseRequest: the instance names itself
 	// (verified against the signature) and reports its build version so the
 	// hub's check-in registry can track the fleet's version spread.
-	payload := map[string]string{
+	payload := map[string]any{
 		"instance_id": s.instanceID.String(),
+		// This kernel verifies the v2 envelope: announce it so the hub may
+		// answer with an "asteby1." token. A kernel without this field gets the
+		// legacy two-part token no matter what the hub flag says.
+		"token_formats": []string{TokenFormatEnvelopeV2},
 	}
 	if s.version != "" {
 		payload["version"] = s.version
@@ -555,12 +574,8 @@ func (s *Service) renew(ctx context.Context) (string, error) {
 	if s.leaseCounter {
 		// Additive and opt-in: the counter lives in the SIGNED claims of the
 		// token we hold, so no host store has to learn a new column.
-		withCtr := map[string]any{"instance_id": payload["instance_id"]}
-		if v, ok := payload["version"]; ok {
-			withCtr["version"] = v
-		}
-		withCtr["lease_ctr"] = s.currentLeaseCounter(ctx)
-		body, err = json.Marshal(withCtr)
+		payload["lease_ctr"] = s.currentLeaseCounter(ctx)
+		body, err = json.Marshal(payload)
 	} else {
 		body, err = json.Marshal(payload)
 	}
