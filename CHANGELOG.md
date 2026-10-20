@@ -9,6 +9,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Pagos a prueba de fallos, ola 0 (`payments/inbox`, `incidents`,
+  `payments/incidents`, `webhookin`).** Ver
+  `docs/DISENO-PAGOS-A-PRUEBA-DE-FALLOS-2026-10-20.md`.
+  - `payments/inbox`: diario durable `commerce_payment_notifications` (solo
+    anexar en las columnas de entrada, con trigger en Postgres), `Record` antes
+    de verificar (503 si no se guarda), `Resolve` con reintentos escalonados y
+    dead letter, redacción de firma y de datos personales, deduplicación,
+    purga (90 días el cuerpo, 24 meses el resultado) y export CSV/NDJSON.
+    `FromDispatch` traduce el resultado del handler a estado y respuesta HTTP.
+  - `incidents`: incidencias de plataforma (`platform_incidents`) separadas por
+    dominio, con huella, agrupación, ciclo abierta/reconocida/resuelta, puente a
+    `notifications` y evento `kernel.<dominio>.incident_opened`.
+    `payments/incidents` es la fachada del dominio `payments`.
+  - `webhookin`: `Route.Kind="payments"`; un `{"success":false}` del handler se
+    responde 503 (antes 200 y la pasarela no reintentaba). `Receiver.Lookup`.
 - **Coherencia de cachés (`cachecoherence`, `database/staleplan`).** Ver
   `docs/CACHE-COHERENCE.md`.
   - `cachecoherence.Bump(reason, WithOrg, WithAddon)`: épocas por

@@ -190,6 +190,12 @@ type Response struct {
 	Headers  map[string]string
 	Body     json.RawMessage
 	Output   []byte
+	// Mapped is true when the kernel, not the handler, chose Status: a
+	// payments route answered {"success":false,...} (an addon's errEnvelope)
+	// and the kernel turned it into 503. Cause holds the handler's error
+	// text then.
+	Mapped bool
+	Cause  string
 }
 
 // BodyBytes returns the bytes to write on the wire: Body as-is for a JSON (or
@@ -258,4 +264,43 @@ func sanitizeResponseHeaders(in map[string]string) map[string]string {
 		out[canon] = strings.TrimSpace(v)
 	}
 	return out
+}
+
+// mapFailureEnvelope is the safety net of a payments route: a handler output
+// of {"success":false,...} that is not a response envelope would otherwise be
+// answered 200 by the host, and the provider would never retry the delivery.
+// It becomes a 503 envelope carrying the handler's error text.
+func mapFailureEnvelope(resp Response) Response {
+	if resp.Envelope {
+		return resp
+	}
+	raw := bytes.TrimSpace(resp.Output)
+	if len(raw) == 0 || raw[0] != '{' {
+		return resp
+	}
+	var out struct {
+		Success *bool           `json:"success"`
+		Error   json.RawMessage `json:"error"`
+		Message string          `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil || out.Success == nil || *out.Success {
+		return resp
+	}
+	cause := out.Message
+	if len(out.Error) > 0 {
+		var s string
+		if json.Unmarshal(out.Error, &s) == nil {
+			cause = s
+		} else {
+			cause = string(out.Error)
+		}
+	}
+	if len(cause) > 300 {
+		cause = cause[:300]
+	}
+	body, _ := json.Marshal(map[string]any{"success": false, "error": "temporarily unavailable"})
+	resp.Envelope, resp.Status, resp.Body = true, http.StatusServiceUnavailable, body
+	resp.Headers = map[string]string{"Retry-After": "30"}
+	resp.Mapped, resp.Cause = true, cause
+	return resp
 }

@@ -95,7 +95,17 @@ type Route struct {
 	// route. Never widens the hard deny list (cookies, proxy credentials) nor
 	// forwards Authorization on a route the kernel verifies.
 	Headers []string
+	// Kind classifies the route for the host. "payments" marks a payment
+	// provider's notification endpoint (the addon provides
+	// commerce.payments.*): the host journals it before dispatching (package
+	// payments/inbox) and DispatchRequest turns a handler answer of
+	// {"success":false,...} into HTTP 503, so the provider retries instead
+	// of treating the delivery as accepted. "" is a plain route.
+	Kind string
 }
+
+// KindPayments is Route.Kind of a payment provider's notification endpoint.
+const KindPayments = "payments"
 
 // Typed errors so the host HTTP layer can map to status codes (404 / 401 / 400 /
 // 500) without string matching.
@@ -178,6 +188,15 @@ func (r *Receiver) Unregister(path string) {
 	delete(r.routes, path)
 }
 
+// Lookup returns the route registered at path (for hosts that need its Kind
+// or Key before dispatching).
+func (r *Receiver) Lookup(path string) (Route, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	route, ok := r.routes[path]
+	return route, ok
+}
+
 // Inbound is one HTTP request reaching a webhook mount, as the host saw it.
 type Inbound struct {
 	// Path is the receiver route key (the Route.Path it was registered under).
@@ -246,7 +265,11 @@ func (r *Receiver) DispatchRequest(ctx context.Context, orgID uuid.UUID, in Inbo
 		if err != nil {
 			return Response{}, err
 		}
-		return decodeResponse(out), nil
+		resp := decodeResponse(out)
+		if route.Kind == KindPayments {
+			resp = mapFailureEnvelope(resp)
+		}
+		return resp, nil
 	}
 	return Response{}, dispatcher.Dispatch(ctx, orgID, target, payload)
 }
