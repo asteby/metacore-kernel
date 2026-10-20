@@ -38,7 +38,9 @@ func legacyDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func stamp(sec int) string { return t0.Add(time.Duration(sec) * time.Second).Format("2006-01-02 15:04:05") }
+func stamp(sec int) string {
+	return t0.Add(time.Duration(sec) * time.Second).Format("2006-01-02 15:04:05")
+}
 
 func exec(t *testing.T, db *sql.DB, q string, args ...any) {
 	t.Helper()
@@ -80,7 +82,9 @@ type memSink struct {
 	dead map[string]bool
 }
 
-func newMemSink() *memSink { return &memSink{rows: map[string]map[string]any{}, dead: map[string]bool{}} }
+func newMemSink() *memSink {
+	return &memSink{rows: map[string]map[string]any{}, dead: map[string]bool{}}
+}
 
 func (m *memSink) DeriveID(org, entity, ext string) string {
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(org+"|"+entity+"|"+ext)).String()
