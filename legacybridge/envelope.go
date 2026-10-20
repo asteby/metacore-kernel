@@ -27,6 +27,14 @@ const (
 	MaxEnvelopeBytes = 4 << 20
 	// MaxBatchEnvelopes acota cuántos envelopes trae un lote.
 	MaxBatchEnvelopes = 5000
+	// MaxFacets y MaxRequires acotan las facetas y dependencias de un envelope.
+	MaxFacets   = 64
+	MaxRequires = 256
+
+	// maxIDLen acota source, entity, external_id, sucursal y stream.
+	maxIDLen = 256
+	// maxCursorLen acota la versión de una fila y el cursor de un lote.
+	maxCursorLen = 512
 )
 
 // Aggregate es la raíz de un envelope y sus hijos completos. El aplicador
@@ -90,6 +98,20 @@ func (e Envelope) Validate() error {
 	}
 	if strings.TrimSpace(e.SourceVersion) == "" {
 		errs = append(errs, "source_version vacío")
+	}
+	for name, v := range map[string]string{"source": e.Source, "entity": e.Entity, "external_id": e.ExternalID, "branch_external_id": e.BranchExternalID} {
+		if len(v) > maxIDLen {
+			errs = append(errs, fmt.Sprintf("%s supera %d bytes", name, maxIDLen))
+		}
+	}
+	if len(e.SourceVersion) > maxCursorLen {
+		errs = append(errs, fmt.Sprintf("source_version supera %d bytes", maxCursorLen))
+	}
+	if len(e.Facets) > MaxFacets {
+		errs = append(errs, fmt.Sprintf("%d facetas (máximo %d)", len(e.Facets), MaxFacets))
+	}
+	if len(e.Requires) > MaxRequires {
+		errs = append(errs, fmt.Sprintf("%d dependencias (máximo %d)", len(e.Requires), MaxRequires))
 	}
 	switch e.Op {
 	case OpUpsert:
@@ -205,6 +227,26 @@ func CompareVersions(candidate, stored string) VersionOrder {
 		return VersionSame
 	}
 	return VersionNewer
+}
+
+// CompareCursors ordena dos cursores de un flujo: "<RFC3339Nano>[#<desempate>]".
+// El instante se compara como tal (si ambos son RFC3339; si no, como texto) y,
+// con el mismo instante, el desempate se compara como texto (el adaptador lo
+// emite ordenable, p. ej. con ceros a la izquierda). A diferencia de
+// CompareVersions es un orden total: un cursor igual o menor no avanza.
+func CompareCursors(candidate, stored string) int {
+	if stored == "" {
+		if candidate == "" {
+			return 0
+		}
+		return 1
+	}
+	ct, cr, _ := strings.Cut(candidate, "#")
+	st, sr, _ := strings.Cut(stored, "#")
+	if c := compareStamp(ct, st); c != 0 {
+		return c
+	}
+	return strings.Compare(cr, sr)
 }
 
 func compareStamp(a, b string) int {

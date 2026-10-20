@@ -55,9 +55,13 @@ func postgresDB(t *testing.T) *gorm.DB {
 	if err := admin.Exec("CREATE SCHEMA " + schema).Error; err != nil {
 		t.Fatal(err)
 	}
-	sep := "?"
-	if strings.Contains(dsn, "?") {
-		sep = "&"
+	// El CI usa el DSN clave=valor; en local suele ser URL.
+	sep := " "
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		sep = "?"
+		if strings.Contains(dsn, "?") {
+			sep = "&"
+		}
 	}
 	db, err := gorm.Open(postgres.Open(dsn+sep+"search_path="+schema), cfg)
 	if err != nil {

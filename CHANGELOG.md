@@ -34,6 +34,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     del propio puente (`CorrelationPrefix`).
   - `HTTPConnector` (Bearer, `X-Idempotency-Key`, firma HMAC-SHA256
     `Sign`/`Verify`; 4xx de validación = permanente, 5xx/429 = reintento).
+  - Concurrencia: cada envelope se aplica con su fila tomada (candado de
+    proceso + `Locker`, que en Postgres es `pg_advisory_xact_lock`) y el cursor
+    se avanza bajo candado con `CompareCursors` (orden total; nunca retrocede).
+    Probado con dos aplicadores a la vez sobre Postgres.
+  - Límites: `MaxBatchEnvelopes`, `MaxFacets`, `MaxRequires` y largo de ids,
+    versión, stream y cursor.
+  - `RefStore.ListRefs` (paginado por external_id, para la reconciliación).
+  - `Outbound.RetryDead`/`Discard` reciben la organización: un comando de otra
+    org responde `ErrCommandNotFound`.
 
 ### Fixed
 

@@ -81,6 +81,22 @@ func (m *MemoryStore) PutRef(_ context.Context, r Ref) error {
 	return nil
 }
 
+func (m *MemoryStore) ListRefs(_ context.Context, org, system, entity, after string, limit int) ([]Ref, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []Ref
+	for _, r := range m.refs {
+		if r.Org == org && r.System == system && r.Entity == entity && r.ExternalID > after {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ExternalID < out[j].ExternalID })
+	if n := clampRefLimit(limit); len(out) > n {
+		out = out[:n]
+	}
+	return out, nil
+}
+
 func (m *MemoryStore) GetCursor(_ context.Context, org, system, stream string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

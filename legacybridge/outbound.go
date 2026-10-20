@@ -338,15 +338,28 @@ func (o *Outbound) Run(ctx context.Context, every time.Duration) {
 	}
 }
 
-// RetryDead regresa un comando muerto a la cola (con sus intentos en cero) y
-// desbloquea su agregado.
-func (o *Outbound) RetryDead(ctx context.Context, id string) (Command, error) {
+// commandOf lee el comando id de la organización org. Un comando de otra
+// organización responde igual que uno inexistente.
+func (o *Outbound) commandOf(ctx context.Context, org, id string) (Command, error) {
+	if org == "" {
+		return Command{}, errors.New("legacybridge: operación sobre un comando sin organización")
+	}
 	c, ok, err := o.cfg.Store.GetCommand(ctx, id)
 	if err != nil {
-		return c, err
+		return Command{}, err
 	}
-	if !ok {
-		return c, ErrCommandNotFound
+	if !ok || c.Org != org {
+		return Command{}, ErrCommandNotFound
+	}
+	return c, nil
+}
+
+// RetryDead regresa un comando muerto de org a la cola (con sus intentos en
+// cero) y desbloquea su agregado.
+func (o *Outbound) RetryDead(ctx context.Context, org, id string) (Command, error) {
+	c, err := o.commandOf(ctx, org, id)
+	if err != nil {
+		return c, err
 	}
 	if c.Status != CommandDead {
 		return c, fmt.Errorf("legacybridge: solo un comando dead se reintenta (está %s)", c.Status)
@@ -359,15 +372,12 @@ func (o *Outbound) RetryDead(ctx context.Context, id string) (Command, error) {
 	return c, o.kick(ctx, AggregateRef{Org: c.Org, System: c.System, AggregateKey: c.AggregateKey}, time.Time{})
 }
 
-// Discard descarta un comando muerto (decisión explícita de un operador) y
-// deja seguir al resto de su agregado.
-func (o *Outbound) Discard(ctx context.Context, id, actor string) (Command, error) {
-	c, ok, err := o.cfg.Store.GetCommand(ctx, id)
+// Discard descarta un comando muerto de org (decisión explícita de un
+// operador) y deja seguir al resto de su agregado.
+func (o *Outbound) Discard(ctx context.Context, org, id, actor string) (Command, error) {
+	c, err := o.commandOf(ctx, org, id)
 	if err != nil {
 		return c, err
-	}
-	if !ok {
-		return c, ErrCommandNotFound
 	}
 	if c.Status != CommandDead {
 		return c, fmt.Errorf("legacybridge: solo un comando dead se descarta (está %s)", c.Status)

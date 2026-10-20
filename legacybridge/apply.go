@@ -89,7 +89,10 @@ type Config struct {
 }
 
 // Applier aplica envelopes del legado en el host.
-type Applier struct{ cfg Config }
+type Applier struct {
+	cfg   Config
+	locks keyLocks
+}
 
 // NewApplier valida la configuración.
 func NewApplier(cfg Config) (*Applier, error) {
@@ -147,9 +150,18 @@ func (a *Applier) Ingest(ctx context.Context, org string, b Batch) (IngestResult
 	if b.Source == "" {
 		return IngestResult{}, errors.New("legacybridge: lote sin source")
 	}
+	if len(b.Envelopes) > MaxBatchEnvelopes {
+		return IngestResult{}, fmt.Errorf("legacybridge: el lote trae %d envelopes (máximo %d)", len(b.Envelopes), MaxBatchEnvelopes)
+	}
+	if len(b.Cursor) > maxCursorLen {
+		return IngestResult{}, fmt.Errorf("legacybridge: cursor de %d bytes (máximo %d)", len(b.Cursor), maxCursorLen)
+	}
 	stream := b.Stream
 	if stream == "" {
 		stream = defaultStream
+	}
+	if len(stream) > maxIDLen {
+		return IngestResult{}, fmt.Errorf("legacybridge: stream de %d bytes (máximo %d)", len(stream), maxIDLen)
 	}
 	out := IngestResult{Counts: map[Outcome]int{}}
 	failed := false
@@ -169,18 +181,24 @@ func (a *Applier) Ingest(ctx context.Context, org string, b Batch) (IngestResult
 		out.Results = append(out.Results, r)
 		out.Counts[r.Outcome]++
 	}
-	prev, err := a.cfg.Store.GetCursor(ctx, org, b.Source, stream)
-	if err != nil {
-		return out, err
-	}
-	out.Cursor = prev
-	if !failed && b.Cursor != "" && CompareVersions(b.Cursor, prev) == VersionNewer {
+	// Leer, comparar y guardar el cursor bajo su candado: dos corridas
+	// simultáneas del mismo flujo nunca lo hacen retroceder.
+	err := withKey(ctx, &a.locks, a.cfg.Store, a.cfg.Atomic, cursorKey(org, b.Source, stream), func(ctx context.Context) error {
+		prev, err := a.cfg.Store.GetCursor(ctx, org, b.Source, stream)
+		if err != nil {
+			return err
+		}
+		out.Cursor = prev
+		if failed || b.Cursor == "" || CompareCursors(b.Cursor, prev) <= 0 {
+			return nil
+		}
 		if err := a.cfg.Store.SetCursor(ctx, org, b.Source, stream, b.Cursor); err != nil {
-			return out, err
+			return err
 		}
 		out.Cursor, out.Advanced = b.Cursor, true
-	}
-	return out, nil
+		return nil
+	})
+	return out, err
 }
 
 // Apply aplica un envelope. Nunca devuelve error: una falla de infraestructura
@@ -190,7 +208,9 @@ func (a *Applier) Apply(ctx context.Context, org string, env Envelope) Result {
 		return a.review(ctx, org, env.Source, env, ReviewCodeInvalid, err.Error())
 	}
 	var res Result
-	err := a.cfg.Atomic(ctx, func(ctx context.Context) error {
+	// Una fila a la vez (en el proceso y, con Locker, entre procesos): dos
+	// corridas simultáneas no aplican versiones fuera de orden.
+	err := withKey(ctx, &a.locks, a.cfg.Store, a.cfg.Atomic, rowKey(org, env.Source, env.Entity, env.ExternalID), func(ctx context.Context) error {
 		var err error
 		res, err = a.apply(ctx, org, env)
 		return err

@@ -55,3 +55,5 @@ jobs:
       - run: go test -count=1 -race -v -run '/Postgres' ./idempotency/ ./outbox/
       # Ledger de pagos: holds y cobros concurrentes, índices parciales, NUMERIC.
       - run: go test -count=1 -race -v -run '/Postgres' ./payments/ledger/
+      # Puente legado: candado por fila y cursor con dos aplicadores a la vez.
+      - run: go test -count=1 -race -v -run '/postgres' ./legacybridge/

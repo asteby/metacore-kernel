@@ -10,6 +10,7 @@ import (
 
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/outbox"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -191,7 +192,10 @@ func TestOutbound_PermanentErrorDeadLettersAndBlocksAggregateUntilRetry(t *testi
 		if len(e.conn.order()) != 0 {
 			t.Fatalf("a2 salió con a1 muerto: %v", e.conn.order())
 		}
-		if _, err := e.out.RetryDead(ctx, a1.ID); err != nil {
+		if _, err := e.out.RetryDead(ctx, uuid.NewString(), a1.ID); !errors.Is(err, ErrCommandNotFound) {
+			t.Fatalf("otra organización reintentó el comando: %v", err)
+		}
+		if _, err := e.out.RetryDead(ctx, org, a1.ID); err != nil {
 			t.Fatal(err)
 		}
 		waitFor(t, "a1 y a2 entregados", func() bool { return len(e.conn.order()) == 2 })
@@ -218,7 +222,10 @@ func TestOutbound_MaxAttemptsDeadLettersAndDiscardUnblocks(t *testing.T) {
 		case <-time.After(20 * time.Second):
 			t.Fatal("a1 no agotó intentos")
 		}
-		if _, err := e.out.Discard(ctx, a1.ID, "operador"); err != nil {
+		if _, err := e.out.Discard(ctx, uuid.NewString(), a1.ID, "intruso"); !errors.Is(err, ErrCommandNotFound) {
+			t.Fatalf("otra organización descartó el comando: %v", err)
+		}
+		if _, err := e.out.Discard(ctx, org, a1.ID, "operador"); err != nil {
 			t.Fatal(err)
 		}
 		waitFor(t, "a2 entregado", func() bool { return len(e.conn.order()) == 1 })
@@ -226,7 +233,7 @@ func TestOutbound_MaxAttemptsDeadLettersAndDiscardUnblocks(t *testing.T) {
 		if got.Status != CommandDiscarded {
 			t.Fatalf("a1 = %s", got.Status)
 		}
-		if _, err := e.out.Discard(ctx, a1.ID, "x"); err == nil {
+		if _, err := e.out.Discard(ctx, org, a1.ID, "x"); err == nil {
 			t.Fatal("solo se descarta un dead")
 		}
 	})

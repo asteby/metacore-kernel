@@ -251,6 +251,30 @@ func (s *GormStore) PutRef(ctx context.Context, r Ref) error {
 		string(r.CreatedIn), string(r.State), r.UpdatedAt).Error
 }
 
+func (s *GormStore) ListRefs(ctx context.Context, org, system, entity, after string, limit int) ([]Ref, error) {
+	var rows []refRow
+	if err := s.conn(ctx).Raw(`SELECT `+refCols+` FROM `+TableRefs+
+		` WHERE org_id = ? AND system = ? AND entity = ? AND external_id > ? ORDER BY external_id LIMIT ?`,
+		org, system, entity, after, clampRefLimit(limit)).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]Ref, len(rows))
+	for i, r := range rows {
+		out[i] = r.ref()
+	}
+	return out, nil
+}
+
+// Lock toma pg_advisory_xact_lock(key) en la transacción del contexto (solo
+// Postgres; SQLite ya serializa las escrituras).
+func (s *GormStore) Lock(ctx context.Context, key string) error {
+	tx, ok := TxFrom(ctx)
+	if !ok || !s.pg {
+		return nil
+	}
+	return tx.Exec(`SELECT pg_advisory_xact_lock(?)`, advisoryKey(key)).Error
+}
+
 // --- cursores ---
 
 func (s *GormStore) GetCursor(ctx context.Context, org, system, stream string) (string, error) {

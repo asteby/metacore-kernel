@@ -67,6 +67,28 @@ type RefStore interface {
 	// PutRef inserta o reemplaza por (org, system, entity, external_id).
 	// ErrRefConflict si el local_id ya está mapeado a otro external_id.
 	PutRef(ctx context.Context, r Ref) error
+	// ListRefs pagina los refs de (org, system, entity) por external_id, después
+	// de after (vacío = desde el principio). limit se acota a MaxListRefs.
+	ListRefs(ctx context.Context, org, system, entity, after string, limit int) ([]Ref, error)
+}
+
+// MaxListRefs acota una página de ListRefs.
+const MaxListRefs = 1000
+
+func clampRefLimit(limit int) int {
+	if limit <= 0 || limit > MaxListRefs {
+		return MaxListRefs
+	}
+	return limit
+}
+
+// Locker serializa el trabajo sobre una clave entre procesos. Lock se llama
+// dentro de la transacción del contexto (Config.Atomic) y el candado dura lo
+// que dura esa transacción (en Postgres, pg_advisory_xact_lock). Sin
+// transacción en el contexto no hace nada: el aplicador ya serializa dentro
+// del proceso.
+type Locker interface {
+	Lock(ctx context.Context, key string) error
 }
 
 // ErrRefConflict: el local_id ya está mapeado a otro external_id (duplicado

@@ -33,7 +33,23 @@
 //     transacción que actualiza bridge_refs (Config.Atomic).
 //
 // El cursor del legado lo guarda el host (CursorStore) y se devuelve en cada
-// respuesta: el adaptador de origen no tiene estado.
+// respuesta: el adaptador de origen no tiene estado. Es "<RFC3339Nano>[#<desempate>]"
+// y solo avanza (CompareCursors).
+//
+// # Concurrencia
+//
+// Cada envelope se aplica con su fila tomada (un candado de proceso por fila y,
+// si el Store implementa Locker, pg_advisory_xact_lock dentro de la transacción
+// de Config.Atomic). Así dos corridas simultáneas, en el mismo proceso o en dos,
+// nunca escriben una versión vieja encima de una nueva. El cursor se lee,
+// compara y guarda bajo su propio candado: no retrocede.
+//
+// # Límites
+//
+// Un lote trae a lo más MaxBatchEnvelopes; un envelope, MaxFacets facetas y
+// MaxRequires dependencias, ids de hasta 256 bytes y versión de hasta 512. El
+// host acota además el cuerpo HTTP. El motor nunca arma SQL con datos del
+// lote: todo valor viaja como parámetro.
 //
 // # Salida: host → legado
 //
