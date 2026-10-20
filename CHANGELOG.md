@@ -43,6 +43,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `RefStore.ListRefs` (paginado por external_id, para la reconciliación).
   - `Outbound.RetryDead`/`Discard` reciben la organización: un comando de otra
     org responde `ErrCommandNotFound`.
+- **legacybridge/sqlpoll: adaptador de origen `sql_poll`.** Lee por consulta
+  la base del legado (MySQL/MariaDB, Postgres o SQLite) con un usuario de solo
+  lectura y produce envelopes, uno por fila. El mapeo es dato (`Profile`:
+  tabla, llave, `updated_at`, sucursal y columnas `copy`/`ref`/`meta`/`bool`/
+  `const`); los identificadores se validan y se citan con las comillas del
+  dialecto, y todo valor va como parámetro.
+  - `Poll`: cambios después del cursor en orden (`updated_at`, llave), con
+    ventana de asentamiento (`Settle`) y fechas sin zona interpretadas en
+    `Location`.
+  - `Sync`: Poll + Ingest por flujo con el cursor del host; retoma tras una
+    caída y converge con dos corridas a la vez.
+  - `Reconcile`: recorre la tabla por llave contra `bridge_refs`; reemite lo
+    que falta o cambió sin tocar `updated_at` y emite `op=delete` de las llaves
+    borradas en duro (comprobando antes que de verdad no existan).
 
 ### Fixed
 
