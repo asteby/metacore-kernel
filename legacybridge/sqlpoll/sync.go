@@ -232,6 +232,48 @@ func (s *Source) Reconcile(ctx context.Context, org, stream string, refs RefRead
 	return rep, flush(true)
 }
 
+// Scan recorre la tabla del flujo por llave y llama a fn con el envelope de
+// cada fila (sin tocar cursores). Sirve para adoptar filas que el host ya tiene
+// antes de la primera sincronización.
+func (s *Source) Scan(ctx context.Context, stream string, fn func(lb.Envelope) error) error {
+	st, ok := s.Profile.Stream(stream)
+	if !ok {
+		return fmt.Errorf("sqlpoll: flujo %q no está en el perfil", stream)
+	}
+	d := s.Dialect
+	key := d.keyExpr(st)
+	page := s.pageSize()
+	var after any
+	for {
+		ph := &placeholders{d: d}
+		q := "SELECT " + s.selectList(st) + " FROM " + d.quote(st.Table)
+		var args []any
+		if after != nil {
+			q += " WHERE " + key + " > " + ph.next()
+			args = append(args, after)
+		}
+		q += " ORDER BY " + key + " LIMIT " + ph.next()
+		args = append(args, page)
+		rows, err := s.query(ctx, q, args...)
+		if err != nil {
+			return fmt.Errorf("sqlpoll: recorrer %s: %w", st.Table, err)
+		}
+		for _, r := range rows {
+			env, err := s.envelope(st, r)
+			if err != nil {
+				return err
+			}
+			if err := fn(env); err != nil {
+				return err
+			}
+		}
+		if len(rows) < page {
+			return nil
+		}
+		after = rows[len(rows)-1][st.Key]
+	}
+}
+
 func (s *Source) exists(ctx context.Context, st Stream, key string) (bool, error) {
 	ph := &placeholders{d: s.Dialect}
 	rows, err := s.query(ctx, "SELECT "+s.Dialect.quote(st.Key)+" FROM "+s.Dialect.quote(st.Table)+

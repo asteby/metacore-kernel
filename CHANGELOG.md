@@ -65,6 +65,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     el desempate del cursor, así una collation que no es binaria no lo atasca.
     Un cursor que no avanza es `ErrCursorStalled` en `StreamReport.Error`, no un
     bucle silencioso.
+  - `QueryTimeout` (30 s por omisión) por consulta y `Scan` (recorrido por
+    llave sin tocar cursores, para adoptar filas que el host ya tiene).
 
 ### Fixed
 

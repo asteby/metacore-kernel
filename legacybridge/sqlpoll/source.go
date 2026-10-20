@@ -65,6 +65,8 @@ func (p *placeholders) next() string {
 const (
 	DefaultPageSize = 500
 	MaxPageSize     = 5000
+	// DefaultQueryTimeout acota cada consulta al legado.
+	DefaultQueryTimeout = 30 * time.Second
 	// DefaultSettle es cuánto se espera a que una fila modificada se asiente
 	// (transacciones abiertas en el legado) antes de leerla.
 	DefaultSettle = 10 * time.Second
@@ -83,7 +85,10 @@ type Source struct {
 	// Settle: Poll no lee filas modificadas hace menos de esto (DefaultSettle).
 	Settle   time.Duration
 	PageSize int
-	Now      func() time.Time
+	// QueryTimeout acota cada consulta al legado (DefaultQueryTimeout): un
+	// túnel medio caído no deja el flujo colgado.
+	QueryTimeout time.Duration
+	Now          func() time.Time
 }
 
 // New valida el perfil y completa los valores por omisión.
@@ -216,6 +221,12 @@ var ErrCursorStalled = errors.New("sqlpoll: el cursor no avanza (el orden de la 
 type row map[string]any
 
 func (s *Source) query(ctx context.Context, q string, args ...any) ([]row, error) {
+	timeout := s.QueryTimeout
+	if timeout <= 0 {
+		timeout = DefaultQueryTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	rs, err := s.DB.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err

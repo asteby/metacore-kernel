@@ -76,3 +76,32 @@ func TestProfile_RejectsUnknownKeyType(t *testing.T) {
 		t.Fatal("key_type desconocido debe rechazarse")
 	}
 }
+
+func TestScan_VisitsEveryRowByKey(t *testing.T) {
+	db := legacyDB(t)
+	seed(t, db)
+	s := newSource(t, db, t0.Add(time.Hour))
+	s.PageSize = 3
+	var got []string
+	if err := s.Scan(context.Background(), "products", func(e lb.Envelope) error {
+		got = append(got, e.ExternalID)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 7 || got[0] != "7l:products:1" || got[6] != "7l:products:7" {
+		t.Fatalf("scan = %v", got)
+	}
+}
+
+// Una consulta que no responde se corta con QueryTimeout.
+func TestSource_QueryTimeoutCutsAHungQuery(t *testing.T) {
+	db := legacyDB(t)
+	s := newSource(t, db, t0)
+	s.QueryTimeout = 50 * time.Millisecond
+	start := time.Now()
+	_, err := s.query(context.Background(), `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n) SELECT count(*) FROM n`)
+	if err == nil || time.Since(start) > 5*time.Second {
+		t.Fatalf("err = %v tras %s", err, time.Since(start))
+	}
+}
