@@ -292,7 +292,7 @@ func (s *Service) Activate(ctx context.Context, token string) (*State, error) {
 // recompute verifies row's token and swaps in a fresh snapshot.
 func (s *Service) recompute(ctx context.Context, row *Record) {
 	st := s.compute(ctx, row)
-	s.applyRevocation(st, row)
+	s.applyRevocation(ctx, st, row)
 	s.store2(st)
 }
 
@@ -335,37 +335,61 @@ func (s *Service) markRevoked(ctx context.Context, row *Record) *Record {
 	if row == nil {
 		return row
 	}
-	if row.RevokedAt == nil {
-		s.mu.RLock()
-		mem := s.revokedMem
-		s.mu.RUnlock()
-		if mem != nil {
-			row.RevokedAt = mem
-			return row
+	if at := s.revokeAnchor(ctx, row); at != nil {
+		row.RevokedAt = at
+		return row
+	}
+	now := s.now()
+	s.mu.Lock()
+	s.revokedMem = &now
+	s.mu.Unlock()
+	row.RevokedAt = &now
+	s.log.Warn("licensing: hub refused the renew as revoked", "revoke_grace", s.revokeGrace.String(), "enforced", s.revokeEnforce)
+	if s.store != nil {
+		if err := s.store.Save(ctx, row); err != nil {
+			s.log.Warn("licensing: persist revocation failed", "err", err)
 		}
-		now := s.now()
-		s.mu.Lock()
-		s.revokedMem = &now
-		s.mu.Unlock()
-		row.RevokedAt = &now
-		s.log.Warn("licensing: hub refused the renew as revoked", "revoke_grace", s.revokeGrace.String(), "enforced", s.revokeEnforce)
-		if s.store != nil {
-			if err := s.store.Save(ctx, row); err != nil {
-				s.log.Warn("licensing: persist revocation failed", "err", err)
-			}
-		}
+		s.saveAnchor(ctx, &now)
 	}
 	return row
+}
+
+// revokeAnchor resolves the first-observed revocation instant from, in order:
+// the Record itself, the store's RevokeAnchorStore side channel (for stores
+// whose Record cannot carry the field, e.g. a GORM table), and the in-process
+// mirror. Nil when the instance is not revoked.
+func (s *Service) revokeAnchor(ctx context.Context, row *Record) *time.Time {
+	if row != nil && row.RevokedAt != nil {
+		return row.RevokedAt
+	}
+	if as, ok := s.store.(RevokeAnchorStore); ok && s.store != nil {
+		if at, err := as.LoadRevokeAnchor(ctx); err != nil {
+			s.log.Warn("licensing: load revoke anchor failed", "err", err)
+		} else if at != nil {
+			return at
+		}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.revokedMem
+}
+
+// saveAnchor writes (or clears, with nil) the anchor through the optional
+// RevokeAnchorStore side channel. A no-op for stores that do not implement it.
+func (s *Service) saveAnchor(ctx context.Context, at *time.Time) {
+	if as, ok := s.store.(RevokeAnchorStore); ok && s.store != nil {
+		if err := as.SaveRevokeAnchor(ctx, at); err != nil {
+			s.log.Warn("licensing: persist revoke anchor failed", "err", err)
+		}
+	}
 }
 
 // applyRevocation overlays the revocation onto a computed snapshot. The
 // informational fields are always filled; the posture (Status/Valid/InGrace)
 // only changes when the revoke policy is enforced AND the revoke grace elapsed.
-func (s *Service) applyRevocation(st *State, row *Record) {
+func (s *Service) applyRevocation(ctx context.Context, st *State, row *Record) {
 	if row != nil && row.RevokedAt == nil {
-		s.mu.RLock()
-		row.RevokedAt = s.revokedMem // store without the field: use the in-process anchor
-		s.mu.RUnlock()
+		row.RevokedAt = s.revokeAnchor(ctx, row)
 	}
 	if row == nil || row.RevokedAt == nil || !st.Configured {
 		return
@@ -513,13 +537,25 @@ func (s *Service) persist(ctx context.Context, token, source string) (*Record, e
 		ValidatedAt:    &now,
 		Source:         source,
 	}
+	// A standing revocation is lifted ONLY by evidence the issuer reinstated
+	// the license: a successful renew (source "renew": the hub answered 200)
+	// or a token issued after the revocation was first observed. Re-pasting
+	// the same (or any older) token must NOT restart the revoke grace.
+	var keep *time.Time
+	if source != "renew" {
+		prev, _ := s.load(ctx)
+		if at := s.revokeAnchor(ctx, prev); at != nil && !ia.After(*at) {
+			keep = at
+		}
+	}
+	row.RevokedAt = keep
 	if err := s.store.Save(ctx, row); err != nil {
 		return nil, err
 	}
-	// A freshly accepted token (renew or activation) lifts any revocation.
 	s.mu.Lock()
-	s.revokedMem = nil
+	s.revokedMem = keep
 	s.mu.Unlock()
+	s.saveAnchor(ctx, keep)
 	return row, nil
 }
 

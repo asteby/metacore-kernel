@@ -62,6 +62,17 @@ type LicenseStore interface {
 	Save(ctx context.Context, rec *Record) error
 }
 
+// RevokeAnchorStore is an OPTIONAL side channel for stores whose persisted row
+// cannot carry Record.RevokedAt (a GORM table that has not added the column to
+// its Record mapping). When the LicenseStore also implements it, the service
+// persists the first-observed revocation instant through it, so the revoke
+// grace survives restarts and cannot be reset. Save/Load of the Record itself
+// need not touch the anchor. SaveRevokeAnchor(nil) clears it.
+type RevokeAnchorStore interface {
+	LoadRevokeAnchor(ctx context.Context) (*time.Time, error)
+	SaveRevokeAnchor(ctx context.Context, at *time.Time) error
+}
+
 // MemoryStore is an in-memory LicenseStore for tests and ephemeral embedders.
 type MemoryStore struct {
 	mu  sync.RWMutex

@@ -141,3 +141,15 @@ type LicenseStore interface {
 
 `MemoryStore` (tests/ephemeral) and `FileStore` (appliances) ship in the
 package; ops adapts its GORM singleton row.
+
+### Revocation anchor: persistence and re-paste
+
+The revoke grace is anchored on the FIRST observed `license_revoked` 403 and
+must survive restarts. A store whose row cannot carry `Record.RevokedAt` (e.g.
+a GORM table) should also implement the optional `licensing.RevokeAnchorStore`
+(`LoadRevokeAnchor` / `SaveRevokeAnchor`); the service persists the anchor
+through it. Without either, the anchor lives in process memory only.
+
+A standing revocation is lifted only by a successful hub renew (`source=renew`)
+or by activating a token whose `iat` is later than the revocation instant.
+Re-pasting the same or an older token does NOT restart the grace.

@@ -296,3 +296,108 @@ func TestRevoke_StoreWithoutFieldKeepsAnchorInProcess(t *testing.T) {
 		t.Fatalf("anchor was reset every cycle by a store without the field: %+v", st)
 	}
 }
+
+// Re-pasting the SAME (older) token must not restart the revoke grace: a
+// revoked customer could otherwise paste every 70h and never turn read-only.
+func TestRevoke_RepastingSameTokenKeepsAnchor(t *testing.T) {
+	h := newRevokeHarness(t, true, true)
+	ctx := context.Background()
+	rec, _ := h.store.Load(ctx)
+	old := rec.Token
+	h.hub.set(http.StatusForbidden, revokedBody, "")
+	h.svc.RefreshNow(ctx)
+	first := *h.svc.Current().RevokedAt
+
+	*h.clock = h.clock.Add(70 * time.Hour)
+	if _, err := h.svc.Activate(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	if st := h.svc.Current(); !st.Revoked || !st.RevokedAt.Equal(first) {
+		t.Fatalf("repaste reset the revocation: %+v", st)
+	}
+	*h.clock = h.clock.Add(3 * time.Hour) // 73h after the first 403
+	h.svc.RefreshNow(ctx)
+	if st := h.svc.Current(); !st.WritesBlocked() || st.Status != "revoked" {
+		t.Fatalf("repaste evaded the read-only: %+v", st)
+	}
+}
+
+// A token issued AFTER the revocation proves the issuer reinstated it: pasting
+// it lifts the revocation.
+func TestRevoke_PastingTokenIssuedAfterRevocationLifts(t *testing.T) {
+	h := newRevokeHarness(t, true, true)
+	ctx := context.Background()
+	h.hub.set(http.StatusForbidden, revokedBody, "")
+	h.svc.RefreshNow(ctx)
+	*h.clock = h.clock.Add(time.Hour)
+	c := baseClaims()
+	c.MaxOfflineHours = 24 * 14
+	c.IssuedAt = *h.clock
+	if _, err := h.svc.Activate(ctx, mintToken(t, h.priv, c)); err != nil {
+		t.Fatal(err)
+	}
+	if st := h.svc.Current(); st.Revoked {
+		t.Fatalf("newer token should lift: %+v", st)
+	}
+}
+
+// anchorStore models a store whose Record cannot carry RevokedAt (ops GORM
+// table) but implements the RevokeAnchorStore side channel.
+type anchorStore struct {
+	LicenseStore
+	at *time.Time
+}
+
+func (a *anchorStore) Save(ctx context.Context, r *Record) error {
+	cp := *r
+	cp.RevokedAt = nil // the underlying table has no column
+	return a.LicenseStore.Save(ctx, &cp)
+}
+func (a *anchorStore) LoadRevokeAnchor(context.Context) (*time.Time, error) { return a.at, nil }
+func (a *anchorStore) SaveRevokeAnchor(_ context.Context, at *time.Time) error {
+	a.at = at
+	return nil
+}
+
+// A GORM-like store with the side channel keeps the grace across a restart
+// (a NEW Service, empty process memory) and across a re-paste.
+func TestRevoke_AnchorStoreSurvivesRestartAndRepaste(t *testing.T) {
+	h := newRevokeHarness(t, true, true)
+	ctx := context.Background()
+	rec, _ := h.store.Load(ctx)
+	old := rec.Token
+	as := &anchorStore{LicenseStore: h.store}
+	svc := h.newService(t, true, true, nil)
+	svc.store = as
+	h.hub.set(http.StatusForbidden, revokedBody, "")
+	svc.RefreshNow(ctx)
+	if as.at == nil {
+		t.Fatalf("anchor not persisted through the side channel")
+	}
+	first := *as.at
+
+	*h.clock = h.clock.Add(60 * time.Hour)
+	svc2 := h.newService(t, true, true, nil) // restart: no in-memory anchor
+	svc2.store = as
+	svc2.Boot(ctx)
+	if st := svc2.Current(); !st.Revoked || !st.RevokedAt.Equal(first) {
+		t.Fatalf("restart lost the anchor: %+v", st)
+	}
+	if _, err := svc2.Activate(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	*h.clock = h.clock.Add(14 * time.Hour) // 74h from the first 403
+	svc2.RefreshNow(ctx)
+	if st := svc2.Current(); st.Status != "revoked" || !st.WritesBlocked() {
+		t.Fatalf("repaste after restart reset the grace: %+v", st)
+	}
+	// a successful renew clears the side channel too
+	c := baseClaims()
+	c.MaxOfflineHours = 24 * 14
+	c.IssuedAt = *h.clock
+	h.hub.set(http.StatusOK, "", mintToken(t, h.priv, c))
+	svc2.RefreshNow(ctx)
+	if as.at != nil || svc2.Current().Revoked {
+		t.Fatalf("renew did not clear the anchor: %v", as.at)
+	}
+}
