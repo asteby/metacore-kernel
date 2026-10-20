@@ -9,6 +9,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Contratos de envíos, evolución aditiva (`capability`).** Ver
+  `docs/capabilities-commerce.md`, «Cotización y guía de envíos», y
+  `docs/adr/0001-contratos-envios-aditivos.md`. Solo campos opcionales: ningún
+  esquema, llave ni evento existente cambia (`commerce.shipping.tracking_updated`
+  y `commerce.fulfillment.updated` intactos); un proveedor anterior sigue válido.
+  - `commerce.shipping.rates`, entrada: `market`, `subtotal_basis`, `origins[]`,
+    `delivery_types[]`, `origin_configured`; `items[]` gana `weight_kg`,
+    `length_cm`, `width_cm`, `height_cm`, `requires_shipping`.
+  - `commerce.shipping.rates`, salida `rates[]`: `list_cost`, `free_reason`
+    (`ShippingRateFreeReasons`), `rule_ref`, `delivery_window`, `pickup_point`,
+    `insurance`, `fallback`, `quote_ref`, `quoted_at`, `quote_hash`,
+    `origin_location_id`, `billable_weight_kg`, `parcels[]`.
+  - `commerce.shipping.label`, entrada: `purpose` (`outbound|return`),
+    `shipment_ref`, `insurance_value`, `quote_ref`, `quote_hash`,
+    `origin_location_id`; salida: `cost_tax`, `estimated_delivery`,
+    `insurance_cost`, `billable_weight_kg`, `parcels[]`.
+  - Nuevas listas `DeliveryTypes`, `ShippingFreeReasons`,
+    `ShippingRateFreeReasons`, `ShippingPurposes` y esquemas
+    `ShippingOriginSchema`, `ShippingRuleRefSchema`, `DeliveryWindowSchema`,
+    `PickupPointSchema`, `RateInsuranceSchema`. Propuesta de versión:
+    **v0.226.0** (minor).
+
 - **Contratos del pago integrado (`capability`).** Ver
   `docs/capabilities-commerce.md`, «Pago integrado». Aditivo y retrocompatible:
   no cambia ningún campo requerido de `commerce.payments.session/confirm/status/

@@ -1,6 +1,9 @@
 package capability
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Well-known commerce and fiscal capability keys. The storefront core
 // (cart, checkout, order) only ever names these keys; which addon answers
@@ -265,6 +268,11 @@ var (
 		opt("id", TypeString, "order line id"),
 		opt("unit_price", TypeDecimal, ""),
 		opt("product_code", TypeString, "fiscal product key (SAT ClaveProdServ, carta porte)"),
+		opt("weight_kg", TypeDecimal, "weight of ONE unit, kg (quote and label by item; parcels stay the source of truth when present)"),
+		opt("length_cm", TypeDecimal, "length of one unit, cm"),
+		opt("width_cm", TypeDecimal, "width of one unit, cm"),
+		opt("height_cm", TypeDecimal, "height of one unit, cm"),
+		opt("requires_shipping", TypeBoolean, "false: a service / gift card that adds no weight and needs no delivery (default true)"),
 	)
 
 	// TrackingEventSchema is one normalized carrier scan.
@@ -792,6 +800,11 @@ func commerceContractList() []Contract {
 				opt("cod_amount", TypeDecimal, "cash on delivery to collect"),
 				list(opt("items", TypeArray, ""), ShipItemSchema),
 				opt("order_ref", TypeString, "cart/order id"),
+				opt("market", TypeString, "market code the quote is for (the host also selects providers by it)"),
+				opt("subtotal_basis", TypeDecimal, "cart subtotal AFTER line / amount discounts and coupons, in currency: the one basis a provider must use for its own 'free over' rule (declared_value stays the insured value)"),
+				list(opt("origins", TypeArray, "candidate ship-from locations (multi-origin); origin stays the primary one"), ShippingOriginSchema),
+				enum(strs(opt("delivery_types", TypeArray, "only these delivery types are wanted: "+strings.Join(DeliveryTypes, " | "))), DeliveryTypes),
+				opt("origin_configured", TypeBoolean, "false: the host has no configured origin and origin is a placeholder; the provider quotes with its own default or answers no rates"),
 			),
 			Output: schema(
 				list(req("rates", TypeArray, ""), schema(
@@ -804,9 +817,23 @@ func commerceContractList() []Contract {
 					opt("eta_days_min", TypeInteger, ""),
 					opt("eta_days_max", TypeInteger, ""),
 					opt("pickup", TypeBoolean, "store/branch pickup option"),
-					enum(opt("delivery_type", TypeString, ""), []string{"door", "branch", "same_day", "on_demand", "pickup"}),
+					enum(opt("delivery_type", TypeString, ""), DeliveryTypes),
 					opt("taxes_included", TypeBoolean, "cost already includes VAT/IVA"),
 					opt("expires_at", TypeString, "RFC 3339"),
+					// Additive (shipping system, wave 0): see shipping_quote.go.
+					opt("list_cost", TypeDecimal, "price before any 'free' rule or discount of the provider; list_cost >= cost; absent = same as cost"),
+					enum(opt("free_reason", TypeString, "why cost is below list_cost or zero (provider side only); coupon, market_policy and shop_threshold belong to the cart"), ShippingRateFreeReasons),
+					obj(opt("rule_ref", TypeObject, "the provider rule that produced the price or the 'free'"), ShippingRuleRefSchema),
+					obj(opt("delivery_window", TypeObject, "promised delivery dates, when the provider knows them (eta_days_* stay the fallback)"), DeliveryWindowSchema),
+					obj(opt("pickup_point", TypeObject, "delivery_type branch / pickup: where the buyer collects"), PickupPointSchema),
+					obj(opt("insurance", TypeObject, "insurance offered or included in cost"), RateInsuranceSchema),
+					opt("fallback", TypeBoolean, "a backup rate offered because live carriers failed or no zone matched"),
+					opt("quote_ref", TypeString, "provider quote id that commerce.shipping.label needs besides rate_id, when its API demands one"),
+					opt("quoted_at", TypeString, "RFC 3339 time the provider computed the price (expires_at is the end of its validity)"),
+					pat(opt("quote_hash", TypeString, "provider digest of the priced facts (id, cost, list_cost, currency, expires_at): sha256:<64 hex>"), QuoteHashPattern),
+					opt("origin_location_id", TypeString, "origins[].location_id this rate ships from"),
+					opt("billable_weight_kg", TypeDecimal, "weight the price is based on (max of actual and volumetric)"),
+					list(opt("parcels", TypeArray, "packages the quote assumed (weight and size actually priced)"), ParcelSchema),
 				)),
 			),
 		},
@@ -826,6 +853,13 @@ func commerceContractList() []Contract {
 				opt("label_size", TypeString, "4x6 / letter"),
 				opt("cod_amount", TypeDecimal, ""),
 				req("idempotency_key", TypeString, "stable per shipment; a duplicate label costs money"),
+				// Additive (shipping system, wave 0): see shipping_quote.go.
+				enum(opt("purpose", TypeString, "outbound (default) or return label"), ShippingPurposes),
+				opt("shipment_ref", TypeString, "id of the host shipment record this label belongs to"),
+				opt("insurance_value", TypeDecimal, "value to insure, in currency; absent = not insured"),
+				opt("quote_ref", TypeString, "rates[].quote_ref of the chosen rate"),
+				pat(opt("quote_hash", TypeString, "hash of the host's immutable quote snapshot (sha256:<64 hex>); provider may log it, never rely on it"), QuoteHashPattern),
+				opt("origin_location_id", TypeString, "location the parcel ships from"),
 			),
 			Output: schema(
 				enum(req("label_status", TypeString, "label_pending resolves by webhook/poll; tracking_number and label_url are set once created"), []string{"created", "label_pending"}),
@@ -838,6 +872,11 @@ func commerceContractList() []Contract {
 				opt("cost", TypeDecimal, ""),
 				opt("currency", TypeCurrency, ""),
 				enum(opt("status", TypeString, "tracking status"), TrackingStatuses),
+				opt("cost_tax", TypeDecimal, "tax included in cost, when the carrier invoices it"),
+				pat(opt("estimated_delivery", TypeString, "YYYY-MM-DD promised delivery date"), DatePattern),
+				opt("insurance_cost", TypeDecimal, "part of cost that is insurance"),
+				opt("billable_weight_kg", TypeDecimal, "weight the carrier billed"),
+				list(opt("parcels", TypeArray, "packages as the carrier registered them"), ParcelSchema),
 			),
 		},
 		{

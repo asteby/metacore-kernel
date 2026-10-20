@@ -132,6 +132,20 @@ Reglas:
 
 `commerce.payments.notification.inspect` (pura: sin red ni escritura) dice si la firma de un aviso es válida (`firma_ok`, `firma_invalida`, `sin_firma`, `sin_secreto`) y qué recurso nombra. `commerce.payments.notification.resolve` lee ese recurso **por id** en la API del proveedor (el cuerpo del aviso nunca se cree) y responde la salida de `status`; valida que el id tenga la forma de los del proveedor (`invalid_input` si no, `not_found` si no existe). `commerce.payments.health` devuelve el autodiagnóstico del conector (`checks[]` con `key`, `ok`, `level`, `message`), sin revelar secretos. Los tres van fijados al proveedor de la ruta del webhook. El diario de avisos, los reintentos y las incidencias viven en el paquete `payments/inbox`, no en `capability`.
 
+## Cotización y guía de envíos: `rates` y `label` (aditivo)
+
+Los dos contratos conservan su llave (`commerce.shipping.rates`, `commerce.shipping.label`; el sufijo `@1` no es una llave válida) y evolucionan **solo** con campos opcionales, como el pago integrado. Un proveedor construido contra la forma anterior (`envia`, `skydropx`, `noventa9minutos`, `shipping_flat`) sigue validando sin cambios, y el host puede ignorar todo campo nuevo. Los eventos `commerce.shipping.tracking_updated` y `commerce.fulfillment.updated` no cambian. Decisión y lista exacta de campos: `docs/adr/0001-contratos-envios-aditivos.md`.
+
+Reparto de responsabilidades (el kernel solo fija el vocabulario):
+
+- **El proveedor** responde el precio de **lista** (`list_cost`), su propio motivo de gratuidad (`free_reason`: `none`, `rate_free`, `rate_free_over`, más `staff_override` y `pickup_free`), la regla que lo produjo (`rule_ref`), el plazo (`eta_days_min/max`, y `delivery_window` si sabe las fechas), el punto de recogida, el seguro, los paquetes y el peso facturable que cotizó, y la vigencia (`quoted_at`, `expires_at`).
+- **El carrito** decide el precio final: los motivos `coupon`, `market_policy` y `shop_threshold` **no** los puede contestar un proveedor (el esquema los rechaza en `rates[].free_reason`); `ShippingFreeReasons` es la enumeración cerrada completa que el pedido registra (precedencia: cupón, política de mercado, umbral de tienda, tarifa con «gratis desde», tarifa gratis). También congela la foto inmutable de la cotización; `quote_hash` de la guía (`sha256:<64 hex>`) es el hash de esa foto y el proveedor, como mucho, lo registra.
+- **Base de «gratis desde».** `subtotal_basis` es el subtotal después de descuentos y cupones; el proveedor lo usa (y no `declared_value`, que es el valor asegurado) para su regla de «gratis desde». Ausente = el comportamiento anterior.
+- **Tipo de entrega.** `DeliveryTypes` (`door`, `branch`, `same_day`, `on_demand`, `pickup`) es el vocabulario del kernel; los anfitriones traducen a él (`home` y `pickup_point` no son valores del kernel). `delivery_types` en la entrada filtra.
+- **Dinero y fechas.** Todo importe es `decimal` en la moneda de la tarifa (nunca número). Las fechas prometidas son `YYYY-MM-DD`; los instantes, RFC 3339. `list_cost >= cost` y `cost >= 0` son invariantes que el esquema no puede expresar: las verifica la suite de contrato de los proveedores.
+- **Selección, sin cambios.** `rates` es fan-out (todos los proveedores que sirven el mercado, o el subconjunto que la organización eligió para él; plazo de 4 s por proveedor; uno inválido o lento se aísla y el resto responde). `label` es de un solo proveedor (el elegido para el mercado, luego el predeterminado de la organización, luego el único), idempotente, y el host lo dirige al proveedor de la tarifa elegida (`rate_id` es de ese proveedor).
+- **Identificadores opacos.** `rates[].id` y `quote_ref` se pasan tal cual; nunca se parten por `:`.
+
 ## Reglas de `commerce.payments.confirm` (webhooks)
 
 El webhook es entrada no confiable. El proveedor y el host deben:
@@ -387,6 +401,11 @@ consulta); siempre hay un proveedor por omisión instalado (`search_basic`,
 | `id` | string |  | order line id |
 | `unit_price` | decimal |  |  |
 | `product_code` | string |  | fiscal product key (SAT ClaveProdServ, carta porte) |
+| `weight_kg` | decimal |  | weight of ONE unit, kg (quote and label by item; parcels stay the source of truth when present) |
+| `length_cm` | decimal |  | length of one unit, cm |
+| `width_cm` | decimal |  | width of one unit, cm |
+| `height_cm` | decimal |  | height of one unit, cm |
+| `requires_shipping` | boolean |  | false: a service / gift card that adds no weight and needs no delivery (default true) |
 
 ### TaxLine
 
@@ -1114,6 +1133,12 @@ Entrada:
 | `label_size` | string |  | 4x6 / letter |
 | `cod_amount` | decimal |  |  |
 | `idempotency_key` | string | sí | stable per shipment; a duplicate label costs money |
+| `purpose` | string: outbound \| return |  | outbound (default) or return label |
+| `shipment_ref` | string |  | id of the host shipment record this label belongs to |
+| `insurance_value` | decimal |  | value to insure, in currency; absent = not insured |
+| `quote_ref` | string |  | rates[].quote_ref of the chosen rate |
+| `quote_hash` | string (`sha256:<64 hex>`) |  | hash of the host's immutable quote snapshot; provider may log it, never rely on it |
+| `origin_location_id` | string |  | location the parcel ships from |
 
 Salida:
 
@@ -1129,6 +1154,11 @@ Salida:
 | `cost` | decimal |  |  |
 | `currency` | currency |  |  |
 | `status` | string: created \| picked_up \| in_transit \| out_for_delivery \| delivered \| exception \| returned \| cancelled |  | tracking status |
+| `cost_tax` | decimal |  | tax included in cost, when the carrier invoices it |
+| `estimated_delivery` | string (`YYYY-MM-DD`) |  | promised delivery date |
+| `insurance_cost` | decimal |  | part of cost that is insurance |
+| `billable_weight_kg` | decimal |  | weight the carrier billed |
+| `parcels` | array<Parcel> |  | packages as the carrier registered them |
 
 ### `commerce.shipping.rates`
 
@@ -1146,6 +1176,11 @@ Entrada:
 | `cod_amount` | decimal |  | cash on delivery to collect |
 | `items` | array<ShipItem> |  |  |
 | `order_ref` | string |  | cart/order id |
+| `market` | string |  | market code the quote is for (the host also selects providers by it) |
+| `subtotal_basis` | decimal |  | cart subtotal AFTER line / amount discounts and coupons, in currency: the one basis a provider must use for its own 'free over' rule (declared_value stays the insured value) |
+| `origins` | array<object> |  | candidate ship-from locations (multi-origin): Address + `location_id` (required); origin stays the primary one |
+| `delivery_types` | array<string: door \| branch \| same_day \| on_demand \| pickup> |  | only these delivery types are wanted |
+| `origin_configured` | boolean |  | false: the host has no configured origin and origin is a placeholder; the provider quotes with its own default or answers no rates |
 
 Salida:
 
@@ -1164,6 +1199,19 @@ Salida:
 | `rates[].delivery_type` | string: door \| branch \| same_day \| on_demand \| pickup |  |  |
 | `rates[].taxes_included` | boolean |  | cost already includes VAT/IVA |
 | `rates[].expires_at` | string |  | RFC 3339 |
+| `rates[].list_cost` | decimal |  | price before any 'free' rule or discount of the provider; list_cost >= cost; absent = same as cost |
+| `rates[].free_reason` | string: none \| rate_free \| rate_free_over \| staff_override \| pickup_free |  | why cost is below list_cost or zero (provider side only) |
+| `rates[].rule_ref` | object |  | `kind`, `id` (required), `version`: the provider rule behind the price |
+| `rates[].delivery_window` | object |  | `from`, `to` (`YYYY-MM-DD`, both required): promised dates |
+| `rates[].pickup_point` | object |  | `id`, `name` (required), `address` (Address), `hours`, `lat`, `lng` |
+| `rates[].insurance` | object |  | `available`, `included` (boolean), `cost` (decimal) |
+| `rates[].fallback` | boolean |  | a backup rate offered because live carriers failed or no zone matched |
+| `rates[].quote_ref` | string |  | provider quote id that label needs besides rate_id |
+| `rates[].quoted_at` | string |  | RFC 3339 time the provider computed the price |
+| `rates[].quote_hash` | string (`sha256:<64 hex>`) |  | provider digest of the priced facts (id, cost, list_cost, currency, expires_at) |
+| `rates[].origin_location_id` | string |  | origins[].location_id this rate ships from |
+| `rates[].billable_weight_kg` | decimal |  | weight the price is based on (max of actual and volumetric) |
+| `rates[].parcels` | array<Parcel> |  | packages the quote assumed |
 
 ### `commerce.shipping.track`
 
