@@ -1,6 +1,9 @@
 package manifest
 
-import "testing"
+import (
+	"runtime/debug"
+	"testing"
+)
 
 func TestEvaluateCompatibility_Compatible(t *testing.T) {
 	m := &Manifest{
@@ -153,5 +156,24 @@ func TestCheckRuntime_HostOnPseudoVersion(t *testing.T) {
 	m := &Manifest{Runtime: ">=0.182.0"}
 	if err := m.CheckRuntime(normalizeModuleVersion("v0.203.2-0.20261016164255-ca5563ec1d19")); err != nil {
 		t.Fatalf("CheckRuntime on a pseudo-version host: %v", err)
+	}
+}
+
+func TestKernelVersionOfLocalReplaceKeepsRequiredRelease(t *testing.T) {
+	cases := []struct {
+		name string
+		dep  debug.Module
+		want string
+	}{
+		{"sin replace", debug.Module{Version: "v0.229.1"}, "0.229.1"},
+		{"replace a ruta local (devel)", debug.Module{Version: "v0.229.1", Replace: &debug.Module{Version: "(devel)"}}, "0.229.1"},
+		{"replace a ruta local sin versión", debug.Module{Version: "v0.229.1", Replace: &debug.Module{}}, "0.229.1"},
+		{"replace a una versión publicada gana", debug.Module{Version: "v0.229.1", Replace: &debug.Module{Version: "v0.230.0"}}, "0.230.0"},
+		{"todo devel", debug.Module{Version: "(devel)", Replace: &debug.Module{Version: "(devel)"}}, ""},
+	}
+	for _, c := range cases {
+		if got := kernelVersionOf(&c.dep); got != c.want {
+			t.Errorf("%s: kernelVersionOf = %q, want %q", c.name, got, c.want)
+		}
 	}
 }

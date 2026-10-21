@@ -254,15 +254,23 @@ func HostRuntimeVersion() string {
 		if d.Path != kernelModulePath {
 			continue
 		}
-		// A `replace` to a released version wins; a replace to a local path
-		// (no version) keeps the required release, which is what the code
-		// was written against.
-		if d.Replace != nil && d.Replace.Version != "" {
-			return normalizeModuleVersion(d.Replace.Version)
-		}
-		return normalizeModuleVersion(d.Version)
+		return kernelVersionOf(d)
 	}
 	return ""
+}
+
+// kernelVersionOf picks the release a kernel dependency stands for. A `replace`
+// to a released version wins; a replace to a local path keeps the required
+// release, which is what the code was written against. Go records a local-path
+// replace as "(devel)": that is "no version", not an answer, so it must not
+// hide the required release.
+func kernelVersionOf(d *debug.Module) string {
+	if d.Replace != nil {
+		if v := normalizeModuleVersion(d.Replace.Version); v != "" {
+			return v
+		}
+	}
+	return normalizeModuleVersion(d.Version)
 }
 
 // normalizeModuleVersion strips the "v", rejects devel versions ("(devel)",
