@@ -323,7 +323,7 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 
 	execCtx, cancel := context.WithTimeout(ctx, dataQueryDeadline)
 	defer cancel()
-	work := inv.db.WithContext(execCtx)
+	work := inv.readDB().WithContext(execCtx)
 
 	// Zero-row probe: result-set metadata yields the column set, which drives
 	// both the soft-delete filter (see the function doc) and the choice of

@@ -45,6 +45,17 @@ func (i *invocation) logf(format string, args ...any) {
 	i.logger.Printf("metacore.wasm "+format, args...)
 }
 
+// readDB devuelve el handle que deben usar las lecturas del host: la
+// transacción abierta de la invocación (si la hay y es real) para que el guest
+// vea lo que él mismo acaba de escribir con data_mutate/data_batch/db_exec, que
+// viven en esa transacción sin confirmar; si no, el pool.
+func (inv *invocation) readDB() *gorm.DB {
+	if inv.tx != nil && isTx(inv.tx) {
+		return inv.tx
+	}
+	return inv.db
+}
+
 type invocation struct {
 	// deadline lets outbound HTTP waits not count against the guest budget.
 	deadline     *guestDeadline
