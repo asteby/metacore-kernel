@@ -401,3 +401,164 @@ func TestRevoke_AnchorStoreSurvivesRestartAndRepaste(t *testing.T) {
 		t.Fatalf("renew did not clear the anchor: %v", as.at)
 	}
 }
+
+// flakyAnchorStore is an anchorStore whose side-channel read can fail.
+type flakyAnchorStore struct {
+	anchorStore
+	failLoad bool
+}
+
+func (f *flakyAnchorStore) LoadRevokeAnchor(ctx context.Context) (*time.Time, error) {
+	if f.failLoad {
+		return nil, context.DeadlineExceeded
+	}
+	return f.anchorStore.LoadRevokeAnchor(ctx)
+}
+
+// A transient read failure of the stored anchor during Activate must neither
+// lift nor restart the revocation, and must not erase the stored anchor.
+func TestRevoke_AnchorReadErrorDuringActivateKeepsAnchor(t *testing.T) {
+	h := newRevokeHarness(t, true, true)
+	ctx := context.Background()
+	rec, _ := h.store.Load(ctx)
+	old := rec.Token
+	fs := &flakyAnchorStore{anchorStore: anchorStore{LicenseStore: h.store}}
+	svc := h.newService(t, true, true, nil)
+	svc.store = fs
+	h.hub.set(http.StatusForbidden, revokedBody, "")
+	svc.RefreshNow(ctx)
+	first := *fs.at
+
+	// restart: empty process memory, so only the stored anchor remembers
+	*h.clock = h.clock.Add(10 * time.Hour)
+	svc2 := h.newService(t, true, true, nil)
+	svc2.store = fs
+	fs.failLoad = true
+	if _, err := svc2.Activate(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	fs.failLoad = false
+	if fs.at == nil || !fs.at.Equal(first) {
+		t.Fatalf("a failed read erased/moved the stored anchor: %v want %v", fs.at, first)
+	}
+	*h.clock = h.clock.Add(63 * time.Hour) // 73h from the first 403
+	svc2.RefreshNow(ctx)
+	if st := svc2.Current(); st.Status != "revoked" || !st.WritesBlocked() {
+		t.Fatalf("revocation lifted by a transient read error: %+v", st)
+	}
+}
+
+// A transient read failure at the moment of the 403 must not stamp a fresh
+// anchor over the real one.
+func TestRevoke_AnchorReadErrorDuringRevokeDoesNotOverwrite(t *testing.T) {
+	h := newRevokeHarness(t, true, true)
+	ctx := context.Background()
+	fs := &flakyAnchorStore{anchorStore: anchorStore{LicenseStore: h.store}}
+	svc := h.newService(t, true, true, nil)
+	svc.store = fs
+	h.hub.set(http.StatusForbidden, revokedBody, "")
+	svc.RefreshNow(ctx)
+	first := *fs.at
+
+	// restart (empty memory) while the store read fails, then another 403
+	svc2 := h.newService(t, true, true, nil)
+	svc2.store = fs
+	*h.clock = h.clock.Add(30 * time.Hour)
+	fs.failLoad = true
+	svc2.RefreshNow(ctx)
+	fs.failLoad = false
+	if fs.at == nil || !fs.at.Equal(first) {
+		t.Fatalf("a failed read let a new anchor overwrite the real one: %v want %v", fs.at, first)
+	}
+}
+
+// If the box clock is behind the hub's, the anchor must not land before the
+// iat of the token we hold: re-pasting that token must keep the revocation.
+func TestRevoke_ClockBehindHubDoesNotLiftOnRepaste(t *testing.T) {
+	h := newRevokeHarness(t, true, true)
+	ctx := context.Background()
+	rec, _ := h.store.Load(ctx)
+	cur := rec.Token
+	// the held token was issued slightly "in the future" of this box clock (within the verify leeway)
+	c := baseClaims()
+	c.MaxOfflineHours = 24 * 14
+	c.IssuedAt = h.clock.Add(4 * time.Minute) // inside the 5 min verify leeway
+	future := mintToken(t, h.priv, c)
+	if _, err := h.svc.Activate(ctx, future); err != nil {
+		t.Fatal(err)
+	}
+	h.hub.set(http.StatusForbidden, revokedBody, "")
+	h.svc.RefreshNow(ctx)
+	if _, err := h.svc.Activate(ctx, future); err != nil {
+		t.Fatal(err)
+	}
+	if st := h.svc.Current(); !st.Revoked {
+		t.Fatalf("re-pasting the held token lifted the revocation (clock skew): %+v", st)
+	}
+	_ = cur
+}
+
+// bareStore implements ONLY LicenseStore (a host that predates the optional
+// RevokeAnchorStore). It must keep working exactly as before.
+type bareStore struct {
+	mu  sync.Mutex
+	rec *Record
+}
+
+func (b *bareStore) Load(context.Context) (*Record, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.rec == nil {
+		return nil, nil
+	}
+	cp := *b.rec
+	return &cp, nil
+}
+func (b *bareStore) Save(_ context.Context, r *Record) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	cp := *r
+	b.rec = &cp
+	return nil
+}
+
+func TestRevokeAnchorStore_IsOptional(t *testing.T) {
+	var ls LicenseStore = &bareStore{}
+	if _, ok := ls.(RevokeAnchorStore); ok {
+		t.Fatal("a store with only Load/Save must not satisfy RevokeAnchorStore")
+	}
+	if _, ok := LicenseStore(NewMemoryStore()).(RevokeAnchorStore); ok {
+		t.Fatal("MemoryStore must stay a plain LicenseStore")
+	}
+	// End to end with the bare store: activate, revoke (flag on), renew clears.
+	h := newRevokeHarness(t, true, true)
+	ctx := context.Background()
+	bs := &bareStore{}
+	svc := h.newService(t, true, true, nil)
+	svc.store = bs
+	rec, _ := h.store.Load(ctx)
+	if _, err := svc.Activate(ctx, rec.Token); err != nil {
+		t.Fatal(err)
+	}
+	h.hub.set(http.StatusForbidden, revokedBody, "")
+	svc.RefreshNow(ctx)
+	if st := svc.Current(); !st.Revoked {
+		t.Fatalf("bare store: revocation not tracked in process: %+v", st)
+	}
+}
+
+// With nothing revoked, State serializes exactly as before this feature: no
+// "revoked" key at all (host /api/license responses must not change).
+func TestState_NoRevokedKeyWhenNotRevoked(t *testing.T) {
+	b, err := json.Marshal(State{Status: "valid", Valid: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	_ = json.Unmarshal(b, &m)
+	for _, k := range []string{"revoked", "revoked_at", "revoke_grace_until"} {
+		if _, ok := m[k]; ok {
+			t.Fatalf("%q must be omitted when not revoked: %s", k, b)
+		}
+	}
+}

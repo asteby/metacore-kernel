@@ -47,7 +47,7 @@ type State struct {
 	// Revoked reports that the hub refused the last renew as "license
 	// revoked". It is INFORMATIONAL unless the revoke policy is enforced
 	// (Config.RevokeEnforce): the status and the gates only change with it.
-	Revoked bool `json:"revoked"`
+	Revoked bool `json:"revoked,omitempty"`
 	// RevokedAt is when the revocation was first observed.
 	RevokedAt *time.Time `json:"revoked_at,omitempty"`
 	// RevokeGraceUntil is when the instance turns read-only after a revocation
