@@ -166,6 +166,15 @@ Léelo antes de tocar esto. Un reintento nunca duplica un efecto porque:
 - Sin `Dialector`, las conexiones ocupadas durante un `Bump` solo se curan por el
   reintento.
 - Solo Postgres (pgx). Otros dialectos: la capa no hace nada.
+- **Los scripts de migración no pasan por el reintento.** `dynamic.execScript`
+  (Apply, DryRunMigrations, ReplayAfterModels) desenvuelve en bucle todo
+  `gorm.ConnPool` envuelto (caché de `PreparedStmt`, `staleplan.pool`/`txPool`,
+  vía `dynamic.ConnPoolUnwrapper`) y ejecuta el archivo por el protocolo simple:
+  un archivo con varios comandos o un `DO $$ … $$` no se puede preparar
+  (SQLSTATE 42601). Por eso ese camino no tiene reintento por plan desfasado, y
+  `txPool.UnwrapConnPool` marca la transacción como no reiniciable para que un
+  0A000 posterior no la reinicie y pierda el script. Todo wrapper nuevo de
+  `ConnPool` debe implementar `UnwrapConnPool()`.
 
 ## 3. Módulo wasm vs manifiesto
 

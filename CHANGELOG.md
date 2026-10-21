@@ -7,6 +7,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Migraciones multi-sentencia con `staleplan` (regresión de OPS 0.1.18).**
+  `dynamic.execScript` solo desenvolvía `PreparedStmtTX`/`PreparedStmtDB`; el
+  envoltorio de `database/staleplan` hacía que el archivo llegara como
+  sentencia preparada y Postgres lo rechazaba con
+  `cannot insert multiple commands into a prepared statement (SQLSTATE 42601)`
+  en cualquier install/upgrade con más de un comando (p. ej. `inventory@1.31.0`,
+  `026_adjustment_source_kind_import_key.up`). Ahora desenvuelve en bucle
+  cualquier envoltura mediante la nueva interfaz `dynamic.ConnPoolUnwrapper`
+  (`UnwrapConnPool()`), implementada por `staleplan.pool` y `staleplan.txPool`
+  (este último deja de ser reiniciable). Los scripts de migración no pasan por
+  el reintento de planes; ver `docs/CACHE-COHERENCE.md`.
+
 ### Added
 
 - **Contratos de envíos, evolución aditiva (`capability`).** Ver

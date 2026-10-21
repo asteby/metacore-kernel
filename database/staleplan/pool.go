@@ -23,6 +23,12 @@ var (
 	_ gorm.GetDBConnector   = (*pool)(nil)
 )
 
+// UnwrapConnPool returns the pool this one wraps. It lets a caller that needs
+// the simple query protocol (dynamic's migration scripts, which hold several
+// commands) skip the statement cache; what runs through it gets no stale-plan
+// retry. Implements dynamic.ConnPoolUnwrapper.
+func (p *pool) UnwrapConnPool() gorm.ConnPool { return p.inner }
+
 func (p *pool) retryable(ctx context.Context, err error) (Kind, bool) {
 	k := Classify(err)
 	if k == KindNone {
@@ -195,6 +201,18 @@ var (
 	_ gorm.ConnPool    = (*txPool)(nil)
 	_ gorm.TxCommitter = (*txPool)(nil)
 )
+
+// UnwrapConnPool hands out the live inner transaction so the caller can bypass
+// the statement cache. Whatever it runs is invisible to this wrapper, so the
+// transaction stops being replayable: a later stale-plan failure must not
+// restart it (rolling back the unseen work and replaying only the session
+// setup). Implements dynamic.ConnPoolUnwrapper.
+func (t *txPool) UnwrapConnPool() gorm.ConnPool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.replayable = false
+	return t.inner
+}
 
 func (t *txPool) cur() gorm.ConnPool {
 	t.mu.Lock()

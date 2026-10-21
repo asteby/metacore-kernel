@@ -18,8 +18,8 @@ import (
 // Each migration is identified by (addon_key, version) and locked by checksum
 // so tampered files are rejected at apply time.
 type Migration struct {
-	ID        uint64    `gorm:"primaryKey"`
-	AddonKey  string    `gorm:"size:100;not null;uniqueIndex:idx_addon_ver"`
+	ID       uint64 `gorm:"primaryKey"`
+	AddonKey string `gorm:"size:100;not null;uniqueIndex:idx_addon_ver"`
 	// Was size:40 — tight enough that a normal descriptive filename
 	// ("<n>_<what>_<why>.up", e.g. pos@017_sale_payment_organization_id_tenant_schema)
 	// blew past it and aborted the upgrade with SQLSTATE 22001 before running
@@ -312,17 +312,45 @@ func migrationSearchPath(tx *gorm.DB, addonSchema string, opts ApplyOptions) ([]
 // more than one command (SQLSTATE 42601 "cannot insert multiple commands into
 // a prepared statement"). Unwrapping the cache and executing without arguments
 // makes pgx use the simple protocol; splitting the file on ';' instead would
-// break dollar-quoted bodies.
+// break dollar-quoted bodies. The same goes for any further wrapper (see
+// ConnPoolUnwrapper), e.g. database/staleplan: scripts run over the simple
+// protocol and do NOT go through the stale-plan retry.
 func execScript(tx *gorm.DB, script string) error {
-	pool := tx.Statement.ConnPool
-	switch p := pool.(type) {
-	case *gorm.PreparedStmtTX:
-		pool = p.Tx
-	case *gorm.PreparedStmtDB:
-		pool = p.ConnPool
-	}
-	_, err := pool.ExecContext(tx.Statement.Context, script)
+	_, err := rawConnPool(tx.Statement.ConnPool).ExecContext(tx.Statement.Context, script)
 	return err
+}
+
+// ConnPoolUnwrapper is implemented by every gorm.ConnPool wrapper that sits
+// between GORM and the driver (the statement cache, database/staleplan's
+// retrying pool and transaction). UnwrapConnPool returns the pool the wrapper
+// delegates to, so a caller that must bypass the wrapper (a multi-command
+// migration script, which Postgres only accepts over the simple query
+// protocol) can walk down to the raw pool without knowing the concrete types.
+//
+// A wrapper that keeps per-transaction bookkeeping must treat the call as the
+// caller taking over the connection: whatever the caller runs through the
+// returned pool is invisible to the wrapper.
+type ConnPoolUnwrapper interface {
+	UnwrapConnPool() gorm.ConnPool
+}
+
+// rawConnPool peels every known wrapper off pool, in a loop and in any order,
+// until it reaches a pool that is not a wrapper. The gorm statement cache
+// types are handled explicitly (they live in gorm and cannot implement
+// ConnPoolUnwrapper); everything else must implement it.
+func rawConnPool(pool gorm.ConnPool) gorm.ConnPool {
+	for {
+		switch p := pool.(type) {
+		case *gorm.PreparedStmtTX:
+			pool = p.Tx
+		case *gorm.PreparedStmtDB:
+			pool = p.ConnPool
+		case ConnPoolUnwrapper:
+			pool = p.UnwrapConnPool()
+		default:
+			return pool
+		}
+	}
 }
 
 // quoteIdents renders schema names as a comma-separated list of quoted
