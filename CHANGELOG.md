@@ -23,6 +23,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **licensing: gracia de revocación persistente (`RevokeAnchorStore`, opcional) y
+  política `LICENSING_REVOKE_ENFORCE` / `LICENSING_REVOKE_GRACE_HOURS` (apagada
+  por defecto).** Un 403 `license_revoked` del renew fija el ancla de la primera
+  revocación; con el flag encendido, pasada la gracia (72 h) el estado pasa a
+  `revoked` (solo lectura con `Enforce`). `RevokeAnchorStore` es opcional: un
+  store que solo implementa `LicenseStore` funciona igual que antes. Un error de
+  lectura del ancla no la levanta ni la reinicia; el ancla no queda antes del
+  `iat` del token vigente. `State.Revoked` lleva `omitempty`: con todo apagado el
+  JSON de `State` no cambia.
+
 - **Contratos de envíos, evolución aditiva (`capability`).** Ver
   `docs/capabilities-commerce.md`, «Cotización y guía de envíos», y
   `docs/adr/0001-contratos-envios-aditivos.md`. Solo campos opcionales: ningún

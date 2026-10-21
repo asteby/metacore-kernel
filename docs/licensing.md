@@ -153,3 +153,14 @@ through it. Without either, the anchor lives in process memory only.
 A standing revocation is lifted only by a successful hub renew (`source=renew`)
 or by activating a token whose `iat` is later than the revocation instant.
 Re-pasting the same or an older token does NOT restart the grace.
+
+`RevokeAnchorStore` is OPTIONAL and additive: a host store that implements only
+`LicenseStore` (every kernel before this one) keeps working exactly as before;
+the anchor then lives in process memory. If the stored anchor cannot be READ
+(transient database error) the service treats it as unknown, not as "not
+revoked": it neither writes a new anchor over the real one nor clears it, so a
+blip during an activation cannot lift or restart the revocation. The anchor is
+never set earlier than the `iat` of the token held, so a box clock that runs a
+few minutes behind the hub cannot make that same token look newer. With nothing
+revoked, `State` serializes without a `revoked` key (no change to host
+`/api/license` responses).
