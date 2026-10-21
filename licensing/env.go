@@ -33,7 +33,15 @@ import (
 //	OPS_VERSION             build version reported on each check-in
 //	HUB_BASE_URL            hub base (default https://hub.asteby.com)
 //	LICENSING_REQUIRE_V2    "1"|"true"|… → refuse the legacy key-less token
-//	                        format (downgrade protection; default off)
+//	                        format (downgrade protection; default off).
+//	                        WARNING: the hub /activate exchange (OPS exchangeKey)
+//	                        does not send token_formats, so it hands out the
+//	                        legacy two-part token, as does a row that has not
+//	                        yet learned envelope_v2: with this flag on, such a
+//	                        token is refused (status invalid, writes blocked,
+//	                        Activate fails). Do not enable on already-sold hosts
+//	                        nor on fresh installs until activation also
+//	                        announces token_formats.
 //	LICENSING_LEASE_COUNTER "1"|"true"|… → renew echoes the lease counter so the
 //	                        hub can flag cloned identities (default off)
 func NewConfigFromEnv() Config {

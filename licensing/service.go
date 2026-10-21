@@ -368,6 +368,14 @@ func (s *Service) markRevoked(ctx context.Context, row *Record) *Record {
 	at, readOK := s.revokeAnchor(ctx, row)
 	if at != nil {
 		row.RevokedAt = at
+		// The anchor came from the in-process mirror, and the side channel read
+		// fine yet holds nothing: an earlier read or write failed, so the real
+		// first-observed instant lives only in memory. Persist it now (and on
+		// every later cycle until the write sticks) or a restart would restart
+		// the grace.
+		if readOK && s.store != nil && s.anchorOnlyInMemory(at) {
+			s.saveAnchor(ctx, at)
+		}
 		return row
 	}
 	now := s.now()
@@ -396,6 +404,14 @@ func (s *Service) markRevoked(ctx context.Context, row *Record) *Record {
 		s.saveAnchor(ctx, &now)
 	}
 	return row
+}
+
+// anchorOnlyInMemory reports whether at is the in-process mirror itself (not a
+// copy read from the Record or the store).
+func (s *Service) anchorOnlyInMemory(at *time.Time) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.revokedMem != nil && s.revokedMem == at
 }
 
 // revokeAnchor resolves the first-observed revocation instant from, in order:

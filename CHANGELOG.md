@@ -9,6 +9,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **licensing: el ancla de revocación que solo vivía en memoria ahora se
+  persiste.** Si el primer 403 `license_revoked` llegaba con `LoadRevokeAnchor`
+  fallando (o `SaveRevokeAnchor` fallaba), el ancla quedaba solo en el espejo
+  en proceso y un reinicio reiniciaba la gracia. `markRevoked` ahora la guarda
+  en el primer ciclo en que la lectura del canal lateral funciona y devuelve
+  nil, y lo reintenta en ciclos posteriores hasta que se persiste. Pruebas
+  nuevas cubren este caso, `LICENSING_REVOKE_GRACE_HOURS=0` (solo lectura
+  inmediata; no puesto = 72 h) y una revocación sin token instalado (`missing`).
+- **licensing: advertencia de compatibilidad de `LICENSING_REQUIRE_V2`
+  (documentación).** El `/activate` del hub (OPS `exchangeKey`) no envía
+  `token_formats` y entrega el token legado de dos partes; con el flag
+  encendido ese token se rechaza y una instalación nueva no puede activarse.
+  No encender el flag en hosts ya vendidos ni en instalaciones nuevas hasta que
+  la activación también anuncie `token_formats`. (`Activate` del kernel solo
+  recibe el token pegado; no hace la llamada al hub, por lo que el anuncio debe
+  hacerse en el host/hub.)
+
 - **Migraciones multi-sentencia con `staleplan` (regresión de OPS 0.1.18).**
   `dynamic.execScript` solo desenvolvía `PreparedStmtTX`/`PreparedStmtDB`; el
   envoltorio de `database/staleplan` hacía que el archivo llegara como
