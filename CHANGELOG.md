@@ -132,6 +132,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     (con `Keys`) deja de confiar en la clave legada del hub para que una
     rotación por key set pueda retirarla. `Tracker.Restore` ya no baja el piso
     anti-rollback y `IsRevoked` acepta ids publicados como `sigv2.HashedID`.
+  - Bajar de versión el kernel tras recibir un token `asteby1.` lo deja en
+    `invalid` (no lo lee ni renueva solo). Recuperación: reactivar con la `lic_`
+    desde el kernel anterior (la activación sin `token_formats` devuelve el token
+    legado). Documentado en el paquete `licensing`; el kernel no guarda una copia
+    legada para no imponer una columna nueva a cada `LicenseStore`.
 
 - **legacybridge: motor genérico de coexistencia con un sistema legado.**
   Paquete nuevo (`bridge/` ya es la costura host-kernel). Sirve para operar el

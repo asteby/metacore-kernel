@@ -29,6 +29,19 @@
 //
 // Verify: split on ".", base64url-decode both halves, ed25519.Verify over the
 // RAW claims bytes (never a re-marshal), unmarshal, then check the window.
+//
+// V2 ENVELOPE AND KERNEL DOWNGRADE. Every renew announces token_formats
+// ["asteby1"]; only then may the hub answer with a v2 "asteby1." token. A
+// kernel OLDER than the v2 envelope that is handed such a token (updater
+// rollback, appliance restored from an older image) splits it into two parts,
+// cannot read it and reports status "invalid"; in that state it does not renew
+// by itself, so it stays invalid (read-only when enforcement is on) until the
+// term ends. RECOVERY: re-activate the instance with its lic_ key from the
+// older kernel. Activation without token_formats returns the legacy two-part
+// token, and the hub then stops announcing v2 for that instance. Before
+// rolling a fleet back, keep the hub's envelope flag off. The kernel does not
+// keep a second (legacy) copy of the token: that would need a new column in
+// every host's LicenseStore, which this package deliberately does not impose.
 package licensing
 
 import (

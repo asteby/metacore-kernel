@@ -74,7 +74,8 @@ type Config struct {
 	RequireV2 bool
 	// LeaseCounter makes renew echo the monotonic lease counter carried by the
 	// current token (field "lease_ctr"), so the hub can detect two copies of
-	// one identity. Default false: the renew body is byte-identical to before.
+	// one identity. Default false: no "lease_ctr" is sent. (The renew body does
+	// always carry "token_formats" and "version", whatever this flag says.)
 	LeaseCounter bool
 	// RetireLegacyKey, together with Keys, stops trusting the hub's legacy
 	// pubkey (kid "legacy" / its derived kid): only the key set verifies. This
