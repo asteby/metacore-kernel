@@ -212,11 +212,10 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 	execCtx, cancel := context.WithTimeout(ctx, dataMutateDeadline)
 	defer cancel()
 
-	work := inv.db.WithContext(execCtx).Begin()
-	if work.Error != nil {
-		return fail("db_error", work.Error.Error())
+	work, rollback, commit, bErr := beginMutationScope(inv, execCtx)
+	if bErr != nil {
+		return fail("db_error", bErr.Error())
 	}
-	rollback := func() { _ = work.Rollback() }
 
 	now := time.Now().UTC()
 	if req.Op == "create" && data == nil {
@@ -269,7 +268,7 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		}
 	}
 
-	if err := work.Commit().Error; err != nil {
+	if err := commit(); err != nil {
 		return fail("db_error", err.Error())
 	}
 
@@ -1021,4 +1020,36 @@ func blankValue(v any) bool {
 		return strings.TrimSpace(t) == ""
 	}
 	return false
+}
+
+// beginMutationScope abre el ámbito atómico de un data_mutate / data_batch.
+//
+// Cuando la invocación corre dentro de una transacción real (Host.InvokeInTx:
+// las rutas de escritura del gateway y las acciones), db_exec ya se acopla a
+// ella. data_mutate abría en cambio una transacción NUEVA sobre el pool: si el
+// guest había tocado antes la misma fila con db_exec (p. ej. un UPDATE ...
+// SET version = version + 1 de concurrencia optimista), la transacción
+// externa conservaba el bloqueo de fila sin confirmar y la nueva esperaba a
+// que la liberara — un auto-bloqueo que sólo terminaba por el plazo de 5 s
+// (context deadline exceeded) sin ninguna consulta visible en pg_stat_activity
+// del lado de la que espera. Con transacción en vuelo el ámbito pasa a ser un
+// SAVEPOINT de esa misma transacción: se mantiene la atomicidad por llamada
+// (rollback parcial) y se comparte la conexión y sus bloqueos. Sin
+// transacción en vuelo, se conserva el comportamiento anterior (Begin/Commit).
+func beginMutationScope(inv *invocation, execCtx context.Context) (work *gorm.DB, rollback func(), commit func() error, err error) {
+	if inv.tx != nil && isTx(inv.tx) {
+		work = inv.tx.WithContext(execCtx)
+		sp := "dm_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		if e := work.SavePoint(sp).Error; e != nil {
+			return nil, nil, nil, e
+		}
+		rollback = func() { _ = work.RollbackTo(sp).Error }
+		commit = func() error { return work.Exec("RELEASE SAVEPOINT " + sp).Error }
+		return work, rollback, commit, nil
+	}
+	work = inv.db.WithContext(execCtx).Begin()
+	if work.Error != nil {
+		return nil, nil, nil, work.Error
+	}
+	return work, func() { _ = work.Rollback() }, func() error { return work.Commit().Error }, nil
 }

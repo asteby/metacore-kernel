@@ -170,9 +170,9 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 	execCtx, cancel := context.WithTimeout(ctx, dataBatchDeadline)
 	defer cancel()
 
-	work := inv.db.WithContext(execCtx).Begin()
-	if work.Error != nil {
-		return fail("db_error", work.Error.Error())
+	work, rollbackScope, commitScope, bErr := beginMutationScope(inv, execCtx)
+	if bErr != nil {
+		return fail("db_error", bErr.Error())
 	}
 
 	now := time.Now().UTC()
@@ -182,20 +182,20 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 			p.data = map[string]any{}
 		}
 		if code, sErr := stampCreateSequences(execCtx, inv, work, orgID, p.req, p.data); sErr != nil {
-			_ = work.Rollback()
+			rollbackScope()
 			return fail(code, fmt.Sprintf("mutations[%d]: %s", i, sErr.Error()))
 		}
 		if code, sErr := stampCreate(execCtx, inv, work, orgID, p.req, p.data); sErr != nil {
-			_ = work.Rollback()
+			rollbackScope()
 			return fail(code, fmt.Sprintf("mutations[%d]: %s", i, sErr.Error()))
 		}
 		if code, cErr := checkCreate(execCtx, inv, work, orgID, p.req, p.data); cErr != nil {
-			_ = work.Rollback()
+			rollbackScope()
 			return fail(code, fmt.Sprintf("mutations[%d]: %s", i, cErr.Error()))
 		}
 		res, code, mErr := applyMutation(work, p.req, p.data, p.inc, orgID, p.tbl, now, dynamic.ActorIDFromContext(ctx), dynamic.BranchIDFromContext(ctx), stageFor(inv, p.req.Table, p.req.Model), extensionsFor(inv, p.req.Table, p.req.Model), updateStampFor(execCtx, inv, work, orgID, p.req))
 		if mErr != nil {
-			_ = work.Rollback()
+			rollbackScope()
 			return fail(code, fmt.Sprintf("mutations[%d]: %s", i, mErr.Error()))
 		}
 		// Declarative guards (Host.WithMutationGuard) check the post-mutation
@@ -203,7 +203,7 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 		// ENTIRE batch back. Deletes are exempt (no resulting row state).
 		if inv.mutationGuard != nil && res.action != "deleted" {
 			if gErr := inv.mutationGuard(execCtx, p.req.Table, res.after); gErr != nil {
-				_ = work.Rollback()
+				rollbackScope()
 				return fail(guardErrCode(gErr), fmt.Sprintf("mutations[%d]: %s", i, gErr.Error()))
 			}
 		}
@@ -217,14 +217,14 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 				computeRow = res.before
 			}
 			if cErr := inv.mutationCompute(execCtx, work, orgID, p.req.Table, res.action, computeRow); cErr != nil {
-				_ = work.Rollback()
+				rollbackScope()
 				return fail(computeErrCode(cErr), fmt.Sprintf("mutations[%d]: %s", i, cErr.Error()))
 			}
 		}
 		results[i] = res
 	}
 
-	if err := work.Commit().Error; err != nil {
+	if err := commitScope(); err != nil {
 		return fail("db_error", err.Error())
 	}
 
