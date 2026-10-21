@@ -1,6 +1,9 @@
 package capability
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Well-known commerce and fiscal capability keys. The storefront core
 // (cart, checkout, order) only ever names these keys; which addon answers
@@ -40,6 +43,32 @@ const (
 	CommercePaymentsRefundStatus    = "commerce.payments.refund.status"
 	CommercePaymentsTerminalCreate  = "commerce.payments.terminal.create"
 	CommercePaymentsTerminalDevices = "commerce.payments.terminal.devices"
+)
+
+// Embedded payment (docs/capabilities-commerce.md, "Pago integrado"): the
+// buyer pays on the storefront page itself. The host creates the session with
+// flow=embedded, reads what the provider declares to paint the form with
+// commerce.payments.client, and charges with commerce.payments.submit. All
+// additive: a store that never sends flow keeps the redirect flow untouched.
+const (
+	// CommercePaymentsSubmit charges what the buyer's browser tokenized with
+	// the provider's own SDK. Idempotent and pinned to the provider that owns
+	// the session; the amount is set by the host, never by the browser.
+	CommercePaymentsSubmit = "commerce.payments.submit"
+	// CommercePaymentsClient is what a provider declares so the storefront can
+	// paint its payment options before any checkout exists. A pinned query
+	// without effects; the cart asks every candidate provider by name.
+	CommercePaymentsClient = "commerce.payments.client"
+)
+
+// Payment-notification health (docs/DISENO-PAGOS-A-PRUEBA-DE-FALLOS §13.2):
+// the host persists every provider notification, asks the provider to inspect
+// it (pure) and to resolve the resource through the provider API, and reports
+// the connector health. The journal itself lives in payments/inbox.
+const (
+	CommercePaymentsNotificationInspect = "commerce.payments.notification.inspect"
+	CommercePaymentsNotificationResolve = "commerce.payments.notification.resolve"
+	CommercePaymentsHealth              = "commerce.payments.health"
 )
 
 // CommercePaymentsConfirmed is the normalized payment-update event every
@@ -88,7 +117,46 @@ var (
 	// CardTypes classify a card payment (fiscal payment form: credit vs debit).
 	CardTypes = []string{"credit", "debit", "prepaid", "other"}
 	// PaymentEventSources tell how an update was observed.
-	PaymentEventSources = []string{"webhook", "poll", "reconcile", "staff"}
+	//
+	// submit (the response of commerce.payments.submit), hint (a
+	// notification whose signature could not be trusted: only the
+	// resource id was used, to read the API) and return (the buyer came
+	// back to the storefront) were added by the embedded-payment
+	// contracts; appended, so the original four keep their order.
+	PaymentEventSources = []string{"webhook", "poll", "reconcile", "staff", "submit", "hint", "return"}
+	// PaymentFlows is how the buyer completes the payment: redirect (default;
+	// hosted checkout, the buyer leaves the storefront) or embedded (the
+	// provider's form is painted in the storefront page).
+	PaymentFlows = []string{"redirect", "embedded"}
+	// SubmitMethods are the families commerce.payments.submit charges:
+	// a tokenized card, a cash voucher (OXXO, 7 Eleven...) or a bank
+	// transfer (SPEI).
+	SubmitMethods = []string{"card", "cash", "bank_transfer"}
+	// PaymentActionTypes is what the storefront must do after a submit:
+	// nothing, show the bank challenge (3DS) inside the page, show the
+	// voucher, or send the buyer to a hosted page.
+	PaymentActionTypes = []string{"none", "challenge", "voucher", "redirect"}
+	// DeclineCodes are the neutral rejection reasons every provider maps
+	// its own codes onto, so the storefront owns the buyer-facing text and
+	// never shows a raw provider code. A provider that cannot tell uses
+	// declined; risk rejections are always declined (never reveal why).
+	DeclineCodes = []string{
+		"insufficient_funds", "invalid_cvc", "invalid_expiry", "invalid_card_data",
+		"call_issuer", "card_disabled", "duplicate", "max_attempts",
+		"authentication_failed", "declined",
+	}
+	// ClientOptionKeys are the payment options a provider declares to the
+	// storefront: card (form in the page), cash (voucher), wallet (the
+	// provider's account) and credits (the provider's installment credit).
+	// wallet and credits normally leave the page (redirect=true).
+	ClientOptionKeys = []string{"card", "cash", "wallet", "credits"}
+	// ClientPointGroups place a cash point on the first list or behind "more".
+	ClientPointGroups = []string{"main", "more"}
+	// NotificationAuths is the verdict of commerce.payments.notification.inspect
+	// on the signature of a notification.
+	NotificationAuths = []string{"firma_ok", "firma_invalida", "sin_firma", "sin_secreto"}
+	// HealthLevels is the severity of a failed health check.
+	HealthLevels = []string{"info", "warning", "critical"}
 	// RefundStatuses is the normalized refund lifecycle.
 	RefundStatuses = []string{"pending", "succeeded", "failed", "manual_required"}
 	// CancelOutcomes answer commerce.payments.cancel: cancelled (confirmed),
@@ -200,6 +268,11 @@ var (
 		opt("id", TypeString, "order line id"),
 		opt("unit_price", TypeDecimal, ""),
 		opt("product_code", TypeString, "fiscal product key (SAT ClaveProdServ, carta porte)"),
+		opt("weight_kg", TypeDecimal, "weight of ONE unit, kg (quote and label by item; parcels stay the source of truth when present)"),
+		opt("length_cm", TypeDecimal, "length of one unit, cm"),
+		opt("width_cm", TypeDecimal, "width of one unit, cm"),
+		opt("height_cm", TypeDecimal, "height of one unit, cm"),
+		opt("requires_shipping", TypeBoolean, "false: a service / gift card that adds no weight and needs no delivery (default true)"),
 	)
 
 	// TrackingEventSchema is one normalized carrier scan.
@@ -293,6 +366,8 @@ var IdempotentContracts = map[string]bool{
 	CommercePaymentsSession: true,
 	CommercePaymentsRefund:  true,
 	CommercePaymentsCancel:  true,
+	// A duplicated submit charges the buyer twice.
+	CommercePaymentsSubmit: true,
 	// A duplicated terminal order charges the buyer twice.
 	CommercePaymentsTerminalCreate: true,
 	CommerceTaxCommit:              true,
@@ -318,12 +393,20 @@ var PinnedContracts = map[string]bool{
 	CommercePaymentsRefundStatus:    true,
 	CommercePaymentsTerminalCreate:  true,
 	CommercePaymentsTerminalDevices: true,
-	CommerceTaxCommit:               true,
-	CommerceTaxReverse:              true,
-	CommerceShippingCancel:          true,
-	CommerceShippingTrack:           true,
-	CommerceFulfillmentCancel:       true,
-	FiscalInvoiceCancel:             true,
+	// Submit belongs to the provider that owns the session; client, inspect,
+	// resolve and health are asked of a named provider (webhook route, store
+	// listing every candidate): selection never answers for another provider.
+	CommercePaymentsSubmit:              true,
+	CommercePaymentsClient:              true,
+	CommercePaymentsNotificationInspect: true,
+	CommercePaymentsNotificationResolve: true,
+	CommercePaymentsHealth:              true,
+	CommerceTaxCommit:                   true,
+	CommerceTaxReverse:                  true,
+	CommerceShippingCancel:              true,
+	CommerceShippingTrack:               true,
+	CommerceFulfillmentCancel:           true,
+	FiscalInvoiceCancel:                 true,
 }
 
 func init() {
@@ -367,7 +450,7 @@ func commerceEvents() []EventContract {
 }
 
 func commerceContracts() []Contract {
-	cs := commerceContractList()
+	cs := append(commerceContractList(), embeddedPaymentContracts()...)
 	// commerce.payments.status answers exactly what confirm answers.
 	var confirm, refund *Schema
 	for _, c := range cs {
@@ -380,8 +463,11 @@ func commerceContracts() []Contract {
 	}
 	for i := range cs {
 		switch cs[i].Key {
-		case CommercePaymentsStatus:
+		case CommercePaymentsStatus, CommercePaymentsNotificationResolve:
 			cs[i].Output = confirm
+		case CommercePaymentsSubmit:
+			// submit answers the confirm shape plus what to do next.
+			cs[i].Output = submitOutput(confirm)
 		case CommercePaymentsRefundStatus:
 			cs[i].Output = refund
 		case CommercePaymentsReconcile:
@@ -418,7 +504,8 @@ func commerceContractList() []Contract {
 				opt("notify_url", TypeString, "webhook URL the host exposes for commerce.payments.confirm"),
 				obj(opt("buyer", TypeObject, ""), BuyerSchema),
 				strs(opt("methods", TypeArray, "allowed method families: card / msi / oxxo / spei / wallet / bnpl / bank_transfer / cash")),
-				opt("method_hint", TypeString, "preselected method family"),
+				opt("method_hint", TypeString, "preselected method family or option (card, cash, wallet and credits are the embedded-payment options)"),
+				enum(opt("flow", TypeString, "redirect (default): hosted checkout, the buyer leaves the page; embedded: the provider declares in client what the storefront paints and the host charges with commerce.payments.submit. A provider that does not support embedded answers redirect"), PaymentFlows),
 				obj(opt("breakdown", TypeObject, "amount components (all decimals)"), schema(
 					opt("subtotal", TypeDecimal, ""),
 					opt("shipping", TypeDecimal, ""),
@@ -449,6 +536,8 @@ func commerceContractList() []Contract {
 				opt("test_mode", TypeBoolean, "session created against the provider sandbox"),
 				opt("qr_data", TypeString, "payload to render as a QR (channel qr)"),
 				opt("qr_image_url", TypeString, "ready-made QR image"),
+				enum(opt("flow", TypeString, "flow the provider actually honored; absent = redirect (a provider that predates embedded payment)"), PaymentFlows),
+				obj(opt("client", TypeObject, "public data to paint the provider form in the storefront (same shape as commerce.payments.client; provider extras allowed); instructions.brick stays for older stores"), openSchema(ClientSchema)),
 			),
 		},
 		{
@@ -484,6 +573,7 @@ func commerceContractList() []Contract {
 				obj(opt("seller", TypeObject, "marketplace seller the payment was charged for"), SellerSchema),
 				opt("provider_status", TypeString, "provider wording / code of the status, untranslated"),
 				opt("status_detail", TypeString, "provider reason (rejection code, expiry, ...)"),
+				strs(opt("also_captured", TypeArray, "provider refs of OTHER captured payments of the same order_ref (double charge); the one answered stays in provider_ref")),
 			),
 		},
 		{
@@ -710,6 +800,11 @@ func commerceContractList() []Contract {
 				opt("cod_amount", TypeDecimal, "cash on delivery to collect"),
 				list(opt("items", TypeArray, ""), ShipItemSchema),
 				opt("order_ref", TypeString, "cart/order id"),
+				opt("market", TypeString, "market code the quote is for (the host also selects providers by it)"),
+				opt("subtotal_basis", TypeDecimal, "cart subtotal AFTER line / amount discounts and coupons, in currency: the one basis a provider must use for its own 'free over' rule (declared_value stays the insured value)"),
+				list(opt("origins", TypeArray, "candidate ship-from locations (multi-origin); origin stays the primary one"), ShippingOriginSchema),
+				enum(strs(opt("delivery_types", TypeArray, "only these delivery types are wanted: "+strings.Join(DeliveryTypes, " | "))), DeliveryTypes),
+				opt("origin_configured", TypeBoolean, "false: the host has no configured origin and origin is a placeholder; the provider quotes with its own default or answers no rates"),
 			),
 			Output: schema(
 				list(req("rates", TypeArray, ""), schema(
@@ -722,9 +817,23 @@ func commerceContractList() []Contract {
 					opt("eta_days_min", TypeInteger, ""),
 					opt("eta_days_max", TypeInteger, ""),
 					opt("pickup", TypeBoolean, "store/branch pickup option"),
-					enum(opt("delivery_type", TypeString, ""), []string{"door", "branch", "same_day", "on_demand", "pickup"}),
+					enum(opt("delivery_type", TypeString, ""), DeliveryTypes),
 					opt("taxes_included", TypeBoolean, "cost already includes VAT/IVA"),
 					opt("expires_at", TypeString, "RFC 3339"),
+					// Additive (shipping system, wave 0): see shipping_quote.go.
+					opt("list_cost", TypeDecimal, "price before any 'free' rule or discount of the provider; list_cost >= cost; absent = same as cost"),
+					enum(opt("free_reason", TypeString, "why cost is below list_cost or zero (provider side only); coupon, market_policy and shop_threshold belong to the cart"), ShippingRateFreeReasons),
+					obj(opt("rule_ref", TypeObject, "the provider rule that produced the price or the 'free'"), ShippingRuleRefSchema),
+					obj(opt("delivery_window", TypeObject, "promised delivery dates, when the provider knows them (eta_days_* stay the fallback)"), DeliveryWindowSchema),
+					obj(opt("pickup_point", TypeObject, "delivery_type branch / pickup: where the buyer collects"), PickupPointSchema),
+					obj(opt("insurance", TypeObject, "insurance offered or included in cost"), RateInsuranceSchema),
+					opt("fallback", TypeBoolean, "a backup rate offered because live carriers failed or no zone matched"),
+					opt("quote_ref", TypeString, "provider quote id that commerce.shipping.label needs besides rate_id, when its API demands one"),
+					opt("quoted_at", TypeString, "RFC 3339 time the provider computed the price (expires_at is the end of its validity)"),
+					pat(opt("quote_hash", TypeString, "provider digest of the priced facts (id, cost, list_cost, currency, expires_at): sha256:<64 hex>"), QuoteHashPattern),
+					opt("origin_location_id", TypeString, "origins[].location_id this rate ships from"),
+					opt("billable_weight_kg", TypeDecimal, "weight the price is based on (max of actual and volumetric)"),
+					list(opt("parcels", TypeArray, "packages the quote assumed (weight and size actually priced)"), ParcelSchema),
 				)),
 			),
 		},
@@ -744,6 +853,13 @@ func commerceContractList() []Contract {
 				opt("label_size", TypeString, "4x6 / letter"),
 				opt("cod_amount", TypeDecimal, ""),
 				req("idempotency_key", TypeString, "stable per shipment; a duplicate label costs money"),
+				// Additive (shipping system, wave 0): see shipping_quote.go.
+				enum(opt("purpose", TypeString, "outbound (default) or return label"), ShippingPurposes),
+				opt("shipment_ref", TypeString, "id of the host shipment record this label belongs to"),
+				opt("insurance_value", TypeDecimal, "value to insure, in currency; absent = not insured"),
+				opt("quote_ref", TypeString, "rates[].quote_ref of the chosen rate"),
+				pat(opt("quote_hash", TypeString, "hash of the host's immutable quote snapshot (sha256:<64 hex>); provider may log it, never rely on it"), QuoteHashPattern),
+				opt("origin_location_id", TypeString, "location the parcel ships from"),
 			),
 			Output: schema(
 				enum(req("label_status", TypeString, "label_pending resolves by webhook/poll; tracking_number and label_url are set once created"), []string{"created", "label_pending"}),
@@ -756,6 +872,11 @@ func commerceContractList() []Contract {
 				opt("cost", TypeDecimal, ""),
 				opt("currency", TypeCurrency, ""),
 				enum(opt("status", TypeString, "tracking status"), TrackingStatuses),
+				opt("cost_tax", TypeDecimal, "tax included in cost, when the carrier invoices it"),
+				pat(opt("estimated_delivery", TypeString, "YYYY-MM-DD promised delivery date"), DatePattern),
+				opt("insurance_cost", TypeDecimal, "part of cost that is insurance"),
+				opt("billable_weight_kg", TypeDecimal, "weight the carrier billed"),
+				list(opt("parcels", TypeArray, "packages as the carrier registered them"), ParcelSchema),
 			),
 		},
 		{
