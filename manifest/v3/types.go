@@ -1698,6 +1698,17 @@ type Contributions struct {
 	// an addon with nothing to configure omits it and hosts show nothing.
 	Config *ConfigEntry `json:"config,omitempty"`
 
+	// Setup declares the addon's guided, resumable setup flows (the
+	// /setup/<addon> page): ordered steps with dependencies, each a check, a
+	// form, an action, a records table or a custom component. Optional — an
+	// addon without it behaves as before. See SetupFlow.
+	Setup []SetupFlow `json:"setup,omitempty"`
+
+	// Health declares the addon's periodic health handler, surfaced on the
+	// installed-addons card and the global setup banner. Optional. See
+	// HealthProbe.
+	Health *HealthProbe `json:"health,omitempty"`
+
 	// Rules contributes declarative anomaly/business rules evaluated by the
 	// host against canonical CRUD events (contributions.rules[]). Each rule
 	// pairs an arithmetic `when` predicate over the record with an outcome
@@ -3053,6 +3064,17 @@ type Setting struct {
 	// (see manifest.ResolveSetting). Lets a chain run a strict stock policy in
 	// one store and a permissive one in another (POS-1).
 	Scope string `json:"scope,omitempty"`
+	// VisibleWhen shows this setting only while a SIBLING setting (same
+	// settings[] list, or the same connector's credentials) has a given value
+	// (field + equals | in; class is not supported here). Pure UI metadata the
+	// SDK evaluates; a hidden setting keeps its stored value and still counts
+	// for required checks only while visible.
+	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`
+	// WriteOnly marks a value the host accepts but NEVER serves back (API
+	// tokens, passwords): reads return only whether it is set. Implied for
+	// type "secret"; use it for string/json settings that hold credentials.
+	// A write_only setting cannot declare a default.
+	WriteOnly bool `json:"write_only,omitempty"`
 }
 
 // SettingOption is a value/label pair for select-typed settings.

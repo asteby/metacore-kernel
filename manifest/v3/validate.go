@@ -1773,6 +1773,9 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 		}
 	}
 
+	// Guided setup flows, health probe and setting visibility (setup.go).
+	errs = append(errs, validateSetup(&m)...)
+
 	// Addon-level pipeline-runtime primitives (connectors / schedules / webhooks).
 	errs = append(errs, validatePipelineRuntime(&m)...)
 	// Per-user desktop agents (distinct from edge_devices hardware pairing).

@@ -444,6 +444,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 	if err := m.validatePipelineRuntime(); err != nil {
 		return err
 	}
+	if err := m.validateSetup(); err != nil {
+		return err
+	}
 	if err := m.validateDocuments(); err != nil {
 		return err
 	}
@@ -2086,6 +2089,54 @@ func validateDerivedReadPermissions(md ModelDefinition, all []ModelDefinition) e
 				return fmt.Errorf("snapshots[%d]: %s", si, msg)
 			}
 		}
+	}
+	return nil
+}
+
+// validateSetup applies the same cross-reference rules as the v3 plane to the
+// projected contributions.setup / contributions.health and to the settings'
+// visible_when / write_only, so a manifest the hub or ops receives converted
+// fails exactly like it fails manifestcheck ("dual validation"). RBAC and slots
+// are not projected onto the legacy carrier, so the own-permission declaration
+// and custom.slot existence checks are v3-only.
+func (m *Manifest) validateSetup() error {
+	var errs []string
+	if len(m.Setup) > 0 || m.Health != nil {
+		refs := v3.SetupRefs{
+			AddonKey:         m.Key,
+			Settings:         map[string]struct{}{},
+			Connectors:       map[string]struct{}{},
+			Actions:          map[string]struct{}{},
+			HasNativeService: m.NativeService != nil,
+			Exports:          m.backendExportSet(),
+		}
+		for _, s := range m.Settings {
+			refs.Settings[s.Key] = struct{}{}
+		}
+		for _, c := range m.Connectors {
+			refs.Connectors[c.Key] = struct{}{}
+		}
+		for _, acts := range m.Actions {
+			for _, a := range acts {
+				refs.Actions[a.Key] = struct{}{}
+			}
+		}
+		errs = append(errs, v3.ValidateSetup(m.Setup, m.Health, refs)...)
+	}
+	settings := make([]v3.Setting, 0, len(m.Settings))
+	for _, s := range m.Settings {
+		settings = append(settings, v3.Setting{Key: s.Key, Default: s.DefaultValue, VisibleWhen: s.VisibleWhen, WriteOnly: s.WriteOnly})
+	}
+	errs = append(errs, v3.ValidateSettingExtras("settings", settings)...)
+	for ci, c := range m.Connectors {
+		creds := make([]v3.Setting, 0, len(c.Credentials))
+		for _, cr := range c.Credentials {
+			creds = append(creds, v3.Setting{Key: cr.Key, Default: cr.Default, VisibleWhen: cr.VisibleWhen, WriteOnly: cr.WriteOnly})
+		}
+		errs = append(errs, v3.ValidateSettingExtras(fmt.Sprintf("connectors[%d].credentials", ci), creds)...)
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("manifest.%s", strings.Join(errs, "; manifest."))
 	}
 	return nil
 }

@@ -244,6 +244,15 @@ type Manifest struct {
 	// apiroute.RoutesFromManifest). The v3 type passes through unchanged.
 	// Empty = the addon exposes no API.
 	APIRoutes []v3.APIRoute `json:"api_routes,omitempty"`
+
+	// Setup is the host projection of v3 contributions.setup[]: the addon's
+	// guided, resumable setup flows. Projected verbatim (same JSON tags); the
+	// host persists progress and the SDK renders it. Empty = no setup surface.
+	Setup []v3.SetupFlow `json:"setup,omitempty"`
+
+	// Health is the host projection of v3 contributions.health: the periodic
+	// health handler. Nil = the addon reports no health.
+	Health *v3.HealthProbe `json:"health,omitempty"`
 }
 
 // DocumentDef is the host/runtime projection of a v3 DocumentDef: a printable
@@ -310,6 +319,9 @@ type CredentialDef struct {
 	OptionsSource string `json:"options_source,omitempty"`
 	// Section binds the credential to a ConnectorDef.FormLayout section/step.
 	Section string `json:"section,omitempty"`
+	// VisibleWhen / WriteOnly project v3 Setting.visible_when / write_only.
+	VisibleWhen *v3.VisibleWhen `json:"visible_when,omitempty"`
+	WriteOnly   bool            `json:"write_only,omitempty"`
 }
 
 // ScheduleDef is the host/runtime projection of a v3 Schedule: a cron job the
@@ -685,6 +697,11 @@ type SettingDef struct {
 	// Scope is "org" (default, "" = org) or "branch": each branch may override
 	// the org value. See ResolveSetting.
 	Scope string `json:"scope,omitempty"`
+	// VisibleWhen / WriteOnly project v3 Setting.visible_when / write_only:
+	// conditional visibility among sibling settings, and a value the host
+	// never serves back. A "secret" is always write-only.
+	VisibleWhen *v3.VisibleWhen `json:"visible_when,omitempty"`
+	WriteOnly   bool            `json:"write_only,omitempty"`
 }
 
 // ReasonRequiredDef is the legacy projection of v3 ReasonRequired.

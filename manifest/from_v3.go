@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	v3 "github.com/asteby/metacore-kernel/manifest/v3"
+	"github.com/asteby/metacore-kernel/runtime/native"
 )
 
 // kernelRequirementKey is the reserved compatibility.requires[] key whose
@@ -168,6 +169,7 @@ func FromV3(m *v3.Manifest) Manifest {
 		spec := *m.Runtime.NativeService
 		if spec.Ingress != nil {
 			ingress := *spec.Ingress
+			ingress.Listeners = append([]native.Listener(nil), ingress.Listeners...)
 			spec.Ingress = &ingress
 		}
 		out.NativeService = &spec
@@ -196,6 +198,8 @@ func FromV3(m *v3.Manifest) Manifest {
 		out.AgentCapabilities = m.Contributions.AgentCapabilities
 		out.PublicRoutes = m.Contributions.PublicRoutes
 		out.APIRoutes = m.Contributions.API
+		out.Setup = m.Contributions.Setup
+		out.Health = m.Contributions.Health
 	}
 
 	return out
@@ -283,6 +287,8 @@ func mapCredentials(in []v3.Setting) []CredentialDef {
 			Secret:        s.Type == "secret",
 			OptionsSource: s.OptionsSource,
 			Section:       s.Section,
+			VisibleWhen:   s.VisibleWhen,
+			WriteOnly:     s.WriteOnly,
 		})
 	}
 	return out
@@ -1129,6 +1135,8 @@ func mapSettings(in []v3.Setting) []SettingDef {
 			Type:         s.Type,
 			DefaultValue: s.Default,
 			Scope:        s.Scope,
+			VisibleWhen:  s.VisibleWhen,
+			WriteOnly:    s.WriteOnly,
 		}
 		for _, o := range s.Options {
 			def.Options = append(def.Options, Option{Value: o.Value, Label: o.Label})
@@ -1786,6 +1794,15 @@ func deriveBackend(m *v3.Manifest) *BackendSpec {
 			if prefix, fn, found := strings.Cut(ev.Do, ":"); found && prefix == "wasm" {
 				add(fn)
 			}
+		}
+	}
+
+	// Setup/health handlers: check, records and health handlers of type wasm
+	// are invoked by the host like action handlers, so their functions join
+	// the export surface (and the hub scanner verifies the module has them).
+	if m.Contributions != nil {
+		for _, fn := range v3.SetupWasmExports(m.Contributions.Setup, m.Contributions.Health) {
+			add(fn)
 		}
 	}
 

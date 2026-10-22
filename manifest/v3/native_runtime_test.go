@@ -96,3 +96,71 @@ func TestValidateNativeServiceIngressRejects(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateNativeServiceTCPListenersAndEgress(t *testing.T) {
+	mk := func(mut func(ns map[string]interface{})) []byte {
+		m := baseValid()
+		runtime := nativeRuntime()
+		mut(runtime["native_service"].(map[string]interface{}))
+		m["runtime"] = runtime
+		return mustJSON(t, m)
+	}
+	ok := mk(func(ns map[string]interface{}) {
+		ns["network"] = map[string]interface{}{"egress": []interface{}{"*:25", "smtp.relay.example:587"}}
+		ns["ingress"] = map[string]interface{}{"kind": "tcp", "listeners": []interface{}{
+			map[string]interface{}{"name": "smtp", "port": 25, "proxy_protocol": "v2"},
+			map[string]interface{}{"name": "submission", "port": 587},
+		}}
+	})
+	if err := Validate(ok); err != nil {
+		t.Fatalf("expected valid tcp ingress + port wildcard egress: %v", err)
+	}
+	// http ingress may carry listeners too.
+	if err := Validate(mk(func(ns map[string]interface{}) {
+		ns["ingress"] = map[string]interface{}{"kind": "http", "listeners": []interface{}{map[string]interface{}{"name": "smtp", "port": 25}}}
+	})); err != nil {
+		t.Fatalf("http+listeners: %v", err)
+	}
+	bad := map[string]func(ns map[string]interface{}){
+		"tcp without listeners": func(ns map[string]interface{}) { ns["ingress"] = map[string]interface{}{"kind": "tcp"} },
+		"tcp with path_prefix": func(ns map[string]interface{}) {
+			ns["ingress"] = map[string]interface{}{"kind": "tcp", "path_prefix": "/x", "listeners": []interface{}{map[string]interface{}{"name": "a", "port": 25}}}
+		},
+		"port zero": func(ns map[string]interface{}) {
+			ns["ingress"] = map[string]interface{}{"kind": "tcp", "listeners": []interface{}{map[string]interface{}{"name": "a", "port": 0}}}
+		},
+		"bad proxy_protocol": func(ns map[string]interface{}) {
+			ns["ingress"] = map[string]interface{}{"kind": "tcp", "listeners": []interface{}{map[string]interface{}{"name": "a", "port": 25, "proxy_protocol": "v3"}}}
+		},
+		"duplicate port": func(ns map[string]interface{}) {
+			ns["ingress"] = map[string]interface{}{"kind": "tcp", "listeners": []interface{}{
+				map[string]interface{}{"name": "a", "port": 25}, map[string]interface{}{"name": "b", "port": 25}}}
+		},
+		"unknown listener field": func(ns map[string]interface{}) {
+			ns["ingress"] = map[string]interface{}{"kind": "tcp", "listeners": []interface{}{map[string]interface{}{"name": "a", "port": 25, "bind": "0.0.0.0"}}}
+		},
+		"bare wildcard egress": func(ns map[string]interface{}) { ns["network"] = map[string]interface{}{"egress": []interface{}{"*"}} },
+		"wildcard on web port": func(ns map[string]interface{}) {
+			ns["network"] = map[string]interface{}{"egress": []interface{}{"*:443"}}
+		},
+		"subdomain wildcard port": func(ns map[string]interface{}) {
+			ns["network"] = map[string]interface{}{"egress": []interface{}{"*.example.com:25"}}
+		},
+		"bad port": func(ns map[string]interface{}) {
+			ns["network"] = map[string]interface{}{"egress": []interface{}{"host:99999"}}
+		},
+	}
+	for name, mut := range bad {
+		if err := Validate(mk(mut)); err == nil {
+			t.Errorf("%s: expected a validation error", name)
+		}
+	}
+}
+
+func TestValidateCapabilityDomainManage(t *testing.T) {
+	m := baseValid()
+	m["capabilities"] = append(m["capabilities"].([]interface{}), map[string]interface{}{"kind": "domain:manage", "target": "mail"})
+	if err := Validate(mustJSON(t, m)); err != nil {
+		t.Fatalf("domain:manage must be a known capability kind: %v", err)
+	}
+}
