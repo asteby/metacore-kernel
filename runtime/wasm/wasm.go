@@ -34,6 +34,7 @@ import (
 	"github.com/asteby/metacore-kernel/capability"
 	"github.com/asteby/metacore-kernel/connectors"
 	"github.com/asteby/metacore-kernel/database/staleplan"
+	"github.com/asteby/metacore-kernel/domains"
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/manifest"
@@ -104,13 +105,16 @@ type Host struct {
 	approvalRequester func(ctx context.Context, in dynamic.ApprovalInput) (*dynamic.ApprovalRequest, error)
 	// approvalConsumer backs the `approval_consume` import (Host.WithApprovalConsumer).
 	approvalConsumer func(ctx context.Context, in dynamic.ConsumeInput) error
-	connectors        *connectors.Resolver
-	capQuerier        capability.Querier
-	edgeCommander     EdgeCommander
-	edgeLimits        *edgeLimiter
-	emitPolicy        EmitPolicyFunc
-	logger            *log.Logger
-	compiled          sync.Map // addonKey -> *compiledEntry
+	connectors       *connectors.Resolver
+	capQuerier       capability.Querier
+	dnsResolver      domains.DNSResolver
+	dnsAuthorize     DNSAuthorizeFunc
+	dnsLimits        *dnsOrgLimiter
+	edgeCommander    EdgeCommander
+	edgeLimits       *edgeLimiter
+	emitPolicy       EmitPolicyFunc
+	logger           *log.Logger
+	compiled         sync.Map // addonKey -> *compiledEntry
 	// modules holds one *instPool per instanceKey(addonKey, installation).
 	// The pool's admission semaphore also single-flights instantiation: every
 	// instance gets a unique wazero module name, so concurrent cold starts no
@@ -812,6 +816,9 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		approvalConsumer:  h.approvalConsumer,
 		connectors:        h.connectors,
 		capQuerier:        h.capQuerier,
+		dnsResolver:       h.dnsResolver,
+		dnsAuthorize:      h.dnsAuthorize,
+		dnsLimits:         h.dnsLimits,
 		edgeCommander:     h.edgeCommander,
 		edgeLimits:        h.edgeLimits,
 		emitPolicy:        h.emitPolicy,

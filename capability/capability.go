@@ -157,9 +157,65 @@ func (c Contract) Has(field string) bool {
 // device/session when the provider manages several (providers default it).
 const MessagingWhatsAppSend = "messaging.whatsapp.send"
 
+// MessagingEmailSend sends one e-mail through whichever installed addon
+// provides it (an own mail server, an SMTP relay, a transactional API). Like
+// messaging.whatsapp.send it is a fire-and-forget ACTION: the provider accepts
+// the message into its outbox and delivery is reported later through its own
+// events, so the consumer reads no output.
+//
+// Fields:
+//
+//	to, cc, bcc      one address, or several separated by "," or ";"
+//	from             sender address; empty = the provider's default sender for
+//	                 the org. A provider MUST refuse a sender whose domain the
+//	                 org has not verified (the consumer cannot spoof).
+//	reply_to         Reply-To address
+//	subject          subject line (templates may fill it)
+//	text, html       bodies; at least one of text, html or template is needed
+//	template         provider-side template key; variables fills it
+//	variables        object of template variables
+//	attachments      array of {filename, content_type, url|blob_ref}; bytes are
+//	                 never inlined in the input
+//	in_reply_to      RFC 5322 Message-ID being answered (threads the reply)
+//	thread_id        provider thread id to attach the message to
+//	idempotency_key  caller-chosen key; a provider MUST NOT send twice for the
+//	                 same (org, key). Retried consumers rely on it.
+//
+// `to` is the only field the host can pre-check (MissingRequired); the
+// subject/body rule is the provider's, reported through its own error.
+const MessagingEmailSend = "messaging.email.send"
+
 // Contracts is the registry of well-known capability contracts. Commerce and
 // fiscal query contracts are registered from commerce.go.
 var Contracts = map[string]Contract{
+	MessagingEmailSend: {
+		Key:  MessagingEmailSend,
+		Kind: KindAction,
+		Doc:  "Send one e-mail through the org's e-mail provider (queued; delivery is reported by provider events).",
+		Input: &Schema{Open: true, Fields: []Field{
+			{Name: "to", Type: TypeString, Required: true, Doc: "recipient address(es), separated by , or ;"},
+			{Name: "cc", Type: TypeString},
+			{Name: "bcc", Type: TypeString},
+			{Name: "from", Type: TypeString, Doc: "sender; empty = provider default for the org"},
+			{Name: "reply_to", Type: TypeString},
+			{Name: "subject", Type: TypeString},
+			{Name: "text", Type: TypeString},
+			{Name: "html", Type: TypeString},
+			{Name: "template", Type: TypeString},
+			{Name: "variables", Type: TypeObject},
+			{Name: "attachments", Type: TypeArray, Of: &Schema{Open: true, Fields: []Field{
+				{Name: "filename", Type: TypeString},
+				{Name: "content_type", Type: TypeString},
+				{Name: "url", Type: TypeString},
+				{Name: "blob_ref", Type: TypeString},
+			}}},
+			{Name: "in_reply_to", Type: TypeString},
+			{Name: "thread_id", Type: TypeString},
+			{Name: "idempotency_key", Type: TypeString},
+		}},
+		Required: []string{"to"},
+		Optional: []string{"cc", "bcc", "from", "reply_to", "subject", "text", "html", "template", "variables", "attachments", "in_reply_to", "thread_id", "idempotency_key"},
+	},
 	MessagingWhatsAppSend: {
 		Key:      MessagingWhatsAppSend,
 		Kind:     KindAction,

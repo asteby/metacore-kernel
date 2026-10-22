@@ -15,6 +15,7 @@ import (
 	"github.com/asteby/metacore-kernel/capability"
 	"github.com/asteby/metacore-kernel/connectors"
 	"github.com/asteby/metacore-kernel/database/staleplan"
+	"github.com/asteby/metacore-kernel/domains"
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/runtime/wasm/importpolicy"
@@ -143,6 +144,12 @@ type invocation struct {
 	// capQuerier resolves and runs capability queries for the
 	// capability_query import (Host.WithCapabilityQuerier). nil = unavailable.
 	capQuerier capability.Querier
+	// dnsResolver / dnsAuthorize back the dns_resolve import (Host.WithDNS);
+	// dnsCalls counts this invocation's lookups.
+	dnsResolver  domains.DNSResolver
+	dnsAuthorize DNSAuthorizeFunc
+	dnsCalls     int
+	dnsLimits    *dnsOrgLimiter
 	// edgeCommander delivers edge_command to a device's agent
 	// (Host.WithEdgeCommander). nil = unavailable.
 	edgeCommander EdgeCommander
@@ -632,6 +639,23 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 			return writeToGuest(ctx, mod, env)
 		}).
 		Export("capability_query")
+
+	// dns_resolve(reqPtr, reqLen) -> i64 (ptr|len envelope)
+	// Read-only DNS lookup of one name/type of a domain the organization owns,
+	// for ownership proofs and record verification. Gated by `domain:manage`
+	// and the host's DNS authorization policy. See docs/wasm-abi.md § 26.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			reqPtr, reqLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			req := readBytes(mod, reqPtr, reqLen)
+			env := executeDNSResolve(ctx, inv, req)
+			return writeToGuest(ctx, mod, env)
+		}).
+		Export("dns_resolve")
 
 	// routing_resolve(reqPtr, reqLen) -> i64 (ptr|len envelope)
 	// Answers which handler wins a decision domain for this org given attrs,

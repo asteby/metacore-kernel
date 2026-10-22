@@ -66,6 +66,10 @@ type Spec struct {
 	// the host. Nil means no public traffic ever reaches the sidecar. See
 	// ingress.go for the contract.
 	Ingress *Ingress `json:"ingress,omitempty"`
+	// Listeners are public TCP ports the host forwards to per-listener unix
+	// sockets (see listeners.go). Independent of Ingress, which is HTTP only:
+	// Ingress != nil always means "has HTTP ingress".
+	Listeners []Listener `json:"listeners,omitempty"`
 }
 
 // Control pins the local host↔sidecar protocol. The supervisor assigns the
@@ -110,8 +114,12 @@ type ResourceLimits struct {
 	PIDs         int `json:"pids"`
 }
 
-// NetworkPolicy is deny-by-default. Egress entries are hostname:port pairs or
-// exact hostnames; wildcard and CIDR support require a future contract version.
+// NetworkPolicy is deny-by-default. Egress entries are exact hostnames,
+// hostname:port pairs, or the single explicit wildcard form "*:<port>" for the
+// closed set of protocol ports in WildcardEgressPorts (SMTP/IMAP/POP3). Any
+// other wildcard (bare "*", "*.example.com", ranges) and CIDR support require a
+// future contract version. See egress.go for the full grammar and the SSRF
+// obligations of enforcers.
 type NetworkPolicy struct {
 	Egress []string `json:"egress,omitempty"`
 }
@@ -121,7 +129,12 @@ type SecretRef struct {
 	Mount  string `json:"mount"`
 }
 
-func (s Spec) Validate() error {
+func (s Spec) Validate() error { return s.ValidateWithApprovedPorts() }
+
+// ValidateWithApprovedPorts is Validate for a host that holds an explicit hub
+// approval for listener ports outside AllowedListenerPorts (the mail ports).
+// Ports in ForbiddenListenerPorts stay refused regardless.
+func (s Spec) ValidateWithApprovedPorts(approved ...int) error {
 	if s.Entrypoint == "" {
 		return errors.New("native runtime: entrypoint is required")
 	}
@@ -167,14 +180,17 @@ func (s Spec) Validate() error {
 		seen[secret.Mount] = struct{}{}
 	}
 	for i, target := range s.Network.Egress {
-		if target == "" || strings.ContainsAny(target, "/* \t\n") {
-			return fmt.Errorf("native runtime: network.egress[%d] must be an exact hostname or hostname:port", i)
+		if _, err := ParseEgress(target); err != nil {
+			return fmt.Errorf("native runtime: network.egress[%d]: %w", i, err)
 		}
 	}
 	if s.Ingress != nil {
 		if err := s.Ingress.Validate(); err != nil {
 			return err
 		}
+	}
+	if err := validateListeners(s.Listeners, approved...); err != nil {
+		return err
 	}
 	if len(s.Artifacts) == 0 {
 		return errors.New("native runtime: at least one artifact is required")

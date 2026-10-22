@@ -512,6 +512,14 @@
         },
         "ingress": {
           "$ref": "#/$defs/NativeIngress"
+        },
+        "listeners": {
+          "type": "array",
+          "maxItems": 16,
+          "description": "Public TCP ports the service asks the host to expose (independent of `ingress`, which is HTTP only). The sidecar binds the supervisor-assigned unix socket in METACORE_NATIVE_LISTENER_<NAME>, never the public port. The host may refuse a port (conflicts, policy, sensitive ports).",
+          "items": {
+            "$ref": "#/$defs/NativeListener"
+          }
         }
       }
     },
@@ -566,6 +574,7 @@
       "properties": {
         "egress": {
           "type": "array",
+          "description": "Deny-by-default outbound allowlist: exact `host`, `host:port`, or `*:<port>` (any public host) for the closed port set 25, 110, 143, 465, 587, 993, 995. No other wildcard or CIDR.",
           "items": {
             "type": "string",
             "minLength": 1
@@ -654,6 +663,34 @@
         },
         "timeout": {
           "type": "string"
+        }
+      }
+    },
+    "NativeListener": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "port"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,31}$"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "proxy_protocol": {
+          "type": "string",
+          "enum": [
+            "",
+            "v1",
+            "v2"
+          ],
+          "description": "HAProxy PROXY protocol header the host forwarder prepends so the sidecar learns the real client address."
         }
       }
     },
@@ -964,6 +1001,7 @@
             "ctx:user",
             "ctx:roles",
             "ctx:org_config",
+            "domain:manage",
             "event:emit",
             "event:subscribe",
             "fs:read",
@@ -974,7 +1012,7 @@
             "file-storage:write",
             "time:wallclock"
           ],
-          "description": "Closed set of capability kinds the runtime enforces. `capability:query <key>` grants the capability_query host import for one capability key (glob allowed, e.g. `commerce.shipping.rates`): the addon asks for a capability and the host resolves the provider per organization and market. `connector:read <key>` grants connector_get for one connector key: an addon implicitly reads the connectors it declares in its own `connectors` block, so this kind is what an addon uses to read a connector DECLARED BY ANOTHER ADDON (e.g. waybill-cartaporte reading fiscal_mexico's `factura_com` so the org configures the PAC credentials once). `edge:command <device_key>.<command_kind>` grants the edge_command host import: send that command kind (glob allowed, e.g. `cashdro.*`) to a physical device of the org whose class is the addon's own `edge_devices[].key`, and receive the answer the host transported from the device's agent. `ctx:user` / `ctx:roles` / `ctx:org_config` grant the matching slice of the ctx_get host import (acting user id+email / the user's role keys / the org's currency, tax, locale and timezone settings); the target is ignored and conventionally `*`."
+          "description": "Closed set of capability kinds the runtime enforces. `capability:query <key>` grants the capability_query host import for one capability key (glob allowed, e.g. `commerce.shipping.rates`): the addon asks for a capability and the host resolves the provider per organization and market. `connector:read <key>` grants connector_get for one connector key: an addon implicitly reads the connectors it declares in its own `connectors` block, so this kind is what an addon uses to read a connector DECLARED BY ANOTHER ADDON (e.g. waybill-cartaporte reading fiscal_mexico's `factura_com` so the org configures the PAC credentials once). `edge:command <device_key>.<command_kind>` grants the edge_command host import: send that command kind (glob allowed, e.g. `cashdro.*`) to a physical device of the org whose class is the addon's own `edge_devices[].key`, and receive the answer the host transported from the device's agent. `ctx:user` / `ctx:roles` / `ctx:org_config` grant the matching slice of the ctx_get host import (acting user id+email / the user's role keys / the org's currency, tax, locale and timezone settings); the target is ignored and conventionally `*`. `domain:manage <purpose>` lets the addon manage the organization's domains (package domains: register, verify ownership, read/apply DNS records) whose purposes include <purpose> (glob allowed, e.g. `mail` or `*`); it never reaches domains reserved for other purposes."
         },
         "target": {
           "type": "string",
@@ -2146,6 +2184,18 @@
         "config": {
           "$ref": "#/$defs/ConfigEntry",
           "description": "The addon's configuration surface. Hosts render a 'Configure' affordance (e.g. in the installed-addons view) linking to it; addons with nothing to configure simply omit it."
+        },
+        "setup": {
+          "type": "array",
+          "maxItems": 8,
+          "description": "Guided, resumable setup flows of the addon (the /setup/<addon> page). Each flow is an ordered set of steps (check, form, action, records, custom) with dependencies; the host persists progress per organization (or instance) and the SDK renders it. At most one flow may use trigger on_install.",
+          "items": {
+            "$ref": "#/$defs/SetupFlow"
+          }
+        },
+        "health": {
+          "$ref": "#/$defs/HealthProbe",
+          "description": "Periodic health handler of the addon, shown on its installed-addons card and the global setup banner."
         },
         "routes": {
           "type": "array",
@@ -4386,6 +4436,299 @@
         }
       }
     },
+    "SetupHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "description": "Handler of this addon: a wasm export or a native operation.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "wasm",
+            "native"
+          ]
+        },
+        "function": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+        },
+        "operation": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,127}$"
+        }
+      }
+    },
+    "SetupFlow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "title",
+        "steps"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,62}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "trigger": {
+          "type": "string",
+          "enum": [
+            "on_install",
+            "manual"
+          ],
+          "default": "manual"
+        },
+        "permission": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_:]*)+$"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "org",
+            "instance"
+          ],
+          "default": "org"
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 40,
+          "items": {
+            "$ref": "#/$defs/SetupStep"
+          }
+        }
+      }
+    },
+    "SetupStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "title",
+        "kind"
+      ],
+      "description": "One step; kind selects exactly one of check|form|action|records|custom.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,62}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "optional": {
+          "type": "boolean",
+          "default": false
+        },
+        "depends_on": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "check",
+            "form",
+            "action",
+            "records",
+            "custom"
+          ]
+        },
+        "check": {
+          "$ref": "#/$defs/SetupCheck"
+        },
+        "form": {
+          "$ref": "#/$defs/SetupForm"
+        },
+        "action": {
+          "$ref": "#/$defs/SetupAction"
+        },
+        "records": {
+          "$ref": "#/$defs/SetupRecords"
+        },
+        "custom": {
+          "$ref": "#/$defs/SetupCustom"
+        },
+        "skip_when": {
+          "$ref": "#/$defs/SetupSkipWhen"
+        }
+      }
+    },
+    "SetupCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "handler"
+      ],
+      "properties": {
+        "handler": {
+          "$ref": "#/$defs/SetupHandler"
+        },
+        "poll": {
+          "$ref": "#/$defs/SetupPoll"
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Go duration of one execution (default 30s, max 5m)."
+        }
+      }
+    },
+    "SetupPoll": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "every"
+      ],
+      "properties": {
+        "every": {
+          "type": "string",
+          "description": "First re-run delay (Go duration, 1s..24h)."
+        },
+        "max_every": {
+          "type": "string",
+          "description": "Backoff ceiling."
+        },
+        "factor": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Backoff multiplier (default 2)."
+        },
+        "give_up_after": {
+          "type": "string",
+          "description": "Stop polling after this long (default 24h)."
+        }
+      }
+    },
+    "SetupForm": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Exactly one of settings or connector.",
+      "properties": {
+        "settings": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string"
+          }
+        },
+        "connector": {
+          "type": "string"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "settings"
+          ]
+        },
+        {
+          "required": [
+            "connector"
+          ]
+        }
+      ]
+    },
+    "SetupAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action"
+      ],
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": "Key of one of contributions.actions[]."
+        }
+      }
+    },
+    "SetupRecords": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "handler"
+      ],
+      "properties": {
+        "handler": {
+          "$ref": "#/$defs/SetupHandler"
+        }
+      }
+    },
+    "SetupCustom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slot"
+      ],
+      "properties": {
+        "slot": {
+          "type": "string",
+          "description": "slot_kind contributed in contributions.slots[]."
+        }
+      }
+    },
+    "SetupSkipWhen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "setting"
+      ],
+      "description": "Skip the step while the setting equals `equals` or is one of `in`.",
+      "properties": {
+        "setting": {
+          "type": "string"
+        },
+        "equals": {
+          "type": "string"
+        },
+        "in": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "HealthProbe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "handler"
+      ],
+      "properties": {
+        "handler": {
+          "$ref": "#/$defs/SetupHandler"
+        },
+        "every": {
+          "type": "string",
+          "description": "Go duration 10s..24h (default 5m)."
+        },
+        "permission": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_:]*)+$"
+        }
+      }
+    },
     "Setting": {
       "type": "object",
       "additionalProperties": false,
@@ -4459,6 +4802,15 @@
         "validation": {
           "type": "string",
           "description": "Optional constraint hint (regex or named rule) the host applies when collecting the value. Used by connector credentials."
+        },
+        "visible_when": {
+          "$ref": "#/$defs/VisibleWhen",
+          "description": "Show this setting only while a SIBLING setting (same settings[] list or same connector's credentials) matches: field + equals | in. 'class' is not supported on settings."
+        },
+        "write_only": {
+          "type": "boolean",
+          "default": false,
+          "description": "The host accepts the value but never serves it back (reads only report whether it is set). Implied for type=secret. Cannot be combined with a default."
         }
       }
     },

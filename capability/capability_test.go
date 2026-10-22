@@ -36,3 +36,39 @@ func TestMissingRequired(t *testing.T) {
 		t.Fatal("capability keys are dotted lowercase segments")
 	}
 }
+
+func TestMessagingEmailSendContract(t *testing.T) {
+	c, ok := Lookup(MessagingEmailSend)
+	if !ok || c.Key != "messaging.email.send" || c.IsQuery() || c.Idempotent {
+		t.Fatalf("messaging.email.send must be a registered fire-and-forget action: %+v ok=%v", c, ok)
+	}
+	if !ValidKey(c.Key) {
+		t.Fatal("key must be well formed")
+	}
+	if got := MissingRequired(c, map[string]any{"subject": "hi"}); len(got) != 1 || got[0] != "to" {
+		t.Fatalf("to must be required, missing=%v", got)
+	}
+	if errs := c.CheckInput(map[string]any{
+		"to": "a@x.com; b@x.com", "subject": "s", "html": "<p>x</p>", "variables": map[string]any{"n": 1},
+		"attachments":     []any{map[string]any{"filename": "a.pdf", "blob_ref": "b1"}},
+		"idempotency_key": "k1",
+	}); len(errs) != 0 {
+		t.Fatalf("valid input rejected: %v", errs)
+	}
+	if errs := c.CheckInput(map[string]any{"to": 5}); len(errs) == 0 {
+		t.Fatal("non-string to must fail")
+	}
+	if errs := c.CheckInput(map[string]any{"to": "a@x.com", "attachments": []any{map[string]any{"filename": 7}}}); len(errs) == 0 {
+		t.Fatal("attachment with a non-string filename must fail")
+	}
+	// Consumer-side mapping validation uses the contract's fields.
+	if errs := ValidateInput(map[string]string{"to": "record.email", "subject": "const:Hola"}, &c); len(errs) != 0 {
+		t.Fatalf("mapping rejected: %v", errs)
+	}
+	if errs := ValidateInput(map[string]string{"recipient": "record.email"}, &c); len(errs) == 0 {
+		t.Fatal("unknown field must be rejected")
+	}
+	if len(c.Required)+len(c.Optional) != len(c.Input.Fields) {
+		t.Fatal("Required/Optional must cover exactly the Input fields")
+	}
+}

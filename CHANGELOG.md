@@ -7,7 +7,93 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed (incompatible)
+
+Validado con la herramienta de manifests contra los 93 manifests de
+`asteby/addons` `origin/main` (incluido `packages/storefront`, que declara
+`network.egress: ["localhost:8080","localhost:8787"]`) y contra
+`packages/mail`/`connector_email` del worktree del addon de correo: 0
+regresiones respecto a kernel main (resultados idénticos). Lo que SÍ puede
+afectar a un manifest o host fuera de ese conjunto:
+
+- `ingress` NO lleva `listeners` ni `kind: "tcp"` (se retiraron antes de
+  publicarse): los listeners son `Spec.Listeners`. `native.Ingress` sigue siendo
+  comparable con `==` y `Ingress != nil` sigue significando HTTP.
+- `wasm.DNSAuthorizeFunc` pasa de `(ctx, org, addon, name)` a
+  `(ctx, DNSAuthRequest)`.
+- `ParseEgress`/`Spec.Validate` ahora aplican una gramatica estricta a
+  `network.egress`: etiquetas DNS ASCII, sin IP literales, sin `*.localhost`,
+  sin sufijos de uso especial (`.internal`, `.local`, `.arpa`, `.svc`, ...); un
+  punto final se normaliza. Se admiten `localhost:<puerto>` y `127.0.0.1:<puerto>`
+  EXACTOS como grants de servicio del host (los usa el manifest publicado del
+  storefront); `NetworkPolicy.DialContext` nunca marca loopback (netguard) y ops
+  decide si los honra (`NetworkPolicy.LoopbackGrants`).
+- `Spec.Listeners` solo admite puertos de correo por defecto
+  (`AllowedListenerPorts`: 25 110 143 465 587 993 995 4190); otro puerto exige
+  aprobacion del hub (`ValidateWithApprovedPorts`, `ListenerRegistry.ClaimApproved`).
+- `domains.WithCloudflareBaseURL` ya no existe (solo tests del paquete);
+  `Cloudflare.UpdateRecord` usa PATCH (no PUT) y no toca comment/tags/proxied.
+- `ProviderApplier.Apply` rechaza planes ajenos (`ErrInvalidPlan`) y falla un
+  update si el registro cambio (`ErrPlanChanged`); `Plan.Fingerprint()` cambia
+  de valor (incluye TTL/Unique/Match/Needle y metadatos del existente).
+  Un TXT `Unique` ya no reemplaza TXT ajenos y el SPF se fusiona.
+- `setupflow.Executor` ya no hereda el contexto del llamador (usar
+  `BaseContext`), `Request.Scope` y `OrgID` son obligatorios en flujos de org;
+  `Principal` incompleto = `ErrNoPrincipal`.
+- Un setting/credential `type: "secret"` con `default` se rechaza en los dos
+  validadores (antes se aceptaba y el default viajaba en el manifest firmado).
+
 ### Added
+
+- **Ola 0 de plataforma para el addon de correo (UNA release de schema, todo
+  aditivo y opcional).** Manifests existentes validan igual; los hosts que no
+  usan lo nuevo no cambian.
+  - **Manifest v3** (en AMBOS validadores, con una sola función
+    `v3.ValidateSetup`): `contributions.setup[]` (`SetupFlow`/`SetupStep`:
+    `check|form|action|records|custom`, `depends_on` sin ciclos, `skip_when`,
+    `poll`), `contributions.health` (`HealthProbe`), `Setting.visible_when` y
+    `Setting.write_only` (también en `connectors[].credentials[]`). Referencias
+    cruzadas: `action`, `custom.slot`, `form.settings|connector`, handlers
+    wasm/native; los handlers wasm de checks/records/health entran a
+    `backend.exports`. Proyección legacy: `Manifest.Setup`, `Manifest.Health`,
+    `SettingDef/CredentialDef.VisibleWhen|WriteOnly`. Ejemplo y schema
+    (`docs/spec/v3/`) actualizados. Ver `docs/setup-flows.md`.
+  - **Paquete `setupflow`**: contrato del handler (`status` pending|running|ok|
+    warn|error|blocked, `message_key`, `params`, `detail`, `retry_after_s`,
+    `fix`), `HealthResult`, ejecutor de checks (principal del usuario, timeout,
+    poll con backoff, dedupe de ejecuciones concurrentes) y `Plan`.
+  - **Native services**: `runtime.native_service.listeners[]`
+    (`Spec.Listeners`: `name`, `port`, `proxy_protocol` v1|v2; FUERA de
+    `ingress`, que sigue siendo solo HTTP y comparable con `==`; el sidecar
+    escucha el socket unix por listener que asigna el supervisor en
+    `METACORE_NATIVE_LISTENER_<NAME>`; puertos sensibles prohibidos
+    `ForbiddenListenerPorts`; `ListenerRegistry` detecta colisiones entre
+    addons) y egress por patrón de puerto `*:25`, `host:587` (comodín de host
+    solo con puerto y solo en 25/110/143/465/587/993/995; IP literales y
+    `localhost` rechazados; `NetworkPolicy.Allows`, `ParseEgress`,
+    `NetworkPolicy.DialContext` con netguard). `*:<port>` exige aprobación
+    explícita del hub y que ops lo aplique antes de instalar el addon de correo.
+    Ver `docs/rfcs/002-native-service-runtime.md`.
+  - **Capability `domain:manage`** (target = propósito del dominio) con
+    `Capabilities.CanManageDomain`.
+  - **Paquete `domains`**: `OrgDomain` genérico (host, purposes, verify_token,
+    status, dns_provider), prueba de propiedad TXT `_asteby-verify.`
+    (equivalente a la del flujo de la tienda), `RecordSet` requerido vs
+    observado (`ok|missing|wrong_value|propagating` + `unknown` cuando la
+    consulta falla) con diagnósticos, `DNSResolver`/`DNSApplier`, y Cloudflare
+    detrás de interfaz (Plan de solo lectura, upsert idempotente que nunca
+    borra, `Fingerprint` + `ApplyConfirmed`). Ver `docs/org-domains.md`.
+  - **ABI wasm 1.17 `dns_resolve`** (import nuevo, aditivo): consulta DNS de
+    solo lectura de un dominio de la organización; exige `domain:manage` y la
+    política `Host.WithDNS(resolver, authorize)` (cerrado por defecto).
+    `DNSAuthorizeFunc(ctx, DNSAuthRequest)` recibe `CanManage(purpose)`;
+    autorizador de referencia `wasm.NewOrgDomainDNSAuthorizer` (dominio
+    pendiente = solo `TXT _asteby-verify.<host>`, sufijos/IP prohibidos),
+    presupuesto por organización (`WithDNSOrgLimit`) cobrado antes de autorizar,
+    errores genéricos hacia el guest y `domains.NewPublicResolver()` como
+    resolvedor recomendado.
+  - **Contrato de capability `messaging.email.send`** (acción, patrón de
+    `messaging.whatsapp.send`; entrada tipada con `idempotency_key`).
 
 - **Contrato v3 de los primitivos del Hub sobre OPS (v0.230.0, solo contrato, sin
   runtime).** Un solo cambio con todos los campos nuevos del manifest, validados

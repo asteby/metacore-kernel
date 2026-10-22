@@ -1,0 +1,394 @@
+package setupflow
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"strings"
+	"sync"
+	"time"
+
+	v3 "github.com/asteby/metacore-kernel/manifest/v3"
+)
+
+// Principal is the identity a check runs as: the acting USER, never a host
+// service account. Hosts build their handler execution context from it so the
+// addon's RBAC and tenant scoping apply to the check exactly as they would to
+// a click in the UI.
+type Principal struct {
+	UserID string
+	OrgID  string
+	Roles  []string
+}
+
+// validFor reports whether the principal is complete for a flow of the given
+// scope: an acting user always, and the organization unless the flow is
+// instance-scoped (v3.SetupScopeInstance). An org-scoped check without an org
+// would run unscoped, so it is refused rather than defaulted.
+func (p Principal) validFor(scope string) bool {
+	if p.UserID == "" {
+		return false
+	}
+	return scope == v3.SetupScopeInstance || p.OrgID != ""
+}
+
+// Request is one handler invocation.
+type Request struct {
+	AddonKey string
+	FlowKey  string
+	StepKey  string
+	Handler  v3.SetupHandler
+	// Scope is the flow's scope (v3.SetupScopeOrg when empty, or
+	// v3.SetupScopeInstance). An org-scoped request requires Principal.OrgID.
+	Scope string
+	// Principal is the acting user (required).
+	Principal Principal
+	// Attempt is the 0-based execution number inside a Poll (0 for Run).
+	Attempt int
+}
+
+// Invoker dispatches a SetupHandler (wasm export or native operation) with
+// the request's principal and returns the raw handler response (the kernel
+// envelope). Hosts implement it over their wasm/native dispatchers.
+type Invoker interface {
+	Invoke(ctx context.Context, req Request) ([]byte, error)
+}
+
+// InvokerFunc adapts a function to Invoker.
+type InvokerFunc func(ctx context.Context, req Request) ([]byte, error)
+
+func (f InvokerFunc) Invoke(ctx context.Context, req Request) ([]byte, error) { return f(ctx, req) }
+
+// Errors.
+var (
+	// ErrNoPrincipal: the request carries no acting user.
+	ErrNoPrincipal = errors.New("setupflow: a check must run as a user principal (and an organization for org-scoped flows)")
+	// ErrBusy: too many timed-out handler executions are still running; a new
+	// one is refused until some return (protects against a hung handler being
+	// retried into unbounded goroutines).
+	ErrBusy = errors.New("setupflow: too many abandoned handler executions")
+	// ErrTimeout: one execution exceeded the check timeout.
+	ErrTimeout = errors.New("setupflow: check timed out")
+	// ErrGaveUp: polling reached give_up_after (or the retry budget) while the
+	// result was still pending; the last result is returned alongside.
+	ErrGaveUp = errors.New("setupflow: gave up polling")
+	// ErrTooManyErrors: MaxConsecutiveErrors transient failures in a row.
+	ErrTooManyErrors = errors.New("setupflow: handler kept failing")
+)
+
+// Defaults of the executor.
+const (
+	DefaultMaxConsecutiveErrors = 5
+	DefaultPollMaxEvery         = time.Hour
+	DefaultMaxAbandoned         = 64
+)
+
+// Executor runs setup checks. The zero value is not usable: set Invoker.
+// It is safe for concurrent use.
+type Executor struct {
+	Invoker Invoker
+	// DefaultTimeout applies when the check declares none (default 30s).
+	DefaultTimeout time.Duration
+	// MaxConsecutiveErrors bounds transient handler failures inside a Poll
+	// (default 5).
+	MaxConsecutiveErrors int
+	// BaseContext builds the context a handler execution runs with, from the
+	// request ONLY (typically: a context carrying the principal's user, org
+	// and roles for the host's authorization layers). It must have an
+	// independent lifetime: the executor adds the check timeout itself. Nil
+	// uses context.Background(). The CALLER's context is deliberately never
+	// used: an execution is shared between callers and outlives each of them,
+	// so the first caller's request-scoped values (auth, tx, deadlines) must
+	// not leak into it.
+	BaseContext func(Request) context.Context
+	// MaxAbandoned bounds executions that timed out but whose Invoker has not
+	// returned yet (default 64); beyond it Run returns ErrBusy.
+	MaxAbandoned int
+	// Sleep waits d or until ctx ends; nil uses a timer. Tests inject a fake.
+	Sleep func(ctx context.Context, d time.Duration) error
+	// Now defaults to time.Now; used for give_up_after.
+	Now func() time.Time
+
+	mu        sync.Mutex
+	inflight  map[string]*flight
+	abandoned int
+}
+
+type flight struct {
+	done chan struct{}
+	res  CheckResult
+	err  error
+}
+
+func (e *Executor) now() time.Time {
+	if e.Now != nil {
+		return e.Now()
+	}
+	return time.Now()
+}
+
+func (e *Executor) sleep(ctx context.Context, d time.Duration) error {
+	if e.Sleep != nil {
+		return e.Sleep(ctx, d)
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+func (e *Executor) timeout(c v3.SetupCheck) (time.Duration, error) {
+	if c.Timeout == "" {
+		if e.DefaultTimeout > 0 {
+			return e.DefaultTimeout, nil
+		}
+		return v3.DefaultSetupTimeout, nil
+	}
+	d, err := time.ParseDuration(c.Timeout)
+	if err != nil || d <= 0 || d > v3.MaxSetupTimeout {
+		return 0, fmt.Errorf("setupflow: invalid check timeout %q", c.Timeout)
+	}
+	return d, nil
+}
+
+func flightKey(r Request) string {
+	return strings.Join([]string{r.Principal.OrgID, r.AddonKey, r.FlowKey, r.StepKey, r.Principal.UserID}, "\x00")
+}
+
+// Run executes the check once as the request's principal and returns its
+// validated result.
+//
+// Concurrent Runs for the same (org, addon, flow, step, user) share ONE
+// execution: a user double-clicking "verify", or the page and a poll racing,
+// never run the handler twice at once. The shared execution is detached from
+// any single caller's cancellation (it is bounded by the check timeout), so a
+// caller that gives up does not abort the others; it just stops waiting.
+// Different users never share an execution: results are permission-scoped.
+func (e *Executor) Run(ctx context.Context, check v3.SetupCheck, req Request) (CheckResult, error) {
+	if e.Invoker == nil {
+		return CheckResult{}, errors.New("setupflow: executor has no Invoker")
+	}
+	if !req.Principal.validFor(req.Scope) {
+		return CheckResult{}, ErrNoPrincipal
+	}
+	timeout, err := e.timeout(check)
+	if err != nil {
+		return CheckResult{}, err
+	}
+	key := flightKey(req)
+
+	e.mu.Lock()
+	if e.inflight == nil {
+		e.inflight = map[string]*flight{}
+	}
+	f, shared := e.inflight[key]
+	if !shared {
+		maxAb := e.MaxAbandoned
+		if maxAb <= 0 {
+			maxAb = DefaultMaxAbandoned
+		}
+		if e.abandoned >= maxAb {
+			e.mu.Unlock()
+			return CheckResult{}, ErrBusy
+		}
+		f = &flight{done: make(chan struct{})}
+		e.inflight[key] = f
+		base := context.Background()
+		if e.BaseContext != nil {
+			if b := e.BaseContext(req); b != nil {
+				base = context.WithoutCancel(b)
+			}
+		}
+		go e.execute(base, key, f, timeout, req)
+	}
+	e.mu.Unlock()
+
+	select {
+	case <-f.done:
+		return f.res, f.err
+	case <-ctx.Done():
+		return CheckResult{}, ctx.Err()
+	}
+}
+
+// execute runs the Invoker in its own goroutine and settles the flight as soon
+// as the result arrives OR the timeout elapses, whichever is first. The
+// in-flight slot is released at the timeout even if the Invoker ignores its
+// context and never returns (its eventual result is discarded), so the next
+// Run starts fresh instead of waiting on a stuck call forever.
+func (e *Executor) execute(ctx context.Context, key string, f *flight, timeout time.Duration, req Request) {
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, ErrTimeout)
+	defer cancel()
+	type outcome struct {
+		raw []byte
+		err error
+	}
+	ch := make(chan outcome, 1)
+	var settled, finished bool
+	go func() {
+		var o outcome
+		defer func() {
+			if r := recover(); r != nil {
+				o = outcome{err: fmt.Errorf("setupflow: handler panicked: %v", r)}
+			}
+			ch <- o
+			e.mu.Lock()
+			finished = true
+			if settled {
+				e.abandoned-- // it had been counted when the timeout fired
+			}
+			e.mu.Unlock()
+		}()
+		o.raw, o.err = e.Invoker.Invoke(ctx, req)
+	}()
+
+	var res CheckResult
+	var err error
+	select {
+	case o := <-ch:
+		switch {
+		case o.err != nil:
+			err = o.err
+			if errors.Is(context.Cause(ctx), ErrTimeout) {
+				err = fmt.Errorf("%w after %s: %v", ErrTimeout, timeout, o.err)
+			}
+		case errors.Is(context.Cause(ctx), ErrTimeout):
+			err = fmt.Errorf("%w after %s", ErrTimeout, timeout)
+		default:
+			res, err = ParseCheckResult(o.raw)
+		}
+	case <-ctx.Done():
+		err = fmt.Errorf("%w after %s", ErrTimeout, timeout)
+		e.mu.Lock()
+		if !finished {
+			settled = true
+			e.abandoned++
+		}
+		e.mu.Unlock()
+	}
+	f.res, f.err = res, err
+	e.mu.Lock()
+	delete(e.inflight, key)
+	e.mu.Unlock()
+	close(f.done)
+}
+
+// PollDelay is the wait before poll re-run number attempt (0-based): Every,
+// then x Factor each time, capped at MaxEvery (default 1h, never below Every).
+// A handler's retry_after_s hint, when positive, replaces the computed delay
+// but is clamped into [1s, cap]. Pure function; no jitter.
+func PollDelay(p v3.SetupPoll, attempt int, hint time.Duration) (time.Duration, error) {
+	every, err := time.ParseDuration(p.Every)
+	if err != nil || every < v3.MinSetupPollEvery {
+		return 0, fmt.Errorf("setupflow: invalid poll.every %q", p.Every)
+	}
+	maxEvery := DefaultPollMaxEvery
+	if p.MaxEvery != "" {
+		if maxEvery, err = time.ParseDuration(p.MaxEvery); err != nil || maxEvery < v3.MinSetupPollEvery {
+			return 0, fmt.Errorf("setupflow: invalid poll.max_every %q", p.MaxEvery)
+		}
+	}
+	if maxEvery < every {
+		maxEvery = every
+	}
+	factor := p.Factor
+	if factor == 0 {
+		factor = v3.DefaultSetupPollFact
+	}
+	if factor < 1 {
+		return 0, fmt.Errorf("setupflow: invalid poll.factor %v", p.Factor)
+	}
+	if hint > 0 {
+		return min(max(hint, v3.MinSetupPollEvery), maxEvery), nil
+	}
+	f := float64(every) * math.Pow(factor, float64(attempt))
+	if math.IsInf(f, 0) || f > float64(maxEvery) {
+		return maxEvery, nil
+	}
+	return time.Duration(f), nil
+}
+
+// Poll runs the check and, while the result is pending or running and the
+// check declares a poll schedule, re-runs it with backoff until it settles.
+//
+//   - onResult (optional) is called after every execution with the 0-based
+//     attempt and the result, so the host can persist progress as it evolves.
+//   - A transient failure (handler error, timeout, malformed result) is retried
+//     on the same schedule; MaxConsecutiveErrors in a row returns
+//     ErrTooManyErrors (wrapping the last cause) with the last good result.
+//   - give_up_after (default 24h) bounds the whole wait: the last result comes
+//     back with ErrGaveUp.
+//   - ctx cancellation returns ctx.Err() with the last result.
+//   - Without check.poll it behaves like Run.
+func (e *Executor) Poll(ctx context.Context, check v3.SetupCheck, req Request, onResult func(attempt int, r CheckResult)) (CheckResult, error) {
+	if check.Poll == nil {
+		r, err := e.Run(ctx, check, req)
+		if err == nil && onResult != nil {
+			onResult(0, r)
+		}
+		return r, err
+	}
+	giveUp := v3.DefaultSetupGiveUpAft
+	if check.Poll.GiveUpAfter != "" {
+		d, err := time.ParseDuration(check.Poll.GiveUpAfter)
+		if err != nil || d <= 0 {
+			return CheckResult{}, fmt.Errorf("setupflow: invalid poll.give_up_after %q", check.Poll.GiveUpAfter)
+		}
+		giveUp = d
+	}
+	maxErrs := e.MaxConsecutiveErrors
+	if maxErrs <= 0 {
+		maxErrs = DefaultMaxConsecutiveErrors
+	}
+	deadline := e.now().Add(giveUp)
+
+	var (
+		last     CheckResult
+		haveLast bool
+		errRun   int
+	)
+	for attempt := 0; ; attempt++ {
+		req.Attempt = attempt
+		r, err := e.Run(ctx, check, req)
+		var hint time.Duration
+		switch {
+		case err == nil:
+			errRun = 0
+			last, haveLast = r, true
+			if onResult != nil {
+				onResult(attempt, r)
+			}
+			if r.Status.Settled() {
+				return r, nil
+			}
+			hint = time.Duration(r.RetryAfterS) * time.Second
+		case ctx.Err() != nil:
+			return last, ctx.Err()
+		case errors.Is(err, ErrNoPrincipal):
+			return last, err
+		default:
+			errRun++
+			if errRun >= maxErrs {
+				return last, fmt.Errorf("%w (%d in a row): %w", ErrTooManyErrors, errRun, err)
+			}
+		}
+		delay, derr := PollDelay(*check.Poll, attempt, hint)
+		if derr != nil {
+			return last, derr
+		}
+		if !e.now().Add(delay).Before(deadline) {
+			if !haveLast {
+				return last, fmt.Errorf("%w before any successful result", ErrGaveUp)
+			}
+			return last, ErrGaveUp
+		}
+		if err := e.sleep(ctx, delay); err != nil {
+			return last, err
+		}
+	}
+}

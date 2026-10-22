@@ -34,6 +34,7 @@ keep them in sync.
 | 1.14    | proposal | `data_mutate` / `data_query` / `data_batch` copy `dynamic.CorrelationIDFromContext` onto `meta.correlation_id` and, on failure, onto `error.correlation_id`. The field is absent when the invocation context has no id. `envelopeVersion` stays `1`. See § 14.13. |
 | 1.15    | proposal | adds `approval_consume` (redeem a supervisor PIN grant in one atomic host step), `approval_required` from `data_mutate` / `data_batch` guards, and the create stamp phase (`Host.WithCreateStamp`: snapshots and grant columns). See § 23 and § 24. |
 | 1.16    | proposal | adds `edge_command`: a guest sends a command to a physical device of its org (CashDro, printer...) and gets back the answer the host carried over the device agent's authenticated connection, not a copy relayed by the browser. It is gated by `edge:command <device_key>.<command_kind>`, and only for device classes from the addon's own `edge_devices[]`. Idempotent per key, with a timeout capped at 60 s, and the device wait does not count against the guest's budget. See § 25. |
+| 1.17    | proposal | adds `dns_resolve`: read-only DNS lookup (A/AAAA/CNAME/MX/TXT) of a name under a domain the invoking organization owns, for ownership proofs and record verification. Gated by a `domain:manage` capability AND the host policy `Host.WithDNS(resolver, authorize)` (fail-closed without it). Guests built against 1.0 – 1.16 keep working. See § 26. |
 | 1.10    | proposal | `http_fetch` / `http_request` responses whose body is **not valid UTF-8** now travel as `body_base64` (standard base64) with `body_is_base64: true` and an EMPTY `body`; UTF-8 bodies are unchanged. Fixes silent corruption of every binary response (PDF / ZIP / image / XLSX): `encoding/json` rewrites each invalid byte as U+FFFD, so guests received corrupt bytes with a 200 status and no error. See § 3.1. |
 | 1.6     | proposal | adds `http_request` (outbound HTTP with caller-supplied request headers as a JSON object — enables `Authorization`/`Accept` for authenticated third-party calls; same `http:fetch` capability + SSRF guard + 30 s timeout + 8 MiB cap as `http_fetch`, which is left unchanged and now delegates to the shared path with empty headers) and `connector_get` (resolves one org's credentials for a declared connector — the v3 `connectors` block — returning a JSON object; gated by `connector:read <key>` and tenant-scoped by the invocation `orgID`). Guests built against 1.0 – 1.5 keep working. |
 
@@ -2641,3 +2642,50 @@ Sends a command to a physical device of the organization (for example a CashDro 
 **Embedder:** `Host.WithEdgeCommander(EdgeCommander)` with `Device(ctx, org, id)` (resolves the device's class) and `Send(ctx, EdgeCommandRequest)` (delivers through the agent's session, records the audit row and applies idempotency). Org and addon always come from the invocation.
 
 **Trust:** the answer is as trustworthy as the agent's connection (device token issued at pairing, TLS). The agent does not sign the device answers; that is an open decision (see the PR).
+
+## 26. `dns_resolve`: DNS lookups of the organization's domains (v1.17)
+
+```
+dns_resolve(reqPtr i32, reqLen i32) -> i64          [v1.17]
+```
+
+Read-only lookup used to prove domain ownership (`_asteby-verify.<host>` TXT)
+and to verify the DNS records a purpose requires (MX, SPF, DKIM, DMARC) from a
+wasm handler, without giving the guest raw network access.
+
+**Request:** `{"name":"_asteby-verify.acme.mx","type":"TXT"}`; `type` is one of
+`A`, `AAAA`, `CNAME`, `MX`, `TXT` (case-insensitive); `name` is lower-cased and a
+trailing dot ignored.
+
+**Response (envelope v1):** `{"success":true,"data":{"name","type","values":[...],"no_records":bool},"meta":{...}}`.
+Values are canonical: TXT text unquoted; MX `"<priority> <host>"`; CNAME target;
+IP text. An authoritative empty answer (NXDOMAIN / no data) is **success** with
+`no_records: true`. A lookup that FAILED is the error `dns_lookup_failed`; a
+guest must never treat it as "the record does not exist".
+
+**Gates**, all required:
+
+1. The addon declares a `domain:manage` capability (`Capabilities.CanResolveDNS`).
+2. The embedder wires `Host.WithDNS(resolver, authorize)`. `authorize(ctx, DNSAuthRequest{OrgID, AddonKey, Name, Type, CanManage})`
+   must return nil only when `name` equals or is under a domain of the invoking
+   organization AND the addon holds `domain:manage` for one of that domain's
+   purposes (`CanManage(purpose)`). `wasm.NewOrgDomainDNSAuthorizer` is the
+   reference policy: it also denies IP literals and private/special-use suffixes
+   (`.local`, `.internal`, `.arpa`, `cluster.local`, ...) and, while a domain is
+   pending, allows only `TXT _asteby-verify.<host>`. Without `authorize` the
+   import answers `forbidden` (an unscoped resolver would be an open DNS oracle
+   and a data-exfiltration channel via query names); without a resolver,
+   `dns_unavailable`.
+
+**Budgets** are charged BEFORE authorization (denied calls count): 64 per
+invocation and `DefaultDNSOrgLimit` per organization per `DefaultDNSOrgWindow`
+(`Host.WithDNSOrgLimit`). **Error messages are generic**: the guest never sees
+the authorizer's or resolver's error text (it goes to the audit log).
+
+**Resolver:** pass a PUBLIC recursive resolver (`domains.NewPublicResolver()`),
+not the system one, which may answer internal names.
+
+**Errors:** `invalid_request`, `no_active_org`, `forbidden`, `dns_unavailable`,
+`dns_lookup_failed`, `rate_limited` (64 lookups per invocation, plus the per-organization budget; 5 s per lookup).
+Implementation: `runtime/wasm/dnsresolve.go`; resolver interface and the
+record logic: package `domains` (docs/org-domains.md).

@@ -23,13 +23,14 @@ type Capabilities struct {
 	// but comes from the org's connector configuration
 	// ("connector:<connector>.<credential>", e.g. a store_url). The runtime
 	// resolves them per invocation; see CanFetchHosts.
-	connHost []ConnectorHostRef
-	eventPub []string
-	eventSub []string
-	connRead []string        // connector keys: "github", "*" for any
-	ctxScope map[string]bool // ctx_get slices: "user", "roles", "org_config"
-	capQuery []string        // capability keys (globs) the addon may query via capability_query
-	edgeCmd  []string        // "<device_key>.<command_kind>" globs the addon may send via edge_command
+	connHost  []ConnectorHostRef
+	eventPub  []string
+	eventSub  []string
+	connRead  []string        // connector keys: "github", "*" for any
+	ctxScope  map[string]bool // ctx_get slices: "user", "roles", "org_config"
+	capQuery  []string        // capability keys (globs) the addon may query via capability_query
+	edgeCmd   []string        // "<device_key>.<command_kind>" globs the addon may send via edge_command
+	domManage []string        // domain purposes (globs) the addon may manage via the domains package
 }
 
 // Compile turns a manifest's declarations into a Capabilities policy.
@@ -57,6 +58,8 @@ func Compile(addonKey string, caps []manifest.Capability) *Capabilities {
 			c.capQuery = append(c.capQuery, cap.Target)
 		case "edge:command":
 			c.edgeCmd = append(c.edgeCmd, cap.Target)
+		case "domain:manage":
+			c.domManage = append(c.domManage, cap.Target)
 		case "ctx:user", "ctx:roles", "ctx:org_config":
 			// The target is ignored: each kind IS the slice. Kept as a set so
 			// the ctx_get import can answer "which slices may this addon see".
@@ -254,6 +257,36 @@ func (c *Capabilities) CanReadConnector(connectorKey string) error {
 		return nil
 	}
 	return fmt.Errorf("addon %q lacks connector:read %q", c.addonKey, connectorKey)
+}
+
+// CanManageDomain returns nil if the addon declared `domain:manage <purpose>`
+// (purpose: "mail", a glob, or "*") for the organization-domain primitive
+// (package domains). The target is the domain PURPOSE, so a mail addon cannot
+// touch the domains an unrelated addon registered for itself.
+func (c *Capabilities) CanManageDomain(purpose string) error {
+	if c != nil && matchAny(c.domManage, purpose) {
+		return nil
+	}
+	addon := ""
+	if c != nil {
+		addon = c.addonKey
+	}
+	return fmt.Errorf("addon %q lacks domain:manage %q", addon, purpose)
+}
+
+// CanResolveDNS returns nil if the addon declared any `domain:manage`
+// capability: the dns_resolve import is a read-only helper of domain
+// management. WHICH names it may resolve is the host's authorization policy
+// (the name must be under a domain of the invoking org), not a manifest glob.
+func (c *Capabilities) CanResolveDNS() error {
+	if c != nil && len(c.domManage) > 0 {
+		return nil
+	}
+	addon := ""
+	if c != nil {
+		addon = c.addonKey
+	}
+	return fmt.Errorf("addon %q lacks domain:manage (required by dns_resolve)", addon)
 }
 
 // CanQueryCapability returns nil if the addon declared

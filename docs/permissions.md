@@ -235,6 +235,7 @@ Supported `kind` values are exhaustive — the enforcer rejects any other:
 | `event:emit`       | Event name or `prefix.*`                  | `events.Bus.Publish`                          |
 | `event:subscribe`  | Event name or `prefix.*`                  | `events.Bus.Subscribe`                        |
 | `connector:read`   | Connector key (`github`) or `*`           | `connector_get` host import (cross-addon connector dispatch) |
+| `domain:manage`    | Domain purpose (`mail`), glob or `*`      | `Capabilities.CanManageDomain` — host guard for the org-domain primitive (package `domains`) |
 
 The contract is in [`manifest/manifest.go`](../manifest/manifest.go) (type
 `Capability`) and the enforcement in

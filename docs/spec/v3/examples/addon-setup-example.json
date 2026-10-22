@@ -1,0 +1,145 @@
+{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": {
+    "key": "mailer",
+    "name": "Mailer",
+    "description": "Illustrative addon exercising guided setup (contributions.setup), health (contributions.health), write-only and conditional settings, TCP listeners and port-scoped egress.",
+    "version": "1.0.0",
+    "category": "communications"
+  },
+  "compatibility": {
+    "requires": [
+      { "key": "kernel", "version": ">=3.0.0 <4.0.0" }
+    ]
+  },
+  "tenancy": { "isolation": "shared", "rls_column": "organization_id" },
+  "capabilities": [
+    { "kind": "db:write", "target": "addon_mailer.*" },
+    { "kind": "http:fetch", "target": "api.cloudflare.com" },
+    { "kind": "connector:read", "target": "cloudflare" },
+    { "kind": "domain:manage", "target": "mail", "reason": "Register the organization's mail domains and read/apply their DNS records." }
+  ],
+  "runtime": {
+    "native_service": {
+      "entrypoint": "backend/mailer-node",
+      "scope": "instance",
+      "health": { "path": "/health", "interval": "15s", "timeout": "3s" },
+      "resources": { "memory_mb": 1024, "cpu_quota_mcpu": 1000, "pids": 512 },
+      "network": { "egress": ["*:25", "*:587", "*:993", "api.cloudflare.com:443"] },
+      "artifacts": [{
+        "os": "linux", "arch": "amd64",
+        "path": "backend/native/linux-amd64.tar.gz",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sbom": "backend/native/linux-amd64.spdx.json"
+      }],
+      "control": { "protocol": "metacore.native/v1", "transport": "unix_http" },
+      "listeners": [
+        { "name": "smtp", "port": 25, "proxy_protocol": "v2" },
+        { "name": "submission", "port": 587, "proxy_protocol": "v2" },
+        { "name": "imaps", "port": 993, "proxy_protocol": "v2" }
+      ]
+    }
+  },
+  "settings": [
+    {
+      "key": "dns_mode", "type": "select", "label": "mailer.setting.dns_mode", "default": "manual",
+      "options": [
+        { "value": "manual", "label": "mailer.dns_mode.manual" },
+        { "value": "cloudflare", "label": "mailer.dns_mode.cloudflare" }
+      ]
+    },
+    {
+      "key": "relay_password", "type": "string", "label": "mailer.setting.relay_password", "write_only": true,
+      "visible_when": { "field": "dns_mode", "equals": "manual" }
+    }
+  ],
+  "connectors": [
+    {
+      "key": "cloudflare", "label": "Cloudflare", "auth": "token",
+      "credentials": [
+        { "key": "api_token", "type": "secret", "label": "mailer.cloudflare.api_token", "required": true },
+        { "key": "account_note", "type": "string", "label": "mailer.cloudflare.note", "write_only": true }
+      ]
+    }
+  ],
+  "rbac": {
+    "permissions": [
+      { "key": "mailer.setup.manage", "label": "mailer.permission.setup" },
+      { "key": "mailer.health.read", "label": "mailer.permission.health" }
+    ]
+  },
+  "provides_capabilities": [
+    {
+      "key": "messaging.email.send",
+      "handler": { "type": "wasm", "function": "SendEmail" },
+      "input": { "to": "payload.to", "subject": "payload.subject", "text": "payload.text" }
+    }
+  ],
+  "contributions": {
+    "slots": [
+      { "slot_kind": "mailer.setup_dns", "entry": "./DnsRecordsStep" }
+    ],
+    "actions": [
+      { "key": "apply_dns_cloudflare", "label": "mailer.action.apply_dns", "handler": { "type": "wasm", "function": "ApplyDnsCloudflare" } }
+    ],
+    "setup": [
+      {
+        "key": "main",
+        "title": "mailer.setup.title",
+        "description": "mailer.setup.description",
+        "trigger": "on_install",
+        "permission": "mailer.setup.manage",
+        "scope": "org",
+        "steps": [
+          {
+            "key": "node", "title": "mailer.setup.node",
+            "kind": "check",
+            "check": { "handler": { "type": "native", "operation": "preflight" }, "timeout": "20s" }
+          },
+          {
+            "key": "settings", "title": "mailer.setup.settings",
+            "kind": "form", "depends_on": ["node"],
+            "form": { "settings": ["dns_mode", "relay_password"] }
+          },
+          {
+            "key": "cloudflare", "title": "mailer.setup.cloudflare",
+            "kind": "form", "depends_on": ["settings"], "optional": true,
+            "form": { "connector": "cloudflare" },
+            "skip_when": { "setting": "dns_mode", "equals": "manual" }
+          },
+          {
+            "key": "records", "title": "mailer.setup.records",
+            "kind": "records", "depends_on": ["settings"],
+            "records": { "handler": { "type": "wasm", "function": "ListRequiredDnsRecords" } }
+          },
+          {
+            "key": "apply", "title": "mailer.setup.apply",
+            "kind": "action", "depends_on": ["cloudflare", "records"], "optional": true,
+            "action": { "action": "apply_dns_cloudflare" },
+            "skip_when": { "setting": "dns_mode", "equals": "manual" }
+          },
+          {
+            "key": "dns_check", "title": "mailer.setup.dns_check",
+            "kind": "check", "depends_on": ["records"],
+            "check": {
+              "handler": { "type": "wasm", "function": "VerifyDns" },
+              "poll": { "every": "30s", "max_every": "1h", "factor": 2, "give_up_after": "72h" },
+              "timeout": "45s"
+            }
+          },
+          {
+            "key": "dns_help", "title": "mailer.setup.dns_help",
+            "kind": "custom", "depends_on": ["records"], "optional": true,
+            "custom": { "slot": "mailer.setup_dns" }
+          }
+        ]
+      }
+    ],
+    "health": {
+      "handler": { "type": "wasm", "function": "HealthSummary" },
+      "every": "5m",
+      "permission": "mailer.health.read"
+    }
+  }
+}

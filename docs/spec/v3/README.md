@@ -248,6 +248,9 @@ The full field-by-field mapping lives in
   extension points, RBAC, billing and signature.
 - [`examples/preset-example.json`](./examples/preset-example.json) — a
   vertical `Preset` bundling foundation addons with default settings.
+- [`examples/addon-setup-example.json`](./examples/addon-setup-example.json) — an
+  `Addon` (mailer) exercising `contributions.setup` / `health`, write-only and
+  conditional settings, TCP listeners and port-scoped egress.
 - [`examples/addon-ui-example.json`](./examples/addon-ui-example.json) — an
   `Addon` (shipping) exercising federated pages (`frontend.pages[]`),
   declarative views (`view_type` map/timeline/calendar/chart/split + `view`)
@@ -278,6 +281,7 @@ release added:
 | next | Top-level `provides_capabilities[]` + handler `type: "capability"` — provider-neutral capability contracts (see [Capability contracts](#capability-contracts)). New `ProvidedCapability` type; `Handler.capability` / `Handler.input`; kernel package `capability`. |
 | unreleased | `frontend.pages[]` (federated pages: key, path, expose, layout `shell`\|`immersive`, title, permission, requires, shares, budget_kb, breadcrumbs) + `frontend.sdk`; `NavItem.view_type` gains `map`\|`timeline`\|`calendar`\|`chart`\|`split` configured by `NavItem.view`; `models[].detail.panels[]`; `compatibility.host_capabilities`. UI host capabilities (`ui.pages`, `ui.embedded_pages`, `ui.views.*`, `ui.detail_panels`, `ui.maps`, `ui.charts`) are implied by use. See [`docs/ui-pages-and-views.md`](../../ui-pages-and-views.md). New `FrontendPage` / `PageBreadcrumb` / `NavView` / `MapView` / `MapPoint` / `MapLayer` / `MapRoute` / `TimelineView` / `TimelineSource` / `CalendarView` / `ChartView` / `SplitView` / `ModelDetail` / `DetailPanel` / `RelationPanel` / `StatsPanel` / `StatItem` types. |
 | unreleased | `models[].option_display` + top-level `option_metrics[]` — declarative picker presentation (title, subtitle, image, trailing metrics with format and tone, badges) and computed values other addons contribute to it (see [Option display](#option-display)). New `OptionDisplay` / `OptionTrailing` / `OptionTone` / `OptionDisplayCondition` / `OptionBadge` / `OptionMetric` types. |
+| next | Mail-platform wave 0 (one schema release, all optional): `contributions.setup[]` (guided resumable setup flows: `SetupFlow`/`SetupStep` kind `check\|form\|action\|records\|custom`, `depends_on`, `skip_when`, `poll`), `contributions.health` (`HealthProbe`), `settings[].visible_when` + `settings[].write_only` (also on `connectors[].credentials[]`), `runtime.native_service.ingress.kind: "tcp"` + `ingress.listeners[]` (public TCP ports, `proxy_protocol`), `network.egress` `*:<port>` for ports 25/110/143/465/587/993/995, capability kind `domain:manage`. See `docs/setup-flows.md`, `docs/org-domains.md`, `docs/rfcs/002-native-service-runtime.md`. Example: `examples/addon-setup-example.json`. |
 
 `metadata.i18n` and `metadata.countries` slot into the `metadata` block:
 
