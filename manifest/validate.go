@@ -1544,10 +1544,19 @@ func (m *Manifest) validatePipelineRuntime() error {
 			}
 		}
 	}
+	// Connector setup blocks: same rules as the v3 validator (shared function).
+	for ci, c := range m.Connectors {
+		if errs := v3.ValidateConnectorBlocks(fmt.Sprintf("connectors[%d]", ci), c.FormLayout, seenHook); len(errs) > 0 {
+			return fmt.Errorf("%s", errs[0])
+		}
+	}
 	seenDevice := make(map[string]struct{}, len(m.EdgeDevices))
 	for di, d := range m.EdgeDevices {
 		if d.Key == "" {
 			return fmt.Errorf("edge_devices[%d].key required", di)
+		}
+		if v3.FormLayoutHasBlocks(d.FormLayout) {
+			return fmt.Errorf("edge_devices[%d].form_layout: blocks are only supported in connectors[].form_layout", di)
 		}
 		if _, dup := seenDevice[d.Key]; dup {
 			return fmt.Errorf("edge_devices[%d].key %q duplicated", di, d.Key)

@@ -1,0 +1,119 @@
+{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": {
+    "key": "acmepay",
+    "name": "AcmePay",
+    "description": "Illustrative payments addon whose connector wizard declares setup blocks: the per-organization webhook URL to paste in the provider's panel, instructions with links, and verification actions with a visible result.",
+    "version": "1.0.0",
+    "category": "integration.payments"
+  },
+  "compatibility": {
+    "requires": [
+      {
+        "key": "kernel",
+        "version": ">=3.0.0 <4.0.0"
+      }
+    ]
+  },
+  "tenancy": {
+    "isolation": "shared",
+    "rls_column": "organization_id"
+  },
+  "capabilities": [
+    {
+      "kind": "http:fetch",
+      "target": "api.acmepay.example"
+    },
+    {
+      "kind": "connector:read",
+      "target": "acmepay"
+    }
+  ],
+  "connectors": [
+    {
+      "key": "acmepay",
+      "label": "acmepay.connector.label",
+      "auth": "token",
+      "form_layout": {
+        "mode": "steps",
+        "sections": [
+          {
+            "key": "connection",
+            "title": "acmepay.section.connection",
+            "blocks": [
+              {
+                "key": "where_keys",
+                "kind": "instructions",
+                "description": "acmepay.block.where_keys",
+                "links": [
+                  {
+                    "label": "acmepay.block.open_panel",
+                    "url": "https://dashboard.acmepay.example/developers"
+                  }
+                ]
+              },
+              {
+                "key": "test_connection",
+                "kind": "action",
+                "title": "acmepay.block.test.title",
+                "label": "acmepay.block.test.label",
+                "export": "handle_connector_test"
+              }
+            ]
+          },
+          {
+            "key": "notifications",
+            "title": "acmepay.section.notifications",
+            "blocks": [
+              {
+                "key": "webhook_url",
+                "kind": "webhook_url",
+                "webhook": "events",
+                "title": "acmepay.block.webhook.title",
+                "description": "acmepay.block.webhook.help",
+                "links": [
+                  {
+                    "label": "acmepay.block.webhook.panel",
+                    "url": "https://dashboard.acmepay.example/webhooks"
+                  }
+                ]
+              },
+              {
+                "key": "test_order",
+                "kind": "action",
+                "title": "acmepay.block.order.title",
+                "description": "acmepay.block.order.help",
+                "label": "acmepay.block.order.label",
+                "export": "handle_setup_test_order"
+              }
+            ]
+          }
+        ]
+      },
+      "credentials": [
+        {
+          "key": "api_key",
+          "type": "secret",
+          "label": "acmepay.field.api_key",
+          "required": true,
+          "section": "connection"
+        },
+        {
+          "key": "webhook_secret",
+          "type": "secret",
+          "label": "acmepay.field.webhook_secret",
+          "section": "notifications"
+        }
+      ],
+      "test_export": "handle_connector_test"
+    }
+  ],
+  "webhooks": [
+    {
+      "key": "events",
+      "path": "/events",
+      "do": "wasm:handle_webhook"
+    }
+  ]
+}

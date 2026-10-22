@@ -1783,6 +1783,10 @@ func deriveBackend(m *v3.Manifest) *BackendSpec {
 	// whitelist the runtime dispatches against (runtime/wasm invokeImpl).
 	for _, c := range m.Connectors {
 		add(c.TestExport)
+		// Setup action blocks ("Crear orden de prueba") are invoked the same way.
+		for _, fn := range v3.FormLayoutBlockExports(c.FormLayout) {
+			add(fn)
+		}
 		for _, cr := range c.Credentials {
 			if cr.Type == "dynamic_select" {
 				add(cr.OptionsSource)

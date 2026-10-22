@@ -156,3 +156,40 @@ res, err = exec.Poll(ctx, *step.Check, req, func(attempt int, r setupflow.CheckR
 El host persiste el progreso (ops: `addon_setup_progress`), aplica `permission`
 y `scope`, y decide cuándo mostrar la tarjeta/banner. Nada de eso vive en el
 kernel.
+
+## Bloques del asistente de conexión (`connectors[].form_layout.sections[].blocks`)
+
+El `form_layout` de un conector (modo `steps`) es el asistente "Configurar
+<addon>". Además de credenciales, cada paso puede declarar **bloques**
+(código: `manifest/v3/connector_blocks.go`; ejemplo:
+`docs/spec/v3/examples/addon-connector-blocks-example.json`):
+
+```jsonc
+"form_layout": { "mode": "steps", "sections": [
+  { "key": "advanced", "title": "…", "blocks": [
+    { "key": "webhook_url", "kind": "webhook_url", "webhook": "notifications",
+      "title": "mp.block.webhook.title", "description": "mp.block.webhook.help",
+      "links": [{ "label": "mp.block.webhook.panel", "url": "https://www.mercadopago.com.mx/developers/panel/app" }] },
+    { "key": "test_order", "kind": "action", "export": "handle_setup_test_order",
+      "label": "mp.block.test_order.label", "description": "mp.block.test_order.help" }
+  ]}
+]}
+```
+
+| `kind` | Qué hace el host | Qué dibuja el SDK |
+|---|---|---|
+| `webhook_url` | Calcula `<base pública>/api/webhooks/<org>/<addon>/<webhook>` para la organización actual (`webhook` = `webhooks[].key`) y lo sirve como `value` del bloque | Valor de solo lectura, botón Copiar, enlaces |
+| `instructions` | Nada | Texto (expandible) + enlaces https |
+| `action` | `POST /integrations/<conector>/blocks/<key>/run`: invoca `export` con las credenciales **guardadas** de la organización | Botón, resultado con `aria-live`, reintento |
+
+Resultado de un `action` (sobre del kernel, `data`):
+`{ok, status?: ok|warn|error|pending, message?, details?: [{key?, label?, value, kind?: text|id|url}]}`.
+`id` lleva botón copiar y `url` (solo https) un enlace. El host nunca inventa
+éxito: un `success:false` o un fallo de transporte se muestra como error.
+
+Reglas (las dos capas de validación con `v3.ValidateConnectorBlocks`):
+`key` única en todo el `form_layout` del conector; `webhook` debe existir en
+`webhooks[]`; `action` exige `export` (se suma a `backend.exports`);
+`instructions` exige `description` o `links`; enlaces solo `https`; máx. 8
+bloques por paso y 4 enlaces por bloque; `blocks` fuera de un conector
+(modelos, edge devices) se rechaza. Un `form_layout` sin `blocks` no cambia.

@@ -1625,6 +1625,83 @@
         "assist": {
           "$ref": "#/$defs/FormAssist",
           "description": "AI-assisted step: the SDK renders a provider-driven panel in this section that sends `input` fields to the host assist provider and merges the returned `output` fields into the form, with live progress. The kernel carries it; the host owns providers."
+        },
+        "blocks": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/FormBlock"
+          },
+          "description": "Non-input elements of a CONNECTOR setup step (only valid in connectors[].form_layout): webhook_url shows the host-computed per-organization URL of one of the addon's webhooks with a copy button; instructions shows help text with https links; action is a verification button bound to a wasm export the host runs with the org's stored connector credentials, whose structured result {ok, status, message, details[]} the SDK shows with retry."
+        }
+      }
+    },
+    "FormBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "kind"
+      ],
+      "description": "One non-input element of a connector setup step (see FormSection.blocks).",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,62}$",
+          "description": "Unique across the connector's form_layout. An action block is run by it (POST /integrations/<connector>/blocks/<key>/run)."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "webhook_url",
+            "instructions",
+            "action"
+          ],
+          "description": "webhook_url | instructions | action."
+        },
+        "title": {
+          "type": "string",
+          "description": "Literal or i18n key."
+        },
+        "description": {
+          "type": "string",
+          "description": "Literal or i18n key. kind=instructions needs it (or links)."
+        },
+        "webhook": {
+          "type": "string",
+          "description": "kind=webhook_url: the webhooks[].key whose public URL for the current organization the host computes."
+        },
+        "links": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "label",
+              "url"
+            ],
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "url": {
+                "type": "string",
+                "pattern": "^https://"
+              }
+            }
+          },
+          "description": "https links to external panels (kind instructions or webhook_url)."
+        },
+        "export": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$",
+          "description": "kind=action: the wasm export the host invokes (joins backend.exports)."
+        },
+        "label": {
+          "type": "string",
+          "description": "kind=action: button text (literal or i18n key)."
         }
       }
     },
