@@ -1,0 +1,693 @@
+{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": {
+    "key": "hub_fleet",
+    "name": "Hub Fleet",
+    "description": "SPIKE (do not publish). Fleet of OPS instances seen by the Asteby Hub: deployment, channel, version, license state and brand, with filters and a revoke request that goes to the trust core.",
+    "version": "0.2.0",
+    "category": "vertical.hub",
+    "icon": {
+      "type": "lucide",
+      "slug": "Server",
+      "color": "#2563EB"
+    },
+    "author": "Asteby",
+    "license": "UNLICENSED",
+    "readme": "README.md",
+    "visibility": "private",
+    "owner": "asteby",
+    "i18n": {
+      "es": {
+        "name": "Flota del Hub",
+        "description": "SPIKE (no publicar). Flota de instancias OPS que ve el Hub de Asteby: despliegue, canal, versión, estado de licencia y marca, con filtros y una solicitud de revocación que va al núcleo de confianza."
+      }
+    }
+  },
+  "compatibility": {
+    "requires": [
+      {
+        "key": "kernel",
+        "version": ">=3.1.0 <4.0.0"
+      }
+    ],
+    "provides": [
+      "hub_fleet"
+    ]
+  },
+  "tenancy": {
+    "isolation": "shared",
+    "rls_column": "organization_id"
+  },
+  "capabilities": [
+    {
+      "kind": "db:read",
+      "target": "addon_hub_fleet.*",
+      "reason": "Read the fleet replica (instances) of the organization."
+    },
+    {
+      "kind": "db:write",
+      "target": "addon_hub_fleet.*",
+      "reason": "Keep the fleet replica (instances) of the organization."
+    },
+    {
+      "kind": "http:fetch",
+      "target": "connector:trust_core.base_url",
+      "reason": "Pedir al nucleo de confianza la revocacion de una licencia."
+    }
+  ],
+  "models": [
+    {
+      "key": "Instance",
+      "table": "instances",
+      "label": "hub_fleet.model.instance",
+      "audit": true,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "primary_key": true,
+          "label": "hub_fleet.field.id",
+          "visibility": "list"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "hub_fleet.field.organization_id",
+          "visibility": "list"
+        },
+        {
+          "name": "instance_id",
+          "type": "text",
+          "not_null": true,
+          "label": "hub_fleet.field.instance_id",
+          "display": "code"
+        },
+        {
+          "name": "source_seq",
+          "type": "bigint",
+          "label": "hub_fleet.field.source_seq",
+          "visibility": "list"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "not_null": true,
+          "label": "hub_fleet.field.name"
+        },
+        {
+          "name": "customer",
+          "type": "text",
+          "label": "hub_fleet.field.customer",
+          "searchable": true
+        },
+        {
+          "name": "brand_name",
+          "type": "text",
+          "label": "hub_fleet.field.brand_name"
+        },
+        {
+          "name": "brand_color",
+          "type": "text",
+          "label": "hub_fleet.field.brand_color",
+          "display": "color",
+          "widget": "color"
+        },
+        {
+          "name": "vertical",
+          "type": "text",
+          "label": "hub_fleet.field.vertical",
+          "searchable": true,
+          "display": "badge",
+          "options": [
+            {
+              "value": "local",
+              "label": "hub_fleet.vertical.local"
+            },
+            {
+              "value": "pitsline",
+              "label": "hub_fleet.vertical.pitsline"
+            },
+            {
+              "value": "link",
+              "label": "hub_fleet.vertical.link"
+            },
+            {
+              "value": "ops",
+              "label": "hub_fleet.vertical.ops"
+            }
+          ]
+        },
+        {
+          "name": "deployment",
+          "type": "text",
+          "not_null": true,
+          "default": "selfhost_vps",
+          "label": "hub_fleet.field.deployment",
+          "searchable": true,
+          "display": "badge",
+          "options": [
+            {
+              "value": "asteby_cloud",
+              "label": "hub_fleet.deployment.asteby_cloud",
+              "color": "blue"
+            },
+            {
+              "value": "selfhost_vps",
+              "label": "hub_fleet.deployment.selfhost_vps",
+              "color": "violet"
+            },
+            {
+              "value": "appliance",
+              "label": "hub_fleet.deployment.appliance",
+              "color": "amber"
+            },
+            {
+              "value": "development",
+              "label": "hub_fleet.deployment.development",
+              "color": "gray"
+            }
+          ]
+        },
+        {
+          "name": "environment",
+          "type": "text",
+          "not_null": true,
+          "default": "production",
+          "label": "hub_fleet.field.environment",
+          "searchable": true,
+          "display": "badge",
+          "options": [
+            {
+              "value": "production",
+              "label": "hub_fleet.environment.production",
+              "color": "green"
+            },
+            {
+              "value": "staging",
+              "label": "hub_fleet.environment.staging",
+              "color": "amber"
+            },
+            {
+              "value": "development",
+              "label": "hub_fleet.environment.development",
+              "color": "gray"
+            }
+          ]
+        },
+        {
+          "name": "channel",
+          "type": "text",
+          "default": "stable",
+          "label": "hub_fleet.field.channel",
+          "searchable": true,
+          "display": "badge",
+          "options": [
+            {
+              "value": "canary",
+              "label": "hub_fleet.channel.canary"
+            },
+            {
+              "value": "beta",
+              "label": "hub_fleet.channel.beta"
+            },
+            {
+              "value": "stable",
+              "label": "hub_fleet.channel.stable"
+            },
+            {
+              "value": "hub-stable",
+              "label": "hub_fleet.channel.hub_stable"
+            }
+          ]
+        },
+        {
+          "name": "reported_version",
+          "type": "text",
+          "label": "hub_fleet.field.reported_version",
+          "display": "code",
+          "searchable": true
+        },
+        {
+          "name": "license_status",
+          "type": "text",
+          "default": "none",
+          "label": "hub_fleet.field.license_status",
+          "searchable": true,
+          "display": "status",
+          "options": [
+            {
+              "value": "active",
+              "label": "hub_fleet.license.active",
+              "color": "green"
+            },
+            {
+              "value": "grace",
+              "label": "hub_fleet.license.grace",
+              "color": "amber"
+            },
+            {
+              "value": "stale",
+              "label": "hub_fleet.license.stale",
+              "color": "amber"
+            },
+            {
+              "value": "revoke_requested",
+              "label": "hub_fleet.license.revoke_requested",
+              "color": "orange"
+            },
+            {
+              "value": "revoked",
+              "label": "hub_fleet.license.revoked",
+              "color": "red"
+            },
+            {
+              "value": "expired",
+              "label": "hub_fleet.license.expired",
+              "color": "red"
+            },
+            {
+              "value": "none",
+              "label": "hub_fleet.license.none",
+              "color": "gray"
+            }
+          ],
+          "protected": true
+        },
+        {
+          "name": "last_seen_at",
+          "type": "timestamp",
+          "label": "hub_fleet.field.last_seen_at",
+          "display": "date",
+          "protected": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "not_null": true,
+          "default": "active",
+          "label": "hub_fleet.field.status",
+          "display": "status",
+          "searchable": true,
+          "options": [
+            {
+              "value": "active",
+              "label": "hub_fleet.status.active",
+              "color": "green"
+            },
+            {
+              "value": "retired",
+              "label": "hub_fleet.status.retired",
+              "color": "gray"
+            }
+          ],
+          "protected": true
+        },
+        {
+          "name": "notes",
+          "type": "text",
+          "label": "hub_fleet.field.notes",
+          "widget": "textarea",
+          "visibility": "modal"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "label": "hub_fleet.field.created_at",
+          "visibility": "list"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp",
+          "label": "hub_fleet.field.updated_at",
+          "visibility": "list"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamp",
+          "label": "hub_fleet.field.deleted_at",
+          "visibility": "list"
+        },
+        {
+          "name": "retired_at",
+          "type": "timestamptz",
+          "protected": true
+        },
+        {
+          "name": "retired_by_id",
+          "type": "uuid",
+          "protected": true
+        },
+        {
+          "name": "retired_reason",
+          "type": "text",
+          "protected": true
+        }
+      ],
+      "indices": [
+        {
+          "name": "hub_fleet_instances_org_instance_uq",
+          "columns": [
+            "organization_id",
+            "instance_id"
+          ],
+          "unique": true,
+          "where": "deleted_at IS NULL"
+        }
+      ],
+      "seed": {
+        "key": "instance_id",
+        "rows": [
+          {
+            "instance_id": "demo-0001",
+            "name": "DEMO tienda autopartes",
+            "customer": "DEMO cliente A",
+            "brand_name": "DEMO Autopartes",
+            "brand_color": "#0F766E",
+            "vertical": "local",
+            "deployment": "selfhost_vps",
+            "environment": "production",
+            "channel": "stable",
+            "reported_version": "0.1.25",
+            "license_status": "active",
+            "status": "active"
+          },
+          {
+            "instance_id": "demo-0002",
+            "name": "DEMO tienda nutricion",
+            "customer": "DEMO cliente B",
+            "brand_name": "DEMO Nutricion",
+            "brand_color": "#B45309",
+            "vertical": "local",
+            "deployment": "selfhost_vps",
+            "environment": "production",
+            "channel": "canary",
+            "reported_version": "0.1.24",
+            "license_status": "grace",
+            "status": "active"
+          },
+          {
+            "instance_id": "demo-0003",
+            "name": "DEMO taller",
+            "customer": "DEMO cliente C",
+            "brand_name": "",
+            "vertical": "pitsline",
+            "deployment": "asteby_cloud",
+            "environment": "production",
+            "channel": "beta",
+            "reported_version": "0.1.25",
+            "license_status": "stale",
+            "status": "active"
+          },
+          {
+            "instance_id": "demo-0004",
+            "name": "DEMO laptop de desarrollo",
+            "customer": "Asteby",
+            "vertical": "ops",
+            "deployment": "development",
+            "environment": "development",
+            "channel": "canary",
+            "reported_version": "0.1.26-dev",
+            "license_status": "none",
+            "status": "active"
+          },
+          {
+            "instance_id": "demo-0005",
+            "name": "DEMO plano de control del Hub",
+            "customer": "Asteby",
+            "brand_name": "Asteby Hub",
+            "brand_color": "#2563EB",
+            "vertical": "ops",
+            "deployment": "asteby_cloud",
+            "environment": "production",
+            "channel": "hub-stable",
+            "reported_version": "0.1.25",
+            "license_status": "active",
+            "status": "active"
+          }
+        ]
+      },
+      "reason_required": {
+        "actions": [
+          "retire",
+          "request_revoke"
+        ],
+        "min_length": 3
+      },
+      "ingest": {
+        "key": [
+          "instance_id"
+        ],
+        "cursor": "source_seq",
+        "fields": [
+          "name",
+          "customer",
+          "brand_name",
+          "brand_color",
+          "vertical",
+          "deployment",
+          "environment",
+          "channel",
+          "reported_version",
+          "license_status",
+          "last_seen_at",
+          "source_seq"
+        ],
+        "exclusive": true,
+        "on_delete": "soft",
+        "max_batch": 500
+      }
+    }
+  ],
+  "contributions": {
+    "navigation": [
+      {
+        "title": "hub_fleet.nav.group",
+        "icon": "Server",
+        "target": "sidebar.operations",
+        "items": [
+          {
+            "title": "hub_fleet.nav.instances",
+            "icon": "Server",
+            "model": "Instance",
+            "permission": "hub_fleet.instance.read"
+          }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "key": "request_revoke",
+        "label": "hub_fleet.action.request_revoke",
+        "icon": "ShieldOff",
+        "target_model": "Instance",
+        "placement": "row",
+        "confirm": true,
+        "confirm_message": "hub_fleet.action.request_revoke_confirm",
+        "requires_state": [
+          "active"
+        ],
+        "fields": [
+          {
+            "key": "reason",
+            "label": "hub_fleet.action.fields.reason",
+            "type": "string",
+            "widget": "textarea",
+            "required": true
+          }
+        ],
+        "handler": {
+          "type": "webhook",
+          "url_ref": "trust_core.base_url",
+          "path": "/core/v1/fleet/instances/{record.instance_id}/revoke-request",
+          "method": "POST",
+          "signing": {
+            "scheme": "metacore-hmac-v1",
+            "secret_ref": "trust_core.signing_secret"
+          },
+          "send_record": [
+            "instance_id",
+            "license_status"
+          ],
+          "timeout_ms": 10000,
+          "retries": 2,
+          "on_success": {
+            "set": {
+              "license_status": "revoke_requested"
+            }
+          }
+        },
+        "tone": "danger",
+        "confirm_typed": {
+          "field": "name"
+        }
+      },
+      {
+        "key": "retire",
+        "label": "hub_fleet.action.retire",
+        "icon": "Archive",
+        "target_model": "Instance",
+        "placement": "row",
+        "tone": "danger",
+        "requires_state": [
+          "active"
+        ],
+        "confirm": true,
+        "confirm_message": "hub_fleet.action.retire_impact",
+        "confirm_typed": {
+          "field": "name"
+        },
+        "fields": [
+          {
+            "key": "reason",
+            "type": "string",
+            "widget": "textarea",
+            "required": true
+          }
+        ],
+        "handler": {
+          "type": "set_fields",
+          "set": {
+            "status": "retired",
+            "retired_at": "$now",
+            "retired_by_id": "$actor.id",
+            "retired_reason": "$payload.reason"
+          }
+        }
+      }
+    ],
+    "dashboard": [
+      {
+        "key": "instances_online",
+        "title": "hub_fleet.kpi.online",
+        "kind": "stat",
+        "query": {
+          "model": "Instance",
+          "aggregate": "count",
+          "where": {
+            "environment": "production",
+            "last_seen_at": {
+              "gte": "$now-15m"
+            }
+          }
+        },
+        "link": {
+          "model": "Instance",
+          "filter": {
+            "environment": "production"
+          }
+        }
+      },
+      {
+        "key": "instances_active_24h",
+        "title": "hub_fleet.kpi.active_24h",
+        "kind": "stat",
+        "query": {
+          "model": "Instance",
+          "aggregate": "count",
+          "date_field": "last_seen_at",
+          "range": "last_24_hours",
+          "where": {
+            "environment": "production"
+          }
+        },
+        "compare": {
+          "to": "previous_period"
+        }
+      }
+    ]
+  },
+  "rbac": {
+    "permissions": [
+      {
+        "key": "hub_fleet.instance.read",
+        "models": [
+          {
+            "model": "Instance",
+            "actions": [
+              "index",
+              "show"
+            ]
+          }
+        ]
+      },
+      {
+        "key": "hub_fleet.instance.retire",
+        "models": [
+          {
+            "model": "Instance",
+            "actions": [
+              "retire"
+            ]
+          }
+        ]
+      }
+    ],
+    "roles": [
+      {
+        "key": "hub_fleet_operator",
+        "label": "hub_fleet.role.operator",
+        "permissions": [
+          "hub_fleet.instance.read",
+          "hub_fleet.instance.retire"
+        ]
+      }
+    ]
+  },
+  "i18n": {
+    "default_locale": "es-MX",
+    "bundles": [
+      {
+        "locale": "es-MX",
+        "path": "locales/es-MX.json"
+      },
+      {
+        "locale": "en-US",
+        "path": "locales/en-US.json"
+      }
+    ]
+  },
+  "connectors": [
+    {
+      "key": "trust_core",
+      "label": "hub_fleet.connector.trust_core",
+      "auth": "token",
+      "credentials": [
+        {
+          "key": "base_url",
+          "type": "string",
+          "required": true,
+          "validation": "^https://"
+        },
+        {
+          "key": "signing_secret",
+          "type": "secret",
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "fleet_feed",
+      "label": "hub_fleet.connector.fleet_feed",
+      "auth": "token",
+      "credentials": [
+        {
+          "key": "signing_secret",
+          "type": "secret",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "webhooks": [
+    {
+      "key": "fleet_changes",
+      "path": "/fleet/changes",
+      "verify": "metacore-hmac-v1",
+      "secret_ref": "fleet_feed.signing_secret",
+      "do": "upsert:Instance"
+    }
+  ]
+}

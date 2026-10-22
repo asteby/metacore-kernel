@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/asteby/metacore-kernel/capability"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -79,6 +80,7 @@ var (
 		"connector":  {},
 		"native":     {},
 		"capability": {},
+		"set_fields": {},
 	}
 	// validLifecycleHookEvents enumerates the manifest.LifecycleHooks map
 	// keys the kernel knows how to fire. "install"/"uninstall"/"enable"/
@@ -505,6 +507,12 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 	if err := m.validateActionIdempotency(); err != nil {
 		return err
 	}
+	if err := m.validateActionPresentation(); err != nil {
+		return err
+	}
+	if err := m.validateIngestDefs(); err != nil {
+		return err
+	}
 	if err := m.validateLifecycleHooks(); err != nil {
 		return err
 	}
@@ -686,6 +694,64 @@ func (m *Manifest) validateActionIdempotency() error {
 	return nil
 }
 
+// validateActionPresentation is the legacy twin of the v3 confirm_typed / tone
+// rules that can be checked without the target model: a named field and a
+// closed tone enum. (Whether the field is a column of the model is the v3
+// plane's job.)
+func (m *Manifest) validateActionPresentation() error {
+	check := func(where string, def *ActionDef) error {
+		if def.ConfirmTyped != nil && strings.TrimSpace(def.ConfirmTyped.Field) == "" {
+			return fmt.Errorf("%s.confirmTyped requires a non-empty field", where)
+		}
+		switch def.Tone {
+		case "", "default", "danger":
+		default:
+			return fmt.Errorf("%s.tone %q is not one of default|danger", where, def.Tone)
+		}
+		return nil
+	}
+	for model, defs := range m.Actions {
+		for i := range defs {
+			if err := check(fmt.Sprintf("manifest.actions[%q][%d]", model, i), &defs[i]); err != nil {
+				return err
+			}
+		}
+	}
+	for i, ext := range m.Extensions {
+		for j := range ext.Actions {
+			if err := check(fmt.Sprintf("manifest.extensions[%d].actions[%d]", i, j), &ext.Actions[j]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validateIngestDefs is the legacy twin of the v3 Model.ingest structural rules
+// (key size, enum and range checks). Index/column coverage needs the model and
+// is the v3 plane's job.
+func (m *Manifest) validateIngestDefs() error {
+	for i, d := range m.ModelDefinitions {
+		ig := d.Ingest
+		if ig == nil {
+			continue
+		}
+		where := fmt.Sprintf("model_definitions[%d] (%s).ingest", i, d.ModelKey)
+		if n := len(ig.Key); n < 1 || n > 4 {
+			return fmt.Errorf("%s.key needs 1 to 4 columns, got %d", where, n)
+		}
+		switch ig.OnDelete {
+		case "", "soft", "ignore":
+		default:
+			return fmt.Errorf("%s.on_delete %q is not one of soft|ignore", where, ig.OnDelete)
+		}
+		if ig.MaxBatch != 0 && (ig.MaxBatch < 1 || ig.MaxBatch > 1000) {
+			return fmt.Errorf("%s.max_batch %d must be between 1 and 1000", where, ig.MaxBatch)
+		}
+	}
+	return nil
+}
+
 // validateActionFields walks every action FieldDef the manifest carries (the
 // Actions map keyed by model and the Actions slice on each ModelExtension,
 // recursing into item_fields line-item groups) and enforces the FORMAT of any
@@ -755,10 +821,16 @@ func validateActionTrigger(t *ActionTrigger, exports map[string]struct{}) error 
 		return nil
 	}
 	if _, ok := validTriggerTypes[t.Type]; !ok {
-		return fmt.Errorf("trigger.type: unknown %q (want wasm|webhook|noop|connector|native|capability)", t.Type)
+		return fmt.Errorf("trigger.type: unknown %q (want wasm|webhook|noop|connector|native|capability|set_fields)", t.Type)
 	}
 	if t.Type != "capability" && (t.Capability != "" || len(t.Input) > 0) {
 		return fmt.Errorf("trigger: capability/input are only allowed when type=capability")
+	}
+	if t.Type != "webhook" && triggerHasWebhookConfig(t) {
+		return fmt.Errorf("trigger: url/url_ref/url_setting/path/method/signing/send_record/timeout_ms/retries/on_success are only allowed when type=webhook")
+	}
+	if t.Type != "set_fields" && t.Set != nil {
+		return fmt.Errorf("trigger.set: only allowed when type=set_fields")
 	}
 	switch t.Type {
 	case "wasm":
@@ -825,6 +897,19 @@ func validateActionTrigger(t *ActionTrigger, exports map[string]struct{}) error 
 		if t.RunInTx {
 			return fmt.Errorf("trigger.run_in_tx: not allowed when type=webhook")
 		}
+		if err := validateWebhookTriggerConfig(t); err != nil {
+			return err
+		}
+	case "set_fields":
+		if t.Export != "" || t.Connector != "" || t.Operation != "" || t.RunInTx {
+			return fmt.Errorf("trigger: set_fields cannot declare export, connector, operation or run_in_tx")
+		}
+		if len(t.Set) == 0 {
+			return fmt.Errorf("trigger.set: required (at least one column) when type=set_fields")
+		}
+		if err := validateTriggerSet("trigger.set", t.Set); err != nil {
+			return err
+		}
 	case "noop":
 		// noop is a UI-only marker; addon code does not run, so neither
 		// Export nor RunInTx make sense.
@@ -833,6 +918,93 @@ func validateActionTrigger(t *ActionTrigger, exports map[string]struct{}) error 
 		}
 		if t.RunInTx {
 			return fmt.Errorf("trigger.run_in_tx: not allowed when type=noop")
+		}
+	}
+	return nil
+}
+
+// triggerHasWebhookConfig reports whether any webhook-only dispatch field is set.
+func triggerHasWebhookConfig(t *ActionTrigger) bool {
+	return t.URL != "" || t.URLRef != "" || t.URLSetting != "" || t.Path != "" || t.Method != "" ||
+		t.Signing != nil || len(t.SendRecord) > 0 || t.TimeoutMS != 0 || t.Retries != nil || t.OnSuccess != nil
+}
+
+var triggerConnectorRefRe = regexp.MustCompile(`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`)
+
+// validateWebhookTriggerConfig is the legacy/install twin of the v3 webhook
+// handler rules that can never have held for a manifest published before the
+// fields existed: exclusive URL sources, a coherent signing block, method and
+// budget ranges, a well-formed on_success.set. The rules that merely tighten
+// (signing required, https only, a destination at all) are v3's tolerated
+// rules and are NOT enforced here: a v3 manifest that passes v3.Validate must
+// never fail this plane (the "double validation" contract).
+func validateWebhookTriggerConfig(t *ActionTrigger) error {
+	sources := 0
+	for _, u := range []string{t.URL, t.URLRef, t.URLSetting} {
+		if u != "" {
+			sources++
+		}
+	}
+	if sources > 1 {
+		return fmt.Errorf("trigger: url, url_ref and url_setting are mutually exclusive")
+	}
+	if t.URLRef != "" && !triggerConnectorRefRe.MatchString(t.URLRef) {
+		return fmt.Errorf("trigger.url_ref %q must be \"<connector>.<credential>\"", t.URLRef)
+	}
+	if t.Path != "" && (t.URL != "" || (t.URLRef == "" && t.URLSetting == "")) {
+		return fmt.Errorf("trigger.path needs url_ref or url_setting as its base (a literal url is already complete)")
+	}
+	switch t.Method {
+	case "", "POST", "PUT", "PATCH", "DELETE":
+	default:
+		return fmt.Errorf("trigger.method %q is not one of POST|PUT|PATCH|DELETE", t.Method)
+	}
+	if t.Signing != nil {
+		switch t.Signing.Scheme {
+		case "metacore-hmac-v1":
+			if !triggerConnectorRefRe.MatchString(t.Signing.SecretRef) {
+				return fmt.Errorf("trigger.signing.secret_ref is required with metacore-hmac-v1 and must be \"<connector>.<credential>\"")
+			}
+		case "instance-ed25519-v1":
+			if t.Signing.SecretRef != "" {
+				return fmt.Errorf("trigger.signing.secret_ref is not allowed with instance-ed25519-v1")
+			}
+		default:
+			return fmt.Errorf("trigger.signing.scheme %q is not one of metacore-hmac-v1|instance-ed25519-v1", t.Signing.Scheme)
+		}
+	}
+	if t.TimeoutMS != 0 && (t.TimeoutMS < 1000 || t.TimeoutMS > 30000) {
+		return fmt.Errorf("trigger.timeout_ms %d must be between 1000 and 30000", t.TimeoutMS)
+	}
+	if t.Retries != nil && (*t.Retries < 0 || *t.Retries > 3) {
+		return fmt.Errorf("trigger.retries %d must be between 0 and 3", *t.Retries)
+	}
+	if t.OnSuccess != nil {
+		if len(t.OnSuccess.Set) == 0 {
+			return fmt.Errorf("trigger.on_success.set: required (at least one column) when on_success is declared")
+		}
+		if err := validateTriggerSet("trigger.on_success.set", t.OnSuccess.Set); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateTriggerSet checks every value of a set map is a scalar, null or a
+// well-formed token (v3.ParseSetValue) and that no key is a kernel-managed
+// column. Column existence needs the model and is checked by the v3 plane.
+func validateTriggerSet(where string, set map[string]any) error {
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if v3.ManagedColumn(k) {
+			return fmt.Errorf("%s.%s: column is managed by the kernel", where, k)
+		}
+		if _, err := v3.ParseSetValue(set[k]); err != nil {
+			return fmt.Errorf("%s.%s: %w", where, k, err)
 		}
 	}
 	return nil
@@ -1070,6 +1242,35 @@ func validateStageMachine(md ModelDefinition) error {
 	return nil
 }
 
+// validateWebhookDoRef validates an inbound webhook's `do`: the shared prefixes
+// plus "upsert:<Model>" (RFC-04), which must name a model of this manifest with
+// an ingest block and needs a kernel-side verify (not "addon").
+func validateWebhookDoRef(w InboundWebhookDef, defs []ModelDefinition) error {
+	prefix, rest, found := strings.Cut(w.Do, ":")
+	if !found || prefix != "upsert" {
+		return validateDoRef(w.Do)
+	}
+	if rest == "" {
+		return fmt.Errorf("%q must be upsert:<Model>", w.Do)
+	}
+	var target *ModelDefinition
+	for i := range defs {
+		if defs[i].ModelKey == rest {
+			target = &defs[i]
+			break
+		}
+	}
+	switch {
+	case target == nil:
+		return fmt.Errorf("%q targets %q, which is not a model of this manifest", w.Do, rest)
+	case target.Ingest == nil:
+		return fmt.Errorf("%q targets model %q, which has no ingest block", w.Do, rest)
+	case w.Verify == "" || w.Verify == "addon":
+		return fmt.Errorf("%q needs verify (hmac-sha256, bearer or metacore-hmac-v1): the kernel verifies the request", w.Do)
+	}
+	return nil
+}
+
 // validateDoRef is the legacy/install twin of v3.validateDoRef: a Schedule /
 // InboundWebhook `do` must carry a known wasm:/webhook:/compiled: prefix.
 func validateDoRef(do string) error {
@@ -1302,7 +1503,7 @@ func (m *Manifest) validatePipelineRuntime() error {
 			return fmt.Errorf("webhooks[%d].path %q duplicated", wi, w.Path)
 		}
 		seenPath[w.Path] = struct{}{}
-		if err := validateDoRef(w.Do); err != nil {
+		if err := validateWebhookDoRef(w, m.ModelDefinitions); err != nil {
 			return fmt.Errorf("webhooks[%d].do %w", wi, err)
 		}
 		for hi, h := range w.Headers {

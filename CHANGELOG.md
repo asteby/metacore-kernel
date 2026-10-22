@@ -7,6 +7,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Contrato v3 de los primitivos del Hub sobre OPS (v0.230.0, solo contrato, sin
+  runtime).** Un solo cambio con todos los campos nuevos del manifest, validados
+  en los dos planos (`manifest/v3` y `manifest.Manifest.Validate`) y con
+  round-trip completo v3 -> `manifest.*Def` -> `modelbase.*` (mismas etiquetas
+  JSON). Los PR de runtime (despachador webhook, `set_fields`, `ingest`, rangos
+  de agregación) salen después como v0.231.0. RFC en
+  `docs/rfcs/2026-10-22-hub-primitivos/`.
+  - **RFC-01 acción webhook firmada.** `Handler.url_ref | url_setting | path |
+    method | signing | send_record | timeout_ms | retries | on_success`.
+    `handlerToTrigger` ya no pierde la URL: `ActionTrigger` (manifest y
+    modelbase) los lleva. Reglas: una sola fuente de URL, `url_ref` exige
+    `http:fetch connector:<ref>`, `url_setting` exige un `http:fetch` de host
+    fijo, `signing.secret_ref` apunta a una credencial `secret`, `path` valida
+    `{record.x}` / `{payload.x}`. Regla tolerada `webhook_action_signing`
+    (destino https + `signing`).
+  - **RFC-02 `set_fields`.** `Handler.type: set_fields` + `Handler.set` (escalar,
+    `null` o tokens `$now`, `$actor.id`, `$payload.<campo>`, `$record.<col>`;
+    `$$` escapa), `Action.confirm_typed {field}` y `Action.tone`. Helpers
+    exportados `ParseSetValue` y `ManagedColumn`. `Action.confirm_typed` implica
+    `confirm` al convertir.
+  - **RFC-04 sumidero `ingest`.** `Model.ingest {key, cursor, fields, exclusive,
+    on_delete, max_batch}` (exige índice único sobre `organization_id` + la llave),
+    `webhooks[].verify: metacore-hmac-v1` y `webhooks[].do: upsert:<Model>`
+    (solo webhooks entrantes; exige verificación del kernel).
+  - **RFC-06 §A** regla tolerada `rbac_permission_resolves`: una clave
+    `<addon>.<recurso>.<verbo>` en `rbac.roles[].permissions` que no está
+    declarada ni resuelve a un modelo propio.
+  - **RFC-07** `Branding.login` (copy del login por marca: `eyebrow`, `title`,
+    `title_accent`, `subtitle`, `highlights`, `stats`, `signup`, `i18n`) y el
+    esquema de `preset.defaults.branding.login` (`null` lo quita).
+  - **RFC-08 §3** `WidgetQuery.range: last_hour | last_24_hours`, `$now` /
+    `$now-<n>(m|h|d)` (máx. 400d) en `where` con `gt|gte|lt|lte` sobre columnas
+    de fecha, y `DashboardWidget.link {model, filter} | {url}` (solo rutas
+    internas).
+  - `modelbase.ActionTrigger.Served()` devuelve solo el tipo de despacho: los
+    campos de despacho (destino, ruta, firma, `set`) no deben llegar al navegador.
+- Las dos reglas nuevas (`webhook_action_signing`, `rbac_permission_resolves`) se
+  reportan como **aviso en ambos modos** durante su primera minor (ver
+  `docs/validation-compat-window.md`); la siguiente las promueve a error.
+
 ### Fixed
 
 - **licensing: el ancla de revocación que solo vivía en memoria ahora se

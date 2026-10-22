@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // Branding is the typed brand kit a preset ships in preset.defaults.branding
@@ -47,6 +48,163 @@ type Branding struct {
 	PWAShortName string `json:"pwa_short_name,omitempty"`
 	// EmailFromName is the display name of outgoing mail. Empty = PlatformName.
 	EmailFromName string `json:"email_from_name,omitempty"`
+	// Login is the optional copy/hero of the sign-in page (RFC-07). Nil = the
+	// host's generic login. null in an overlay removes the base's block.
+	Login *LoginCopy `json:"login,omitempty"`
+}
+
+// LoginCopy is the plain-text copy of the sign-in page's brand panel. Every
+// field is optional; empty falls back to the next layer of the cascade
+// (organization -> instance -> preset -> generic). Text is plain: no HTML and
+// no URLs are interpreted, the host renders it as text.
+type LoginCopy struct {
+	Eyebrow     string `json:"eyebrow,omitempty"`
+	Title       string `json:"title,omitempty"`
+	TitleAccent string `json:"title_accent,omitempty"`
+	Subtitle    string `json:"subtitle,omitempty"`
+	// Highlights replace the generic module tiles (at most 8).
+	Highlights []LoginHighlight `json:"highlights,omitempty"`
+	// Stats are at most 3 figures; empty or absent = NO figures are shown (the
+	// host never invents numbers).
+	Stats []LoginStat `json:"stats,omitempty"`
+	// Signup false hides the «create account» link. Nil = the host's behavior.
+	Signup *bool `json:"signup,omitempty"`
+	// I18n carries per-locale overrides ("es", "en", "es-MX"), same text keys.
+	I18n map[string]LoginCopyLocale `json:"i18n,omitempty"`
+}
+
+// LoginHighlight is one tile of the login panel.
+type LoginHighlight struct {
+	// Icon is a Lucide PascalCase name (same rule as Role.icon).
+	Icon  string `json:"icon,omitempty"`
+	Label string `json:"label"`
+}
+
+// LoginStat is one figure of the login panel.
+type LoginStat struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+// LoginCopyLocale is the translatable subset of LoginCopy.
+type LoginCopyLocale struct {
+	Eyebrow     string           `json:"eyebrow,omitempty"`
+	Title       string           `json:"title,omitempty"`
+	TitleAccent string           `json:"title_accent,omitempty"`
+	Subtitle    string           `json:"subtitle,omitempty"`
+	Highlights  []LoginHighlight `json:"highlights,omitempty"`
+	Stats       []LoginStat      `json:"stats,omitempty"`
+}
+
+// Login copy limits (RFC-07 §2).
+const (
+	loginMaxShort      = 80
+	loginMaxSubtitle   = 200
+	loginMaxHighlights = 8
+	loginMaxStats      = 3
+	loginMaxLabel      = 24
+	loginMaxStatValue  = 16
+)
+
+var (
+	loginIconRe   = regexp.MustCompile(`^[A-Z][A-Za-z0-9]{0,63}$`)
+	loginLocaleRe = regexp.MustCompile(`^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$`)
+)
+
+// plainText reports whether s is plain text: no angle brackets (HTML) and no
+// control characters.
+func plainText(s string) bool {
+	if strings.ContainsAny(s, "<>") {
+		return false
+	}
+	for _, r := range s {
+		if r < 0x20 && r != '\t' {
+			return false
+		}
+	}
+	return true
+}
+
+func loginText(where, name, v string, max int) []string {
+	var errs []string
+	if n := utf8.RuneCountInString(v); n > max {
+		errs = append(errs, fmt.Sprintf("%s.%s is %d characters, max %d", where, name, n, max))
+	}
+	if !plainText(v) {
+		errs = append(errs, fmt.Sprintf("%s.%s must be plain text (no HTML, no control characters)", where, name))
+	}
+	return errs
+}
+
+func loginHighlights(where string, hs []LoginHighlight) []string {
+	var errs []string
+	if len(hs) > loginMaxHighlights {
+		errs = append(errs, fmt.Sprintf("%s.highlights has %d items, max %d", where, len(hs), loginMaxHighlights))
+	}
+	for i, h := range hs {
+		hw := fmt.Sprintf("%s.highlights[%d]", where, i)
+		if h.Icon != "" && !loginIconRe.MatchString(h.Icon) {
+			errs = append(errs, fmt.Sprintf("%s.icon %q must be a Lucide PascalCase name", hw, h.Icon))
+		}
+		if strings.TrimSpace(h.Label) == "" {
+			errs = append(errs, fmt.Sprintf("%s.label is required", hw))
+		}
+		errs = append(errs, loginText(hw, "label", h.Label, loginMaxLabel)...)
+	}
+	return errs
+}
+
+func loginStats(where string, ss []LoginStat) []string {
+	var errs []string
+	if len(ss) > loginMaxStats {
+		errs = append(errs, fmt.Sprintf("%s.stats has %d items, max %d", where, len(ss), loginMaxStats))
+	}
+	for i, st := range ss {
+		sw := fmt.Sprintf("%s.stats[%d]", where, i)
+		if strings.TrimSpace(st.Label) == "" || strings.TrimSpace(st.Value) == "" {
+			errs = append(errs, fmt.Sprintf("%s needs a label and a value", sw))
+		}
+		errs = append(errs, loginText(sw, "label", st.Label, loginMaxLabel)...)
+		errs = append(errs, loginText(sw, "value", st.Value, loginMaxStatValue)...)
+	}
+	return errs
+}
+
+func loginTexts(where string, eyebrow, title, accent, subtitle string) []string {
+	var errs []string
+	errs = append(errs, loginText(where, "eyebrow", eyebrow, loginMaxShort)...)
+	errs = append(errs, loginText(where, "title", title, loginMaxShort)...)
+	errs = append(errs, loginText(where, "title_accent", accent, loginMaxShort)...)
+	errs = append(errs, loginText(where, "subtitle", subtitle, loginMaxSubtitle)...)
+	return errs
+}
+
+// Validate checks the login copy limits: lengths, plain text, Lucide icon
+// names, at most 8 highlights and 3 stats, and well-formed locale keys.
+func (l *LoginCopy) Validate() []string {
+	if l == nil {
+		return nil
+	}
+	const w = "branding.login"
+	errs := loginTexts(w, l.Eyebrow, l.Title, l.TitleAccent, l.Subtitle)
+	errs = append(errs, loginHighlights(w, l.Highlights)...)
+	errs = append(errs, loginStats(w, l.Stats)...)
+	locales := make([]string, 0, len(l.I18n))
+	for loc := range l.I18n {
+		locales = append(locales, loc)
+	}
+	sort.Strings(locales)
+	for _, loc := range locales {
+		lw := w + ".i18n." + loc
+		if !loginLocaleRe.MatchString(loc) {
+			errs = append(errs, fmt.Sprintf("%s: %q is not a locale key (e.g. es, en, es-MX)", w+".i18n", loc))
+		}
+		t := l.I18n[loc]
+		errs = append(errs, loginTexts(lw, t.Eyebrow, t.Title, t.TitleAccent, t.Subtitle)...)
+		errs = append(errs, loginHighlights(lw, t.Highlights)...)
+		errs = append(errs, loginStats(lw, t.Stats)...)
+	}
+	return errs
 }
 
 // BrandingAssetPrefix is the bundle directory branding assets live in.
@@ -106,6 +264,7 @@ func (b Branding) Validate() []string {
 	if b.SupportURL != "" && !isHTTPURL(b.SupportURL) {
 		errs = append(errs, fmt.Sprintf("branding.support_url %q must be an http(s) URL", b.SupportURL))
 	}
+	errs = append(errs, b.Login.Validate()...)
 	return errs
 }
 
