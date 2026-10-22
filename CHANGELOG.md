@@ -9,6 +9,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Ola 0 de plataforma para el addon de correo (UNA release de schema, todo
+  aditivo y opcional).** Manifests existentes validan igual; los hosts que no
+  usan lo nuevo no cambian.
+  - **Manifest v3** (en AMBOS validadores, con una sola función
+    `v3.ValidateSetup`): `contributions.setup[]` (`SetupFlow`/`SetupStep`:
+    `check|form|action|records|custom`, `depends_on` sin ciclos, `skip_when`,
+    `poll`), `contributions.health` (`HealthProbe`), `Setting.visible_when` y
+    `Setting.write_only` (también en `connectors[].credentials[]`). Referencias
+    cruzadas: `action`, `custom.slot`, `form.settings|connector`, handlers
+    wasm/native; los handlers wasm de checks/records/health entran a
+    `backend.exports`. Proyección legacy: `Manifest.Setup`, `Manifest.Health`,
+    `SettingDef/CredentialDef.VisibleWhen|WriteOnly`. Ejemplo y schema
+    (`docs/spec/v3/`) actualizados. Ver `docs/setup-flows.md`.
+  - **Paquete `setupflow`**: contrato del handler (`status` pending|running|ok|
+    warn|error|blocked, `message_key`, `params`, `detail`, `retry_after_s`,
+    `fix`), `HealthResult`, ejecutor de checks (principal del usuario, timeout,
+    poll con backoff, dedupe de ejecuciones concurrentes) y `Plan`.
+  - **Native services**: `ingress.kind: "tcp"` + `ingress.listeners[]`
+    (`name`, `port`, `proxy_protocol` v1|v2; el sidecar liga la dirección que
+    asigna el supervisor en `METACORE_NATIVE_LISTENER_<NAME>`) y egress por
+    patrón de puerto `*:25`, `host:587` (comodín de host solo con puerto y solo
+    en 25/110/143/465/587/993/995; `NetworkPolicy.Allows`, `ParseEgress`). El
+    comodín no levanta el SSRF guard. Ver `docs/rfcs/002-native-service-runtime.md`.
+  - **Capability `domain:manage`** (target = propósito del dominio) con
+    `Capabilities.CanManageDomain`.
+  - **Paquete `domains`**: `OrgDomain` genérico (host, purposes, verify_token,
+    status, dns_provider), prueba de propiedad TXT `_asteby-verify.`
+    (equivalente a la del flujo de la tienda), `RecordSet` requerido vs
+    observado (`ok|missing|wrong_value|propagating` + `unknown` cuando la
+    consulta falla) con diagnósticos, `DNSResolver`/`DNSApplier`, y Cloudflare
+    detrás de interfaz (Plan de solo lectura, upsert idempotente que nunca
+    borra, `Fingerprint` + `ApplyConfirmed`). Ver `docs/org-domains.md`.
+  - **ABI wasm 1.17 `dns_resolve`** (import nuevo, aditivo): consulta DNS de
+    solo lectura de un dominio de la organización; exige `domain:manage` y la
+    política `Host.WithDNS(resolver, authorize)` (cerrado por defecto).
+  - **Contrato de capability `messaging.email.send`** (acción, patrón de
+    `messaging.whatsapp.send`; entrada tipada con `idempotency_key`).
+
 - **Contrato v3 de los primitivos del Hub sobre OPS (v0.230.0, solo contrato, sin
   runtime).** Un solo cambio con todos los campos nuevos del manifest, validados
   en los dos planos (`manifest/v3` y `manifest.Manifest.Validate`) y con
