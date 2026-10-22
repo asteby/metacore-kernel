@@ -109,6 +109,7 @@ type Host struct {
 	capQuerier       capability.Querier
 	dnsResolver      domains.DNSResolver
 	dnsAuthorize     DNSAuthorizeFunc
+	dnsLimits        *dnsOrgLimiter
 	edgeCommander    EdgeCommander
 	edgeLimits       *edgeLimiter
 	emitPolicy       EmitPolicyFunc
@@ -817,6 +818,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		capQuerier:        h.capQuerier,
 		dnsResolver:       h.dnsResolver,
 		dnsAuthorize:      h.dnsAuthorize,
+		dnsLimits:         h.dnsLimits,
 		edgeCommander:     h.edgeCommander,
 		edgeLimits:        h.edgeLimits,
 		emitPolicy:        h.emitPolicy,

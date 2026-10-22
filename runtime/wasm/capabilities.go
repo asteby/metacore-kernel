@@ -149,6 +149,7 @@ type invocation struct {
 	dnsResolver  domains.DNSResolver
 	dnsAuthorize DNSAuthorizeFunc
 	dnsCalls     int
+	dnsLimits    *dnsOrgLimiter
 	// edgeCommander delivers edge_command to a device's agent
 	// (Host.WithEdgeCommander). nil = unavailable.
 	edgeCommander EdgeCommander

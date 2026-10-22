@@ -34,7 +34,9 @@ type DNSResolver interface {
 
 // NetResolver is the stdlib-backed DNSResolver. With a server it queries that
 // recursive resolver directly (use several public ones to observe
-// propagation); without, the system resolver.
+// propagation); without, the system resolver. Prefer NewPublicResolver for
+// anything reachable from an addon: the system resolver may answer internal
+// names.
 type NetResolver struct {
 	label string
 	r     *net.Resolver
@@ -58,6 +60,15 @@ func NewNetResolver(label, server string) *NetResolver {
 	}
 	return &NetResolver{label: label, r: r}
 }
+
+// PublicResolverAddr is the recursive resolver NewPublicResolver queries.
+const PublicResolverAddr = "1.1.1.1:53"
+
+// NewPublicResolver is the RECOMMENDED resolver for exposing DNS to addons
+// (wasm dns_resolve) and for ownership checks: it always asks a public
+// recursive resolver, so internal / split-horizon names and the host's search
+// domains are never consulted.
+func NewPublicResolver() *NetResolver { return NewNetResolver("public", PublicResolverAddr) }
 
 func (n *NetResolver) Name() string { return n.label }
 
