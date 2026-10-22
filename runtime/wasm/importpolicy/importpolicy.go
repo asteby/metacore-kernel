@@ -51,6 +51,7 @@ var HostFunctions = map[string]struct{}{
 	"capability_query": {},
 	"routing_resolve":  {},
 	"edge_command":     {},
+	"dns_resolve":      {},
 }
 
 // WASIFunctions is the closed set of WASI imports a guest may declare:

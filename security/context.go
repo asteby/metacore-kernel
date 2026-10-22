@@ -274,6 +274,21 @@ func (c *Capabilities) CanManageDomain(purpose string) error {
 	return fmt.Errorf("addon %q lacks domain:manage %q", addon, purpose)
 }
 
+// CanResolveDNS returns nil if the addon declared any `domain:manage`
+// capability: the dns_resolve import is a read-only helper of domain
+// management. WHICH names it may resolve is the host's authorization policy
+// (the name must be under a domain of the invoking org), not a manifest glob.
+func (c *Capabilities) CanResolveDNS() error {
+	if c != nil && len(c.domManage) > 0 {
+		return nil
+	}
+	addon := ""
+	if c != nil {
+		addon = c.addonKey
+	}
+	return fmt.Errorf("addon %q lacks domain:manage (required by dns_resolve)", addon)
+}
+
 // CanQueryCapability returns nil if the addon declared
 // `capability:query <key>` (key: "commerce.shipping.rates", a glob such as
 // "commerce.*", or "*") for the capability_query host import. The consumer
