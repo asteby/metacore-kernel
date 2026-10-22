@@ -1150,6 +1150,32 @@
             }
           }
         },
+        "ingest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["key"],
+          "description": "Upsert sink (RFC-04): an external replicator posts signed batches to a webhooks[] route whose do is 'upsert:<this model>'; rows are created/updated by natural key with an optional monotonic cursor.",
+          "properties": {
+            "key": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 4,
+              "uniqueItems": true,
+              "items": { "type": "string" },
+              "description": "Natural-key columns. A UNIQUE index over organization_id + exactly these columns must exist (a partial WHERE deleted_at IS NULL one is fine)."
+            },
+            "cursor": { "type": "string", "description": "Monotonic bigint or timestamp column; an entry whose cursor is <= the stored one is skipped as stale. Omit for last-write-wins." },
+            "fields": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string" },
+              "description": "Columns the sink may write besides the key. Default: every non-managed column."
+            },
+            "exclusive": { "type": "boolean", "description": "true makes fields protected columns for the generic write path (UI, data API, import): only the sink and declared actions listing them write them. Default false." },
+            "on_delete": { "type": "string", "enum": ["soft", "ignore"], "description": "Default 'soft' (deleted_at + deleted_by_id = system actor). Never a physical delete." },
+            "max_batch": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum items per request. Default 500." }
+          }
+        },
         "sequences": {
           "type": "array",
           "description": "Atomic folio counters the kernel maintains per org (or branch) for this model — invoice folios, remission numbers, tickets. A column binds to one via 'sequence' for auto-stamping on create; a wasm handler pulls one via the sequence_next host import.",
@@ -2743,6 +2769,9 @@
         "compare": {
           "$ref": "#/$defs/WidgetCompare"
         },
+        "link": {
+          "$ref": "#/$defs/WidgetLink"
+        },
         "slot": {
           "type": "string",
           "description": "Federation slot a kind:'custom' widget mounts into. Default 'dashboard.widgets'."
@@ -2785,7 +2814,7 @@
         },
         "where": {
           "type": "object",
-          "description": "Filter map. Equality by default, or {op: value} where op is eq|neq|gt|gte|lt|lte|contains.",
+          "description": "Filter map. Equality by default, or {op: value} where op is eq|neq|gt|gte|lt|lte|contains. With gt|gte|lt|lte over a date/timestamp column the value may be '$now' or '$now-<n>(m|h|d)' (at most 400d), resolved by the database clock.",
           "additionalProperties": true
         },
         "group_by": {
@@ -2808,6 +2837,8 @@
         "range": {
           "type": "string",
           "enum": [
+            "last_hour",
+            "last_24_hours",
             "last_7_days",
             "last_30_days",
             "last_12_months",
@@ -2826,6 +2857,25 @@
         },
         "limit": {
           "type": "integer"
+        }
+      }
+    },
+    "WidgetLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Where a dashboard widget navigates on click. Exactly one of model (an own model, optionally with filter) or url (a relative internal route).",
+      "properties": {
+        "model": { "type": "string", "description": "Model key of this addon; the SDK opens its list." },
+        "filter": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "number", "boolean"] },
+          "description": "column -> value, written to the URL as f_<column>=<value>. Requires model."
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^/([^/\\\\].*)?$",
+          "maxLength": 512,
+          "description": "Internal route such as '/m/instances?f_environment=production'. Never absolute."
         }
       }
     },
@@ -3216,7 +3266,8 @@
                 "compiled",
                 "connector",
                 "native",
-                "capability"
+                "capability",
+                "set_fields"
               ]
             },
             "function": {
@@ -3224,6 +3275,81 @@
             },
             "url": {
               "type": "string"
+            },
+            "url_ref": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
+              "description": "When type=webhook: '<connector>.<credential>' whose value (a string credential) is the destination BASE URL. Requires an http:fetch capability 'connector:<same ref>'. Exclusive with url and url_setting."
+            },
+            "url_setting": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "description": "When type=webhook: key of a string setting of the addon holding the destination base URL. The resolved host must also be covered by a fixed-host http:fetch capability. Exclusive with url and url_ref."
+            },
+            "path": {
+              "type": "string",
+              "pattern": "^/",
+              "description": "When type=webhook: path appended to the url_ref/url_setting base. May embed {record.<column>} and {payload.<field>} placeholders (path-escaped at dispatch)."
+            },
+            "method": {
+              "type": "string",
+              "enum": ["POST", "PUT", "PATCH", "DELETE"],
+              "description": "When type=webhook: HTTP method. Default POST."
+            },
+            "signing": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["scheme"],
+              "description": "When type=webhook: how the request is authenticated. Required by the webhook_action_signing rule.",
+              "properties": {
+                "scheme": {
+                  "type": "string",
+                  "enum": ["metacore-hmac-v1", "instance-ed25519-v1"],
+                  "description": "metacore-hmac-v1: HMAC with a per-destination secret (ts + method + path + nonce + sha256(body)). instance-ed25519-v1: the instance's Ed25519 key, bound to host and path (no shared secret)."
+                },
+                "secret_ref": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
+                  "description": "'<connector>.<credential>' of a type 'secret' credential. Required with metacore-hmac-v1, forbidden with instance-ed25519-v1."
+                }
+              }
+            },
+            "send_record": {
+              "type": "array",
+              "items": { "type": "string" },
+              "uniqueItems": true,
+              "description": "When type=webhook: record columns that travel in the body (default: only id)."
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 30000,
+              "description": "When type=webhook: TOTAL budget including retries. Default 10000."
+            },
+            "retries": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3,
+              "description": "When type=webhook: retries on network error, 429 or 5xx (never on 4xx). Default 2."
+            },
+            "on_success": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "When type=webhook: applied only when the destination answers 2xx.",
+              "properties": {
+                "set": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "additionalProperties": true,
+                  "description": "Same contract as handler.set."
+                }
+              }
+            },
+            "set": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": true,
+              "description": "When type=set_fields: column -> value. A value is a scalar, null or a token: $now, $actor.id, $payload.<field>, $record.<column> (a literal starting with $ is written $$...). Valid on a row action of an own model only; managed, generated, sequence and snapshot columns are refused."
             },
             "operation": {
               "type": "string",
@@ -3298,6 +3424,20 @@
         "confirm_message": {
           "type": "string",
           "description": "Body shown in the confirmation step."
+        },
+        "confirm_typed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["field"],
+          "description": "The user must TYPE the current value of this column of the acted-on row to confirm (verified by the server as payload.confirm_text, for any handler type). Implies confirm.",
+          "properties": {
+            "field": { "type": "string", "minLength": 1, "description": "Column of the action's target model." }
+          }
+        },
+        "tone": {
+          "type": "string",
+          "enum": ["default", "danger"],
+          "description": "UI only. 'danger' groups the action at the end of the menu with a destructive variant. Default 'default'."
         },
         "requires_state": {
           "type": "array",
@@ -4540,9 +4680,9 @@
         "verify": {
           "type": "string",
           "enum": [
-            "hmac-sha256", "bearer", "addon"
+            "hmac-sha256", "bearer", "addon", "metacore-hmac-v1"
           ],
-          "description": "Signature scheme. hmac-sha256 signs the body; bearer checks a static token sent as Authorization: Bearer|Token <secret> (for providers that cannot sign); addon means the handler verifies (it receives raw_body_b64, query and the allowlisted headers) and the kernel needs no secret. Omit for no verification."
+          "description": "Signature scheme. metacore-hmac-v1 signs timestamp + method + path + nonce + sha256(body) with a 5 min window and a mandatory nonce (replay-safe; works for any route). hmac-sha256 signs the body only; bearer checks a static token sent as Authorization: Bearer|Token <secret> (for providers that cannot sign); addon means the handler verifies (it receives raw_body_b64, query and the allowlisted headers) and the kernel needs no secret. Omit for no verification."
         },
         "secret_ref": {
           "type": "string",
@@ -4550,8 +4690,8 @@
         },
         "do": {
           "type": "string",
-          "pattern": "^(wasm|webhook|compiled):.+$",
-          "description": "Handler reference the verified body is routed to: 'wasm:<export>' | 'webhook:<key>' | 'compiled:<fn>'."
+          "pattern": "^(wasm|webhook|compiled|upsert):.+$",
+          "description": "Handler reference the verified body is routed to: 'wasm:<export>' | 'webhook:<key>' | 'compiled:<fn>' | 'upsert:<Model>' (feeds the batch into the ingest sink of an own model with an ingest block; needs verify other than addon)."
         },
         "headers": {
           "type": "array",
@@ -4775,6 +4915,56 @@
         }
       }
     },
+    "LoginCopy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Plain-text copy of the sign-in page's brand panel (RFC-07). No HTML. Empty or absent stats = no figures are shown.",
+      "properties": {
+        "eyebrow": { "type": "string", "maxLength": 80, "pattern": "^[^<>]*$" },
+        "title": { "type": "string", "maxLength": 80, "pattern": "^[^<>]*$" },
+        "title_accent": { "type": "string", "maxLength": 80, "pattern": "^[^<>]*$" },
+        "subtitle": { "type": "string", "maxLength": 200, "pattern": "^[^<>]*$" },
+        "highlights": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/LoginHighlight" } },
+        "stats": { "type": "array", "maxItems": 3, "items": { "$ref": "#/$defs/LoginStat" } },
+        "signup": { "type": "boolean", "description": "false hides the create-account link." },
+        "i18n": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$" },
+          "additionalProperties": { "$ref": "#/$defs/LoginCopyLocale" },
+          "description": "Per-locale overrides with the same text keys."
+        }
+      }
+    },
+    "LoginCopyLocale": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "eyebrow": { "type": "string", "maxLength": 80, "pattern": "^[^<>]*$" },
+        "title": { "type": "string", "maxLength": 80, "pattern": "^[^<>]*$" },
+        "title_accent": { "type": "string", "maxLength": 80, "pattern": "^[^<>]*$" },
+        "subtitle": { "type": "string", "maxLength": 200, "pattern": "^[^<>]*$" },
+        "highlights": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/LoginHighlight" } },
+        "stats": { "type": "array", "maxItems": 3, "items": { "$ref": "#/$defs/LoginStat" } }
+      }
+    },
+    "LoginHighlight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label"],
+      "properties": {
+        "icon": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]{0,63}$", "description": "Lucide PascalCase name." },
+        "label": { "type": "string", "minLength": 1, "maxLength": 24, "pattern": "^[^<>]*$" }
+      }
+    },
+    "LoginStat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "value"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1, "maxLength": 24, "pattern": "^[^<>]*$" },
+        "value": { "type": "string", "minLength": 1, "maxLength": 16, "pattern": "^[^<>]*$" }
+      }
+    },
     "Preset": {
       "type": "object",
       "additionalProperties": false,
@@ -4870,7 +5060,8 @@
                 "pwa_name": { "type": ["string", "null"] },
                 "pwa_short_name": { "type": ["string", "null"] },
                 "email_from_name": { "type": ["string", "null"] },
-                "fonts": { "type": ["array", "null"], "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 ]{0,59}$" } }
+                "fonts": { "type": ["array", "null"], "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 ]{0,59}$" } },
+                "login": { "anyOf": [ { "$ref": "#/$defs/LoginCopy" }, { "type": "null" } ], "description": "Copy/hero of the sign-in page (RFC-07). null removes the base's block." }
               }
             },
             "branding_file": { "type": "string", "description": "Bundle path (./defaults/...) of a JSON file with the branding object." }

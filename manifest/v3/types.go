@@ -359,18 +359,48 @@ type InboundWebhook struct {
 	Path string `json:"path"`
 	// Verify is the signature scheme: "" (none) | "hmac-sha256" | "bearer"
 	// (a static token in Authorization: Bearer|Token <secret>) | "addon" (the
-	// handler verifies from raw_body_b64/query/headers; no kernel secret).
+	// handler verifies from raw_body_b64/query/headers; no kernel secret) |
+	// "metacore-hmac-v1" (HMAC over ts + method + path + nonce + sha256(body),
+	// 5 min window, nonce required: replay-safe; works for any route).
 	Verify string `json:"verify,omitempty"`
 	// SecretRef resolves the signing secret as "<connector>.<credential>"
 	// (e.g. "github.webhook_secret"). Required when Verify is hmac-sha256 or
 	// bearer; optional (validated when set) for "addon".
 	SecretRef string `json:"secret_ref,omitempty"`
-	// Do is the handler reference the verified body is routed to.
+	// Do is the handler reference the verified body is routed to:
+	// wasm:<export> | webhook:<key> | compiled:<fn> | upsert:<Model> — the last
+	// feeds a batch into the Model's ingest sink (RFC-04); <Model> must be an
+	// own model with an `ingest` block and Verify must be set and not "addon".
 	Do string `json:"do"`
 	// Headers extends the kernel's default request-header allowlist
 	// (webhookin.DefaultHeaders) for this route: lowercase names, a trailing
 	// "*" matches a prefix (e.g. "x-acme-*"). Optional.
 	Headers []string `json:"headers,omitempty"`
+}
+
+// IngestSpec configures the upsert sink of a model (Model.ingest, RFC-04).
+type IngestSpec struct {
+	// Key lists the natural-key columns (1..4). A UNIQUE index covering
+	// organization_id + exactly these columns must exist (a partial
+	// `deleted_at IS NULL` one is fine).
+	Key []string `json:"key"`
+	// Cursor is an optional monotonic column (bigint or timestamp[tz]): an entry
+	// whose cursor is <= the stored one is skipped as stale. Without it the last
+	// write wins.
+	Cursor string `json:"cursor,omitempty"`
+	// Fields lists the columns the sink may write besides the key. Default: every
+	// non-managed column. Never id, organization_id, created_*, updated_*,
+	// deleted_*, generated or sequence columns.
+	Fields []string `json:"fields,omitempty"`
+	// Exclusive turns Fields into server-side protected columns for the generic
+	// write path (UI, data API, import): only the sink and declared actions
+	// listing the column write them. Default false.
+	Exclusive bool `json:"exclusive,omitempty"`
+	// OnDelete is "soft" (default: deleted_at + deleted_by_id = system actor) or
+	// "ignore". Never a physical delete.
+	OnDelete string `json:"on_delete,omitempty"`
+	// MaxBatch is the maximum items per request, 1..1000 (default 500).
+	MaxBatch int `json:"max_batch,omitempty"`
 }
 
 // edgeDeviceKinds is the closed set of hardware categories an EdgeDevice may
@@ -804,6 +834,13 @@ type Model struct {
 	// the activity log answers who removed/cancelled what, when, and why. Nil =
 	// no reason needed (the legacy behaviour). See ReasonRequired.
 	ReasonRequired *ReasonRequired `json:"reason_required,omitempty"`
+
+	// Ingest declares the model as the TARGET of a signed idempotent upsert sink
+	// (RFC-04): an external replicator posts batches to a webhooks[] route whose
+	// `do` is "upsert:<ThisModel>" and the kernel creates/updates rows by their
+	// natural key with a monotonic cursor. Nil = no sink. See IngestSpec.
+	Ingest *IngestSpec `json:"ingest,omitempty"`
+
 	// AppendOnly marks the model as an append-only ledger: rows may be created
 	// but never modified or removed. The kernel refuses every UPDATE and DELETE
 	// on it (REST, the wasm data_mutate / data_batch imports and their `inc`
@@ -1982,6 +2019,10 @@ type DashboardWidget struct {
 	// chip). Requires Query.DateField + Query.Range.
 	Compare *WidgetCompare `json:"compare,omitempty"`
 
+	// Link makes the widget clickable: it navigates to a list view, pinning
+	// filters in the URL. Optional.
+	Link *WidgetLink `json:"link,omitempty"`
+
 	// Slot is the federation slot the host mounts a kind:"custom" widget into.
 	// Default "dashboard.widgets". Ignored for declarative kinds.
 	Slot string `json:"slot,omitempty"`
@@ -2010,6 +2051,9 @@ type WidgetQuery struct {
 	// Where is a filter map: equality by default, or {op: value} where op is
 	// eq|neq|gt|gte|lt|lte|contains — the same operators the list builder uses.
 	// Values are raw JSON so booleans/numbers/strings round-trip faithfully.
+	// With gt|gte|lt|lte over a timestamp/date column the value may be the token
+	// "$now" or "$now-<dur>" (<dur> = \d+(m|h|d), at most 400d), substituted by
+	// the database clock at query time.
 	Where map[string]json.RawMessage `json:"where,omitempty"`
 	// GroupBy buckets the result by a column (bar/line/area/pie/donut/list).
 	GroupBy string `json:"group_by,omitempty"`
@@ -2020,13 +2064,25 @@ type WidgetQuery struct {
 	DateField string `json:"date_field,omitempty"`
 	// Interval buckets the time series: day|week|month. Used with DateField.
 	Interval string `json:"interval,omitempty"`
-	// Range is the time window: last_7_days|last_30_days|last_12_months|
-	// this_month|this_year|this_day|all.
+	// Range is the time window: last_hour|last_24_hours|last_7_days|
+	// last_30_days|last_12_months|this_month|this_year|this_day|all.
 	Range string `json:"range,omitempty"`
 	// Order sorts buckets by value: asc|desc.
 	Order string `json:"order,omitempty"`
 	// Limit caps the number of buckets (host clamps to 1..24).
 	Limit int `json:"limit,omitempty"`
+}
+
+// WidgetLink is where a dashboard widget navigates on click. Exactly one of
+// Model (an own model, optionally with Filter) or URL (a relative internal
+// route, never absolute) is set.
+type WidgetLink struct {
+	// Model is a model key of THIS addon; the SDK opens its list.
+	Model string `json:"model,omitempty"`
+	// Filter maps column -> value, written to the URL as f_<column>=<value>.
+	Filter map[string]any `json:"filter,omitempty"`
+	// URL is an internal route such as "/m/instances?f_environment=production".
+	URL string `json:"url,omitempty"`
 }
 
 // WidgetCompare requests a delta computation against an earlier window.
@@ -2218,6 +2274,16 @@ type Action struct {
 	// ConfirmMessage is the body shown in that confirmation step.
 	ConfirmMessage string `json:"confirm_message,omitempty"`
 
+	// ConfirmTyped asks the user to TYPE the current value of a column of the
+	// acted-on row before the action runs («escribe el nombre de la instancia»).
+	// The server verifies it (payload.confirm_text) for ANY handler type, so a
+	// script with a token must also name the resource. Implies Confirm.
+	ConfirmTyped *ConfirmTyped `json:"confirm_typed,omitempty"`
+
+	// Tone is pure UI: "default" (omitted) or "danger" — the SDK groups
+	// destructive actions at the end of the menu with a destructive variant.
+	Tone string `json:"tone,omitempty"`
+
 	// RequiresState gates the action on the target record's lifecycle column
 	// (`status`, or `state` when status is empty): the action is only valid
 	// (and the host only surfaces it) when that value is one of these. The
@@ -2267,6 +2333,13 @@ type Action struct {
 	// serves it to organizations where the predicate holds (e.g. another addon
 	// is installed). Nil = always served. See Condition.
 	Condition *Condition `json:"condition,omitempty"`
+}
+
+// ConfirmTyped names the column whose current value the user must type to
+// confirm an action (Action.ConfirmTyped).
+type ConfirmTyped struct {
+	// Field is a column of the action's target model.
+	Field string `json:"field"`
 }
 
 // ActionIdempotency declares the payload field that carries an action's
@@ -2781,7 +2854,7 @@ type NotificationEntered struct {
 
 // Handler is the polymorphic invocation target for actions/tools/subscriptions.
 type Handler struct {
-	Type     string `json:"type"` // "wasm" | "webhook" | "compiled" | "connector" | "native"
+	Type     string `json:"type"` // "wasm" | "webhook" | "compiled" | "connector" | "native" | "capability" | "set_fields"
 	Function string `json:"function,omitempty"`
 	URL      string `json:"url,omitempty"`
 	// Operation names the metacore.native/v1 operation when Type=="native".
@@ -2800,6 +2873,61 @@ type Handler struct {
 	// maps contract fields to record.<col> | payload.<field> | const:<literal>.
 	Capability string            `json:"capability,omitempty"`
 	Input      map[string]string `json:"input,omitempty"`
+
+	// ---- type=="webhook" dispatch (RFC-01 §2.1). Valid ONLY on
+	// contributions.actions[] handlers; tools, subscriptions and provided
+	// capabilities reject them (the async outbox is another RFC).
+
+	// URLRef reads the destination BASE URL from a connector credential of the
+	// org, "<connector>.<credential>". Requires an http:fetch capability
+	// "connector:<same ref>". Exclusive with URL and URLSetting.
+	URLRef string `json:"url_ref,omitempty"`
+	// URLSetting reads the base URL from a string setting of the addon
+	// (settings[].key). The resolved host must ALSO be covered by a fixed-host
+	// http:fetch capability. Exclusive with URL and URLRef.
+	URLSetting string `json:"url_setting,omitempty"`
+	// Path is appended to the URLRef/URLSetting base. It may embed
+	// {record.<column>} and {payload.<field>} placeholders (path-escaped).
+	Path string `json:"path,omitempty"`
+	// Method is POST (default) | PUT | PATCH | DELETE.
+	Method string `json:"method,omitempty"`
+	// Signing selects how the outgoing request is authenticated.
+	Signing *HandlerSigning `json:"signing,omitempty"`
+	// SendRecord lists the record columns that travel in the body (default: only
+	// the id), so a third party never receives the whole row.
+	SendRecord []string `json:"send_record,omitempty"`
+	// TimeoutMS is the TOTAL budget including retries, 1000..30000 (default 10000).
+	TimeoutMS int `json:"timeout_ms,omitempty"`
+	// Retries is the number of retries on network error / 429 / 5xx, 0..3
+	// (default 2 when omitted; a pointer so an explicit 0 survives).
+	Retries *int `json:"retries,omitempty"`
+	// OnSuccess runs when the destination answers 2xx.
+	OnSuccess *HandlerOnSuccess `json:"on_success,omitempty"`
+
+	// ---- type=="set_fields" (RFC-02 §2.1).
+
+	// Set maps column -> value for a declarative field change on the acted-on
+	// row. A value is a scalar literal, null or a token: $now, $actor.id,
+	// $payload.<field>, $record.<column>. A literal starting with "$" is written
+	// "$$...". Valid only on contributions.actions[] with placement row.
+	Set map[string]any `json:"set,omitempty"`
+}
+
+// HandlerSigning is the request-signing block of a webhook action handler.
+type HandlerSigning struct {
+	// Scheme is "metacore-hmac-v1" (shared secret per destination) or
+	// "instance-ed25519-v1" (the instance's Ed25519 key, bound to host + path).
+	Scheme string `json:"scheme"`
+	// SecretRef is "<connector>.<credential>" (a type "secret" credential).
+	// Required with metacore-hmac-v1, forbidden with instance-ed25519-v1. Never a
+	// setting: settings do not get the secret treatment of connector credentials.
+	SecretRef string `json:"secret_ref,omitempty"`
+}
+
+// HandlerOnSuccess is applied only on a 2xx answer of a webhook action.
+type HandlerOnSuccess struct {
+	// Set has the same contract as Handler.Set (set_fields).
+	Set map[string]any `json:"set,omitempty"`
 }
 
 // ExtensionPoints is what this addon publishes for others to extend.

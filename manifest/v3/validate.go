@@ -1101,6 +1101,10 @@ func validatePipelineRuntime(m *Manifest) []string {
 
 	// Webhooks: unique keys + paths; do prefix known; verify ⇒ secret_ref → a
 	// declared connector credential.
+	modelsByKey := make(map[string]Model, len(m.Models))
+	for _, mod := range m.Models {
+		modelsByKey[mod.Key] = mod
+	}
 	seenHook := make(map[string]struct{}, len(m.Webhooks))
 	seenPath := make(map[string]struct{}, len(m.Webhooks))
 	for wi, w := range m.Webhooks {
@@ -1120,7 +1124,7 @@ func validatePipelineRuntime(m *Manifest) []string {
 			}
 			seenPath[w.Path] = struct{}{}
 		}
-		if msg := validateDoRef(w.Do); msg != "" {
+		if msg := validateWebhookDo(w, modelsByKey); msg != "" {
 			errs = append(errs, fmt.Sprintf("webhooks[%d].do %s", wi, msg))
 		}
 		for hi, h := range w.Headers {
@@ -1912,6 +1916,23 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 			}
 		}
 	}
+
+	// Hub-primitives contract (RFC-01/02/04/06/08): webhook + set_fields action
+	// handlers, confirm_typed, ingest sinks, $now tokens / links on dashboard
+	// widgets. Its two tolerated rules (webhook_action_signing,
+	// rbac_permission_resolves) are warning-only in both modes for their first
+	// minor (compat.go: warnOnlyWindow).
+	warnOnly := func(rule, msg string) {
+		if _, ok := warnOnlyWindow[rule]; !ok {
+			tolerate(rule, msg)
+			return
+		}
+		*warnings = append(*warnings, fmt.Sprintf("[%s] %s", rule, msg))
+	}
+	errs = append(errs, validateHubActions(&m, warnOnly)...)
+	errs = append(errs, validateIngest(&m, rls)...)
+	errs = append(errs, validateDashboardHub(&m)...)
+	validateRBACPermissionResolves(&m, warnOnly)
 
 	if len(errs) > 0 {
 		return fmt.Errorf("v3: manifest validation failed:\n  - %s", strings.Join(errs, "\n  - "))

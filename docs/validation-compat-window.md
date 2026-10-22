@@ -18,7 +18,15 @@ became invalid overnight and `installer.Upgrade` failed in production with
   Structural / schema errors are never downgraded.
 - After one minor release, drop the rule from `legacyTolerated` and change its
   call site back to a plain `errs = append(...)`.
-- Currently tolerated: `requires_state_in_stages`.
+- Currently tolerated: `requires_state_in_stages`, `audit_column_type`,
+  `webhook_action_signing` and `rbac_permission_resolves`.
+- The last two (hub-primitives contract, v0.230.0) are **warning-only in both
+  modes** for their first minor (`warnOnlyWindow` in `manifest/v3/compat.go`):
+  placeholder `handler: {type: "webhook"}` fixtures and cross-addon role keys
+  are everywhere, so making them publish errors on the release that introduces
+  them would break every consumer's bump. `ValidateWithOptions` /
+  `ParseWithOptions` return the warnings in either mode; the next minor moves
+  them to `tolerate` (error in strict mode) and then to plain errors.
 
 ## Who calls which mode
 

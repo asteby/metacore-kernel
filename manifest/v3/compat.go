@@ -36,10 +36,28 @@ const (
 	RuleAuditColumnType = "audit_column_type"
 )
 
+// RuleWebhookActionSigning and RuleRBACPermissionResolves are declared in
+// hub_primitives_validate.go next to the checks that emit them. Unlike the two
+// rules above they are WARNING-ONLY IN BOTH MODES for their first minor
+// (warnOnlyWindow): placeholder `handler: {type: "webhook"}` fixtures are
+// everywhere (host and addon tests), so turning them into publish errors on the
+// same release that introduces the rule would break every consumer's bump. The
+// warnings come back from ValidateWithOptions / ParseWithOptions in either
+// mode; promote them to `tolerate` (and then to plain errors) in the next minor.
+
 // legacyTolerated lists the rules currently inside their compatibility window.
 var legacyTolerated = []string{
 	RuleRequiresStateInStages,
 	RuleAuditColumnType,
+	RuleWebhookActionSigning,
+	RuleRBACPermissionResolves,
+}
+
+// warnOnlyWindow marks the legacyTolerated rules that are reported as warnings
+// even when Options.Strict is set (see the note above).
+var warnOnlyWindow = map[string]struct{}{
+	RuleWebhookActionSigning:   {},
+	RuleRBACPermissionResolves: {},
 }
 
 // LegacyTolerated returns the rule ids currently inside their compatibility

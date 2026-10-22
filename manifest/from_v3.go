@@ -727,6 +727,12 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		def.Transitions = mapModelTransitions(m.Transitions)
 		def.OnTransition = mapModelTransitionHooks(m.OnTransition)
 		def.Locking = m.Locking
+		if ig := m.Ingest; ig != nil {
+			cp := *ig
+			cp.Key = append([]string(nil), ig.Key...)
+			cp.Fields = append([]string(nil), ig.Fields...)
+			def.Ingest = &cp
+		}
 		if rr := m.ReasonRequired; rr != nil {
 			def.ReasonRequired = &ReasonRequiredDef{Delete: rr.Delete, Actions: rr.Actions, MinLength: rr.MinLength}
 		}
@@ -1161,7 +1167,9 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 		// Exception: when `modal` declares a federated custom UI, never invent
 		// Confirm — the SDK must fail closed if the remote is missing instead
 		// of opening a generic confirmation that hides the broken custom flow.
-		confirm := a.Modal == "" && (a.Confirm || a.ConfirmMessage != "")
+		// confirm_typed implies a confirmation step (the SDK renders the typed
+		// field inside it).
+		confirm := a.Modal == "" && (a.Confirm || a.ConfirmMessage != "" || a.ConfirmTyped != nil)
 		def := ActionDef{
 			Key:              a.Key,
 			Name:             a.Key,
@@ -1169,6 +1177,8 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 			Icon:             a.Icon,
 			Confirm:          confirm,
 			ConfirmMessage:   a.ConfirmMessage,
+			ConfirmTyped:     copyConfirmTyped(a.ConfirmTyped),
+			Tone:             a.Tone,
 			Modal:            a.Modal,
 			Placement:        a.Placement,
 			Priority:         a.Priority,
@@ -1562,7 +1572,21 @@ func handlerToTrigger(h v3.Handler) *ActionTrigger {
 	case "wasm":
 		return &ActionTrigger{Type: "wasm", Export: h.Function}
 	case "webhook":
-		return &ActionTrigger{Type: "webhook"}
+		return &ActionTrigger{
+			Type:       "webhook",
+			URL:        h.URL,
+			URLRef:     h.URLRef,
+			URLSetting: h.URLSetting,
+			Path:       h.Path,
+			Method:     h.Method,
+			Signing:    copyHandlerSigning(h.Signing),
+			SendRecord: append([]string(nil), h.SendRecord...),
+			TimeoutMS:  h.TimeoutMS,
+			Retries:    copyIntPtr(h.Retries),
+			OnSuccess:  copyHandlerOnSuccess(h.OnSuccess),
+		}
+	case "set_fields":
+		return &ActionTrigger{Type: "set_fields", Set: copyAnyMap(h.Set)}
 	case "connector":
 		return &ActionTrigger{Type: "connector", Connector: h.Connector, Export: h.Export}
 	case "native":
@@ -1890,6 +1914,48 @@ func mapProvidesCapabilities(in []v3.ProvidedCapability) []CapabilityProviderDef
 		})
 	}
 	return out
+}
+
+func copyConfirmTyped(in *v3.ConfirmTyped) *v3.ConfirmTyped {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
+}
+
+func copyAnyMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func copyIntPtr(p *int) *int {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+func copyHandlerSigning(in *v3.HandlerSigning) *v3.HandlerSigning {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
+}
+
+func copyHandlerOnSuccess(in *v3.HandlerOnSuccess) *v3.HandlerOnSuccess {
+	if in == nil {
+		return nil
+	}
+	return &v3.HandlerOnSuccess{Set: copyAnyMap(in.Set)}
 }
 
 func copyStringMap(in map[string]string) map[string]string {

@@ -499,6 +499,12 @@ type ActionDef struct {
 	Condition      interface{} `json:"condition,omitempty"`
 	Confirm        bool        `json:"confirm,omitempty"`
 	ConfirmMessage string      `json:"confirmMessage,omitempty"`
+	// ConfirmTyped mirrors manifest.ActionDef.ConfirmTyped: the SDK asks the user
+	// to type the current value of Field before dispatching and sends it as
+	// payload.confirm_text; the server verifies it.
+	ConfirmTyped *ConfirmTypedDef `json:"confirmTyped,omitempty"`
+	// Tone mirrors manifest.ActionDef.Tone ("default" | "danger"): pure UI.
+	Tone string `json:"tone,omitempty"`
 	// Modal is the federated UI slot ("<addon_key>.<action_key>"). Must match
 	// manifest.ActionDef.Modal so the host→frontend JSON round-trip preserves it;
 	// without this field the SDK never learns a custom modal was declared and
@@ -541,6 +547,47 @@ type ActionTrigger struct {
 	// (provider-neutral capability dispatch, package capability).
 	Capability string            `json:"capability,omitempty"`
 	Input      map[string]string `json:"input,omitempty"`
+
+	// Webhook dispatch config and set_fields mapping (RFC-01/02). Tags mirror
+	// manifest.ActionTrigger for the round-trip. DISPATCH CONFIG: never serve it
+	// to the browser — use Served().
+	URL        string           `json:"url,omitempty"`
+	URLRef     string           `json:"url_ref,omitempty"`
+	URLSetting string           `json:"url_setting,omitempty"`
+	Path       string           `json:"path,omitempty"`
+	Method     string           `json:"method,omitempty"`
+	Signing    *ActionSigning   `json:"signing,omitempty"`
+	SendRecord []string         `json:"send_record,omitempty"`
+	TimeoutMS  int              `json:"timeout_ms,omitempty"`
+	Retries    *int             `json:"retries,omitempty"`
+	OnSuccess  *ActionOnSuccess `json:"on_success,omitempty"`
+	Set        map[string]any   `json:"set,omitempty"`
+}
+
+// ActionSigning is the served twin of v3.HandlerSigning.
+type ActionSigning struct {
+	Scheme    string `json:"scheme"`
+	SecretRef string `json:"secret_ref,omitempty"`
+}
+
+// ActionOnSuccess is the served twin of v3.HandlerOnSuccess.
+type ActionOnSuccess struct {
+	Set map[string]any `json:"set,omitempty"`
+}
+
+// ConfirmTypedDef is the served twin of v3.ConfirmTyped.
+type ConfirmTypedDef struct {
+	Field string `json:"field"`
+}
+
+// Served returns the browser-safe projection of the trigger: only the dispatch
+// type (what the UI needs to know), never the destination, path, signing
+// reference or set mapping. A nil trigger stays nil.
+func (t *ActionTrigger) Served() *ActionTrigger {
+	if t == nil {
+		return nil
+	}
+	return &ActionTrigger{Type: t.Type}
 }
 
 // ActionStepDef is one wizard page of a multi-step action form — the served

@@ -828,7 +828,12 @@ type ActionDef struct {
 	SupervisorPolicy string `json:"supervisorPolicy,omitempty"`
 	Confirm          bool   `json:"confirm,omitempty"`
 	ConfirmMessage   string `json:"confirmMessage,omitempty"`
-	Modal            string `json:"modal,omitempty"` // slot name for a custom modal
+	// ConfirmTyped is the projection of v3 Action.confirm_typed: the user types
+	// the current value of Field to confirm; the server verifies payload.confirm_text.
+	ConfirmTyped *v3.ConfirmTyped `json:"confirmTyped,omitempty"`
+	// Tone is the projection of v3 Action.tone ("default" | "danger"); pure UI.
+	Tone  string `json:"tone,omitempty"`
+	Modal string `json:"modal,omitempty"` // slot name for a custom modal
 	// Steps is the host/runtime projection of a v3 Action.steps wizard: one
 	// page per step, per-step validation, single submit with the union of all
 	// steps' values. Mutually exclusive with Fields. See manifest/v3.ActionStep.
@@ -907,7 +912,7 @@ type IdempotencyDef struct {
 // prompted the action. This is what unlocks "stamp this invoice and write
 // the linked log entry atomically" without leaking partially-applied state.
 type ActionTrigger struct {
-	Type    string `json:"type"`             // "wasm" | "webhook" | "noop" | "connector" | "native"
+	Type    string `json:"type"`             // "wasm" | "webhook" | "noop" | "connector" | "native" | "capability" | "set_fields"
 	Export  string `json:"export,omitempty"` // wasm export name; required when Type=wasm or connector
 	RunInTx bool   `json:"run_in_tx,omitempty"`
 	// Operation is required for native triggers and is dispatched over the
@@ -924,6 +929,35 @@ type ActionTrigger struct {
 	// fields to record.<col> | payload.<field> | const:<literal>.
 	Capability string            `json:"capability,omitempty"`
 	Input      map[string]string `json:"input,omitempty"`
+
+	// ---- Type=="webhook" dispatch config (v3 Handler fields, RFC-01). The tags
+	// match modelbase.ActionTrigger so the manifest→host JSON round-trip keeps
+	// them. These are DISPATCH config: hosts must not serve them to the browser
+	// (modelbase.ActionTrigger.Served keeps only the type).
+
+	// URL is the literal https destination; URLRef ("<connector>.<credential>")
+	// and URLSetting (a settings[] key) read the base URL from the org config.
+	URL        string `json:"url,omitempty"`
+	URLRef     string `json:"url_ref,omitempty"`
+	URLSetting string `json:"url_setting,omitempty"`
+	// Path is appended to the URLRef/URLSetting base; {record.<col>} and
+	// {payload.<field>} placeholders are path-escaped at dispatch.
+	Path   string `json:"path,omitempty"`
+	Method string `json:"method,omitempty"` // POST (default) | PUT | PATCH | DELETE
+	// Signing: metacore-hmac-v1 (secret_ref) or instance-ed25519-v1.
+	Signing *v3.HandlerSigning `json:"signing,omitempty"`
+	// SendRecord lists the record columns that travel in the body (default: id).
+	SendRecord []string `json:"send_record,omitempty"`
+	// TimeoutMS is the total budget incl. retries (1000..30000, default 10000);
+	// Retries is 0..3 (nil = default 2).
+	TimeoutMS int  `json:"timeout_ms,omitempty"`
+	Retries   *int `json:"retries,omitempty"`
+	// OnSuccess.Set is applied only on a 2xx answer (same contract as Set).
+	OnSuccess *v3.HandlerOnSuccess `json:"on_success,omitempty"`
+
+	// Set (Type=="set_fields", RFC-02) maps column -> scalar | null | token
+	// ($now, $actor.id, $payload.<f>, $record.<col>). Dispatch config, not served.
+	Set map[string]any `json:"set,omitempty"`
 }
 
 // CapabilityProviderDef is the host projection of one v3
@@ -1221,6 +1255,10 @@ type ModelDefinition struct {
 	// (PER-4): the dynamic engine refuses a delete / the listed actions unless
 	// the request carries a reason (dynamic.ReasonPolicyResolver). Nil = none.
 	ReasonRequired *ReasonRequiredDef `json:"reason_required,omitempty"`
+	// Ingest is the projection of v3 Model.ingest (RFC-04): the model is the
+	// target of a signed idempotent upsert sink (webhooks[].do "upsert:<Model>").
+	// Nil = no sink.
+	Ingest *v3.IngestSpec `json:"ingest,omitempty"`
 	// AppendOnly is the host/runtime projection of v3 Model.append_only: the
 	// model is an append-only ledger and every UPDATE/DELETE on it is refused
 	// (dynamic.Service and the wasm data_mutate / data_batch imports).
