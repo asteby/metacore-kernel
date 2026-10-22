@@ -101,7 +101,13 @@ type Ingress struct {
 	PathPrefix   string `json:"path_prefix,omitempty"`
 	MaxBodyBytes int64  `json:"max_body_bytes,omitempty"`
 	Timeout      string `json:"timeout,omitempty"`
+	// Listeners are public TCP ports the host forwards to the service (see
+	// listeners.go). Optional for kind "http", required for kind "tcp".
+	Listeners []Listener `json:"listeners,omitempty"`
 }
+
+// HTTPEnabled reports whether the host should mount the HTTP ingress proxy.
+func (i Ingress) HTTPEnabled() bool { return i.Kind == IngressKindHTTP }
 
 // EffectiveIngress is an Ingress with defaults applied.
 type EffectiveIngress struct {
@@ -111,8 +117,20 @@ type EffectiveIngress struct {
 }
 
 func (i Ingress) Validate() error {
-	if i.Kind != IngressKindHTTP {
-		return fmt.Errorf("native runtime: ingress.kind %q must be %q", i.Kind, IngressKindHTTP)
+	if i.Kind != IngressKindHTTP && i.Kind != IngressKindTCP {
+		return fmt.Errorf("native runtime: ingress.kind %q must be %q or %q", i.Kind, IngressKindHTTP, IngressKindTCP)
+	}
+	if err := validateListeners(i.Listeners); err != nil {
+		return err
+	}
+	if i.Kind == IngressKindTCP {
+		if len(i.Listeners) == 0 {
+			return fmt.Errorf("native runtime: ingress.kind %q requires at least one listener", IngressKindTCP)
+		}
+		if i.PathPrefix != "" || i.MaxBodyBytes != 0 || i.Timeout != "" {
+			return fmt.Errorf("native runtime: ingress.kind %q cannot set path_prefix, max_body_bytes or timeout", IngressKindTCP)
+		}
+		return nil
 	}
 	if i.PathPrefix != "" {
 		if !ingressPathPattern.MatchString(i.PathPrefix) || path.Clean(i.PathPrefix) != i.PathPrefix || strings.Contains(i.PathPrefix, "..") {
@@ -241,6 +259,9 @@ var errIngressTimeout = errors.New("native ingress: upstream response header tim
 func NewIngressProxy(socketPath string, ingress Ingress, opts IngressProxyOptions) (*IngressProxy, error) {
 	if err := ingress.Validate(); err != nil {
 		return nil, err
+	}
+	if !ingress.HTTPEnabled() {
+		return nil, fmt.Errorf("native ingress: kind %q has no HTTP ingress to proxy", ingress.Kind)
 	}
 	if opts.Transport == nil {
 		if socketPath == "" {

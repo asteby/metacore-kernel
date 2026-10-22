@@ -110,8 +110,12 @@ type ResourceLimits struct {
 	PIDs         int `json:"pids"`
 }
 
-// NetworkPolicy is deny-by-default. Egress entries are hostname:port pairs or
-// exact hostnames; wildcard and CIDR support require a future contract version.
+// NetworkPolicy is deny-by-default. Egress entries are exact hostnames,
+// hostname:port pairs, or the single explicit wildcard form "*:<port>" for the
+// closed set of protocol ports in WildcardEgressPorts (SMTP/IMAP/POP3). Any
+// other wildcard (bare "*", "*.example.com", ranges) and CIDR support require a
+// future contract version. See egress.go for the full grammar and the SSRF
+// obligations of enforcers.
 type NetworkPolicy struct {
 	Egress []string `json:"egress,omitempty"`
 }
@@ -167,8 +171,8 @@ func (s Spec) Validate() error {
 		seen[secret.Mount] = struct{}{}
 	}
 	for i, target := range s.Network.Egress {
-		if target == "" || strings.ContainsAny(target, "/* \t\n") {
-			return fmt.Errorf("native runtime: network.egress[%d] must be an exact hostname or hostname:port", i)
+		if _, err := ParseEgress(target); err != nil {
+			return fmt.Errorf("native runtime: network.egress[%d]: %w", i, err)
 		}
 	}
 	if s.Ingress != nil {
