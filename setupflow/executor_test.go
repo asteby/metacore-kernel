@@ -358,3 +358,88 @@ func TestPoll_WithoutPollRunsOnce(t *testing.T) {
 		t.Fatalf("%+v %v calls=%d", res, err, n.Load())
 	}
 }
+
+type ctxKey struct{}
+
+func TestRun_CallerContextValuesNeverReachTheHandler(t *testing.T) {
+	var seen any
+	var baseSeen any
+	e, _ := newExec(InvokerFunc(func(ctx context.Context, _ Request) ([]byte, error) {
+		seen = ctx.Value(ctxKey{})
+		baseSeen = ctx.Value(ctxKey{}) // same key, base context sets it below
+		return ok("a.b"), nil
+	}))
+	callerCtx := context.WithValue(context.Background(), ctxKey{}, "caller-request-state")
+	if _, err := e.Run(callerCtx, v3.SetupCheck{}, req("u1")); err != nil {
+		t.Fatal(err)
+	}
+	if seen != nil {
+		t.Fatalf("the caller's request context leaked into the shared execution: %v", seen)
+	}
+	e.BaseContext = func(r Request) context.Context {
+		return context.WithValue(context.Background(), ctxKey{}, "principal:"+r.Principal.UserID)
+	}
+	if _, err := e.Run(callerCtx, v3.SetupCheck{}, req("u1")); err != nil {
+		t.Fatal(err)
+	}
+	if baseSeen != "principal:u1" {
+		t.Fatalf("BaseContext must be built from the request principal: %v", baseSeen)
+	}
+}
+
+func TestRun_TimeoutReleasesInflightEvenIfInvokerNeverReturns(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	var calls atomic.Int32
+	e, _ := newExec(InvokerFunc(func(context.Context, Request) ([]byte, error) {
+		if calls.Add(1) == 1 {
+			<-block // ignores its context: a stuck handler
+		}
+		return ok("a.b"), nil
+	}))
+	_, err := e.Run(context.Background(), v3.SetupCheck{Timeout: "50ms"}, req("u1"))
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("want ErrTimeout, got %v", err)
+	}
+	e.mu.Lock()
+	n := len(e.inflight)
+	e.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("inflight must be released at the timeout, have %d", n)
+	}
+	// The next run is a fresh execution, not a wait on the stuck one.
+	if _, err := e.Run(context.Background(), v3.SetupCheck{Timeout: "1s"}, req("u1")); err != nil {
+		t.Fatalf("fresh run: %v", err)
+	}
+}
+
+func TestRun_AbandonedExecutionsAreBounded(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	e, _ := newExec(InvokerFunc(func(context.Context, Request) ([]byte, error) { <-block; return nil, nil }))
+	e.MaxAbandoned = 2
+	for i := 0; i < 2; i++ {
+		if _, err := e.Run(context.Background(), v3.SetupCheck{Timeout: "20ms"}, req("u1")); !errors.Is(err, ErrTimeout) {
+			t.Fatalf("run %d: %v", i, err)
+		}
+	}
+	if _, err := e.Run(context.Background(), v3.SetupCheck{Timeout: "20ms"}, req("u1")); !errors.Is(err, ErrBusy) {
+		t.Fatalf("want ErrBusy, got %v", err)
+	}
+}
+
+func TestRun_OrgScopedFlowRequiresOrg(t *testing.T) {
+	e, _ := newExec(InvokerFunc(func(context.Context, Request) ([]byte, error) { return ok("a.b"), nil }))
+	r := req("u1")
+	r.Principal.OrgID = ""
+	for _, scope := range []string{"", v3.SetupScopeOrg} {
+		r.Scope = scope
+		if _, err := e.Run(context.Background(), v3.SetupCheck{}, r); !errors.Is(err, ErrNoPrincipal) {
+			t.Errorf("scope %q without org must be refused: %v", scope, err)
+		}
+	}
+	r.Scope = v3.SetupScopeInstance
+	if _, err := e.Run(context.Background(), v3.SetupCheck{}, r); err != nil {
+		t.Errorf("instance flows need no org: %v", err)
+	}
+}
