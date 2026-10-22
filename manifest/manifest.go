@@ -856,8 +856,13 @@ type ActionDef struct {
 	// steps' values. Mutually exclusive with Fields. See manifest/v3.ActionStep.
 	Steps      []ActionStepDef `json:"steps,omitempty"`
 	Placement  string          `json:"placement,omitempty"`  // "row" (default), "table", or "create" — see v3.Action.Placement
-	Priority   string          `json:"priority,omitempty"`   // "primary", "secondary" or "" (auto) — see v3.Action.Priority
+	Priority   string          `json:"priority,omitempty"`   // "primary", "secondary", "overflow" or "" (auto) — see v3.Action.Priority
 	ModalWidth string          `json:"modalWidth,omitempty"` // explicit modal width (CSS length / px); SDK reads action.modalWidth
+
+	// Destructive is the projection of v3 Action.destructive: the action undoes
+	// or releases something irreversibly; pure UI (destructive variant,
+	// separated placement, destructive confirmation).
+	Destructive bool `json:"destructive,omitempty"`
 
 	// Trigger declares how the action dispatches when invoked. Optional —
 	// when nil the legacy behaviour applies (the host resolves the action via
@@ -1314,6 +1319,11 @@ type ModelDefinition struct {
 	// (map, timeline, chart, relation, stats, custom) the host serves with the
 	// model's table metadata. Pure UI metadata. Nil = the default detail page.
 	Detail *v3.ModelDetail `json:"detail,omitempty"`
+
+	// TitleField / SubtitleField carry v3 Model.title_field / subtitle_field
+	// (pure UI): the columns that head a record in detail and card views.
+	TitleField    string `json:"title_field,omitempty"`
+	SubtitleField string `json:"subtitle_field,omitempty"`
 	// OptionMetrics are the option_metrics[] of this addon that AGGREGATE this
 	// model (Metric.Model == ModelKey), copied here so a host persisting only
 	// model definitions keeps them. The same entries are in
@@ -1789,6 +1799,12 @@ type ColumnDef struct {
 	//   "list"  — only API list payloads (omitted from detail/modal forms).
 	// Unknown values are rejected by Validate.
 	Visibility string `json:"visibility,omitempty"`
+
+	// DisplayFor / CardRole are the projection of v3 Column.display_for and
+	// Column.card_role (pure UI): the column is the display text of the
+	// relation column it names, and its role in the mobile record card.
+	DisplayFor string `json:"display_for,omitempty"`
+	CardRole   string `json:"card_role,omitempty"`
 
 	// Searchable opts the column into the model's full-text/contains search
 	// index. It is intentionally separate from Index (which is a DDL btree

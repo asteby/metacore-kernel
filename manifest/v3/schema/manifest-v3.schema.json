@@ -1266,6 +1266,16 @@
           "detail": {
             "$ref": "#/$defs/ModelDetail",
             "description": "Panels of the record detail page (map, timeline, chart, relation, stats, custom). Pure UI; implies host capability ui.detail_panels."
+          },
+          "title_field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Column whose value titles a record in the detail page and the mobile card. Must be a declared column. Pure UI."
+          },
+          "subtitle_field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Column whose value subtitles a record in the detail page and the mobile card. Must be a declared column. Pure UI."
           }
       },
       "examples": [
@@ -1561,6 +1571,16 @@
           "type": "string",
           "enum": ["all", "table", "modal", "list"],
           "description": "Where the column is rendered. 'all' (default) everywhere; 'table' only in the list table (not in the form nor in embedded line subtables); 'modal' only in the create/edit form; 'list' only in API payloads (no table column, no form field). Pure UI metadata: the value is still stored, read and written."
+        },
+        "display_for": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "This column is the denormalized display text of the relation column it names (e.g. customer_name -> customer_id). Must be another column of the model that declares a ref. The SDK does not render it as a separate detail field when the relation is visible. Pure UI: the value is still stored, read and written."
+        },
+        "card_role": {
+          "type": "string",
+          "enum": ["title", "subtitle", "metric", "status", "hidden"],
+          "description": "Role of this column in the mobile record card. Omitted = the SDK decides heuristically. Pure UI."
         },
         "section": {
           "type": "string",
@@ -3445,9 +3465,14 @@
           "type": "string",
           "enum": [
             "primary",
-            "secondary"
+            "secondary",
+            "overflow"
           ],
-          "description": "Rank among the record's actions: 'primary' is the single highlighted action of the row menu / document header; 'secondary' (share, print, email, send to chat) goes to the document's secondary bar and the row menu's «Más…» group. Omitted = classified by the host by convention."
+          "description": "Rank among the record's actions: 'primary' is the single highlighted action of the row menu / document header; 'secondary' (share, print, email, send to chat) goes to the document's secondary bar and the row menu's «Más…» group; 'overflow' (rare / maintenance actions) is always tucked behind the «⋯» menu. Omitted = classified by the host by convention."
+        },
+        "destructive": {
+          "type": "boolean",
+          "description": "UI only. Marks an action that undoes or releases something irreversibly: the SDK paints it with the destructive variant, separates it from the other actions and asks for a destructive confirmation. Complements tone 'danger'. Default false."
         },
         "fields": {
           "type": "array",

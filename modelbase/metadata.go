@@ -30,6 +30,13 @@ type TableMetadata struct {
 	DefaultSortOrder  string `json:"defaultSortOrder,omitempty"`
 	SearchPlaceholder string `json:"searchPlaceholder,omitempty"`
 
+	// TitleField / SubtitleField name the columns that head a record in the
+	// detail page and the mobile card (mirror manifest.ModelDefinition). The
+	// host copies them from the model definition when serving; empty keeps the
+	// SDK's heuristic. Pure UI.
+	TitleField    string `json:"title_field,omitempty"`
+	SubtitleField string `json:"subtitle_field,omitempty"`
+
 	// SearchRefs names foreign-key columns (ColumnDef.Ref set) the free-text
 	// search reaches THROUGH: a term matches a row when it matches the
 	// referenced record's own search columns (e.g. an order found by its
@@ -198,6 +205,13 @@ type ColumnDef struct {
 	// "modal" form only, "list" API payloads only. The SDK reads it through
 	// its column-visibility helpers. Pure UI.
 	Visibility string `json:"visibility,omitempty"`
+	// DisplayFor names the relation column (one with Ref) this column is the
+	// denormalized display text of; the SDK does not render it twice in the
+	// record detail. CardRole is the column's role in the mobile record card:
+	// title|subtitle|metric|status|hidden. Mirror manifest.ColumnDef (same JSON
+	// keys, so the round-trip is lossless); pure UI.
+	DisplayFor string `json:"display_for,omitempty"`
+	CardRole   string `json:"card_role,omitempty"`
 	// Readonly marks a SYSTEM-GENERATED column (see manifest/v3 Column.readonly):
 	// the host projects it so form derivation excludes it from create and marks
 	// it read-only in edit. The column still renders in tables/detail. Pure UI.
@@ -494,7 +508,7 @@ type ActionDef struct {
 	Type           string      `json:"type,omitempty"`       // custom, link
 	LinkURL        string      `json:"linkUrl,omitempty"`    // URL pattern for type=link
 	Placement      string      `json:"placement,omitempty"`  // "row" (default), "table", or "create" — see manifest/v3.Action.Placement
-	Priority       string      `json:"priority,omitempty"`   // "primary", "secondary" or "" (auto) — see manifest/v3.Action.Priority. Must match manifest.ActionDef.Priority for the host→SDK round-trip.
+	Priority       string      `json:"priority,omitempty"`   // "primary", "secondary", "overflow" or "" (auto) — see manifest/v3.Action.Priority. Must match manifest.ActionDef.Priority for the host→SDK round-trip.
 	ModalWidth     string      `json:"modalWidth,omitempty"` // explicit modal width (CSS length / px); SDK reads action.modalWidth. Must match manifest.ActionDef.ModalWidth so the host→SDK JSON round-trip preserves it.
 	Condition      interface{} `json:"condition,omitempty"`
 	Confirm        bool        `json:"confirm,omitempty"`
@@ -505,6 +519,10 @@ type ActionDef struct {
 	ConfirmTyped *ConfirmTypedDef `json:"confirmTyped,omitempty"`
 	// Tone mirrors manifest.ActionDef.Tone ("default" | "danger"): pure UI.
 	Tone string `json:"tone,omitempty"`
+	// Destructive mirrors manifest.ActionDef.Destructive: the action undoes or
+	// releases something irreversibly. Pure UI; omitted when false so existing
+	// payloads are unchanged.
+	Destructive bool `json:"destructive,omitempty"`
 	// Modal is the federated UI slot ("<addon_key>.<action_key>"). Must match
 	// manifest.ActionDef.Modal so the host→frontend JSON round-trip preserves it;
 	// without this field the SDK never learns a custom modal was declared and

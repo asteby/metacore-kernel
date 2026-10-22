@@ -629,6 +629,10 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// Visibility rides through so table/form derivation scopes where
 				// the column renders (table / modal / list-only).
 				Visibility: c.Visibility,
+				// DisplayFor / CardRole ride through (pure UI): the relation
+				// column this one is the label of, and its mobile-card role.
+				DisplayFor: c.DisplayFor,
+				CardRole:   c.CardRole,
 				// Readonly rides through so DeriveFormFields excludes the
 				// system-generated column from create and marks it read-only in edit.
 				Readonly: c.Readonly,
@@ -761,6 +765,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		// Detail panels ride through verbatim (pure UI), served with the
 		// model's table metadata.
 		def.Detail = m.Detail
+		// TitleField / SubtitleField ride through verbatim (pure UI).
+		def.TitleField = m.TitleField
+		def.SubtitleField = m.SubtitleField
 		out = append(out, def)
 	}
 	return out
@@ -1190,6 +1197,7 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 			Modal:            a.Modal,
 			Placement:        a.Placement,
 			Priority:         a.Priority,
+			Destructive:      a.Destructive,
 			ModalWidth:       a.ModalWidth,
 			RequiresState:    a.RequiresState,
 			SupervisorPolicy: a.SupervisorPolicy,

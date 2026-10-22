@@ -898,6 +898,13 @@ type Model struct {
 	// metadata: the host serves it with the model's table metadata and needs
 	// host capability "ui.detail_panels". Nil = the default detail page.
 	Detail *ModelDetail `json:"detail,omitempty"`
+
+	// TitleField / SubtitleField name the columns whose values head a record:
+	// the detail page title and subtitle and the mobile card title/subtitle.
+	// Each must be a declared column of this model. Empty = the SDK guesses.
+	// Pure UI metadata.
+	TitleField    string `json:"title_field,omitempty"`
+	SubtitleField string `json:"subtitle_field,omitempty"`
 }
 
 // Stage is one lifecycle stage of a model's StageField column. The kernel
@@ -1260,6 +1267,22 @@ type Column struct {
 	// "list" for an internal mirror (money in minor units next to its currency
 	// column) that the user never needs to see. Optional.
 	Visibility string `json:"visibility,omitempty"`
+
+	// DisplayFor declares that this column is the denormalized display text of
+	// the relation column it names (e.g. customer_name with display_for
+	// "customer_id"). It must name another column of the same model that
+	// carries a Ref. The SDK does not render it as a separate field in the
+	// record detail when the relation column is visible (it would duplicate the
+	// resolved relation label) and may use it as the relation's label in
+	// tables. Pure UI metadata: the value is still stored, read and written.
+	// Optional.
+	DisplayFor string `json:"display_for,omitempty"`
+
+	// CardRole assigns this column a role in the mobile record card: "title",
+	// "subtitle", "metric" (up to three inline figures), "status" (badge) or
+	// "hidden" (left out of the card). Empty = the SDK decides heuristically.
+	// Pure UI metadata. Optional.
+	CardRole string `json:"card_role,omitempty"`
 
 	// Readonly marks a SYSTEM-GENERATED column: a value the addon/host populates
 	// (e.g. an id or number a remote API returns after a write), NOT something a
@@ -2254,11 +2277,22 @@ type Action struct {
 	//   "secondary" — share / print / email / send-to-chat style actions: the
 	//                 host moves them to the document's secondary bar (footer)
 	//                 and to a discreet «Más…» group in the row menu.
+	//   "overflow"  — rarely used / maintenance actions: the host always tucks
+	//                 them behind the «⋯» menu, never as a visible button (on a
+	//                 narrow screen the toolbar shows primary and, if there is
+	//                 room, secondary; overflow never).
 	//   ""          — auto: the host classifies by convention (share, print,
 	//                 email, chat, download keys → secondary; the rest stay in
 	//                 the main menu).
 	// Hosts that don't understand it ignore it (no layout change).
 	Priority string `json:"priority,omitempty"`
+
+	// Destructive marks an action that deletes, voids or releases something
+	// irreversibly (cancel an order, release stock). Pure UI: the SDK paints it
+	// with the destructive variant, separates it from the other actions and
+	// asks for a destructive confirmation. It complements Tone ("danger"),
+	// which keeps working; neither implies the other. Default false (omitted).
+	Destructive bool `json:"destructive,omitempty"`
 
 	// Fields declares a declarative form the host renders in the action modal
 	// before dispatching the handler. Optional — an action with no fields and

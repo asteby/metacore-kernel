@@ -38,3 +38,13 @@ func TestValidate_ActionPriorityRejectsUnknown(t *testing.T) {
 		t.Fatalf("expected a priority enum error, got %v", err)
 	}
 }
+
+func TestValidate_ActionPriorityOverflow(t *testing.T) {
+	m, err := Parse(actionPriorityManifest("overflow"))
+	if err != nil {
+		t.Fatalf("overflow must be accepted: %v", err)
+	}
+	if got := m.Contributions.Actions[0].Priority; got != "overflow" {
+		t.Fatalf("parsed %q", got)
+	}
+}
