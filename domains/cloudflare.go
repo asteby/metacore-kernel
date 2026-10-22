@@ -32,10 +32,11 @@ type Cloudflare struct {
 // CloudflareOption customizes NewCloudflare.
 type CloudflareOption func(*Cloudflare)
 
-// WithCloudflareBaseURL points at another endpoint (tests only).
-func WithCloudflareBaseURL(u string) CloudflareOption {
-	return func(c *Cloudflare) { c.base = strings.TrimSuffix(u, "/") }
-}
+// The API base URL is fixed to CloudflareAPI in production code. There is
+// deliberately no exported option to change it: a host that let a tenant or an
+// addon choose it would send the API token to an attacker-controlled server.
+// Tests redirect the client with the unexported withCloudflareBaseURL
+// (cloudflare_testhook_test.go) or WithCloudflareHTTPClient.
 
 // WithCloudflareHTTPClient replaces the HTTP client.
 func WithCloudflareHTTPClient(hc *http.Client) CloudflareOption {
@@ -74,13 +75,15 @@ type cfError struct {
 }
 
 type cfRecord struct {
-	ID       string `json:"id,omitempty"`
-	Type     string `json:"type"`
-	Name     string `json:"name"`
-	Content  string `json:"content"`
-	TTL      int    `json:"ttl"`
-	Priority *int   `json:"priority,omitempty"`
-	Proxied  *bool  `json:"proxied,omitempty"`
+	ID       string   `json:"id,omitempty"`
+	Type     string   `json:"type"`
+	Name     string   `json:"name"`
+	Content  string   `json:"content"`
+	TTL      int      `json:"ttl"`
+	Priority *int     `json:"priority,omitempty"`
+	Proxied  *bool    `json:"proxied,omitempty"`
+	Comment  string   `json:"comment,omitempty"`
+	Tags     []string `json:"tags,omitempty"`
 }
 
 func (c *Cloudflare) do(ctx context.Context, method, path string, q url.Values, body any, out *cfEnvelope) error {
@@ -210,6 +213,7 @@ func fromCF(r cfRecord) ProviderRecord {
 	if p.Type == TypeTXT {
 		p.Value = canonTXT(p.Value)
 	}
+	p.Comment, p.Tags, p.Proxied = r.Comment, r.Tags, r.Proxied
 	return p
 }
 
@@ -231,27 +235,38 @@ func toCF(r Record) cfRecord {
 	default:
 		out.Content = strings.TrimSpace(r.Value)
 	}
+	return out
+}
+
+// toCFCreate is toCF plus proxied=false on address/CNAME records: NEW mail and
+// auth hosts are never proxied. Updates (toCF alone) leave proxied untouched.
+func toCFCreate(r Record) cfRecord {
+	out := toCF(r)
 	if r.Type == TypeA || r.Type == TypeAAAA || r.Type == TypeCNAME {
 		f := false
-		out.Proxied = &f // mail/auth hosts are never proxied
+		out.Proxied = &f
 	}
 	return out
 }
 
 func (c *Cloudflare) CreateRecord(ctx context.Context, z Zone, r Record) (ProviderRecord, error) {
 	var env cfEnvelope
-	if err := c.do(ctx, http.MethodPost, "/zones/"+url.PathEscape(z.ID)+"/dns_records", nil, toCF(r), &env); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/zones/"+url.PathEscape(z.ID)+"/dns_records", nil, toCFCreate(r), &env); err != nil {
 		return ProviderRecord{}, err
 	}
 	return decodeCFRecord(env)
 }
 
+// UpdateRecord PATCHes only the fields the applier manages (type, name,
+// content, ttl, priority). comment, tags and proxied are never sent, so the
+// tenant's annotations survive and a proxied record stays as it was (the plan
+// surfaces it as a warning); a PUT would reset them.
 func (c *Cloudflare) UpdateRecord(ctx context.Context, z Zone, id string, r Record) (ProviderRecord, error) {
 	if id == "" {
 		return ProviderRecord{}, errors.New("cloudflare: record id is required")
 	}
 	var env cfEnvelope
-	if err := c.do(ctx, http.MethodPut, "/zones/"+url.PathEscape(z.ID)+"/dns_records/"+url.PathEscape(id), nil, toCF(r), &env); err != nil {
+	if err := c.do(ctx, http.MethodPatch, "/zones/"+url.PathEscape(z.ID)+"/dns_records/"+url.PathEscape(id), nil, toCF(r), &env); err != nil {
 		return ProviderRecord{}, err
 	}
 	return decodeCFRecord(env)

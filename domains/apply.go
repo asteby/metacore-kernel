@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -26,6 +27,30 @@ type ProviderRecord struct {
 	Value    string     `json:"value"`
 	Priority int        `json:"priority,omitempty"`
 	TTL      int        `json:"ttl,omitempty"`
+	// Comment, Tags and Proxied are provider-side metadata the applier never
+	// writes on update: they are preserved, shown in the plan and covered by
+	// its fingerprint. Proxied is nil when the provider has no such notion.
+	Comment string   `json:"comment,omitempty"`
+	Tags    []string `json:"tags,omitempty"`
+	Proxied *bool    `json:"proxied,omitempty"`
+}
+
+// sameStored reports whether two stored records are identical in everything
+// the applier reasons about (value, TTL and the preserved metadata).
+func (p ProviderRecord) sameStored(o ProviderRecord) bool {
+	if p.ID != o.ID || p.Canonical() != o.Canonical() || p.TTL != o.TTL || p.Comment != o.Comment ||
+		strings.Join(p.Tags, "\x1f") != strings.Join(o.Tags, "\x1f") {
+		return false
+	}
+	return (p.Proxied == nil) == (o.Proxied == nil) && (p.Proxied == nil || *p.Proxied == *o.Proxied)
+}
+
+func (p ProviderRecord) fingerprint() string {
+	px := "-"
+	if p.Proxied != nil {
+		px = fmt.Sprint(*p.Proxied)
+	}
+	return strings.Join([]string{p.ID, p.Canonical(), fmt.Sprint(p.TTL), p.Comment, strings.Join(p.Tags, ","), px}, "\x1d")
 }
 
 // Record converts to the package's Record (for canonical comparison).
@@ -62,6 +87,10 @@ var (
 	ErrPlanBlocked = errors.New("domains: plan has blocked entries")
 	// ErrPlanChanged: the live plan differs from the one the user confirmed.
 	ErrPlanChanged = errors.New("domains: plan changed since it was confirmed")
+	// ErrInvalidPlan: the plan handed to Apply is not one Plan could have
+	// produced for this provider (forged or corrupted: names outside the
+	// domain, an update whose existing record is at another name, ...).
+	ErrInvalidPlan = errors.New("domains: invalid plan")
 )
 
 // Action of a plan entry.
@@ -80,6 +109,13 @@ const (
 	DiagExtraExisting    = "extra_existing_values"
 	DiagMXOtherTarget    = "mx_other_target"
 	DiagCNAMEConflict    = "cname_conflict"
+	// DiagMergesSPF: an existing SPF record is kept and the required
+	// mechanism is merged into it (nothing the tenant had is dropped).
+	DiagMergesSPF = "merges_spf"
+	// DiagProxiedExisting: the record being updated is proxied by the
+	// provider; the update preserves that, but mail/auth hosts must be
+	// DNS-only.
+	DiagProxiedExisting = "proxied_existing"
 )
 
 // PlanEntry is one record's diff.
@@ -130,9 +166,13 @@ func (p Plan) Fingerprint() string {
 	for _, e := range p.Entries {
 		ex := ""
 		if e.Existing != nil {
-			ex = e.Existing.ID + "=" + e.Existing.Canonical()
+			ex = e.Existing.fingerprint()
 		}
-		lines = append(lines, strings.Join([]string{string(e.Action), e.Record.Key(), e.Record.Canonical(), ex}, "\x1f"))
+		r := e.Record
+		// Everything that changes what gets written (or how it is matched)
+		// is part of what the user confirms.
+		meta := fmt.Sprintf("ttl=%d unique=%t match=%s needle=%s", r.TTL, r.Unique, r.Match, r.Needle)
+		lines = append(lines, strings.Join([]string{string(e.Action), r.Key(), r.Canonical(), meta, ex}, "\x1f"))
 	}
 	sort.Strings(lines)
 	h := sha256.New()
@@ -165,6 +205,11 @@ type ApplyResult struct {
 //	Plan  read-only: finds the zone, lists what exists, returns the diff
 //	Apply executes create/update entries; idempotent (re-running a plan
 //	      that already took effect writes nothing); never deletes
+//
+// Hosts should call ApplyConfirmed, the only path that ties the write to what
+// the user confirmed. ProviderApplier.Apply still defends itself: it rejects a
+// plan that does not belong to this provider/domain and re-verifies every
+// update against the live record before writing.
 type DNSApplier interface {
 	Name() string
 	Plan(ctx context.Context, set RecordSet) (Plan, error)
@@ -226,13 +271,72 @@ func (a *ProviderApplier) Plan(ctx context.Context, set RecordSet) (Plan, error)
 	return plan, nil
 }
 
+// txtFamily classifies a TXT payload by the protocol it belongs to, so a
+// unique record only ever replaces its own kind: an SPF never overwrites a
+// google-site-verification token living at the same name.
+func txtFamily(name, value string) string {
+	l := strings.ToLower(canonTXT(value))
+	switch {
+	case strings.HasPrefix(l, "v=spf1"):
+		return "spf"
+	case strings.HasPrefix(l, "v=dmarc1"):
+		return "dmarc"
+	case strings.HasPrefix(l, "v=dkim1"), strings.Contains(name, "._domainkey."):
+		return "dkim"
+	}
+	return ""
+}
+
+var spfAllRe = regexp.MustCompile(`^[+\-~?]?all$`)
+
+// mergeSPF inserts the mechanisms of needle into an existing SPF record,
+// before its terminating "all"/"redirect=" and without dropping anything the
+// tenant already authorises. Mechanisms already present are not duplicated.
+func mergeSPF(existing, needle string) string {
+	fields := strings.Fields(canonTXT(existing))
+	have := map[string]struct{}{}
+	for _, f := range fields {
+		have[strings.ToLower(f)] = struct{}{}
+	}
+	var add []string
+	for _, n := range strings.Fields(canonTXT(needle)) {
+		if _, ok := have[strings.ToLower(n)]; !ok {
+			add = append(add, n)
+		}
+	}
+	if len(add) == 0 {
+		return strings.Join(fields, " ")
+	}
+	at := len(fields)
+	for i, f := range fields {
+		lf := strings.ToLower(f)
+		if i > 0 && (spfAllRe.MatchString(lf) || strings.HasPrefix(lf, "redirect=")) {
+			at = i
+			break
+		}
+	}
+	out := append([]string{}, fields[:at]...)
+	out = append(out, add...)
+	out = append(out, fields[at:]...)
+	return strings.Join(out, " ")
+}
+
 func planRecord(rec Record, atName []ProviderRecord) PlanEntry {
 	var same []ProviderRecord
 	cnameAt, otherAt := false, false
-	unique := rec.Unique || rec.Type == TypeCNAME // a name holds one CNAME
+	family := ""
+	if rec.Type == TypeTXT {
+		family = txtFamily(rec.Name, rec.Value)
+	}
+	// A TXT without a recognised family has no safe notion of "the one value
+	// to replace": it is only ever created (or found equal), never updated.
+	unique := (rec.Unique && (rec.Type != TypeTXT || family != "")) || rec.Type == TypeCNAME
 	for _, p := range atName {
 		switch {
 		case p.Type == rec.Type:
+			if family != "" && txtFamily(p.Name, p.Value) != family {
+				continue // someone else's TXT (site verification, ...): untouched
+			}
 			same = append(same, p)
 		case p.Type == TypeCNAME:
 			cnameAt = true
@@ -257,11 +361,23 @@ func planRecord(rec Record, atName []ProviderRecord) PlanEntry {
 		return blocked(rec, "a CNAME already exists at this name; it cannot coexist with "+string(rec.Type))
 	}
 	if unique && len(same) > 0 {
-		e := PlanEntry{Action: ActionUpdate, Record: rec, Existing: &same[0]}
-		e.Warnings = append(e.Warnings, diag(DiagReplacesExisting, SeverityWarn,
-			map[string]any{"name": rec.Name, "type": string(rec.Type), "from": same[0].Canonical(), "to": want}, ""))
+		desired := rec
+		e := PlanEntry{Action: ActionUpdate, Existing: &same[0]}
+		if family == "spf" && rec.Match == MatchContains && rec.Needle != "" {
+			// Keep the tenant's SPF and merge our mechanism into it.
+			desired.Value = mergeSPF(same[0].Value, rec.Needle)
+			e.Warnings = append(e.Warnings, diag(DiagMergesSPF, SeverityWarn,
+				map[string]any{"name": rec.Name, "from": same[0].Canonical(), "to": desired.Canonical()}, ""))
+		} else {
+			e.Warnings = append(e.Warnings, diag(DiagReplacesExisting, SeverityWarn,
+				map[string]any{"name": rec.Name, "type": string(rec.Type), "from": same[0].Canonical(), "to": want}, ""))
+		}
+		e.Record = desired
 		if len(same) > 1 {
 			e.Warnings = append(e.Warnings, diag(DiagExtraExisting, SeverityWarn, map[string]any{"name": rec.Name, "count": len(same) - 1}, ""))
+		}
+		if same[0].Proxied != nil && *same[0].Proxied {
+			e.Warnings = append(e.Warnings, diag(DiagProxiedExisting, SeverityWarn, map[string]any{"name": rec.Name}, "the existing record is proxied and stays proxied"))
 		}
 		return e
 	}
@@ -284,6 +400,9 @@ func (a *ProviderApplier) Apply(ctx context.Context, plan Plan) (ApplyResult, er
 	res := ApplyResult{AppliedAt: time.Now().UTC()}
 	if plan.HasBlocked() {
 		return res, ErrPlanBlocked
+	}
+	if err := a.validatePlan(ctx, plan); err != nil {
+		return res, err
 	}
 	var errs []error
 	for _, e := range plan.Entries {
@@ -325,6 +444,29 @@ func (a *ProviderApplier) Apply(ctx context.Context, plan Plan) (ApplyResult, er
 				errs = append(errs, fmt.Errorf("update %s: %s", e.Record, ae.Error))
 				break
 			}
+			// Re-verify against the live zone: the record must still be the
+			// one the user saw (value, TTL and preserved metadata), otherwise
+			// the write could clobber a change made in between.
+			cur, err := a.P.ListRecords(ctx, plan.Zone, e.Record.Name)
+			if err != nil {
+				ae.Error = err.Error()
+				res.Failed++
+				errs = append(errs, fmt.Errorf("update %s: %w", e.Record, err))
+				break
+			}
+			var live *ProviderRecord
+			for i := range cur {
+				if cur[i].ID == e.Existing.ID {
+					live = &cur[i]
+					break
+				}
+			}
+			if live == nil || !live.sameStored(*e.Existing) {
+				ae.Error = ErrPlanChanged.Error()
+				res.Failed++
+				errs = append(errs, fmt.Errorf("update %s: %w", e.Record, ErrPlanChanged))
+				break
+			}
 			pr, err := a.P.UpdateRecord(ctx, plan.Zone, e.Existing.ID, e.Record)
 			if err != nil {
 				ae.Error = err.Error()
@@ -345,6 +487,55 @@ func (a *ProviderApplier) Apply(ctx context.Context, plan Plan) (ApplyResult, er
 		}
 	}
 	return res, errors.Join(errs...)
+}
+
+// validatePlan refuses a plan that Plan could not have produced for this
+// provider: foreign provider/zone, names outside the domain or the zone, or
+// updates whose existing record sits at another name or type.
+func (a *ProviderApplier) validatePlan(ctx context.Context, plan Plan) error {
+	bad := func(format string, args ...any) error {
+		return fmt.Errorf("%w: %s", ErrInvalidPlan, fmt.Sprintf(format, args...))
+	}
+	if plan.Provider != a.P.Name() {
+		return bad("provider %q is not %q", plan.Provider, a.P.Name())
+	}
+	if err := ValidateHost(plan.Domain); err != nil {
+		return bad("domain: %v", err)
+	}
+	zn := strings.ToLower(plan.Zone.Name)
+	if plan.Zone.ID == "" || zn == "" || (plan.Domain != zn && !strings.HasSuffix(plan.Domain, "."+zn)) {
+		return bad("zone %q does not contain domain %q", plan.Zone.Name, plan.Domain)
+	}
+	live, err := a.P.FindZone(ctx, plan.Domain)
+	if err != nil {
+		return err
+	}
+	if live.ID != plan.Zone.ID {
+		return bad("zone %q is not the zone of %q", plan.Zone.ID, plan.Domain)
+	}
+	for i, e := range plan.Entries {
+		if err := e.Record.Validate(); err != nil {
+			return bad("entries[%d]: %v", i, err)
+		}
+		if e.Record.Name != plan.Domain && !strings.HasSuffix(e.Record.Name, "."+plan.Domain) {
+			return bad("entries[%d]: name %q is outside domain %q", i, e.Record.Name, plan.Domain)
+		}
+		switch e.Action {
+		case ActionCreate, ActionNoop, ActionUpdate:
+		default:
+			return bad("entries[%d]: unknown action %q", i, e.Action)
+		}
+		if e.Action == ActionUpdate && (e.Existing == nil || e.Existing.ID == "") {
+			return bad("entries[%d]: update without an existing record id", i)
+		}
+		if e.Existing != nil {
+			ex := e.Existing.Record()
+			if ex.Name != e.Record.Name || ex.Type != e.Record.Type {
+				return bad("entries[%d]: existing record %s %s does not match %s %s", i, ex.Type, ex.Name, e.Record.Type, e.Record.Name)
+			}
+		}
+	}
+	return nil
 }
 
 func findSame(rec Record, cur []ProviderRecord) *ProviderRecord {

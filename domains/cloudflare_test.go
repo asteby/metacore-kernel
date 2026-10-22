@@ -36,7 +36,7 @@ func newCF(t *testing.T) *cfFake {
 }
 
 func (f *cfFake) provider() *Cloudflare {
-	return NewCloudflare(cfToken, WithCloudflareBaseURL(f.srv.URL))
+	return NewCloudflare(cfToken, withCloudflareBaseURL(f.srv.URL))
 }
 
 func (f *cfFake) write(w http.ResponseWriter, code int, result any, info map[string]any) {
@@ -122,6 +122,9 @@ func (f *cfFake) handle(w http.ResponseWriter, r *http.Request) {
 			f.recs[zone] = append(f.recs[zone], in)
 			f.write(w, 200, in, nil)
 		case r.Method == http.MethodPut:
+			// The applier must never PUT (it would reset comment/tags/proxied).
+			f.write(w, 405, nil, nil)
+		case r.Method == http.MethodPatch:
 			id := strings.TrimPrefix(rest, "/")
 			var in cfRecord
 			b, _ := io.ReadAll(r.Body)
@@ -129,9 +132,20 @@ func (f *cfFake) handle(w http.ResponseWriter, r *http.Request) {
 			f.bodies = append(f.bodies, in)
 			for i := range f.recs[zone] {
 				if f.recs[zone][i].ID == id {
+					old := f.recs[zone][i]
 					in.ID = id
 					if in.Type == "TXT" {
 						in.Content = `"` + in.Content + `"`
+					}
+					// PATCH semantics: omitted fields keep their stored value.
+					if in.Proxied == nil {
+						in.Proxied = old.Proxied
+					}
+					if in.Comment == "" {
+						in.Comment = old.Comment
+					}
+					if in.Tags == nil {
+						in.Tags = old.Tags
 					}
 					f.recs[zone][i] = in
 					f.write(w, 200, in, nil)
@@ -230,7 +244,7 @@ func TestCloudflare_ZoneNotFoundAndAuth(t *testing.T) {
 	if _, err := p.FindZone(context.Background(), "nothere.org"); !errors.Is(err, ErrZoneNotFound) {
 		t.Fatalf("zone: %v", err)
 	}
-	bad := NewCloudflare("wrong-token", WithCloudflareBaseURL(f.srv.URL))
+	bad := NewCloudflare("wrong-token", withCloudflareBaseURL(f.srv.URL))
 	_, err := bad.FindZone(context.Background(), "example.com")
 	if !errors.Is(err, ErrProviderAuth) {
 		t.Fatalf("auth: %v", err)
@@ -244,7 +258,7 @@ func TestCloudflare_ZoneNotFoundAndAuth(t *testing.T) {
 	if err := p.Verify(context.Background()); err != nil {
 		t.Fatalf("verify ok: %v", err)
 	}
-	if _, err := NewCloudflare("", WithCloudflareBaseURL(f.srv.URL)).FindZone(context.Background(), "example.com"); !errors.Is(err, ErrProviderAuth) {
+	if _, err := NewCloudflare("", withCloudflareBaseURL(f.srv.URL)).FindZone(context.Background(), "example.com"); !errors.Is(err, ErrProviderAuth) {
 		t.Fatalf("empty token: %v", err)
 	}
 }
@@ -280,5 +294,41 @@ func TestCloudflare_UpdateRequiresID(t *testing.T) {
 	f := newCF(t)
 	if _, err := f.provider().UpdateRecord(context.Background(), Zone{ID: "zone-1"}, "", Record{}); err == nil {
 		t.Fatal("empty id")
+	}
+}
+
+func TestCloudflare_UpdatePreservesCommentTagsAndProxied(t *testing.T) {
+	f := newCF(t)
+	yes := true
+	f.recs["zone-1"] = []cfRecord{{ID: "h", Type: "CNAME", Name: "mail.example.com", Content: "old.target.net", TTL: 1, Proxied: &yes, Comment: "owned by ops", Tags: []string{"team:infra"}}}
+	a := NewProviderApplier(f.provider())
+	set := RecordSet{Domain: "example.com", Records: []Record{{Type: TypeCNAME, Name: "mail.example.com", Value: "new.target.net"}}}
+	plan, err := a.Plan(context.Background(), set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := plan.Entries[0]
+	if e.Action != ActionUpdate || e.Existing.Comment != "owned by ops" || e.Existing.Proxied == nil || !*e.Existing.Proxied || !hasWarn(e, DiagProxiedExisting) {
+		t.Fatalf("plan must show preserved metadata and warn about proxied: %+v", e)
+	}
+	if res, err := a.Apply(context.Background(), plan); err != nil || res.Updated != 1 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	got := f.recs["zone-1"][0]
+	if got.Content != "new.target.net" || got.Comment != "owned by ops" || len(got.Tags) != 1 || got.Proxied == nil || !*got.Proxied {
+		t.Fatalf("comment/tags/proxied must survive the update: %+v", got)
+	}
+	last := f.bodies[len(f.bodies)-1]
+	if last.Proxied != nil || last.Comment != "" || last.Tags != nil {
+		t.Fatalf("PATCH body must not carry preserved fields: %+v", last)
+	}
+	// The preserved metadata is part of the fingerprint.
+	other := plan
+	other.Entries = append([]PlanEntry(nil), plan.Entries...)
+	ex := *other.Entries[0].Existing
+	ex.Comment = "changed"
+	other.Entries[0].Existing = &ex
+	if other.Fingerprint() == plan.Fingerprint() {
+		t.Fatal("fingerprint must cover comment")
 	}
 }
