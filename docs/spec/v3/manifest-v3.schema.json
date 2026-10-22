@@ -512,6 +512,14 @@
         },
         "ingress": {
           "$ref": "#/$defs/NativeIngress"
+        },
+        "listeners": {
+          "type": "array",
+          "maxItems": 16,
+          "description": "Public TCP ports the service asks the host to expose (independent of `ingress`, which is HTTP only). The sidecar binds the supervisor-assigned unix socket in METACORE_NATIVE_LISTENER_<NAME>, never the public port. The host may refuse a port (conflicts, policy, sensitive ports).",
+          "items": {
+            "$ref": "#/$defs/NativeListener"
+          }
         }
       }
     },
@@ -636,22 +644,13 @@
       "required": [
         "kind"
       ],
-      "description": "Optional public ingress. kind=http: the sidecar serves plain HTTP/1.1 on a third supervisor-assigned unix socket; the host decides which public hosts route to it. kind=tcp: only `listeners` (public TCP ports the host forwards to loopback addresses it assigns). listeners may also accompany kind=http.",
+      "description": "Optional public HTTP ingress. The sidecar serves plain HTTP/1.1 on a third supervisor-assigned unix socket; the host decides which public hosts route to it.",
       "properties": {
         "kind": {
           "type": "string",
           "enum": [
-            "http",
-            "tcp"
+            "http"
           ]
-        },
-        "listeners": {
-          "type": "array",
-          "maxItems": 16,
-          "description": "Public TCP ports the service asks the host to expose. The sidecar binds the supervisor-assigned loopback address in METACORE_NATIVE_LISTENER_<NAME>, never the public port. The host may refuse a port (conflicts, policy).",
-          "items": {
-            "$ref": "#/$defs/NativeListener"
-          }
         },
         "path_prefix": {
           "type": "string",

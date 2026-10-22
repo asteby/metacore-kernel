@@ -56,7 +56,7 @@ func TestSetupExampleIsValidAndStrict(t *testing.T) {
 	if !parsed.Settings[1].WriteOnly || parsed.Settings[1].VisibleWhen == nil || parsed.Settings[1].VisibleWhen.Field != "dns_mode" {
 		t.Fatalf("setting extras not decoded: %+v", parsed.Settings[1])
 	}
-	if l := parsed.Runtime.NativeService.Ingress.Listeners; len(l) != 3 || l[0].ProxyProtocol != "v2" {
+	if l := parsed.Runtime.NativeService.Listeners; len(l) != 3 || l[0].ProxyProtocol != "v2" {
 		t.Fatalf("listeners not decoded: %+v", l)
 	}
 }

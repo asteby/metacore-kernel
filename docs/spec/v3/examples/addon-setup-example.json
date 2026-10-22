@@ -34,14 +34,11 @@
         "sbom": "backend/native/linux-amd64.spdx.json"
       }],
       "control": { "protocol": "metacore.native/v1", "transport": "unix_http" },
-      "ingress": {
-        "kind": "tcp",
-        "listeners": [
-          { "name": "smtp", "port": 25, "proxy_protocol": "v2" },
-          { "name": "submission", "port": 587, "proxy_protocol": "v2" },
-          { "name": "imaps", "port": 993, "proxy_protocol": "v2" }
-        ]
-      }
+      "listeners": [
+        { "name": "smtp", "port": 25, "proxy_protocol": "v2" },
+        { "name": "submission", "port": 587, "proxy_protocol": "v2" },
+        { "name": "imaps", "port": 993, "proxy_protocol": "v2" }
+      ]
     }
   },
   "settings": [

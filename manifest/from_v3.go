@@ -169,9 +169,9 @@ func FromV3(m *v3.Manifest) Manifest {
 		spec := *m.Runtime.NativeService
 		if spec.Ingress != nil {
 			ingress := *spec.Ingress
-			ingress.Listeners = append([]native.Listener(nil), ingress.Listeners...)
 			spec.Ingress = &ingress
 		}
+		spec.Listeners = append([]native.Listener(nil), spec.Listeners...)
 		out.NativeService = &spec
 	}
 	out.Connectors = mapConnectors(m.Connectors)

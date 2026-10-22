@@ -66,6 +66,10 @@ type Spec struct {
 	// the host. Nil means no public traffic ever reaches the sidecar. See
 	// ingress.go for the contract.
 	Ingress *Ingress `json:"ingress,omitempty"`
+	// Listeners are public TCP ports the host forwards to per-listener unix
+	// sockets (see listeners.go). Independent of Ingress, which is HTTP only:
+	// Ingress != nil always means "has HTTP ingress".
+	Listeners []Listener `json:"listeners,omitempty"`
 }
 
 // Control pins the local host↔sidecar protocol. The supervisor assigns the
@@ -179,6 +183,9 @@ func (s Spec) Validate() error {
 		if err := s.Ingress.Validate(); err != nil {
 			return err
 		}
+	}
+	if err := validateListeners(s.Listeners); err != nil {
+		return err
 	}
 	if len(s.Artifacts) == 0 {
 		return errors.New("native runtime: at least one artifact is required")

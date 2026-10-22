@@ -107,37 +107,44 @@ func TestValidateNativeServiceTCPListenersAndEgress(t *testing.T) {
 	}
 	ok := mk(func(ns map[string]interface{}) {
 		ns["network"] = map[string]interface{}{"egress": []interface{}{"*:25", "smtp.relay.example:587"}}
-		ns["ingress"] = map[string]interface{}{"kind": "tcp", "listeners": []interface{}{
+		ns["listeners"] = []interface{}{
 			map[string]interface{}{"name": "smtp", "port": 25, "proxy_protocol": "v2"},
 			map[string]interface{}{"name": "submission", "port": 587},
-		}}
+		}
 	})
 	if err := Validate(ok); err != nil {
-		t.Fatalf("expected valid tcp ingress + port wildcard egress: %v", err)
+		t.Fatalf("expected valid listeners + port wildcard egress: %v", err)
 	}
-	// http ingress may carry listeners too.
+	// listeners coexist with an HTTP ingress.
 	if err := Validate(mk(func(ns map[string]interface{}) {
-		ns["ingress"] = map[string]interface{}{"kind": "http", "listeners": []interface{}{map[string]interface{}{"name": "smtp", "port": 25}}}
+		ns["ingress"] = map[string]interface{}{"kind": "http"}
+		ns["listeners"] = []interface{}{map[string]interface{}{"name": "smtp", "port": 25}}
 	})); err != nil {
 		t.Fatalf("http+listeners: %v", err)
 	}
 	bad := map[string]func(ns map[string]interface{}){
-		"tcp without listeners": func(ns map[string]interface{}) { ns["ingress"] = map[string]interface{}{"kind": "tcp"} },
-		"tcp with path_prefix": func(ns map[string]interface{}) {
-			ns["ingress"] = map[string]interface{}{"kind": "tcp", "path_prefix": "/x", "listeners": []interface{}{map[string]interface{}{"name": "a", "port": 25}}}
+		"tcp ingress kind": func(ns map[string]interface{}) { ns["ingress"] = map[string]interface{}{"kind": "tcp"} },
+		"listeners inside ingress": func(ns map[string]interface{}) {
+			ns["ingress"] = map[string]interface{}{"kind": "http", "listeners": []interface{}{map[string]interface{}{"name": "a", "port": 25}}}
+		},
+		"forbidden port ssh": func(ns map[string]interface{}) {
+			ns["listeners"] = []interface{}{map[string]interface{}{"name": "a", "port": 22}}
+		},
+		"ip literal egress": func(ns map[string]interface{}) {
+			ns["network"] = map[string]interface{}{"egress": []interface{}{"169.254.169.254:80"}}
 		},
 		"port zero": func(ns map[string]interface{}) {
-			ns["ingress"] = map[string]interface{}{"kind": "tcp", "listeners": []interface{}{map[string]interface{}{"name": "a", "port": 0}}}
+			ns["listeners"] = []interface{}{map[string]interface{}{"name": "a", "port": 0}}
 		},
 		"bad proxy_protocol": func(ns map[string]interface{}) {
-			ns["ingress"] = map[string]interface{}{"kind": "tcp", "listeners": []interface{}{map[string]interface{}{"name": "a", "port": 25, "proxy_protocol": "v3"}}}
+			ns["listeners"] = []interface{}{map[string]interface{}{"name": "a", "port": 25, "proxy_protocol": "v3"}}
 		},
 		"duplicate port": func(ns map[string]interface{}) {
-			ns["ingress"] = map[string]interface{}{"kind": "tcp", "listeners": []interface{}{
-				map[string]interface{}{"name": "a", "port": 25}, map[string]interface{}{"name": "b", "port": 25}}}
+			ns["listeners"] = []interface{}{
+				map[string]interface{}{"name": "a", "port": 25}, map[string]interface{}{"name": "b", "port": 25}}
 		},
 		"unknown listener field": func(ns map[string]interface{}) {
-			ns["ingress"] = map[string]interface{}{"kind": "tcp", "listeners": []interface{}{map[string]interface{}{"name": "a", "port": 25, "bind": "0.0.0.0"}}}
+			ns["listeners"] = []interface{}{map[string]interface{}{"name": "a", "port": 25, "bind": "0.0.0.0"}}
 		},
 		"bare wildcard egress": func(ns map[string]interface{}) { ns["network"] = map[string]interface{}{"egress": []interface{}{"*"}} },
 		"wildcard on web port": func(ns map[string]interface{}) {

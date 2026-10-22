@@ -38,7 +38,7 @@ func TestFromV3ProjectsSetupHealthAndSettingExtras(t *testing.T) {
 	if cr := out.Connectors[0].Credentials[1]; !cr.WriteOnly {
 		t.Fatalf("credential write_only not projected: %+v", cr)
 	}
-	if l := out.NativeService.Ingress.Listeners; len(l) != 3 || l[2].Name != "imaps" {
+	if l := out.NativeService.Listeners; len(l) != 3 || l[2].Name != "imaps" {
 		t.Fatalf("listeners not projected: %+v", l)
 	}
 }
@@ -91,7 +91,7 @@ func TestLegacyValidateRejectsBadSetup(t *testing.T) {
 		{"health bad every", func(m *manifest.Manifest) { m.Health.Every = "1s" }, "health.every"},
 		{"visible_when unknown sibling", func(m *manifest.Manifest) { m.Settings[1].VisibleWhen.Field = "ghost" }, "not a sibling"},
 		{"write_only with default", func(m *manifest.Manifest) { m.Settings[1].DefaultValue = "x" }, "write_only"},
-		{"listener duplicate port", func(m *manifest.Manifest) { m.NativeService.Ingress.Listeners[1].Port = 25 }, "duplicate"},
+		{"listener duplicate port", func(m *manifest.Manifest) { m.NativeService.Listeners[1].Port = 25 }, "duplicate"},
 		{"wildcard egress on web port", func(m *manifest.Manifest) { m.NativeService.Network.Egress = []string{"*:443"} }, "egress"},
 	}
 	for _, c := range cases {

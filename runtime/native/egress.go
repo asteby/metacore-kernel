@@ -1,9 +1,15 @@
 package native
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/netip"
 	"strconv"
 	"strings"
+
+	"github.com/asteby/metacore-kernel/netguard"
 )
 
 // Egress policy.
@@ -30,6 +36,23 @@ import (
 //     still refuse loopback, private, link-local and metadata destinations
 //     (see package netguard) after resolving the name, exactly as for exact
 //     entries; "any host" means "any PUBLIC host".
+//
+// IP literals ("10.0.0.5", "169.254.169.254:25", "[::1]:25") and "localhost"
+// (or *.localhost) are never valid hosts in ANY form: an entry names a public
+// DNS name, and the destination address is always judged after resolution.
+//
+// # Approval and enforcement obligations
+//
+// "*:<port>" is a broad grant: the addon can reach any public host on that
+// port, which is a data-exfiltration surface. The hub MUST require explicit
+// (human) approval of every manifest that carries a wildcard egress entry, and
+// ops MUST enforce NetworkPolicy before installing such an addon (for example
+// the mail addon) -- never rely on the addon being well behaved. Enforcers
+// should dial through NetworkPolicy.DialContext, which combines Allows with
+// the netguard SSRF guard (private, loopback, link-local and cloud-metadata
+// addresses such as 169.254.169.254 are refused after DNS resolution); a
+// network-namespace / firewall rule is the defence in depth for sidecars that
+// open sockets on their own.
 //
 // NetworkPolicy.Allows is the reference decision function hosts should use so
 // every enforcer interprets the grammar the same way.
@@ -65,6 +88,9 @@ func ParseEgress(target string) (EgressRule, error) {
 		return EgressRule{}, fmt.Errorf("must be an exact hostname, hostname:port or *:port")
 	}
 	host, portStr, hasPort := strings.Cut(target, ":")
+	if strings.HasPrefix(host, "[") || strings.HasSuffix(host, "]") {
+		return EgressRule{}, fmt.Errorf("%q: IP literals are not allowed, use a hostname", target)
+	}
 	if strings.Contains(portStr, ":") {
 		return EgressRule{}, fmt.Errorf("%q: IPv6 literals and extra ':' are not supported", target)
 	}
@@ -92,8 +118,36 @@ func ParseEgress(target string) (EgressRule, error) {
 	if host == "" {
 		return EgressRule{}, fmt.Errorf("%q: hostname is empty", target)
 	}
+	if err := rejectIPOrLocalHost(target, host); err != nil {
+		return EgressRule{}, err
+	}
 	rule.Host = strings.ToLower(host)
 	return rule, nil
+}
+
+// rejectIPOrLocalHost refuses IP literals (including decimal/hex/octal-looking
+// IPv4 forms whose last label is numeric) and localhost names.
+func rejectIPOrLocalHost(target, host string) error {
+	h := strings.ToLower(strings.TrimSuffix(host, "."))
+	if _, err := netip.ParseAddr(h); err == nil {
+		return fmt.Errorf("%q: IP literals are not allowed, use a hostname", target)
+	}
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return fmt.Errorf("%q: localhost is not a valid egress destination", target)
+	}
+	last := h[strings.LastIndexByte(h, '.')+1:]
+	numeric := last != ""
+	for _, c := range last {
+		if !(c >= '0' && c <= '9') && !(c == 'x' || (c >= 'a' && c <= 'f')) {
+			numeric = false
+			break
+		}
+	}
+	// A TLD is never all digits; "0x7f.1", "2130706433" are IPv4 spellings.
+	if numeric && (last[0] >= '0' && last[0] <= '9') {
+		return fmt.Errorf("%q: numeric hosts are not allowed, use a hostname", target)
+	}
+	return nil
 }
 
 func wildcardPortAllowed(p int) bool {
@@ -123,4 +177,39 @@ func (n NetworkPolicy) Allows(host string, port int) bool {
 		}
 	}
 	return false
+}
+
+// ErrEgressDenied is returned by DialContext when the policy does not admit
+// the destination.
+var ErrEgressDenied = errors.New("native runtime: egress destination not allowed by network policy")
+
+// DialContext is the reference enforcement point: it dials address only if
+// the policy Allows the (hostname, port) pair AND the resolved address passes
+// the netguard SSRF guard (netguard.ErrBlockedEgress for loopback, private,
+// link-local, CGNAT and cloud-metadata addresses such as 169.254.169.254).
+// Only tcp networks and hostnames are admitted: an IP-literal destination is
+// refused outright. Wire it as http.Transport.DialContext or hand it to any
+// client that opens connections on behalf of the sidecar.
+func (n NetworkPolicy) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	switch network {
+	case "tcp", "tcp4", "tcp6":
+	default:
+		return nil, fmt.Errorf("%w: network %q", ErrEgressDenied, network)
+	}
+	host, portStr, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEgressDenied, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, fmt.Errorf("%w: bad port", ErrEgressDenied)
+	}
+	if rejectIPOrLocalHost(address, host) != nil {
+		return nil, fmt.Errorf("%w: %s", ErrEgressDenied, host)
+	}
+	if !n.Allows(host, port) {
+		return nil, fmt.Errorf("%w: %s:%d", ErrEgressDenied, host, port)
+	}
+	d := net.Dialer{Control: netguard.DialControl}
+	return d.DialContext(ctx, network, address)
 }
