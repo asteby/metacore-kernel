@@ -188,32 +188,45 @@ Some services speak a non-HTTP protocol straight to the internet (a mail server
 on 25/465/587/993). Two additive extensions of the same contract cover them;
 nothing changes for specs that do not use them.
 
-### `ingress.listeners` (kind `tcp`, or alongside `http`)
+### `listeners` (on the spec, NOT inside `ingress`)
 
 ```json
-"ingress": { "kind": "tcp", "listeners": [
+"listeners": [
   { "name": "smtp", "port": 25, "proxy_protocol": "v2" },
   { "name": "submission", "port": 587, "proxy_protocol": "v2" },
-  { "name": "imaps", "port": 993, "proxy_protocol": "v2" } ] }
+  { "name": "imaps", "port": 993, "proxy_protocol": "v2" } ]
 ```
 
-- `kind: "tcp"` carries only listeners (no `path_prefix`/`max_body_bytes`/
-  `timeout`, at least one listener). `kind: "http"` may also carry them; only an
-  http ingress is mounted behind `IngressProxy` (`Ingress.HTTPEnabled()`).
+- `Spec.Listeners` sits next to `Spec.Ingress`. `Ingress` stays HTTP-only
+  (`kind: "http"`), comparable with `==`, and `Spec.Ingress != nil` keeps
+  meaning "this service has HTTP ingress" (ops relies on both). A mail service
+  has `Ingress == nil` and `Listeners` set.
 - `name` `^[a-z][a-z0-9_]{0,31}$`, `port` is the PUBLIC TCP port (1-65535),
   unique per service; at most 16. `proxy_protocol`: `""`, `"v1"` or `"v2"`.
-- **The sidecar never binds the public port.** The supervisor assigns each
-  listener a loopback address and exports it as
-  `METACORE_NATIVE_LISTENER_<NAME>` (`native.ListenerEnv(name)`, reserved like
-  the other env vars); a host-side L4 forwarder (systemd socket, nftables
-  redirect, userspace proxy) maps the public port to it. This is what lets a
-  rootless sidecar serve port 25.
+- **Forbidden public ports** (`native.ForbiddenListenerPorts`): 21, 22, 23, 53,
+  80, 111, 135, 139, 443, 445, 2049, 2375, 2376, 2379, 2380, 3306, 3389, 5432,
+  5984, 6379, 6443, 8080, 8443, 9200, 10250, 11211, 27017. Mail ports are not
+  in the list.
+- **Collisions between addons**: `native.ListenerRegistry` (`Claim(owner,
+  listeners)` / `Release(owner)`) refuses a public port already claimed by
+  another owner, atomically; the supervisor must `Claim` before opening
+  anything.
+- **The sidecar never binds the public port, nor any TCP port.** The supervisor
+  assigns each listener a UNIX SOCKET in the same host-private service
+  directory (and with the same owner/mode) as the control and ingress sockets,
+  and exports its path as `METACORE_NATIVE_LISTENER_<NAME>`
+  (`native.ListenerEnv(name)`, reserved like the other env vars). A host-side
+  L4 forwarder (systemd socket, userspace proxy) accepts on the public port and
+  pipes into that socket. A shared loopback port is NOT used: any local process
+  or other addon could connect to it and forge a PROXY header, spoofing client
+  addresses (SPF/greylist/abuse decisions). Rootless sidecars still serve
+  port 25 because they never bind it.
 - With `proxy_protocol` the forwarder prepends a HAProxy PROXY header so the
-  sidecar sees the real client address (SPF, greylisting, abuse). The listener
-  must then be reachable only from the forwarder (loopback).
-- **The host may refuse a port.** Conflicts with another service on the machine,
-  firewall policy and tenant limits are host decisions: refuse the install or
-  mark the service blocked; never rebind or stop a foreign service.
+  sidecar sees the real client address. Because only the supervisor user can
+  reach the unix socket, the header can be trusted.
+- **The host may refuse a port.** Conflicts, firewall policy and tenant limits
+  are host decisions: refuse the install or mark the service blocked; never
+  rebind or stop a foreign service.
 
 ### `network.egress` grammar
 
@@ -224,7 +237,9 @@ nothing changes for specs that do not use them.
 | `*:<port>` | any PUBLIC host on one port, **only** `25 110 143 465 587 993 995` |
 
 Everything else stays forbidden: a bare `*`, `*.example.com`, `mail.*`,
-`*:443`, `*:*`, ranges and CIDR (`ParseEgress` returns the reason). The
+`*:443`, `*:*`, ranges and CIDR (`ParseEgress` returns the reason). **IP
+literals** (`10.0.0.5`, `169.254.169.254:25`, `[::1]:25`, numeric spellings such
+as `2130706433`) and `localhost`/`*.localhost` are rejected in every form. The
 wildcard exists because MX delivery and tenant-configured IMAP/SMTP servers have
 destinations that cannot be enumerated in a signed manifest; the closed port
 list (`WildcardEgressPorts`) keeps it from becoming "reach anything". Widening
@@ -234,7 +249,16 @@ it is a kernel release.
 still refuse loopback, private, link-local, CGNAT and metadata addresses
 (`netguard.IsBlockedIP`) on the address the socket actually connects to.
 `NetworkPolicy.Allows(host, port)` is the reference decision function for the
-manifest grammar.
+manifest grammar. `NetworkPolicy.DialContext` combines `Allows` with the netguard
+dialer (private, loopback, link-local and metadata `169.254.169.254` are refused
+after resolution; IP-literal destinations and non-tcp networks are denied):
+enforcers should dial through it.
+
+**`*:<port>` needs explicit hub approval.** It lets the addon reach any public
+host on that port, i.e. a data-exfiltration surface. The hub must require a
+human approval of any manifest carrying a wildcard egress entry, and ops must
+enforce `NetworkPolicy` (`DialContext`, plus a netns/firewall rule for sidecars
+that open sockets on their own) BEFORE installing the mail addon.
 
 ## Delivery sequence
 
@@ -254,9 +278,10 @@ manifest grammar.
 13. Complete: ingress plane contract and reusable `IngressProxy` — kernel side.
 14. Ops: assign `EnvIngressSocket`, map verified hosts to services, mount the
     proxy behind TLS.
-15. Complete (kernel): TCP `ingress.listeners` + port-scoped egress contract.
-16. Ops: L4 forwarder for listeners (`METACORE_NATIVE_LISTENER_<NAME>`, PROXY
-    protocol), port-conflict admission, egress enforcement with `Allows` + SSRF.
+15. Complete (kernel): `Spec.Listeners` + port-scoped egress contract.
+16. Ops: L4 forwarder for listeners (per-listener unix socket
+    `METACORE_NATIVE_LISTENER_<NAME>`, PROXY protocol), `ListenerRegistry`
+    admission, egress enforcement with `NetworkPolicy.DialContext`.
 
 ## Non-goals
 

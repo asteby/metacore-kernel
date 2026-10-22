@@ -179,6 +179,11 @@ func TestSetupValidation_Negative(t *testing.T) {
 		{"write_only with default", func(m jm) {
 			m["settings"].([]interface{})[1].(jm)["default"] = "hunter2"
 		}, "write_only cannot declare a default"},
+		{"secret with default", func(m jm) {
+			x := m["settings"].([]interface{})[1].(jm)
+			x["type"], x["default"] = "secret", "hunter2"
+			delete(x, "write_only")
+		}, "secret cannot declare a default"},
 		{"credential visible_when unknown", func(m jm) {
 			cr := m["connectors"].([]interface{})[0].(jm)["credentials"].([]interface{})
 			cr[1].(jm)["visible_when"] = jm{"field": "ghost", "equals": "x"}

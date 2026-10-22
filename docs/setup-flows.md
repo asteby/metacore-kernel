@@ -117,17 +117,32 @@ cuando aún no hay resultado o la sonda falló.
 ## Ejecutor
 
 ```go
-exec := &setupflow.Executor{Invoker: hostInvoker}   // Invoker despacha wasm/native con el principal
+exec := &setupflow.Executor{
+    Invoker: hostInvoker,                       // despacha wasm/native con el principal
+    BaseContext: func(r setupflow.Request) context.Context { // ctx del handler, SOLO desde el request
+        return hostAuthContext(r.Principal)     // vida independiente: el executor pone el timeout
+    },
+}
 res, err := exec.Run(ctx, *step.Check, setupflow.Request{
-    AddonKey: "mailer", FlowKey: "main", StepKey: "dns_check",
+    AddonKey: "mailer", FlowKey: "main", StepKey: "dns_check", Scope: flow.Scope,
     Handler: step.Check.Handler, Principal: setupflow.Principal{UserID: u, OrgID: o, Roles: roles},
 })
 res, err = exec.Poll(ctx, *step.Check, req, func(attempt int, r setupflow.CheckResult) { /* persistir */ })
 ```
 
-- **Principal del usuario**: obligatorio (`ErrNoPrincipal`). El check corre con
-  lo que ese usuario puede hacer, no con una cuenta de servicio del host.
-- **Timeout** por ejecución (`ErrTimeout`), aunque el handler ignore su contexto.
+- **Principal del usuario**: obligatorio (`ErrNoPrincipal`), y `OrgID` también
+  cuando el flujo es de scope `org` (`Request.Scope` vacío u `org`); solo un
+  flujo `instance` corre sin organización. El check corre con lo que ese usuario
+  puede hacer, no con una cuenta de servicio del host.
+- **Contexto del handler**: la ejecución es compartida y sobrevive a cada
+  llamador, así que NUNCA hereda el `ctx` de la petición (ni sus valores de
+  auth, transacciones o deadlines). Se construye con `Executor.BaseContext(req)`
+  (solo desde el principal) o, sin él, `context.Background()`; el executor añade
+  el timeout.
+- **Timeout** por ejecución (`ErrTimeout`), aunque el handler ignore su contexto:
+  al vencer se libera el slot en vuelo y la siguiente corrida arranca limpia (la
+  goroutine colgada se descarta al volver; hasta `MaxAbandoned`=64 abandonadas,
+  después `ErrBusy`).
 - **Dedupe**: ejecuciones concurrentes de la misma `(org, addon, flow, step,
   usuario)` comparten **una** sola corrida; un llamador que cancela no aborta a
   los demás. Usuarios distintos nunca comparten resultado.

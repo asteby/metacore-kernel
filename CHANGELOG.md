@@ -7,6 +7,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed (incompatible, solo respecto a la propia ola 0 aun sin release)
+
+Nada de esto afecta a manifests ni hosts publicados antes de la ola 0:
+
+- `ingress` NO lleva `listeners` ni `kind: "tcp"` (se retiraron antes de
+  publicarse): los listeners son `Spec.Listeners`. `native.Ingress` sigue siendo
+  comparable con `==` y `Ingress != nil` sigue significando HTTP.
+- `wasm.DNSAuthorizeFunc` pasa de `(ctx, org, addon, name)` a
+  `(ctx, DNSAuthRequest)`.
+- `ParseEgress`/`Spec.Validate` ahora rechazan IP literales y `localhost` en
+  `network.egress` (antes un `10.0.0.5` o `localhost:25` pasaba la validacion).
+- `domains.WithCloudflareBaseURL` ya no existe (solo tests del paquete);
+  `Cloudflare.UpdateRecord` usa PATCH (no PUT) y no toca comment/tags/proxied.
+- `ProviderApplier.Apply` rechaza planes ajenos (`ErrInvalidPlan`) y falla un
+  update si el registro cambio (`ErrPlanChanged`); `Plan.Fingerprint()` cambia
+  de valor (incluye TTL/Unique/Match/Needle y metadatos del existente).
+  Un TXT `Unique` ya no reemplaza TXT ajenos y el SPF se fusiona.
+- `setupflow.Executor` ya no hereda el contexto del llamador (usar
+  `BaseContext`), `Request.Scope` y `OrgID` son obligatorios en flujos de org;
+  `Principal` incompleto = `ErrNoPrincipal`.
+- Un setting/credential `type: "secret"` con `default` se rechaza en los dos
+  validadores (antes se aceptaba y el default viajaba en el manifest firmado).
+
 ### Added
 
 - **Ola 0 de plataforma para el addon de correo (UNA release de schema, todo
@@ -26,12 +49,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     warn|error|blocked, `message_key`, `params`, `detail`, `retry_after_s`,
     `fix`), `HealthResult`, ejecutor de checks (principal del usuario, timeout,
     poll con backoff, dedupe de ejecuciones concurrentes) y `Plan`.
-  - **Native services**: `ingress.kind: "tcp"` + `ingress.listeners[]`
-    (`name`, `port`, `proxy_protocol` v1|v2; el sidecar liga la dirección que
-    asigna el supervisor en `METACORE_NATIVE_LISTENER_<NAME>`) y egress por
-    patrón de puerto `*:25`, `host:587` (comodín de host solo con puerto y solo
-    en 25/110/143/465/587/993/995; `NetworkPolicy.Allows`, `ParseEgress`). El
-    comodín no levanta el SSRF guard. Ver `docs/rfcs/002-native-service-runtime.md`.
+  - **Native services**: `runtime.native_service.listeners[]`
+    (`Spec.Listeners`: `name`, `port`, `proxy_protocol` v1|v2; FUERA de
+    `ingress`, que sigue siendo solo HTTP y comparable con `==`; el sidecar
+    escucha el socket unix por listener que asigna el supervisor en
+    `METACORE_NATIVE_LISTENER_<NAME>`; puertos sensibles prohibidos
+    `ForbiddenListenerPorts`; `ListenerRegistry` detecta colisiones entre
+    addons) y egress por patrón de puerto `*:25`, `host:587` (comodín de host
+    solo con puerto y solo en 25/110/143/465/587/993/995; IP literales y
+    `localhost` rechazados; `NetworkPolicy.Allows`, `ParseEgress`,
+    `NetworkPolicy.DialContext` con netguard). `*:<port>` exige aprobación
+    explícita del hub y que ops lo aplique antes de instalar el addon de correo.
+    Ver `docs/rfcs/002-native-service-runtime.md`.
   - **Capability `domain:manage`** (target = propósito del dominio) con
     `Capabilities.CanManageDomain`.
   - **Paquete `domains`**: `OrgDomain` genérico (host, purposes, verify_token,
@@ -44,6 +73,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - **ABI wasm 1.17 `dns_resolve`** (import nuevo, aditivo): consulta DNS de
     solo lectura de un dominio de la organización; exige `domain:manage` y la
     política `Host.WithDNS(resolver, authorize)` (cerrado por defecto).
+    `DNSAuthorizeFunc(ctx, DNSAuthRequest)` recibe `CanManage(purpose)`;
+    autorizador de referencia `wasm.NewOrgDomainDNSAuthorizer` (dominio
+    pendiente = solo `TXT _asteby-verify.<host>`, sufijos/IP prohibidos),
+    presupuesto por organización (`WithDNSOrgLimit`) cobrado antes de autorizar,
+    errores genéricos hacia el guest y `domains.NewPublicResolver()` como
+    resolvedor recomendado.
   - **Contrato de capability `messaging.email.send`** (acción, patrón de
     `messaging.whatsapp.send`; entrada tipada con `idempotency_key`).
 

@@ -592,6 +592,9 @@ func validateSettingExtras(where string, list []Setting) []string {
 		if s.WriteOnly && s.Default != nil {
 			errs = append(errs, w+".write_only cannot declare a default (it would be served back)")
 		}
+		if s.Type == "secret" && s.Default != nil {
+			errs = append(errs, w+".secret cannot declare a default (a secret is write-only and a default would ship in the signed manifest)")
+		}
 		vw := s.VisibleWhen
 		if vw == nil {
 			continue

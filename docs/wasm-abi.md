@@ -2666,13 +2666,26 @@ guest must never treat it as "the record does not exist".
 **Gates**, all required:
 
 1. The addon declares a `domain:manage` capability (`Capabilities.CanResolveDNS`).
-2. The embedder wires `Host.WithDNS(resolver, authorize)`. `authorize(ctx, orgID, addonKey, name)`
+2. The embedder wires `Host.WithDNS(resolver, authorize)`. `authorize(ctx, DNSAuthRequest{OrgID, AddonKey, Name, Type, CanManage})`
    must return nil only when `name` equals or is under a domain of the invoking
-   organization whose purposes the addon may manage. Without `authorize` the
-   import answers `forbidden` (an unscoped resolver would be an open DNS oracle);
-   without a resolver, `dns_unavailable`.
+   organization AND the addon holds `domain:manage` for one of that domain's
+   purposes (`CanManage(purpose)`). `wasm.NewOrgDomainDNSAuthorizer` is the
+   reference policy: it also denies IP literals and private/special-use suffixes
+   (`.local`, `.internal`, `.arpa`, `cluster.local`, ...) and, while a domain is
+   pending, allows only `TXT _asteby-verify.<host>`. Without `authorize` the
+   import answers `forbidden` (an unscoped resolver would be an open DNS oracle
+   and a data-exfiltration channel via query names); without a resolver,
+   `dns_unavailable`.
+
+**Budgets** are charged BEFORE authorization (denied calls count): 64 per
+invocation and `DefaultDNSOrgLimit` per organization per `DefaultDNSOrgWindow`
+(`Host.WithDNSOrgLimit`). **Error messages are generic**: the guest never sees
+the authorizer's or resolver's error text (it goes to the audit log).
+
+**Resolver:** pass a PUBLIC recursive resolver (`domains.NewPublicResolver()`),
+not the system one, which may answer internal names.
 
 **Errors:** `invalid_request`, `no_active_org`, `forbidden`, `dns_unavailable`,
-`dns_lookup_failed`, `rate_limited` (64 lookups per invocation; 5 s per lookup).
+`dns_lookup_failed`, `rate_limited` (64 lookups per invocation, plus the per-organization budget; 5 s per lookup).
 Implementation: `runtime/wasm/dnsresolve.go`; resolver interface and the
 record logic: package `domains` (docs/org-domains.md).

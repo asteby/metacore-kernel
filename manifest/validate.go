@@ -2125,13 +2125,17 @@ func (m *Manifest) validateSetup() error {
 	}
 	settings := make([]v3.Setting, 0, len(m.Settings))
 	for _, s := range m.Settings {
-		settings = append(settings, v3.Setting{Key: s.Key, Default: s.DefaultValue, VisibleWhen: s.VisibleWhen, WriteOnly: s.WriteOnly})
+		settings = append(settings, v3.Setting{Key: s.Key, Type: s.Type, Default: s.DefaultValue, VisibleWhen: s.VisibleWhen, WriteOnly: s.WriteOnly})
 	}
 	errs = append(errs, v3.ValidateSettingExtras("settings", settings)...)
 	for ci, c := range m.Connectors {
 		creds := make([]v3.Setting, 0, len(c.Credentials))
 		for _, cr := range c.Credentials {
-			creds = append(creds, v3.Setting{Key: cr.Key, Default: cr.Default, VisibleWhen: cr.VisibleWhen, WriteOnly: cr.WriteOnly})
+			typ := ""
+			if cr.Secret {
+				typ = "secret"
+			}
+			creds = append(creds, v3.Setting{Key: cr.Key, Type: typ, Default: cr.Default, VisibleWhen: cr.VisibleWhen, WriteOnly: cr.WriteOnly})
 		}
 		errs = append(errs, v3.ValidateSettingExtras(fmt.Sprintf("connectors[%d].credentials", ci), creds)...)
 	}
