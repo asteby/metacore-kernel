@@ -7,17 +7,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Changed (incompatible, solo respecto a la propia ola 0 aun sin release)
+### Changed (incompatible)
 
-Nada de esto afecta a manifests ni hosts publicados antes de la ola 0:
+Validado con la herramienta de manifests contra los 93 manifests de
+`asteby/addons` `origin/main` (incluido `packages/storefront`, que declara
+`network.egress: ["localhost:8080","localhost:8787"]`) y contra
+`packages/mail`/`connector_email` del worktree del addon de correo: 0
+regresiones respecto a kernel main (resultados idénticos). Lo que SÍ puede
+afectar a un manifest o host fuera de ese conjunto:
 
 - `ingress` NO lleva `listeners` ni `kind: "tcp"` (se retiraron antes de
   publicarse): los listeners son `Spec.Listeners`. `native.Ingress` sigue siendo
   comparable con `==` y `Ingress != nil` sigue significando HTTP.
 - `wasm.DNSAuthorizeFunc` pasa de `(ctx, org, addon, name)` a
   `(ctx, DNSAuthRequest)`.
-- `ParseEgress`/`Spec.Validate` ahora rechazan IP literales y `localhost` en
-  `network.egress` (antes un `10.0.0.5` o `localhost:25` pasaba la validacion).
+- `ParseEgress`/`Spec.Validate` ahora aplican una gramatica estricta a
+  `network.egress`: etiquetas DNS ASCII, sin IP literales, sin `*.localhost`,
+  sin sufijos de uso especial (`.internal`, `.local`, `.arpa`, `.svc`, ...); un
+  punto final se normaliza. Se admiten `localhost:<puerto>` y `127.0.0.1:<puerto>`
+  EXACTOS como grants de servicio del host (los usa el manifest publicado del
+  storefront); `NetworkPolicy.DialContext` nunca marca loopback (netguard) y ops
+  decide si los honra (`NetworkPolicy.LoopbackGrants`).
+- `Spec.Listeners` solo admite puertos de correo por defecto
+  (`AllowedListenerPorts`: 25 110 143 465 587 993 995 4190); otro puerto exige
+  aprobacion del hub (`ValidateWithApprovedPorts`, `ListenerRegistry.ClaimApproved`).
 - `domains.WithCloudflareBaseURL` ya no existe (solo tests del paquete);
   `Cloudflare.UpdateRecord` usa PATCH (no PUT) y no toca comment/tags/proxied.
 - `ProviderApplier.Apply` rechaza planes ajenos (`ErrInvalidPlan`) y falla un

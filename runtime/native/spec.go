@@ -129,7 +129,12 @@ type SecretRef struct {
 	Mount  string `json:"mount"`
 }
 
-func (s Spec) Validate() error {
+func (s Spec) Validate() error { return s.ValidateWithApprovedPorts() }
+
+// ValidateWithApprovedPorts is Validate for a host that holds an explicit hub
+// approval for listener ports outside AllowedListenerPorts (the mail ports).
+// Ports in ForbiddenListenerPorts stay refused regardless.
+func (s Spec) ValidateWithApprovedPorts(approved ...int) error {
 	if s.Entrypoint == "" {
 		return errors.New("native runtime: entrypoint is required")
 	}
@@ -184,7 +189,7 @@ func (s Spec) Validate() error {
 			return err
 		}
 	}
-	if err := validateListeners(s.Listeners); err != nil {
+	if err := validateListeners(s.Listeners, approved...); err != nil {
 		return err
 	}
 	if len(s.Artifacts) == 0 {

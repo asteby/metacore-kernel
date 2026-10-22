@@ -97,6 +97,11 @@ func TestDNSResolve_Gates(t *testing.T) {
 		{"no resolver", dnsInv(manageMail, nil, allowUnder("acme.mx")), `{"name":"acme.mx","type":"TXT"}`, "dns_unavailable"},
 		{"bad type", dnsInv(manageMail, good, allowUnder("acme.mx")), `{"name":"acme.mx","type":"SOA"}`, "invalid_request"},
 		{"bad name", dnsInv(manageMail, good, allowUnder("acme.mx")), `{"name":"a b.acme.mx","type":"TXT"}`, "invalid_request"},
+		{"nul in name", dnsInv(manageMail, good, allowUnder("acme.mx")), "{\"name\":\"a\\u0000.acme.mx\",\"type\":\"TXT\"}", "invalid_request"},
+		{"backslash in name", dnsInv(manageMail, good, allowUnder("acme.mx")), `{"name":"a\\\\b.acme.mx","type":"TXT"}`, "invalid_request"},
+		{"star in name", dnsInv(manageMail, good, allowUnder("acme.mx")), `{"name":"*.acme.mx","type":"TXT"}`, "invalid_request"},
+		{"unicode in name", dnsInv(manageMail, good, allowUnder("acme.mx")), `{"name":"m\u00e9l.acme.mx","type":"TXT"}`, "invalid_request"},
+		{"empty label", dnsInv(manageMail, good, allowUnder("acme.mx")), `{"name":"a..acme.mx","type":"TXT"}`, "invalid_request"},
 		{"empty name", dnsInv(manageMail, good, allowUnder("acme.mx")), `{"name":"","type":"TXT"}`, "invalid_request"},
 		{"bad json", dnsInv(manageMail, good, allowUnder("acme.mx")), `{`, "invalid_request"},
 	}
@@ -237,6 +242,12 @@ func TestOrgDomainDNSAuthorizer(t *testing.T) {
 	az2 := NewOrgDomainDNSAuthorizer(listerStub{foreign})
 	if err := az2(context.Background(), DNSAuthRequest{OrgID: org, Name: "acme.mx", Type: "A", CanManage: mail.CanManageDomain}); err == nil {
 		t.Error("foreign org domain must not authorize")
+	}
+	// A row without organization authorizes nobody.
+	orphan := verified
+	orphan.OrganizationID = uuid.Nil
+	if err := NewOrgDomainDNSAuthorizer(listerStub{orphan})(context.Background(), DNSAuthRequest{OrgID: org, Name: "acme.mx", Type: "A", CanManage: mail.CanManageDomain}); err == nil {
+		t.Error("OrganizationID==Nil rows must not authorize any org")
 	}
 	// No capability for the purpose.
 	if err := az(context.Background(), DNSAuthRequest{OrgID: org, Name: "acme.mx", Type: "A", CanManage: security.Compile("x", nil).CanManageDomain}); err == nil {

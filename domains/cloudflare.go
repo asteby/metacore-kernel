@@ -232,6 +232,10 @@ func toCF(r Record) cfRecord {
 		out.Content = canonHost(r.Value)
 	case TypeTXT:
 		out.Content = canonTXT(r.Value)
+		if len(out.Content) > MaxTXTString {
+			// Cloudflare takes long TXT as consecutive quoted strings <= 255.
+			out.Content = QuoteTXTStrings(out.Content)
+		}
 	default:
 		out.Content = strings.TrimSpace(r.Value)
 	}

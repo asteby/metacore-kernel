@@ -434,3 +434,100 @@ func TestFingerprintCoversTTLUniqueMatchNeedle(t *testing.T) {
 		}
 	}
 }
+
+func TestCanonTXTMultiStringAndEscapes(t *testing.T) {
+	cases := map[string]string{
+		`"v=spf1 a mx" " include:_spf.x.net -all"`: "v=spf1 a mx include:_spf.x.net -all",
+		`"v=spf1 a mx" "include:_spf.x.net -all"`:  "v=spf1 a mxinclude:_spf.x.net -all", // concatenated verbatim, like a DNS client
+		`"say \"hi\" \\ end"`:                      `say "hi" \ end`,
+		`"a\065b"`:                                 "aAb",
+		`plain value`:                              "plain value",
+		`"unterminated`:                            `"unterminated`,
+		`"a" junk`:                                 `"a" junk`,
+	}
+	for in, want := range cases {
+		if got := canonTXT(in); got != want {
+			t.Errorf("canonTXT(%q) = %q want %q", in, got, want)
+		}
+	}
+	long := strings.Repeat("x", 600)
+	q := QuoteTXTStrings(long)
+	if got := canonTXT(q); got != long {
+		t.Error("quote/parse must round-trip")
+	}
+	for _, p := range SplitTXT(long) {
+		if len(p) > MaxTXTString {
+			t.Fatalf("chunk of %d", len(p))
+		}
+	}
+}
+
+func TestPlan_SPFMultiStringFromProviderMerges(t *testing.T) {
+	m := newMem("example.com")
+	m.add(TypeTXT, "example.com", `"v=spf1 a mx " "include:old.net -all"`, 0)
+	a := NewProviderApplier(m)
+	plan, err := a.Plan(context.Background(), RecordSet{Domain: "example.com", Records: []Record{mailSet.Records[1]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.Entries[0].Record.Value; got != "v=spf1 a mx include:old.net include:_spf.mail.test -all" {
+		t.Fatalf("multi-string SPF corrupted: %q", got)
+	}
+}
+
+func TestMergeSPFIgnoresTerminalTokensInNeedle(t *testing.T) {
+	got := mergeSPF("v=spf1 include:old.net -all", "v=spf1 include:a.net ~all redirect=x.net")
+	if got != "v=spf1 include:old.net include:a.net -all" {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestApply_ForgedUpdatesCannotRewriteOtherRecords(t *testing.T) {
+	m := newMem("example.com")
+	m.add(TypeA, "example.com", "203.0.113.7", 0)                    // r1
+	m.add(TypeTXT, "example.com", "google-site-verification=abc", 0) // r2
+	a := NewProviderApplier(m)
+	zone := Zone{ID: "z1", Name: "example.com"}
+	// Attack 1: Existing claims the live A record is a TXT with the same value.
+	forged1 := Plan{Provider: "mem", Zone: zone, Domain: "example.com", Entries: []PlanEntry{{
+		Action:   ActionUpdate,
+		Record:   Record{Type: TypeTXT, Name: "example.com", Value: "v=spf1 -all", Unique: true},
+		Existing: &ProviderRecord{ID: "r1", Type: TypeTXT, Name: "example.com", Value: "203.0.113.7"},
+	}}}
+	if _, err := a.Apply(context.Background(), forged1); err == nil || len(m.updates) != 0 {
+		t.Fatalf("A record rewritten as TXT: err=%v updates=%d", err, len(m.updates))
+	}
+	// Attack 2: a perfectly consistent plan that overwrites the site-verification TXT.
+	forged2 := Plan{Provider: "mem", Zone: zone, Domain: "example.com", Entries: []PlanEntry{{
+		Action:   ActionUpdate,
+		Record:   Record{Type: TypeTXT, Name: "example.com", Value: "v=spf1 -all", Unique: true},
+		Existing: &ProviderRecord{ID: "r2", Type: TypeTXT, Name: "example.com", Value: "google-site-verification=abc"},
+	}}}
+	if _, err := a.Apply(context.Background(), forged2); !errors.Is(err, ErrInvalidPlan) || len(m.updates) != 0 {
+		t.Fatalf("site verification overwritten: err=%v updates=%d", err, len(m.updates))
+	}
+	// sameStored itself distinguishes type and name.
+	x := ProviderRecord{ID: "r1", Type: TypeA, Name: "example.com", Value: "1.2.3.4"}
+	y := x
+	y.Type = TypeTXT
+	z := x
+	z.Name = "other.example.com"
+	if x.sameStored(y) || x.sameStored(z) {
+		t.Fatal("sameStored must compare type and name")
+	}
+}
+
+func TestApply_UniqueCreateRaceReplans(t *testing.T) {
+	m := newMem("example.com")
+	a := NewProviderApplier(m)
+	set := RecordSet{Domain: "example.com", Records: []Record{mailSet.Records[1]}}
+	plan, _ := a.Plan(context.Background(), set)
+	if plan.Entries[0].Action != ActionCreate {
+		t.Fatal("setup")
+	}
+	m.add(TypeTXT, "example.com", "v=spf1 include:someone-else.net -all", 0) // appears between Plan and Apply
+	res, err := a.Apply(context.Background(), plan)
+	if !errors.Is(err, ErrPlanChanged) || res.Failed != 1 || len(m.creates) != 0 {
+		t.Fatalf("must not create a second SPF: %+v %v", res, err)
+	}
+}

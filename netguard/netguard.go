@@ -225,3 +225,23 @@ func IsValidHostPattern(p string) bool {
 	}
 	return true
 }
+
+// ForbiddenHostSuffixes are special-use / private name spaces (RFC 6761, 6762,
+// 8375, Kubernetes, mDNS, reverse zones) that no addon-facing policy (native
+// egress grammar, dns_resolve) may name, even under a domain the tenant owns.
+var ForbiddenHostSuffixes = []string{
+	"local", "localhost", "internal", "arpa", "cluster.local", "svc", "lan",
+	"home", "corp", "intranet", "private",
+}
+
+// HasForbiddenSuffix reports whether name (lower-case, no trailing dot) equals
+// or sits under one of ForbiddenHostSuffixes.
+func HasForbiddenSuffix(name string) bool {
+	name = strings.ToLower(strings.TrimSuffix(name, "."))
+	for _, suf := range ForbiddenHostSuffixes {
+		if name == suf || strings.HasSuffix(name, "."+suf) {
+			return true
+		}
+	}
+	return false
+}

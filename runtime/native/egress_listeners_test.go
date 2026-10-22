@@ -14,6 +14,10 @@ func TestParseEgress(t *testing.T) {
 		"*:25":                 {AnyHost: true, Port: 25},
 		"*:993":                {AnyHost: true, Port: 993},
 		"web.whatsapp.com:443": {Host: "web.whatsapp.com", Port: 443},
+		"localhost:8080":       {Host: "localhost", Port: 8080},
+		"localhost:8787":       {Host: "localhost", Port: 8787},
+		"127.0.0.1:8080":       {Host: "127.0.0.1", Port: 8080},
+		"smtp.example.com.:25": {Host: "smtp.example.com", Port: 25}, // trailing dot normalized
 	}
 	for in, want := range ok {
 		got, err := ParseEgress(in)
@@ -26,12 +30,41 @@ func TestParseEgress(t *testing.T) {
 		"*.example.com", "*.example.com:25", "mail.*:25", "a*b:25",
 		"host:0", "host:70000", "host:", ":25", "host:25:26", "host/path",
 		"10.0.0.0/8", "host name:25", "[::1]:25",
-		"127.0.0.1", "127.0.0.1:25", "169.254.169.254:80", "10.0.0.1", "localhost", "localhost:25", "app.localhost:25", "2130706433:25", "0x7f.1:25", "::1",
+		"127.0.0.1", "localhost", "127.0.0.2:25", "169.254.169.254:80", "10.0.0.1", "app.localhost:25", "localhost.:x", "2130706433:25", "0x7f.1:25", "::1",
 	}
+	bad = append(bad,
+		"host\x00.example.com:25", "m\u00e9l.example.com", "localhost..", "localhost..:25", "1.2.3.4%eth0", "1.2.3.4%eth0:25",
+		"metadata.google.internal", "metadata.google.internal:80", "svc.cluster.local:25", "x.local:25", "1.0.0.127.in-addr.arpa",
+		"a..b.com", ".example.com", "-bad.example.com", "under_score.example.com", "localhost:*", "*localhost:25", "0x7f.1:25", "127.1:25", "::ffff:127.0.0.1",
+	)
 	for _, in := range bad {
 		if r, err := ParseEgress(in); err == nil {
 			t.Errorf("ParseEgress(%q) = %+v; want error", in, r)
 		}
+	}
+}
+
+func TestLoopbackGrantsAreDeclarationsOnly(t *testing.T) {
+	n := NetworkPolicy{Egress: []string{"localhost:8080", "127.0.0.1:8787", "api.example.com:443", "*:25"}}
+	g := n.LoopbackGrants()
+	if len(g) != 2 || !g[0].IsLoopbackGrant() {
+		t.Fatalf("grants: %+v", g)
+	}
+	if !n.Allows("localhost", 8080) || n.Allows("localhost", 9999) {
+		t.Error("exact grant, exact port")
+	}
+	// A wildcard never matches IPs or local names.
+	for _, h := range []string{"127.0.0.1", "localhost", "10.0.0.1", "db.internal", "x.local"} {
+		if (NetworkPolicy{Egress: []string{"*:25"}}).Allows(h, 25) {
+			t.Errorf("*:25 must not match %s", h)
+		}
+	}
+	// DialContext never dials loopback, even when granted: ops decides.
+	if _, err := n.DialContext(context.Background(), "tcp", "127.0.0.1:8787"); !errors.Is(err, ErrEgressDenied) {
+		t.Errorf("IP literal via DialContext: %v", err)
+	}
+	if _, err := n.DialContext(context.Background(), "tcp", "localhost:8080"); err == nil {
+		t.Error("DialContext must not reach loopback (netguard)")
 	}
 }
 
@@ -112,6 +145,26 @@ func TestSpecListeners(t *testing.T) {
 			t.Errorf("%s: expected error", name)
 		}
 	}
+	// Non-mail ports need explicit hub approval; forbidden ones never pass.
+	other := validSpec()
+	other.Listeners = []Listener{{Name: "a", Port: 9999}}
+	if err := other.Validate(); err == nil {
+		t.Error("9999 needs approval")
+	}
+	if err := other.ValidateWithApprovedPorts(9999); err != nil {
+		t.Errorf("approved port: %v", err)
+	}
+	other.Listeners = []Listener{{Name: "a", Port: 22}}
+	if err := other.ValidateWithApprovedPorts(22); err == nil {
+		t.Error("ssh stays forbidden even when 'approved'")
+	}
+	for _, p := range AllowedListenerPorts {
+		s := validSpec()
+		s.Listeners = []Listener{{Name: "a", Port: p}}
+		if err := s.Validate(); err != nil {
+			t.Errorf("mail port %d: %v", p, err)
+		}
+	}
 	many := validSpec()
 	for i := 0; i <= MaxListeners; i++ {
 		many.Listeners = append(many.Listeners, Listener{Name: "l" + string(rune('a'+i)), Port: 1000 + i})
@@ -137,12 +190,12 @@ func TestListenerRegistryCollisions(t *testing.T) {
 	if err := r.Claim("mailer-1", []Listener{{Name: "smtp", Port: 25}, {Name: "sub", Port: 587}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Claim("other", []Listener{{Name: "x", Port: 9999}, {Name: "y", Port: 587}}); err == nil {
+	if err := r.Claim("other", []Listener{{Name: "x", Port: 995}, {Name: "y", Port: 587}}); err == nil {
 		t.Fatal("port 587 is owned by mailer-1")
 	}
 	// A failed claim reserves nothing.
-	if err := r.Claim("third", []Listener{{Name: "x", Port: 9999}}); err != nil {
-		t.Fatalf("9999 must be free after failed claim: %v", err)
+	if err := r.Claim("third", []Listener{{Name: "x", Port: 995}}); err != nil {
+		t.Fatalf("995 must be free after failed claim: %v", err)
 	}
 	if err := r.Claim("mailer-1", []Listener{{Name: "smtp", Port: 25}}); err != nil {
 		t.Fatalf("same owner re-claim: %v", err)

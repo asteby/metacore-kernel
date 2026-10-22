@@ -22,8 +22,10 @@ import (
 //     The host decides whether the port may be opened at all and may refuse
 //     the install or mark the service blocked. Ports of well-known sensitive
 //     services (SSH, HTTP/S, databases, ... see ForbiddenListenerPorts) are
-//     never admitted, and two services may never claim the same public port
-//     (ListenerRegistry).
+//     never admitted, only mail-protocol ports are admitted by default
+//     (AllowedListenerPorts) and any other port needs explicit hub approval
+//     (Spec.ValidateWithApprovedPorts), and two services may never claim the
+//     same public port (ListenerRegistry).
 //   - The sidecar never binds the public port, and never a TCP port at all.
 //     The supervisor assigns, per listener, a UNIX SOCKET inside the
 //     host-private service directory (same directory, ownership and mode as
@@ -55,11 +57,19 @@ const (
 	MaxListeners = 16
 )
 
-// ForbiddenListenerPorts are public ports no native service may claim: they
+// AllowedListenerPorts is the closed allowlist of public ports a native
+// service may declare WITHOUT special approval: the mail protocols (SMTP 25,
+// POP3 110, IMAP 143, SMTPS 465, submission 587, IMAPS 993, POP3S 995,
+// ManageSieve 4190). Any other port is refused by Validate and needs an
+// explicit, recorded hub approval (ValidateWithApprovedPorts). Widening the
+// default list is a kernel release.
+var AllowedListenerPorts = []int{25, 110, 143, 465, 587, 993, 995, 4190}
+
+// ForbiddenListenerPorts are never admitted, not even with hub approval: they
 // belong to the host's own infrastructure or to well-known sensitive services
 // (remote shell, web edge, DNS, databases, caches, container/orchestration
-// control planes). Mail ports (25, 110, 143, 465, 587, 993, 995) are NOT in
-// the list. Widening or narrowing it is a kernel release.
+// control planes). It is a backstop for approvals, not the access rule (that
+// is the allowlist).
 var ForbiddenListenerPorts = map[int]string{
 	21: "ftp", 22: "ssh", 23: "telnet", 53: "dns", 80: "http", 111: "rpcbind",
 	135: "msrpc", 139: "netbios", 443: "https", 445: "smb", 2049: "nfs",
@@ -67,6 +77,20 @@ var ForbiddenListenerPorts = map[int]string{
 	3306: "mysql", 3389: "rdp", 5432: "postgres", 5984: "couchdb",
 	6379: "redis", 6443: "kubernetes-api", 8080: "http-alt", 8443: "https-alt",
 	9200: "elasticsearch", 10250: "kubelet", 11211: "memcached", 27017: "mongodb",
+}
+
+func listenerPortAllowed(p int, approved []int) bool {
+	for _, a := range AllowedListenerPorts {
+		if a == p {
+			return true
+		}
+	}
+	for _, a := range approved {
+		if a == p {
+			return true
+		}
+	}
+	return false
 }
 
 var listenerNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
@@ -86,7 +110,7 @@ func ListenerEnv(name string) string {
 	return EnvListenerPrefix + strings.ToUpper(name)
 }
 
-func validateListeners(ls []Listener) error {
+func validateListeners(ls []Listener, approved ...int) error {
 	if len(ls) > MaxListeners {
 		return fmt.Errorf("native runtime: listeners allows at most %d entries", MaxListeners)
 	}
@@ -98,6 +122,9 @@ func validateListeners(ls []Listener) error {
 		}
 		if l.Port < 1 || l.Port > 65535 {
 			return fmt.Errorf("native runtime: listeners[%d].port must be between 1 and 65535", i)
+		}
+		if !listenerPortAllowed(l.Port, approved) {
+			return fmt.Errorf("native runtime: listeners[%d].port %d is not a mail port %v and has no hub approval", i, l.Port, AllowedListenerPorts)
 		}
 		if svc, banned := ForbiddenListenerPorts[l.Port]; banned {
 			return fmt.Errorf("native runtime: listeners[%d].port %d is reserved for %s and cannot be exposed by a native service", i, l.Port, svc)
@@ -139,10 +166,16 @@ func NewListenerRegistry() *ListenerRegistry {
 // port is held by another owner. Re-claiming for the same owner replaces its
 // previous reservation (an upgrade that changes ports).
 func (r *ListenerRegistry) Claim(owner string, ls []Listener) error {
+	return r.ClaimApproved(owner, ls)
+}
+
+// ClaimApproved is Claim for listeners whose non-mail ports were explicitly
+// approved by the hub (never a ForbiddenListenerPorts port).
+func (r *ListenerRegistry) ClaimApproved(owner string, ls []Listener, approved ...int) error {
 	if owner == "" {
 		return errors.New("native runtime: listener owner is required")
 	}
-	if err := validateListeners(ls); err != nil {
+	if err := validateListeners(ls, approved...); err != nil {
 		return err
 	}
 	r.mu.Lock()

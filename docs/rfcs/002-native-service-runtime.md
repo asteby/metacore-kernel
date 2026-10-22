@@ -203,10 +203,13 @@ nothing changes for specs that do not use them.
   has `Ingress == nil` and `Listeners` set.
 - `name` `^[a-z][a-z0-9_]{0,31}$`, `port` is the PUBLIC TCP port (1-65535),
   unique per service; at most 16. `proxy_protocol`: `""`, `"v1"` or `"v2"`.
-- **Forbidden public ports** (`native.ForbiddenListenerPorts`): 21, 22, 23, 53,
-  80, 111, 135, 139, 443, 445, 2049, 2375, 2376, 2379, 2380, 3306, 3389, 5432,
-  5984, 6379, 6443, 8080, 8443, 9200, 10250, 11211, 27017. Mail ports are not
-  in the list.
+- **Public ports are an ALLOWLIST** (`native.AllowedListenerPorts`): the mail
+  protocols 25, 110, 143, 465, 587, 993, 995 and 4190. `Spec.Validate` refuses
+  any other port. A different port needs an explicit, recorded **hub approval**:
+  the hub validates with `Spec.ValidateWithApprovedPorts(ports...)` and ops
+  admits it with `ListenerRegistry.ClaimApproved`. Even approved, the ports in
+  `native.ForbiddenListenerPorts` (ssh, http/s, dns, databases, caches,
+  docker/kubernetes/etcd control planes, ...) are never admitted.
 - **Collisions between addons**: `native.ListenerRegistry` (`Claim(owner,
   listeners)` / `Release(owner)`) refuses a public port already claimed by
   another owner, atomically; the supervisor must `Claim` before opening
@@ -234,12 +237,26 @@ nothing changes for specs that do not use them.
 |---|---|
 | `host` | exact hostname |
 | `host:port` | exact hostname and TCP port |
+| `localhost:<port>`, `127.0.0.1:<port>` | exact host-service grant (see below) |
 | `*:<port>` | any PUBLIC host on one port, **only** `25 110 143 465 587 993 995` |
 
 Everything else stays forbidden: a bare `*`, `*.example.com`, `mail.*`,
-`*:443`, `*:*`, ranges and CIDR (`ParseEgress` returns the reason). **IP
-literals** (`10.0.0.5`, `169.254.169.254:25`, `[::1]:25`, numeric spellings such
-as `2130706433`) and `localhost`/`*.localhost` are rejected in every form. The
+`*:443`, `*:*`, ranges and CIDR (`ParseEgress` returns the reason). Hostnames
+are strict ASCII DNS labels (NUL, unicode, zone ids, empty labels, `localhost..`
+are rejected; one trailing dot is normalized away so the rule can match), and
+special-use suffixes (`.local`, `.internal` such as `metadata.google.internal`,
+`.arpa`, `.svc`, `cluster.local`, ...; `netguard.ForbiddenHostSuffixes`) are
+refused. **IP literals** (`10.0.0.5`, `169.254.169.254:25`, `[::1]:25`,
+`1.2.3.4%eth0`, numeric spellings such as `2130706433`) and `*.localhost` are
+rejected in every form. The single exception is the **exact host-service grant**
+`localhost:<port>` / `127.0.0.1:<port>` (explicit port; no wildcard, range or
+other loopback spelling), which published addons such as the storefront declare
+(`localhost:8080`, `localhost:8787`). It is a declaration, not an authorization:
+`NetworkPolicy.DialContext` still applies netguard and therefore NEVER dials
+loopback; ops decides whether to honour these grants (it can read them with
+`NetworkPolicy.LoopbackGrants()` and dial exactly those with its own dialer) and
+the hub shows them for approval. A `*:<port>` wildcard never matches an IP or a
+local name. The
 wildcard exists because MX delivery and tenant-configured IMAP/SMTP servers have
 destinations that cannot be enumerated in a signed manifest; the closed port
 list (`WildcardEgressPorts`) keeps it from becoming "reach anything". Widening

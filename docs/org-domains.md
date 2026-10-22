@@ -97,8 +97,14 @@ res, plan, err := domains.ApplyConfirmed(ctx, ap, set, confirmedFingerprint)
   (`google-site-verification`, `MS=`...) ni se tocan ni se cuentan; un TXT sin
   familia reconocida solo se crea, nunca se reemplaza. Para el SPF con
   `Match: contains` + `Needle`, el needle se **fusiona** en el SPF existente
-  (antes de `all`/`redirect=`, sin duplicar) con warning `merges_spf`: lo que el
-  cliente ya autorizaba se conserva. Un MX junto a
+  (antes de `all`/`redirect=`, sin duplicar; los tokens `v=spf1`, `all` y
+  `redirect=` del needle se ignoran) con warning `merges_spf`: lo que el cliente
+  ya autorizaba se conserva. Los TXT de varias cadenas (`"a" "b"`, como los
+  devuelve Cloudflare) se reensamblan respetando escapes antes de comparar o
+  fusionar, y al escribir un valor > 255 bytes se parte en cadenas de ≤ 255
+  (`QuoteTXTStrings`). Un `create` de un registro `Unique` se re-planifica contra
+  la zona viva: si apareció un SPF entre `Plan` y `Apply`, falla con
+  `ErrPlanChanged` en vez de crear un segundo. Un MX junto a
   otro ajeno se *crea* con `mx_other_target` (los MX del cliente se quedan);
   un CNAME que choca con otro tipo queda `blocked`. Reaplicar un plan viejo no
   duplica (cada creación re-lista el nombre antes de escribir).
@@ -109,7 +115,10 @@ res, plan, err := domains.ApplyConfirmed(ctx, ap, set, confirmedFingerprint)
   ajeno al proveedor/dominio (zona que no contiene el dominio, nombres fuera del
   dominio, update cuyo `Existing` está en otro nombre/tipo, acción desconocida) y
   **re-verifica cada update** contra el registro vivo (valor, TTL, comment, tags,
-  proxied) antes de escribir: si cambió → `ErrPlanChanged` en esa entrada. La
+  proxied) antes de escribir: si cambió → `ErrPlanChanged` en esa entrada. La comparación incluye tipo y nombre,
+  y un update TXT exige que el existente y el nuevo compartan familia
+  (spf/dmarc/dkim): un plan falsificado no puede reescribir un A como TXT ni
+  pisar `google-site-verification`. La
   vía recomendada sigue siendo `ApplyConfirmed`.
 - El `Fingerprint` cubre acción, registro (incl. `TTL`, `Unique`, `Match`,
   `Needle`) y el registro existente completo (incl. comment/tags/proxied).
@@ -148,8 +157,11 @@ resp: {"success":true,"data":{"name","type","values":[…],"no_records":bool},"m
 - **Autorizador de referencia:** `wasm.NewOrgDomainDNSAuthorizer(lister)`
   (`lister.ListOrgDomains(ctx, org)` sobre la tabla del host). Reglas, todas
   cerradas por defecto: (1) IP literales y sufijos prohibidos
-  (`ForbiddenDNSSuffixes`: `.local`, `.internal`, `.arpa`, `cluster.local`,
-  `.localhost`, `.svc`, `.lan`, ...) se deniegan; (2) el nombre debe ser (o
+  (`netguard.ForbiddenHostSuffixes`: `.local`, `.internal`, `.arpa`,
+  `cluster.local`, `.localhost`, `.svc`, `.lan`, ...) se deniegan, y el nombre
+  debe ser ASCII estricto (letras, dígitos, `-`, `_`; sin NUL, `\`, `*`, unicode
+  ni etiquetas vacías: `invalid_request`); una fila de dominio sin
+  `OrganizationID` no autoriza a ninguna organización; (2) el nombre debe ser (o
   colgar de) un `OrgDomain` de la organización (gana el más específico) y no
   estar `disabled`; (3) el addon debe tener `domain:manage` para **algún
   purpose de ese dominio** (un addon de correo no resuelve un dominio solo de
@@ -157,10 +169,17 @@ resp: {"success":true,"data":{"name","type","values":[…],"no_records":bool},"m
   `TXT _asteby-verify.<host>` exacto; los sub-nombres arbitrarios (que
   permitirían codificar datos en el nombre consultado: canal de exfiltración)
   solo en dominios `verified`.
-- **Presupuesto**: 64 consultas por invocación **y** `DefaultDNSOrgLimit` (600)
+- **Presupuesto** (el de organización es **por proceso**, en memoria: con varias
+  réplicas el techo real es N×; ops debe aplicar además su propio límite): 64 consultas por invocación **y** `DefaultDNSOrgLimit` (600)
   por organización y `DefaultDNSOrgWindow` (1 h), ajustable con
   `Host.WithDNSOrgLimit`. Se cobra **antes** de autorizar: las denegaciones
   también cuentan.
+- **Canal residual**: un dominio `pending` solo admite el TXT de verificación,
+  pero un addon que registre dominios pendientes arbitrarios
+  (`attacker.com`) puede codificar datos en `_asteby-verify.<datos>.attacker.com`
+  si el nombre es el del dominio registrado. Ops debe **limitar el registro de
+  dominios pendientes por addon y por organización** (cuota y rate), si no el
+  canal sigue siendo exfiltración acotada.
 - **Errores genéricos hacia el guest**: una denegación responde
   `forbidden` con un mensaje fijo; el detalle del autorizador (qué dominios
   tiene la org, su estado) solo va al log de auditoría. Igual el fallo de

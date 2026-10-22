@@ -102,14 +102,99 @@ func canonHost(v string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(v), "."))
 }
 
-// canonTXT trims whitespace and one pair of surrounding quotes (providers such
-// as Cloudflare return TXT content quoted).
+// canonTXT is the canonical TXT text. A value of one or more double-quoted
+// character-strings ("a" "b", the multi-string form providers such as
+// Cloudflare return for long records) is parsed with its escapes (\" \\ \DDD)
+// and the strings are concatenated, exactly as a DNS client reassembles them;
+// anything else is just trimmed.
 func canonTXT(v string) string {
 	v = strings.TrimSpace(v)
-	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
-		v = v[1 : len(v)-1]
+	if strings.HasPrefix(v, `"`) {
+		if out, ok := parseQuotedStrings(v); ok {
+			return strings.TrimSpace(out)
+		}
 	}
-	return strings.TrimSpace(v)
+	return v
+}
+
+// parseQuotedStrings parses `"a" "b"...` (strings separated only by
+// whitespace). ok is false when v is not entirely made of quoted strings.
+func parseQuotedStrings(v string) (string, bool) {
+	var b strings.Builder
+	i := 0
+	for i < len(v) {
+		for i < len(v) && (v[i] == ' ' || v[i] == '\t') {
+			i++
+		}
+		if i >= len(v) {
+			break
+		}
+		if v[i] != '"' {
+			return "", false
+		}
+		i++
+		closed := false
+		for i < len(v) {
+			c := v[i]
+			switch {
+			case c == '"':
+				closed = true
+				i++
+			case c == '\\' && i+1 < len(v):
+				if i+3 < len(v) && v[i+1] >= '0' && v[i+1] <= '9' && v[i+2] >= '0' && v[i+2] <= '9' && v[i+3] >= '0' && v[i+3] <= '9' {
+					n := int(v[i+1]-'0')*100 + int(v[i+2]-'0')*10 + int(v[i+3]-'0')
+					if n > 255 {
+						return "", false
+					}
+					b.WriteByte(byte(n))
+					i += 4
+				} else {
+					b.WriteByte(v[i+1])
+					i += 2
+				}
+			default:
+				b.WriteByte(c)
+				i++
+			}
+			if closed {
+				break
+			}
+		}
+		if !closed {
+			return "", false
+		}
+	}
+	return b.String(), true
+}
+
+// MaxTXTString is the longest single character-string of a TXT record (RFC
+// 1035); longer values are written as several consecutive strings.
+const MaxTXTString = 255
+
+// SplitTXT cuts a TXT value into character-strings of at most MaxTXTString
+// bytes (never empty: a short value is one string).
+func SplitTXT(v string) []string {
+	if len(v) <= MaxTXTString {
+		return []string{v}
+	}
+	var out []string
+	for len(v) > MaxTXTString {
+		out = append(out, v[:MaxTXTString])
+		v = v[MaxTXTString:]
+	}
+	return append(out, v)
+}
+
+// QuoteTXTStrings renders the value as `"s1" "s2"` with \" and \\ escaped,
+// each string at most MaxTXTString bytes.
+func QuoteTXTStrings(v string) string {
+	parts := SplitTXT(v)
+	q := make([]string, len(parts))
+	for i, p := range parts {
+		p = strings.ReplaceAll(p, `\`, `\\`)
+		q[i] = `"` + strings.ReplaceAll(p, `"`, `\"`) + `"`
+	}
+	return strings.Join(q, " ")
 }
 
 // Abs joins a relative label onto a domain: Abs("example.com","_dmarc") ->

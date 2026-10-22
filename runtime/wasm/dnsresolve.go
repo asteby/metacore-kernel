@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -90,7 +91,7 @@ func executeDNSResolve(ctx context.Context, inv *invocation, reqJSON []byte) []b
 	if !typ.Valid() {
 		return fail("invalid_request", "type must be one of A, AAAA, CNAME, MX, TXT")
 	}
-	if err := (domains.Record{Type: domains.TypeTXT, Name: name, Value: "x"}).Validate(); err != nil {
+	if !validDNSQueryName(name) {
 		return fail("invalid_request", "name is not a valid DNS name")
 	}
 	if inv.dnsResolver == nil {
@@ -139,6 +140,23 @@ func executeDNSResolve(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		"meta":    dnsMeta(addonKey, orgID, start),
 	})
 	return env
+}
+
+var dnsLabelRe = regexp.MustCompile(`^[a-z0-9_]([a-z0-9_-]{0,61})$`)
+
+// validDNSQueryName admits only strict ASCII hostnames (letters, digits, '-',
+// and '_' for service labels such as _dmarc / _asteby-verify): no NUL, '\\',
+// '*', spaces or unicode, which a resolver or log sink could interpret.
+func validDNSQueryName(name string) bool {
+	if name == "" || len(name) > 253 {
+		return false
+	}
+	for _, l := range strings.Split(name, ".") {
+		if !dnsLabelRe.MatchString(l) {
+			return false
+		}
+	}
+	return true
 }
 
 func dnsMeta(addonKey string, orgID uuid.UUID, start time.Time) map[string]any {

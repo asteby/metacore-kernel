@@ -38,7 +38,7 @@ type ProviderRecord struct {
 // sameStored reports whether two stored records are identical in everything
 // the applier reasons about (value, TTL and the preserved metadata).
 func (p ProviderRecord) sameStored(o ProviderRecord) bool {
-	if p.ID != o.ID || p.Canonical() != o.Canonical() || p.TTL != o.TTL || p.Comment != o.Comment ||
+	if p.ID != o.ID || p.Type != o.Type || strings.ToLower(strings.TrimSuffix(p.Name, ".")) != strings.ToLower(strings.TrimSuffix(o.Name, ".")) || p.Canonical() != o.Canonical() || p.TTL != o.TTL || p.Comment != o.Comment ||
 		strings.Join(p.Tags, "\x1f") != strings.Join(o.Tags, "\x1f") {
 		return false
 	}
@@ -300,6 +300,12 @@ func mergeSPF(existing, needle string) string {
 	}
 	var add []string
 	for _, n := range strings.Fields(canonTXT(needle)) {
+		// Only mechanisms are merged: the version tag, a terminal "all" and
+		// "redirect=" belong to the tenant's record (adding them would yield
+		// "... ~all -all").
+		if ln := strings.ToLower(n); ln == "v=spf1" || spfAllRe.MatchString(ln) || strings.HasPrefix(ln, "redirect=") {
+			continue
+		}
 		if _, ok := have[strings.ToLower(n)]; !ok {
 			add = append(add, n)
 		}
@@ -421,6 +427,15 @@ func (a *ProviderApplier) Apply(ctx context.Context, plan Plan) (ApplyResult, er
 					res.Unchanged++
 					break
 				}
+				// Re-plan this slot against the live zone: if something
+				// appeared since the plan (a second SPF for a Unique record, a
+				// conflicting CNAME) creating would duplicate or break it.
+				if again := planRecord(e.Record, cur); again.Action != ActionCreate {
+					ae.Error = ErrPlanChanged.Error()
+					res.Failed++
+					errs = append(errs, fmt.Errorf("create %s: %w", e.Record, ErrPlanChanged))
+					break
+				}
 			}
 			if err != nil {
 				ae.Error = err.Error()
@@ -532,6 +547,15 @@ func (a *ProviderApplier) validatePlan(ctx context.Context, plan Plan) error {
 			ex := e.Existing.Record()
 			if ex.Name != e.Record.Name || ex.Type != e.Record.Type {
 				return bad("entries[%d]: existing record %s %s does not match %s %s", i, ex.Type, ex.Name, e.Record.Type, e.Record.Name)
+			}
+			if e.Action == ActionUpdate && e.Record.Type == TypeTXT {
+				// Only a recognised protocol family is ever updated, and only
+				// onto a record of the same family: a forged plan must not be
+				// able to overwrite google-site-verification with an SPF.
+				fam := txtFamily(e.Record.Name, e.Record.Value)
+				if fam == "" || txtFamily(e.Existing.Name, e.Existing.Value) != fam {
+					return bad("entries[%d]: TXT update requires the existing record and the new one to share a family (spf|dmarc|dkim)", i)
+				}
 			}
 		}
 	}

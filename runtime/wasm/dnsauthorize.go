@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/asteby/metacore-kernel/domains"
+	"github.com/asteby/metacore-kernel/netguard"
 	"github.com/google/uuid"
 )
 
@@ -77,13 +78,9 @@ type OrgDomainLister interface {
 	ListOrgDomains(ctx context.Context, orgID uuid.UUID) ([]domains.OrgDomain, error)
 }
 
-// ForbiddenDNSSuffixes are never resolvable through dns_resolve, even under a
-// domain the organization owns: they address private or special-use name
-// spaces (RFC 6761/6762/8375, Kubernetes, mDNS, reverse zones).
-var ForbiddenDNSSuffixes = []string{
-	"local", "localhost", "internal", "arpa", "cluster.local", "svc", "lan",
-	"home", "corp", "intranet", "private", "test", "invalid", "example",
-}
+// ForbiddenDNSSuffixes aliases netguard.ForbiddenHostSuffixes: never
+// resolvable through dns_resolve, even under a domain the organization owns.
+var ForbiddenDNSSuffixes = netguard.ForbiddenHostSuffixes
 
 // NewOrgDomainDNSAuthorizer is the reference DNSAuthorizeFunc. Rules, all
 // fail-closed:
@@ -106,10 +103,8 @@ func NewOrgDomainDNSAuthorizer(lister OrgDomainLister) DNSAuthorizeFunc {
 		if _, err := netip.ParseAddr(name); err == nil {
 			return errors.New("IP literal")
 		}
-		for _, suf := range ForbiddenDNSSuffixes {
-			if name == suf || strings.HasSuffix(name, "."+suf) {
-				return fmt.Errorf("forbidden suffix .%s", suf)
-			}
+		if netguard.HasForbiddenSuffix(name) {
+			return errors.New("forbidden special-use suffix")
 		}
 		list, err := lister.ListOrgDomains(ctx, req.OrgID)
 		if err != nil {
@@ -118,7 +113,8 @@ func NewOrgDomainDNSAuthorizer(lister OrgDomainLister) DNSAuthorizeFunc {
 		var best *domains.OrgDomain
 		for i := range list {
 			d := &list[i]
-			if d.OrganizationID != uuid.Nil && d.OrganizationID != req.OrgID {
+			// A row with no organization is malformed, never "everyone's".
+			if d.OrganizationID == uuid.Nil || d.OrganizationID != req.OrgID {
 				continue
 			}
 			if name == d.Host || strings.HasSuffix(name, "."+d.Host) {

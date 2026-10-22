@@ -116,7 +116,7 @@ func (f *cfFake) handle(w http.ResponseWriter, r *http.Request) {
 			f.bodies = append(f.bodies, in)
 			f.next++
 			in.ID = fmt.Sprintf("rec-%d", f.next)
-			if in.Type == "TXT" {
+			if in.Type == "TXT" && !strings.HasPrefix(in.Content, `"`) {
 				in.Content = `"` + in.Content + `"` // Cloudflare echoes TXT quoted
 			}
 			f.recs[zone] = append(f.recs[zone], in)
@@ -134,7 +134,7 @@ func (f *cfFake) handle(w http.ResponseWriter, r *http.Request) {
 				if f.recs[zone][i].ID == id {
 					old := f.recs[zone][i]
 					in.ID = id
-					if in.Type == "TXT" {
+					if in.Type == "TXT" && !strings.HasPrefix(in.Content, `"`) {
 						in.Content = `"` + in.Content + `"`
 					}
 					// PATCH semantics: omitted fields keep their stored value.
@@ -330,5 +330,42 @@ func TestCloudflare_UpdatePreservesCommentTagsAndProxied(t *testing.T) {
 	other.Entries[0].Existing = &ex
 	if other.Fingerprint() == plan.Fingerprint() {
 		t.Fatal("fingerprint must cover comment")
+	}
+}
+
+func TestCloudflare_LongTXTIsWrittenAsChunksAndMergedFromMultiString(t *testing.T) {
+	f := newCF(t)
+	f.recs["zone-1"] = []cfRecord{{ID: "spf", Type: "TXT", Name: "example.com", Content: `"v=spf1 a mx" " include:old.net -all"`, TTL: 1}}
+	a := NewProviderApplier(f.provider())
+	set := RecordSet{Domain: "example.com", Records: []Record{
+		{Type: TypeTXT, Name: "example.com", Value: "v=spf1 include:_spf.mail.test ~all", Unique: true, Match: MatchContains, Needle: "include:_spf.mail.test"},
+		{Type: TypeTXT, Name: "s1._domainkey.example.com", Value: "v=DKIM1; k=rsa; p=" + strings.Repeat("A", 500), Unique: true},
+	}}
+	plan, err := a.Plan(context.Background(), set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, err := a.Apply(context.Background(), plan); err != nil || res.Updated != 1 || res.Created != 1 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if got := canonTXT(f.recs["zone-1"][0].Content); got != "v=spf1 a mx include:old.net include:_spf.mail.test -all" {
+		t.Fatalf("stored SPF: %q", got)
+	}
+	var dkim cfRecord
+	for _, r := range f.recs["zone-1"] {
+		if strings.Contains(r.Name, "_domainkey") {
+			dkim = r
+		}
+	}
+	for _, part := range strings.Split(strings.Trim(dkim.Content, `"`), `" "`) {
+		if len(part) > 255 {
+			t.Fatalf("TXT string of %d bytes", len(part))
+		}
+	}
+	if !strings.Contains(dkim.Content, `" "`) || canonTXT(dkim.Content) != "v=DKIM1; k=rsa; p="+strings.Repeat("A", 500) {
+		t.Fatalf("long TXT not chunked/round-trippable: %.60s", dkim.Content)
+	}
+	if plan2, _ := a.Plan(context.Background(), set); plan2.Changes() {
+		t.Fatalf("must converge: %v", plan2.Counts())
 	}
 }
