@@ -95,6 +95,10 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			// Visibility rides through so the SDK scopes the column to the
 			// table, the form, or API payloads only.
 			Visibility: c.Visibility,
+			// DisplayFor / CardRole ride through (pure UI) so the SDK dedupes
+			// the denormalized label in the detail and lays out the mobile card.
+			DisplayFor: c.DisplayFor,
+			CardRole:   c.CardRole,
 			// Section rides through onto the served column so a consumer that
 			// derives the modal from table metadata still sees the form grouping.
 			Section: c.Section,

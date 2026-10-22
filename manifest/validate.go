@@ -396,6 +396,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 				return fmt.Errorf("manifest.model_definitions[%d].columns[%d]: %w", i, j, err)
 			}
 		}
+		if err := validateRecordPresentation(md); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d]: %w", i, err)
+		}
 		if err := validateRelations(md.Relations); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
@@ -711,6 +714,11 @@ func (m *Manifest) validateActionPresentation() error {
 		default:
 			return fmt.Errorf("%s.tone %q is not one of default|danger", where, def.Tone)
 		}
+		if def.Priority != "" {
+			if _, ok := v3.ActionPriorities[def.Priority]; !ok {
+				return fmt.Errorf("%s.priority %q is not one of primary|secondary|overflow", where, def.Priority)
+			}
+		}
 		return nil
 	}
 	for model, defs := range m.Actions {
@@ -1020,6 +1028,11 @@ func validateColumnExtensions(col ColumnDef) error {
 	if col.Visibility != "" {
 		if _, ok := validVisibility[col.Visibility]; !ok {
 			return fmt.Errorf("visibility %q not allowed (want table|modal|list|all)", col.Visibility)
+		}
+	}
+	if col.CardRole != "" {
+		if _, ok := v3.CardRoles[col.CardRole]; !ok {
+			return fmt.Errorf("card_role %q not allowed (want title|subtitle|metric|status|hidden)", col.CardRole)
 		}
 	}
 	if col.Widget != "" {
@@ -2141,6 +2154,40 @@ func (m *Manifest) validateSetup() error {
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("manifest.%s", strings.Join(errs, "; manifest."))
+	}
+	return nil
+}
+
+// validateRecordPresentation is the legacy twin of the v3 check of display_for,
+// title_field and subtitle_field: they must resolve against the model's own
+// columns, and display_for must name a column that carries a ref. Models that
+// declare none of them pass unchanged.
+func validateRecordPresentation(md ModelDefinition) error {
+	byName := make(map[string]ColumnDef, len(md.Columns))
+	for _, c := range md.Columns {
+		byName[c.Name] = c
+	}
+	for _, c := range md.Columns {
+		if c.DisplayFor == "" {
+			continue
+		}
+		target, ok := byName[c.DisplayFor]
+		switch {
+		case c.DisplayFor == c.Name:
+			return fmt.Errorf("columns[%s].display_for %q cannot point at the column itself", c.Name, c.DisplayFor)
+		case !ok:
+			return fmt.Errorf("columns[%s].display_for %q is not a declared column of the model", c.Name, c.DisplayFor)
+		case target.Ref == "":
+			return fmt.Errorf("columns[%s].display_for %q must name a column that declares a ref", c.Name, c.DisplayFor)
+		}
+	}
+	for field, v := range map[string]string{"title_field": md.TitleField, "subtitle_field": md.SubtitleField} {
+		if v == "" {
+			continue
+		}
+		if _, ok := byName[v]; !ok {
+			return fmt.Errorf("%s %q is not a declared column of the model", field, v)
+		}
 	}
 	return nil
 }

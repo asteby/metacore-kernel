@@ -1630,6 +1630,9 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 		// (the schema pattern already enforces the shape). Mirrors the legacy
 		// validator so a manifest fails identically on both surfaces.
 		errs = append(errs, validateStageMachine(mi, mod, ownCols)...)
+		// Record presentation vocabulary (display_for, card_role, title_field,
+		// subtitle_field): references must resolve against the model's columns.
+		errs = append(errs, validateRecordPresentation(mi, mod, ownCols)...)
 		// Guided document create flow (document_forms): types, fields and lines.
 		errs = append(errs, validateDocumentForms(fmt.Sprintf("models[%d].document_forms", mi), mod.DocumentForms, ownCols, colsByModel)...)
 		// Row-locking strategy (guards): only ""/"row" are understood.
@@ -2426,6 +2429,57 @@ func serverDerivedPaymentInputs(where, key string, input map[string]string) []st
 		root := strings.SplitN(target, ".", 2)[0]
 		if paymentServerDerived[root] && strings.HasPrefix(src, "payload.") {
 			errs = append(errs, fmt.Sprintf("%s.input[%q] maps %s from %q: it is server-derived (marketplace configuration), never taken from a payload", where, target, root, src))
+		}
+	}
+	sort.Strings(errs)
+	return errs
+}
+
+// CardRoles is the closed set of Column.card_role values.
+var CardRoles = map[string]struct{}{
+	"title": {}, "subtitle": {}, "metric": {}, "status": {}, "hidden": {},
+}
+
+// ActionPriorities is the closed set of Action.priority values ("" = auto).
+var ActionPriorities = map[string]struct{}{
+	"primary": {}, "secondary": {}, "overflow": {},
+}
+
+// validateRecordPresentation checks the pure-UI record vocabulary of a model:
+// display_for must name ANOTHER column of the model that carries a ref,
+// card_role is a closed enum, and title_field / subtitle_field must name
+// declared columns. Models that declare none of them are untouched.
+func validateRecordPresentation(mi int, mod Model, ownCols map[string]struct{}) []string {
+	var errs []string
+	byName := make(map[string]Column, len(mod.Columns))
+	for _, c := range mod.Columns {
+		byName[c.Name] = c
+	}
+	for ci, c := range mod.Columns {
+		where := fmt.Sprintf("models[%d].columns[%d]", mi, ci)
+		if c.DisplayFor != "" {
+			target, ok := byName[c.DisplayFor]
+			switch {
+			case c.DisplayFor == c.Name:
+				errs = append(errs, fmt.Sprintf("%s.display_for %q cannot point at the column itself", where, c.DisplayFor))
+			case !ok:
+				errs = append(errs, fmt.Sprintf("%s.display_for %q is not a declared column of the model", where, c.DisplayFor))
+			case target.Ref == "":
+				errs = append(errs, fmt.Sprintf("%s.display_for %q must name a column that declares a ref (a relation)", where, c.DisplayFor))
+			}
+		}
+		if c.CardRole != "" {
+			if _, ok := CardRoles[c.CardRole]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.card_role %q is not one of title|subtitle|metric|status|hidden", where, c.CardRole))
+			}
+		}
+	}
+	for field, v := range map[string]string{"title_field": mod.TitleField, "subtitle_field": mod.SubtitleField} {
+		if v == "" {
+			continue
+		}
+		if _, ok := ownCols[v]; !ok {
+			errs = append(errs, fmt.Sprintf("models[%d].%s %q is not a declared column of the model", mi, field, v))
 		}
 	}
 	sort.Strings(errs)

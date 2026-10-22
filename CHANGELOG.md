@@ -45,6 +45,28 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- **Vocabulario de UI móvil en manifests y metadata servida (PR K-1; todo
+  aditivo y opcional, `omitempty`).** Un manifest sin estos campos valida y se
+  sirve byte a byte igual que antes.
+  - `Action.priority` admite ahora `"overflow"` (siempre tras el menú «⋯»)
+    además de `primary`/`secondary` (schema v3 en sus dos copias, tipos v3,
+    `manifest.ActionDef.Priority` y `modelbase.ActionDef.Priority`); el
+    validador legacy también rechaza un valor fuera del conjunto.
+  - `Action.destructive` (bool): `v3.Action` → `manifest.ActionDef.Destructive`
+    → `modelbase.ActionDef.Destructive` (clave JSON `destructive`). Convive con
+    `tone: "danger"`; ninguno implica al otro.
+  - `Column.display_for` (columna `ref` de la que esta es el texto
+    desnormalizado) y `Column.card_role` (`title|subtitle|metric|status|hidden`):
+    v3 → `manifest.ColumnDef` → `dynamic.DeriveTableColumns` →
+    `modelbase.ColumnDef`. Validados en AMBOS planos: `display_for` debe nombrar
+    otra columna del modelo con `ref`.
+  - `Model.title_field` / `subtitle_field`: v3 → `manifest.ModelDefinition` y
+    `modelbase.TableMetadata.TitleField/SubtitleField` (el host los copia al
+    servir). Deben ser columnas declaradas.
+  - Nota: el kernel no genera las acciones CRUD (`enableCRUDActions` las
+    materializa el SDK), así que el `destructive` por defecto del `delete`
+    CRUD se aplica en el SDK/ops, no aquí.
+
 - **Ola 0 de plataforma para el addon de correo (UNA release de schema, todo
   aditivo y opcional).** Manifests existentes validan igual; los hosts que no
   usan lo nuevo no cambian.
