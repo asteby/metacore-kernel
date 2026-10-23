@@ -263,6 +263,24 @@ Pruebas por capa: kernel (vectores, esquema de capacidad con casos válidos/ inv
 
 Cajas por almacén y bin-packing; multiorigen (diseño de envíos §4.7); `display: "measure"` solo con dos consumidores (tres bumps + doble validación); Carta Porte (`waybill-cartaporte` lee peso resuelto → `PesoEnKg`, mercancía peligrosa del perfil, clave de producto de `fiscal_data` en cascada producto → categoría → perfil).
 
+## 8 bis. Escala (requisito del dueño: «que quede pro escalable»)
+
+Objetivo de diseño: el mismo modelo debe servir a una tienda de 50 SKUs y a un catálogo de 1 M de SKUs × N organizaciones sin cambiar de forma. Reglas y límites:
+
+| Tema | Regla | Por qué escala |
+|---|---|---|
+| Herencia | se **resuelve al leer**; cambiar un perfil o la categoría no reescribe productos | reasignar 100 000 SKUs = 1 escritura (el perfil) o N escrituras de FK en lote, nunca copias de valores; sin cascadas ni disparadores |
+| Costo por carrito | productos, variantes, perfiles y categorías se leen **en lote** por ids (`queryIn`, trozos de 100: el `data_query` del guest wasm se recorta a 200 filas y no pagina), con memo por petición; profundidad de categorías acotada a 5 con detección de ciclos | consultas por cotización constantes (≈ 4-6) sin importar el número de líneas; nada de N+1 |
+| Motor | `shared/shipspec` es puro (sin I/O), enteros, sin reflexión; `Pack` es O(n) en v1 y la v3 (FFD) es O(u log u) con u = unidades acotadas (`max_line_quantity` 99 por línea y un tope de unidades por bulto/carrito; por encima, respaldo al modo v1) | latencia predecible dentro del plazo de 4 s del fan-out a paqueterías |
+| Caché de tarifas | los bultos que produce `shipspec` son deterministas (mismo carrito → mismos bultos), base para la llave de caché del kit de paqueterías (diseño de envíos §4.5: peso a 100 g, medidas a 1 cm) | más aciertos de caché y menos llamadas pagadas a APIs |
+| Listados | «sin peso propio» = `weight_kg IS NULL` con índice parcial `WHERE deleted_at IS NULL AND weight_kg IS NULL` (migración 013, fase 2); «sin peso efectivo» (sin propio ni heredado) se cuenta con **una** consulta agregada con `LEFT JOIN` a categorías/perfiles en el informe «Listo para vender», no recorriendo filas en wasm | filtros y conteos en O(índice) aunque el catálogo crezca |
+| Migraciones y rellenos | 012 es una sentencia por tabla, idempotente y solo sobre filas `NULL` (catálogos actuales: 3 796 en ProtekAuto; el mayor conocido, 8 308); para catálogos > 500 000 filas el relleno se hace por lotes reanudables (primitivo `backfills` del kernel o tarea del host), nunca en una transacción gigante | sin bloqueos largos en actualizaciones |
+| Importación | conversión de unidades pura en el registro (sin consultas), escrituras en lote por el bundle existente, avisos por fila | mismo rendimiento que hoy; las unidades no agregan I/O |
+| Edición masiva | por filtro (categoría, «sin peso», búsqueda), no solo por selección visible; ejecución asíncrona con progreso para > 1 000 filas (acción declarativa *set fields* / tarea en segundo plano) | asignar perfil a 50 000 SKUs sin colgar la UI |
+| Multiorganización | perfiles y ajustes org-scoped (RLS de siempre); toda caché lleva la organización en la llave; presets solo configuración | sin fugas entre tenants; un preset nuevo no toca datos de clientes |
+| Contratos | solo aditivos, vectores dorados compartidos Go/TS por sha256, ADR por cambio | N addons y N tiendas evolucionan sin romper v1 ni desincronizar conversiones |
+| Multiindustria | nada de giros en kernel/SDK; lo propio de una industria es **dato** (perfiles y clases de atributo en presets: «Llanta», «Lubricante 1 L», «Medicamento», «Prenda», «Digital») | una industria nueva = un preset, no código |
+
 ## 9. Alternativas descartadas
 
 | Alternativa | Por qué no |
