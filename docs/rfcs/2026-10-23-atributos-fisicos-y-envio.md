@@ -136,7 +136,11 @@ Para ProtekAuto esto convierte «editar 3 795 SKUs» en «crear 4-6 perfiles y a
 
 ### 4.4 Empaques (`ProductPackaging`, addon `products`, fase 3)
 
-`product_id`, `name` («Caja c/4»), `quantity` (unidades de venta contenidas, decimal), `barcode` (GTIN-14 típico), `weight_kg`, `length_cm/width_cm/height_cm`, `sales`, `purchase`, `ships_as_is` (la caja sale cerrada tal cual). Lo usan compras (comprar por caja), POS (escanear la caja = N piezas), inventario (recibir por caja) y el empacador: si el carrito pide ≥ `quantity` unidades y el empaque `ships_as_is`, esas unidades viajan en la caja con su peso y medidas. ProtekAuto: los 40 `caja_piezas` se vuelven 40 filas (importador, §6); el nombre «CAJA C/4» deja de engañar al comprador cuando la tienda lo decida.
+**Decisión con datos (ProtekAuto, verificado):** todos los aceites «garrafa 5 L» (mineral, semi y sintético, con o sin «CAJA C/4» en el nombre) tienen `weight_kg = 4.6` y precios de $570 a $977 MXN. Por caja de 4 serían ~$30-50/L (imposible); por garrafa, $114-$195/L (coherente con el mercado: un 5 L Liqui Moly cuesta $2 064 en Sanborns). Por lo tanto **precio y peso son por pieza** y «CAJA C/N» / `attributes.caja_piezas` (19 nombres con «CAJA C/», 40 productos con `caja_piezas`) es el **empaque del proveedor**, no la unidad de venta. Pendiente de confirmar con el dueño del negocio (Rodrigo) **solo** si la tienda restringe la venta a cajas cerradas.
+
+Modelo: `product_id`, `name` («Caja c/4»), **`pieces_per_package`** (unidades de venta contenidas, decimal para venta por medida), `barcode` (GTIN-14 típico), `weight_kg`, `length_cm/width_cm/height_cm` (de la caja completa; si faltan se estiman como `pieces_per_package` × pieza apiladas, marcado como estimado), `sales`, `purchase`, `ships_as_is` (la caja sale cerrada tal cual). Para qué sirve: compras (comprar por caja), recepción en inventario (caja × piezas al ledger, que sigue en piezas), POS (escanear la caja = N piezas) y envío (si el carrito pide ≥ `pieces_per_package` y el empaque `ships_as_is`, esas piezas viajan en la caja con su peso y medidas).
+
+**`sold_in_package_multiples`** (opcional, **apagado** por omisión, nunca se asume): ajuste por tienda con override por producto/empaque; encendido, el carrito y el POS solo aceptan cantidades múltiplo de `pieces_per_package` (error de validación con el múltiplo válido más cercano). La fase 1 no toca `caja_piezas`; el importador lo convierte en empaque en la fase 3 (registro `packagings[]`), no por SQL con claves de la tienda.
 
 ### 4.5 Peso volumétrico y bultos (`addons/shared/shipspec`)
 
@@ -303,7 +307,7 @@ Objetivo de diseño: el mismo modelo debe servir a una tienda de 50 SKUs y a un 
 
 1. **Volteo de precedencia** columna > `metadata` en fase 2 (tras 012): ¿de acuerdo? (recomendado: sí).
 2. **`missing_weight_policy` por omisión** para tiendas nuevas: `allow` (actual), `estimate` (perfil/estimación) o `block`. Recomendado: `estimate` si hay perfil, si no `block`.
-3. **ProtekAuto**: ¿se vende por pieza aunque el nombre diga «CAJA C/4»? (los datos dicen que sí: precio y peso de una pieza). ¿Se renombran esos 40 productos o se modela la caja como empaque vendible?
+3. **ProtekAuto**: los datos dicen que se vende **por pieza** (§4.4) y que «CAJA C/N» es el empaque del proveedor. Falta que Rodrigo confirme si la tienda restringe la venta a cajas cerradas (`sold_in_package_multiples`, apagado por omisión) y si se renombran los 19 productos con «CAJA C/» en el nombre para no confundir al comprador.
 4. **`parcel_dimensions = stack`** para ProtekAuto una vez que haya medidas en columnas: sube la precisión de la cotización con varias piezas pero puede subir el precio cotizado frente a la caja de 20×20×20 por omisión.
 5. **Unidades de visualización**: ¿métrico fijo para MX y imperial para US vía preset de región, con override por organización?
 6. **Tablas del host de UoM**: ¿congelar y planear su retiro?
