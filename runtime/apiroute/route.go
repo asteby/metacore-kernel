@@ -54,6 +54,17 @@ type Route struct {
 	Cache *Cache
 	// Do is the handler reference ("wasm:<export>" | "compiled:<fn>").
 	Do string
+	// Audience is "store" or "tooling" (see v3.APIRoute.Audience); "" is
+	// read as "store" — use EffectiveAudience.
+	Audience string
+}
+
+// EffectiveAudience returns the route's audience, defaulting to "store".
+func (r Route) EffectiveAudience() string {
+	if r.Audience == "" {
+		return v3.APIAudienceStore
+	}
+	return r.Audience
 }
 
 // RoutesFromManifest converts the manifest projection (manifest.Manifest.
@@ -71,6 +82,8 @@ func RoutesFromManifest(api []v3.APIRoute) []Route {
 			Auth:   AuthKind(r.Auth),
 			Scopes: slices.Clone(r.Scopes),
 			Do:     r.Do,
+
+			Audience: r.Audience,
 		}
 		if r.Cache != nil {
 			rt.Cache = &Cache{MaxAge: r.Cache.MaxAge, SWR: r.Cache.SWR, Private: r.Cache.Private}
@@ -90,6 +103,8 @@ func (r Route) toManifest() v3.APIRoute {
 		Auth:   string(r.Auth),
 		Scopes: r.Scopes,
 		Do:     r.Do,
+
+		Audience: r.Audience,
 	}
 	if r.Cache != nil {
 		out.Cache = &v3.APICache{MaxAge: r.Cache.MaxAge, SWR: r.Cache.SWR, Private: r.Cache.Private}

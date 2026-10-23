@@ -297,10 +297,14 @@ func authorize(r Route, p Principal) error {
 	default:
 		return fmt.Errorf("%w: route %s.%s has unknown auth %q", ErrForbidden, r.Addon, r.Key, r.Auth)
 	}
+	var missing []string
 	for _, s := range r.Scopes {
 		if !p.HasScope(s) {
-			return fmt.Errorf("%w: missing scope %q", ErrForbidden, s)
+			missing = append(missing, s)
 		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: route %s.%s missing scopes %q", InsufficientScope(missing...), r.Addon, r.Key, missing)
 	}
 	return nil
 }

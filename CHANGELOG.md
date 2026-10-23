@@ -7,6 +7,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `apitoken.Service.SetScopes(ctx, id, scopes)` cambia los alcances de un token
+  existente sin rotarlo (mismas reglas que `Issue`, incluida la lista permitida
+  de `pk_`; falla con `ErrNotFound`/`ErrRevoked`/`ErrExpired`; atomico via la
+  interfaz opcional `apitoken.ScopeStore`, implementada por `MemoryStore` y
+  `GormStore`). Ruta opcional `PATCH /:id/scopes` en `apitoken.Handler`.
+- `apiroute.ErrInsufficientScope` / `apiroute.InsufficientScope(missing...)`:
+  el 403 por alcance faltante lleva `code: "insufficient_scope"`,
+  `required_scopes: [...]` y `legacy_code: "forbidden"`. `errors.Is(err,
+  ErrForbidden)` sigue siendo cierto. `apiroute.Error` gana `LegacyCode` y
+  `RequiredScopes`. Los clientes que leen `error.code == "forbidden"` deben
+  pasar a `insufficient_scope` (o leer `legacy_code`); `legacy_code` se
+  mantiene al menos un minor.
+- `contributions.api[].audience` (`"store"` por omision | `"tooling"`),
+  aditivo y opcional; `apiroute.Route.Audience` / `EffectiveAudience()`.
+  Esquema (`manifest-v3.schema.json`, ambas copias) y validador lo aceptan.
+
 ### Changed (incompatible)
 
 Validado con la herramienta de manifests contra los 93 manifests de

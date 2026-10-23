@@ -367,3 +367,126 @@ func TestKindOf(t *testing.T) {
 		t.Fatal("non-base64url accepted")
 	}
 }
+
+func TestSetScopes(t *testing.T) {
+	eachStore(t, func(t *testing.T, store Store) {
+		clk := newClock()
+		svc := newSvc(store, clk)
+		ctx := context.Background()
+		exp := clk.Now().Add(24 * time.Hour)
+		plain, tok, err := svc.Issue(ctx, org, "ssr", KindSecret, []string{"catalog:read"}, &exp, WithRateLimit(30))
+		if err != nil {
+			t.Fatal(err)
+		}
+		clk.Advance(time.Minute)
+
+		got, err := svc.SetScopes(ctx, tok.ID, []string{"customer:write", " catalog:read", "customer:write"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(got.Scopes, ",") != "catalog:read,customer:write" {
+			t.Fatalf("scopes = %v", got.Scopes)
+		}
+		if got.TokenHash != tok.TokenHash || got.Prefix != tok.Prefix || got.Status != StatusActive ||
+			got.ExpiresAt == nil || !got.ExpiresAt.Equal(exp) || got.RateLimitPerMinute != 30 || got.Name != "ssr" ||
+			!got.UpdatedAt.Equal(clk.Now()) {
+			t.Fatalf("SetScopes changed more than scopes: %+v", got)
+		}
+		// Same secret, new scopes on the very next request (no cache).
+		at, err := svc.Authenticate(ctx, plain)
+		if err != nil || strings.Join(at.Scopes, ",") != "catalog:read,customer:write" {
+			t.Fatalf("authenticate after SetScopes: %v %+v", err, at)
+		}
+		// Invalid input leaves the token untouched.
+		for _, bad := range [][]string{nil, {"Bad Scope"}} {
+			if _, err := svc.SetScopes(ctx, tok.ID, bad); !errors.Is(err, ErrInvalidScope) {
+				t.Fatalf("scopes %v: %v", bad, err)
+			}
+		}
+		if cur, _ := svc.Get(ctx, tok.ID); strings.Join(cur.Scopes, ",") != "catalog:read,customer:write" {
+			t.Fatalf("scopes changed by a rejected call: %v", cur.Scopes)
+		}
+		if _, err := svc.SetScopes(ctx, uuid.New(), []string{"catalog:read"}); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("unknown id: %v", err)
+		}
+		// Expired.
+		clk.Advance(24 * time.Hour)
+		if _, err := svc.SetScopes(ctx, tok.ID, []string{"catalog:read"}); !errors.Is(err, ErrExpired) {
+			t.Fatalf("expired: %v", err)
+		}
+	})
+}
+
+func TestSetScopes_PublishableAllowlistAndRevoked(t *testing.T) {
+	eachStore(t, func(t *testing.T, store Store) {
+		svc := newSvc(store, newClock())
+		ctx := context.Background()
+		_, pk, _ := svc.Issue(ctx, org, "browser", KindPublishable, []string{"catalog:read"}, nil)
+		for _, bad := range []string{"customer:write", "checkout:write", "*", "catalog:*", "*:read"} {
+			if _, err := svc.SetScopes(ctx, pk.ID, []string{"catalog:read", bad}); !errors.Is(err, ErrInvalidScope) {
+				t.Fatalf("pk with %q: %v", bad, err)
+			}
+		}
+		got, err := svc.SetScopes(ctx, pk.ID, []string{"cart:write", "content:read"})
+		if err != nil || strings.Join(got.Scopes, ",") != "cart:write,content:read" {
+			t.Fatalf("allowed pk scopes: %v %+v", err, got)
+		}
+		if err := svc.Revoke(ctx, pk.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.SetScopes(ctx, pk.ID, []string{"catalog:read"}); !errors.Is(err, ErrRevoked) {
+			t.Fatalf("revoked: %v", err)
+		}
+		if cur, _ := svc.Get(ctx, pk.ID); cur.Status != StatusRevoked || strings.Join(cur.Scopes, ",") != "cart:write,content:read" {
+			t.Fatalf("revoked token mutated: %+v", cur)
+		}
+	})
+}
+
+func TestSetScopes_Concurrent(t *testing.T) {
+	eachStore(t, func(t *testing.T, store Store) {
+		svc := newSvc(store, newClock())
+		ctx := context.Background()
+		plain, tok, _ := svc.Issue(ctx, org, "ssr", KindSecret, []string{"catalog:read"}, nil)
+		sets := [][]string{{"catalog:read"}, {"cart:write", "catalog:read"}, {"customer:read", "customer:write"}}
+		var wg sync.WaitGroup
+		for i := 0; i < 24; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				if _, err := svc.SetScopes(ctx, tok.ID, sets[i%len(sets)]); err != nil {
+					t.Errorf("SetScopes: %v", err)
+				}
+				if _, err := svc.Authenticate(ctx, plain); err != nil {
+					t.Errorf("Authenticate: %v", err)
+				}
+			}(i)
+		}
+		wg.Wait()
+		cur, _ := svc.Get(ctx, tok.ID)
+		ok := false
+		for _, s := range sets {
+			ok = ok || strings.Join(s, ",") == strings.Join(cur.Scopes, ",")
+		}
+		if !ok || cur.Status != StatusActive {
+			t.Fatalf("final scopes are not one of the written sets: %+v", cur)
+		}
+	})
+}
+
+// A Store without ScopeStore still gets a correct (process-local) SetScopes.
+type plainStore struct{ Store }
+
+func TestSetScopes_FallbackStore(t *testing.T) {
+	svc := newSvc(plainStore{NewMemoryStore()}, newClock())
+	ctx := context.Background()
+	_, tok, _ := svc.Issue(ctx, org, "ssr", KindSecret, []string{"catalog:read"}, nil)
+	got, err := svc.SetScopes(ctx, tok.ID, []string{"orders:read"})
+	if err != nil || strings.Join(got.Scopes, ",") != "orders:read" {
+		t.Fatalf("fallback: %v %+v", err, got)
+	}
+	_ = svc.Revoke(ctx, tok.ID)
+	if _, err := svc.SetScopes(ctx, tok.ID, []string{"catalog:read"}); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("fallback revoked: %v", err)
+	}
+}

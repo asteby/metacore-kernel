@@ -25,6 +25,14 @@
 //	plain2, tok2, err := svc.Rotate(ctx, tok.ID, 24*time.Hour) // old works 24h more
 //	err = svc.Revoke(ctx, tok2.ID)
 //
+// SetScopes(ctx, id, scopes) replaces a token's scopes without touching its
+// secret, expiry or status (so a missing scope is repaired without rotating
+// the credential). It applies Issue's rules, including the publishable
+// allowlist, fails with ErrNotFound / ErrRevoked / ErrExpired, and is atomic
+// (Stores implementing ScopeStore do it in one conditional write; MemoryStore
+// and GormStore do). Authenticate reads the store on every call, so the
+// change is effective on the next request.
+//
 // Rotation keeps two tokens valid during the grace window: the new one
 // records RotatedFromID and the old one's ExpiresAt is pulled in to
 // now+grace (grace <= 0 revokes it at once).
@@ -33,5 +41,5 @@
 // "Authorization: Bearer pk_|sk_|pt_..." into an apiroute.Principal (kind
 // token) with per-token rate limiting (Limiter; MemoryLimiter by default),
 // Middleware does the same for plain Fiber routes, and Handler is the staff
-// CRUD (list / issue / rotate / revoke) for an organization's tokens.
+// CRUD (list / issue / rotate / PATCH /:id/scopes / revoke) for an organization's tokens.
 package apitoken

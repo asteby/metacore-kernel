@@ -522,3 +522,33 @@ func TestGateway_MarketResolution(t *testing.T) {
 		t.Fatal("market resolver error must fail the request")
 	}
 }
+
+func TestGateway_InsufficientScopeBody(t *testing.T) {
+	gw := newTestGateway(t, &recorder{})
+	_, err := gw.Handle(context.Background(), get("/storefront/products/x", tokenPrincipal("cart:write")))
+	if !errors.Is(err, ErrInsufficientScope) || !errors.Is(err, ErrForbidden) {
+		t.Fatalf("err = %v, want insufficient_scope that still matches ErrForbidden", err)
+	}
+	resp := ErrorResponse(err)
+	var body struct {
+		Error struct {
+			Code           string   `json:"code"`
+			LegacyCode     string   `json:"legacy_code"`
+			Message        string   `json:"message"`
+			RequiredScopes []string `json:"required_scopes"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(resp.Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	e := body.Error
+	if resp.Status != 403 || e.Code != "insufficient_scope" || e.LegacyCode != "forbidden" ||
+		e.Message != "insufficient scope" || len(e.RequiredScopes) != 1 || e.RequiredScopes[0] != "catalog:read" {
+		t.Fatalf("response = %d %s", resp.Status, resp.Body)
+	}
+	// The unknown-auth guard and plain ErrForbidden keep the old shape.
+	plain := ErrorResponse(ErrForbidden)
+	if strings.Contains(string(plain.Body), "legacy_code") || strings.Contains(string(plain.Body), "required_scopes") {
+		t.Fatalf("plain forbidden changed: %s", plain.Body)
+	}
+}

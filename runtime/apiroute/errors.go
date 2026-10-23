@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -24,6 +25,14 @@ type Error struct {
 	Field string
 	// RetryAfter, when > 0, is sent as Retry-After (seconds).
 	RetryAfter int
+	// LegacyCode, when set, is the code older clients matched before Code was
+	// refined. It is sent as "legacy_code" and errors.Is also matches the
+	// sentinel carrying it (an insufficient_scope error still matches
+	// ErrForbidden).
+	LegacyCode string
+	// RequiredScopes lists the scopes the caller lacked (insufficient_scope).
+	// They come from the route's public contract, never from the credential.
+	RequiredScopes []string
 }
 
 // Error implements error.
@@ -38,7 +47,10 @@ func (e *Error) Error() string {
 // match it under errors.Is.
 func (e *Error) Is(target error) bool {
 	t, ok := target.(*Error)
-	return ok && t != nil && e != nil && t.Status == e.Status && t.Code == e.Code
+	if !ok || t == nil || e == nil || t.Status != e.Status {
+		return false
+	}
+	return t.Code == e.Code || (e.LegacyCode != "" && t.Code == e.LegacyCode)
 }
 
 // NewError builds an Error with the given HTTP status, code and message.
@@ -51,6 +63,16 @@ func NewError(status int, code, message string) *Error {
 func RateLimited(retryAfter int) *Error {
 	e := *ErrRateLimited
 	e.RetryAfter = retryAfter
+	return &e
+}
+
+// InsufficientScope returns ErrInsufficientScope carrying the scopes the
+// caller lacks (sorted copy). errors.Is matches both ErrInsufficientScope and
+// ErrForbidden.
+func InsufficientScope(missing ...string) *Error {
+	e := *ErrInsufficientScope
+	e.RequiredScopes = slices.Clone(missing)
+	slices.Sort(e.RequiredScopes)
 	return &e
 }
 
@@ -70,6 +92,11 @@ var (
 	ErrUnauthorized = &Error{Status: http.StatusUnauthorized, Code: "unauthorized", Message: "authentication required"}
 	// ErrForbidden — authenticated, but missing a required scope.
 	ErrForbidden = &Error{Status: http.StatusForbidden, Code: "forbidden", Message: "insufficient scope"}
+	// ErrInsufficientScope — authenticated, but the credential lacks scopes
+	// the route requires. Answers 403 code "insufficient_scope" with
+	// "required_scopes" and, for clients that matched the former code,
+	// "legacy_code": "forbidden" (kept for at least one minor release).
+	ErrInsufficientScope = &Error{Status: http.StatusForbidden, Code: "insufficient_scope", Message: "insufficient scope", LegacyCode: "forbidden"}
 	// ErrPayloadTooLarge — the request body exceeds the gateway limit.
 	ErrPayloadTooLarge = &Error{Status: http.StatusRequestEntityTooLarge, Code: "payload_too_large", Message: "request body too large"}
 	// ErrRateLimited — the principal exceeded its request budget.
@@ -119,9 +146,15 @@ func ErrorResponse(err error) Response {
 	if status < 400 || status > 599 {
 		status = http.StatusInternalServerError
 	}
-	payload := map[string]string{"code": e.Code, "message": e.Message}
+	payload := map[string]any{"code": e.Code, "message": e.Message}
 	if e.Field != "" {
 		payload["field"] = e.Field
+	}
+	if e.LegacyCode != "" {
+		payload["legacy_code"] = e.LegacyCode
+	}
+	if len(e.RequiredScopes) > 0 {
+		payload["required_scopes"] = e.RequiredScopes
 	}
 	body, _ := json.Marshal(map[string]any{"error": payload})
 	headers := map[string]string{

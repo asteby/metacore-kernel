@@ -179,3 +179,26 @@ func TestRoutesFromManifest(t *testing.T) {
 		t.Fatal("nil in, nil out")
 	}
 }
+
+func TestRoute_Audience(t *testing.T) {
+	in := []v3.APIRoute{
+		{Key: "a", Method: "GET", Path: "/a", Auth: "token", Scopes: []string{"content:read"}, Do: "wasm:a"},
+		{Key: "b", Method: "PUT", Path: "/b", Auth: "token", Scopes: []string{"content:write"}, Do: "wasm:b", Audience: "tooling"},
+	}
+	out := RoutesFromManifest(in)
+	if out[0].Audience != "" || out[0].EffectiveAudience() != "store" || out[1].EffectiveAudience() != "tooling" {
+		t.Fatalf("audiences: %+v", out)
+	}
+	if out[1].toManifest().Audience != "tooling" {
+		t.Fatal("audience lost converting back")
+	}
+	r := NewRouter()
+	if err := r.Register("x", out); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	bad := out[0]
+	bad.Audience = "public"
+	if err := NewRouter().Register("y", []Route{bad}); err == nil {
+		t.Fatal("unknown audience must be rejected at registration")
+	}
+}

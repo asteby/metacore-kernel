@@ -23,6 +23,16 @@ var apiRouteDoPrefixes = map[string]struct{}{
 	"wasm": {}, "compiled": {},
 }
 
+// API route audiences. An empty Audience means APIAudienceStore.
+const (
+	APIAudienceStore   = "store"
+	APIAudienceTooling = "tooling"
+)
+
+var apiRouteAudiences = map[string]struct{}{
+	APIAudienceStore: {}, APIAudienceTooling: {},
+}
+
 var (
 	apiRouteKeyRe  = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 	apiScopeRe     = regexp.MustCompile(`^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$`)
@@ -173,6 +183,11 @@ func ValidateAPIRoute(r APIRoute) []string {
 			errs = append(errs, fmt.Sprintf("scope %q is repeated", s))
 		}
 		seenScope[s] = struct{}{}
+	}
+	if r.Audience != "" {
+		if _, ok := apiRouteAudiences[r.Audience]; !ok {
+			errs = append(errs, fmt.Sprintf("audience %q is not one of store|tooling", r.Audience))
+		}
 	}
 	if c := r.Cache; c != nil {
 		if r.Method != "GET" {

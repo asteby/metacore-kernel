@@ -149,12 +149,14 @@ func NewHandler(svc *Service, resolver StaffResolver) *Handler {
 //	GET    /             List the organization's tokens
 //	POST   /             Issue {name, kind, scopes, expires_at?, rate_limit_per_minute?}
 //	POST   /:id/rotate   Rotate {grace_seconds?} (default 0: old token revoked)
+//	PATCH  /:id/scopes   Replace the scopes {scopes} (same secret, no rotation)
 //	POST   /:id/revoke   Revoke
 //	DELETE /:id          Revoke
 func (h *Handler) Mount(r fiber.Router) {
 	r.Get("/", h.list)
 	r.Post("/", h.issue)
 	r.Post("/:id/rotate", h.rotate)
+	r.Patch("/:id/scopes", h.setScopes)
 	r.Post("/:id/revoke", h.revoke)
 	r.Delete("/:id", h.revoke)
 }
@@ -232,6 +234,26 @@ func (h *Handler) rotate(c fiber.Ctx) error {
 	}
 	c.Set(fiber.HeaderCacheControl, "no-store")
 	return ok(c, fiber.Map{"token": plain, "api_token": nt})
+}
+
+type scopesBody struct {
+	Scopes []string `json:"scopes"`
+}
+
+func (h *Handler) setScopes(c fiber.Ctx) error {
+	t, err := h.owned(c)
+	if err != nil {
+		return failErr(c, err)
+	}
+	var b scopesBody
+	if err := c.Bind().Body(&b); err != nil {
+		return fail(c, fiber.StatusBadRequest, "invalid body")
+	}
+	nt, err := h.svc.SetScopes(c.Context(), t.ID, b.Scopes)
+	if err != nil {
+		return failErr(c, err)
+	}
+	return ok(c, fiber.Map{"api_token": nt})
 }
 
 func (h *Handler) revoke(c fiber.Ctx) error {
