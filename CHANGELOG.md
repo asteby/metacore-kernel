@@ -45,6 +45,11 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- **`webhookin`: alias `raw_body`** (`PayloadRawBody`) en el payload de
+  `BuildPayload`: el cuerpo exacto como texto, solo si es UTF-8 válido (ausente
+  en cuerpos binarios). Corrige `raw_body_missing` en addons (skydropx,
+  noventa9minutos, stripe_tax) que leen `raw_body`. `raw_body_b64` sigue siendo
+  la fuente canónica, siempre presente; verificar firmas sobre ella.
 - **Bloques de configuración del conector** (`connectors[].form_layout.sections[].blocks`,
   `manifest/v3/connector_blocks.go`): elementos no-input de un paso del
   asistente de conexión. `webhook_url` (URL pública del webhook `webhooks[].key`
