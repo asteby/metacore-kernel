@@ -1781,6 +1781,8 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 
 	// Addon-level pipeline-runtime primitives (connectors / schedules / webhooks).
 	errs = append(errs, validatePipelineRuntime(&m)...)
+	// Connector setup blocks (webhook_url / instructions / action).
+	errs = append(errs, validateFormBlocks(&m)...)
 	// Per-user desktop agents (distinct from edge_devices hardware pairing).
 	errs = append(errs, validateDesktopClients(&m)...)
 

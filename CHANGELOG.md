@@ -45,6 +45,18 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- **Bloques de configuración del conector** (`connectors[].form_layout.sections[].blocks`,
+  `manifest/v3/connector_blocks.go`): elementos no-input de un paso del
+  asistente de conexión. `webhook_url` (URL pública del webhook `webhooks[].key`
+  para la organización actual, la calcula el host, con copiar),
+  `instructions` (texto + enlaces https al panel del proveedor) y `action`
+  (botón de verificación ligado a un export wasm que el host corre con las
+  credenciales guardadas; resultado `{ok,status,message,details[]}`).
+  Aditivo: un `form_layout` sin `blocks` se comporta igual. Ambos validadores
+  usan `v3.ValidateConnectorBlocks`; `blocks` fuera de un conector (modelos,
+  edge devices) se rechaza; los `export` de acciones se suman a
+  `backend.exports`. Ejemplo: `docs/spec/v3/examples/addon-connector-blocks-example.json`.
+
 - **Vocabulario de UI móvil en manifests y metadata servida (PR K-1; todo
   aditivo y opcional, `omitempty`).** Un manifest sin estos campos valida y se
   sirve byte a byte igual que antes.

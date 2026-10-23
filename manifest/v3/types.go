@@ -1417,6 +1417,11 @@ type FormSection struct {
 	// kernel only carries it through; the host owns the provider registry
 	// and the SDK the panel. Nil = a plain section.
 	Assist *FormAssist `json:"assist,omitempty"`
+	// Blocks are non-input elements of a CONNECTOR setup step: the per-org
+	// webhook URL to paste in the provider's panel, instructions with links,
+	// and verification actions with a visible result. Only valid inside
+	// connectors[].form_layout; see FormBlock (connector_blocks.go).
+	Blocks []FormBlock `json:"blocks,omitempty"`
 }
 
 // FormAssist is the declaration of an AI-assisted form step (see
