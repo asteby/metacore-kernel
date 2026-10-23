@@ -1931,6 +1931,13 @@ type APIRoute struct {
 	// Do is the handler reference: "wasm:<export>" | "compiled:<fn>".
 	// Required.
 	Do string `json:"do"`
+	// Audience says who the route is for: "store" (default when empty — the
+	// public storefront surface a store credential may use) or "tooling"
+	// (back-office/automation routes that a store profile must not be granted,
+	// e.g. content writes). Hosts derive the scopes of a profile from the
+	// routes of its audience. Optional and additive; it does not change
+	// authorization by itself.
+	Audience string `json:"audience,omitempty"`
 }
 
 // APICache is the HTTP caching policy of a GET APIRoute. With Private the

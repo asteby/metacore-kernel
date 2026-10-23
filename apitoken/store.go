@@ -31,6 +31,17 @@ type Store interface {
 	TouchLastUsed(ctx context.Context, id uuid.UUID, at time.Time) error
 }
 
+// ScopeStore is an optional Store capability: replace a token's scopes
+// atomically, only while the token is usable. Service.SetScopes uses it when
+// the Store implements it (MemoryStore and GormStore do); otherwise it falls
+// back to Get + Update serialized by the Service (single process only).
+type ScopeStore interface {
+	// UpdateScopes sets scopes and updated_at on token id, touching nothing
+	// else, provided the token is active (not revoked) and not expired at now.
+	// It returns the stored token, ErrNotFound, ErrRevoked or ErrExpired.
+	UpdateScopes(ctx context.Context, id uuid.UUID, scopes []string, now time.Time) (*APIToken, error)
+}
+
 // --- in-memory ------------------------------------------------------------
 
 // MemoryStore is a goroutine-safe in-memory Store for tests and single-node
@@ -128,6 +139,23 @@ func (s *MemoryStore) Update(_ context.Context, t *APIToken) error {
 	return nil
 }
 
+// UpdateScopes implements ScopeStore.
+func (s *MemoryStore) UpdateScopes(_ context.Context, id uuid.UUID, scopes []string, now time.Time) (*APIToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.byID[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if err := t.Usable(now); err != nil {
+		return nil, err
+	}
+	t.Scopes = slices.Clone(scopes)
+	t.UpdatedAt = now
+	s.byID[id] = t
+	return cloneToken(t), nil
+}
+
 // TouchLastUsed implements Store.
 func (s *MemoryStore) TouchLastUsed(_ context.Context, id uuid.UUID, at time.Time) error {
 	s.mu.Lock()
@@ -216,6 +244,29 @@ func (s *GormStore) Update(ctx context.Context, t *APIToken) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// UpdateScopes implements ScopeStore. The usability check lives in the UPDATE's
+// WHERE clause, so a concurrent Revoke cannot be overwritten.
+func (s *GormStore) UpdateScopes(ctx context.Context, id uuid.UUID, scopes []string, now time.Time) (*APIToken, error) {
+	res := s.db.WithContext(ctx).Model(&APIToken{}).
+		Where("id = ? AND status = ? AND (expires_at IS NULL OR expires_at > ?)", id, StatusActive, now).
+		Select("scopes", "updated_at").
+		UpdateColumns(&APIToken{Scopes: scopes, UpdatedAt: now})
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	t, err := s.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if res.RowsAffected == 0 {
+		if err := t.Usable(now); err != nil {
+			return nil, err
+		}
+		return nil, ErrNotFound
+	}
+	return t, nil
 }
 
 // TouchLastUsed implements Store.

@@ -2649,6 +2649,13 @@
           "type": "string",
           "pattern": "^(wasm|compiled):.+$",
           "description": "Handler reference: 'wasm:<export>' | 'compiled:<fn>'."
+        },
+        "audience": {
+          "type": "string",
+          "enum": [
+            "store", "tooling"
+          ],
+          "description": "Who the route is for: 'store' (default, the storefront surface) or 'tooling' (back-office/automation routes a store profile must not be granted). Additive; does not change authorization."
         }
       }
     },

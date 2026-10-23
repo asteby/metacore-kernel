@@ -35,6 +35,8 @@ type Service struct {
 	log         *slog.Logger
 	publishable func(scope string) bool
 
+	scopesMu sync.Mutex // serializes the SetScopes fallback for non-ScopeStore stores
+
 	mu      sync.Mutex
 	touched map[uuid.UUID]time.Time // last last_used_at write per token
 }
@@ -328,6 +330,46 @@ func (s *Service) Rotate(ctx context.Context, id uuid.UUID, grace time.Duration)
 		return "", nil, fmt.Errorf("apitoken: rotate: new token %s issued but old token not updated: %w", nt.ID, err)
 	}
 	return plain, nt, nil
+}
+
+// SetScopes replaces the scopes of an existing token without touching its
+// secret, hash, prefix, expiry, status or rate limit, and returns the stored
+// token. The scopes obey the same rules as Issue (grammar, normalization and,
+// for publishable tokens, the publishable allowlist). It fails with
+// ErrNotFound, ErrRevoked or ErrExpired when the token is not usable. The
+// change is atomic and visible to the next Authenticate (which reads the store
+// on every call; there is no cache to invalidate).
+func (s *Service) SetScopes(ctx context.Context, id uuid.UUID, scopes []string) (*APIToken, error) {
+	cur, err := s.store.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	now := s.now().UTC()
+	if err := cur.Usable(now); err != nil {
+		return nil, err
+	}
+	norm, err := s.validate(cur, scopes, now)
+	if err != nil {
+		return nil, err
+	}
+	if ss, ok := s.store.(ScopeStore); ok {
+		return ss.UpdateScopes(ctx, id, norm, now)
+	}
+	s.scopesMu.Lock()
+	defer s.scopesMu.Unlock()
+	t, err := s.store.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := t.Usable(now); err != nil {
+		return nil, err
+	}
+	t.Scopes = norm
+	t.UpdatedAt = now
+	if err := s.store.Update(ctx, t); err != nil {
+		return nil, err
+	}
+	return t, nil
 }
 
 // Revoke disables a token permanently. Revoking a revoked token is a no-op.

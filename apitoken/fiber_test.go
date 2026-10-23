@@ -247,3 +247,46 @@ func TestStaffHandler(t *testing.T) {
 		t.Fatalf("rotated token: %v", err)
 	}
 }
+
+func TestHandler_SetScopes(t *testing.T) {
+	ctx := context.Background()
+	svc := newSvc(NewMemoryStore(), newClock())
+	other := uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+	app := fiber.New()
+	NewHandler(svc, func(c fiber.Ctx) (uuid.UUID, uuid.UUID, error) {
+		if c.Get("X-Org") == "other" {
+			return other, uuid.Nil, nil
+		}
+		return org, uuid.Nil, nil
+	}).Mount(app.Group("/api-tokens"))
+	_, sk, _ := svc.Issue(ctx, org, "ssr", KindSecret, []string{"catalog:read"}, nil)
+	_, pk, _ := svc.Issue(ctx, org, "browser", KindPublishable, []string{"catalog:read"}, nil)
+
+	patch := func(id uuid.UUID, body string, hdr map[string]string) (int, string) {
+		req := httptest.NewRequest("PATCH", "/api-tokens/"+id.String()+"/scopes", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		resp, err := app.Test(req, fiber.TestConfig{Timeout: 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if st, body := patch(sk.ID, `{"scopes":["catalog:read","customer:write"]}`, nil); st != 200 || !strings.Contains(body, "customer:write") {
+		t.Fatalf("patch: %d %s", st, body)
+	}
+	if st, _ := patch(pk.ID, `{"scopes":["customer:write"]}`, nil); st != 400 {
+		t.Fatalf("pk disallowed scope: %d", st)
+	}
+	if st, _ := patch(sk.ID, `{"scopes":["customer:write"]}`, map[string]string{"X-Org": "other"}); st != 404 {
+		t.Fatalf("foreign org: %d", st)
+	}
+	_ = svc.Revoke(ctx, sk.ID)
+	if st, _ := patch(sk.ID, `{"scopes":["catalog:read"]}`, nil); st != 409 {
+		t.Fatalf("revoked: %d", st)
+	}
+}

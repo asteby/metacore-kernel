@@ -123,3 +123,17 @@ func TestParseAPIPath(t *testing.T) {
 		t.Fatalf("root: %+v %v", segs, err)
 	}
 }
+
+func TestValidateAPIRoute_Audience(t *testing.T) {
+	r := APIRoute{Key: "k", Method: "GET", Path: "/k", Auth: "token", Scopes: []string{"content:read"}, Do: "wasm:k"}
+	for _, ok := range []string{"", "store", "tooling"} {
+		r.Audience = ok
+		if errs := ValidateAPIRoute(r); len(errs) != 0 {
+			t.Fatalf("audience %q: %v", ok, errs)
+		}
+	}
+	r.Audience = "admin"
+	if errs := ValidateAPIRoute(r); len(errs) != 1 || !strings.Contains(errs[0], "audience") {
+		t.Fatalf("audience admin: %v", errs)
+	}
+}

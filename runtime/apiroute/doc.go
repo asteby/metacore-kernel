@@ -47,6 +47,13 @@
 // handler as Request.Market ("" = organization level) and scopes capability
 // resolution to (organization, market, capability).
 //
+// Errors: a missing scope answers 403 with code "insufficient_scope", the
+// missing scopes in "required_scopes" (they are part of the route's public
+// contract) and "legacy_code": "forbidden" for clients that matched the old
+// code. errors.Is(err, ErrForbidden) still holds. Route.Audience ("store" by
+// default, or "tooling") lets hosts derive a store credential's scopes from
+// the store routes only; it does not change authorization.
+//
 // A WASM dispatcher marshals the Request, invokes the export named after
 // "wasm:" for Request.Addon, and returns DecodeResponse(out).
 //
