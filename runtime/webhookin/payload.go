@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -70,6 +71,11 @@ var responseHeaderIndex = func() map[string]string {
 // the original (v0) fields; the rest were added for provider-grade
 // verification. `body` is a convenience copy that JSON serialization compacts
 // and may re-escape — verify signatures over `raw_body_b64` only.
+//
+// `raw_body` is a compatibility alias for addons that read the body as text:
+// the exact body as a string, present ONLY when the bytes are valid UTF-8
+// (absent, never empty, for binary bodies). It is not the canonical source:
+// `raw_body_b64` is always present and signatures must be verified over it.
 const (
 	PayloadOrg        = "org"          // string, org UUID
 	PayloadWebhook    = "webhook"      // string, route key
@@ -78,6 +84,7 @@ const (
 	PayloadQuery      = "query"        // map[string][]string, never nil
 	PayloadHeaders    = "headers"      // map[string]string, lowercase keys, allowlisted
 	PayloadRawBodyB64 = "raw_body_b64" // string, base64 (std, padded) of the exact body
+	PayloadRawBody    = "raw_body"     // string, exact body text; only when valid UTF-8
 	PayloadBody       = "body"         // parsed JSON when valid, else string
 	PayloadReceivedAt = "received_at"  // string, RFC 3339 (UTC, nanoseconds)
 )
@@ -96,7 +103,7 @@ func BuildPayload(route Route, orgID uuid.UUID, in Inbound) map[string]any {
 	for k, vs := range in.Query {
 		query[k] = append([]string(nil), vs...)
 	}
-	return map[string]any{
+	out := map[string]any{
 		PayloadOrg:        orgID.String(),
 		PayloadWebhook:    route.Key,
 		PayloadPath:       in.Path,
@@ -107,6 +114,10 @@ func BuildPayload(route Route, orgID uuid.UUID, in Inbound) map[string]any {
 		PayloadBody:       bodyValue(in.Body),
 		PayloadReceivedAt: now().UTC().Format(time.RFC3339Nano),
 	}
+	if utf8.Valid(in.Body) {
+		out[PayloadRawBody] = string(in.Body)
+	}
+	return out
 }
 
 // FilterHeaders returns the request headers a route's handler may see:

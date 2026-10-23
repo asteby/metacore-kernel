@@ -43,6 +43,9 @@
     nunca sale del kernel. `cookie`, `set-cookie` y `proxy-authorization` nunca pasan.
     El kernel no registra valores de cabeceras.
 - `raw_body_b64` es la única fuente válida para verificar firmas.
+- `raw_body` es un alias de compatibilidad: el cuerpo exacto como texto, presente sólo si los
+  bytes son UTF-8 válido (ausente, nunca vacío, en cuerpos binarios). Verificar la firma sobre
+  `raw_body_b64`.
 - Los backends deben serializar con `webhookin.EncodePayload` (sin escape HTML).
 
 ## 3. `verify: "addon"`
