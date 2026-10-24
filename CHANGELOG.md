@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **legacybridge: `PendingStore.DuePending` y `Applier.RetryWaiting` son por
+  origen `(org, system)`.** La cola global ordenada por `next_attempt` dejaba al
+  frente los pendientes de un origen sin configuración y, con 200 o más, los de
+  las demás organizaciones no se reintentaban. Índice nuevo
+  `idx_bridge_pending_org_due (org_id, system, next_attempt)` en `Schema`.
+
 ### Added
 
 - `apitoken.Service.SetScopes(ctx, id, scopes)` cambia los alcances de un token
@@ -387,6 +395,27 @@ afectar a un manifest o host fuera de ese conjunto:
     envenenada.
   - `Outbound.RetryDead`/`Discard` reciben la organización: un comando de otra
     org responde `ErrCommandNotFound`.
+- **legacybridge/sqlpoll: adaptador de origen `sql_poll`.** Lee por consulta
+  la base del legado (MySQL/MariaDB, Postgres o SQLite) con un usuario de solo
+  lectura y produce envelopes, uno por fila. El mapeo es dato (`Profile`:
+  tabla, llave, `updated_at`, sucursal y columnas `copy`/`ref`/`meta`/`bool`/
+  `const`); los identificadores se validan y se citan con las comillas del
+  dialecto, y todo valor va como parámetro.
+  - `Poll`: cambios después del cursor en orden (`updated_at`, llave), con
+    ventana de asentamiento (`Settle`) y fechas sin zona interpretadas en
+    `Location`.
+  - `Sync`: Poll + Ingest por flujo con el cursor del host; retoma tras una
+    caída y converge con dos corridas a la vez.
+  - `Reconcile`: recorre la tabla por llave contra `bridge_refs`; reemite lo
+    que falta o cambió sin tocar `updated_at` y emite `op=delete` de las llaves
+    borradas en duro (comprobando antes que de verdad no existan).
+  - `key_type` (`integer` por omisión, o `text`): una llave de texto se ordena y
+    compara en binario (`BINARY` / `COLLATE "C"` / `COLLATE BINARY`), igual que
+    el desempate del cursor, así una collation que no es binaria no lo atasca.
+    Un cursor que no avanza es `ErrCursorStalled` en `StreamReport.Error`, no un
+    bucle silencioso.
+  - `QueryTimeout` (30 s por omisión) por consulta y `Scan` (recorrido por
+    llave sin tocar cursores, para adoptar filas que el host ya tiene).
 
 ### Fixed
 
