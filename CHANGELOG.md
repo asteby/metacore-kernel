@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Paquete `settings` (ADR 0002, F1, aditivo): `Store` (`Read`/`Write` con
+  revision optimista, validacion por tipo contra el manifest instalado, rechazo
+  de secretos y claves `_`, evento `settings.changed`) y `Resolver` (precedencia
+  default del manifest < org < sucursal, reutiliza `manifest.ResolveSetting`).
+  Migracion 0008 `metacore_addon_settings`. `wasm.SettingsResolver` +
+  `Host.WithSettingsResolver`: opcional; sin el, el comportamiento no cambia.
+  Nada lee ni escribe la tabla hasta que el host lo cablee. Minor.
 - `apitoken.Service.SetScopes(ctx, id, scopes)` cambia los alcances de un token
   existente sin rotarlo (mismas reglas que `Issue`, incluida la lista permitida
   de `pk_`; falla con `ErrNotFound`/`ErrRevoked`/`ErrExpired`; atomico via la

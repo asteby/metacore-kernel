@@ -72,6 +72,9 @@ type Host struct {
 	caps          *security.Capabilities
 	addonCaps     func(addonKey string) *security.Capabilities
 	bus           *events.Bus
+	// settingsResolver, when set, supplies the per-invocation settings (see
+	// SettingsResolver). nil keeps the caller-passed map as the only source.
+	settingsResolver SettingsResolver
 	db            *gorm.DB
 	enforcer      *security.Enforcer
 	tableResolver func(table string) string
@@ -705,6 +708,7 @@ func (h *Host) InvokeForInTx(ctx context.Context, tx *gorm.DB, orgID, installati
 }
 
 func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) (out []byte, err error) {
+	settings = h.resolveSettings(ctx, orgID, addonKey, settings)
 	start := time.Now()
 	defer func() { h.metrics.invoked(addonKey, err, time.Since(start)) }()
 
