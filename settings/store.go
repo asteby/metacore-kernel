@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/asteby/metacore-kernel/manifest"
 )
@@ -143,7 +144,16 @@ func (s *Store) Read(ctx context.Context, org uuid.UUID, addon, scopeKind, scope
 }
 
 func readRow(db *gorm.DB, org uuid.UUID, addon, kind, id string) (Values, int64, error) {
+	return readRowLock(db, org, addon, kind, id, false)
+}
+
+// readRowLock is readRow; with lock set it takes SELECT ... FOR UPDATE (only
+// meaningful on Postgres; SQLite serialises writers on its own).
+func readRowLock(db *gorm.DB, org uuid.UUID, addon, kind, id string, lock bool) (Values, int64, error) {
 	var rows []Row
+	if lock && db.Dialector.Name() == "postgres" {
+		db = db.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
 	// Only values+rev: updated_at is TIMESTAMPTZ, which the sqlite test driver
 	// does not parse into time.Time (it stays a string there).
 	err := db.Select("values", "rev").Where("org_id = ? AND addon_key = ? AND scope_kind = ? AND scope_id = ?", org, addon, kind, id).
@@ -193,12 +203,17 @@ func (s *Store) Write(ctx context.Context, org uuid.UUID, addon, scopeKind, scop
 		}
 		def, ok := byKey[k]
 		if !ok {
+			if v == nil {
+				// Clearing an orphan key (no longer declared) is always allowed.
+				keys = append(keys, k)
+				continue
+			}
 			return 0, fmt.Errorf("%w: %q", ErrUnknownKey, k)
 		}
 		if sensitive(def) {
 			return 0, fmt.Errorf("%w: %q", ErrSecretKey, k)
 		}
-		if scopeKind == ScopeBranch && def.Scope != manifest.SettingScopeBranch {
+		if scopeKind == ScopeBranch && def.Scope != manifest.SettingScopeBranch && v != nil {
 			return 0, fmt.Errorf("%w: %q", ErrNotBranchScoped, k)
 		}
 		if v != nil {
@@ -214,14 +229,10 @@ func (s *Store) Write(ctx context.Context, org uuid.UUID, addon, scopeKind, scop
 		newRev  int64
 		changed bool
 	)
-	// Without expectedRev a lost race is retried on the fresh row.
-	for attempt := 0; attempt < 5; attempt++ {
-		newRev, changed, err = s.writeOnce(ctx, org, addon, scopeKind, scopeID, patch, expectedRev, actor)
-		if errors.Is(err, errRace) && expectedRev == nil {
-			continue
-		}
-		break
-	}
+	// expectedRev == nil is true last-writer-wins: writeOnce serialises on the
+	// row lock, so no retries are needed. A lost race only happens (and maps
+	// to ErrConflict) when expectedRev != nil.
+	newRev, changed, err = s.writeOnce(ctx, org, addon, scopeKind, scopeID, patch, expectedRev, actor)
 	if errors.Is(err, errRace) {
 		err = ErrConflict
 	}
@@ -240,7 +251,10 @@ func (s *Store) Write(ctx context.Context, org uuid.UUID, addon, scopeKind, scop
 	return newRev, nil
 }
 
-var errRace = errors.New("settings: lost write race")
+var (
+	errRace  = errors.New("settings: lost write race")
+	errNoRow = errors.New("settings: nothing to create") // internal rollback sentinel
+)
 
 func (s *Store) writeOnce(ctx context.Context, org uuid.UUID, addon, kind, id string, patch Values, expectedRev *int64, actor uuid.UUID) (int64, bool, error) {
 	var (
@@ -248,7 +262,17 @@ func (s *Store) writeOnce(ctx context.Context, org uuid.UUID, addon, kind, id st
 		changed bool
 	)
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		cur, curRev, err := readRow(tx, org, addon, kind, id)
+		lww := expectedRev == nil
+		if lww {
+			// Ensure a row exists to lock on (rev 0 placeholder, invisible
+			// until commit), then lock it: concurrent writers queue here and
+			// each applies its patch on top of the previous committed state.
+			ph := Row{OrgID: org, AddonKey: addon, ScopeKind: kind, ScopeID: id, Values: Values{}, Rev: 0, UpdatedAt: time.Now().UTC()}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&ph).Error; err != nil {
+				return err
+			}
+		}
+		cur, curRev, err := readRowLock(tx, org, addon, kind, id, lww)
 		if err != nil {
 			return err
 		}
@@ -271,6 +295,9 @@ func (s *Store) writeOnce(ctx context.Context, org uuid.UUID, addon, kind, id st
 			return nil
 		}
 		if curRev == 0 && len(next) == 0 {
+			if lww {
+				return errNoRow // roll back the placeholder: nothing to create
+			}
 			return nil // nothing stored, nothing to create
 		}
 		var by *uuid.UUID
@@ -279,14 +306,14 @@ func (s *Store) writeOnce(ctx context.Context, org uuid.UUID, addon, kind, id st
 			by = &a
 		}
 		now := time.Now().UTC()
-		if curRev == 0 {
+		if curRev == 0 && !lww {
 			row := Row{OrgID: org, AddonKey: addon, ScopeKind: kind, ScopeID: id, Values: next, Rev: 1, UpdatedBy: by, UpdatedAt: now}
-			if err := tx.Create(&row).Error; err != nil {
-				// A concurrent insert of the same PK: treat as a lost race.
-				if _, r, rerr := readRow(s.DB.WithContext(ctx), org, addon, kind, id); rerr == nil && r > 0 {
-					return errRace
-				}
-				return err
+			res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				return errRace // a concurrent insert of the same PK won
 			}
 			rev, changed = 1, true
 			return nil
@@ -306,6 +333,9 @@ func (s *Store) writeOnce(ctx context.Context, org uuid.UUID, addon, kind, id st
 		rev, changed = curRev+1, true
 		return nil
 	})
+	if errors.Is(err, errNoRow) {
+		return 0, false, nil
+	}
 	if errors.Is(err, errRace) && expectedRev != nil {
 		return 0, false, ErrConflict
 	}

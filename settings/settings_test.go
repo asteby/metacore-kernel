@@ -340,3 +340,48 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+func TestOrphanKeyCanBeClearedButNotSet(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	branch := uuid.NewString()
+	// Orphans: unknown key in org scope, and an org-scoped key in a branch row.
+	f.db.Create(&settings.Row{OrgID: f.org, AddonKey: "acme", ScopeKind: "org",
+		Values: settings.Values{"ghost": "x", "mode": "pro"}, Rev: 1})
+	f.db.Create(&settings.Row{OrgID: f.org, AddonKey: "acme", ScopeKind: "branch", ScopeID: branch,
+		Values: settings.Values{"mode": "pro"}, Rev: 1})
+	if _, err := f.st.Write(ctx, f.org, "acme", settings.ScopeOrg, "", settings.Values{"ghost": nil}, nil, uuid.Nil); err != nil {
+		t.Fatalf("clear unknown orphan: %v", err)
+	}
+	if _, err := f.st.Write(ctx, f.org, "acme", settings.ScopeBranch, branch, settings.Values{"mode": nil}, nil, uuid.Nil); err != nil {
+		t.Fatalf("clear non-branch orphan: %v", err)
+	}
+	v, _, _ := f.st.Read(ctx, f.org, "acme", settings.ScopeOrg, "")
+	if _, ok := v["ghost"]; ok || v["mode"] != "pro" {
+		t.Fatalf("org values = %v", v)
+	}
+	bv, _, _ := f.st.Read(ctx, f.org, "acme", settings.ScopeBranch, branch)
+	if len(bv) != 0 {
+		t.Fatalf("branch values = %v", bv)
+	}
+	if _, err := f.st.Write(ctx, f.org, "acme", settings.ScopeOrg, "", settings.Values{"ghost": "y"}, nil, uuid.Nil); !errors.Is(err, settings.ErrUnknownKey) {
+		t.Fatalf("set unknown must fail: %v", err)
+	}
+	if _, err := f.st.Write(ctx, f.org, "acme", settings.ScopeOrg, "", settings.Values{"_x": nil}, nil, uuid.Nil); !errors.Is(err, settings.ErrReservedKey) {
+		t.Fatalf("reserved key must fail: %v", err)
+	}
+}
+
+func TestWriteToEmptyScopeCreatesNoRow(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	rev, err := f.st.Write(ctx, f.org, "acme", settings.ScopeOrg, "", settings.Values{"mode": nil}, nil, uuid.Nil)
+	if err != nil || rev != 0 {
+		t.Fatalf("rev=%d err=%v", rev, err)
+	}
+	var n int64
+	f.db.Model(&settings.Row{}).Count(&n)
+	if n != 0 {
+		t.Fatalf("placeholder row leaked: %d", n)
+	}
+}

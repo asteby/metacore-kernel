@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -116,10 +117,15 @@ func (r *Resolver) Resolve(ctx context.Context, org uuid.UUID, addon string, sco
 
 func present(m Values, k string) bool { v, ok := m[k]; return ok && v != nil }
 
+var warnedUndeclared sync.Map
+
 func warnUndeclared(addon, layer string, vals Values, declared map[string]struct{}) {
 	for k := range vals {
 		if _, ok := declared[k]; !ok && !strings.HasPrefix(k, "_") {
-			slog.Warn("settings.resolve.undeclared_key_ignored", "addon_key", addon, "layer", layer, "key", k)
+			// Once per (addon, layer, key) per process: Resolve runs on hot paths.
+			if _, seen := warnedUndeclared.LoadOrStore(addon+"\x00"+layer+"\x00"+k, struct{}{}); !seen {
+				slog.Warn("settings.resolve.undeclared_key_ignored", "addon_key", addon, "layer", layer, "key", k)
+			}
 		}
 	}
 }

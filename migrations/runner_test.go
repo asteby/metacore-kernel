@@ -138,3 +138,33 @@ func TestRunnerDialect_SQLite3Explicit(t *testing.T) {
 		}
 	}
 }
+
+// Guards against a gap in sqlfiles/: a later out-of-order file would fail on
+// every database already past it.
+func TestRunnerAppliesContiguousVersions(t *testing.T) {
+	db := openInMemory(t)
+	r := migrations.Runner{}
+	ctx := context.Background()
+	if err := r.Up(ctx, db); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	list, err := r.Status(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []int64
+	for _, m := range list {
+		if m.Applied {
+			got = append(got, m.Version)
+		}
+	}
+	if len(got) < 8 {
+		t.Fatalf("applied = %v", got)
+	}
+	for i, v := range got {
+		if v != int64(i+1) {
+			t.Fatalf("non-contiguous versions: %v", got)
+		}
+	}
+	t.Logf("applied versions: %v", got)
+}
