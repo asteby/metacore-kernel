@@ -61,6 +61,83 @@ evento (`events.Bus.EstimateSubscribers`; los taps `*` del dispatcher y de audit
 cuentan), o `-1` si no se puede saber (un router sin `Estimator`, o falló la consulta de
 suscripciones). El reparto real ocurre después de la invocación.
 
+## Un router durable no pierde eventos en silencio
+
+El bus tolera que un handler plano falle (se registra y se sigue: un suscriptor roto
+no bloquea a sus hermanos ni la publicación). El **dispatcher** es distinto: es el
+router que escribe el libro de entregas, y si no escribe, el evento no quedó en
+ninguna parte. Por eso se registra con `Bus.SubscribeDurableRouting` y su error **sí**
+se propaga:
+
+- `Publish` / `PublishWithCount` ejecutan a todos los suscriptores y devuelven un error
+  agregado (`errors.Is(err, events.ErrDurableDelivery)`) si falló un router durable.
+- `dispatch.handle` devuelve error si falla `SubscriptionsForOrg`; `enqueue` devuelve
+  error si falla el INSERT del libro. Una suscripción que falla no impide insertar las
+  demás.
+- El outbox (`publishCanonical`, `OutboxPublisher`, relay) **no estampa `published_at`**
+  cuando `Publish` devuelve error; el relay reintenta la fila con los mismos bytes.
+
+### Qué se ejecuta una vez y qué puede repetirse
+
+- **El dispatcher** deduplica: el libro tiene `delivery_id` estable, así que un reintento
+  solo inserta lo que faltaba y cada suscripción de addon se entrega una vez.
+- **Los suscriptores planos** (tap de auditoría `*`, puentes de reglas, bitácora,
+  tiempo real, impresión, imágenes, render...) **no deduplican**, y por eso el reintento
+  no los vuelve a llamar. Cuando el intento en línea falla solo en el libro, esos
+  hermanos *ya corrieron* en ese mismo `Publish` (corren antes de devolver el error): el
+  outbox marca la fila `fanned_out = true` y el relay la reintenta con
+  `Bus.PublishDurableOnly`, que invoca **únicamente** a los routers durables. Los planos
+  se ejecutan una vez.
+- **Excepción, a propósito:** una fila *sin* marca (el proceso murió antes o durante el
+  fan-out, o es anterior a la columna) recibe la publicación completa, planos incluidos:
+  no se sabe si alguno corrió. Ahí sí puede haber una segunda ejecución de los planos
+  (at-least-once); un suscriptor plano con efectos no idempotentes debe tolerarlo.
+- Un `Publisher` que envuelva al bus y no exponga `PublishDurableOnly`
+  (`dynamic.DurableOnlyPublisher`) recibe la publicación completa en el reintento (el
+  comportamiento anterior).
+
+### Reintentos, agotamiento y errores permanentes
+
+- El relay espacia los reintentos con backoff exponencial (`next_attempt_at`: 60 s tras el
+  primer fallo, luego 2 min, 4 min, ... tope 30 min) en lugar de un ticker fijo.
+- Un nombre de evento de más de `dynamic.MaxEventNameLen` (512) caracteres no cabe en el
+  libro (`size:512`): se **rechaza antes de persistir** con un log de error
+  `kernel.outbox.rejected` (y el dispatcher lo descarta sin error), en vez de gastar los
+  25 intentos.
+- Al agotar `outboxMaxAttempts` (25) la fila queda sin `published_at` (visible para
+  repetirla a mano) y **en ese momento** se registra a nivel error
+  `kernel.outbox.exhausted` (evento, org, fila, último error) y se llama a
+  `dynamic.Config.OnOutboxExhausted`, donde el host abre el incidente (el paquete
+  `incidents` requiere un `Store`, org y política de huella que `dynamic` no posee, así que
+  el kernel emite log + hook).
+- Quien publica sin outbox (p. ej. `data_mutate`) ve el error en su log; un `Publish`
+  que antes devolvía siempre `nil` ahora puede devolver este error.
+
+`event_emit` con un `*gorm.DB` que es un pool (acciones Native: `actx.DB`) no cuenta
+como transacción: se persiste y publica en línea. Solo una transacción abierta difiere
+la publicación al commit hook.
+
+El índice `..._due` del libro se crea en Postgres con `CREATE INDEX CONCURRENTLY` (en
+segundo plano desde `Wire`, con reintentos y backoff que se cancelan con el `Wire`) y se
+recrea si quedó inválido. Crear/borrar el índice exige un candado de aviso de sesión
+(`pg_try_advisory_lock`): un índice inválido porque *otra réplica lo está construyendo* no
+se toca (esa réplica lo termina); uno huérfano de un constructor caído (candado libre) sí
+se recrea. Un arranque nuevo no puede ver el candado de una versión anterior del kernel
+(sin él, el comportamiento previo).
+
+La conexión que construye el índice corre con `statement_timeout = 0` (el del host, p. ej.
+5 s en ops, abortaría el `CREATE INDEX CONCURRENTLY` que espera a snapshots viejos) y lo
+restaura al terminar; el candado se suelta siempre en esa misma conexión (sesión nueva de
+gorm, sin la cancelación de `Wire`) o, si no se puede, la conexión se cierra en vez de
+devolverse al pool. Tras 8 fallos reales seguidos (no cuenta «otra réplica lo construye»)
+el reintento en segundo plano se rinde con un log de error `dispatch.due_index_gave_up`; el
+siguiente arranque lo vuelve a intentar.
+
+**Advertencia con PgBouncer**: los candados de sesión (`pg_try_advisory_lock`) no son
+seguros con PgBouncer en modo *transaction*: el candado y su liberación pueden caer en
+conexiones de servidor distintas. Ops lo tiene planeado en PLAN-BINARIO F4; hasta entonces
+el kernel debe conectarse a Postgres directo (o con PgBouncer en modo *session*).
+
 ## Libro de entregas = cola duradera (`dispatch_deliveries` / `event_deliveries`)
 
 Cada fila es el trabajo: lleva `payload`, `next_attempt_at` y un lease

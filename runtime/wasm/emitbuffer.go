@@ -174,6 +174,17 @@ func (h *Host) flushEmits(ctx context.Context, tx *gorm.DB, buf *emitBuffer, add
 	if pub == nil {
 		return
 	}
+	// A pool handle (Native actions invoke with actx.DB = pool) is not a
+	// transaction: treating it as one defers the fan-out to a commit hook that
+	// never fires, so the event waited for the relay (~40 s) or was dropped.
+	// Without a real tx the publisher persists and publishes on the normal path.
+	if tx != nil && !isTx(tx) {
+		h.logger.Printf("metacore.wasm addon=%s fn=%s warn: the db handle given to flushEmits is not an open transaction (a pool?); publishing %d event(s) on the normal path instead of deferring to a commit hook",
+			addonKey, funcName, len(evs))
+	}
+	if !isTx(tx) {
+		tx = nil
+	}
 	pub.Publish(context.WithoutCancel(ctx), tx, evs)
 }
 

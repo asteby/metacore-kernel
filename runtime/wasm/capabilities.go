@@ -439,8 +439,14 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 				// Hand-built invocation (tests): legacy immediate publish.
 				subscribers, err := inv.bus.PublishWithCount(ctx, inv.addonKey, eventName, inv.orgID, payload)
 				if err != nil {
+					code := "forbidden"
+					if errors.Is(err, events.ErrDurableDelivery) {
+						// Not a permission problem: the siblings ran but the
+						// durable ledger did not record the event.
+						code = "durable_delivery_failed"
+					}
 					return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
-						"forbidden", err.Error(), inv.orgID, start))
+						code, err.Error(), inv.orgID, start))
 				}
 				return writeToGuest(ctx, mod, eventEmitOK(
 					inv.addonKey, eventName, subscribers, inv.orgID, start))

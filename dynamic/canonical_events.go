@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"github.com/asteby/metacore-kernel/provenance"
 	"strings"
 	"time"
@@ -216,6 +217,13 @@ func (s *Service) publishCanonical(ctx context.Context, model, action string, us
 		After:         after,
 	}
 	event := fmt.Sprintf("%s.%s.%s", addonKey, modelKey, action)
+	if len(event) > MaxEventNameLen {
+		// Permanent: no store can record this name, so retrying would burn the
+		// relay's attempts for nothing. Reject it before persisting.
+		log.Printf("level=error msg=kernel.outbox.rejected reason=event_name_too_long len=%d max=%d event=%.80s: %v",
+			len(event), MaxEventNameLen, event, ErrEventNameTooLong)
+		return
+	}
 
 	// Transactional-outbox durability (see outbox.go): persist the intent
 	// BEFORE fan-out so a crash or bus failure between the committed data
@@ -268,6 +276,15 @@ func (s *Service) publishCanonical(ctx context.Context, model, action string, us
 	perr := s.bus.Publish(pubCtx, addonKey, event, user.GetOrganizationID(), payload)
 	if perr == nil && outboxID != uuid.Nil {
 		s.markOutboxPublished(ctx, outboxID)
+	} else if perr != nil && outboxID != uuid.Nil {
+		// A durable router failed to record the event: the row stays
+		// unpublished and the outbox relay retries it.
+		if siblingsRan(perr) && s.db != nil {
+			// The plain subscribers already ran in this attempt: the relay
+			// must retry the durable routers only (no duplicate side effects).
+			markOutboxFannedOut(ctx, s.db, outboxID)
+		}
+		log.Printf("dynamic: event %s not recorded by the durable bus (outbox relay will retry): %v", event, perr)
 	}
 }
 

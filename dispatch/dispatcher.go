@@ -72,6 +72,15 @@ type canonicalEvent struct {
 // back in its envelope; before, it always saw 1 — this wildcard tap — even when
 // nothing was routed).
 func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName string, payload any) (int, error) {
+	if len(eventName) > dynamic.MaxEventNameLen {
+		// Permanent: the ledger column (size:512) cannot hold the name, so every
+		// INSERT would fail and a retry could never heal it. Returning an error
+		// would make the outbox burn all its attempts; drop it loudly instead.
+		d.logger.Error("dispatch.event_name_too_long",
+			slog.Int("len", len(eventName)), slog.Int("max", dynamic.MaxEventNameLen),
+			slog.String("event", eventName[:80]))
+		return 0, nil
+	}
 	// The event NAME comes from the bus and is authoritative: it is what the
 	// emitter passed to Publish / `event_emit`. The payload is re-marshalled
 	// only to (a) produce the JSON bytes forwarded to handlers and (b) read the
@@ -204,7 +213,9 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 			slog.String("org", orgID.String()),
 			slog.String("event", eventName),
 			slog.String("err", err.Error()))
-		return 0, nil
+		// Durable router: surface the failure so the outbox does not stamp
+		// published_at and the relay retries (the ledger dedups by stable id).
+		return 0, fmt.Errorf("dispatch: subscriptions for org %s: %w", orgID, err)
 	}
 
 	if ce.CorrelationID == "" {
@@ -214,16 +225,24 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 	raw = stampEnvelope(raw, d.buildEnvelope(ctx, orgID, eventName, occurrenceID, emitter, ce, meta))
 
 	enqueued := 0
+	var errs []error
 	for i := range subs {
 		sub := subs[i]
 		if !eventMatches(sub.Event, eventName) {
 			continue
 		}
-		if d.enqueue(ctx, orgID, eventName, occurrenceID, emitter, ce, raw, sub) {
+		ok, err := d.enqueue(ctx, orgID, eventName, occurrenceID, emitter, ce, raw, sub)
+		if err != nil {
+			// Keep going: the other subscriptions still get their rows; the
+			// retry only re-inserts what is missing (stable delivery ids).
+			errs = append(errs, err)
+			continue
+		}
+		if ok {
 			enqueued++
 		}
 	}
-	return enqueued, nil
+	return enqueued, errors.Join(errs...)
 }
 
 // estimate is the events.Estimator of the dispatcher's "*" tap: the number of

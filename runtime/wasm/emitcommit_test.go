@@ -237,3 +237,31 @@ func TestEmitOnCommit_CrashAfterPersistLeavesRecoverableRow(t *testing.T) {
 		t.Fatalf("row lost its identity: %+v", rows[0])
 	}
 }
+
+// Native actions invoke with actx.DB = the POOL, which flushEmits used to treat
+// as an open transaction: the fan-out was deferred to a commit hook that never
+// fires, so the event waited for the relay or was dropped. A pool handle must
+// take the normal persist-and-publish path.
+func TestEmitOnCommit_PoolHandleIsNotATransaction(t *testing.T) {
+	x := newCommitHarness(t, []byte(`{"success":true}`), nil)
+	if isTx(x.db) {
+		t.Fatal("precondition: a pool handle must not look like a tx")
+	}
+	buf := &emitBuffer{}
+	ev, err := stageEmit(context.Background(), "testaddon", "ev.fired", uuid.New(), []byte(aggPayload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := buf.add(ev); err != nil {
+		t.Fatal(err)
+	}
+	// No CommitHook on the ctx: with the old behaviour nothing was published.
+	x.h.flushEmits(context.Background(), x.db, buf, "testaddon", "emit_test", []byte(`{"success":true}`), nil)
+	if n := x.fired.Load(); n != 1 {
+		t.Fatalf("pool handle: fired=%d, want 1 (published on the normal path)", n)
+	}
+	rows := x.rows(t)
+	if len(rows) != 1 || rows[0].PublishedAt == nil {
+		t.Fatalf("want one published outbox row, got %+v", rows)
+	}
+}

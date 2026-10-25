@@ -10,6 +10,7 @@ import (
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -127,7 +128,12 @@ func TestExecuteApprovalConsume_CapabilityGate(t *testing.T) {
 
 // Under InvokeInTx the redemption rides the invocation's transaction.
 func TestExecuteApprovalConsume_UsesInvocationTx(t *testing.T) {
-	db, tx := &gorm.DB{}, &gorm.DB{}
+	db, err := gorm.Open(sqlite.Open("file:consume_tx_"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := db.Begin() // a real transaction: isTx() must say so
+	defer tx.Rollback()
 	var got *gorm.DB
 	f := func(_ context.Context, in dynamic.ConsumeInput) error { got = in.DB; return nil }
 	ctx := dynamic.WithActorID(context.Background(), uuid.NewString())
@@ -139,5 +145,10 @@ func TestExecuteApprovalConsume_UsesInvocationTx(t *testing.T) {
 	executeApprovalConsume(ctx, &invocation{addonKey: "a", orgID: uuid.New(), db: db, approvalConsumer: f}, body)
 	if got != db {
 		t.Fatalf("sin tx usa la conexión")
+	}
+	// A pool handle in inv.tx (Native actions) is not a transaction.
+	executeApprovalConsume(ctx, &invocation{addonKey: "a", orgID: uuid.New(), db: db, tx: &gorm.DB{}, approvalConsumer: f}, body)
+	if got != db {
+		t.Fatalf("un handle que no es tx cae a la conexión")
 	}
 }

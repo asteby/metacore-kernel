@@ -3,6 +3,7 @@ package dispatch_test
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"net/url"
@@ -202,5 +203,267 @@ func TestDurablePG_PublishKillRestart(t *testing.T) {
 	}
 	if !seqs[1] || !seqs[2] {
 		t.Fatalf("envelope sequences = %v", seqs)
+	}
+}
+
+// An index left INVALID by an interrupted CREATE INDEX CONCURRENTLY is dropped
+// and rebuilt; a valid one is left alone; the table keeps accepting inserts.
+func TestDurablePG_DueIndexIsBuiltConcurrentlyAndHealsWhenInvalid(t *testing.T) {
+	db := pgSchemaDB(t)()
+	if err := dispatch.Migrate(db, ""); err != nil {
+		t.Fatal(err)
+	}
+	const idx = "idx_" + dispatch.DefaultTableName + "_due"
+	valid := func() (exists, ok bool) {
+		var rows []bool
+		if err := db.Raw("SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass(?)", idx).Scan(&rows).Error; err != nil {
+			t.Fatal(err)
+		}
+		return len(rows) > 0, len(rows) > 0 && rows[0]
+	}
+	if e, ok := valid(); !e || !ok {
+		t.Fatalf("index after Migrate: exists=%v valid=%v", e, ok)
+	}
+	// Simulate an interrupted concurrent build.
+	if err := db.Exec("UPDATE pg_index SET indisvalid = false WHERE indexrelid = to_regclass(?)", idx).Error; err != nil {
+		t.Skipf("cannot flag the index invalid without superuser: %v", err)
+	}
+	if e, ok := valid(); !e || ok {
+		t.Fatalf("setup: exists=%v valid=%v, want invalid", e, ok)
+	}
+	if err := dispatch.Migrate(db, ""); err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := valid(); !e || !ok {
+		t.Fatalf("index after healing: exists=%v valid=%v", e, ok)
+	}
+	// Idempotent when already valid, and Wire (async path) converges too.
+	if err := dispatch.Migrate(db, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Another replica is building the index with CREATE INDEX CONCURRENTLY: the
+// catalog shows it INVALID, which used to look like an interrupted build and got
+// it dropped (waiting on the builder, then "tuple concurrently updated"). While
+// a session holds the build lock the index must not be touched; once the lock is
+// gone (builder crashed) the invalid leftover is healed.
+func TestDurablePG_DueIndexBeingBuiltByAnotherReplicaIsNotDropped(t *testing.T) {
+	open := pgSchemaDB(t)
+	db := open()
+	if err := dispatch.Migrate(db, ""); err != nil {
+		t.Fatal(err)
+	}
+	const idx = "idx_" + dispatch.DefaultTableName + "_due"
+	oid := func() (id uint32, valid bool) {
+		var r struct {
+			Oid   uint32
+			Valid bool
+		}
+		if err := db.Raw("SELECT i.indexrelid::oid::text::bigint AS oid, i.indisvalid AS valid FROM pg_index i WHERE i.indexrelid = to_regclass(?)", idx).Scan(&r).Error; err != nil {
+			t.Fatal(err)
+		}
+		return r.Oid, r.Valid
+	}
+	before, _ := oid()
+	if err := db.Exec("UPDATE pg_index SET indisvalid = false WHERE indexrelid = to_regclass(?)", idx).Error; err != nil {
+		t.Skipf("cannot flag the index invalid without superuser: %v", err)
+	}
+
+	// The "other replica": a dedicated connection holding the build lock.
+	builder := open()
+	release := make(chan struct{})
+	held := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		_ = builder.Connection(func(c *gorm.DB) error {
+			var got bool
+			c.Raw("SELECT pg_try_advisory_lock(hashtextextended(?, 0))", "metacore.dispatch.due_index:"+dispatch.DefaultTableName).Scan(&got)
+			if !got {
+				t.Error("builder could not take the lock")
+			}
+			close(held)
+			<-release
+			c.Exec("SELECT pg_advisory_unlock(hashtextextended(?, 0))", "metacore.dispatch.due_index:"+dispatch.DefaultTableName)
+			return nil
+		})
+	}()
+	<-held
+
+	start := time.Now()
+	if err := dispatch.Migrate(open(), ""); err != nil {
+		t.Fatalf("Migrate while another replica builds: %v", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("Migrate waited %s on the other builder", d)
+	}
+	if id, valid := oid(); id != before || valid {
+		t.Fatalf("index was touched while another session held the build lock (oid %d -> %d, valid=%v)", before, id, valid)
+	}
+
+	close(release)
+	<-finished
+	if err := dispatch.Migrate(open(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, valid := oid(); !valid {
+		t.Fatal("stale invalid index not healed once the lock is free")
+	}
+}
+
+// Several replicas starting together converge on one valid index, no errors.
+func TestDurablePG_DueIndexConcurrentStartersConverge(t *testing.T) {
+	open := pgSchemaDB(t)
+	first := open()
+	// The table is created once (concurrent CREATE TABLE races are not what is
+	// under test); the index is dropped so every starter has to build it.
+	if err := dispatch.Migrate(first, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Exec("DROP INDEX idx_" + dispatch.DefaultTableName + "_due").Error; err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 6)
+	for i := 0; i < 6; i++ {
+		db := open()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- dispatch.Migrate(db, "")
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Migrate: %v", err)
+		}
+	}
+	if err := dispatch.Migrate(open(), ""); err != nil {
+		t.Fatal(err)
+	}
+	var valid []bool
+	first.Raw("SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass(?)", "idx_"+dispatch.DefaultTableName+"_due").Scan(&valid)
+	if len(valid) != 1 || !valid[0] {
+		t.Fatalf("index state after concurrent starters: %v", valid)
+	}
+}
+
+// advisoryLocks counts the sessions holding the sweeper-index build lock (other
+// packages' tests may hold unrelated advisory locks on the same server).
+func advisoryLocks(t *testing.T, db *gorm.DB) int {
+	t.Helper()
+	var n int
+	if err := db.Raw("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND granted AND ((classid::bigint << 32) | objid::bigint) = hashtextextended(?, 0)",
+		"metacore.dispatch.due_index:"+dispatch.DefaultTableName).Scan(&n).Error; err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// dropDueIndexAndHoldSnapshot removes the sweeper index and opens an old
+// REPEATABLE READ snapshot, which CREATE INDEX CONCURRENTLY has to wait for.
+func dropDueIndexAndHoldSnapshot(t *testing.T, open func() *gorm.DB, db *gorm.DB) (release func()) {
+	t.Helper()
+	if err := dispatch.Migrate(db, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("DROP INDEX idx_" + dispatch.DefaultTableName + "_due").Error; err != nil {
+		t.Fatal(err)
+	}
+	tx := open().Begin(&sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	var n int
+	if err := tx.Raw("SELECT count(*) FROM " + dispatch.DefaultTableName).Scan(&n).Error; err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	release = func() { once.Do(func() { tx.Rollback() }) }
+	t.Cleanup(release)
+	return release
+}
+
+// The host's statement_timeout (ops sets 5 s on every connection) used to abort
+// the build while it waited for an old snapshot, leaving an INVALID index and
+// the session lock behind. The dedicated connection now runs without the limit
+// and gets its previous value back.
+func TestDurablePG_IndexBuildIgnoresStatementTimeoutAndLeavesNoLock(t *testing.T) {
+	open := pgSchemaDB(t)
+	db := open()
+	release := dropDueIndexAndHoldSnapshot(t, open, db)
+	go func() { time.Sleep(2500 * time.Millisecond); release() }()
+
+	builder := open()
+	sqlDB, _ := builder.DB()
+	sqlDB.SetMaxOpenConns(1)
+	if err := builder.Exec("SET statement_timeout = 1000").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatch.Migrate(builder, ""); err != nil {
+		t.Fatalf("index build aborted by statement_timeout: %v", err)
+	}
+	var valid bool
+	if err := db.Raw("SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass(?)", "idx_"+dispatch.DefaultTableName+"_due").Scan(&valid).Error; err != nil || !valid {
+		t.Fatalf("index not valid after the build (valid=%v err=%v)", valid, err)
+	}
+	if n := advisoryLocks(t, db); n != 0 {
+		t.Fatalf("%d advisory lock(s) left behind", n)
+	}
+	var timeout string
+	if err := builder.Raw("SHOW statement_timeout").Scan(&timeout).Error; err != nil {
+		t.Fatal(err)
+	}
+	if timeout != "1s" {
+		t.Fatalf("statement_timeout after the build = %q, want the previous 1s", timeout)
+	}
+}
+
+// A failed CREATE INDEX CONCURRENTLY (cancelled server-side) leaves the gorm
+// connection with a sticky error, and gorm skips Exec on such an instance: the
+// old deferred unlock never ran and every other replica saw "busy" forever.
+func TestDurablePG_FailedIndexBuildReleasesTheAdvisoryLock(t *testing.T) {
+	open := pgSchemaDB(t)
+	db := open()
+	release := dropDueIndexAndHoldSnapshot(t, open, db)
+
+	done := make(chan error, 1)
+	builder := open()
+	sqlDB, _ := builder.DB()
+	sqlDB.SetMaxOpenConns(1)
+	go func() { done <- dispatch.Migrate(builder, "") }()
+
+	// Cancel the build from the server once it is waiting on the snapshot.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var cancelled int
+		if err := db.Raw("SELECT count(pg_cancel_backend(pid)) FROM pg_stat_activity WHERE query ILIKE 'CREATE INDEX CONCURRENTLY%' AND pid <> pg_backend_pid()").Scan(&cancelled).Error; err != nil {
+			t.Fatal(err)
+		}
+		if cancelled > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the index build never started")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err := <-done; err == nil {
+		t.Fatal("Migrate succeeded although its index build was cancelled")
+	}
+	if n := advisoryLocks(t, db); n != 0 {
+		t.Fatalf("%d advisory lock(s) left behind by the failed build", n)
+	}
+	// Another session can take the lock and, with the snapshot gone, heals.
+	release()
+	if err := dispatch.Migrate(open(), ""); err != nil {
+		t.Fatalf("Migrate after the failed build: %v", err)
+	}
+	var valid bool
+	if err := db.Raw("SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass(?)", "idx_"+dispatch.DefaultTableName+"_due").Scan(&valid).Error; err != nil || !valid {
+		t.Fatalf("index not rebuilt after the lock was released (valid=%v err=%v)", valid, err)
 	}
 }
