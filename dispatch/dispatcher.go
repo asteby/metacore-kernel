@@ -72,6 +72,15 @@ type canonicalEvent struct {
 // back in its envelope; before, it always saw 1 — this wildcard tap — even when
 // nothing was routed).
 func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName string, payload any) (int, error) {
+	if len(eventName) > dynamic.MaxEventNameLen {
+		// Permanent: the ledger column (size:512) cannot hold the name, so every
+		// INSERT would fail and a retry could never heal it. Returning an error
+		// would make the outbox burn all its attempts; drop it loudly instead.
+		d.logger.Error("dispatch.event_name_too_long",
+			slog.Int("len", len(eventName)), slog.Int("max", dynamic.MaxEventNameLen),
+			slog.String("event", eventName[:80]))
+		return 0, nil
+	}
 	// The event NAME comes from the bus and is authoritative: it is what the
 	// emitter passed to Publish / `event_emit`. The payload is re-marshalled
 	// only to (a) produce the JSON bytes forwarded to handlers and (b) read the

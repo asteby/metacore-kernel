@@ -108,7 +108,7 @@ func executeApprovalConsume(ctx context.Context, inv *invocation, reqJSON []byte
 }
 
 func consumeDB(inv *invocation) *gorm.DB {
-	if inv.tx != nil {
+	if inv.tx != nil && isTx(inv.tx) {
 		return inv.tx
 	}
 	return inv.db

@@ -1232,10 +1232,13 @@ Defined error codes:
 | `forbidden`         | The bus capability check (`Capabilities.CanEmit`) or the host's emit policy (`Host.WithEmitPolicy`, `security.EmitPolicy` in `enforce`; see docs/capabilities.md "Política de emisión de eventos") denied the publish. |
 | `no_active_org`     | Invocation reached the host import without an `orgID` (§ 12.6).     |
 | `bus_unavailable`   | Host was constructed without an `events.Bus` (deployment misconfig).|
+| `durable_delivery_failed` | Legacy immediate-publish path only (hand-built invocations): the durable router (dispatch ledger) could not record the event (`events.ErrDurableDelivery`). Siblings already ran. |
 
 Subscriber-side errors do not appear here. `events.Bus.Publish` already
 swallows handler errors and logs them; the publisher is decoupled from
-delivery failures by design.
+delivery failures by design. The one exception is a durable router (the
+dispatch ledger): its failure is surfaced to durable publishers (the outbox),
+see docs/events-bus.md.
 
 **Emitter stamp.** Subscribers do not have to trust who a payload says it
 comes from. The bus records the publishing addon key in the delivery context

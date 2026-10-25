@@ -83,6 +83,21 @@ type subscription struct {
 // handlers/subscribers never produce it: their errors stay logged-and-swallowed.
 var ErrDurableDelivery = errors.New("events: durable delivery failed")
 
+// DurableError is the concrete error behind ErrDurableDelivery (errors.Is
+// matches it). SiblingsRan reports whether the plain subscribers (taps,
+// handlers, non-durable routers) ran in the SAME call that produced the error:
+// true for PublishWithCount/Publish, false for PublishDurableOnly. A durable
+// publisher (the outbox) uses it to avoid re-running those siblings when it
+// retries — see PublishDurableOnly.
+type DurableError struct {
+	err      error
+	siblings bool
+}
+
+func (e *DurableError) Error() string     { return e.err.Error() }
+func (e *DurableError) Unwrap() error     { return e.err }
+func (e *DurableError) SiblingsRan() bool { return e.siblings }
+
 // Bus is the thread-safe fan-out registry. The zero value is not usable —
 // construct with NewBus.
 type Bus struct {
@@ -125,7 +140,7 @@ func (b *Bus) Subscribe(addonKey, eventPattern string, h Handler) error {
 	}
 	return b.subscribeRouting(addonKey, eventPattern, func(ctx context.Context, orgID uuid.UUID, _ string, payload any) (int, error) {
 		return 1, h(ctx, orgID, payload)
-	}, nil, false, false)
+	}, nil, subKind{})
 }
 
 // SubscribeEvent is Subscribe for a name-aware EventHandler. Semantics are
@@ -137,7 +152,7 @@ func (b *Bus) SubscribeEvent(addonKey, eventPattern string, h EventHandler) erro
 	}
 	return b.subscribeRouting(addonKey, eventPattern, func(ctx context.Context, orgID uuid.UUID, event string, payload any) (int, error) {
 		return 1, h(ctx, orgID, event, payload)
-	}, nil, false, false)
+	}, nil, subKind{})
 }
 
 // SubscribeRouting registers a RoutingHandler — a subscriber whose reported
@@ -145,13 +160,13 @@ func (b *Bus) SubscribeEvent(addonKey, eventPattern string, h EventHandler) erro
 // Used by the dispatcher, which is a router for every addon subscription of
 // the org rather than a subscriber in its own right.
 func (b *Bus) SubscribeRouting(addonKey, eventPattern string, h RoutingHandler) error {
-	return b.subscribeRouting(addonKey, eventPattern, h, nil, false, true)
+	return b.subscribeRouting(addonKey, eventPattern, h, nil, subKind{router: true})
 }
 
 // SubscribeRoutingEstimated is SubscribeRouting plus an Estimator: a dry-run
 // count of the deliveries the router would make, used by EstimateSubscribers.
 func (b *Bus) SubscribeRoutingEstimated(addonKey, eventPattern string, h RoutingHandler, est Estimator) error {
-	return b.subscribeRouting(addonKey, eventPattern, h, est, false, true)
+	return b.subscribeRouting(addonKey, eventPattern, h, est, subKind{router: true})
 }
 
 // SubscribeTap registers an observer (e.g. the audit trail) that sees every
@@ -163,7 +178,7 @@ func (b *Bus) SubscribeTap(addonKey, eventPattern string, h Handler) error {
 	}
 	return b.subscribeRouting(addonKey, eventPattern, func(ctx context.Context, orgID uuid.UUID, _ string, payload any) (int, error) {
 		return 1, h(ctx, orgID, payload)
-	}, nil, true, false)
+	}, nil, subKind{tap: true})
 }
 
 // SubscribeDurableRouting is SubscribeRoutingEstimated for a router that
@@ -173,10 +188,17 @@ func (b *Bus) SubscribeTap(addonKey, eventPattern string, h Handler) error {
 // row unpublished and the relay retries. The router must be idempotent: a retry
 // republishes the same event.
 func (b *Bus) SubscribeDurableRouting(addonKey, eventPattern string, h RoutingHandler, est Estimator) error {
-	return b.subscribeRouting(addonKey, eventPattern, h, est, false, true, true)
+	return b.subscribeRouting(addonKey, eventPattern, h, est, subKind{router: true, durable: true})
 }
 
-func (b *Bus) subscribeRouting(addonKey, eventPattern string, h RoutingHandler, est Estimator, tap, router bool, durable ...bool) error {
+// subKind describes how a subscription counts and how its failures are treated.
+type subKind struct {
+	tap     bool // observer: not a subscriber for EstimateSubscribers
+	router  bool // SubscribeRouting*: reports its own delivery count
+	durable bool // failure is propagated (ErrDurableDelivery)
+}
+
+func (b *Bus) subscribeRouting(addonKey, eventPattern string, h RoutingHandler, est Estimator, kind subKind) error {
 	if eventPattern == "" {
 		return fmt.Errorf("events: empty pattern")
 	}
@@ -192,9 +214,9 @@ func (b *Bus) subscribeRouting(addonKey, eventPattern string, h RoutingHandler, 
 		Pattern:  eventPattern,
 		fn:       h,
 		est:      est,
-		tap:      tap,
-		isRouter: router,
-		durable:  len(durable) > 0 && durable[0],
+		tap:      kind.tap,
+		isRouter: kind.router,
+		durable:  kind.durable,
 	})
 	b.mu.Unlock()
 	b.logger.Printf("metacore.events subscribe addon=%s pattern=%s", addonKey, eventPattern)
@@ -235,6 +257,21 @@ func (b *Bus) Publish(ctx context.Context, addonKey, event string, orgID uuid.UU
 // the error is non-nil. Capability denial in `ModeShadow` returns
 // `(matched, nil)` mirroring the bus's pre-existing behaviour.
 func (b *Bus) PublishWithCount(ctx context.Context, addonKey, event string, orgID uuid.UUID, payload any) (int, error) {
+	return b.publish(ctx, addonKey, event, orgID, payload, false)
+}
+
+// PublishDurableOnly is the retry path of a durable publisher. It runs the same
+// checks as Publish but invokes ONLY the durable routers (SubscribeDurableRouting);
+// taps, plain handlers and non-durable routers are NOT called. The outbox uses
+// it once the in-line attempt already reached those siblings and only the
+// durable ledger write failed, so a relay retry never re-executes side effects
+// (audit rows, printing, paid AI generations) that are not idempotent.
+func (b *Bus) PublishDurableOnly(ctx context.Context, addonKey, event string, orgID uuid.UUID, payload any) error {
+	_, err := b.publish(ctx, addonKey, event, orgID, payload, true)
+	return err
+}
+
+func (b *Bus) publish(ctx context.Context, addonKey, event string, orgID uuid.UUID, payload any, durableOnly bool) (int, error) {
 	if event == "" {
 		return 0, fmt.Errorf("events: empty event name")
 	}
@@ -249,8 +286,14 @@ func (b *Bus) PublishWithCount(ctx context.Context, addonKey, event string, orgI
 	b.mu.RLock()
 	matched := make([]subscription, 0, 4)
 	for pattern, subs := range b.subs {
-		if eventMatches(pattern, event) {
-			matched = append(matched, subs...)
+		if !eventMatches(pattern, event) {
+			continue
+		}
+		for _, s := range subs {
+			if durableOnly && !s.durable {
+				continue
+			}
+			matched = append(matched, s)
 		}
 	}
 	b.mu.RUnlock()
@@ -276,7 +319,10 @@ func (b *Bus) PublishWithCount(ctx context.Context, addonKey, event string, orgI
 	}
 	// Plain handler errors never reach here; only a durable router's does, so
 	// the publisher can tell "recorded" from "lost".
-	return delivered, errors.Join(durableErrs...)
+	if len(durableErrs) == 0 {
+		return delivered, nil
+	}
+	return delivered, &DurableError{err: errors.Join(durableErrs...), siblings: !durableOnly}
 }
 
 // Unsubscribe removes every subscription registered under addonKey. It is the

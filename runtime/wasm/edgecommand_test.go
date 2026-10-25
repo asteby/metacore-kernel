@@ -11,6 +11,7 @@ import (
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -136,11 +137,31 @@ func TestEdgeCommandLimitsAndGuards(t *testing.T) {
 	}
 
 	// Inside a transactional invocation: refused before anything is sent.
+	poolDB, err := gorm.Open(sqlite.Open("file:edge_tx_"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	realTx := poolDB.Begin()
+	defer realTx.Rollback()
 	txInv := edgeInv(org, e, "cashdro.*")
-	txInv.tx = &gorm.DB{}
+	txInv.tx = realTx
 	e.got = nil
 	if ok, d := capEnv(t, executeEdgeCommand(ctx, txInv, req)); ok || d["code"] != "in_transaction" || e.got != nil {
 		t.Fatalf("in tx: %v", d)
+	}
+	// A POOL handle in inv.tx (Native actions pass actx.DB) is not a transaction:
+	// same bug class as flushEmits, the command must go out.
+	poolInv := edgeInv(org, e, "cashdro.*")
+	poolInv.tx = poolDB
+	if ok, d := capEnv(t, executeEdgeCommand(ctx, poolInv, req)); !ok || e.got == nil {
+		t.Fatalf("pool handle rejected as in_transaction: %v", d)
+	}
+	// And consumeDB only prefers inv.tx when it really is one.
+	if consumeDB(&invocation{tx: poolDB, db: poolDB}) != poolDB || consumeDB(&invocation{tx: realTx, db: poolDB}) != realTx {
+		t.Fatal("consumeDB must use inv.tx only when it is an open transaction")
+	}
+	if consumeDB(&invocation{tx: &gorm.DB{}, db: poolDB}) != poolDB {
+		t.Fatal("a non-tx inv.tx must fall back to inv.db")
 	}
 
 	// Per invocation.

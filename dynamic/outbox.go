@@ -24,6 +24,8 @@ package dynamic
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -39,12 +41,23 @@ type EventOutbox struct {
 	ID             uuid.UUID  `gorm:"type:uuid;primaryKey"`
 	OrganizationID uuid.UUID  `gorm:"type:uuid;index"`
 	AddonKey       string     `gorm:"size:100"`
-	EventName      string     `gorm:"size:200"`
+	EventName      string     `gorm:"size:512"`
 	Payload        string     `gorm:"type:text"`
 	CreatedAt      time.Time  `gorm:"index"`
 	PublishedAt    *time.Time `gorm:"index"`
 	Attempts       int
 	LastError      string `gorm:"size:500"`
+
+	// FannedOut records that an in-line (or relay) publication already ran the
+	// plain subscribers (audit tap, bridges, ...) and only the durable ledger
+	// write failed. The relay then calls PublishDurableOnly instead of
+	// re-publishing to everyone. Additive: rows written before the column
+	// existed are false, i.e. "unknown", and get the full publication (the
+	// safe side for a process that died before fan-out).
+	FannedOut bool `gorm:"not null;default:false"`
+	// NextAttemptAt is the relay's exponential backoff: the row is not swept
+	// before it. NULL (old rows, never-retried rows) means "due".
+	NextAttemptAt *time.Time `gorm:"index"`
 
 	// Envelope identity (metacore.event/1). All additive and nullable: rows
 	// written before these columns existed relay exactly as before.
@@ -96,13 +109,77 @@ const (
 	// is stamping published_at right now.
 	outboxRelayMinAge = 10 * time.Second
 	// outboxMaxAttempts caps relay retries per row; an exhausted row stays
-	// visible (published_at NULL, attempts capped) instead of disappearing.
+	// visible (published_at NULL, attempts capped) instead of disappearing, and
+	// the moment it is exhausted it is reported loudly (see reportExhausted).
 	outboxMaxAttempts = 25
+	// outboxBackoffBase/Max shape the retry spacing: base*2^attempts, capped.
+	outboxBackoffBase = 30 * time.Second
+	outboxBackoffMax  = 30 * time.Minute
+	// MaxEventNameLen is the longest event name the outbox and the dispatch
+	// ledger (event_deliveries.event, size:512) can store. A longer one can never
+	// be recorded, so it is rejected before persisting instead of burning every
+	// relay attempt on an error that cannot heal.
+	MaxEventNameLen = 512
 	// outboxRetention prunes PUBLISHED rows older than this.
 	outboxRetention = 7 * 24 * time.Hour
 	// outboxSweepBatch bounds one relay pass.
 	outboxSweepBatch = 200
 )
+
+// outboxBackoff is the wait before relay attempt number attempts+1.
+func outboxBackoff(attempts int) time.Duration {
+	if attempts < 0 {
+		attempts = 0
+	}
+	if attempts >= 10 {
+		return outboxBackoffMax
+	}
+	d := outboxBackoffBase << attempts
+	if d > outboxBackoffMax || d <= 0 {
+		return outboxBackoffMax
+	}
+	return d
+}
+
+// ErrEventNameTooLong is returned/logged when an event name exceeds
+// MaxEventNameLen. It is permanent: retrying cannot help.
+var ErrEventNameTooLong = fmt.Errorf("dynamic: event name longer than %d characters cannot be recorded in the outbox or the dispatch ledger", MaxEventNameLen)
+
+// DurableOnlyPublisher is implemented by a Publisher (events.Bus) that can
+// republish an event to its durable routers alone. The relay uses it for a row
+// whose plain subscribers already ran.
+type DurableOnlyPublisher interface {
+	PublishDurableOnly(ctx context.Context, addonKey, event string, orgID uuid.UUID, payload any) error
+}
+
+// siblingsRan reports whether err is a durable-delivery failure raised by a
+// publication in which the plain subscribers did run (events.DurableError).
+func siblingsRan(err error) bool {
+	var d interface{ SiblingsRan() bool }
+	return err != nil && errors.As(err, &d) && d.SiblingsRan()
+}
+
+// republish sends one persisted row to the bus. A row already marked FannedOut
+// goes to the durable routers only (when the bus supports it); an unmarked one
+// (process died before/during fan-out) gets the full publication.
+func republish(ctx context.Context, bus Publisher, row *EventOutbox) error {
+	pctx := row.publishContext(ctx)
+	payload := json.RawMessage(row.Payload)
+	if row.FannedOut {
+		if d, ok := bus.(DurableOnlyPublisher); ok {
+			return d.PublishDurableOnly(pctx, row.AddonKey, row.EventName, row.OrganizationID, payload)
+		}
+	}
+	return bus.Publish(pctx, row.AddonKey, row.EventName, row.OrganizationID, payload)
+}
+
+// markOutboxFannedOut records that the plain subscribers already ran for id.
+func markOutboxFannedOut(ctx context.Context, db *gorm.DB, id uuid.UUID) {
+	if err := db.WithContext(ctx).Model(&EventOutbox{}).Where("id = ?", id).
+		Update("fanned_out", true).Error; err != nil {
+		log.Printf("dynamic: outbox mark fanned_out failed (row %s; the relay may re-run plain subscribers): %v", id, err)
+	}
+}
 
 // persistOutbox writes the pre-publish intent row. Failure is loud but
 // non-fatal: the event still fans out directly (old behaviour), it just
@@ -166,7 +243,8 @@ func (s *Service) RelayOutboxOnce(ctx context.Context) {
 	var rows []EventOutbox
 	cutoff := time.Now().UTC().Add(-outboxRelayMinAge)
 	err := s.db.WithContext(ctx).
-		Where("published_at IS NULL AND created_at < ? AND attempts < ?", cutoff, outboxMaxAttempts).
+		Where("published_at IS NULL AND created_at < ? AND attempts < ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)",
+			cutoff, outboxMaxAttempts, time.Now().UTC()).
 		Order("created_at asc").
 		Limit(outboxSweepBatch).
 		Find(&rows).Error
@@ -178,12 +256,15 @@ func (s *Service) RelayOutboxOnce(ctx context.Context) {
 		row := &rows[i]
 		// Re-publish the ORIGINAL bytes: the dispatcher re-marshals payloads,
 		// and json.RawMessage round-trips byte-identical, so the canonical
-		// occurrence id is preserved and the ledger dedups the fan-out.
-		perr := s.bus.Publish(row.publishContext(ctx), row.AddonKey, row.EventName, row.OrganizationID, json.RawMessage(row.Payload))
-		updates := map[string]any{"attempts": row.Attempts + 1}
+		// occurrence id is preserved and the ledger dedups the fan-out. A row
+		// whose plain subscribers already ran only goes to the durable routers.
+		perr := republish(ctx, s.bus, row)
+		attempts := row.Attempts + 1
+		updates := map[string]any{"attempts": attempts}
 		if perr == nil {
 			updates["published_at"] = time.Now().UTC()
 			updates["last_error"] = ""
+			updates["next_attempt_at"] = nil
 			log.Printf("dynamic: outbox relay recovered event %s (org %s, row %s)", row.EventName, row.OrganizationID, row.ID)
 		} else {
 			msg := perr.Error()
@@ -191,13 +272,44 @@ func (s *Service) RelayOutboxOnce(ctx context.Context) {
 				msg = msg[:500]
 			}
 			updates["last_error"] = msg
+			updates["next_attempt_at"] = time.Now().UTC().Add(outboxBackoff(attempts))
+			if siblingsRan(perr) {
+				// The full publication just reached the plain subscribers:
+				// from now on only the durable routers are retried.
+				updates["fanned_out"] = true
+			}
 		}
 		s.db.WithContext(ctx).Model(&EventOutbox{}).Where("id = ?", row.ID).Updates(updates)
+		if perr != nil && attempts >= outboxMaxAttempts {
+			row.Attempts, row.LastError = attempts, fmt.Sprint(updates["last_error"])
+			s.reportExhausted(ctx, row)
+		}
 	}
 	// Retention: published rows are audit breadcrumbs, not a queue.
 	s.db.WithContext(ctx).
 		Where("published_at IS NOT NULL AND published_at < ?", time.Now().UTC().Add(-outboxRetention)).
 		Delete(&EventOutbox{})
+}
+
+// reportExhausted is the loud, structured signal that a row ran out of relay
+// attempts and will never be retried again: an error log line
+// (`kernel.outbox.exhausted`) and the optional host hook (Config.OnOutboxExhausted),
+// which is where a host opens an incident (the incidents package needs a Store,
+// an org and a fingerprint policy the dynamic service does not own). The row
+// stays in the table (published_at NULL) for manual replay.
+func (s *Service) reportExhausted(ctx context.Context, row *EventOutbox) {
+	log.Printf("level=error msg=kernel.outbox.exhausted event=%s org=%s row=%s attempts=%d last_error=%q",
+		row.EventName, row.OrganizationID, row.ID, row.Attempts, row.LastError)
+	if s.onOutboxExhausted != nil {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("dynamic: OnOutboxExhausted panicked: %v", r)
+				}
+			}()
+			s.onOutboxExhausted(ctx, *row)
+		}()
+	}
 }
 
 // publishContext rebuilds the publication context the original publisher had:
@@ -358,6 +470,9 @@ func (p *OutboxPublisher) Publish(ctx context.Context, tx *gorm.DB, evs []Staged
 	if p == nil || p.bus == nil || len(evs) == 0 {
 		return
 	}
+	if evs = rejectOversized(evs); len(evs) == 0 {
+		return
+	}
 	if tx != nil {
 		p.publishInTx(ctx, tx, evs)
 		return
@@ -372,6 +487,22 @@ func (p *OutboxPublisher) Publish(ctx context.Context, tx *gorm.DB, evs []Staged
 		}
 	}
 	p.fanOut(ctx, evs, rows)
+}
+
+// rejectOversized drops (loudly) the events whose name no store can hold. The
+// ledger would fail the INSERT forever; failing here, before persisting, keeps
+// the rest of the batch durable and spends no relay attempts.
+func rejectOversized(evs []StagedEvent) []StagedEvent {
+	ok := evs[:0:0]
+	for _, e := range evs {
+		if len(e.Name) > MaxEventNameLen {
+			log.Printf("level=error msg=kernel.outbox.rejected reason=event_name_too_long len=%d max=%d event=%.80s: %v",
+				len(e.Name), MaxEventNameLen, e.Name, ErrEventNameTooLong)
+			continue
+		}
+		ok = append(ok, e)
+	}
+	return ok
 }
 
 // persist writes evs to the outbox as one (nested) transaction on db; nil on
@@ -451,6 +582,11 @@ func (p *OutboxPublisher) fanOut(ctx context.Context, evs []StagedEvent, rows []
 		}
 		if err := p.bus.Publish(pctx, evs[i].AddonKey, evs[i].Name, evs[i].OrgID, payload); err != nil {
 			log.Printf("dynamic: guest event %s publish failed: %v", evs[i].Name, err)
+			if row != nil && p.db != nil && siblingsRan(err) {
+				// Plain subscribers already ran: the relay must retry the
+				// durable routers only.
+				markOutboxFannedOut(ctx, p.db, row.ID)
+			}
 			continue
 		}
 		if row != nil && p.db != nil {
@@ -468,6 +604,9 @@ func normalizePayload(b []byte) string {
 }
 
 func (p *OutboxPublisher) stage(ctx context.Context, t *gorm.DB, e *StagedEvent) (*EventOutbox, error) {
+	if len(e.Name) > MaxEventNameLen {
+		return nil, ErrEventNameTooLong
+	}
 	if e.ID == "" {
 		e.ID = NewEventID()
 	}

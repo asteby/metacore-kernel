@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `events`: `Bus.PublishDurableOnly` (publica solo a los routers durables), `events.DurableError`
+  (`SiblingsRan()`; `errors.Is(err, ErrDurableDelivery)`), `SubscribeDurableRouting`,
+  `ErrDurableDelivery`. **Cambio de contrato:** `Publish`/`PublishWithCount` ahora pueden
+  devolver el error de un router durable. `dynamic`: `EventOutbox.FannedOut` y `NextAttemptAt`
+  (columnas aditivas; filas viejas = sin marca, a tiempo), `Config.OnOutboxExhausted`,
+  `MaxEventNameLen`, `DurableOnlyPublisher`. Backoff exponencial del relay, log
+  `kernel.outbox.exhausted`, rechazo de nombres >512 antes de persistir. Minor.
+
 ### Fixed
 
 - **Bus durable: el outbox ya no estampa `published_at` sobre un evento que el libro de
@@ -20,6 +30,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   el relay reintenta (el libro deduplica lo que sí entró por id estable). Los handlers/suscriptores
   planos y los taps siguen sin poder bloquear la publicación. Un emisor que llame
   `Publish` ahora puede recibir un error que antes era siempre `nil`.
+  El relay no vuelve a ejecutar a los suscriptores planos (tap de auditoría, puentes): si el
+  intento en línea ya los alcanzó, la fila se marca `fanned_out` y el reintento va solo a los
+  routers durables (`PublishDurableOnly`); una fila sin marca (caída del proceso) sigue
+  recibiendo la publicación completa.
 - **wasm: `flushEmits` ya no trata un pool como transacción.** Las acciones Native invocan con
   `actx.DB` = pool; los eventos de `event_emit` quedaban esperando un commit hook que nunca llegaba
   (~40 s vía el relay, o descartados sin outbox armado). Con un handle que no es una transacción
@@ -28,7 +42,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (fuera de transacción y fuera del arranque de `Wire`, en una goroutine) para no bloquear los
   INSERT del libro; un índice que quedó inválido (`pg_index.indisvalid = false`) se borra y se
   recrea. SQLite conserva el `CREATE INDEX IF NOT EXISTS`. `dispatch.Migrate` sigue siendo
-  síncrona.
+  síncrona. Un candado de aviso (`pg_try_advisory_lock`) evita que una réplica borre el índice
+  que otra está construyendo; la goroutine de `Wire` reintenta con backoff y se cancela con él.
+- wasm: `edge_command` y `approval_consume` usan `isTx` (con un pool ya no se rechaza por
+  `in_transaction`); `flushEmits` avisa si recibe un handle que no es transacción; el camino
+  legado de `event_emit` devuelve `durable_delivery_failed` (no `forbidden`).
 
 ### Added
 

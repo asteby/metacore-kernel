@@ -3,6 +3,7 @@ package dispatch
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -151,7 +152,10 @@ func Migrate(db *gorm.DB, tableName string) error {
 	if err := migrateTable(db, tableName); err != nil {
 		return err
 	}
-	return ensureDueIndex(db, tableName)
+	if err := ensureDueIndex(db, tableName); err != nil && !errors.Is(err, errDueIndexBusy) {
+		return err
+	}
+	return nil
 }
 
 func migrateTable(db *gorm.DB, tableName string) error {
@@ -211,24 +215,73 @@ func dbInTx(db *gorm.DB) bool {
 	return ok
 }
 
-// ensureDueIndex applies dueIndexPlan against the live database.
+// errDueIndexBusy means another session (a replica starting at the same time)
+// holds the build lock for this table's sweeper index. It is not a failure:
+// the caller must not touch the index and may check again later.
+var errDueIndexBusy = errors.New("dispatch: sweeper index is being built by another session")
+
+// dueIndexState reports whether the sweeper index exists and is valid.
+func dueIndexState(db *gorm.DB, tableName string) (exists, valid bool, err error) {
+	var rows []bool
+	if err := db.Raw("SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass(?)",
+		pgIndexRef(tableName, dueIndexName(tableName))).Scan(&rows).Error; err != nil {
+		return false, false, err
+	}
+	exists = len(rows) > 0
+	return exists, exists && rows[0], nil
+}
+
+// dueIndexLockKey is the advisory-lock namespace of one table's sweeper index.
+func dueIndexLockKey(tableName string) string { return "metacore.dispatch.due_index:" + tableName }
+
+// ensureDueIndex brings the sweeper index to a valid state.
+//
+// On Postgres, CREATE INDEX CONCURRENTLY leaves the index INVALID in the catalog
+// while it builds. A replica that starts meanwhile must not mistake that for an
+// interrupted build and DROP it (it would wait on the builder and then fail with
+// "tuple concurrently updated"). So whoever has to create or drop the index
+// first takes a session advisory lock on a dedicated connection; if another
+// session holds it, the index is theirs to finish and errDueIndexBusy is
+// returned (Migrate treats it as success; Wire's background retry re-checks).
+// A crashed builder releases the lock with its connection, so a truly stale
+// invalid index is still healed by the next starter.
 func ensureDueIndex(db *gorm.DB, tableName string) error {
 	dialect := db.Dialector.Name()
-	inTx := dbInTx(db)
-	var exists, valid bool
-	if dialect == "postgres" && !inTx {
-		var rows []bool
-		if err := db.Raw("SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass(?)",
-			pgIndexRef(tableName, dueIndexName(tableName))).Scan(&rows).Error; err != nil {
+	if dialect != "postgres" || dbInTx(db) {
+		for _, stmt := range dueIndexPlan(dialect, tableName, dbInTx(db), false, false) {
+			if err := db.Exec(stmt).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	exists, valid, err := dueIndexState(db, tableName)
+	if err != nil {
+		return err
+	}
+	if exists && valid {
+		return nil
+	}
+	return db.Connection(func(c *gorm.DB) error {
+		key := dueIndexLockKey(tableName)
+		var got bool
+		if err := c.Raw("SELECT pg_try_advisory_lock(hashtextextended(?, 0))", key).Scan(&got).Error; err != nil {
 			return err
 		}
-		exists = len(rows) > 0
-		valid = exists && rows[0]
-	}
-	for _, stmt := range dueIndexPlan(dialect, tableName, inTx, exists, valid) {
-		if err := db.Exec(stmt).Error; err != nil {
+		if !got {
+			return errDueIndexBusy
+		}
+		defer c.Exec("SELECT pg_advisory_unlock(hashtextextended(?, 0))", key)
+		// Re-read under the lock: the previous holder may have just finished.
+		exists, valid, err := dueIndexState(c, tableName)
+		if err != nil {
 			return err
 		}
-	}
-	return nil
+		for _, stmt := range dueIndexPlan(dialect, tableName, false, exists, valid) {
+			if err := c.Exec(stmt).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

@@ -241,3 +241,111 @@ func TestDurablePG_DueIndexIsBuiltConcurrentlyAndHealsWhenInvalid(t *testing.T) 
 		t.Fatal(err)
 	}
 }
+
+// Another replica is building the index with CREATE INDEX CONCURRENTLY: the
+// catalog shows it INVALID, which used to look like an interrupted build and got
+// it dropped (waiting on the builder, then "tuple concurrently updated"). While
+// a session holds the build lock the index must not be touched; once the lock is
+// gone (builder crashed) the invalid leftover is healed.
+func TestDurablePG_DueIndexBeingBuiltByAnotherReplicaIsNotDropped(t *testing.T) {
+	open := pgSchemaDB(t)
+	db := open()
+	if err := dispatch.Migrate(db, ""); err != nil {
+		t.Fatal(err)
+	}
+	const idx = "idx_" + dispatch.DefaultTableName + "_due"
+	oid := func() (id uint32, valid bool) {
+		var r struct {
+			Oid   uint32
+			Valid bool
+		}
+		if err := db.Raw("SELECT i.indexrelid::oid::text::bigint AS oid, i.indisvalid AS valid FROM pg_index i WHERE i.indexrelid = to_regclass(?)", idx).Scan(&r).Error; err != nil {
+			t.Fatal(err)
+		}
+		return r.Oid, r.Valid
+	}
+	before, _ := oid()
+	if err := db.Exec("UPDATE pg_index SET indisvalid = false WHERE indexrelid = to_regclass(?)", idx).Error; err != nil {
+		t.Skipf("cannot flag the index invalid without superuser: %v", err)
+	}
+
+	// The "other replica": a dedicated connection holding the build lock.
+	builder := open()
+	release := make(chan struct{})
+	held := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		_ = builder.Connection(func(c *gorm.DB) error {
+			var got bool
+			c.Raw("SELECT pg_try_advisory_lock(hashtextextended(?, 0))", "metacore.dispatch.due_index:"+dispatch.DefaultTableName).Scan(&got)
+			if !got {
+				t.Error("builder could not take the lock")
+			}
+			close(held)
+			<-release
+			c.Exec("SELECT pg_advisory_unlock(hashtextextended(?, 0))", "metacore.dispatch.due_index:"+dispatch.DefaultTableName)
+			return nil
+		})
+	}()
+	<-held
+
+	start := time.Now()
+	if err := dispatch.Migrate(open(), ""); err != nil {
+		t.Fatalf("Migrate while another replica builds: %v", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("Migrate waited %s on the other builder", d)
+	}
+	if id, valid := oid(); id != before || valid {
+		t.Fatalf("index was touched while another session held the build lock (oid %d -> %d, valid=%v)", before, id, valid)
+	}
+
+	close(release)
+	<-finished
+	if err := dispatch.Migrate(open(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, valid := oid(); !valid {
+		t.Fatal("stale invalid index not healed once the lock is free")
+	}
+}
+
+// Several replicas starting together converge on one valid index, no errors.
+func TestDurablePG_DueIndexConcurrentStartersConverge(t *testing.T) {
+	open := pgSchemaDB(t)
+	first := open()
+	// The table is created once (concurrent CREATE TABLE races are not what is
+	// under test); the index is dropped so every starter has to build it.
+	if err := dispatch.Migrate(first, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Exec("DROP INDEX idx_" + dispatch.DefaultTableName + "_due").Error; err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 6)
+	for i := 0; i < 6; i++ {
+		db := open()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- dispatch.Migrate(db, "")
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Migrate: %v", err)
+		}
+	}
+	if err := dispatch.Migrate(open(), ""); err != nil {
+		t.Fatal(err)
+	}
+	var valid []bool
+	first.Raw("SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass(?)", "idx_"+dispatch.DefaultTableName+"_due").Scan(&valid)
+	if len(valid) != 1 || !valid[0] {
+		t.Fatalf("index state after concurrent starters: %v", valid)
+	}
+}
