@@ -41,12 +41,40 @@ type Provider struct {
 	// the Executor turns the contract input into the provider payload with
 	// Resolve(Input, nil, contractInput).
 	Input map[string]string
+	// Priority orders the providers of one selection tier (the org's
+	// market selection, the org default or the plain eligible set): lower
+	// wins (1 before 2) and any positive value outranks 0. 0 = unset. When
+	// the best positive priority of a tier is shared, the tier is still
+	// ambiguous (fail closed). With no priority anywhere, selection is the
+	// pre-priority algorithm bit for bit.
+	Priority int
+	// Status is the host's view of whether the provider can serve right now.
+	// "" is treated as ready. StatusNotConfigured providers are skipped by
+	// Select (the next one in the tier is the fallback); see ErrNotConfigured.
+	Status ProviderStatus
 	// Timeout overrides the per-provider deadline (0 = contract/executor).
 	Timeout time.Duration
 	// Ref is opaque host data (dispatch target, manifest row …) handed back
 	// to the Invoker untouched.
 	Ref any
 }
+
+// ProviderStatus is the readiness of a provider as the host knows it.
+type ProviderStatus string
+
+const (
+	// StatusReady: configured and usable (same as the empty status).
+	StatusReady ProviderStatus = "ready"
+	// StatusNotConfigured: installed and enabled but missing what it needs
+	// (credentials, origin…). Select skips it.
+	StatusNotConfigured ProviderStatus = "not_configured"
+	// StatusUnhealthy: configured but failing right now. Informational: Select
+	// still routes to it (a health blip must not silently re-route payments).
+	StatusUnhealthy ProviderStatus = "unhealthy"
+)
+
+// Usable reports whether Select may route to the provider.
+func (p Provider) Usable() bool { return p.Status != StatusNotConfigured }
 
 // Serves reports whether the provider declared support for any country of
 // the market (or declared none, or the market has none).
@@ -83,6 +111,10 @@ var (
 	// ErrAmbiguousProvider: several eligible providers and none selected for
 	// the market nor marked as the org default.
 	ErrAmbiguousProvider = errors.New("capability: ambiguous provider")
+	// ErrNotConfigured: providers exist for the org/market but every one of
+	// the candidate tier is StatusNotConfigured. Distinct from ErrNoProvider
+	// (nothing installed) so the UI can say "connect your credentials".
+	ErrNotConfigured = errors.New("capability: provider not configured")
 	// ErrNotQuery: the contract is an action, it returns no output.
 	ErrNotQuery = errors.New("capability: not a query contract")
 	// ErrInvalidInput: the contract input misses required fields or has
@@ -159,53 +191,86 @@ func (e *OutputError) Unwrap() error { return ErrInvalidOutput }
 // Select resolves which providers a call reaches for (org, market,
 // capability); providers are the ones installed+enabled in the org.
 //
-// Cardinality One:
-//  1. the provider the org selected for the market (Markets ∋ m.Code);
+// Cardinality One. Three tiers are tried in order and the first non-empty one
+// decides (no cascade to the next tier):
+//  1. the providers the org selected for the market (Markets ∋ m.Code);
 //  2. else, among the providers serving the market's countries, the org
-//     default;
-//  3. else the only provider serving the market;
-//  4. else ErrAmbiguousProvider (several) / ErrNoProvider (none).
+//     defaults;
+//  3. else every provider serving the market.
+//
+// Inside the deciding tier the providers with Status not_configured are
+// skipped, the rest are ranked by Priority (lower first, positive before 0)
+// and the best one wins; a tie for the best rank is ErrAmbiguousProvider, an
+// empty tier 3 is ErrNoProvider and a tier whose members are all
+// not_configured is ErrNotConfigured. With no Priority and no Status set this
+// is exactly the original rule: one provider in the tier wins, several are
+// ambiguous.
 //
 // Cardinality All: every provider serving the market's countries — unless
 // the org selected some providers for this market explicitly, in which case
-// exactly those (a market opting into a subset of carriers).
+// exactly those (a market opting into a subset of carriers). not_configured
+// ones are dropped; if that leaves none, ErrNotConfigured.
 //
 // The result is sorted by addon key (stable fan-out order).
 func Select(c Contract, providers []Provider, m Market) ([]Provider, error) {
+	r := resolve(c, providers, m)
+	return r.chosen, r.err
+}
+
+// resolution is the full outcome of the one resolver every consumer uses
+// (queries, API routes, the capability_providers listing).
+type resolution struct {
+	sorted   []Provider // all providers, by addon key
+	selected []bool     // aligned with sorted
+	eligible []bool
+	chosen   []Provider
+	err      error
+}
+
+func resolve(c Contract, providers []Provider, m Market) resolution {
 	sorted := append([]Provider(nil), providers...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Addon < sorted[j].Addon })
 
+	r := resolution{sorted: sorted, selected: make([]bool, len(sorted)), eligible: make([]bool, len(sorted))}
 	var selected, eligible []Provider
-	for _, p := range sorted {
+	for i, p := range sorted {
 		if p.SelectedFor(m.Code) {
 			selected = append(selected, p)
+			r.selected[i] = true
 		}
 		if p.Serves(m) {
 			eligible = append(eligible, p)
+			r.eligible[i] = true
 		}
 	}
-	fail := func(err error, ps []Provider) error {
+	fail := func(err error, ps []Provider) {
 		e := &SelectionError{Capability: c.Key, Market: m.Code, err: err}
 		for _, p := range ps {
 			e.Candidates = append(e.Candidates, p.Addon)
 		}
-		return e
+		r.chosen, r.err = nil, e
 	}
 	if c.Fanout() {
+		tier := eligible
 		if len(selected) > 0 {
-			return selected, nil
+			tier = selected
 		}
-		if len(eligible) == 0 {
-			return nil, fail(ErrNoProvider, sorted)
+		if len(tier) == 0 {
+			fail(ErrNoProvider, sorted)
+			return r
 		}
-		return eligible, nil
-	}
-	switch len(selected) {
-	case 1:
-		return selected, nil
-	case 0:
-	default:
-		return nil, fail(ErrAmbiguousProvider, selected)
+		var usable []Provider
+		for _, p := range tier {
+			if p.Usable() {
+				usable = append(usable, p)
+			}
+		}
+		if len(usable) == 0 {
+			fail(ErrNotConfigured, tier)
+			return r
+		}
+		r.chosen = usable
+		return r
 	}
 	var defaults []Provider
 	for _, p := range eligible {
@@ -213,17 +278,101 @@ func Select(c Contract, providers []Provider, m Market) ([]Provider, error) {
 			defaults = append(defaults, p)
 		}
 	}
-	switch {
-	case len(defaults) == 1:
-		return defaults, nil
-	case len(defaults) > 1:
-		return nil, fail(ErrAmbiguousProvider, defaults)
-	case len(eligible) == 1:
-		return eligible, nil
-	case len(eligible) == 0:
-		return nil, fail(ErrNoProvider, sorted)
+	tier := selected
+	if len(tier) == 0 {
+		tier = defaults
 	}
-	return nil, fail(ErrAmbiguousProvider, eligible)
+	if len(tier) == 0 {
+		tier = eligible
+	}
+	if len(tier) == 0 {
+		fail(ErrNoProvider, sorted)
+		return r
+	}
+	var usable []Provider
+	for _, p := range tier {
+		if p.Usable() {
+			usable = append(usable, p)
+		}
+	}
+	if len(usable) == 0 {
+		fail(ErrNotConfigured, tier)
+		return r
+	}
+	best := bestRanked(usable)
+	if len(best) > 1 {
+		fail(ErrAmbiguousProvider, best)
+		return r
+	}
+	r.chosen = best
+	return r
+}
+
+// bestRanked returns the providers tied for the best rank of ps (kept in
+// input order): a positive Priority beats 0, a lower positive beats a higher
+// one. With no priority set it returns ps unchanged.
+func bestRanked(ps []Provider) []Provider {
+	rank := func(p Provider) int {
+		if p.Priority > 0 {
+			return p.Priority
+		}
+		return int(^uint(0) >> 1) // unset: after every positive priority
+	}
+	best := rank(ps[0])
+	for _, p := range ps[1:] {
+		if r := rank(p); r < best {
+			best = r
+		}
+	}
+	var out []Provider
+	for _, p := range ps {
+		if rank(p) == best {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// ProviderView is one installed provider as the resolver sees it for a
+// (capability, market): what the UI and a guest need to explain a selection
+// without invoking anything.
+type ProviderView struct {
+	Addon     string         `json:"addon"`
+	Label     string         `json:"label,omitempty"`
+	Countries []string       `json:"countries,omitempty"`
+	Default   bool           `json:"default,omitempty"`
+	Priority  int            `json:"priority,omitempty"`
+	Status    ProviderStatus `json:"status"`
+	// Selected: the org selected it for the market.
+	Selected bool `json:"selected,omitempty"`
+	// Serves: it serves the market's countries.
+	Serves bool `json:"serves"`
+	// Reached: Select would route a call to it (always false when selection
+	// fails).
+	Reached bool `json:"reached"`
+}
+
+// Eligible lists every provider with how the resolver treats it for market m,
+// using the same resolution as Select (never a second implementation). The
+// second result is Select's error for the same input (nil when a call would
+// be routed), so a caller can show both the list and why it does not resolve.
+// Sorted by addon key.
+func Eligible(c Contract, providers []Provider, m Market) ([]ProviderView, error) {
+	r := resolve(c, providers, m)
+	reached := map[string]bool{}
+	for _, p := range r.chosen {
+		reached[p.Addon] = true
+	}
+	out := make([]ProviderView, 0, len(r.sorted))
+	for i, p := range r.sorted {
+		st := p.Status
+		if st == "" {
+			st = StatusReady
+		}
+		out = append(out, ProviderView{Addon: p.Addon, Label: p.Label, Countries: p.Countries, Default: p.Default,
+			Priority: p.Priority, Status: st, Selected: r.selected[i], Serves: r.eligible[i], Reached: reached[p.Addon]})
+	}
+	return out, r.err
 }
 
 // SelectPinned resolves the single provider a follow-up call is bound to: the
@@ -696,6 +845,53 @@ func (g *Engine) Query(ctx context.Context, q Query) (QueryResult, error) {
 		return QueryResult{Capability: c.Key, Market: q.Market.Code}, err
 	}
 	return g.Executor.Run(ctx, c, q.Org, q.Market.Code, chosen, q.Input, g.Invoke)
+}
+
+// ProviderListing is what ListProviders answers.
+type ProviderListing struct {
+	Capability string         `json:"capability"`
+	Market     string         `json:"market,omitempty"`
+	Providers  []ProviderView `json:"providers"`
+	// Resolution is "ok" or the error code a call would get: no_provider |
+	// ambiguous_provider | not_configured.
+	Resolution string `json:"resolution"`
+}
+
+// ProviderLister is implemented by a Querier that can list providers without
+// invoking them (Engine does); the capability_providers host import uses it.
+type ProviderLister interface {
+	ListProviders(ctx context.Context, q Query) (ProviderListing, error)
+}
+
+// ListProviders implements ProviderLister with the same Source and resolver as
+// Query.
+func (g *Engine) ListProviders(ctx context.Context, q Query) (ProviderListing, error) {
+	lookup := g.Lookup
+	if lookup == nil {
+		lookup = Lookup
+	}
+	c, ok := lookup(q.Capability)
+	if !ok {
+		return ProviderListing{}, fmt.Errorf("%w: unknown contract %q", ErrNotQuery, q.Capability)
+	}
+	if g.Source == nil {
+		return ProviderListing{}, errors.New("capability: engine has no provider source")
+	}
+	all, err := g.Source.Providers(ctx, q.Org, c.Key)
+	if err != nil {
+		return ProviderListing{}, fmt.Errorf("capability %s: list providers: %w", c.Key, err)
+	}
+	views, serr := Eligible(c, all, q.Market)
+	res := "ok"
+	switch {
+	case errors.Is(serr, ErrNoProvider):
+		res = "no_provider"
+	case errors.Is(serr, ErrAmbiguousProvider):
+		res = "ambiguous_provider"
+	case errors.Is(serr, ErrNotConfigured):
+		res = "not_configured"
+	}
+	return ProviderListing{Capability: c.Key, Market: q.Market.Code, Providers: views, Resolution: res}, nil
 }
 
 // Installation-settings keys hosts use to persist provider selection. The
