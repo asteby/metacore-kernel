@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"time"
 	"unicode/utf8"
@@ -15,6 +17,7 @@ import (
 	"github.com/asteby/metacore-kernel/capability"
 	"github.com/asteby/metacore-kernel/connectors"
 	"github.com/asteby/metacore-kernel/database/staleplan"
+	"github.com/asteby/metacore-kernel/diag"
 	"github.com/asteby/metacore-kernel/domains"
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
@@ -162,6 +165,9 @@ type invocation struct {
 	emitPolicy EmitPolicyFunc
 	// metrics are the host collectors (nil when the host has none).
 	metrics *hostMetrics
+	// bag collects this invocation's diagnostic context (failed outbound HTTP,
+	// last log lines, secrets to scrub); nil when diagnostics are off.
+	bag *diag.Bag
 }
 
 type invKey struct{}
@@ -229,6 +235,7 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 			}
 			inv.logger.Printf("metacore.wasm addon=%s installation=%s msg=%s",
 				inv.addonKey, inv.installation, string(msg))
+			inv.bag.Log(string(msg))
 		}).
 		Export("log")
 
@@ -298,6 +305,7 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 					return writeToGuest(ctx, mod, jsonError("bad_request", "headers must be a JSON object: "+err.Error()))
 				}
 			}
+			inv.bag.AddHeaders(headers)
 			return doHTTP(ctx, mod, inv, url, method, headers, body)
 		}).
 		Export("http_request")
@@ -338,6 +346,9 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 			creds, err := inv.connectors.Get(ctx, inv.orgID, key)
 			if err != nil {
 				return writeToGuest(ctx, mod, jsonError("not_found", err.Error()))
+			}
+			for _, v := range creds {
+				inv.bag.AddSecrets(v)
 			}
 			buf, _ := json.Marshal(creds)
 			return writeToGuest(ctx, mod, buf)
@@ -723,6 +734,9 @@ func connectorFetchHosts(ctx context.Context, inv *invocation) []string {
 		if err != nil {
 			continue
 		}
+		for _, v := range creds {
+			inv.bag.AddSecrets(v)
+		}
 		if h := security.HostFromCredential(creds[ref.Credential]); h != "" {
 			hosts = append(hosts, h)
 		}
@@ -730,11 +744,16 @@ func connectorFetchHosts(ctx context.Context, inv *invocation) []string {
 	return hosts
 }
 
+// newHTTPClient builds the outbound client (a var so tests can stub the
+// transport; the loopback guard in CanFetch rules out a local test server).
+var newHTTPClient = func() *http.Client { return &http.Client{Timeout: 30 * time.Second} }
+
 func doHTTP(ctx context.Context, mod api.Module, inv *invocation, url, method string, headers map[string]string, body []byte) uint64 {
 	if method == "" {
 		method = http.MethodGet
 	}
 	if err := inv.caps.CanFetchHosts(url, connectorFetchHosts(ctx, inv)); err != nil {
+		inv.bag.HTTPBlocked(url, method)
 		return writeToGuest(ctx, mod, jsonError("forbidden", err.Error()))
 	}
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
@@ -747,7 +766,8 @@ func doHTTP(ctx context.Context, mod api.Module, inv *invocation, url, method st
 	if len(body) > 0 && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newHTTPClient()
+	inv.bag.HTTPStarted(method)
 	var (
 		resp     *http.Response
 		respBody []byte
@@ -760,8 +780,11 @@ func doHTTP(ctx context.Context, mod api.Module, inv *invocation, url, method st
 		}
 	})
 	if err != nil {
+		var ne net.Error
+		inv.bag.HTTPTransportError(url, method, errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()))
 		return writeToGuest(ctx, mod, jsonError("transport", err.Error()))
 	}
+	inv.bag.HTTPResult(url, method, resp.StatusCode, respBody)
 	return writeToGuest(ctx, mod, httpResponseEnvelope(resp.StatusCode, respBody))
 }
 

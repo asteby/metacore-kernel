@@ -35,6 +35,7 @@ import (
 	"github.com/asteby/metacore-kernel/connectors"
 	"github.com/asteby/metacore-kernel/database/staleplan"
 	"github.com/asteby/metacore-kernel/domains"
+	"github.com/asteby/metacore-kernel/diag"
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/manifest"
@@ -75,6 +76,9 @@ type Host struct {
 	// settingsResolver, when set, supplies the per-invocation settings (see
 	// SettingsResolver). nil keeps the caller-passed map as the only source.
 	settingsResolver SettingsResolver
+	// diag, when set, captures a sanitized diagnostic of every failed
+	// invocation (see WithDiagnostics). nil = no capture, as before.
+	diag *diag.Recorder
 	db            *gorm.DB
 	enforcer      *security.Enforcer
 	tableResolver func(table string) string
@@ -711,6 +715,8 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 	settings = h.resolveSettings(ctx, orgID, addonKey, settings)
 	start := time.Now()
 	defer func() { h.metrics.invoked(addonKey, err, time.Since(start)) }()
+	ctx, finishDiag := h.beginDiag(ctx, orgID, addonKey, funcName, settings)
+	defer func() { finishDiag(&out, &err, recover()) }()
 
 	ce, ok := h.compiled.Load(addonKey)
 	if !ok {
@@ -769,7 +775,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 	h.metrics.waited(addonKey, time.Since(waitStart))
 	if err != nil {
 		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
-			return nil, fmt.Errorf("wasm: %s: all %d pooled instances busy for %s", addonKey, pool.size, timeout)
+			return nil, &faultError{code: "pool_busy", err: fmt.Errorf("wasm: %s: all %d pooled instances busy for %s", addonKey, pool.size, timeout)}
 		}
 		return nil, err
 	}
@@ -828,6 +834,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		emitPolicy:        h.emitPolicy,
 		metrics:           h.metrics,
 		logger:            h.logger,
+		bag:               diagBagFrom(ctx),
 	})
 
 	if mod.inst.IsClosed() {
@@ -851,12 +858,19 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		// unrelated exports until restart. Evict so the next Invoke gets a
 		// fresh reactor; the failed call itself is NOT retried (not idempotent).
 		evict(evictTrap)
-		return nil, fmt.Errorf("wasm: call %s: %w", funcName, err)
+		code := "trap"
+		switch {
+		case ctx.Err() != nil:
+			code = "canceled"
+		case callCtx.Err() != nil:
+			code = "timeout"
+		}
+		return nil, &faultError{code: code, err: fmt.Errorf("wasm: call %s: %w", funcName, err)}
 	}
 	if mem := mod.inst.Memory(); mem != nil {
 		if limit := entry.pages; mem.Size() > limit*pageBytes {
 			evict(evictMemory)
-			return nil, fmt.Errorf("wasm: %s exceeded memory_limit_mb (%d pages > %d)", addonKey, mem.Size()/pageBytes, limit)
+			return nil, &faultError{code: "memory_limit", err: fmt.Errorf("wasm: %s exceeded memory_limit_mb (%d pages > %d)", addonKey, mem.Size()/pageBytes, limit)}
 		}
 	}
 	if len(results) != 1 {

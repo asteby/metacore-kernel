@@ -9,6 +9,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `diag` (revisión 3 del PR #545): saneado de breadcrumbs acotado (borrado por valor sobre la línea completa y corte a 640 bytes antes de las regex; caso adverso 1,28 s -> 45 ms), limitador de tasa antes de `Sanitize`, URL recortadas antes del borrado por valor (sin fuga con secreto en query/ruta/userinfo/fragmento), deduplicación solo con correlación igual y no vacía, claves en español (`contraseña`, `clave`, `llave`, `pass`, `sid`, `refresh`, `session_id`), email Unicode y `%40`, prefiltro del sobre sin distinguir mayúsculas; se elimina `WithScrubber`/`ScrubberFrom`. `BenchmarkInvokeOK_*` corre con el benchtime por defecto.
+
+- Paquete `diag` (ADR 0003, F0, aditivo): diagnostico saneado de addons. `diag.Sanitize`
+  (allowlist por campo, borrado por valor de secretos, sin extraer valores; vectores
+  dorados + fuzz), `Recorder` asincrono (agregado, token bucket por org x addon,
+  retencion 14/90 dias), `Store` con org obligatorio, `Handler.Mount` (issues, events,
+  resolve/mute, export; falla cerrado sin middleware), alertas inyectables
+  (`IncidentsAlerter`). Migracion 0009 (`addon_diagnostic_groups`,
+  `addon_diagnostic_events`). `wasm.Host.WithDiagnostics`: captura automatica de
+  trap/timeout/pool/memoria/panic, sobre `{success:false}`, llamadas salientes fallidas
+  y breadcrumbs, sin cambiar el addon. `capability.Executor.OnFailure` + `Failure`.
+  Apagable con `KERNEL_DIAGNOSTICS=off`; sin `WithDiagnostics` nada cambia. Minor.
+  Endurecido tras revision: el recorte de breadcrumbs ocurre despues de sanear (un
+  secreto conocido ya no puede quedar partido), la extraccion de rutas solo mira
+  claves de mensaje/ruta y `provider_code` exige forma de codigo, `ScrubText` cubre
+  PAN con separadores y ancho completo (NFKC), URL sin esquema, IP, telefonos,
+  `clave=valor` sensibles, caracteres de formato y secretos hex/base64url/partidos;
+  `Scrubber` perezoso y prefiltro de sobre (ruta exitosa ≈78 µs vs ≈160 µs antes);
+  `Recorder.Close`/`Flush` con plazo (`Options.FlushTimeout`); resolver/mute exigen
+  `platform.diagnostics.manage` (`HandlerOptions.Manage`, falla cerrado); 500 generico
+  en errores internos; indice `(org_id, diag_ref)` en 0009; export sin N+1; sin doble
+  registro de un addon wasm que es proveedor de capacidad.
 - Paquete `settings` (ADR 0002, F1, aditivo): `Store` (`Read`/`Write` con
   revision optimista, validacion por tipo contra el manifest instalado, rechazo
   de secretos y claves `_`, evento `settings.changed`) y `Resolver` (precedencia
