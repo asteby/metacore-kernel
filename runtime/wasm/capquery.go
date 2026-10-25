@@ -101,12 +101,74 @@ func executeCapabilityQuery(ctx context.Context, inv *invocation, reqJSON []byte
 	return env
 }
 
+// executeCapabilityProviders implements `metacore_host.capability_providers`:
+// the guest lists the providers of a capability for a market and how the
+// resolver treats each one (serves, selected, default, priority, status,
+// reached) without invoking any. Same gate as capability_query (the addon needs
+// `capability:query <key>`) and the same resolver (capability.Eligible ->
+// capability.Select). The import is registered by the host capability table
+// (capabilities.go) and the import allowlist; this is its implementation.
+func executeCapabilityProviders(ctx context.Context, inv *invocation, reqJSON []byte) []byte {
+	start := time.Now()
+	addonKey, orgID := "", uuid.Nil
+	if inv != nil {
+		addonKey, orgID = inv.addonKey, inv.orgID
+	}
+	fail := func(code, msg string) []byte {
+		b, _ := json.Marshal(map[string]any{
+			"success": false,
+			"error":   hostErrorBody(code, msg),
+			"meta":    capQueryMeta(addonKey, orgID, start),
+		})
+		return b
+	}
+	if inv == nil {
+		return fail("invalid_request", "invocation context missing")
+	}
+	if orgID == uuid.Nil {
+		return fail("no_active_org", "invocation has no bound orgID")
+	}
+	var req capQueryRequest
+	if err := json.Unmarshal(reqJSON, &req); err != nil {
+		return fail("invalid_request", "malformed request JSON: "+err.Error())
+	}
+	req.Capability = strings.TrimSpace(req.Capability)
+	if req.Capability == "" {
+		return fail("invalid_request", "capability is required")
+	}
+	if err := inv.caps.CanQueryCapability(req.Capability); err != nil {
+		inv.logf("audit capability_providers addon=%s capability=%s org=%s decision=denied: %v", addonKey, req.Capability, orgID, err)
+		return fail("forbidden", err.Error())
+	}
+	lister, ok := inv.capQuerier.(capability.ProviderLister)
+	if !ok {
+		return fail("capability_unavailable", "host has no capability provider lister configured")
+	}
+	listing, err := lister.ListProviders(ctx, capability.Query{
+		Org:        orgID,
+		Market:     capability.Market{Code: strings.TrimSpace(req.Market)},
+		Capability: req.Capability,
+		Caller:     addonKey,
+	})
+	if err != nil {
+		return fail(capQueryErrorCode(err), err.Error())
+	}
+	env, _ := json.Marshal(map[string]any{
+		"success": true,
+		"data":    listing,
+		"meta":    capQueryMeta(addonKey, orgID, start),
+	})
+	return env
+}
+
 func capQueryErrorCode(err error) string {
 	switch {
 	case errors.Is(err, capability.ErrNoProvider):
 		return "no_provider"
 	case errors.Is(err, capability.ErrAmbiguousProvider):
 		return "ambiguous_provider"
+	case errors.Is(err, capability.ErrNotConfigured):
+		return "not_configured"
 	case errors.Is(err, capability.ErrInvalidInput):
 		return "validation_error"
 	case errors.Is(err, capability.ErrNotQuery):

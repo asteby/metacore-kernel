@@ -81,3 +81,52 @@ func TestCapabilityQueryGate(t *testing.T) {
 		t.Fatalf("depth: %v", e)
 	}
 }
+
+type fakeLister struct {
+	fakeQuerier
+	listing capability.ProviderListing
+	err     error
+	got     capability.Query
+}
+
+func (f *fakeLister) ListProviders(_ context.Context, q capability.Query) (capability.ProviderListing, error) {
+	f.got = q
+	return f.listing, f.err
+}
+
+func TestCapabilityProvidersGateAndCodes(t *testing.T) {
+	org := uuid.New()
+	l := &fakeLister{listing: capability.ProviderListing{Capability: "commerce.payments.session", Market: "mx", Resolution: "ok",
+		Providers: []capability.ProviderView{{Addon: "mp", Status: capability.StatusReady, Serves: true, Reached: true}}}}
+	inv := &invocation{
+		addonKey:   "storefront_cart",
+		orgID:      org,
+		caps:       security.Compile("storefront_cart", []manifest.Capability{{Kind: "capability:query", Target: "commerce.payments.*"}}),
+		capQuerier: l,
+	}
+	ctx := context.Background()
+	ok, d := capEnv(t, executeCapabilityProviders(ctx, inv, []byte(`{"capability":"commerce.payments.session","market":"mx"}`)))
+	if !ok || d["resolution"] != "ok" || l.got.Org != org || l.got.Market.Code != "mx" || l.got.Caller != "storefront_cart" {
+		t.Fatalf("listing failed: %v %+v", d, l.got)
+	}
+	if ok, e := capEnv(t, executeCapabilityProviders(ctx, inv, []byte(`{"capability":"commerce.shipping.rates"}`))); ok || e["code"] != "forbidden" {
+		t.Fatalf("undeclared capability must be forbidden: %v", e)
+	}
+	inv.capQuerier = &fakeQuerier{}
+	if ok, e := capEnv(t, executeCapabilityProviders(ctx, inv, []byte(`{"capability":"commerce.payments.session"}`))); ok || e["code"] != "capability_unavailable" {
+		t.Fatalf("querier without lister: %v", e)
+	}
+	inv.capQuerier = nil
+	if ok, e := capEnv(t, executeCapabilityProviders(ctx, inv, []byte(`{"capability":"commerce.payments.session"}`))); ok || e["code"] != "capability_unavailable" {
+		t.Fatalf("nil querier: %v", e)
+	}
+}
+
+func TestCapQueryErrorCodeNotConfigured(t *testing.T) {
+	if got := capQueryErrorCode(capability.ErrNotConfigured); got != "not_configured" {
+		t.Fatalf("got %q", got)
+	}
+	if got := capQueryErrorCode(capability.ErrAmbiguousProvider); got != "ambiguous_provider" {
+		t.Fatalf("got %q", got)
+	}
+}

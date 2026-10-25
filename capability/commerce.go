@@ -100,6 +100,21 @@ const CommerceShippingTrackingUpdated = "commerce.shipping.tracking_updated"
 // The payload is FulfillmentUpdatedSchema; dedupe on emitter + event_id.
 const CommerceFulfillmentUpdated = "commerce.fulfillment.updated"
 
+// CommerceShipmentsUpdated is the business-level shipment event (contract
+// version 1, "commerce.shipments.updated@1" in the design docs; the version is
+// not part of the key, see ADR 0001): the provider of commerce.shipments.*
+// emits it once per change of Shipment.status, whatever raw event (carrier
+// tracking_updated, 3PL fulfillment.updated, staff action) caused it. The
+// payload is ShipmentUpdatedSchema; dedupe on emitter + event_id.
+const CommerceShipmentsUpdated = "commerce.shipments.updated"
+
+// TestModeDoc documents the official optional test_mode flag of the shipping
+// and fulfillment outputs. Providers that already answer the vendor extension
+// x_environment ("sandbox" | "production") keep emitting it: extension keys are
+// ignored by validation, so both can travel together; hosts read test_mode
+// first and fall back to x_environment.
+const TestModeDoc = "the answer comes from the provider sandbox / test credentials (true) or from production (false); absent = the provider does not say (hosts may fall back to the x_environment extension)"
+
 // Normalized status vocabularies shared by providers.
 var (
 	// PaymentStatuses is the normalized payment lifecycle.
@@ -165,6 +180,14 @@ var (
 	CancelOutcomes = []string{"cancelled", "cancelling", "not_cancellable"}
 	// TerminalDeviceStatuses is the normalized availability of a device.
 	TerminalDeviceStatuses = []string{"online", "offline", "busy", "unknown"}
+	// ShipmentStatuses is the business status of a shipment: the host maps the
+	// raw carrier / 3PL statuses (TrackingStatuses, FulfillmentStatuses) onto it
+	// and adds the pre-carrier and 3PL stages.
+	ShipmentStatuses = []string{"pending", "ready_to_ship", "label_pending", "label_created", "handed_to_3pl", "ready_for_pickup", "picked_up", "in_transit", "out_for_delivery", "delivered", "exception", "returned", "lost", "cancelled"}
+
+	// ShipmentModes are the ways a shipment travels.
+	ShipmentModes = []string{"carrier", "3pl", "own_fleet", "manual"}
+
 	// TrackingStatuses is the normalized parcel lifecycle every carrier
 	// status is mapped onto.
 	TrackingStatuses = []string{"created", "picked_up", "in_transit", "out_for_delivery", "delivered", "exception", "returned", "cancelled"}
@@ -322,6 +345,31 @@ var (
 		opt("test_mode", TypeBoolean, "update from the provider sandbox"),
 	)
 
+	// ShipmentUpdatedSchema is the payload of commerce.shipments.updated.
+	ShipmentUpdatedSchema = schema(
+		req("shipment_id", TypeString, "id of the host shipment record"),
+		req("event_id", TypeString, "stable per status change, e.g. shipment_id|status; subscribers dedupe on emitter + event_id"),
+		enum(req("status", TypeString, "new business status"), ShipmentStatuses),
+		enum(opt("previous_status", TypeString, ""), ShipmentStatuses),
+		req("occurred_at", TypeString, "RFC 3339 time of the change"),
+		opt("order_ref", TypeString, "the order the shipment belongs to"),
+		opt("sales_order_id", TypeString, ""),
+		enum(opt("mode", TypeString, "how the parcel travels"), ShipmentModes),
+		opt("provider", TypeString, "carrier / 3PL addon key"),
+		opt("carrier", TypeString, ""),
+		opt("service", TypeString, ""),
+		opt("tracking_number", TypeString, ""),
+		opt("tracking_url", TypeString, ""),
+		opt("label_url", TypeString, ""),
+		opt("provider_status", TypeString, "carrier wording / code of the status, untranslated"),
+		opt("description", TypeString, ""),
+		opt("location", TypeString, ""),
+		opt("exception_reason", TypeString, "why the shipment is in exception / lost / returned"),
+		opt("promised_by", TypeString, "YYYY-MM-DD promised delivery date"),
+		opt("source", TypeString, "what caused the change: webhook, poll, staff or system"),
+		opt("test_mode", TypeBoolean, TestModeDoc),
+	)
+
 	// TaxLineSchema is one computed tax component.
 	TaxLineSchema = schema(
 		req("name", TypeString, "e.g. IVA, State tax"),
@@ -431,6 +479,11 @@ func commerceEvents() []EventContract {
 			Name: CommerceFulfillmentUpdated, EmittedBy: "commerce.fulfillment",
 			Doc:     "a warehouse / 3PL observed a new normalized status of a fulfillment it accepted (webhook or poll)",
 			Payload: FulfillmentUpdatedSchema,
+		},
+		{
+			Name: CommerceShipmentsUpdated, EmittedBy: "commerce.shipments",
+			Doc:     "a shipment changed its business status (one event per change, from carrier, 3PL or staff)",
+			Payload: ShipmentUpdatedSchema,
 		},
 		{
 			Name: CommercePaymentsConfirmed, EmittedBy: "commerce.payments",
@@ -834,6 +887,7 @@ func commerceContractList() []Contract {
 					opt("origin_location_id", TypeString, "origins[].location_id this rate ships from"),
 					opt("billable_weight_kg", TypeDecimal, "weight the price is based on (max of actual and volumetric)"),
 					list(opt("parcels", TypeArray, "packages the quote assumed (weight and size actually priced)"), ParcelSchema),
+					opt("test_mode", TypeBoolean, TestModeDoc),
 				)),
 			),
 		},
@@ -877,6 +931,7 @@ func commerceContractList() []Contract {
 				opt("insurance_cost", TypeDecimal, "part of cost that is insurance"),
 				opt("billable_weight_kg", TypeDecimal, "weight the carrier billed"),
 				list(opt("parcels", TypeArray, "packages as the carrier registered them"), ParcelSchema),
+				opt("test_mode", TypeBoolean, TestModeDoc),
 			),
 		},
 		{
@@ -937,6 +992,7 @@ func commerceContractList() []Contract {
 				opt("carrier", TypeString, ""),
 				opt("tracking_url", TypeString, ""),
 				opt("message", TypeString, "reason when on_hold/rejected"),
+				opt("test_mode", TypeBoolean, TestModeDoc),
 			),
 		},
 		{

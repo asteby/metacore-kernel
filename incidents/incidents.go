@@ -24,6 +24,7 @@ const (
 	DomainEvents       = "events"
 	DomainUpdates      = "updates"
 	DomainStore        = "store"
+	DomainShipping     = "shipping"
 )
 
 // Severities. "alta" means money or customer data may be at stake.
