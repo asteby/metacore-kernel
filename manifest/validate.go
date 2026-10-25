@@ -456,6 +456,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 	if err := m.validatePublicRoutes(); err != nil {
 		return err
 	}
+	if err := m.validateInject(); err != nil {
+		return err
+	}
 	for i, c := range m.Capabilities {
 		if !strings.Contains(c.Kind, ":") {
 			return fmt.Errorf("manifest.capabilities[%d]: kind must be namespaced (e.g. db:read)", i)
@@ -2197,6 +2200,38 @@ func validateRecordPresentation(md ModelDefinition) error {
 		if _, ok := byName[v]; !ok {
 			return fmt.Errorf("%s %q is not a declared column of the model", field, v)
 		}
+	}
+	return nil
+}
+
+// validateInject is the legacy/install-surface twin of the v3 inject rules:
+// both planes run the same v3.ValidateInject, plus the shape of every action
+// target (qualified "<addon>.<Model>" or role "@domain.entity"). The widget
+// body is checked on the v3 plane only (the legacy carrier has no dashboard).
+func (m *Manifest) validateInject() error {
+	for model := range m.Actions {
+		if msg := v3.ActionTargetProblem(model); msg != "" {
+			return fmt.Errorf("actions[%q]: %s", model, msg)
+		}
+	}
+	if len(m.Inject) == 0 && len(m.SealedModels) == 0 && len(m.PrimaryFrom) == 0 {
+		return nil
+	}
+	cols := make(map[string]map[string]struct{}, len(m.ModelDefinitions))
+	for _, md := range m.ModelDefinitions {
+		set := make(map[string]struct{}, len(md.Columns))
+		for _, c := range md.Columns {
+			set[c.Name] = struct{}{}
+		}
+		cols[md.ModelKey] = set
+	}
+	errs := v3.ValidateInject(v3.InjectEnv{
+		AddonKey:  m.Key,
+		Cols:      cols,
+		Federated: m.Frontend != nil && m.Frontend.Format == "federation",
+	}, m.Inject, &v3.ExtensionPoints{Sealed: m.SealedModels, PrimaryFrom: m.PrimaryFrom})
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
 	}
 	return nil
 }

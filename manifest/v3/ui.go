@@ -293,8 +293,14 @@ type DetailPanel struct {
 // RelationPanel lists the record's children through one of the model's
 // relations.
 type RelationPanel struct {
-	// Name is the relation (Model.Relations[].Name).
-	Name string `json:"name"`
+	// Name is the relation (Model.Relations[].Name). Required in
+	// models[].detail panels; not used by contributions.inject[] panels.
+	Name string `json:"name,omitempty"`
+	// Via is used only by contributions.inject[] panels: the CONTRIBUTOR's
+	// model and the foreign-key column pointing at the target record
+	// ("Shipment.sales_order_id"). The owner never declares a relation to a
+	// model it does not know.
+	Via string `json:"via,omitempty"`
 	// Columns are child columns shown (default: the child's defaults).
 	Columns []string `json:"columns,omitempty"`
 	// Limit caps the rows shown before "see all" (1..50, default 10).

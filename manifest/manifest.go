@@ -245,6 +245,17 @@ type Manifest struct {
 	// Empty = the addon exposes no API.
 	APIRoutes []v3.APIRoute `json:"api_routes,omitempty"`
 
+	// Inject is the host projection of v3 contributions.inject[]: declarative
+	// panels, tabs, computed columns, badges, filters and widgets this addon
+	// mounts on a model (concrete "<addon>.<Model>" or role "@domain.entity").
+	Inject []v3.Inject `json:"inject,omitempty"`
+	// SealedModels is v3 extension_points.sealed: own models that refuse
+	// inject[] and cross-addon actions from other addons.
+	SealedModels []string `json:"sealed_models,omitempty"`
+	// PrimaryFrom is v3 extension_points.primary_from: addon keys allowed to
+	// contribute a "primary" action to this addon's models.
+	PrimaryFrom []string `json:"primary_from,omitempty"`
+
 	// Setup is the host projection of v3 contributions.setup[]: the addon's
 	// guided, resumable setup flows. Projected verbatim (same JSON tags); the
 	// host persists progress and the SDK renders it. Empty = no setup surface.

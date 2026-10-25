@@ -663,6 +663,9 @@ func (c *uiChecker) panels(where, model string, panels []DetailPanel) {
 				continue
 			}
 			rw := pw + ".relation"
+			if p.Relation.Via != "" {
+				c.addf("%s.via is only valid in contributions.inject[] panels; a model's own panel names a relation with name", rw)
+			}
 			if p.Relation.Name == "" {
 				c.addf("%s.name is required", rw)
 			}

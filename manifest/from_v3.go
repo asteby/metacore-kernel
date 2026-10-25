@@ -198,8 +198,14 @@ func FromV3(m *v3.Manifest) Manifest {
 		out.AgentCapabilities = m.Contributions.AgentCapabilities
 		out.PublicRoutes = m.Contributions.PublicRoutes
 		out.APIRoutes = m.Contributions.API
+		out.Inject = m.Contributions.Inject
 		out.Setup = m.Contributions.Setup
 		out.Health = m.Contributions.Health
+	}
+
+	if m.ExtensionPoints != nil {
+		out.SealedModels = m.ExtensionPoints.Sealed
+		out.PrimaryFrom = m.ExtensionPoints.PrimaryFrom
 	}
 
 	return out

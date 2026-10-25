@@ -1695,6 +1695,14 @@ type Contributions struct {
 	// dashboard surface omit it. See DashboardWidget for the full contract.
 	Dashboard []DashboardWidget `json:"dashboard,omitempty"`
 
+	// Inject contributes declarative pieces of UI (a panel, a tab, a computed
+	// list column, a header badge, a list filter, a dashboard widget) to a
+	// model another addon owns, addressed by a concrete "<addon>.<Model>" or by
+	// role ("@commerce.order"). Served per installation and per org at query
+	// time, so uninstalling the contributor removes everything. Optional. See
+	// Inject.
+	Inject []Inject `json:"inject,omitempty"`
+
 	// Documents contributes printable document templates. Each entry binds a
 	// bundle-relative HTML template to one of the addon's models; the host
 	// hydrates the template with the record (and its child rows) and the org
@@ -2037,7 +2045,9 @@ type DashboardWidget struct {
 	// Icon is an optional lucide slug rendered in the accent colour.
 	Icon string `json:"icon,omitempty"`
 	// Kind is the renderer selector: stat|bar|line|area|pie|donut|list|
-	// progress|custom. Required.
+	// progress|map|custom. "map" is a choropleth: query.group_by names the
+	// geographic column (state, municipality, zone) each bucket keys on.
+	// Required.
 	Kind string `json:"kind"`
 	// Size is the grid span over a 4-column grid: sm(1)|md(2)|lg(3)|full(4).
 	// Default sm.
@@ -2992,6 +3002,15 @@ type ExtensionPoints struct {
 	Events                  []PublishedEvent `json:"events,omitempty"`
 	SlotKinds               []PublishedSlot  `json:"slot_kinds,omitempty"`
 	ModelExtensionsAccepted []string         `json:"model_extensions_accepted,omitempty"`
+
+	// Sealed lists own models (Model keys) that refuse contributions.inject[]
+	// and cross-addon actions from other addons. Everything not sealed is open
+	// by default; a contribution aimed at a sealed model is served inert.
+	Sealed []string `json:"sealed,omitempty"`
+	// PrimaryFrom lists addon keys allowed to contribute an action with
+	// priority "primary" to this addon's models. Any other contributed action
+	// is capped at "secondary", so no addon can steal the main button.
+	PrimaryFrom []string `json:"primary_from,omitempty"`
 }
 
 // PublishedEvent declares an event this addon emits.
