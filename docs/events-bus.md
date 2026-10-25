@@ -29,11 +29,18 @@ if err == nil { err = tx.Commit().Error }
 if err != nil { hook.Discard() } else { host.PublishCommitted(ctx, hook) }
 ```
 
-Sin gancho cableado, publica solo el relay (con retraso de hasta ~40 s, nunca se
-pierde). Con el gancho, el relay queda como respaldo si el proceso cae entre el commit y
+Sin gancho cableado, publica solo el relay (con retraso de hasta ~40 s; no se pierde
+mientras el outbox esté armado y haya durabilidad). **Sin durabilidad**
+(`WithDurableEmits(false)` u outbox sin armar) e `InvokeInTx` sin gancho, los eventos de
+la transacción se **descartan** (solo queda un log): en ese caso el gancho es
+obligatorio. Con el gancho, el relay queda como respaldo si el proceso cae entre el commit y
 `PublishCommitted`. Si el outbox aún no está armado (la migración falló), dentro de una
 transacción se publica sin persistir tras el commit (no duradero) y se reintenta armar
 con backoff (1 s a 1 min).
+
+**Doble publicación:** si la transacción dura más de ~10 s, el relay y el gancho pueden
+publicar la misma fila. El libro de entregas colapsa el duplicado, pero los taps y los
+suscriptores planos ven el evento dos veces (at-least-once).
 
 El host arma el outbox al cablearse (`WithBus` / `WithDB` / `WithEventPublisher`), no en
 el primer `emit`.
@@ -105,7 +112,7 @@ host; un valor escrito por el emisor se reemplaza). El payload anterior no cambi
 | `source` | quien publicó, según el bus (addon o `kernel`) |
 | `org_id`, `occurred_at` | tenant y cuándo ocurrió |
 | `aggregate {type,id}` | entidad del evento: la que declara el guest, o `model`/`id` en un CRUD canónico |
-| `sequence` | contador monótono por (org, agregado); ausente si no hay agregado |
+| `sequence` | contador monótono por (org, agregado) en CRUD canónico; en eventos del guest es por (org, emisor, agregado): dos addons con el mismo `SalesOrder/123` reciben ambos `seq=1`, así que los consumidores ordenan por (`source`, agregado). Ausente si no hay agregado |
 | `correlation_id`, `causation_id` | petición de origen / evento cuya entrega produjo este |
 | `actor_id`, `branch_id` | actor y sucursal |
 | `generation` | 0 original, N en el N-ésimo `Replay` |
