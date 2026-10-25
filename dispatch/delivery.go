@@ -139,20 +139,96 @@ func ForgetDeliveries(db *gorm.DB, tableName, addonKey, eventName string) (int64
 	return res.RowsAffected, res.Error
 }
 
-// Migrate ensures the delivery ledger table exists with the Delivery schema.
-// Safe to call repeatedly (GORM AutoMigrate is additive). Wire calls this
-// automatically; a host that owns migration timing can call it explicitly and
-// pass the already-migrated table to Wire.
+// Migrate ensures the delivery ledger table and its sweeper index exist with the
+// Delivery schema. Safe to call repeatedly (GORM AutoMigrate is additive). Wire
+// calls the table half automatically (and builds the index off the startup
+// path on Postgres); a host that owns migration timing can call Migrate
+// explicitly and pass the already-migrated table to Wire.
 func Migrate(db *gorm.DB, tableName string) error {
 	if tableName == "" {
 		tableName = DefaultTableName
 	}
-	if err := db.Table(tableName).AutoMigrate(&Delivery{}); err != nil {
+	if err := migrateTable(db, tableName); err != nil {
 		return err
 	}
-	// The sweeper's claim path only ever looks at pending rows; a partial index
-	// keeps it O(pending) however many delivered rows the ledger has piled up.
-	// (Both Postgres and SQLite support partial indexes.)
-	idx := "idx_" + strings.NewReplacer(".", "_", `"`, "").Replace(tableName) + "_due"
-	return db.Exec("CREATE INDEX IF NOT EXISTS " + idx + " ON " + tableName + " (next_attempt_at) WHERE status = 'pending'").Error
+	return ensureDueIndex(db, tableName)
+}
+
+func migrateTable(db *gorm.DB, tableName string) error {
+	return db.Table(tableName).AutoMigrate(&Delivery{})
+}
+
+const dueIndexCols = " (next_attempt_at) WHERE status = 'pending'"
+
+// dueIndexName is the sweeper index of a ledger table.
+func dueIndexName(tableName string) string {
+	return "idx_" + strings.NewReplacer(".", "_", `"`, "").Replace(tableName) + "_due"
+}
+
+// dueIndexPlan decides which statements bring the sweeper index to a valid
+// state. The sweeper's claim path only ever looks at pending rows; a partial
+// index keeps it O(pending) however many delivered rows the ledger has piled up.
+//
+//   - Postgres builds it CONCURRENTLY (a plain CREATE INDEX takes a SHARE lock
+//     that blocks every INSERT into the ledger — i.e. every event — for the
+//     whole build on a big table). CONCURRENTLY cannot run inside a
+//     transaction, so inTx falls back to the plain form. A build interrupted
+//     midway leaves an INVALID index that IF NOT EXISTS would skip forever, so
+//     an invalid one is dropped and recreated.
+//   - SQLite keeps the plain statement.
+//
+// exists/valid describe the current index (ignored off Postgres).
+func dueIndexPlan(dialect, tableName string, inTx, exists, valid bool) []string {
+	idx := dueIndexName(tableName)
+	if dialect != "postgres" || inTx {
+		return []string{"CREATE INDEX IF NOT EXISTS " + idx + " ON " + tableName + dueIndexCols}
+	}
+	var out []string
+	if exists && !valid {
+		out = append(out, "DROP INDEX CONCURRENTLY IF EXISTS "+pgIndexRef(tableName, idx))
+		exists = false
+	}
+	if !exists {
+		out = append(out, "CREATE INDEX CONCURRENTLY IF NOT EXISTS "+idx+" ON "+tableName+dueIndexCols)
+	}
+	return out
+}
+
+// pgIndexRef qualifies idx with the schema of a schema-qualified table name
+// (an index always lives in its table's schema).
+func pgIndexRef(tableName, idx string) string {
+	if i := strings.LastIndex(tableName, "."); i > 0 {
+		return tableName[:i] + "." + idx
+	}
+	return idx
+}
+
+func dbInTx(db *gorm.DB) bool {
+	if db == nil || db.Statement == nil || db.Statement.ConnPool == nil {
+		return false
+	}
+	_, ok := db.Statement.ConnPool.(gorm.TxCommitter)
+	return ok
+}
+
+// ensureDueIndex applies dueIndexPlan against the live database.
+func ensureDueIndex(db *gorm.DB, tableName string) error {
+	dialect := db.Dialector.Name()
+	inTx := dbInTx(db)
+	var exists, valid bool
+	if dialect == "postgres" && !inTx {
+		var rows []bool
+		if err := db.Raw("SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass(?)",
+			pgIndexRef(tableName, dueIndexName(tableName))).Scan(&rows).Error; err != nil {
+			return err
+		}
+		exists = len(rows) > 0
+		valid = exists && rows[0]
+	}
+	for _, stmt := range dueIndexPlan(dialect, tableName, inTx, exists, valid) {
+		if err := db.Exec(stmt).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }

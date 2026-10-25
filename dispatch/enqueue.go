@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/asteby/metacore-kernel/dynamic"
@@ -56,12 +57,13 @@ func (d *Dispatcher) buildEnvelope(ctx context.Context, orgID uuid.UUID, eventNa
 // holding the row's lease. A duplicate event that hits the unique index — or a
 // row already delivered/dead — short-circuits with no invocation. Reports
 // whether a delivery was actually enqueued, which feeds the emitter-facing
-// subscriber count.
+// subscriber count. A failed ledger INSERT is returned (not swallowed): the
+// event is not recorded for this subscription and the publisher must retry.
 //
 // The row is the durable work item (see ledger.go): if this process dies before
 // or during the attempt, the lease expires and the sweeper of ANY process
 // resumes it. The goroutine is only the fast path.
-func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName, occurrenceID, emitter string, ce canonicalEvent, payload []byte, sub Subscription) bool {
+func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName, occurrenceID, emitter string, ce canonicalEvent, payload []byte, sub Subscription) (bool, error) {
 	id := deliveryID(eventName, occurrenceID, sub)
 	now := time.Now().UTC()
 	lease := now.Add(d.opts.lease)
@@ -100,24 +102,24 @@ func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName, oc
 		d.logger.Warn("dispatch.ledger_insert_error",
 			slog.String("delivery_id", id),
 			slog.String("err", res.Error.Error()))
-		return false
+		return false, fmt.Errorf("dispatch: ledger insert %s: %w", id, res.Error)
 	}
 	if res.RowsAffected == 0 {
 		// Already enqueued/delivered/dead — idempotent no-op.
-		return false
+		return false, nil
 	}
 
 	if d.baseCtx.Err() != nil {
 		// Shut down between the insert and the attempt: leave the row leased;
 		// the next process resumes it when the lease expires.
-		return true
+		return true, nil
 	}
 	d.inflight.Add(1)
 	go func() {
 		defer d.inflight.Add(-1)
 		d.runClaimed(row, &sub)
 	}()
-	return true
+	return true, nil
 }
 
 // guestFailure is the error a `{success:false}` guest answer becomes. It keeps

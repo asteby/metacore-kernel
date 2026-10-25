@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"github.com/asteby/metacore-kernel/provenance"
 	"strings"
 	"time"
@@ -268,6 +269,10 @@ func (s *Service) publishCanonical(ctx context.Context, model, action string, us
 	perr := s.bus.Publish(pubCtx, addonKey, event, user.GetOrganizationID(), payload)
 	if perr == nil && outboxID != uuid.Nil {
 		s.markOutboxPublished(ctx, outboxID)
+	} else if perr != nil && outboxID != uuid.Nil {
+		// A durable router failed to record the event: the row stays
+		// unpublished and the outbox relay retries it.
+		log.Printf("dynamic: event %s not recorded by the durable bus (outbox relay will retry): %v", event, perr)
 	}
 }
 

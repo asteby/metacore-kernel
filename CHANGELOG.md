@@ -7,6 +7,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bus durable: el outbox ya no estampa `published_at` sobre un evento que el libro de
+  entregas no registró (pérdida silenciosa).** Antes `dispatch.handle` devolvía `(0, nil)` si
+  `SubscriptionsForOrg` fallaba, `enqueue` devolvía `false` sin error si fallaba el INSERT del
+  libro y `events.Bus` tragaba cualquier error de handler: el outbox lo daba por publicado.
+  Nuevo `events.Bus.SubscribeDurableRouting` (lo usa `dispatch.Wire`) y `events.ErrDurableDelivery`:
+  el error de un router durable lo devuelven `PublishWithCount` / `Publish` (agregado con
+  `errors.Join`, tras correr a los demás suscriptores); `enqueue` devuelve error cuando falla el
+  INSERT. `publishCanonical`, `OutboxPublisher` y el relay no estampan `published_at` en ese caso y
+  el relay reintenta (el libro deduplica lo que sí entró por id estable). Los handlers/suscriptores
+  planos y los taps siguen sin poder bloquear la publicación. Un emisor que llame
+  `Publish` ahora puede recibir un error que antes era siempre `nil`.
+- **wasm: `flushEmits` ya no trata un pool como transacción.** Las acciones Native invocan con
+  `actx.DB` = pool; los eventos de `event_emit` quedaban esperando un commit hook que nunca llegaba
+  (~40 s vía el relay, o descartados sin outbox armado). Con un handle que no es una transacción
+  (`isTx`) se persiste y publica por el camino normal.
+- **dispatch: el índice `..._due` del libro se crea con `CREATE INDEX CONCURRENTLY` en Postgres**
+  (fuera de transacción y fuera del arranque de `Wire`, en una goroutine) para no bloquear los
+  INSERT del libro; un índice que quedó inválido (`pg_index.indisvalid = false`) se borra y se
+  recrea. SQLite conserva el `CREATE INDEX IF NOT EXISTS`. `dispatch.Migrate` sigue siendo
+  síncrona.
+
 ### Added
 
 - `capability` (X1.4 + X1.5, aditivo, sin cambios de manifest ni de schema): campo oficial opcional `test_mode` en la salida de `commerce.shipping.rates[]`, `commerce.shipping.label` y `commerce.fulfillment.create` (compatible con la extensión `x_environment` que ya emite skydropx; el anfitrión lee `test_mode` y cae a `x_environment`); evento `commerce.shipments.updated` (contrato v1, `ShipmentUpdatedSchema`, `ShipmentStatuses`, `ShipmentModes`, dominio reservado `commerce.shipments`); `incidents.DomainShipping`. `Provider.Priority` / `Provider.Status` (`ProviderStatus`: ready, not_configured, unhealthy), `Select` v2 con respaldo (dentro del nivel que decide se salta `not_configured` y gana la mejor prioridad; empate = `ErrAmbiguousProvider`, falla cerrado), `ErrNotConfigured` (código `not_configured` en `capability_query`), `Eligible` (misma resolución que `Select`), `Engine.ListProviders` y la implementación `executeCapabilityProviders` del import `capability_providers` (el registro del import en la tabla de capacidades del host va aparte). Sin prioridades ni estado el resultado es idéntico al anterior (prueba de equivalencia exhaustiva contra una copia del `Select` previo). Minor.

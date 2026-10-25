@@ -22,6 +22,7 @@ package events
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -70,7 +71,17 @@ type subscription struct {
 	tap bool
 	// isRouter is true for SubscribeRouting*: a plain Subscribe counts as 1.
 	isRouter bool
+	// durable marks a router whose failure means the event was NOT recorded
+	// anywhere durable (the dispatcher's delivery ledger). Its error is
+	// propagated by PublishWithCount (see ErrDurableDelivery) so a durable
+	// publisher such as the outbox does not stamp published_at over a loss.
+	durable bool
 }
+
+// ErrDurableDelivery is wrapped by the error PublishWithCount returns when a
+// durable router (SubscribeDurableRouting) failed to record the event. Plain
+// handlers/subscribers never produce it: their errors stay logged-and-swallowed.
+var ErrDurableDelivery = errors.New("events: durable delivery failed")
 
 // Bus is the thread-safe fan-out registry. The zero value is not usable —
 // construct with NewBus.
@@ -155,7 +166,17 @@ func (b *Bus) SubscribeTap(addonKey, eventPattern string, h Handler) error {
 	}, nil, true, false)
 }
 
-func (b *Bus) subscribeRouting(addonKey, eventPattern string, h RoutingHandler, est Estimator, tap, router bool) error {
+// SubscribeDurableRouting is SubscribeRoutingEstimated for a router that
+// persists the event (the dispatcher's delivery ledger). Unlike every other
+// subscriber, its error is NOT swallowed: PublishWithCount/Publish return it
+// (wrapping ErrDurableDelivery) after all siblings ran, so the outbox keeps the
+// row unpublished and the relay retries. The router must be idempotent: a retry
+// republishes the same event.
+func (b *Bus) SubscribeDurableRouting(addonKey, eventPattern string, h RoutingHandler, est Estimator) error {
+	return b.subscribeRouting(addonKey, eventPattern, h, est, false, true, true)
+}
+
+func (b *Bus) subscribeRouting(addonKey, eventPattern string, h RoutingHandler, est Estimator, tap, router bool, durable ...bool) error {
 	if eventPattern == "" {
 		return fmt.Errorf("events: empty pattern")
 	}
@@ -173,6 +194,7 @@ func (b *Bus) subscribeRouting(addonKey, eventPattern string, h RoutingHandler, 
 		est:      est,
 		tap:      tap,
 		isRouter: router,
+		durable:  len(durable) > 0 && durable[0],
 	})
 	b.mu.Unlock()
 	b.logger.Printf("metacore.events subscribe addon=%s pattern=%s", addonKey, eventPattern)
@@ -182,7 +204,9 @@ func (b *Bus) subscribeRouting(addonKey, eventPattern string, h RoutingHandler, 
 // Publish delivers event+payload to every subscriber whose pattern matches.
 // The addonKey identifies the producer ("kernel" for host-originated events);
 // it drives the event:emit capability check. Handler errors are logged and
-// otherwise swallowed so one faulty subscriber cannot block siblings.
+// otherwise swallowed so one faulty subscriber cannot block siblings; the one
+// exception is a durable router (SubscribeDurableRouting): its failure is
+// returned, wrapping ErrDurableDelivery, after every sibling ran.
 //
 // Publish is a thin wrapper over PublishWithCount kept for source compat —
 // callers that need the matched-subscriber count (e.g. the wasm `event_emit`
@@ -235,17 +259,24 @@ func (b *Bus) PublishWithCount(ctx context.Context, addonKey, event string, orgI
 		orgID, event, addonKey, len(matched))
 
 	delivered := 0
+	var durableErrs []error
 	for _, s := range matched {
 		n, err := s.fn(ctx, orgID, event, payload)
 		if err != nil {
 			b.logger.Printf("metacore.events handler_error addon=%s pattern=%s event=%s err=%v",
 				s.AddonKey, s.Pattern, event, err)
+			if s.durable {
+				durableErrs = append(durableErrs, fmt.Errorf("%w: addon=%s pattern=%s event=%s: %w",
+					ErrDurableDelivery, s.AddonKey, s.Pattern, event, err))
+			}
 		}
 		if n > 0 {
 			delivered += n
 		}
 	}
-	return delivered, nil
+	// Plain handler errors never reach here; only a durable router's does, so
+	// the publisher can tell "recorded" from "lost".
+	return delivered, errors.Join(durableErrs...)
 }
 
 // Unsubscribe removes every subscription registered under addonKey. It is the

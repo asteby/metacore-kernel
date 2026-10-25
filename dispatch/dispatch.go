@@ -269,7 +269,20 @@ func Wire(bus *events.Bus, invoker WasmInvoker, db *gorm.DB, provider Subscripti
 		opt(o)
 	}
 
-	if err := Migrate(db, o.tableName); err != nil {
+	if err := migrateTable(db, o.tableName); err != nil {
+		return noop, fmt.Errorf("dispatch: migrate %s: %w", o.tableName, err)
+	}
+	if db.Dialector.Name() == "postgres" && !dbInTx(db) {
+		// CREATE INDEX CONCURRENTLY waits for older transactions and can take a
+		// while on a big ledger: keep it off the startup path. Until it lands
+		// the sweeper just scans; nothing is blocked meanwhile.
+		go func() {
+			if err := ensureDueIndex(db, o.tableName); err != nil {
+				o.logger.Warn("dispatch.due_index_error",
+					slog.String("table", o.tableName), slog.String("err", err.Error()))
+			}
+		}()
+	} else if err := ensureDueIndex(db, o.tableName); err != nil {
 		return noop, fmt.Errorf("dispatch: migrate %s: %w", o.tableName, err)
 	}
 
@@ -284,7 +297,7 @@ func Wire(bus *events.Bus, invoker WasmInvoker, db *gorm.DB, provider Subscripti
 	}
 	d.baseCtx, d.stop = context.WithCancel(context.Background())
 
-	if err := bus.SubscribeRoutingEstimated(subscriberKey, "*", d.handle, d.estimate); err != nil {
+	if err := bus.SubscribeDurableRouting(subscriberKey, "*", d.handle, d.estimate); err != nil {
 		return noop, fmt.Errorf("dispatch: subscribe: %w", err)
 	}
 	d.logger.Info("dispatch.wired",

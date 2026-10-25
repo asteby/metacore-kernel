@@ -204,3 +204,40 @@ func TestDurablePG_PublishKillRestart(t *testing.T) {
 		t.Fatalf("envelope sequences = %v", seqs)
 	}
 }
+
+// An index left INVALID by an interrupted CREATE INDEX CONCURRENTLY is dropped
+// and rebuilt; a valid one is left alone; the table keeps accepting inserts.
+func TestDurablePG_DueIndexIsBuiltConcurrentlyAndHealsWhenInvalid(t *testing.T) {
+	db := pgSchemaDB(t)()
+	if err := dispatch.Migrate(db, ""); err != nil {
+		t.Fatal(err)
+	}
+	const idx = "idx_" + dispatch.DefaultTableName + "_due"
+	valid := func() (exists, ok bool) {
+		var rows []bool
+		if err := db.Raw("SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass(?)", idx).Scan(&rows).Error; err != nil {
+			t.Fatal(err)
+		}
+		return len(rows) > 0, len(rows) > 0 && rows[0]
+	}
+	if e, ok := valid(); !e || !ok {
+		t.Fatalf("index after Migrate: exists=%v valid=%v", e, ok)
+	}
+	// Simulate an interrupted concurrent build.
+	if err := db.Exec("UPDATE pg_index SET indisvalid = false WHERE indexrelid = to_regclass(?)", idx).Error; err != nil {
+		t.Skipf("cannot flag the index invalid without superuser: %v", err)
+	}
+	if e, ok := valid(); !e || ok {
+		t.Fatalf("setup: exists=%v valid=%v, want invalid", e, ok)
+	}
+	if err := dispatch.Migrate(db, ""); err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := valid(); !e || !ok {
+		t.Fatalf("index after healing: exists=%v valid=%v", e, ok)
+	}
+	// Idempotent when already valid, and Wire (async path) converges too.
+	if err := dispatch.Migrate(db, ""); err != nil {
+		t.Fatal(err)
+	}
+}

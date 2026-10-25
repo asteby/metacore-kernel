@@ -204,7 +204,9 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 			slog.String("org", orgID.String()),
 			slog.String("event", eventName),
 			slog.String("err", err.Error()))
-		return 0, nil
+		// Durable router: surface the failure so the outbox does not stamp
+		// published_at and the relay retries (the ledger dedups by stable id).
+		return 0, fmt.Errorf("dispatch: subscriptions for org %s: %w", orgID, err)
 	}
 
 	if ce.CorrelationID == "" {
@@ -214,16 +216,24 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 	raw = stampEnvelope(raw, d.buildEnvelope(ctx, orgID, eventName, occurrenceID, emitter, ce, meta))
 
 	enqueued := 0
+	var errs []error
 	for i := range subs {
 		sub := subs[i]
 		if !eventMatches(sub.Event, eventName) {
 			continue
 		}
-		if d.enqueue(ctx, orgID, eventName, occurrenceID, emitter, ce, raw, sub) {
+		ok, err := d.enqueue(ctx, orgID, eventName, occurrenceID, emitter, ce, raw, sub)
+		if err != nil {
+			// Keep going: the other subscriptions still get their rows; the
+			// retry only re-inserts what is missing (stable delivery ids).
+			errs = append(errs, err)
+			continue
+		}
+		if ok {
 			enqueued++
 		}
 	}
-	return enqueued, nil
+	return enqueued, errors.Join(errs...)
 }
 
 // estimate is the events.Estimator of the dispatcher's "*" tap: the number of

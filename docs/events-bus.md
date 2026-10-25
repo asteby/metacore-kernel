@@ -61,6 +61,33 @@ evento (`events.Bus.EstimateSubscribers`; los taps `*` del dispatcher y de audit
 cuentan), o `-1` si no se puede saber (un router sin `Estimator`, o falló la consulta de
 suscripciones). El reparto real ocurre después de la invocación.
 
+## Un router durable no pierde eventos en silencio
+
+El bus tolera que un handler plano falle (se registra y se sigue: un suscriptor roto
+no bloquea a sus hermanos ni la publicación). El **dispatcher** es distinto: es el
+router que escribe el libro de entregas, y si no escribe, el evento no quedó en
+ninguna parte. Por eso se registra con `Bus.SubscribeDurableRouting` y su error **sí**
+se propaga:
+
+- `Publish` / `PublishWithCount` ejecutan a todos los suscriptores y devuelven un error
+  agregado (`errors.Is(err, events.ErrDurableDelivery)`) si falló un router durable.
+- `dispatch.handle` devuelve error si falla `SubscriptionsForOrg`; `enqueue` devuelve
+  error si falla el INSERT del libro. Una suscripción que falla no impide insertar las
+  demás.
+- El outbox (`publishCanonical`, `OutboxPublisher`, relay) **no estampa `published_at`**
+  cuando `Publish` devuelve error; el relay reintenta la fila con los mismos bytes. El
+  libro deduplica por `delivery_id` estable: solo se inserta lo que faltaba y nada se
+  ejecuta dos veces.
+- Quien publica sin outbox (p. ej. `data_mutate`) ve el error en su log; un `Publish`
+  que antes devolvía siempre `nil` ahora puede devolver este error.
+
+`event_emit` con un `*gorm.DB` que es un pool (acciones Native: `actx.DB`) no cuenta
+como transacción: se persiste y publica en línea. Solo una transacción abierta difiere
+la publicación al commit hook.
+
+El índice `..._due` del libro se crea en Postgres con `CREATE INDEX CONCURRENTLY` (en
+segundo plano desde `Wire`, para no bloquear los INSERT) y se recrea si quedó inválido.
+
 ## Libro de entregas = cola duradera (`dispatch_deliveries` / `event_deliveries`)
 
 Cada fila es el trabajo: lleva `payload`, `next_attempt_at` y un lease
