@@ -26,6 +26,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     `causation_id`, `generation`, …) y tabla `kernel_event_sequences`; `dynamic.Meta` / `WithMeta`.
     Los eventos CRUD canónicos también lo llevan. `retryable` / `retry_after_ms` en la respuesta
     del guest; `dispatch.Replay` con generación.
+  - Dentro de `InvokeInTx` / `InvokeForInTx` el evento se persiste en la transacción del llamador
+    y **no se publica en línea**; se publica tras el commit con `wasm.WithCommitHook` +
+    `Host.PublishCommitted` (sin gancho, lo publica el relay). Un rollback no entrega nada.
+  - `data.subscribers` de `event_emit` es una estimación (`events.Bus.EstimateSubscribers`; `-1` si
+    no se sabe; los taps del dispatcher y audit no cuentan). Nuevos `events.SubscribeTap`,
+    `SubscribeRoutingEstimated`, `Estimator`.
+  - `aggregate.type` / `aggregate.id` del guest se validan (1-128 bytes, `[A-Za-z0-9_.:-]`,
+    `invalid_payload`) y su secuencia se cuenta por emisor (`<addon>:<tipo>`);
+    `kernel_event_sequences.aggregate_type` pasa a 256.
+  - El outbox del host wasm se arma al cablear (`WithBus`/`WithDB`), con reintento y backoff;
+    `Host.WithDurableEmits(bool)` (alinear con `DisableEventOutbox`; ver `docs/events-bus.md`).
+  - **Aviso para hosts:** `dispatch.Wire` arranca un barrido de entregas cada 5 s y `Migrate`
+    ejecuta SQL adicional (columnas del libro, `kernel_event_outbox`/`kernel_event_sequences` al
+    cablear el host wasm): los tests de hosts con `sqlmock` estricto pueden romper y deben
+    esperar esas sentencias (o usar `WithPollInterval` alto y `WithDurableEmits(false)`).
 
 - `diag` (revisión 3 del PR #545): saneado de breadcrumbs acotado (borrado por valor sobre la línea completa y corte a 640 bytes antes de las regex; caso adverso 1,28 s -> 45 ms), limitador de tasa antes de `Sanitize`, URL recortadas antes del borrado por valor (sin fuga con secreto en query/ruta/userinfo/fragmento), deduplicación solo con correlación igual y no vacía, claves en español (`contraseña`, `clave`, `llave`, `pass`, `sid`, `refresh`, `session_id`), email Unicode y `%40`, prefiltro del sobre sin distinguir mayúsculas; se elimina `WithScrubber`/`ScrubberFrom`. `BenchmarkInvokeOK_*` corre con el benchtime por defecto.
 

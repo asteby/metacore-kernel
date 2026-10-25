@@ -62,6 +62,14 @@ type subscription struct {
 	// fn is the normalised callback: every Subscribe* variant is adapted to
 	// this one shape so Publish has a single call path.
 	fn RoutingHandler
+	// est, when set, answers "how many deliveries would you make for this
+	// event?" without delivering (see EstimateSubscribers).
+	est Estimator
+	// tap marks an observer (audit trail) that is not a subscriber: it counts
+	// for nothing in EstimateSubscribers.
+	tap bool
+	// isRouter is true for SubscribeRouting*: a plain Subscribe counts as 1.
+	isRouter bool
 }
 
 // Bus is the thread-safe fan-out registry. The zero value is not usable —
@@ -104,9 +112,9 @@ func (b *Bus) Subscribe(addonKey, eventPattern string, h Handler) error {
 	if h == nil {
 		return fmt.Errorf("events: nil handler")
 	}
-	return b.SubscribeRouting(addonKey, eventPattern, func(ctx context.Context, orgID uuid.UUID, _ string, payload any) (int, error) {
+	return b.subscribeRouting(addonKey, eventPattern, func(ctx context.Context, orgID uuid.UUID, _ string, payload any) (int, error) {
 		return 1, h(ctx, orgID, payload)
-	})
+	}, nil, false, false)
 }
 
 // SubscribeEvent is Subscribe for a name-aware EventHandler. Semantics are
@@ -116,9 +124,9 @@ func (b *Bus) SubscribeEvent(addonKey, eventPattern string, h EventHandler) erro
 	if h == nil {
 		return fmt.Errorf("events: nil handler")
 	}
-	return b.SubscribeRouting(addonKey, eventPattern, func(ctx context.Context, orgID uuid.UUID, event string, payload any) (int, error) {
+	return b.subscribeRouting(addonKey, eventPattern, func(ctx context.Context, orgID uuid.UUID, event string, payload any) (int, error) {
 		return 1, h(ctx, orgID, event, payload)
-	})
+	}, nil, false, false)
 }
 
 // SubscribeRouting registers a RoutingHandler — a subscriber whose reported
@@ -126,6 +134,28 @@ func (b *Bus) SubscribeEvent(addonKey, eventPattern string, h EventHandler) erro
 // Used by the dispatcher, which is a router for every addon subscription of
 // the org rather than a subscriber in its own right.
 func (b *Bus) SubscribeRouting(addonKey, eventPattern string, h RoutingHandler) error {
+	return b.subscribeRouting(addonKey, eventPattern, h, nil, false, true)
+}
+
+// SubscribeRoutingEstimated is SubscribeRouting plus an Estimator: a dry-run
+// count of the deliveries the router would make, used by EstimateSubscribers.
+func (b *Bus) SubscribeRoutingEstimated(addonKey, eventPattern string, h RoutingHandler, est Estimator) error {
+	return b.subscribeRouting(addonKey, eventPattern, h, est, false, true)
+}
+
+// SubscribeTap registers an observer (e.g. the audit trail) that sees every
+// matching event but is not a subscriber: it still runs on Publish and still
+// adds 1 to PublishWithCount, but EstimateSubscribers does not count it.
+func (b *Bus) SubscribeTap(addonKey, eventPattern string, h Handler) error {
+	if h == nil {
+		return fmt.Errorf("events: nil handler")
+	}
+	return b.subscribeRouting(addonKey, eventPattern, func(ctx context.Context, orgID uuid.UUID, _ string, payload any) (int, error) {
+		return 1, h(ctx, orgID, payload)
+	}, nil, true, false)
+}
+
+func (b *Bus) subscribeRouting(addonKey, eventPattern string, h RoutingHandler, est Estimator, tap, router bool) error {
 	if eventPattern == "" {
 		return fmt.Errorf("events: empty pattern")
 	}
@@ -140,6 +170,9 @@ func (b *Bus) SubscribeRouting(addonKey, eventPattern string, h RoutingHandler) 
 		AddonKey: addonKey,
 		Pattern:  eventPattern,
 		fn:       h,
+		est:      est,
+		tap:      tap,
+		isRouter: router,
 	})
 	b.mu.Unlock()
 	b.logger.Printf("metacore.events subscribe addon=%s pattern=%s", addonKey, eventPattern)

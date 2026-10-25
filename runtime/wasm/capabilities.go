@@ -456,12 +456,17 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 			if payloadLen > 0 {
 				raw = readBytes(mod, payloadPtr, payloadLen)
 			}
-			if err := inv.emits.add(stageEmit(ctx, inv.addonKey, eventName, inv.orgID, raw)); err != nil {
+			staged, serr := stageEmit(ctx, inv.addonKey, eventName, inv.orgID, raw)
+			if serr != nil {
+				return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
+					"invalid_payload", serr.Error(), inv.orgID, start))
+			}
+			if err := inv.emits.add(staged); err != nil {
 				return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
 					"too_many_events", err.Error(), inv.orgID, start))
 			}
 			return writeToGuest(ctx, mod, eventEmitOK(
-				inv.addonKey, eventName, inv.bus.MatchCount(eventName), inv.orgID, start))
+				inv.addonKey, eventName, inv.bus.EstimateSubscribers(ctx, inv.orgID, eventName), inv.orgID, start))
 		}).
 		Export("event_emit")
 

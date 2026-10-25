@@ -8,11 +8,51 @@ suscriptor sigue debiendo ser idempotente frente a efectos externos.
 
 El guest no publica al llamar: el evento va a un buffer de la invocación y se
 confirma solo si la invocación termina bien (ver `docs/wasm-abi.md` § 12.4).
-Éxito -> `kernel_event_outbox` -> bus -> libro de entregas. Trap, error del host o
-`{"success":false}` -> se descarta. Si el proceso cae entre el outbox y la
-publicación, el relay del outbox (`dynamic.Service.RelayOutboxOnce`, cada 30 s)
-republica la fila con la **misma identidad** (id, agregado, secuencia, causa, actor,
-sucursal, correlación), y el libro la colapsa en las entregas ya registradas.
+Trap, error del host o `{"success":false}` -> se descarta.
+
+**Sin transacción del llamador** (`Invoke`, `InvokeFor`): éxito -> `kernel_event_outbox`
+-> bus -> libro de entregas. Si el proceso cae entre el outbox y la publicación, el
+relay del outbox (`dynamic.Service.RelayOutboxOnce`, cada 30 s) republica la fila con la
+**misma identidad** (id, agregado, secuencia, causa, actor, sucursal, correlación), y el
+libro la colapsa en las entregas ya registradas.
+
+**Dentro de una transacción del llamador** (`InvokeInTx` / `InvokeForInTx`): las filas del
+outbox y el avance de la secuencia se escriben **en esa transacción** y **no se publica
+en línea**: el evento no existe hasta el `COMMIT`. Un `ROLLBACK` borra filas y secuencia
+y no hay entrega. La publicación ocurre después del commit, por un gancho que el
+llamador invoca:
+
+```go
+ctx, hook := wasm.WithCommitHook(ctx)
+out, err := host.InvokeInTx(ctx, tx, ...)
+if err == nil { err = tx.Commit().Error }
+if err != nil { hook.Discard() } else { host.PublishCommitted(ctx, hook) }
+```
+
+Sin gancho cableado, publica solo el relay (con retraso de hasta ~40 s, nunca se
+pierde). Con el gancho, el relay queda como respaldo si el proceso cae entre el commit y
+`PublishCommitted`. Si el outbox aún no está armado (la migración falló), dentro de una
+transacción se publica sin persistir tras el commit (no duradero) y se reintenta armar
+con backoff (1 s a 1 min).
+
+El host arma el outbox al cablearse (`WithBus` / `WithDB` / `WithEventPublisher`), no en
+el primer `emit`.
+
+### Quién barre el outbox (`Host.WithDurableEmits`)
+
+Las emisiones duraderas solo se recuperan si algo barre `kernel_event_outbox`:
+`dynamic.Service` lo hace (relay de 30 s) **salvo** con `DisableEventOutbox: true`. Un
+host que desactiva el outbox del servicio, o que usa el host wasm sin `dynamic.Service`,
+debe llamar `host.WithDurableEmits(false)` (publica directo al bus tras el éxito, sin
+tabla ni recuperación) o llamar él mismo a `Service.RelayOutboxOnce`. Por defecto es
+`true` si el host tiene DB.
+
+### `data.subscribers` es una estimación
+
+`event_emit` responde con el número de suscripciones de la organización que casan con el
+evento (`events.Bus.EstimateSubscribers`; los taps `*` del dispatcher y de audit no
+cuentan), o `-1` si no se puede saber (un router sin `Estimator`, o falló la consulta de
+suscripciones). El reparto real ocurre después de la invocación.
 
 ## Libro de entregas = cola duradera (`dispatch_deliveries` / `event_deliveries`)
 

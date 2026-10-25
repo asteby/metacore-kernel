@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -70,7 +71,7 @@ type EventOutbox struct {
 // number.
 type EventSequence struct {
 	OrganizationID uuid.UUID `gorm:"type:uuid;primaryKey"`
-	AggregateType  string    `gorm:"size:200;primaryKey"`
+	AggregateType  string    `gorm:"size:256;primaryKey"`
 	AggregateID    string    `gorm:"size:200;primaryKey"`
 	LastSeq        int64
 	UpdatedAt      time.Time
@@ -263,18 +264,30 @@ type StagedEvent struct {
 // canonical CRUD events use: persist first, fan out second, stamp
 // published_at on success. A crash between the persist and the fan-out leaves
 // the row unpublished, and Service.RelayOutboxOnce re-publishes it.
+//
+// Inside a caller's transaction (tx != nil) it NEVER fans out in line: the
+// event is not real until that transaction commits. The rows (and their
+// aggregate sequence bump) join the caller's tx, so a rollback removes them
+// and nothing is ever delivered. Publication happens only after commit, via
+// the CommitHook the caller put on the ctx (WithCommitHook + CommitHook.Run);
+// with no hook the committed rows wait for the outbox relay
+// (Service.RelayOutboxOnce), which is the safety net either way.
 type OutboxPublisher struct {
 	db  *gorm.DB
 	bus Publisher
 
-	once    sync.Once
-	armed   bool
-	crashAt func() error // test seam: runs between persist and publish
+	armed    atomic.Bool
+	armMu    sync.Mutex // serialises migration attempts
+	armFails int
+	retryAt  time.Time
+	arming   atomic.Bool  // an async arm attempt is in flight
+	crashAt  func() error // test seam: runs between persist and publish
 }
 
 // NewOutboxPublisher builds a publisher over db + bus. A nil db degrades to
 // direct publication (no crash durability), which is what hosts without a
-// database get today.
+// database get today. Call Arm at wiring time so the table migration never
+// happens on the hot path.
 func NewOutboxPublisher(db *gorm.DB, bus Publisher) *OutboxPublisher {
 	return &OutboxPublisher{db: db, bus: bus}
 }
@@ -285,56 +298,135 @@ func NewOutboxPublisher(db *gorm.DB, bus Publisher) *OutboxPublisher {
 // the relay must recover them). For tests only.
 func (p *OutboxPublisher) OnPersisted(fn func() error) { p.crashAt = fn }
 
-func (p *OutboxPublisher) arm() bool {
-	p.once.Do(func() {
-		if p.db == nil {
-			return
+const (
+	armBackoffMin = time.Second
+	armBackoffMax = time.Minute
+)
+
+// Arm migrates the outbox tables so persistence can be used. It is meant for
+// wiring time (WithBus / WithDB / WithEventPublisher), not the hot path. A
+// failure is not permanent: the next call after an exponential backoff
+// (1s..1m) tries again. Safe for concurrent use.
+func (p *OutboxPublisher) Arm() bool {
+	if p == nil || p.db == nil {
+		return false
+	}
+	if p.armed.Load() {
+		return true
+	}
+	p.armMu.Lock()
+	defer p.armMu.Unlock()
+	if p.armed.Load() {
+		return true
+	}
+	if time.Now().Before(p.retryAt) {
+		return false
+	}
+	if err := MigrateEventOutbox(p.db); err != nil {
+		p.armFails++
+		d := armBackoffMin << min(p.armFails-1, 6)
+		if d > armBackoffMax {
+			d = armBackoffMax
 		}
-		if err := MigrateEventOutbox(p.db); err != nil {
-			log.Printf("dynamic: event outbox unavailable for guest events (migrate failed: %v) — publishing without crash durability", err)
-			return
-		}
-		p.armed = true
-	})
-	return p.armed
+		p.retryAt = time.Now().Add(d)
+		log.Printf("dynamic: event outbox unavailable for guest events (migrate failed: %v) — publishing without crash durability; retrying in %s", err, d)
+		return false
+	}
+	p.armed.Store(true)
+	return true
+}
+
+// armAsync retries Arm off the caller's goroutine (used when the hot path
+// finds the publisher unarmed while a transaction holds a connection: a
+// migration there could wait on the very connection the caller owns).
+func (p *OutboxPublisher) armAsync() {
+	if p.db == nil || !p.arming.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer p.arming.Store(false)
+		p.Arm()
+	}()
 }
 
 // Publish persists then fans out evs in order. tx, when non-nil, is the open
-// transaction of the surrounding action: the rows join it, so a rollback of
-// the action also removes the events it staged. It never returns an error to
-// the caller — by the time it runs the invocation already succeeded — but it
-// logs every degradation.
+// transaction of the surrounding action: the rows join it, nothing is
+// published in line, and the fan-out is deferred to the ctx's CommitHook (see
+// OutboxPublisher). It never returns an error to the caller — by the time it
+// runs the invocation already succeeded — but it logs every degradation.
 func (p *OutboxPublisher) Publish(ctx context.Context, tx *gorm.DB, evs []StagedEvent) {
 	if p == nil || p.bus == nil || len(evs) == 0 {
 		return
 	}
-	rows := make([]*EventOutbox, 0, len(evs))
-	dbx := p.db
 	if tx != nil {
-		dbx = tx
+		p.publishInTx(ctx, tx, evs)
+		return
 	}
-	if dbx != nil && p.arm() {
-		perr := dbx.WithContext(ctx).Transaction(func(t *gorm.DB) error {
-			rows = rows[:0]
-			for i := range evs {
-				row, err := p.stage(ctx, t, &evs[i])
-				if err != nil {
-					return err
-				}
-				rows = append(rows, row)
-			}
-			return nil
-		})
-		if perr != nil {
-			log.Printf("dynamic: guest event outbox persist failed (%d event(s) fan out without crash durability): %v", len(evs), perr)
-			rows = nil
-		}
+	var rows []*EventOutbox
+	if p.db != nil && p.Arm() {
+		rows = p.persist(ctx, p.db, evs)
 	}
 	if len(rows) > 0 && p.crashAt != nil {
 		if err := p.crashAt(); err != nil {
 			return
 		}
 	}
+	p.fanOut(ctx, evs, rows)
+}
+
+// persist writes evs to the outbox as one (nested) transaction on db; nil on
+// failure (logged), in which case the caller degrades to non-durable fan-out.
+func (p *OutboxPublisher) persist(ctx context.Context, db *gorm.DB, evs []StagedEvent) []*EventOutbox {
+	rows := make([]*EventOutbox, 0, len(evs))
+	perr := db.WithContext(ctx).Transaction(func(t *gorm.DB) error {
+		rows = rows[:0]
+		for i := range evs {
+			row, err := p.stage(ctx, t, &evs[i])
+			if err != nil {
+				return err
+			}
+			rows = append(rows, row)
+		}
+		return nil
+	})
+	if perr != nil {
+		log.Printf("dynamic: guest event outbox persist failed (%d event(s) fan out without crash durability): %v", len(evs), perr)
+		return nil
+	}
+	return rows
+}
+
+func (p *OutboxPublisher) publishInTx(ctx context.Context, tx *gorm.DB, evs []StagedEvent) {
+	var rows []*EventOutbox
+	if p.armed.Load() {
+		rows = p.persist(ctx, tx, evs)
+	} else {
+		// Never migrate while the caller's tx holds a connection.
+		p.armAsync()
+	}
+	hook := CommitHookFrom(ctx)
+	if hook == nil {
+		if len(rows) > 0 {
+			log.Printf("dynamic: %d guest event(s) persisted in the caller's transaction; no commit hook on the ctx, the outbox relay publishes them after commit", len(rows))
+		} else {
+			log.Printf("dynamic: %d guest event(s) NOT persisted and no commit hook on the ctx: dropped (publishing in line would announce uncommitted state)", len(evs))
+		}
+		return
+	}
+	staged := append([]StagedEvent(nil), evs...)
+	hook.add(func(c context.Context) {
+		if len(rows) > 0 && p.crashAt != nil {
+			if err := p.crashAt(); err != nil {
+				return
+			}
+		}
+		p.fanOut(c, staged, rows)
+	})
+}
+
+// fanOut publishes evs (rows[i] is the persisted row of evs[i], when any) and
+// stamps published_at on the persisted ones.
+func (p *OutboxPublisher) fanOut(ctx context.Context, evs []StagedEvent, rows []*EventOutbox) {
 	for i := range evs {
 		var row *EventOutbox
 		if i < len(rows) {
@@ -361,8 +453,8 @@ func (p *OutboxPublisher) Publish(ctx context.Context, tx *gorm.DB, evs []Staged
 			log.Printf("dynamic: guest event %s publish failed: %v", evs[i].Name, err)
 			continue
 		}
-		if row != nil {
-			dbx.WithContext(ctx).Model(&EventOutbox{}).Where("id = ?", row.ID).
+		if row != nil && p.db != nil {
+			p.db.WithContext(ctx).Model(&EventOutbox{}).Where("id = ?", row.ID).
 				Updates(map[string]any{"published_at": time.Now().UTC()})
 		}
 	}
@@ -404,7 +496,14 @@ func (p *OutboxPublisher) stage(ctx context.Context, t *gorm.DB, e *StagedEvent)
 		BranchID:       e.BranchID,
 	}
 	if e.AggregateType != "" && e.AggregateID != "" {
-		seq, err := nextAggregateSequence(ctx, t, e.OrgID, e.AggregateType, e.AggregateID)
+		// A guest-declared aggregate counts in its emitter's own namespace
+		// ("<addon>:<type>"; addon keys never contain ':'), so one addon can
+		// never advance another's counter, nor a canonical model's.
+		seqType := e.AggregateType
+		if e.AddonKey != "" {
+			seqType = e.AddonKey + ":" + e.AggregateType
+		}
+		seq, err := nextAggregateSequence(ctx, t, e.OrgID, seqType, e.AggregateID)
 		if err != nil {
 			return nil, err
 		}

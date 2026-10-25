@@ -284,7 +284,7 @@ func Wire(bus *events.Bus, invoker WasmInvoker, db *gorm.DB, provider Subscripti
 	}
 	d.baseCtx, d.stop = context.WithCancel(context.Background())
 
-	if err := bus.SubscribeRouting(subscriberKey, "*", d.handle); err != nil {
+	if err := bus.SubscribeRoutingEstimated(subscriberKey, "*", d.handle, d.estimate); err != nil {
 		return noop, fmt.Errorf("dispatch: subscribe: %w", err)
 	}
 	d.logger.Info("dispatch.wired",

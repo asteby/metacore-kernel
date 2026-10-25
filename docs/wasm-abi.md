@@ -1256,13 +1256,18 @@ invocation ENDS:
   `kernel_event_outbox` and then published in emission order. A crash between
   the write and the publication is recovered by the outbox relay.
 
-Consequences for guests: `data.subscribers` is now the number of bus
-subscriptions that match at emit time (an estimate; the real fan-out happens
-after the invocation), and a subscriber no longer runs *before* the emitting
+Consequences for guests: `data.subscribers` is now an ESTIMATE taken at emit
+time (the real fan-out happens after the invocation): the number of the org's
+addon subscriptions that match the event (the dispatcher's and the audit
+trail's `*` taps do not count), or `-1` when the host cannot tell (a router
+without an estimator, or the subscription lookup failed). And a subscriber no longer runs *before* the emitting
 invocation finishes. A guest may name the entity an event is about with a
 top-level `"aggregate": {"type": "...", "id": "..."}` in its payload; the host
 then allocates the per-aggregate `sequence` of the `metacore.event/1`
-envelope (docs/events-bus.md). At most 256 events / 4 MiB per invocation
+envelope (docs/events-bus.md). `aggregate.type` and `aggregate.id` must each be
+1-128 bytes of `[A-Za-z0-9_.:-]`, otherwise the call fails with
+`invalid_payload`; the counter is namespaced by the emitting addon, so no addon
+can advance another's sequence. At most 256 events / 4 MiB per invocation
 (`too_many_events`).
 
 ### 12.5 Limits

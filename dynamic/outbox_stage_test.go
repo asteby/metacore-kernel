@@ -124,3 +124,66 @@ func TestOutbox_CanonicalEventCarriesEnvelopeIdentity(t *testing.T) {
 		t.Fatalf("canonical meta = %+v / %+v (occurrence %s)", rec.metas[0], rec.metas[1], ce.OccurrenceID)
 	}
 }
+
+// A guest-declared aggregate counts in its emitter's own namespace: another
+// addon (or a canonical model) with the same type/id never advances it.
+func TestOutbox_GuestAggregateSequenceIsNamespacedPerEmitter(t *testing.T) {
+	rec := &metaRecorder{}
+	svc := newOutboxTestService(t, rec)
+	pub := NewOutboxPublisher(svc.db, rec)
+	org := uuid.New()
+	mk := func(addon string) StagedEvent {
+		return StagedEvent{AddonKey: addon, Name: addon + ".changed", OrgID: org, Payload: []byte(`{}`), AggregateType: "Order", AggregateID: "1"}
+	}
+	pub.Publish(context.Background(), nil, []StagedEvent{mk("a"), mk("b"), mk("b"), mk("a")})
+	var got []string
+	for _, m := range rec.metas {
+		got = append(got, fmt.Sprint(m.Sequence))
+	}
+	if fmt.Sprint(got) != "[1 1 2 2]" {
+		t.Fatalf("sequences = %v, want [1 1 2 2]", got)
+	}
+	// A canonical counter for the same (type, id) is untouched.
+	seq, err := nextAggregateSequence(context.Background(), svc.db, org, "Order", "1")
+	if err != nil || seq != 1 {
+		t.Fatalf("canonical counter = %d (%v), want 1", seq, err)
+	}
+}
+
+// An unarmed publisher must not migrate inside the caller's tx on a
+// one-connection pool; a failed arm retries later instead of staying off.
+func TestOutbox_UnarmedPublishInTxDoesNotHangAndArmRetries(t *testing.T) {
+	rec := &metaRecorder{}
+	svc := newOutboxTestService(t, rec)
+	pub := NewOutboxPublisher(svc.db, rec) // not armed
+	ctx, hook := WithCommitHook(context.Background())
+	tx := svc.db.Begin()
+	done := make(chan struct{})
+	go func() {
+		pub.Publish(ctx, tx, []StagedEvent{{AddonKey: "a", Name: "a.x", OrgID: uuid.New(), Payload: []byte(`{}`)}})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("HANG: Publish in a tx blocked")
+	}
+	if err := tx.Commit().Error; err != nil {
+		t.Fatal(err)
+	}
+	hook.Run(context.Background())
+	if len(rec.metas) != 1 {
+		t.Fatalf("published %d, want 1 after commit", len(rec.metas))
+	}
+
+	// Arm failure is not permanent: backoff, then a later call succeeds.
+	p2 := NewOutboxPublisher(svc.db, rec)
+	p2.armFails, p2.retryAt = 3, time.Now().Add(time.Hour) // as after failed migrations
+	if p2.Arm() {
+		t.Fatal("Arm must respect the backoff window")
+	}
+	p2.retryAt = time.Now().Add(-time.Second)
+	if !p2.Arm() {
+		t.Fatal("Arm must retry after the backoff instead of staying off forever")
+	}
+}

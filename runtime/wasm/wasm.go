@@ -76,6 +76,10 @@ type Host struct {
 	// pub commits the events a successful invocation staged (emitbuffer.go).
 	pubMu sync.Mutex
 	pub   *dynamic.OutboxPublisher
+	// pubAuto: pub was built by the host (rebuilt when bus / db change).
+	pubAuto bool
+	// durableOff: WithDurableEmits(false) — publish without the outbox.
+	durableOff bool
 	// settingsResolver, when set, supplies the per-invocation settings (see
 	// SettingsResolver). nil keeps the caller-passed map as the only source.
 	settingsResolver SettingsResolver
@@ -253,6 +257,7 @@ func newCompileCache(dir string, logger *log.Logger) wazero.CompilationCache {
 // `bus_unavailable` JSON error to the guest.
 func (h *Host) WithBus(b *events.Bus) *Host {
 	h.bus = b
+	h.rebuildAutoPublisher()
 	return h
 }
 
@@ -262,6 +267,7 @@ func (h *Host) WithBus(b *events.Bus) *Host {
 // search_path without leaking state between invocations.
 func (h *Host) WithDB(db *gorm.DB) *Host {
 	h.db = db
+	defer h.rebuildAutoPublisher()
 	// Guests query through db: a prepared plan outdated by an addon migration
 	// must cost one retry, not every later call (no-op off Postgres).
 	if err := staleplan.Install(db); err != nil && h.logger != nil {

@@ -226,6 +226,24 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 	return enqueued, nil
 }
 
+// estimate is the events.Estimator of the dispatcher's "*" tap: the number of
+// deliveries handle WOULD enqueue for eventName in orgID (subscriptions of the
+// org whose pattern matches), without persisting anything. ok=false when the
+// provider fails, so the caller reports "unknown" instead of a wrong number.
+func (d *Dispatcher) estimate(ctx context.Context, orgID uuid.UUID, eventName string) (int, bool) {
+	subs, err := d.provider.SubscriptionsForOrg(ctx, orgID)
+	if err != nil {
+		return 0, false
+	}
+	n := 0
+	for i := range subs {
+		if eventMatches(subs[i].Event, eventName) {
+			n++
+		}
+	}
+	return n, true
+}
+
 // NotReadyError is implemented by invoker errors that mean "the subscriber
 // cannot run YET" (runtime still loading) rather than "the subscriber
 // failed". The dispatcher waits for it instead of spending attempts.
