@@ -199,6 +199,9 @@ func (h *Host) WithEventPublisher(p *dynamic.OutboxPublisher) *Host {
 // straight to the bus after the invocation succeeds, with no table and no
 // recovery) or call Service.RelayOutboxOnce itself. Call it before the first
 // invocation; it rebuilds the default publisher.
+//
+// Caveat: with durability off, an InvokeInTx without a commit hook DISCARDS
+// the events of the tx (only a log remains); the hook is then mandatory.
 func (h *Host) WithDurableEmits(durable bool) *Host {
 	h.pubMu.Lock()
 	h.durableOff = !durable
@@ -257,7 +260,17 @@ type CommitHook = dynamic.CommitHook
 //
 // Inside a transaction event_emit persists to the outbox in that tx and never
 // publishes in line; without calling PublishCommitted the committed rows are
-// published by the outbox relay instead (later, but never lost).
+// published by the outbox relay instead (later, but not lost while the outbox
+// is armed).
+//
+// WITHOUT durability (WithDurableEmits(false), or the outbox not armed) and
+// InvokeInTx without a hook, the events of the tx are DISCARDED: nothing is
+// persisted and nothing publishes, only a log line remains. In that case the
+// commit hook is mandatory.
+//
+// Double publication: if the tx stays open longer than ~10 s, both the relay
+// and the hook can publish the same row. The ledger collapses the duplicate,
+// but taps and plain subscribers see the event twice (at-least-once).
 func WithCommitHook(ctx context.Context) (context.Context, *CommitHook) {
 	return dynamic.WithCommitHook(ctx)
 }
