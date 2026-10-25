@@ -49,6 +49,16 @@ const maxCrumbRaw = 4 * MaxBreadcrumbLen
 // clipCrumb acota una linea desmesurada sin dejar a medias un secreto: borra
 // por valor ANTES de cortar y descarta el token que quede partido en el corte.
 func clipCrumb(line string, sc *Scrubber) string {
+	// Acota el costo de Redact: un secreto que cruce el byte maxCrumbRaw
+	// empieza dentro de maxCrumbScan, asi que se borra igual antes de cortar.
+	const maxCrumbScan = 8 << 10
+	if len(line) > maxCrumbScan {
+		cut := maxCrumbScan
+		for cut > 0 && !utf8.RuneStart(line[cut]) {
+			cut--
+		}
+		line = line[:cut]
+	}
 	line = sc.Redact(line)
 	if len(line) <= maxCrumbRaw {
 		return line
