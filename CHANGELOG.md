@@ -9,6 +9,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `diag` (revisión 3 del PR #545): saneado de breadcrumbs acotado (borrado por valor sobre la línea completa y corte a 640 bytes antes de las regex; caso adverso 1,28 s -> 45 ms), limitador de tasa antes de `Sanitize`, URL recortadas antes del borrado por valor (sin fuga con secreto en query/ruta/userinfo/fragmento), deduplicación solo con correlación igual y no vacía, claves en español (`contraseña`, `clave`, `llave`, `pass`, `sid`, `refresh`, `session_id`), email Unicode y `%40`, prefiltro del sobre sin distinguir mayúsculas; se elimina `WithScrubber`/`ScrubberFrom`. `BenchmarkInvokeOK_*` corre con el benchtime por defecto.
+
 - Paquete `diag` (ADR 0003, F0, aditivo): diagnostico saneado de addons. `diag.Sanitize`
   (allowlist por campo, borrado por valor de secretos, sin extraer valores; vectores
   dorados + fuzz), `Recorder` asincrono (agregado, token bucket por org x addon,

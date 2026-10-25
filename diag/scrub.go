@@ -316,19 +316,28 @@ func redactLoose(str string, loose []string) string {
 }
 
 var (
-	reURL      = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.\-]*://[^\s"'<>)\]]+`)
-	reBareURL  = regexp.MustCompile(`(?i)\b[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?)*\.[a-z]{2,24}(?::\d{1,5})?[/?#][^\s"'<>)\]]*`)
-	reJWT      = regexp.MustCompile(`eyJ[A-Za-z0-9_\-]{5,}\.[A-Za-z0-9_\-]{5,}\.?[A-Za-z0-9_\-]*`)
-	reEmail    = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}`)
+	// Las URL toleran el marcador [redacted] dentro: aunque un borrado por valor
+	// previo lo haya metido en la ruta, la query o el userinfo, la URL se recorta
+	// a su host entera y no deja el resto expuesto.
+	reURL     = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.\-]*://(?:\[redacted\]|[^\s"'<>)\]])+`)
+	reBareURL = regexp.MustCompile(`(?i)\b[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?)*\.[a-z]{2,24}(?::\d{1,5})?[/?#](?:\[redacted\]|[^\s"'<>)\]])*`)
+	reJWT     = regexp.MustCompile(`eyJ[A-Za-z0-9_\-]{5,}\.[A-Za-z0-9_\-]{5,}\.?[A-Za-z0-9_\-]*`)
+	// Email con letras Unicode (josé@correo.mx) y con la arroba url-encoded
+	// (juan.perez%40gmail.com).
+	reEmail    = regexp.MustCompile(`[\p{L}\p{N}._%+\-]+(?:@|%40)[\p{L}\p{N}\-]+(?:\.[\p{L}\p{N}\-]+)*\.\p{L}{2,}`)
 	reAuth     = regexp.MustCompile(`(?i)\b(bearer|basic|token|apikey|api[_-]?key)\s+[A-Za-z0-9._~+/=\-]{4,}`)
-	reSecretKV = regexp.MustCompile(`(?i)([\w.\-]*(?:password|passwd|passphrase|pwd|secret|api[_-]?key|apikey|token|authorization|credential|private[_-]?key|signature|cookie|bearer|auth)[\w.\-]*["']?\s*[=:]\s*)(?:(?:bearer|basic|token|digest|apikey)\s+)?(?:\[redacted\]|"[^"]*"|'[^']*'|[^\s,;&"'}\]]+)`)
-	rePAN      = regexp.MustCompile(`\d(?:[^\dA-Za-z]{0,2}\d){12,18}`)
-	rePANShape = regexp.MustCompile(`\d{4}(?:[^\dA-Za-z]{1,2}\d{4}){3}`)
-	reIPv4     = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
-	reIPv6     = regexp.MustCompile(`(?i)(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?|::(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4}`)
-	rePhone    = regexp.MustCompile(`\+\d[\d ().\-]{7,}\d|\(?\d{2,3}\)?[ .\-]\d{3,4}[ .\-]\d{4}\b`)
-	reDigits   = regexp.MustCompile(`\d{6,}`)
-	reToken    = regexp.MustCompile(`[A-Za-z0-9_\-+/=]{24,}`)
+	reSecretKV = regexp.MustCompile(`(?i)([\w.\-]*(?:password|passwd|passphrase|pwd|contrase(?:ñ|n)a|session[_-]?id|secret|api[_-]?key|apikey|token|authorization|credential|private[_-]?key|signature|cookie|bearer|auth)[\w.\-]*["']?\s*[=:]\s*)(?:(?:bearer|basic|token|digest|apikey)\s+)?(?:\[redacted\]|"[^"]*"|'[^']*'|[^\s,;&"'}\]]+)`)
+	// Claves cortas o genericas del español/ingles que no pueden ir como subcadena
+	// de cualquier palabra (sid en "inside"): solo como palabra o como un segmento
+	// separado por _ . - (clave, clave_privada, mi_llave, user_pass, sid, refresh).
+	reSecretKV2 = regexp.MustCompile(`(?i)((?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+[_.\-])*(?:pass|sid|refresh|clave|llave)(?:[_.\-][A-Za-z0-9]+)*["']?\s*[=:]\s*)(?:(?:bearer|basic|token|digest|apikey)\s+)?(?:\[redacted\]|"[^"]*"|'[^']*'|[^\s,;&"'}\]]+)`)
+	rePAN       = regexp.MustCompile(`\d(?:[^\dA-Za-z]{0,2}\d){12,18}`)
+	rePANShape  = regexp.MustCompile(`\d{4}(?:[^\dA-Za-z]{1,2}\d{4}){3}`)
+	reIPv4      = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
+	reIPv6      = regexp.MustCompile(`(?i)(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?|::(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4}`)
+	rePhone     = regexp.MustCompile(`\+\d[\d ().\-]{7,}\d|\(?\d{2,3}\)?[ .\-]\d{3,4}[ .\-]\d{4}\b`)
+	reDigits    = regexp.MustCompile(`\d{6,}`)
+	reToken     = regexp.MustCompile(`[A-Za-z0-9_\-+/=]{24,}`)
 )
 
 // MaxBreadcrumbLen es el largo maximo (runas) de una linea de breadcrumb.
@@ -394,13 +403,16 @@ func safeHost(h string) bool {
 }
 
 func scrubOnce(str string, sc *Scrubber) string {
-	str = sc.Redact(str)
+	// Primero las URL (quedan en su host) y despues el borrado por valor: si el
+	// marcador de borrado entrara antes en la URL, el resto quedaria expuesto.
 	str = reURL.ReplaceAllStringFunc(str, urlToHost)
 	str = reBareURL.ReplaceAllStringFunc(str, urlToHost)
+	str = sc.Redact(str)
 	str = reJWT.ReplaceAllString(str, "[jwt]")
 	str = reEmail.ReplaceAllString(str, "[email]")
 	str = reAuth.ReplaceAllString(str, "[redacted]")
 	str = reSecretKV.ReplaceAllString(str, "${1}[redacted]")
+	str = reSecretKV2.ReplaceAllString(str, "${1}[redacted]")
 	str = redactPAN(str)
 	str = reIPv4.ReplaceAllString(str, "[ip]")
 	str = reIPv6.ReplaceAllString(str, "[ip]")

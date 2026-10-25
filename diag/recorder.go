@@ -188,6 +188,16 @@ func (r *Recorder) Record(d Diagnostic, sc *Scrubber) {
 		d.At = r.opt.Now()
 	}
 	org := d.Org
+	// El limitador va ANTES de sanear: sanear los breadcrumbs (regex) es lo que
+	// cuesta CPU en la ruta de fallo, asi que un addon ruidoso que ya agoto su
+	// cupo solo sube el contador del grupo (la huella no depende de los
+	// breadcrumbs) y no quema CPU en lineas que luego no se guardarian.
+	r.mu.Lock()
+	sample := r.take(org.String()+"|"+d.AddonKey, r.opt.Now())
+	r.mu.Unlock()
+	if !sample {
+		d.Breadcrumbs = nil
+	}
 	d = Sanitize(d, sc)
 	if d.AddonKey == "" {
 		return
@@ -215,7 +225,7 @@ func (r *Recorder) Record(d Diagnostic, sc *Scrubber) {
 		e.last = d.At
 		e.d.Severity, e.d.AddonVersion = d.Severity, d.AddonVersion
 	}
-	if len(e.samples) < 5 && r.take(org.String()+"|"+d.AddonKey, now) {
+	if sample && len(e.samples) < 5 {
 		e.samples = append(e.samples, d)
 	}
 	r.noteBurst(key, now, d, e)
@@ -236,7 +246,9 @@ type hostRecord struct {
 }
 
 // hostRecordedSince reporta si el host ya registro un fallo de (org, addon) a
-// partir de since y con la misma correlacion (o sin correlacion que comparar).
+// partir de since y con la MISMA correlacion, no vacia en ambos lados (ADR 0003).
+// Sin evidencia positiva de que sea el mismo fallo no se deduplica: es mejor un
+// registro de mas que perder un fallo legitimo de otro grupo.
 func (r *Recorder) hostRecordedSince(org uuid.UUID, addon, corr string, since time.Time) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -244,7 +256,7 @@ func (r *Recorder) hostRecordedSince(org uuid.UUID, addon, corr string, since ti
 	if !ok || h.at.Before(since) {
 		return false
 	}
-	return corr == "" || h.corr == "" || corr == h.corr
+	return corr != "" && corr == h.corr
 }
 
 // take: token bucket por org x addon.

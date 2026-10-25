@@ -19,8 +19,10 @@ func FromEnvelope(raw []byte) (Diagnostic, bool) {
 		return Diagnostic{}, false
 	}
 	// Prefiltro barato: una salida exitosa (la inmensa mayoria) no menciona
-	// "success" junto a false; no vale la pena parsearla.
-	if !bytes.Contains(raw, []byte(`"success"`)) || !bytes.Contains(raw, []byte("false")) {
+	// "success" junto a false; no vale la pena parsearla. La clave se busca sin
+	// distinguir mayusculas porque encoding/json tambien las ignora al decodificar
+	// ("Success":false es un sobre de fallo); "false" es literal JSON y va en minusculas.
+	if !containsFoldKey(raw, `"success"`) || !bytes.Contains(raw, []byte("false")) {
 		return Diagnostic{}, false
 	}
 	var env struct {
@@ -52,4 +54,22 @@ func FromEnvelope(raw []byte) (Diagnostic, bool) {
 	}
 	d.Props = ExtractPaths(obj.Message)
 	return d, true
+}
+
+// containsFoldKey busca key (ASCII, en minusculas) en raw sin distinguir
+// mayusculas, en una sola pasada y sin copiar.
+func containsFoldKey(raw []byte, key string) bool {
+	first := key[0] // '"': no tiene mayuscula, ancla la busqueda
+	for i := 0; i+len(key) <= len(raw); {
+		j := bytes.IndexByte(raw[i:], first)
+		if j < 0 || i+j+len(key) > len(raw) {
+			return false
+		}
+		i += j
+		if bytes.EqualFold(raw[i:i+len(key)], []byte(key)) {
+			return true
+		}
+		i++
+	}
+	return false
 }

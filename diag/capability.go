@@ -20,10 +20,10 @@ func (r *Recorder) OnCapabilityFailure(ctx context.Context, f capability.Failure
 	if r.hostRecordedSince(f.Org, f.Provider, CorrelationFrom(ctx), r.opt.Now().Add(-f.Duration-time.Second)) {
 		return
 	}
-	sc := ScrubberFrom(ctx)
-	if sc == nil {
-		sc = NewScrubber()
-	}
+	// Aqui no hay secretos conocidos por valor (el Executor no ve ajustes ni
+	// cabeceras del guest): el saneado es solo por patron y allowlist; lo que se
+	// guarda de un fallo de capacidad es codigo, operacion y rutas de campo.
+	sc := NewScrubber()
 	d := Diagnostic{
 		Org: f.Org, AddonKey: f.Provider, Kind: KindCapability, Operation: f.Capability,
 		CorrelationID: CorrelationFrom(ctx), Severity: SeverityError, Code: f.Code,

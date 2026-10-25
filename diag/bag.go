@@ -38,10 +38,13 @@ type Bag struct {
 // NewBag crea la bolsa de una invocacion.
 func NewBag() *Bag { return &Bag{Scrubber: NewScrubber()} }
 
-// maxCrumbRaw es el tope (bytes) de una linea cruda en memoria. El recorte a
-// MaxBreadcrumbLen runas ocurre DESPUES de sanear (Sanitize): cortar antes
-// partiria un secreto conocido y el Scrubber ya no lo reconoceria.
-const maxCrumbRaw = 8 << 10
+// maxCrumbRaw es el tope (bytes) de una linea cruda que llega a las regex de
+// ScrubText (4 veces MaxBreadcrumbLen: ScrubText es superlineal y corre en la
+// ruta de fallo, sincrona y fuera del presupuesto del guest). El borrado por
+// valor (Redact, barato y lineal) se hace sobre la linea COMPLETA antes de
+// cortar; asi un secreto conocido partido por el corte nunca se filtra. El
+// recorte final a MaxBreadcrumbLen runas ocurre despues de sanear.
+const maxCrumbRaw = 4 * MaxBreadcrumbLen
 
 // clipCrumb acota una linea desmesurada sin dejar a medias un secreto: borra
 // por valor ANTES de cortar y descarta el token que quede partido en el corte.
@@ -68,8 +71,9 @@ func clipCrumb(line string, sc *Scrubber) string {
 	return line[:lo]
 }
 
-// Log guarda una linea de log del guest (anillo de MaxBreadcrumbs). La linea se
-// guarda casi cruda en memoria (tope maxCrumbRaw) y se sanea y recorta al persistir.
+// Log guarda una linea de log del guest (anillo de MaxBreadcrumbs). Una linea
+// mayor que maxCrumbRaw se borra por valor completa y se corta; el resto se
+// guarda cruda y se sanea (regex) solo si la invocacion falla.
 func (b *Bag) Log(line string) {
 	if b == nil {
 		return
@@ -235,25 +239,7 @@ const (
 	keyCorrelation ctxKey = iota
 	keyInvocation
 	keySubject
-	keyScrubber
 )
-
-// WithScrubber propaga los secretos conocidos de la llamada (ajustes, cabeceras)
-// a quien registra un fallo lejos de donde se conocen, p. ej. el hook de fallo
-// de capacidades. Un fallo de capacidad se sanea con ellos ademas de con las
-// reglas de patron.
-func WithScrubber(ctx context.Context, sc *Scrubber) context.Context {
-	if sc == nil {
-		return ctx
-	}
-	return context.WithValue(ctx, keyScrubber, sc)
-}
-
-// ScrubberFrom lee el Scrubber del contexto (nil si no hay).
-func ScrubberFrom(ctx context.Context) *Scrubber {
-	s, _ := ctx.Value(keyScrubber).(*Scrubber)
-	return s
-}
 
 // WithCorrelation propaga un id de correlacion (el mismo de la peticion o
 // accion que origino la invocacion) hasta el diagnostico.

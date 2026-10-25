@@ -157,14 +157,12 @@ func newSQLiteDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func TestOnCapabilityFailure_UsesScrubberAndSkipsWhatHostRecorded(t *testing.T) {
+func TestOnCapabilityFailure_SkipsWhatHostRecorded(t *testing.T) {
 	db := newSQLiteDB(t)
 	rec, st := mkRec(t, db, nil, Options{})
 	org := uuid.New()
-	sc := NewScrubber("tok_live_secretvalue")
-	ctx := WithScrubber(context.Background(), sc)
-	rec.OnCapabilityFailure(ctx, capability.Failure{Org: org, Capability: "commerce.shipping.rates", Provider: "slowpost", Code: "provider_error",
-		Reported: capability.NewCodedError("bad_gateway", "tok_live_secretvalue rejected for rate.zone")})
+	rec.OnCapabilityFailure(context.Background(), capability.Failure{Org: org, Capability: "commerce.shipping.rates", Provider: "slowpost", Code: "provider_error",
+		Reported: capability.NewCodedError("bad_gateway", "rate.zone rejected")})
 	// El host del runtime registra un fallo wasm del addon "wasmco" y luego el
 	// Executor reporta el mismo fallo: solo debe quedar el del host.
 	rec.Record(Diagnostic{Org: org, AddonKey: "wasmco", Kind: KindEnvelope, Operation: "pay", Code: "provider_error", CorrelationID: "c1"}, nil)
@@ -178,7 +176,7 @@ func TestOnCapabilityFailure_UsesScrubberAndSkipsWhatHostRecorded(t *testing.T) 
 		kinds[g.AddonKey+"/"+string(g.Kind)]++
 		if g.AddonKey == "slowpost" {
 			_, evs, _ := st.Get(context.Background(), org, g.ID)
-			if p := evs[0].Diagnostic.Props; has(p, "tok_live_secretvalue") || !has(p, "rate.zone") {
+			if p := evs[0].Diagnostic.Props; !has(p, "rate.zone") {
 				t.Errorf("props=%v", p)
 			}
 		}
@@ -396,5 +394,127 @@ func TestRecorder_CloseReturnsWithPausedPostgres(t *testing.T) {
 		t.Logf("Close returned in %v with Postgres paused", time.Since(start))
 	case <-time.After(10 * time.Second):
 		t.Fatal("Close colgado con Postgres congelado")
+	}
+}
+
+// --- 3a revision: URL con secreto conocido, claves en español, email, dedup ---
+
+func TestScrubText_URLWithKnownSecretKeepsOnlyHost(t *testing.T) {
+	const secret = "SuperSecretKey99"
+	sc := NewScrubber(secret)
+	cases := []struct{ name, in string }{
+		{"query", "GET https://api.x.com/v1/customers?api_key=" + secret + "&customer=juan_perez&addr=calle_reforma_222 failed"},
+		{"ruta", "POST https://api.telegram.org/bot" + secret + "/customers/juan_perez/orders?name=maria.lopez failed"},
+		{"userinfo", "dial https://admin:" + secret + "@db.x.com/clientes/juan_perez?x=maria.lopez failed"},
+		{"fragmento", "redirect https://app.x.com/cb?ok=1#token=" + secret + "&user=juan_perez&name=maria.lopez failed"},
+		{"sin esquema", "GET api.x.com/v1/customers?k=" + secret + "&customer=juan_perez&name=maria.lopez failed"},
+	}
+	for _, c := range cases {
+		out := ScrubText(c.in, sc)
+		for _, bad := range []string{secret, "juan_perez", "maria.lopez", "calle_reforma", "/v1", "]"} {
+			if strings.Contains(out, bad) {
+				t.Errorf("%s: filtra %q: %q", c.name, bad, out)
+			}
+		}
+		if !strings.Contains(out, "api.x.com") && !strings.Contains(out, "api.telegram.org") && !strings.Contains(out, "db.x.com") && !strings.Contains(out, "app.x.com") {
+			t.Errorf("%s: se perdio el host: %q", c.name, out)
+		}
+		if ScrubText(out, sc) != out {
+			t.Errorf("%s: no idempotente: %q", c.name, out)
+		}
+	}
+	// Aunque el marcador entre antes (clipCrumb borra por valor antes de cortar).
+	pre := sc.Redact("GET https://api.x.com/v1/c?api_key=" + secret + "&customer=juan_perez")
+	if out := ScrubText(pre, sc); strings.Contains(out, "juan_perez") {
+		t.Errorf("marcador previo: %q", out)
+	}
+}
+
+func TestScrubText_SpanishAndGenericKeys(t *testing.T) {
+	sc := NewScrubber()
+	for _, k := range []string{"contraseña", "contrasena", "clave", "clave_privada", "llave", "pass", "session_id", "sid", "refresh", "user_pass", "Contraseña"} {
+		for _, sep := range []string{"=", ": ", "="} {
+			in := "login fallo " + k + sep + "hunter2xyz fin"
+			if out := ScrubText(in, sc); strings.Contains(out, "hunter2xyz") {
+				t.Errorf("%s%s: %q", k, sep, out)
+			}
+		}
+	}
+	for _, in := range []string{"inside=1 outside=2 passed=true classic=ok", "res=ok sidebar=left"} {
+		if out := ScrubText(in, sc); out != in {
+			t.Errorf("sobre-borrado: %q => %q", in, out)
+		}
+	}
+}
+
+func TestScrubText_EmailVariants(t *testing.T) {
+	sc := NewScrubber()
+	for _, in := range []string{"user juan.perez%40gmail.com x", "user josé@correo.mx x", "user JOSÉ.PÉREZ@correo.com.mx x", "user ñandú@dominio.mx x"} {
+		out := ScrubText(in, sc)
+		if !strings.Contains(out, "[email]") || strings.Contains(out, "perez") || strings.Contains(out, "jos") || strings.Contains(out, "andú") {
+			t.Errorf("%q => %q", in, out)
+		}
+	}
+}
+
+func TestFromEnvelope_KeyCaseInsensitive(t *testing.T) {
+	for _, raw := range []string{`{"Success":false,"error":{"code":"x_y","message":"m"}}`, `{"SUCCESS":false,"error":{"code":"x_y"}}`, `{"success":false,"error":{"code":"x_y"}}`} {
+		if _, ok := FromEnvelope([]byte(raw)); !ok {
+			t.Errorf("no detecta %s", raw)
+		}
+	}
+	if _, ok := FromEnvelope([]byte(`{"Success":true,"note":"false"}`)); ok {
+		t.Error("exito detectado como fallo")
+	}
+}
+
+func TestOnCapabilityFailure_NoDedupWithoutPositiveCorrelation(t *testing.T) {
+	db := newSQLiteDB(t)
+	rec, st := mkRec(t, db, nil, Options{})
+	org := uuid.New()
+	// El webhook wasm de "pay" registra un fallo con correlacion inv-webhook.
+	rec.Record(Diagnostic{Org: org, AddonKey: "pay", Kind: KindRuntime, Operation: "on_webhook", Code: "runtime_error", CorrelationID: "inv-webhook"}, nil)
+	// Un fallo de capacidad del mismo addon SIN correlacion es otro fallo.
+	rec.OnCapabilityFailure(context.Background(), capability.Failure{Org: org, Capability: "fiscal.stamp", Provider: "pay", Code: "timeout", Duration: 5 * time.Millisecond})
+	// Con otra correlacion tambien.
+	rec.OnCapabilityFailure(WithCorrelation(context.Background(), "otra"), capability.Failure{Org: org, Capability: "fiscal.stamp", Provider: "pay", Code: "provider_error", Duration: 5 * time.Millisecond})
+	rec.Flush(context.Background())
+	gs, _, _ := st.List(context.Background(), Filter{Org: org})
+	if len(gs) != 3 {
+		t.Fatalf("grupos=%d, quiero 3 (runtime + 2 capacidad)", len(gs))
+	}
+}
+
+func TestSanitize_AdversarialBreadcrumbCostBounded(t *testing.T) {
+	sc := NewScrubber()
+	b := NewBag()
+	b.Scrubber = sc
+	for i := 0; i < 20; i++ {
+		b.Log(strings.Repeat("1.1.1.1.", 1010))
+	}
+	d := Diagnostic{Org: uuid.New(), AddonKey: "acme", Code: "x"}
+	b.Apply(&d)
+	start := time.Now()
+	Sanitize(d, sc)
+	if el := time.Since(start); !raceEnabled && el > 300*time.Millisecond { // antes: ~1,3 s; con -race el tiempo no es comparable
+		t.Errorf("Sanitize de 20 lineas de 8 KB tardo %v", el)
+	}
+}
+
+// Un secreto conocido que cae justo en el corte nunca se filtra.
+func TestBag_KnownSecretSplitByCutNeverLeaks(t *testing.T) {
+	const secret = "ZyXwVuTsRqPoNmLkJi"
+	for off := maxCrumbRaw - len(secret) - 3; off < maxCrumbRaw+3; off++ {
+		b := NewBag()
+		b.AddSecrets(secret)
+		b.Log(strings.Repeat("a ", off/2) + secret + strings.Repeat(" b", 4000))
+		d := Diagnostic{Org: uuid.New(), AddonKey: "acme", Code: "x"}
+		b.Apply(&d)
+		o := Sanitize(d, b.Scrubber)
+		for _, c := range o.Breadcrumbs {
+			if strings.Contains(c, secret) || strings.Contains(c, secret[:8]) || strings.Contains(c, secret[len(secret)-8:]) {
+				t.Fatalf("off=%d filtra: %q", off, c)
+			}
+		}
 	}
 }
