@@ -116,3 +116,51 @@ func TestUpgrade_RowLockHookError_AbortsPersist(t *testing.T) {
 		t.Errorf("row must stay at 1.0.0, got %q", row.Version)
 	}
 }
+
+// Two concurrent upgrades 1.0->1.1 and 1.0->1.2: the one that commits last
+// must not move the version back. Simulated by a competing upgrade landing
+// (1.2.0) while this one (1.1.0) is loading the backend.
+func TestUpgrade_ConcurrentHigherVersionNotRolledBack(t *testing.T) {
+	db := upgradeTestDB(t)
+	org := uuid.New()
+	seedInstallation(t, db, org, "demo", "1.0.0", nil)
+	loader := midUpgradeLoader{mutate: func() {
+		if err := db.Model(&Installation{}).Where("organization_id = ?", org).
+			Update("version", "1.2.0").Error; err != nil {
+			t.Errorf("competing upgrade: %v", err)
+		}
+	}}
+	_, err := lockTestInstaller(db, loader).Upgrade(context.Background(), org, wasmUpgradeBundle())
+	if !errors.Is(err, ErrCannotDowngrade) {
+		t.Fatalf("want ErrCannotDowngrade, got %v", err)
+	}
+	var row Installation
+	db.Where("organization_id = ?", org).Take(&row)
+	if row.Version != "1.2.0" {
+		t.Errorf("version regressed to %q", row.Version)
+	}
+}
+
+type captureBroadcaster struct{ ev []ManifestChangeEvent }
+
+func (c *captureBroadcaster) Broadcast(_ context.Context, e ManifestChangeEvent) error {
+	c.ev = append(c.ev, e)
+	return nil
+}
+
+func TestUpgrade_OldHashComesFromFreshRow(t *testing.T) {
+	db := upgradeTestDB(t)
+	org := uuid.New()
+	seedInstallation(t, db, org, "demo", "1.0.0", nil)
+	cb := &captureBroadcaster{}
+	inst := lockTestInstaller(db, midUpgradeLoader{mutate: func() {
+		db.Model(&Installation{}).Where("organization_id = ?", org).Update("manifest_hash", "sha256:concurrent")
+	}})
+	inst.Broadcaster = cb
+	if _, err := inst.Upgrade(context.Background(), org, wasmUpgradeBundle()); err != nil {
+		t.Fatal(err)
+	}
+	if len(cb.ev) != 1 || cb.ev[0].OldHash != "sha256:concurrent" {
+		t.Fatalf("OldHash = %+v", cb.ev)
+	}
+}

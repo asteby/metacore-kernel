@@ -214,7 +214,8 @@ type Installer struct {
 	// the order is always host lock -> row lock. `existing` is the row as
 	// loaded at the start of Upgrade (identity fields only are reliable). The
 	// hook must not call external services; returning an error aborts the
-	// commit. Optional: nil keeps the previous behaviour. See WithRowLockHook.
+	// commit. It runs on every dialect, sqlite included (where the row lock
+	// below is a no-op), and must not write to the installation row. Optional: nil keeps the previous behaviour. See WithRowLockHook.
 	RowLockHook   func(tx *gorm.DB, existing *Installation) error
 	KernelVersion string
 	// RuntimeVersion is the host's metacore-kernel release (default
@@ -1509,7 +1510,6 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	// the old installation and ADDS defaults for any new settings declared
 	// by the new manifest — addon authors don't have to teach every host to
 	// run a migration just to surface a new toggle.
-	prevHash := existing.ManifestHash
 	newHash := manifestHashFromBundle(newBundle)
 	now := time.Now()
 	// The row was read at the top of Upgrade and the migrations / wasm load /
@@ -1518,7 +1518,7 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	// settings, a wasm block flipping status). So re-read the row under a row
 	// lock in one short transaction (no external calls inside) and write back
 	// ONLY the columns Upgrade owns: version, manifest_hash and settings.
-	fresh, err := i.persistUpgradedRow(existing, toVersion, newHash, newBundle.Manifest)
+	fresh, prevHash, err := i.persistUpgradedRow(existing, toVersion, newHash, newBundle.Manifest)
 	if err != nil {
 		return nil, err
 	}
@@ -1581,8 +1581,9 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 // FOR UPDATE (a no-op on sqlite) and updates only version, manifest_hash and
 // the merged settings. status and any settings the host added since Upgrade
 // started are preserved. Nothing external may run inside this transaction.
-func (i *Installer) persistUpgradedRow(loaded Installation, toVersion, newHash string, m manifest.Manifest) (*Installation, error) {
+func (i *Installer) persistUpgradedRow(loaded Installation, toVersion, newHash string, m manifest.Manifest) (*Installation, string, error) {
 	var fresh Installation
+	var prevHash string
 	err := i.DB.Transaction(func(tx *gorm.DB) error {
 		if i.RowLockHook != nil {
 			if err := i.RowLockHook(tx, &loaded); err != nil {
@@ -1597,6 +1598,12 @@ func (i *Installer) persistUpgradedRow(loaded Installation, toVersion, newHash s
 			}
 			return err
 		}
+		// Re-check the version ordering against the fresh row: two concurrent
+		// upgrades (1.0->1.1 and 1.0->1.2) must not move the version back.
+		if err := guardUpgradeVersion(fresh.Version, toVersion); err != nil {
+			return err
+		}
+		prevHash = fresh.ManifestHash
 		fresh.Version = toVersion
 		fresh.ManifestHash = newHash
 		fresh.Settings = mergeSettings(fresh.Settings, defaultSettings(m))
@@ -1605,9 +1612,9 @@ func (i *Installer) persistUpgradedRow(loaded Installation, toVersion, newHash s
 		return tx.Model(&fresh).Select("Version", "ManifestHash", "Settings").Updates(&fresh).Error
 	})
 	if err != nil {
-		return nil, fmt.Errorf("installer.Upgrade: persist row: %w", err)
+		return nil, "", fmt.Errorf("installer.Upgrade: persist row: %w", err)
 	}
-	return &fresh, nil
+	return &fresh, prevHash, nil
 }
 
 // guardUpgradeVersion enforces strict-greater semver ordering on the upgrade
