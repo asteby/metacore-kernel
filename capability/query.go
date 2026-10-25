@@ -272,6 +272,10 @@ type Result struct {
 	Output   json.RawMessage
 	Err      error
 	Duration time.Duration
+	// reported is the coded error the provider answered even when its code is
+	// not declared by the contract (Err then only keeps the message); it feeds
+	// Failure.Reported.
+	reported *CodedError
 }
 
 // OK reports whether the provider answered a valid output.
@@ -425,6 +429,30 @@ type Executor struct {
 	SkipOutputValidation bool
 	// Now is the clock (tests); nil = time.Now.
 	Now func() time.Time
+	// OnFailure, when set, is told about every provider that failed (timeout,
+	// panic, invalid_output, a provider-reported code…) so the host can keep a
+	// diagnostic. It runs on the provider's goroutine, must not block and its
+	// panics are swallowed: it can never change the query result.
+	OnFailure func(ctx context.Context, f Failure)
+}
+
+// Failure describes one failed provider call for Executor.OnFailure. It carries
+// no payload or output: only who failed and how.
+type Failure struct {
+	Org        uuid.UUID
+	Market     string
+	Capability string
+	// Provider is the addon key of the provider that failed.
+	Provider string
+	// Code is Result.ErrorCode(): timeout | invalid_output | panic | canceled |
+	// a contract code | provider_error.
+	Code          string
+	Indeterminate bool
+	Duration      time.Duration
+	Err           error
+	// Reported is what the provider itself answered (code + message) when it
+	// replied with a typed error, whether or not the contract declares the code.
+	Reported *CodedError
 }
 
 func (e Executor) now() time.Time {
@@ -493,10 +521,20 @@ func (e Executor) Run(ctx context.Context, c Contract, org uuid.UUID, market str
 				}
 			}
 			res.Results[i] = e.one(ctx, c, org, market, p, input, invoke)
+			e.reportFailure(ctx, c, org, market, res.Results[i])
 		}(i, p)
 	}
 	wg.Wait()
 	return res, nil
+}
+
+func (e Executor) reportFailure(ctx context.Context, c Contract, org uuid.UUID, market string, r Result) {
+	if e.OnFailure == nil || r.OK() {
+		return
+	}
+	defer func() { _ = recover() }()
+	e.OnFailure(ctx, Failure{Org: org, Market: market, Capability: c.Key, Provider: r.Provider,
+		Code: r.ErrorCode(), Indeterminate: r.Indeterminate(), Duration: r.Duration, Err: r.Err, Reported: r.reported})
 }
 
 type invokeOutcome struct {
@@ -552,6 +590,9 @@ func (e Executor) one(parent context.Context, c Contract, org uuid.UUID, market 
 		return r
 	case oc.err != nil:
 		var coded *CodedError
+		if errors.As(oc.err, &coded) {
+			r.reported = coded
+		}
 		if errors.As(oc.err, &coded) && !contains(c.Errors, coded.Code) {
 			// Not part of the contract: keep the message, drop the code so
 			// consumers only ever branch on declared codes.

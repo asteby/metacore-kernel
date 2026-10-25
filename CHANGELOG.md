@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Paquete `diag` (ADR 0003, F0, aditivo): diagnostico saneado de addons. `diag.Sanitize`
+  (allowlist por campo, borrado por valor de secretos, sin extraer valores; vectores
+  dorados + fuzz), `Recorder` asincrono (agregado, token bucket por org x addon,
+  retencion 14/90 dias), `Store` con org obligatorio, `Handler.Mount` (issues, events,
+  resolve/mute, export; falla cerrado sin middleware), alertas inyectables
+  (`IncidentsAlerter`). Migracion 0009 (`addon_diagnostic_groups`,
+  `addon_diagnostic_events`). `wasm.Host.WithDiagnostics`: captura automatica de
+  trap/timeout/pool/memoria/panic, sobre `{success:false}`, llamadas salientes fallidas
+  y breadcrumbs, sin cambiar el addon. `capability.Executor.OnFailure` + `Failure`.
+  Apagable con `KERNEL_DIAGNOSTICS=off`; sin `WithDiagnostics` nada cambia. Minor.
 - Paquete `settings` (ADR 0002, F1, aditivo): `Store` (`Read`/`Write` con
   revision optimista, validacion por tipo contra el manifest instalado, rechazo
   de secretos y claves `_`, evento `settings.changed`) y `Resolver` (precedencia

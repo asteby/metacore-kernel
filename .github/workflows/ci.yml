@@ -57,3 +57,9 @@ jobs:
       - run: go test -count=1 -race -v -run '/Postgres' ./payments/ledger/
       # Puente legado: candado por fila y cursor con dos aplicadores a la vez.
       - run: go test -count=1 -race -v -run '/postgres' ./legacybridge/
+      # Diagnostico de addons: concurrencia del agregador, jsonb y migracion 0009 en Postgres real.
+      - run: go test -count=1 -race -v -run 'Postgres|Concurrency' ./diag/
+      # Fuzz del saneado (un objetivo por invocacion).
+      - run: go test -run '^$' -fuzz '^FuzzSanitize$' -fuzztime 20s ./diag/
+      - run: go test -run '^$' -fuzz '^FuzzExtractBody$' -fuzztime 20s ./diag/
+      - run: go test -run '^$' -fuzz '^FuzzScrubText$' -fuzztime 20s ./diag/
