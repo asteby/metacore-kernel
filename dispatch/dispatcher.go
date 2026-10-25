@@ -10,14 +10,13 @@ import (
 	"log/slog"
 	"math/rand"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // Dispatcher is the runtime built by Wire. It is the events.Handler registered
@@ -31,10 +30,18 @@ type Dispatcher struct {
 	opts     *Options
 	logger   *slog.Logger
 
-	// wg tracks in-flight async deliveries so tests (and graceful shutdown)
-	// can wait for the queue to drain. Production hosts fire-and-forget; the
-	// WaitIdle helper is test-facing.
-	wg sync.WaitGroup
+	// baseCtx lives as long as the dispatcher (cancel func of Wire stops it);
+	// every attempt derives from it, so shutdown interrupts running handlers
+	// and hands their deliveries back without spending an attempt.
+	baseCtx context.Context
+	stop    context.CancelFunc
+	// workerID prefixes lease tokens so a stuck row names its last holder.
+	workerID string
+	// inflight counts attempts, sweeps and armed wake-ups; running counts the
+	// attempts the sweeper started (bounds its concurrency). WaitIdle is
+	// test-facing.
+	inflight atomic.Int64
+	running  atomic.Int64
 }
 
 // canonicalEvent is the dispatcher's structural view of the bus payload. It
@@ -153,7 +160,15 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 	// dynamic.publishCanonical now stamps a per-publication occurrence_id, and
 	// the outbox relay re-publishes the PERSISTED bytes, so a replayed event
 	// carries the same id and still collapses to one delivery.
+	meta := dynamic.MetaFromContext(ctx)
 	occurrenceID := ce.OccurrenceID
+	if occurrenceID == "" {
+		// A durable publisher (the wasm event_emit buffer, the outbox relay)
+		// stamped a stable publication id: a re-publish of the persisted event
+		// carries the same id, so the ledger collapses it into the deliveries
+		// it already recorded.
+		occurrenceID = meta.ID
+	}
 	if occurrenceID == "" && ce.ID != "" {
 		// Canonical event from before occurrence_id existed (an unpublished
 		// outbox row written by an older kernel, or a host building the
@@ -192,6 +207,12 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 		return 0, nil
 	}
 
+	if ce.CorrelationID == "" {
+		ce.CorrelationID = dynamic.CorrelationIDFromContext(ctx)
+	}
+	// metacore.event/1 identity block (additive; see envelope.go).
+	raw = stampEnvelope(raw, d.buildEnvelope(ctx, orgID, eventName, occurrenceID, emitter, ce, meta))
+
 	enqueued := 0
 	for i := range subs {
 		sub := subs[i]
@@ -205,77 +226,22 @@ func (d *Dispatcher) handle(ctx context.Context, orgID uuid.UUID, eventName stri
 	return enqueued, nil
 }
 
-// enqueue persists the deterministic delivery row (idempotent INSERT) and, when
-// the row is newly created (or still pending), launches the async worker. A
-// duplicate event that hits the unique index — or a row already delivered/dead —
-// short-circuits with no invocation. Reports whether a delivery was actually
-// enqueued, which feeds the emitter-facing subscriber count.
-func (d *Dispatcher) enqueue(ctx context.Context, orgID uuid.UUID, eventName, occurrenceID, emitter string, ce canonicalEvent, payload []byte, sub Subscription) bool {
-	id := deliveryID(eventName, occurrenceID, sub)
-
-	row := Delivery{
-		ID:             uuid.New(),
-		DeliveryID:     id,
-		OrganizationID: orgID,
-		Event:          eventName,
-		Emitter:        emitter,
-		AddonKey:       sub.AddonKey,
-		HandlerType:    sub.HandlerType,
-		Export:         sub.Function,
-		Status:         StatusPending,
-		Attempts:       0,
+// estimate is the events.Estimator of the dispatcher's "*" tap: the number of
+// deliveries handle WOULD enqueue for eventName in orgID (subscriptions of the
+// org whose pattern matches), without persisting anything. ok=false when the
+// provider fails, so the caller reports "unknown" instead of a wrong number.
+func (d *Dispatcher) estimate(ctx context.Context, orgID uuid.UUID, eventName string) (int, bool) {
+	subs, err := d.provider.SubscriptionsForOrg(ctx, orgID)
+	if err != nil {
+		return 0, false
 	}
-
-	// Idempotent insert: ON CONFLICT(delivery_id) DO NOTHING. RowsAffected==0
-	// means the delivery already exists (a re-published event) — do not
-	// re-invoke. This is the day-one idempotency guarantee.
-	res := d.db.Session(&gorm.Session{NewDB: true}).
-		Table(d.opts.tableName).
-		Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "delivery_id"}}, DoNothing: true}).
-		Create(&row)
-	if res.Error != nil {
-		d.logger.Warn("dispatch.ledger_insert_error",
-			slog.String("delivery_id", id),
-			slog.String("err", res.Error.Error()))
-		return false
-	}
-	if res.RowsAffected == 0 {
-		// Already enqueued/delivered/dead — idempotent no-op.
-		return false
-	}
-
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
-		// Detach from the request ctx: the source HTTP request may complete
-		// (and cancel its ctx) long before a slow subscriber finishes. Carry a
-		// fresh background ctx with a generous per-delivery deadline — but
-		// re-attach the originating EVENT's identity (actor + correlation):
-		// host imports the handler calls (data_mutate above all) stamp their
-		// own canonical events from this ctx, so without it every downstream
-		// mutation surfaced as an anonymous actor in the audit trail.
-		bg, cancel := context.WithTimeout(context.Background(), d.deliveryTimeout())
-		defer cancel()
-		bg = dynamic.WithActorID(bg, ce.ActorID)
-		bg = dynamic.WithBranchID(bg, ce.BranchID)
-		if emitter != "" {
-			bg = events.WithEmitter(bg, emitter)
+	n := 0
+	for i := range subs {
+		if eventMatches(subs[i].Event, eventName) {
+			n++
 		}
-		if ce.CorrelationID != "" {
-			bg = dynamic.WithCorrelationID(bg, ce.CorrelationID)
-		}
-		d.deliver(bg, orgID, eventName, id, payload, sub)
-	}()
-	return true
-}
-
-// deliveryTimeout bounds a single delivery's wall clock across its retries.
-// The wasm runtime already caps each invocation via the BackendSpec timeout;
-// this is the outer guard so a retry loop cannot run unbounded.
-func (d *Dispatcher) deliveryTimeout() time.Duration {
-	// MaxAttempts invocations, each bounded by the runtime; a generous outer
-	// envelope. Kept simple — not configurable until a host needs it.
-	return time.Duration(d.opts.maxAttempts)*30*time.Second + d.opts.notReadyWait
+	}
+	return n, true
 }
 
 // NotReadyError is implemented by invoker errors that mean "the subscriber
@@ -289,103 +255,6 @@ type NotReadyError interface {
 func isNotReady(err error) bool {
 	var nr NotReadyError
 	return errors.As(err, &nr) && nr.NotReady()
-}
-
-// deliver runs the bounded retry loop for one delivery. Each attempt:
-// authorize → invoke the tier handler → on success mark delivered, on error
-// bump attempts and (if exhausted) mark dead.
-func (d *Dispatcher) deliver(ctx context.Context, orgID uuid.UUID, eventName, id string, payload []byte, sub Subscription) {
-	// Capability gate FIRST — an addon that lacks event:subscribe never has
-	// its handler invoked, and the denial is a terminal (dead) outcome, not a
-	// retryable error (retrying a permission denial is pointless).
-	if d.opts.capability != nil {
-		if err := d.opts.capability.CanDeliver(sub.AddonKey, eventName); err != nil {
-			msg := fmt.Sprintf("capability denied: %v", err)
-			d.markDead(id, msg)
-			d.logger.Warn("dispatch.capability_denied",
-				slog.String("addon", sub.AddonKey),
-				slog.String("event", eventName))
-			d.notify(id, eventName, sub, StatusDead, 0, msg)
-			return
-		}
-	}
-
-	var lastErr error
-	notReadyUntil := time.Now().Add(d.opts.notReadyWait)
-	notReadyPause := d.opts.retryBackoff
-	for attempt := 1; attempt <= d.opts.maxAttempts; attempt++ {
-		if err := ctx.Err(); err != nil {
-			lastErr = err
-			break
-		}
-		// Space out retries. The wait is skipped on the first attempt and
-		// aborts early if the delivery's outer deadline expires while waiting.
-		if attempt > 1 {
-			if err := sleepCtx(ctx, d.backoffFor(attempt)); err != nil {
-				lastErr = err
-				break
-			}
-		}
-		err := d.invoke(ctx, orgID, payload, sub)
-		if err == nil {
-			d.markDelivered(id, attempt)
-			d.logger.Debug("dispatch.delivered",
-				slog.String("addon", sub.AddonKey),
-				slog.String("event", eventName),
-				slog.String("function", sub.Function),
-				slog.Int("attempt", attempt))
-			d.notify(id, eventName, sub, StatusDelivered, attempt, "")
-			return
-		}
-		lastErr = err
-		// The subscriber is not up yet (its module is still loading after a
-		// restart): wait for it instead of spending an attempt, up to
-		// notReadyWait. The first attempt after it comes up runs as attempt
-		// `attempt` again, with the normal retry budget intact.
-		if isNotReady(err) && time.Now().Before(notReadyUntil) {
-			d.logger.Info("dispatch.subscriber_not_ready",
-				slog.String("addon", sub.AddonKey),
-				slog.String("event", eventName),
-				slog.String("err", err.Error()))
-			if serr := sleepCtx(ctx, notReadyPause); serr != nil {
-				lastErr = serr
-				break
-			}
-			if notReadyPause < time.Second {
-				notReadyPause = time.Second
-			} else if notReadyPause < 10*time.Second {
-				notReadyPause *= 2
-			}
-			attempt--
-			continue
-		}
-		d.bumpAttempt(id, attempt, err.Error())
-		d.logger.Warn("dispatch.delivery_attempt_failed",
-			slog.String("addon", sub.AddonKey),
-			slog.String("event", eventName),
-			slog.Int("attempt", attempt),
-			slog.String("err", err.Error()))
-	}
-
-	msg := "exhausted retries"
-	if lastErr != nil {
-		msg = lastErr.Error()
-		// A module that never came up is not a transient failure of this
-		// event: say so, otherwise the ledger only reads "not loaded".
-		if isNotReady(lastErr) {
-			msg = fmt.Sprintf("%s: subscriber module never became ready within %s "+
-				"(bundle without backend.wasm, compile/instantiate failure or addon disabled; see the host boot log)",
-				msg, d.opts.notReadyWait)
-		}
-	}
-	d.markDead(id, msg)
-	d.logger.Error("dispatch.delivery_dead",
-		slog.String("addon", sub.AddonKey),
-		slog.String("event", eventName),
-		slog.String("function", sub.Function),
-		slog.String("err", msg))
-	d.notify(id, eventName, sub, StatusDead, d.opts.maxAttempts, msg)
-	d.emitDeadLetter(orgID, id, eventName, sub, msg)
 }
 
 // DeadLetterEvent is published on the bus whenever a delivery exhausts its
@@ -483,7 +352,7 @@ func (d *Dispatcher) invoke(ctx context.Context, orgID uuid.UUID, payload []byte
 				slog.String("addon", sub.AddonKey),
 				slog.String("function", sub.Function),
 				slog.String("err", msg))
-			return fmt.Errorf("guest: %s", msg)
+			return newGuestFailure("guest: "+msg, out)
 		}
 		return nil
 	case handlerTypeNative:
@@ -499,7 +368,7 @@ func (d *Dispatcher) invoke(ctx context.Context, orgID uuid.UUID, payload []byte
 				slog.String("addon", sub.AddonKey),
 				slog.String("operation", sub.Function),
 				slog.String("err", msg))
-			return fmt.Errorf("native: %s", msg)
+			return newGuestFailure("native: "+msg, out)
 		}
 		return nil
 	case handlerTypeCompiled:
@@ -518,44 +387,23 @@ func (d *Dispatcher) invoke(ctx context.Context, orgID uuid.UUID, payload []byte
 	}
 }
 
-func (d *Dispatcher) markDelivered(id string, attempts int) {
-	now := time.Now().UTC()
-	d.db.Session(&gorm.Session{NewDB: true}).
-		Table(d.opts.tableName).
-		Where("delivery_id = ?", id).
-		Updates(map[string]any{
-			"status":       StatusDelivered,
-			"attempts":     attempts,
-			"delivered_at": now,
-			"last_error":   "",
-		})
+// WaitIdle blocks until no delivery attempt, sweep or scheduled retry wake-up
+// is in flight. Test-facing / graceful-shutdown helper — production event paths
+// fire-and-forget. It does NOT prevent new deliveries from being enqueued; call
+// it after the bus has stopped publishing. A retry scheduled further out than
+// the poll interval is durable state (next_attempt_at), not in-flight work, so
+// it does not hold WaitIdle.
+func (d *Dispatcher) WaitIdle() {
+	quiet := 0
+	for quiet < 3 {
+		if d.inflight.Load() == 0 {
+			quiet++
+		} else {
+			quiet = 0
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
-
-func (d *Dispatcher) bumpAttempt(id string, attempts int, errMsg string) {
-	d.db.Session(&gorm.Session{NewDB: true}).
-		Table(d.opts.tableName).
-		Where("delivery_id = ?", id).
-		Updates(map[string]any{
-			"attempts":   attempts,
-			"last_error": truncErr(errMsg),
-		})
-}
-
-func (d *Dispatcher) markDead(id, errMsg string) {
-	d.db.Session(&gorm.Session{NewDB: true}).
-		Table(d.opts.tableName).
-		Where("delivery_id = ?", id).
-		Updates(map[string]any{
-			"status":     StatusDead,
-			"last_error": truncErr(errMsg),
-		})
-}
-
-// WaitIdle blocks until all in-flight async deliveries finish. Test-facing /
-// graceful-shutdown helper — production event paths fire-and-forget. It does
-// NOT prevent new deliveries from being enqueued; call it after the bus has
-// stopped publishing.
-func (d *Dispatcher) WaitIdle() { d.wg.Wait() }
 
 // guestEnvelopeError returns a non-empty message when the wasm guest returned
 // a `{success:false}` envelope. Missing/malformed JSON is not a guest error

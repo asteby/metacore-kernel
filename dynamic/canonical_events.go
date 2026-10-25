@@ -222,6 +222,16 @@ func (s *Service) publishCanonical(ctx context.Context, model, action string, us
 	// write and the publish can no longer lose the event — the relay
 	// re-publishes anything that never got stamped published_at.
 	var outboxID uuid.UUID
+	pubCtx := ctx
+	occurred := time.Now().UTC()
+	meta := Meta{
+		ID:            payload.OccurrenceID,
+		Version:       1,
+		OccurredAt:    occurred.Format(time.RFC3339Nano),
+		AggregateType: modelKey,
+		AggregateID:   id,
+		CausationID:   CausationIDFromContext(ctx),
+	}
 	if s.outboxEnabled {
 		if raw, merr := json.Marshal(payload); merr == nil {
 			row := &EventOutbox{
@@ -230,15 +240,32 @@ func (s *Service) publishCanonical(ctx context.Context, model, action string, us
 				AddonKey:       addonKey,
 				EventName:      event,
 				Payload:        string(raw),
-				CreatedAt:      time.Now().UTC(),
+				CreatedAt:      occurred,
+				EventID:        payload.OccurrenceID,
+				Version:        1,
+				OccurredAt:     &occurred,
+				AggregateType:  modelKey,
+				AggregateID:    id,
+				CausationID:    meta.CausationID,
+				CorrelationID:  payload.CorrelationID,
+				ActorID:        payload.ActorID,
+				BranchID:       payload.BranchID,
 			}
+			if id != "" {
+				// Best effort: an unsequenced event (0) is still delivered.
+				if seq, serr := nextAggregateSequence(ctx, s.db, user.GetOrganizationID(), modelKey, id); serr == nil {
+					row.Sequence = seq
+				}
+			}
+			meta.Sequence = row.Sequence
 			if s.persistOutbox(ctx, row) {
 				outboxID = row.ID
 			}
 		}
 	}
+	pubCtx = WithMeta(ctx, meta)
 
-	perr := s.bus.Publish(ctx, addonKey, event, user.GetOrganizationID(), payload)
+	perr := s.bus.Publish(pubCtx, addonKey, event, user.GetOrganizationID(), payload)
 	if perr == nil && outboxID != uuid.Nil {
 		s.markOutboxPublished(ctx, outboxID)
 	}

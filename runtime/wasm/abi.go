@@ -48,7 +48,8 @@ import (
 //	      documented in docs/wasm-abi.md § 12.4. Legacy guests that ignore
 //	      the return value still see the publish side-effect — the envelope
 //	      is allocated in the guest's own bump arena but the host writes it
-//	      *after* `events.Bus.PublishWithCount` returns, so dropping the
+//	      *after* the call is validated (publication itself is deferred until
+//	      the invocation succeeds, see emitbuffer.go), so dropping the
 //	      return value is harmless. See wasm/eventemit.go (EventEmitEnvelopeVersion).
 
 // writeMem allocates `len(data)` bytes in the guest via its exported alloc

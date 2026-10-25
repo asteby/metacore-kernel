@@ -25,6 +25,8 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,7 +45,40 @@ type EventOutbox struct {
 	PublishedAt    *time.Time `gorm:"index"`
 	Attempts       int
 	LastError      string `gorm:"size:500"`
+
+	// Envelope identity (metacore.event/1). All additive and nullable: rows
+	// written before these columns existed relay exactly as before.
+	//
+	// EventID is the publication id; it is the idempotency discriminator the
+	// dispatch ledger keys on, so a relay re-publish of this row collapses into
+	// the deliveries already recorded. Sequence is the per-aggregate monotonic
+	// counter allocated when the row is persisted.
+	EventID       string `gorm:"size:64"`
+	Version       int
+	OccurredAt    *time.Time
+	AggregateType string `gorm:"size:200"`
+	AggregateID   string `gorm:"size:200"`
+	Sequence      int64
+	CausationID   string `gorm:"size:64"`
+	CorrelationID string `gorm:"size:128"`
+	ActorID       string `gorm:"size:64"`
+	BranchID      string `gorm:"size:64"`
 }
+
+// EventSequence is the per-aggregate counter behind the envelope's `sequence`.
+// One row per (org, aggregate type, aggregate id), bumped atomically by an
+// upsert, so two concurrent events about the same aggregate never share a
+// number.
+type EventSequence struct {
+	OrganizationID uuid.UUID `gorm:"type:uuid;primaryKey"`
+	AggregateType  string    `gorm:"size:256;primaryKey"`
+	AggregateID    string    `gorm:"size:200;primaryKey"`
+	LastSeq        int64
+	UpdatedAt      time.Time
+}
+
+// TableName pins the physical name; kernel-owned, host-schema table.
+func (EventSequence) TableName() string { return "kernel_event_sequences" }
 
 // TableName pins the physical name; kernel-owned, host-schema table.
 func (EventOutbox) TableName() string { return "kernel_event_outbox" }
@@ -51,7 +86,7 @@ func (EventOutbox) TableName() string { return "kernel_event_outbox" }
 // MigrateEventOutbox creates/updates the outbox table. Additive and safe to
 // call repeatedly.
 func MigrateEventOutbox(db *gorm.DB) error {
-	return db.AutoMigrate(&EventOutbox{})
+	return db.AutoMigrate(&EventOutbox{}, &EventSequence{})
 }
 
 const (
@@ -144,7 +179,7 @@ func (s *Service) RelayOutboxOnce(ctx context.Context) {
 		// Re-publish the ORIGINAL bytes: the dispatcher re-marshals payloads,
 		// and json.RawMessage round-trips byte-identical, so the canonical
 		// occurrence id is preserved and the ledger dedups the fan-out.
-		perr := s.bus.Publish(ctx, row.AddonKey, row.EventName, row.OrganizationID, json.RawMessage(row.Payload))
+		perr := s.bus.Publish(row.publishContext(ctx), row.AddonKey, row.EventName, row.OrganizationID, json.RawMessage(row.Payload))
 		updates := map[string]any{"attempts": row.Attempts + 1}
 		if perr == nil {
 			updates["published_at"] = time.Now().UTC()
@@ -163,4 +198,328 @@ func (s *Service) RelayOutboxOnce(ctx context.Context) {
 	s.db.WithContext(ctx).
 		Where("published_at IS NOT NULL AND published_at < ?", time.Now().UTC().Add(-outboxRetention)).
 		Delete(&EventOutbox{})
+}
+
+// publishContext rebuilds the publication context the original publisher had:
+// the stable envelope identity (Meta) and the actor / branch /
+// correlation / causation the dispatcher re-attaches to the delivery ctx. A
+// relay re-publish therefore carries the same identity as the first attempt,
+// which is what makes the ledger collapse it into the deliveries it already has.
+func (r *EventOutbox) publishContext(ctx context.Context) context.Context {
+	m := Meta{
+		ID:            r.EventID,
+		Version:       r.Version,
+		AggregateType: r.AggregateType,
+		AggregateID:   r.AggregateID,
+		Sequence:      r.Sequence,
+		CausationID:   r.CausationID,
+	}
+	if r.OccurredAt != nil {
+		m.OccurredAt = r.OccurredAt.UTC().Format(time.RFC3339Nano)
+	}
+	ctx = WithMeta(ctx, m)
+	ctx = WithCausationID(ctx, r.CausationID)
+	ctx = WithActorID(ctx, r.ActorID)
+	ctx = WithBranchID(ctx, r.BranchID)
+	if r.CorrelationID != "" {
+		ctx = WithCorrelationID(ctx, r.CorrelationID)
+	}
+	return ctx
+}
+
+// nextAggregateSequence atomically bumps and returns the counter of one
+// aggregate. It is a single upsert, so it is safe under any concurrency and
+// holds the row lock only until the surrounding transaction ends.
+func nextAggregateSequence(ctx context.Context, db *gorm.DB, orgID uuid.UUID, aggType, aggID string) (int64, error) {
+	var seq int64
+	err := db.WithContext(ctx).Raw(
+		`INSERT INTO kernel_event_sequences (organization_id, aggregate_type, aggregate_id, last_seq, updated_at)
+		 VALUES (?, ?, ?, 1, ?)
+		 ON CONFLICT (organization_id, aggregate_type, aggregate_id)
+		 DO UPDATE SET last_seq = kernel_event_sequences.last_seq + 1, updated_at = excluded.updated_at
+		 RETURNING last_seq`,
+		orgID, aggType, aggID, time.Now().UTC()).Scan(&seq).Error
+	return seq, err
+}
+
+// StagedEvent is one domain event an emitter (the wasm event_emit import)
+// buffered during an invocation and now wants published durably.
+type StagedEvent struct {
+	ID            string // publication id; generated when empty
+	AddonKey      string // emitter (bus capability subject)
+	Name          string
+	OrgID         uuid.UUID
+	Payload       []byte // raw JSON, as the guest wrote it
+	Version       int
+	AggregateType string
+	AggregateID   string
+	OccurredAt    time.Time
+	CausationID   string
+	CorrelationID string
+	ActorID       string
+	BranchID      string
+}
+
+// OutboxPublisher publishes buffered domain events through the same outbox the
+// canonical CRUD events use: persist first, fan out second, stamp
+// published_at on success. A crash between the persist and the fan-out leaves
+// the row unpublished, and Service.RelayOutboxOnce re-publishes it.
+//
+// Inside a caller's transaction (tx != nil) it NEVER fans out in line: the
+// event is not real until that transaction commits. The rows (and their
+// aggregate sequence bump) join the caller's tx, so a rollback removes them
+// and nothing is ever delivered. Publication happens only after commit, via
+// the CommitHook the caller put on the ctx (WithCommitHook + CommitHook.Run);
+// with no hook the committed rows wait for the outbox relay
+// (Service.RelayOutboxOnce), which is the safety net either way.
+type OutboxPublisher struct {
+	db  *gorm.DB
+	bus Publisher
+
+	armed    atomic.Bool
+	armMu    sync.Mutex // serialises migration attempts
+	armFails int
+	retryAt  time.Time
+	arming   atomic.Bool  // an async arm attempt is in flight
+	crashAt  func() error // test seam: runs between persist and publish
+}
+
+// NewOutboxPublisher builds a publisher over db + bus. A nil db degrades to
+// direct publication (no crash durability), which is what hosts without a
+// database get today. Call Arm at wiring time so the table migration never
+// happens on the hot path.
+func NewOutboxPublisher(db *gorm.DB, bus Publisher) *OutboxPublisher {
+	return &OutboxPublisher{db: db, bus: bus}
+}
+
+// OnPersisted installs a fault-injection hook that runs after the events are
+// persisted and before any is published; a non-nil error aborts the publication
+// exactly as a process crash at that point would (the rows stay unpublished and
+// the relay must recover them). For tests only.
+func (p *OutboxPublisher) OnPersisted(fn func() error) { p.crashAt = fn }
+
+const (
+	armBackoffMin = time.Second
+	armBackoffMax = time.Minute
+)
+
+// Arm migrates the outbox tables so persistence can be used. It is meant for
+// wiring time (WithBus / WithDB / WithEventPublisher), not the hot path. A
+// failure is not permanent: the next call after an exponential backoff
+// (1s..1m) tries again. Safe for concurrent use.
+func (p *OutboxPublisher) Arm() bool {
+	if p == nil || p.db == nil {
+		return false
+	}
+	if p.armed.Load() {
+		return true
+	}
+	p.armMu.Lock()
+	defer p.armMu.Unlock()
+	if p.armed.Load() {
+		return true
+	}
+	if time.Now().Before(p.retryAt) {
+		return false
+	}
+	if err := MigrateEventOutbox(p.db); err != nil {
+		p.armFails++
+		d := armBackoffMin << min(p.armFails-1, 6)
+		if d > armBackoffMax {
+			d = armBackoffMax
+		}
+		p.retryAt = time.Now().Add(d)
+		log.Printf("dynamic: event outbox unavailable for guest events (migrate failed: %v) — publishing without crash durability; retrying in %s", err, d)
+		return false
+	}
+	p.armed.Store(true)
+	return true
+}
+
+// armAsync retries Arm off the caller's goroutine (used when the hot path
+// finds the publisher unarmed while a transaction holds a connection: a
+// migration there could wait on the very connection the caller owns).
+func (p *OutboxPublisher) armAsync() {
+	if p.db == nil || !p.arming.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer p.arming.Store(false)
+		p.Arm()
+	}()
+}
+
+// Publish persists then fans out evs in order. tx, when non-nil, is the open
+// transaction of the surrounding action: the rows join it, nothing is
+// published in line, and the fan-out is deferred to the ctx's CommitHook (see
+// OutboxPublisher). It never returns an error to the caller — by the time it
+// runs the invocation already succeeded — but it logs every degradation.
+func (p *OutboxPublisher) Publish(ctx context.Context, tx *gorm.DB, evs []StagedEvent) {
+	if p == nil || p.bus == nil || len(evs) == 0 {
+		return
+	}
+	if tx != nil {
+		p.publishInTx(ctx, tx, evs)
+		return
+	}
+	var rows []*EventOutbox
+	if p.db != nil && p.Arm() {
+		rows = p.persist(ctx, p.db, evs)
+	}
+	if len(rows) > 0 && p.crashAt != nil {
+		if err := p.crashAt(); err != nil {
+			return
+		}
+	}
+	p.fanOut(ctx, evs, rows)
+}
+
+// persist writes evs to the outbox as one (nested) transaction on db; nil on
+// failure (logged), in which case the caller degrades to non-durable fan-out.
+func (p *OutboxPublisher) persist(ctx context.Context, db *gorm.DB, evs []StagedEvent) []*EventOutbox {
+	rows := make([]*EventOutbox, 0, len(evs))
+	perr := db.WithContext(ctx).Transaction(func(t *gorm.DB) error {
+		rows = rows[:0]
+		for i := range evs {
+			row, err := p.stage(ctx, t, &evs[i])
+			if err != nil {
+				return err
+			}
+			rows = append(rows, row)
+		}
+		return nil
+	})
+	if perr != nil {
+		log.Printf("dynamic: guest event outbox persist failed (%d event(s) fan out without crash durability): %v", len(evs), perr)
+		return nil
+	}
+	return rows
+}
+
+func (p *OutboxPublisher) publishInTx(ctx context.Context, tx *gorm.DB, evs []StagedEvent) {
+	var rows []*EventOutbox
+	if p.armed.Load() {
+		rows = p.persist(ctx, tx, evs)
+	} else {
+		// Never migrate while the caller's tx holds a connection.
+		p.armAsync()
+	}
+	hook := CommitHookFrom(ctx)
+	if hook == nil {
+		if len(rows) > 0 {
+			log.Printf("dynamic: %d guest event(s) persisted in the caller's transaction; no commit hook on the ctx, the outbox relay publishes them after commit", len(rows))
+		} else {
+			log.Printf("dynamic: %d guest event(s) NOT persisted and no commit hook on the ctx: dropped (publishing in line would announce uncommitted state)", len(evs))
+		}
+		return
+	}
+	staged := append([]StagedEvent(nil), evs...)
+	hook.add(func(c context.Context) {
+		if len(rows) > 0 && p.crashAt != nil {
+			if err := p.crashAt(); err != nil {
+				return
+			}
+		}
+		p.fanOut(c, staged, rows)
+	})
+}
+
+// fanOut publishes evs (rows[i] is the persisted row of evs[i], when any) and
+// stamps published_at on the persisted ones.
+func (p *OutboxPublisher) fanOut(ctx context.Context, evs []StagedEvent, rows []*EventOutbox) {
+	for i := range evs {
+		var row *EventOutbox
+		if i < len(rows) {
+			row = rows[i]
+		}
+		var pctx context.Context
+		var payload json.RawMessage
+		if row != nil {
+			pctx = row.publishContext(ctx)
+			payload = json.RawMessage(row.Payload)
+		} else {
+			e := evs[i]
+			tmp := EventOutbox{EventID: e.ID, Version: e.Version, AggregateType: e.AggregateType,
+				AggregateID: e.AggregateID, CausationID: e.CausationID, CorrelationID: e.CorrelationID,
+				ActorID: e.ActorID, BranchID: e.BranchID}
+			if !e.OccurredAt.IsZero() {
+				t := e.OccurredAt
+				tmp.OccurredAt = &t
+			}
+			pctx = tmp.publishContext(ctx)
+			payload = json.RawMessage(normalizePayload(e.Payload))
+		}
+		if err := p.bus.Publish(pctx, evs[i].AddonKey, evs[i].Name, evs[i].OrgID, payload); err != nil {
+			log.Printf("dynamic: guest event %s publish failed: %v", evs[i].Name, err)
+			continue
+		}
+		if row != nil && p.db != nil {
+			p.db.WithContext(ctx).Model(&EventOutbox{}).Where("id = ?", row.ID).
+				Updates(map[string]any{"published_at": time.Now().UTC()})
+		}
+	}
+}
+
+func normalizePayload(b []byte) string {
+	if len(b) == 0 {
+		return "null"
+	}
+	return string(b)
+}
+
+func (p *OutboxPublisher) stage(ctx context.Context, t *gorm.DB, e *StagedEvent) (*EventOutbox, error) {
+	if e.ID == "" {
+		e.ID = NewEventID()
+	}
+	if e.OccurredAt.IsZero() {
+		e.OccurredAt = time.Now().UTC()
+	}
+	if e.Version <= 0 {
+		e.Version = 1
+	}
+	occurred := e.OccurredAt.UTC()
+	row := &EventOutbox{
+		ID:             uuid.New(),
+		OrganizationID: e.OrgID,
+		AddonKey:       e.AddonKey,
+		EventName:      e.Name,
+		Payload:        normalizePayload(e.Payload),
+		CreatedAt:      time.Now().UTC(),
+		EventID:        e.ID,
+		Version:        e.Version,
+		OccurredAt:     &occurred,
+		AggregateType:  e.AggregateType,
+		AggregateID:    e.AggregateID,
+		CausationID:    e.CausationID,
+		CorrelationID:  e.CorrelationID,
+		ActorID:        e.ActorID,
+		BranchID:       e.BranchID,
+	}
+	if e.AggregateType != "" && e.AggregateID != "" {
+		// A guest-declared aggregate counts in its emitter's own namespace
+		// ("<addon>:<type>"; addon keys never contain ':'), so one addon can
+		// never advance another's counter, nor a canonical model's.
+		seqType := e.AggregateType
+		if e.AddonKey != "" {
+			seqType = e.AddonKey + ":" + e.AggregateType
+		}
+		seq, err := nextAggregateSequence(ctx, t, e.OrgID, seqType, e.AggregateID)
+		if err != nil {
+			return nil, err
+		}
+		row.Sequence = seq
+	}
+	if err := t.WithContext(ctx).Create(row).Error; err != nil {
+		return nil, err
+	}
+	return row, nil
+}
+
+// NewEventID returns a time-ordered (uuidv7) publication id, falling back to
+// v4 when the clock/entropy source fails.
+func NewEventID() string {
+	if id, err := uuid.NewV7(); err == nil {
+		return id.String()
+	}
+	return uuid.NewString()
 }

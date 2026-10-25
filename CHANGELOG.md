@@ -11,6 +11,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - `capability` (X1.4 + X1.5, aditivo, sin cambios de manifest ni de schema): campo oficial opcional `test_mode` en la salida de `commerce.shipping.rates[]`, `commerce.shipping.label` y `commerce.fulfillment.create` (compatible con la extensión `x_environment` que ya emite skydropx; el anfitrión lee `test_mode` y cae a `x_environment`); evento `commerce.shipments.updated` (contrato v1, `ShipmentUpdatedSchema`, `ShipmentStatuses`, `ShipmentModes`, dominio reservado `commerce.shipments`); `incidents.DomainShipping`. `Provider.Priority` / `Provider.Status` (`ProviderStatus`: ready, not_configured, unhealthy), `Select` v2 con respaldo (dentro del nivel que decide se salta `not_configured` y gana la mejor prioridad; empate = `ErrAmbiguousProvider`, falla cerrado), `ErrNotConfigured` (código `not_configured` en `capability_query`), `Eligible` (misma resolución que `Select`), `Engine.ListProviders` y la implementación `executeCapabilityProviders` del import `capability_providers` (el registro del import en la tabla de capacidades del host va aparte). Sin prioridades ni estado el resultado es idéntico al anterior (prueba de equivalencia exhaustiva contra una copia del `Select` previo). Minor.
 
+- Bus de eventos duradero (R1 del plan de extensibilidad, X1.1-X1.3; `docs/events-bus.md`). Minor.
+  - **Emitir al confirmar**: `event_emit` del guest ya no publica al llamar. Valida y acumula en un
+    buffer por invocación; solo si la invocación termina bien se escribe en `kernel_event_outbox` y
+    se publica (`dynamic.OutboxPublisher`, `Host.WithEventPublisher`). Un guest que emite y luego
+    falla o hace trap no genera entregas; una caída entre el outbox y la publicación la recupera el
+    relay con la misma identidad. Tope: 256 eventos / 4 MiB por invocación.
+  - **Libro de entregas duradero**: `dispatch_deliveries` pasa de registro + goroutine a cola
+    (`payload`, `next_attempt_at`, lease, reclamo `FOR UPDATE SKIP LOCKED`, latido, escrituras
+    protegidas por token). Se elimina el bucle de reintentos en memoria; lo `pending` se retoma al
+    arrancar y en cada barrido (`WithPollInterval`, `WithLease`, `WithAttemptTimeout`). Estado
+    nuevo `cancelled` (suscripción desinstalada). Columnas nuevas por AutoMigrate (aditivas).
+  - **Envelope `metacore.event/1`** bajo la clave `envelope` del payload (`aggregate`, `sequence`,
+    `causation_id`, `generation`, …) y tabla `kernel_event_sequences`; `dynamic.Meta` / `WithMeta`.
+    Los eventos CRUD canónicos también lo llevan. `retryable` / `retry_after_ms` en la respuesta
+    del guest; `dispatch.Replay` con generación.
+  - Dentro de `InvokeInTx` / `InvokeForInTx` el evento se persiste en la transacción del llamador
+    y **no se publica en línea**; se publica tras el commit con `wasm.WithCommitHook` +
+    `Host.PublishCommitted` (sin gancho, lo publica el relay). Un rollback no entrega nada.
+  - `data.subscribers` de `event_emit` es una estimación (`events.Bus.EstimateSubscribers`; `-1` si
+    no se sabe; los taps del dispatcher y audit no cuentan). Nuevos `events.SubscribeTap`,
+    `SubscribeRoutingEstimated`, `Estimator`.
+  - `aggregate.type` / `aggregate.id` del guest se validan (1-128 bytes, `[A-Za-z0-9_.:-]`,
+    `invalid_payload`) y su secuencia se cuenta por emisor (`<addon>:<tipo>`);
+    `kernel_event_sequences.aggregate_type` pasa a 256.
+  - El outbox del host wasm se arma al cablear (`WithBus`/`WithDB`), con reintento y backoff;
+    `Host.WithDurableEmits(bool)` (alinear con `DisableEventOutbox`; ver `docs/events-bus.md`).
+  - **Aviso para hosts:** `dispatch.Wire` arranca un barrido de entregas cada 5 s y `Migrate`
+    ejecuta SQL adicional (columnas del libro, `kernel_event_outbox`/`kernel_event_sequences` al
+    cablear el host wasm): los tests de hosts con `sqlmock` estricto pueden romper y deben
+    esperar esas sentencias (o usar `WithPollInterval` alto y `WithDurableEmits(false)`).
+
 - `diag` (revisión 3 del PR #545): saneado de breadcrumbs acotado (borrado por valor sobre la línea completa y corte a 640 bytes antes de las regex; caso adverso 1,28 s -> 45 ms), limitador de tasa antes de `Sanitize`, URL recortadas antes del borrado por valor (sin fuga con secreto en query/ruta/userinfo/fragmento), deduplicación solo con correlación igual y no vacía, claves en español (`contraseña`, `clave`, `llave`, `pass`, `sid`, `refresh`, `session_id`), email Unicode y `%40`, prefiltro del sobre sin distinguir mayúsculas; se elimina `WithScrubber`/`ScrubberFrom`. `BenchmarkInvokeOK_*` corre con el benchtime por defecto.
 
 - Paquete `diag` (ADR 0003, F0, aditivo): diagnostico saneado de addons. `diag.Sanitize`

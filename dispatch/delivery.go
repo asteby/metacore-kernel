@@ -3,6 +3,8 @@ package dispatch
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -10,11 +12,17 @@ import (
 )
 
 // Delivery status values. A delivery starts `pending`, becomes `delivered` on
-// the first successful invocation, or `dead` once it exhausts MaxAttempts.
+// the first successful invocation, or `dead` once it exhausts MaxAttempts (or
+// the guest says the failure is not retryable). `cancelled` is terminal too:
+// the subscription disappeared (addon uninstalled/disabled) before it ran.
+//
+// A `pending` row is the durable work item: it carries the payload,
+// `next_attempt_at` and a lease, so ANY process can pick it up after a restart.
 const (
 	StatusPending   = "pending"
 	StatusDelivered = "delivered"
 	StatusDead      = "dead"
+	StatusCancelled = "cancelled"
 )
 
 // Delivery is one row of the dispatch ledger: the record of (attempting to)
@@ -45,6 +53,38 @@ type Delivery struct {
 	// event the host published. Empty on rows written before the column
 	// existed (additive column, see Migrate).
 	Emitter string `gorm:"size:256" json:"emitter,omitempty"`
+
+	// --- durable queue columns (additive; see ledger.go) -------------------
+
+	// Payload is the exact JSON delivered to the handler (envelope included).
+	// Persisting it is what lets a restarted process resume a `pending`
+	// delivery, and what lets Replay re-deliver it. Rows written before this
+	// column existed have it empty and are left alone.
+	Payload string `gorm:"type:text;not null;default:''" json:"-"`
+	// SubEvent is the subscribed pattern (Subscription.Event); with
+	// AddonKey/HandlerType/Export it identifies the subscription so a resumed
+	// delivery re-resolves it (fresh Settings, still installed?).
+	SubEvent string `gorm:"size:512;not null;default:''" json:"sub_event,omitempty"`
+	// EventID is the envelope id; ActorID/BranchID/CorrelationID are re-attached
+	// to the delivery ctx on resume.
+	EventID       string `gorm:"size:128;not null;default:''" json:"event_id,omitempty"`
+	ActorID       string `gorm:"size:64;not null;default:''" json:"-"`
+	BranchID      string `gorm:"size:64;not null;default:''" json:"-"`
+	CorrelationID string `gorm:"size:128;not null;default:''" json:"-"`
+	// Generation is 0 for the original delivery and N for the Nth Replay;
+	// RootDeliveryID is the delivery_id of generation 0 of the chain.
+	Generation     int    `gorm:"not null;default:0" json:"generation"`
+	RootDeliveryID string `gorm:"size:64;not null;default:''" json:"-"`
+	// NextAttemptAt is when a `pending` row becomes claimable.
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+	// LeaseUntil/LeaseToken are the claim: while LeaseUntil is in the future
+	// only the holder of LeaseToken may run or finish the row. A crashed
+	// holder simply lets the lease expire.
+	LeaseUntil *time.Time `json:"-"`
+	LeaseToken string     `gorm:"size:64;not null;default:''" json:"-"`
+	// NotReadySince is when the subscriber first answered "not ready" in the
+	// current streak (waiting for a module to load does not spend attempts).
+	NotReadySince *time.Time `json:"-"`
 }
 
 // deliveryID derives the deterministic idempotency key for one (event,
@@ -74,6 +114,17 @@ func deliveryID(eventName, occurrenceID string, sub Subscription) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// replayDeliveryID derives the idempotency key of generation gen (>0) of a
+// delivery chain. Generation 0 keeps the original deliveryID, so the ledger
+// never collides with a Replay and a Replay never collides with itself.
+func replayDeliveryID(root string, gen int) string {
+	h := sha256.New()
+	_, _ = h.Write([]byte(root))
+	_, _ = h.Write([]byte{0x00})
+	_, _ = h.Write([]byte("generation:" + strconv.Itoa(gen)))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // ForgetDeliveries deletes every ledger row for one addon+event so the next
 // publish of the same occurrence is not a no-op. Use after a guest was
 // wrongly marked delivered (`success:false` treated as ok).
@@ -96,5 +147,12 @@ func Migrate(db *gorm.DB, tableName string) error {
 	if tableName == "" {
 		tableName = DefaultTableName
 	}
-	return db.Table(tableName).AutoMigrate(&Delivery{})
+	if err := db.Table(tableName).AutoMigrate(&Delivery{}); err != nil {
+		return err
+	}
+	// The sweeper's claim path only ever looks at pending rows; a partial index
+	// keeps it O(pending) however many delivered rows the ledger has piled up.
+	// (Both Postgres and SQLite support partial indexes.)
+	idx := "idx_" + strings.NewReplacer(".", "_", `"`, "").Replace(tableName) + "_due"
+	return db.Exec("CREATE INDEX IF NOT EXISTS " + idx + " ON " + tableName + " (next_attempt_at) WHERE status = 'pending'").Error
 }

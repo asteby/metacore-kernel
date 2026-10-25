@@ -1243,6 +1243,33 @@ comes from. The bus records the publishing addon key in the delivery context
 payload as `"emitter"`, replacing any `emitter` field the guest sent. A guest
 cannot publish as another addon.
 
+**Emit on commit (kernel ≥ the release that adds `runtime/wasm/emitbuffer.go`).**
+`event_emit` no longer publishes at call time. It validates (bus capability,
+emit policy, size) and appends the event to a per-invocation buffer; the
+guest still gets its success/`forbidden` envelope immediately. When the
+invocation ENDS:
+
+- trap, host error or an answer with `"success": false` → the buffer is
+  discarded: no outbox row, no delivery, the event never happened;
+- success (an explicit `"success": true`, or an answer that is not a JSON
+  envelope at all, as legacy guests return) → the events are written to
+  `kernel_event_outbox` and then published in emission order. A crash between
+  the write and the publication is recovered by the outbox relay.
+
+Consequences for guests: `data.subscribers` is now an ESTIMATE taken at emit
+time (the real fan-out happens after the invocation): the number of the org's
+addon subscriptions that match the event (the dispatcher's and the audit
+trail's `*` taps do not count), or `-1` when the host cannot tell (a router
+without an estimator, or the subscription lookup failed). And a subscriber no longer runs *before* the emitting
+invocation finishes. A guest may name the entity an event is about with a
+top-level `"aggregate": {"type": "...", "id": "..."}` in its payload; the host
+then allocates the per-aggregate `sequence` of the `metacore.event/1`
+envelope (docs/events-bus.md). `aggregate.type` and `aggregate.id` must each be
+1-128 bytes of `[A-Za-z0-9_.:-]`, otherwise the call fails with
+`invalid_payload`; the counter is namespaced by the emitting addon, so no addon
+can advance another's sequence. At most 256 events / 4 MiB per invocation
+(`too_many_events`).
+
 ### 12.5 Limits
 
 | Knob                    | Default | Configurable via                                  |
