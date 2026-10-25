@@ -18,6 +18,11 @@ func FromEnvelope(raw []byte) (Diagnostic, bool) {
 	if len(raw) < 2 || raw[0] != '{' || len(raw) > 4<<20 {
 		return Diagnostic{}, false
 	}
+	// Prefiltro barato: una salida exitosa (la inmensa mayoria) no menciona
+	// "success" junto a false; no vale la pena parsearla.
+	if !bytes.Contains(raw, []byte(`"success"`)) || !bytes.Contains(raw, []byte("false")) {
+		return Diagnostic{}, false
+	}
 	var env struct {
 		Success *bool           `json:"success"`
 		Error   json.RawMessage `json:"error"`

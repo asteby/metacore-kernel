@@ -163,7 +163,7 @@ const (
 	diagBearer = "tok_live_ABCDEF123456"
 )
 
-func newDiagFixture(t *testing.T, timeoutMs int) *diagFixture {
+func newDiagFixture(t testing.TB, timeoutMs int) *diagFixture {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:wasmdiag_%s?mode=memory&cache=shared&_busy_timeout=5000", uuid.NewString())),
 		&gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})

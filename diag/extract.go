@@ -101,10 +101,41 @@ func bareSeg(sg string) string {
 // ruta de campo. Las frases NUNCA se copian y no se extrae ningun valor: un
 // token se acepta solo si pasa el regex de rutas, no esta pegado a
 // @ / \ % # & ~ + * - y no es dominio ni nombre de archivo.
-func ExtractPaths(text string) []string {
+func ExtractPaths(text string) []string { return ExtractPathsScrubbed(text, nil) }
+
+// valueCues: la palabra que precede a un token y delata que el token es un
+// VALOR (un nombre, un usuario, un id), no un campo: "user john_doe", "name
+// maria.lopez", "value juan.perez".
+var valueCues = map[string]bool{
+	"user": true, "username": true, "usuario": true, "customer": true, "cliente": true, "client": true,
+	"name": true, "nombre": true, "named": true, "email": true, "correo": true, "mail": true, "id": true,
+	"value": true, "valor": true, "by": true, "from": true, "hello": true, "hola": true, "dear": true,
+	"mr": true, "mrs": true, "sr": true, "sra": true, "dr": true, "host": true, "ip": true,
+	"account": true, "cuenta": true, "holder": true, "titular": true, "payer": true, "buyer": true,
+	"seller": true, "owner": true, "contact": true, "contacto": true, "as": true, "with": true, "de": true, "del": true, "por": true,
+}
+
+// prevWord devuelve la palabra (minusculas) justo antes de text[s:], saltando
+// espacios, comillas y dos puntos.
+func prevWord(text string, s int) string {
+	i := s
+	for i > 0 && strings.IndexByte(" \t\n'\"`:(", text[i-1]) >= 0 {
+		i--
+	}
+	j := i
+	for j > 0 && ((text[j-1] >= 'a' && text[j-1] <= 'z') || (text[j-1] >= 'A' && text[j-1] <= 'Z')) {
+		j--
+	}
+	return strings.ToLower(text[j:i])
+}
+
+// ExtractPathsScrubbed es ExtractPaths borrando antes por valor los secretos de
+// sc (un secreto conocido dentro del mensaje no puede acabar como "ruta").
+func ExtractPathsScrubbed(text string, sc *Scrubber) []string {
 	if len(text) > maxScanString {
 		text = text[:maxScanString]
 	}
+	text = sc.Redact(text)
 	var out []string
 	seen := map[string]bool{}
 	for _, loc := range reRun.FindAllStringIndex(text, -1) {
@@ -127,8 +158,16 @@ func ExtractPaths(text string) []string {
 		if s > 0 && text[s-1] == '.' {
 			continue
 		}
+		if valueCues[prevWord(text, s)] {
+			continue
+		}
+		// "(maria.lopez)": un token entre parentesis es una aclaracion sobre un
+		// valor, no el nombre de un campo.
+		if s > 0 && e < len(text) && text[s-1] == '(' && text[e] == ')' {
+			continue
+		}
 		p := camelToSnake(tok)
-		if !validPath(p, false) || seen[p] {
+		if !validPath(p, false) || seen[p] || sc.Contains(p) {
 			continue
 		}
 		seen[p] = true
@@ -152,6 +191,9 @@ func pathValue(s string) (string, bool) {
 	s = strings.TrimPrefix(s, "$")
 	s = strings.TrimPrefix(s, ".")
 	s = strings.Trim(s, "/")
+	if i := strings.IndexByte(s, '/'); i > 0 && fsRoots[strings.ToLower(s[:i])] {
+		return "", false
+	}
 	s = strings.ReplaceAll(s, "/", ".")
 	if s == "" || s[0] < 'a' || s[0] > 'z' {
 		return "", false
@@ -165,12 +207,54 @@ func pathValue(s string) (string, bool) {
 
 var pathKeys = map[string]bool{
 	"field": true, "fields": true, "path": true, "param": true, "parameter": true, "property": true,
-	"pointer": true, "attribute": true, "target": true, "loc": true, "location": true, "source": true,
+	"pointer": true, "attribute": true, "loc": true,
+}
+
+// fsRoots: primer tramo de una ruta de archivo; un valor asi no es un puntero
+// de campo aunque venga en una clave de ruta.
+var fsRoots = map[string]bool{
+	"home": true, "users": true, "usr": true, "var": true, "etc": true, "opt": true, "tmp": true, "root": true,
+	"mnt": true, "srv": true, "proc": true, "windows": true, "bin": true, "dev": true, "lib": true,
 }
 
 var codeKeys = map[string]bool{
 	"code": true, "error": true, "error_code": true, "err_code": true, "errorcode": true, "type": true,
 	"error_type": true, "reason": true, "kind": true, "status": true, "error_id": true,
+}
+
+// strongCodeKeys nombran un codigo de error sin ambiguedad: cualquier valor con
+// forma de codigo se acepta. En las demas (error, type, reason, kind, status)
+// el valor puede ser texto: solo se acepta con '_' (cc_rejected_other_reason) o
+// si es una palabra generica de estado (rejected, forbidden...).
+var strongCodeKeys = map[string]bool{
+	"code": true, "error_code": true, "err_code": true, "errorcode": true, "error_type": true, "error_id": true,
+}
+
+var genericStatusWords = map[string]bool{
+	"error": true, "fail": true, "failed": true, "failure": true, "invalid": true, "expired": true, "rejected": true,
+	"declined": true, "denied": true, "refused": true, "unauthorized": true, "forbidden": true, "timeout": true,
+	"conflict": true, "duplicate": true, "unavailable": true, "pending": true, "approved": true, "cancelled": true,
+	"canceled": true, "unknown": true, "internal": true, "notfound": true, "success": true,
+}
+
+// messageKeys: claves cuyo valor es un mensaje de error en lenguaje natural. Es
+// el UNICO texto libre del que se intentan sacar rutas de campo; en cualquier
+// otra clave el valor es un dato (nombre, usuario, dominio) y no se toca.
+var messageKeys = map[string]bool{
+	"message": true, "messages": true, "msg": true, "detail": true, "details": true, "description": true,
+	"error_description": true, "error_message": true, "title": true, "errors": true,
+}
+
+// providerCode acepta el valor de una clave de codigo como codigo de proveedor.
+func providerCode(key, raw string) (string, bool) {
+	c := strings.ToLower(strings.TrimSpace(raw))
+	if !reCode.MatchString(c) || longDigitRun(c, 5) {
+		return "", false
+	}
+	if strongCodeKeys[key] || strings.Contains(c, "_") || genericStatusWords[c] {
+		return c, true
+	}
+	return "", false
 }
 
 // BodyFacts es lo UNICO que el kernel retiene de un cuerpo de error ajeno.
@@ -185,6 +269,11 @@ type BodyFacts struct {
 // numericas, rutas de campo y esqueleto de claves/tipos. Sin valores. httpStatus
 // se usa solo para no repetir el status como causa.
 func ExtractBody(body []byte, httpStatus int) BodyFacts {
+	return ExtractBodyScrubbed(body, httpStatus, nil)
+}
+
+// ExtractBodyScrubbed es ExtractBody borrando antes por valor los secretos de sc.
+func ExtractBodyScrubbed(body []byte, httpStatus int, sc *Scrubber) BodyFacts {
 	var f BodyFacts
 	body = bytes.TrimSpace(body)
 	if len(body) == 0 {
@@ -202,7 +291,7 @@ func ExtractBody(body []byte, httpStatus int) BodyFacts {
 		f.ProviderCodes = []string{"non_json_body"}
 		return f
 	}
-	w := &walker{status: httpStatus}
+	w := &walker{status: httpStatus, sc: sc}
 	w.walk(root, "", 0)
 	f.ProviderCodes = w.codes.list(maxProviderCds)
 	f.Causes = w.causes.list(maxCauses)
@@ -237,6 +326,7 @@ func (o *orderedSet) list(max int) []string {
 
 type walker struct {
 	status               int
+	sc                   *Scrubber
 	nodes                int
 	codes, causes, props orderedSet
 }
@@ -262,7 +352,7 @@ func (w *walker) walk(v any, key string, depth int) {
 		}
 	case string:
 		if codeKeys[key] {
-			if c := strings.ToLower(strings.TrimSpace(x)); reCode.MatchString(c) && !longDigitRun(c, 5) {
+			if c, ok := providerCode(key, x); ok {
 				w.codes.add(c)
 			} else if reCause.MatchString(strings.TrimSpace(x)) && strings.TrimSpace(x) != strconv.Itoa(w.status) {
 				w.causes.add(strings.TrimSpace(x))
@@ -273,8 +363,8 @@ func (w *walker) walk(v any, key string, depth int) {
 				w.props.add(p)
 			}
 		}
-		if !codeKeys[key] && !pathKeys[key] {
-			for _, p := range ExtractPaths(x) {
+		if messageKeys[key] {
+			for _, p := range ExtractPathsScrubbed(x, w.sc) {
 				w.props.add(p)
 			}
 		}

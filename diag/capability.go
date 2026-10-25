@@ -3,6 +3,7 @@ package diag
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/asteby/metacore-kernel/capability"
 )
@@ -13,6 +14,15 @@ import (
 func (r *Recorder) OnCapabilityFailure(ctx context.Context, f capability.Failure) {
 	if !r.Enabled() {
 		return
+	}
+	// El runtime (wasm) ya registro este mismo fallo si el proveedor es un addon
+	// wasm: no se duplica.
+	if r.hostRecordedSince(f.Org, f.Provider, CorrelationFrom(ctx), r.opt.Now().Add(-f.Duration-time.Second)) {
+		return
+	}
+	sc := ScrubberFrom(ctx)
+	if sc == nil {
+		sc = NewScrubber()
 	}
 	d := Diagnostic{
 		Org: f.Org, AddonKey: f.Provider, Kind: KindCapability, Operation: f.Capability,
@@ -29,10 +39,10 @@ func (r *Recorder) OnCapabilityFailure(ctx context.Context, f capability.Failure
 	}
 	if coded != nil {
 		d.ProviderCode = []string{coded.Code}
-		d.Props = ExtractPaths(coded.Message)
+		d.Props = ExtractPathsScrubbed(coded.Message, sc)
 	}
 	if f.Code == "canceled" {
 		d.Severity = SeverityWarning
 	}
-	r.Record(d, nil)
+	r.Record(d, sc)
 }

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 )
@@ -100,6 +101,9 @@ func Sanitize(d Diagnostic, sc *Scrubber) Diagnostic {
 	}
 	o.UpstreamHost = cleanHost(d.UpstreamHost, sc)
 	for _, b := range d.Breadcrumbs {
+		if len(b) > maxCrumbRaw { // Diagnostic armado a mano: acota sin partir secretos
+			b = clipCrumb(b, sc)
+		}
 		b = strings.TrimSpace(ScrubText(strings.Map(printable, b), sc))
 		b = strings.TrimSpace(truncateRunes(b, MaxBreadcrumbLen))
 		if b == "" {
@@ -120,7 +124,7 @@ func printable(r rune) rune {
 	if r == '\t' {
 		return ' '
 	}
-	if r < 0x20 || r == 0x7f {
+	if r < 0x20 || r == 0x7f || unicode.Is(unicode.Cf, r) {
 		return -1
 	}
 	return r

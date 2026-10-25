@@ -16,6 +16,9 @@ var (
 	ErrOrgRequired = errors.New("diag: organization is required")
 	ErrNotFound    = errors.New("diag: not found")
 	ErrBadStatus   = errors.New("diag: invalid status")
+	// ErrEventsNeedFilter: Events exige correlation_id, diag_ref o sujeto; es un
+	// error del llamador (400), no del servidor.
+	ErrEventsNeedFilter = errors.New("diag: events needs correlation_id, diag_ref or subject")
 )
 
 // Retencion por defecto.
@@ -164,6 +167,31 @@ func (s *Store) Get(ctx context.Context, org, id uuid.UUID) (Group, []Event, err
 	return g, toEvents(rows), nil
 }
 
+// RecentEvents devuelve, en UNA consulta, las ultimas perGroup muestras de cada
+// grupo (mas reciente primero), indexadas por grupo. Sustituye a un Get por
+// grupo (N+1) en el support bundle.
+func (s *Store) RecentEvents(ctx context.Context, org uuid.UUID, groupIDs []uuid.UUID, perGroup int) (map[uuid.UUID][]Event, error) {
+	if org == uuid.Nil {
+		return nil, ErrOrgRequired
+	}
+	out := map[uuid.UUID][]Event{}
+	if len(groupIDs) == 0 || perGroup <= 0 {
+		return out, nil
+	}
+	var rows []eventRow
+	err := s.db.WithContext(ctx).Raw(`SELECT id, org_id, group_id, correlation_id, invocation_id, diag_ref, is_first, occurred_at, payload FROM (
+SELECT e.*, ROW_NUMBER() OVER (PARTITION BY e.group_id ORDER BY e.occurred_at DESC, e.id) AS rn
+FROM `+TableEvents+` e WHERE e.org_id = ? AND e.group_id IN ?) t
+WHERE rn <= ? ORDER BY group_id, rn`, org, groupIDs, perGroup).Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("diag: recent events: %w", err)
+	}
+	for _, r := range rows {
+		out[r.GroupID] = append(out[r.GroupID], r.event())
+	}
+	return out, nil
+}
+
 func toEvents(rows []eventRow) []Event {
 	out := make([]Event, 0, len(rows))
 	for _, r := range rows {
@@ -199,7 +227,7 @@ func (s *Store) Events(ctx context.Context, f EventQuery) ([]Event, error) {
 		q, n = q.Where("subject_type = ? AND subject_id = ?", f.SubjectType, f.SubjectID), n+1
 	}
 	if n == 0 {
-		return nil, errors.New("diag: events needs correlation_id, diag_ref or subject")
+		return nil, ErrEventsNeedFilter
 	}
 	if f.Limit <= 0 || f.Limit > 200 {
 		f.Limit = 50

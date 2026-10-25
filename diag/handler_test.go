@@ -3,10 +3,12 @@ package diag
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
@@ -42,6 +44,12 @@ func newAPI(t *testing.T, db *gorm.DB, super bool) *apiFixture {
 		IsSuperAdmin:  func(fiber.Ctx) bool { return super },
 		KernelVersion: "v9.9.9",
 		Versions:      func(fiber.Ctx) map[string]string { return map[string]string{"acme": "1.2.3"} },
+		Manage: []fiber.Handler{func(c fiber.Ctx) error { // PermManage de pruebas
+			if c.Get("X-Test-Manage") != "1" {
+				return c.SendStatus(403)
+			}
+			return c.Next()
+		}},
 	})
 	f.app = fiber.New()
 	authed := func(c fiber.Ctx) error {
@@ -64,6 +72,7 @@ func (f *apiFixture) do(t *testing.T, method, path string, org uuid.UUID) (int, 
 	if org != uuid.Nil {
 		req.Header.Set("X-Test-Org", org.String())
 	}
+	req.Header.Set("X-Test-Manage", "1")
 	res, err := f.app.Test(req)
 	if err != nil {
 		t.Fatal(err)
@@ -169,3 +178,86 @@ func TestHandler_SuperAdminCrossOrg(t *testing.T) {
 }
 
 func toJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
+
+func TestHandler_ResolveMuteNeedManagePermission(t *testing.T) {
+	db := newSQLiteDB(t)
+	f := newAPI(t, db, false)
+	url := "/api/diagnostics/issues/" + f.ga.ID.String()
+	req := httptest.NewRequest("POST", url+"/resolve", nil)
+	req.Header.Set("X-Test-Org", f.orgA.String()) // ve (PermView) pero no gestiona
+	if res, _ := f.app.Test(req); res.StatusCode != 403 {
+		t.Fatalf("view-only resolve: %d", res.StatusCode)
+	}
+	req = httptest.NewRequest("POST", url+"/mute", nil)
+	req.Header.Set("X-Test-Org", f.orgA.String())
+	if res, _ := f.app.Test(req); res.StatusCode != 403 {
+		t.Fatalf("view-only mute: %d", res.StatusCode)
+	}
+	if code, _ := f.do(t, "GET", url, f.orgA); code != 200 {
+		t.Fatalf("view-only read: %d", code)
+	}
+	// Sin middlewares Manage las rutas ni existen (falla cerrado).
+	h := NewHandler(f.st, HandlerOptions{})
+	app := fiber.New()
+	pass := func(c fiber.Ctx) error { c.Locals("organization_id", f.orgA); return c.Next() }
+	if err := h.Mount(app.Group("/d"), pass); err != nil {
+		t.Fatal(err)
+	}
+	res, _ := app.Test(httptest.NewRequest("POST", "/d/issues/"+f.ga.ID.String()+"/resolve", nil))
+	if res.StatusCode != 404 && res.StatusCode != 405 {
+		t.Fatalf("resolve mounted without Manage: %d", res.StatusCode)
+	}
+}
+
+func TestHandler_InternalErrorsAreGeneric500(t *testing.T) {
+	db := newSQLiteDB(t)
+	f := newAPI(t, db, false)
+	sqlDB, _ := db.DB()
+	_ = sqlDB.Close() // la base se cae
+	req := httptest.NewRequest("GET", "/api/diagnostics/events?correlation_id=c1", nil)
+	req.Header.Set("X-Test-Org", f.orgA.String())
+	res, _ := f.app.Test(req)
+	b, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 500 {
+		t.Fatalf("status=%d body=%s", res.StatusCode, b)
+	}
+	for _, leak := range []string{"sql", "database", "diag:", "closed"} {
+		if strings.Contains(strings.ToLower(string(b)), leak) {
+			t.Fatalf("internal text leaked (%q): %s", leak, b)
+		}
+	}
+}
+
+func TestBundle_NoNPlusOne(t *testing.T) {
+	db := newSQLiteDB(t)
+	rec, st := mkRec(t, db, nil, Options{})
+	org := uuid.New()
+	for i := 0; i < 30; i++ {
+		rec.Record(failure(org, func(d *Diagnostic) { d.Code = fmt.Sprintf("code_%d", i) }), nil)
+	}
+	rec.Flush(context.Background())
+	queries := 0
+	cb := func(*gorm.DB) { queries++ }
+	_ = db.Callback().Query().Before("gorm:query").Register("count_q", cb)
+	_ = db.Callback().Row().Before("gorm:row").Register("count_r", cb)
+	_ = db.Callback().Raw().Before("gorm:raw").Register("count_raw", cb)
+	h := NewHandler(st, HandlerOptions{})
+	b, err := h.Bundle(context.Background(), org, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Issues) != 30 || len(b.Events) != 30 {
+		t.Fatalf("issues=%d events=%d", len(b.Issues), len(b.Events))
+	}
+	if queries > 4 {
+		t.Fatalf("bundle ran %d queries for 30 groups", queries)
+	}
+}
+
+func TestSchema_HasDiagRefIndex(t *testing.T) {
+	for _, d := range []string{"postgres", "sqlite"} {
+		if !strings.Contains(strings.Join(Schema(d), "\n"), "(org_id, diag_ref)") {
+			t.Errorf("%s: missing (org_id, diag_ref) index", d)
+		}
+	}
+}

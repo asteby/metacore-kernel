@@ -18,8 +18,18 @@ import (
 // o, de respaldo, su RequireAdmin), pasado a Mount.
 const PermView = "platform.diagnostics.view"
 
+// PermManage es el permiso que gobierna resolver y silenciar incidencias:
+// platform.diagnostics.manage. Ver con PermView no basta para cambiar su estado.
+const PermManage = "platform.diagnostics.manage"
+
 // HandlerOptions de la API.
 type HandlerOptions struct {
+	// Manage son los middlewares ADICIONALES (tras los de Mount) que protegen
+	// POST /issues/:id/resolve y /mute, p. ej.
+	// permission.Gate(svc, lookup, permission.Cap("platform.diagnostics", "manage")).
+	// Falla cerrado: sin ninguno, esas dos rutas no se montan y la API es de
+	// solo lectura.
+	Manage []fiber.Handler
 	// IsSuperAdmin decide si la peticion puede mirar otra organizacion con
 	// ?org_id=. Nil = nadie (solo la organizacion propia).
 	IsSuperAdmin func(c fiber.Ctx) bool
@@ -53,11 +63,11 @@ func NewHandler(store *Store, opt HandlerOptions) *Handler {
 //	GET  /issues?addon=&code=&severity=&status=&since=
 //	GET  /issues/:id                       (con muestras)
 //	GET  /events?correlation_id= | subject_type=&subject_id= | diag_ref=
-//	POST /issues/:id/resolve
-//	POST /issues/:id/mute
+//	POST /issues/:id/resolve               (solo con HandlerOptions.Manage)
+//	POST /issues/:id/mute                  (solo con HandlerOptions.Manage)
 //	GET  /export                           (support bundle, sin ajustes)
 //
-// mw se aplica a TODAS las rutas y es obligatorio: sin al menos un middleware
+// mw (PermView) se aplica a TODAS las rutas y es obligatorio: sin al menos un middleware
 // de acceso Mount devuelve error (falla cerrado) en vez de exponer diagnosticos.
 func (h *Handler) Mount(r fiber.Router, mw ...fiber.Handler) error {
 	var chain []any
@@ -76,10 +86,31 @@ func (h *Handler) Mount(r fiber.Router, mw ...fiber.Handler) error {
 	reg(r.Get, "/issues", h.list)
 	reg(r.Get, "/issues/:id", h.get)
 	reg(r.Get, "/events", h.events)
-	reg(r.Post, "/issues/:id/resolve", h.setStatus(StatusResolved))
-	reg(r.Post, "/issues/:id/mute", h.setStatus(StatusMuted))
+	if manage := compact(h.opt.Manage); len(manage) > 0 {
+		// Cambiar el estado exige PermManage ademas de PermView.
+		regm := func(path string, final fiber.Handler) {
+			hs := append([]any{}, chain[1:]...)
+			for _, m := range manage {
+				hs = append(hs, m)
+			}
+			add := r.Post
+			add(path, chain[0], append(hs, final)...)
+		}
+		regm("/issues/:id/resolve", h.setStatus(StatusResolved))
+		regm("/issues/:id/mute", h.setStatus(StatusMuted))
+	}
 	reg(r.Get, "/export", h.export)
 	return nil
+}
+
+func compact(in []fiber.Handler) []fiber.Handler {
+	var out []fiber.Handler
+	for _, m := range in {
+		if m != nil {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 type fiberLocals struct{ c fiber.Ctx }
@@ -198,10 +229,10 @@ func (h *Handler) events(c fiber.Ctx) error {
 	q.Limit, _ = strconv.Atoi(c.Query("limit"))
 	evs, err := h.store.Events(c.Context(), q)
 	if err != nil {
-		if errors.Is(err, ErrOrgRequired) {
-			return fail(c, err)
+		if errors.Is(err, ErrEventsNeedFilter) {
+			return fail(c, fiber.NewError(fiber.StatusBadRequest, "correlation_id, diag_ref or subject_type+subject_id is required"))
 		}
-		return fail(c, fiber.NewError(fiber.StatusBadRequest, err.Error()))
+		return fail(c, err) // cualquier otro fallo es del servidor: 500 generico, sin el texto interno
 	}
 	return ok(c, evs, fiber.Map{"count": len(evs)})
 }

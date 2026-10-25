@@ -16,16 +16,18 @@ func (h *Handler) Bundle(ctx context.Context, org uuid.UUID, since time.Time) (B
 	if err != nil {
 		return b, err
 	}
+	ids := make([]uuid.UUID, len(groups))
+	for i, g := range groups {
+		ids[i] = g.ID
+	}
+	// Una sola consulta para todas las muestras (antes: una por grupo).
+	byGroup, err := h.store.RecentEvents(ctx, org, ids, 5)
+	if err != nil {
+		return b, err
+	}
 	for _, g := range groups {
 		b.Issues = append(b.Issues, resanitizeGroup(g))
-		_, evs, err := h.store.Get(ctx, org, g.ID)
-		if err != nil {
-			return b, err
-		}
-		if len(evs) > 5 {
-			evs = evs[:5]
-		}
-		b.Events = append(b.Events, evs...)
+		b.Events = append(b.Events, byGroup[g.ID]...)
 	}
 	return b, nil
 }

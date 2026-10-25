@@ -19,6 +19,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   trap/timeout/pool/memoria/panic, sobre `{success:false}`, llamadas salientes fallidas
   y breadcrumbs, sin cambiar el addon. `capability.Executor.OnFailure` + `Failure`.
   Apagable con `KERNEL_DIAGNOSTICS=off`; sin `WithDiagnostics` nada cambia. Minor.
+  Endurecido tras revision: el recorte de breadcrumbs ocurre despues de sanear (un
+  secreto conocido ya no puede quedar partido), la extraccion de rutas solo mira
+  claves de mensaje/ruta y `provider_code` exige forma de codigo, `ScrubText` cubre
+  PAN con separadores y ancho completo (NFKC), URL sin esquema, IP, telefonos,
+  `clave=valor` sensibles, caracteres de formato y secretos hex/base64url/partidos;
+  `Scrubber` perezoso y prefiltro de sobre (ruta exitosa ≈78 µs vs ≈160 µs antes);
+  `Recorder.Close`/`Flush` con plazo (`Options.FlushTimeout`); resolver/mute exigen
+  `platform.diagnostics.manage` (`HandlerOptions.Manage`, falla cerrado); 500 generico
+  en errores internos; indice `(org_id, diag_ref)` en 0009; export sin N+1; sin doble
+  registro de un addon wasm que es proveedor de capacidad.
 - Paquete `settings` (ADR 0002, F1, aditivo): `Store` (`Read`/`Write` con
   revision optimista, validacion por tipo contra el manifest instalado, rechazo
   de secretos y claves `_`, evento `settings.changed`) y `Resolver` (precedencia

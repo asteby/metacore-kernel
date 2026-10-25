@@ -56,5 +56,8 @@ CREATE INDEX IF NOT EXISTS idx_addon_diagnostic_events_corr ON addon_diagnostic_
 CREATE INDEX IF NOT EXISTS idx_addon_diagnostic_events_subject ON addon_diagnostic_events (org_id, subject_type, subject_id);
 -- +goose StatementEnd
 -- +goose StatementBegin
+CREATE INDEX IF NOT EXISTS idx_addon_diagnostic_events_ref ON addon_diagnostic_events (org_id, diag_ref);
+-- +goose StatementEnd
+-- +goose StatementBegin
 CREATE INDEX IF NOT EXISTS idx_addon_diagnostic_events_occ ON addon_diagnostic_events (occurred_at);
 -- +goose StatementEnd

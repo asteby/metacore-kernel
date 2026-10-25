@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -37,17 +38,47 @@ type Bag struct {
 // NewBag crea la bolsa de una invocacion.
 func NewBag() *Bag { return &Bag{Scrubber: NewScrubber()} }
 
+// maxCrumbRaw es el tope (bytes) de una linea cruda en memoria. El recorte a
+// MaxBreadcrumbLen runas ocurre DESPUES de sanear (Sanitize): cortar antes
+// partiria un secreto conocido y el Scrubber ya no lo reconoceria.
+const maxCrumbRaw = 8 << 10
+
+// clipCrumb acota una linea desmesurada sin dejar a medias un secreto: borra
+// por valor ANTES de cortar y descarta el token que quede partido en el corte.
+func clipCrumb(line string, sc *Scrubber) string {
+	line = sc.Redact(line)
+	if len(line) <= maxCrumbRaw {
+		return line
+	}
+	cut := maxCrumbRaw
+	for cut > 0 && !utf8.RuneStart(line[cut]) {
+		cut--
+	}
+	line = line[:cut]
+	// Descarta el tramo final sin separador: puede ser la mitad de un secreto
+	// que no conocemos (o que se anadio despues).
+	const tail = 128
+	lo := len(line) - tail
+	if lo < 0 {
+		lo = 0
+	}
+	if i := strings.LastIndexAny(line[lo:], " \t\n,;&?=/\"'"); i >= 0 {
+		return line[:lo+i]
+	}
+	return line[:lo]
+}
+
 // Log guarda una linea de log del guest (anillo de MaxBreadcrumbs). La linea se
-// guarda cruda en memoria y se sanea al persistir.
+// guarda casi cruda en memoria (tope maxCrumbRaw) y se sanea y recorta al persistir.
 func (b *Bag) Log(line string) {
 	if b == nil {
 		return
 	}
+	if len(line) > maxCrumbRaw {
+		line = clipCrumb(line, b.Scrubber)
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if len(line) > 4*MaxBreadcrumbLen {
-		line = line[:4*MaxBreadcrumbLen]
-	}
 	if len(b.crumbs) >= MaxBreadcrumbs {
 		copy(b.crumbs, b.crumbs[1:])
 		b.crumbs = b.crumbs[:MaxBreadcrumbs-1]
@@ -75,7 +106,7 @@ func (b *Bag) HTTPResult(rawURL, method string, status int, body []byte) {
 	if b == nil || status < 400 {
 		return
 	}
-	f := HTTPFailure{Status: status, Host: HostOf(rawURL), Method: cleanMethod(method), Facts: ExtractBody(body, status)}
+	f := HTTPFailure{Status: status, Host: HostOf(rawURL), Method: cleanMethod(method), Facts: ExtractBodyScrubbed(body, status, b.Scrubber)}
 	b.addFail(f)
 }
 
@@ -204,7 +235,25 @@ const (
 	keyCorrelation ctxKey = iota
 	keyInvocation
 	keySubject
+	keyScrubber
 )
+
+// WithScrubber propaga los secretos conocidos de la llamada (ajustes, cabeceras)
+// a quien registra un fallo lejos de donde se conocen, p. ej. el hook de fallo
+// de capacidades. Un fallo de capacidad se sanea con ellos ademas de con las
+// reglas de patron.
+func WithScrubber(ctx context.Context, sc *Scrubber) context.Context {
+	if sc == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, keyScrubber, sc)
+}
+
+// ScrubberFrom lee el Scrubber del contexto (nil si no hay).
+func ScrubberFrom(ctx context.Context) *Scrubber {
+	s, _ := ctx.Value(keyScrubber).(*Scrubber)
+	return s
+}
 
 // WithCorrelation propaga un id de correlacion (el mismo de la peticion o
 // accion que origino la invocacion) hasta el diagnostico.

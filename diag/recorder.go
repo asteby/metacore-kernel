@@ -68,6 +68,10 @@ type Options struct {
 	BurstThreshold int
 	BurstWindow    time.Duration
 	Alerter        Alerter
+	// FlushTimeout: plazo de cada escritura a la base (flush, alerta) y del flush
+	// final de Close (5s). Una base que no responde nunca cuelga el cierre ni
+	// el bucle: lo pendiente se devuelve a la cola y se reintenta.
+	FlushTimeout time.Duration
 	// AddonVersion resuelve la version instalada de un addon (opcional).
 	AddonVersion func(addonKey string) string
 	Logger       *slog.Logger
@@ -107,6 +111,7 @@ type Recorder struct {
 	bursts   map[string]*burstState   // org|fp
 	burstDue map[string]struct{}      // org|fp pendientes de alertar
 	dropped  int64
+	hostSeen map[string]hostRecord // org|addon: ultimo fallo registrado por el host del runtime
 
 	startOnce sync.Once
 	closeOnce sync.Once
@@ -120,6 +125,9 @@ type Recorder struct {
 func NewRecorder(store *Store, opt Options) *Recorder {
 	if opt.FlushEvery <= 0 {
 		opt.FlushEvery = 5 * time.Second
+	}
+	if opt.FlushTimeout <= 0 {
+		opt.FlushTimeout = 5 * time.Second
 	}
 	if opt.RatePerMin <= 0 {
 		opt.RatePerMin = 60
@@ -147,7 +155,7 @@ func NewRecorder(store *Store, opt Options) *Recorder {
 	return &Recorder{
 		store: store, opt: opt, on: on && store != nil, log: lg.With("component", "diag"),
 		pending: map[string]*pendingEntry{}, buckets: map[string]*bucket{},
-		bursts: map[string]*burstState{}, burstDue: map[string]struct{}{},
+		hostSeen: map[string]hostRecord{}, bursts: map[string]*burstState{}, burstDue: map[string]struct{}{},
 		stop: make(chan struct{}), done: make(chan struct{}),
 	}
 }
@@ -211,6 +219,32 @@ func (r *Recorder) Record(d Diagnostic, sc *Scrubber) {
 		e.samples = append(e.samples, d)
 	}
 	r.noteBurst(key, now, d, e)
+	if d.Kind != KindCapability {
+		if len(r.hostSeen) > 10000 {
+			r.hostSeen = map[string]hostRecord{}
+		}
+		r.hostSeen[org.String()+"|"+d.AddonKey] = hostRecord{at: now, corr: d.CorrelationID}
+	}
+}
+
+// hostRecord: ultimo fallo que el host del runtime (wasm, nativo) registro de un
+// addon, para no registrar de nuevo el mismo fallo cuando el addon actuaba como
+// proveedor de una capacidad y el Executor tambien lo reporta.
+type hostRecord struct {
+	at   time.Time
+	corr string
+}
+
+// hostRecordedSince reporta si el host ya registro un fallo de (org, addon) a
+// partir de since y con la misma correlacion (o sin correlacion que comparar).
+func (r *Recorder) hostRecordedSince(org uuid.UUID, addon, corr string, since time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	h, ok := r.hostSeen[org.String()+"|"+addon]
+	if !ok || h.at.Before(since) {
+		return false
+	}
+	return corr == "" || h.corr == "" || corr == h.corr
 }
 
 // take: token bucket por org x addon.
@@ -279,7 +313,7 @@ func (r *Recorder) Start(ctx context.Context) {
 				case <-t.C:
 					r.tick(ctx)
 				case <-r.stop:
-					r.Flush(context.Background())
+					r.Flush(context.Background()) // acotado por FlushTimeout
 					return
 				case <-ctx.Done():
 					r.Flush(context.Background())
@@ -297,7 +331,16 @@ func (r *Recorder) Close() {
 	}
 	r.closeOnce.Do(func() { close(r.stop) })
 	if r.started.Load() {
-		<-r.done
+		// El bucle hace el flush final (acotado). Si esta atascado en otra cosa
+		// (una purga lenta), no esperamos mas de un plazo y un segundo.
+		t := time.NewTimer(r.opt.FlushTimeout + time.Second)
+		defer t.Stop()
+		select {
+		case <-r.done:
+		case <-t.C:
+			r.log.Warn("diag.close_timeout")
+		}
+		return
 	}
 	r.Flush(context.Background())
 }
@@ -311,7 +354,9 @@ func (r *Recorder) tick(ctx context.Context) {
 	r.Flush(ctx)
 	if now := r.opt.Now(); now.Sub(r.lastPurge) >= 24*time.Hour {
 		r.lastPurge = now
-		if _, _, err := r.PurgeNow(ctx); err != nil {
+		pctx, cancel := context.WithTimeout(ctx, 6*r.opt.FlushTimeout)
+		defer cancel()
+		if _, _, err := r.PurgeNow(pctx); err != nil {
 			r.log.Warn("diag.purge_failed", "err", err.Error())
 		}
 	}
@@ -348,6 +393,8 @@ func (r *Recorder) Flush(ctx context.Context) {
 	if !r.Enabled() {
 		return
 	}
+	ctx, cancel := context.WithTimeout(ctx, r.opt.FlushTimeout)
+	defer cancel()
 	r.mu.Lock()
 	batch := r.pending
 	r.pending = map[string]*pendingEntry{}

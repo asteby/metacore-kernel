@@ -85,6 +85,7 @@ func Schema(dialect string) []string {
 		`CREATE INDEX IF NOT EXISTS idx_` + TableEvents + `_group ON ` + TableEvents + ` (org_id, group_id, occurred_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_` + TableEvents + `_corr ON ` + TableEvents + ` (org_id, correlation_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_` + TableEvents + `_subject ON ` + TableEvents + ` (org_id, subject_type, subject_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_` + TableEvents + `_ref ON ` + TableEvents + ` (org_id, diag_ref)`,
 		`CREATE INDEX IF NOT EXISTS idx_` + TableEvents + `_occ ON ` + TableEvents + ` (occurred_at)`,
 	}
 }

@@ -56,19 +56,22 @@ func (h *Host) beginDiag(ctx context.Context, orgID uuid.UUID, addonKey, funcNam
 	if s := diag.SubjectFrom(ctx); s.Type != "" {
 		bag.SetSubject(s.Type, s.ID)
 	}
+	callerCtx := ctx
 	ctx = context.WithValue(ctx, diagBagKey{}, bag)
-	invID := diag.InvocationIDFrom(ctx)
-	corr := diag.CorrelationFrom(ctx)
-	if corr == "" {
-		corr = invID
-	}
-	org := orgID
-	if org == uuid.Nil {
-		org = orgIDFrom(ctx)
-	}
 	return ctx, func(out *[]byte, errp *error, rec any) {
 		func() {
 			defer func() { _ = recover() }() // un fallo del diagnostico nunca toca al guest
+			// Todo lo que cuesta (id de invocacion, organizacion, saneado) se
+			// calcula aqui, solo cuando hay un fallo que registrar.
+			invID := diag.InvocationIDFrom(callerCtx)
+			corr := diag.CorrelationFrom(callerCtx)
+			if corr == "" {
+				corr = invID
+			}
+			org := orgID
+			if org == uuid.Nil {
+				org = orgIDFrom(callerCtx)
+			}
 			d := diag.Diagnostic{
 				Org: org, AddonKey: addonKey, Operation: funcName, CorrelationID: corr, InvocationID: invID,
 				Severity: diag.SeverityError,
