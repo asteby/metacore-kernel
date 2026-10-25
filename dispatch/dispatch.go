@@ -38,7 +38,10 @@
 //     handler ASYNCHRONOUSLY on a worker goroutine so a slow subscriber never
 //     blocks the CRUD mutation that produced the event;
 //  5. retries a failed delivery up to MaxAttempts — spaced by an exponential
-//     backoff, see WithRetryBackoff — then marks it dead.
+//     backoff, see WithRetryBackoff — then marks it dead. The ledger row is a
+//     DURABLE queue item (payload, next_attempt_at, lease; see ledger.go): a
+//     restart resumes what was still pending, and replicas share the work with
+//     FOR UPDATE SKIP LOCKED.
 //
 // SECURITY: the bus capability check bypasses the Enforcer for the literal
 // "kernel" key (events/events.go). The dispatcher subscribes under "kernel" so
@@ -277,7 +280,9 @@ func Wire(bus *events.Bus, invoker WasmInvoker, db *gorm.DB, provider Subscripti
 		provider: provider,
 		opts:     o,
 		logger:   o.logger,
+		workerID: uuid.NewString()[:8],
 	}
+	d.baseCtx, d.stop = context.WithCancel(context.Background())
 
 	if err := bus.SubscribeRouting(subscriberKey, "*", d.handle); err != nil {
 		return noop, fmt.Errorf("dispatch: subscribe: %w", err)
@@ -286,6 +291,13 @@ func Wire(bus *events.Bus, invoker WasmInvoker, db *gorm.DB, provider Subscripti
 		slog.String("table", o.tableName),
 		slog.Int("max_attempts", o.maxAttempts))
 
-	cancel = func() { bus.Unsubscribe(subscriberKey) }
+	// The sweeper: resumes `pending` deliveries a previous process left behind
+	// (it runs once immediately) and claims retries as they come due.
+	go d.pollLoop()
+
+	cancel = func() {
+		bus.Unsubscribe(subscriberKey)
+		d.stop()
+	}
 	return cancel, nil
 }

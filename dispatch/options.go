@@ -46,6 +46,9 @@ type Options struct {
 	retryBackoff    time.Duration
 	retryBackoffMax time.Duration
 	notReadyWait    time.Duration
+	pollInterval    time.Duration
+	lease           time.Duration
+	attemptTimeout  time.Duration
 	capability      CapabilityChecker
 	compiled        CompiledRegistry
 	native          NativeInvoker
@@ -112,6 +115,9 @@ func defaultOptions() *Options {
 		retryBackoff:    defaultRetryBackoff,
 		retryBackoffMax: defaultRetryBackoffMax,
 		notReadyWait:    defaultNotReadyWait,
+		pollInterval:    defaultPollInterval,
+		lease:           defaultLease,
+		attemptTimeout:  defaultAttemptTimeout,
 		capability:      nil, // permit-all until a host wires a checker
 		compiled:        nil, // compiled tier inert until a registry is wired
 		logger:          slog.Default(),
@@ -164,6 +170,38 @@ func WithNotReadyWait(d time.Duration) Option {
 			d = 0
 		}
 		o.notReadyWait = d
+	}
+}
+
+// WithPollInterval sets how often the sweeper looks for due deliveries (default
+// 5s). The sweeper also runs once at boot, which is what resumes the deliveries
+// a previous process left `pending`.
+func WithPollInterval(d time.Duration) Option {
+	return func(o *Options) {
+		if d > 0 {
+			o.pollInterval = d
+		}
+	}
+}
+
+// WithLease sets how long a claimed delivery stays reserved for its worker
+// before another one may take it over (default 2m). A running attempt renews
+// the lease every third of it; a process that dies mid-attempt is recovered
+// once the lease expires.
+func WithLease(d time.Duration) Option {
+	return func(o *Options) {
+		if d > 0 {
+			o.lease = d
+		}
+	}
+}
+
+// WithAttemptTimeout bounds ONE invocation attempt (default 5m).
+func WithAttemptTimeout(d time.Duration) Option {
+	return func(o *Options) {
+		if d > 0 {
+			o.attemptTimeout = d
+		}
 	}
 }
 

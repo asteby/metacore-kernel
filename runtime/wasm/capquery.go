@@ -140,6 +140,7 @@ func executeCapabilityProviders(ctx context.Context, inv *invocation, reqJSON []
 		inv.logf("audit capability_providers addon=%s capability=%s org=%s decision=denied: %v", addonKey, req.Capability, orgID, err)
 		return fail("forbidden", err.Error())
 	}
+	inv.logf("audit capability_providers addon=%s capability=%s market=%s org=%s decision=allowed", addonKey, req.Capability, req.Market, orgID)
 	lister, ok := inv.capQuerier.(capability.ProviderLister)
 	if !ok {
 		return fail("capability_unavailable", "host has no capability provider lister configured")

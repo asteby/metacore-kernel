@@ -160,6 +160,9 @@ type invocation struct {
 	// and this invocation's count.
 	edgeLimits *edgeLimiter
 	edgeSent   int
+	// emits is this invocation's event_emit buffer (emitbuffer.go); nil only
+	// for hand-built invocations in tests, which publish immediately.
+	emits *emitBuffer
 	// emitPolicy gates event_emit by event name (Host.WithEmitPolicy). nil =
 	// no policy (pre-policy behaviour).
 	emitPolicy EmitPolicyFunc
@@ -432,13 +435,33 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 				return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
 					"forbidden", denied.Error(), inv.orgID, start))
 			}
-			subscribers, err := inv.bus.PublishWithCount(ctx, inv.addonKey, eventName, inv.orgID, payload)
-			if err != nil {
+			if inv.emits == nil {
+				// Hand-built invocation (tests): legacy immediate publish.
+				subscribers, err := inv.bus.PublishWithCount(ctx, inv.addonKey, eventName, inv.orgID, payload)
+				if err != nil {
+					return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
+						"forbidden", err.Error(), inv.orgID, start))
+				}
+				return writeToGuest(ctx, mod, eventEmitOK(
+					inv.addonKey, eventName, subscribers, inv.orgID, start))
+			}
+			// Emit on commit: refuse what the bus would refuse NOW (so the
+			// guest still gets its `forbidden`), but publish only if the
+			// invocation ends successfully. See emitbuffer.go.
+			if err := inv.bus.CheckEmit(inv.addonKey, eventName); err != nil {
 				return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
 					"forbidden", err.Error(), inv.orgID, start))
 			}
+			var raw []byte
+			if payloadLen > 0 {
+				raw = readBytes(mod, payloadPtr, payloadLen)
+			}
+			if err := inv.emits.add(stageEmit(ctx, inv.addonKey, eventName, inv.orgID, raw)); err != nil {
+				return writeToGuest(ctx, mod, eventEmitErr(inv.addonKey,
+					"too_many_events", err.Error(), inv.orgID, start))
+			}
 			return writeToGuest(ctx, mod, eventEmitOK(
-				inv.addonKey, eventName, subscribers, inv.orgID, start))
+				inv.addonKey, eventName, inv.bus.MatchCount(eventName), inv.orgID, start))
 		}).
 		Export("event_emit")
 
@@ -650,6 +673,24 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 			return writeToGuest(ctx, mod, env)
 		}).
 		Export("capability_query")
+
+	// capability_providers(reqPtr, reqLen) -> i64 (ptr|len envelope)
+	// Lists the providers of a capability for a market and how the resolver
+	// treats each one, without invoking any. Same `capability:query <key>` gate
+	// as capability_query. The scanner allowlist of the hub must list this
+	// import too (X1.6).
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module,
+			reqPtr, reqLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			req := readBytes(mod, reqPtr, reqLen)
+			env := executeCapabilityProviders(ctx, inv, req)
+			return writeToGuest(ctx, mod, env)
+		}).
+		Export("capability_providers")
 
 	// dns_resolve(reqPtr, reqLen) -> i64 (ptr|len envelope)
 	// Read-only DNS lookup of one name/type of a domain the organization owns,

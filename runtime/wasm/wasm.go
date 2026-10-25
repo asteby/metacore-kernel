@@ -34,8 +34,8 @@ import (
 	"github.com/asteby/metacore-kernel/capability"
 	"github.com/asteby/metacore-kernel/connectors"
 	"github.com/asteby/metacore-kernel/database/staleplan"
-	"github.com/asteby/metacore-kernel/domains"
 	"github.com/asteby/metacore-kernel/diag"
+	"github.com/asteby/metacore-kernel/domains"
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/manifest"
@@ -63,22 +63,25 @@ const (
 type Host struct {
 	// rt is the runtime for the global memory ceiling (256 MiB); runtimes
 	// with a tighter per-addon limit live in runtimes (see runtimeFor).
-	rt            wazero.Runtime
-	cache         wazero.CompilationCache
-	runtimes      sync.Map // uint32 memory-limit pages -> *runtimeSlot
-	poolSize      int
-	poolSizeFn    func(addonKey string) int
-	poolMemMB     int
-	metrics       *hostMetrics
-	caps          *security.Capabilities
-	addonCaps     func(addonKey string) *security.Capabilities
-	bus           *events.Bus
+	rt         wazero.Runtime
+	cache      wazero.CompilationCache
+	runtimes   sync.Map // uint32 memory-limit pages -> *runtimeSlot
+	poolSize   int
+	poolSizeFn func(addonKey string) int
+	poolMemMB  int
+	metrics    *hostMetrics
+	caps       *security.Capabilities
+	addonCaps  func(addonKey string) *security.Capabilities
+	bus        *events.Bus
+	// pub commits the events a successful invocation staged (emitbuffer.go).
+	pubMu sync.Mutex
+	pub   *dynamic.OutboxPublisher
 	// settingsResolver, when set, supplies the per-invocation settings (see
 	// SettingsResolver). nil keeps the caller-passed map as the only source.
 	settingsResolver SettingsResolver
 	// diag, when set, captures a sanitized diagnostic of every failed
 	// invocation (see WithDiagnostics). nil = no capture, as before.
-	diag *diag.Recorder
+	diag          *diag.Recorder
 	db            *gorm.DB
 	enforcer      *security.Enforcer
 	tableResolver func(table string) string
@@ -733,10 +736,18 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 	// One retry: an instance closed under us (unload race, or a prior
 	// timeout/cancel closing the wazero instance, see sys.ExitError) is
 	// discarded by the pool; run once more on a fresh/other instance.
+	// event_emit stages into this buffer; it is flushed to the outbox only if
+	// the invocation succeeds (emitbuffer.go). Each invocation (and each retry
+	// of a closed module) starts with an empty one.
+	emits := &emitBuffer{}
+	ctx = withEmitBuffer(ctx, emits)
+
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
+		emits.reset()
 		out, err := h.invokeOnce(ctx, tx, orgID, installation, addonKey, funcName, payload, settings, entry)
 		if err == nil {
+			h.flushEmits(ctx, tx, emits, addonKey, funcName, out, nil)
 			return out, nil
 		}
 		lastErr = err
@@ -752,8 +763,10 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		if attempt == 0 && isClosedModuleErr(err) {
 			continue
 		}
+		emits.reset()
 		return nil, err
 	}
+	emits.reset()
 	return nil, lastErr
 }
 
@@ -803,6 +816,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		settings:          settings,
 		caps:              h.capsFor(addonKey),
 		bus:               h.bus,
+		emits:             emitBufferFrom(ctx),
 		orgID:             orgID,
 		db:                h.db,
 		tx:                tx,
