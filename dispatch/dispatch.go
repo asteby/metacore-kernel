@@ -319,13 +319,18 @@ func Wire(bus *events.Bus, invoker WasmInvoker, db *gorm.DB, provider Subscripti
 
 const (
 	dueIndexRetryMin = time.Second
-	dueIndexRetryMax = time.Minute
+	dueIndexRetryMax = 5 * time.Minute
+	// dueIndexMaxFailures bounds the real failures (not "another replica is
+	// building it") before the loop gives up: each retry may DROP and CREATE a
+	// big index, so it must not repeat forever.
+	dueIndexMaxFailures = 8
 )
 
 // ensureIndexLoop builds the sweeper index in the background, retrying with
-// exponential backoff until it is valid or Wire's context is cancelled.
+// exponential backoff (up to dueIndexMaxFailures real failures) until it is valid or Wire's context is cancelled.
 func (d *Dispatcher) ensureIndexLoop(table string) {
 	wait := dueIndexRetryMin
+	failures := 0
 	for {
 		err := ensureDueIndex(d.db.WithContext(d.baseCtx), table)
 		if err == nil {
@@ -337,6 +342,12 @@ func (d *Dispatcher) ensureIndexLoop(table string) {
 		if errors.Is(err, errDueIndexBusy) {
 			d.logger.Info("dispatch.due_index_busy", slog.String("table", table), slog.Duration("retry_in", wait))
 		} else {
+			failures++
+			if failures >= dueIndexMaxFailures {
+				d.logger.Error("dispatch.due_index_gave_up",
+					slog.String("table", table), slog.String("err", err.Error()), slog.Int("failures", failures))
+				return
+			}
 			d.logger.Warn("dispatch.due_index_error",
 				slog.String("table", table), slog.String("err", err.Error()), slog.Duration("retry_in", wait))
 		}

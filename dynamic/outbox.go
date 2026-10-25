@@ -175,7 +175,9 @@ func republish(ctx context.Context, bus Publisher, row *EventOutbox) error {
 
 // markOutboxFannedOut records that the plain subscribers already ran for id.
 func markOutboxFannedOut(ctx context.Context, db *gorm.DB, id uuid.UUID) {
-	if err := db.WithContext(ctx).Model(&EventOutbox{}).Where("id = ?", id).
+	// Detached from the caller's cancellation: the publish already happened, and a
+	// client that disconnects must not make the relay re-run the plain subscribers.
+	if err := db.WithContext(context.WithoutCancel(ctx)).Model(&EventOutbox{}).Where("id = ?", id).
 		Update("fanned_out", true).Error; err != nil {
 		log.Printf("dynamic: outbox mark fanned_out failed (row %s; the relay may re-run plain subscribers): %v", id, err)
 	}
@@ -279,7 +281,12 @@ func (s *Service) RelayOutboxOnce(ctx context.Context) {
 				updates["fanned_out"] = true
 			}
 		}
-		s.db.WithContext(ctx).Model(&EventOutbox{}).Where("id = ?", row.ID).Updates(updates)
+		if uerr := s.db.WithContext(ctx).Model(&EventOutbox{}).Where("id = ?", row.ID).Updates(updates).Error; uerr != nil {
+			// The attempt was not recorded: do not announce exhaustion for a row
+			// whose counter did not move; the next sweep retries it.
+			log.Printf("dynamic: outbox relay could not record attempt %d for row %s: %v", attempts, row.ID, uerr)
+			continue
+		}
 		if perr != nil && attempts >= outboxMaxAttempts {
 			row.Attempts, row.LastError = attempts, fmt.Sprint(updates["last_error"])
 			s.reportExhausted(ctx, row)

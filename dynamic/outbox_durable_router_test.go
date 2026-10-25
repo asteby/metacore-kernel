@@ -285,3 +285,60 @@ func TestOutboxPublisher_LedgerFailureMarksFannedOut(t *testing.T) {
 		t.Fatalf("row = %+v", row)
 	}
 }
+
+// The exhaustion notice fires once, when the cap is reached; failures before it
+// only log the attempt.
+func TestOutbox_ExhaustionIsNotReportedBeforeTheCap(t *testing.T) {
+	bus := &splitBus{}
+	bus.down.Store(true)
+	svc := newOutboxTestService(t, bus)
+	reports := 0
+	svc.onOutboxExhausted = func(context.Context, EventOutbox) { reports++ }
+	svc.publishCanonical(context.Background(), "dyn_items", "created", newUser(uuid.New()), uuid.NewString(), nil, map[string]any{"x": 1})
+	ageOutbox(svc)
+	svc.db.Model(&EventOutbox{}).Where("1 = 1").Update("attempts", outboxMaxAttempts-4)
+
+	for i := 0; i < 3; i++ { // attempts cap-3, cap-2, cap-1
+		svc.RelayOutboxOnce(context.Background())
+		makeDue(svc)
+		if reports != 0 {
+			t.Fatalf("exhaustion reported after %d failure(s), before the cap", i+1)
+		}
+	}
+	svc.RelayOutboxOnce(context.Background()) // the cap-th attempt
+	if reports != 1 {
+		t.Fatalf("exhaustion reports at the cap = %d, want 1", reports)
+	}
+}
+
+// The name limit is inclusive: 512 characters are recorded, 513 are not.
+func TestOutbox_EventNameLimitBoundary(t *testing.T) {
+	// event = "kernel." + model + ".created"
+	pad := MaxEventNameLen - len("kernel.") - len(".created")
+	for _, tc := range []struct {
+		name string
+		n    int
+		rows int
+	}{{"at the limit", pad, 1}, {"over the limit", pad + 1, 0}} {
+		t.Run(tc.name, func(t *testing.T) {
+			bus := &splitBus{}
+			svc := newOutboxTestService(t, bus)
+			svc.publishCanonical(context.Background(), strings.Repeat("m", tc.n), "created", newUser(uuid.New()), uuid.NewString(), nil, map[string]any{"x": 1})
+			var n int64
+			svc.db.Model(&EventOutbox{}).Count(&n)
+			if int(n) != tc.rows {
+				t.Fatalf("outbox rows = %d, want %d", n, tc.rows)
+			}
+		})
+	}
+}
+
+// Same limit through the guest-event publisher (rejectOversized).
+func TestRejectOversized_Boundary(t *testing.T) {
+	at := StagedEvent{Name: strings.Repeat("a", MaxEventNameLen)}
+	over := StagedEvent{Name: strings.Repeat("a", MaxEventNameLen+1)}
+	got := rejectOversized([]StagedEvent{at, over})
+	if len(got) != 1 || len(got[0].Name) != MaxEventNameLen {
+		t.Fatalf("rejectOversized kept %d event(s): %+v", len(got), got)
+	}
+}

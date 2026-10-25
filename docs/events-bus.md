@@ -98,8 +98,8 @@ se propaga:
 
 ### Reintentos, agotamiento y errores permanentes
 
-- El relay espacia los reintentos con backoff exponencial (`next_attempt_at`: 30 s, 60 s,
-  ... tope 30 min) en lugar de un ticker fijo.
+- El relay espacia los reintentos con backoff exponencial (`next_attempt_at`: 60 s tras el
+  primer fallo, luego 2 min, 4 min, ... tope 30 min) en lugar de un ticker fijo.
 - Un nombre de evento de más de `dynamic.MaxEventNameLen` (512) caracteres no cabe en el
   libro (`size:512`): se **rechaza antes de persistir** con un log de error
   `kernel.outbox.rejected` (y el dispatcher lo descarta sin error), en vez de gastar los
@@ -124,6 +124,19 @@ recrea si quedó inválido. Crear/borrar el índice exige un candado de aviso de
 se toca (esa réplica lo termina); uno huérfano de un constructor caído (candado libre) sí
 se recrea. Un arranque nuevo no puede ver el candado de una versión anterior del kernel
 (sin él, el comportamiento previo).
+
+La conexión que construye el índice corre con `statement_timeout = 0` (el del host, p. ej.
+5 s en ops, abortaría el `CREATE INDEX CONCURRENTLY` que espera a snapshots viejos) y lo
+restaura al terminar; el candado se suelta siempre en esa misma conexión (sesión nueva de
+gorm, sin la cancelación de `Wire`) o, si no se puede, la conexión se cierra en vez de
+devolverse al pool. Tras 8 fallos reales seguidos (no cuenta «otra réplica lo construye»)
+el reintento en segundo plano se rinde con un log de error `dispatch.due_index_gave_up`; el
+siguiente arranque lo vuelve a intentar.
+
+**Advertencia con PgBouncer**: los candados de sesión (`pg_try_advisory_lock`) no son
+seguros con PgBouncer en modo *transaction*: el candado y su liberación pueden caer en
+conexiones de servidor distintas. Ops lo tiene planeado en PLAN-BINARIO F4; hasta entonces
+el kernel debe conectarse a Postgres directo (o con PgBouncer en modo *session*).
 
 ## Libro de entregas = cola duradera (`dispatch_deliveries` / `event_deliveries`)
 

@@ -210,3 +210,17 @@ func TestDurableBus_OversizedEventNameIsNotAnError(t *testing.T) {
 		t.Fatalf("ledger rows = %d, want 0", n)
 	}
 }
+
+// The limit is inclusive: a name of exactly MaxEventNameLen is recorded.
+func TestDurableBus_EventNameAtTheLimitIsRecorded(t *testing.T) {
+	db := ledgerDB(t)
+	h := &countingHandler{}
+	name := strings.Repeat("e", dynamic.MaxEventNameLen)
+	bus := wireWith(t, db, staticProvider("customers", uuid.New(), name, "compiled", "on_event"), h)
+	if err := bus.Publish(context.Background(), "kernel", name, uuid.New(), map[string]any{"occurrence_id": "o"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := deliveryCount(t, db); n != 1 {
+		t.Fatalf("ledger rows = %d, want 1", n)
+	}
+}

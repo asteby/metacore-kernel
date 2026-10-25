@@ -1,7 +1,10 @@
 package dispatch
 
 import (
+	"context"
 	"crypto/sha256"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"errors"
 	"strconv"
@@ -271,7 +274,49 @@ func ensureDueIndex(db *gorm.DB, tableName string) error {
 		if !got {
 			return errDueIndexBusy
 		}
-		defer c.Exec("SELECT pg_advisory_unlock(hashtextextended(?, 0))", key)
+		ctx := c.Statement.Context
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		// The lock is per SESSION: whatever happens below, it must be released
+		// on this very connection or discarded with it. Cleanup therefore runs
+		// on a fresh gorm session (c carries c.Error after a failed statement
+		// and gorm would skip the Exec) and on a context that survives the
+		// cancellation of Wire's.
+		cleanup := func() *gorm.DB {
+			u := c.Session(&gorm.Session{NewDB: true}).WithContext(context.WithoutCancel(ctx))
+			u.Error = nil // Session copies the sticky error of c
+			return u
+		}
+		discard := func() {
+			if conn, ok := c.Statement.ConnPool.(*sql.Conn); ok {
+				_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			}
+		}
+		defer func() {
+			var released bool
+			if err := cleanup().Raw("SELECT pg_advisory_unlock(hashtextextended(?, 0))", key).Scan(&released).Error; err != nil || !released {
+				// Never hand a connection that may still hold the session lock
+				// back to the pool: close it so Postgres drops the lock.
+				discard()
+			}
+		}()
+		// The build waits for every older snapshot; the host's statement_timeout
+		// (ops sets 5 s on every connection) would abort it midway and leave an
+		// INVALID index. The dedicated connection runs without that limit (the
+		// Wire context still cancels it) and gets the previous value back.
+		var prevTimeout string
+		if err := c.Raw("SELECT current_setting('statement_timeout')").Scan(&prevTimeout).Error; err != nil {
+			return err
+		}
+		if err := c.Exec("SET statement_timeout = 0").Error; err != nil {
+			return err
+		}
+		defer func() {
+			if err := cleanup().Exec("SELECT set_config('statement_timeout', ?, false)", prevTimeout).Error; err != nil {
+				discard()
+			}
+		}()
 		// Re-read under the lock: the previous holder may have just finished.
 		exists, valid, err := dueIndexState(c, tableName)
 		if err != nil {
