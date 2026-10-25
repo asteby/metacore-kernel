@@ -3,7 +3,6 @@ package v3
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"os"
 	"reflect"
 	"sort"
@@ -42,20 +41,59 @@ func TestSchemaCopiesIdentical(t *testing.T) {
 }
 
 // knownParityGaps es la allowlist inicial de diferencias conocidas. Clave:
-// "<ruta>: go-only <tag>" (campo Go sin propiedad en el schema) o
-// "<ruta>: schema-only <prop>" (propiedad del schema sin tag Go). El valor
+// "<TipoGo>: go-only <tag>" (campo Go sin propiedad en el schema) o
+// "<TipoGo>: schema-only <prop>" (propiedad del schema sin tag Go). El valor
 // explica por que. El test falla tanto si aparece una diferencia nueva como
 // si una entrada queda obsoleta (hay que borrarla al arreglar el schema).
-var knownParityGaps = map[string]string{}
+var knownParityGaps = map[string]string{
+	// BUG ABIERTO (auditoria B1): Model.Import existe en Go (types.go,
+	// *ImportSpec, 2026-07-27) pero $defs.Model del schema tiene
+	// additionalProperties:false y no declara "import": ningun manifest
+	// puede usarlo (0 addons lo usan; la feature nunca llego). Se corrige
+	// agregando "import" al schema en MD1/R2, no aqui; al hacerlo, borra
+	// esta entrada (el test falla por obsoleta).
+	"Manifest.models: go-only import": "BUG ABIERTO B1: Model.Import sin propiedad en el schema",
+
+	// Handler es un solo tipo Go (union de todos los tipos de handler) que
+	// el schema estrecha por sitio de uso. Estas son deuda conocida de
+	// forma, no un bug de un campo: el schema de estos sitios solo admite
+	// una parte de los campos de Handler.
+	"Manifest.contributions.subscriptions.handler: go-only method":      "schema de subscription.handler no admite este campo de Handler",
+	"Manifest.contributions.subscriptions.handler: go-only on_success":  "schema de subscription.handler no admite este campo de Handler",
+	"Manifest.contributions.subscriptions.handler: go-only path":        "schema de subscription.handler no admite este campo de Handler",
+	"Manifest.contributions.subscriptions.handler: go-only retries":     "schema de subscription.handler no admite este campo de Handler",
+	"Manifest.contributions.subscriptions.handler: go-only send_record": "schema de subscription.handler no admite este campo de Handler",
+	"Manifest.contributions.subscriptions.handler: go-only set":         "schema de subscription.handler no admite este campo de Handler",
+	"Manifest.contributions.subscriptions.handler: go-only signing":     "schema de subscription.handler no admite este campo de Handler",
+	"Manifest.contributions.subscriptions.handler: go-only timeout_ms":  "schema de subscription.handler no admite este campo de Handler",
+	"Manifest.contributions.subscriptions.handler: go-only url_ref":     "schema de subscription.handler no admite este campo de Handler",
+	"Manifest.contributions.subscriptions.handler: go-only url_setting": "schema de subscription.handler no admite este campo de Handler",
+	"Manifest.provides_capabilities.handler: go-only capability":        "schema de provides_capabilities.handler no admite este campo de Handler",
+	"Manifest.provides_capabilities.handler: go-only connector":         "schema de provides_capabilities.handler no admite este campo de Handler",
+	"Manifest.provides_capabilities.handler: go-only export":            "schema de provides_capabilities.handler no admite este campo de Handler",
+	"Manifest.provides_capabilities.handler: go-only input":             "schema de provides_capabilities.handler no admite este campo de Handler",
+	"Manifest.provides_capabilities.handler: go-only method":            "schema de provides_capabilities.handler no admite este campo de Handler",
+	"Manifest.provides_capabilities.handler: go-only on_success":        "schema de provides_capabilities.handler no admite este campo de Handler",
+	"Manifest.provides_capabilities.handler: go-only path":              "schema de provides_capabilities.handler no admite este campo de Handler",
+	"Manifest.provides_capabilities.handler: go-only retries":           "schema de provides_capabilities.handler no admite este campo de Handler",
+	"Manifest.provides_capabilities.handler: go-only send_record":       "schema de provides_capabilities.handler no admite este campo de Handler",
+	"Manifest.provides_capabilities.handler: go-only set":               "schema de provides_capabilities.handler no admite este campo de Handler",
+	"Manifest.provides_capabilities.handler: go-only signing":           "schema de provides_capabilities.handler no admite este campo de Handler",
+	"Manifest.provides_capabilities.handler: go-only timeout_ms":        "schema de provides_capabilities.handler no admite este campo de Handler",
+	"Manifest.provides_capabilities.handler: go-only url":               "schema de provides_capabilities.handler no admite este campo de Handler",
+	"Manifest.provides_capabilities.handler: go-only url_ref":           "schema de provides_capabilities.handler no admite este campo de Handler",
+	"Manifest.provides_capabilities.handler: go-only url_setting":       "schema de provides_capabilities.handler no admite este campo de Handler",
+}
 
 func TestGoSchemaParity(t *testing.T) {
 	var root map[string]any
 	if err := json.Unmarshal(schemaBytes, &root); err != nil {
 		t.Fatal(err)
 	}
-	w := &parityWalker{root: root, seen: map[string]bool{}, found: map[string]bool{}}
+	w := &parityWalker{skipped: map[string]bool{}, root: root, seen: map[string]bool{}, found: map[string]bool{}}
 	w.walk(reflect.TypeOf(Manifest{}), root, "Manifest")
 
+	t.Logf("tipos con UnmarshalJSON propio (omitidos): %v", w.skipped)
 	var fresh []string
 	for k := range w.found {
 		if _, ok := knownParityGaps[k]; !ok {
@@ -78,10 +116,17 @@ func TestGoSchemaParity(t *testing.T) {
 	}
 }
 
+var jsonUnmarshaler = reflect.TypeOf((*json.Unmarshaler)(nil)).Elem()
+
+func hasCustomJSON(t reflect.Type) bool {
+	return t.Implements(jsonUnmarshaler) || reflect.PointerTo(t).Implements(jsonUnmarshaler)
+}
+
 type parityWalker struct {
-	root  map[string]any
-	seen  map[string]bool
-	found map[string]bool
+	skipped map[string]bool
+	root    map[string]any
+	seen    map[string]bool
+	found   map[string]bool
 }
 
 func (w *parityWalker) resolve(n map[string]any) map[string]any {
@@ -199,15 +244,13 @@ func (w *parityWalker) walk(gt reflect.Type, sn map[string]any, path string) {
 	if gt.Kind() != reflect.Struct {
 		return
 	}
-	sn = w.child(sn)
-	key := gt.PkgPath() + "." + gt.Name() + "@" + path
-	if gt.Name() != "" {
-		key = gt.PkgPath() + "." + gt.Name() + "|" + fmt.Sprint(sn["$id"], sn["title"], len(sn))
-	}
-	if w.seen[key+"|"+path] {
+	if hasCustomJSON(gt) {
+		// Forma en el cable distinta de los tags del struct (p. ej.
+		// FieldOptions: array o {source,...}); los tags no la describen.
+		w.skipped[gt.Name()] = true
 		return
 	}
-	w.seen[key+"|"+path] = true
+	sn = w.child(sn)
 
 	sprops := map[string]map[string]any{}
 	w.props(sn, sprops, 0)
@@ -215,22 +258,44 @@ func (w *parityWalker) walk(gt reflect.Type, sn map[string]any, path string) {
 		// Nodo sin "properties" (p. ej. objeto libre): nada que comparar.
 		return
 	}
+	// Cada par (tipo Go, forma del nodo del schema) se visita una sola vez:
+	// los tipos recursivos terminan y las diferencias se nombran por tipo
+	// Go (estable), no por la ruta por la que se llego primero.
+	names := make([]string, 0, len(sprops))
+	for k := range sprops {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	vk := gt.PkgPath() + "." + gt.Name() + "|" + strings.Join(names, ",")
+	if w.seen[vk] {
+		return
+	}
+	w.seen[vk] = true
+
+	// Se etiqueta por ruta: un mismo tipo Go (Handler) se reutiliza en
+	// sitios con schemas distintos (action/tool/subscription/setup).
+	label := path
 	gprops := map[string]reflect.Type{}
 	goTags(gt, gprops)
+	tags := make([]string, 0, len(gprops))
+	for k := range gprops {
+		tags = append(tags, k)
+	}
+	sort.Strings(tags)
 
-	for tag := range gprops {
+	for _, tag := range tags {
 		if _, ok := sprops[tag]; !ok {
-			w.found[path+": go-only "+tag] = true
+			w.found[label+": go-only "+tag] = true
 		}
 	}
-	for prop := range sprops {
+	for _, prop := range names {
 		if _, ok := gprops[prop]; !ok {
-			w.found[path+": schema-only "+prop] = true
+			w.found[label+": schema-only "+prop] = true
 		}
 	}
-	for tag, ft := range gprops {
+	for _, tag := range tags {
 		if sp, ok := sprops[tag]; ok {
-			w.walk(ft, sp, path+"."+tag)
+			w.walk(gprops[tag], sp, path+"."+tag)
 		}
 	}
 }
