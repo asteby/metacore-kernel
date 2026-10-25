@@ -15,7 +15,8 @@ type EmitEventResult struct {
 	Event string
 	// Subscribers is the number of handlers the in-process events.Bus
 	// fanned out to. It is an ESTIMATE and may be -1 when the host cannot
-	// count (e.g. durable or in-tx emits). Zero is a successful publish
+	// count (a routing subscriber without an estimator, or an estimator that
+	// cannot tell for this org). Zero is a successful publish
 	// that matched no pattern; it is NOT an error condition.
 	Subscribers int
 	// Meta carries the host-side bookkeeping fields. New fields land
