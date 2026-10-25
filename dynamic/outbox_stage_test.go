@@ -176,6 +176,11 @@ func TestOutbox_UnarmedPublishInTxDoesNotHangAndArmRetries(t *testing.T) {
 		t.Fatalf("published %d, want 1 after commit", len(rec.metas))
 	}
 
+	// Let the async arm attempt of pub finish so it cannot contend with p2.
+	for i := 0; i < 500 && (!pub.armed.Load() || pub.arming.Load()); i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	// Arm failure is not permanent: backoff, then a later call succeeds.
 	p2 := NewOutboxPublisher(svc.db, rec)
 	p2.armFails, p2.retryAt = 3, time.Now().Add(time.Hour) // as after failed migrations
@@ -183,7 +188,14 @@ func TestOutbox_UnarmedPublishInTxDoesNotHangAndArmRetries(t *testing.T) {
 		t.Fatal("Arm must respect the backoff window")
 	}
 	p2.retryAt = time.Now().Add(-time.Second)
-	if !p2.Arm() {
+	armed := false
+	for i := 0; i < 50 && !armed; i++ {
+		if armed = p2.Arm(); !armed {
+			p2.retryAt = time.Now().Add(-time.Second) // transient lock: keep retrying
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	if !armed {
 		t.Fatal("Arm must retry after the backoff instead of staying off forever")
 	}
 }
