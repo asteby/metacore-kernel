@@ -180,8 +180,6 @@ var (
 	CancelOutcomes = []string{"cancelled", "cancelling", "not_cancellable"}
 	// TerminalDeviceStatuses is the normalized availability of a device.
 	TerminalDeviceStatuses = []string{"online", "offline", "busy", "unknown"}
-	// TrackingStatuses is the normalized parcel lifecycle every carrier
-	// status is mapped onto.
 	// ShipmentStatuses is the business status of a shipment: the host maps the
 	// raw carrier / 3PL statuses (TrackingStatuses, FulfillmentStatuses) onto it
 	// and adds the pre-carrier and 3PL stages.
@@ -190,6 +188,8 @@ var (
 	// ShipmentModes are the ways a shipment travels.
 	ShipmentModes = []string{"carrier", "3pl", "own_fleet", "manual"}
 
+	// TrackingStatuses is the normalized parcel lifecycle every carrier
+	// status is mapped onto.
 	TrackingStatuses = []string{"created", "picked_up", "in_transit", "out_for_delivery", "delivered", "exception", "returned", "cancelled"}
 	// FulfillmentStatuses is the normalized fulfillment lifecycle: the
 	// statuses commerce.fulfillment.create answers (accepted, on_hold,
