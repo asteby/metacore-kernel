@@ -83,6 +83,10 @@ type invocation struct {
 	// resolveTable is the embedder-injected logical→physical table mapping
 	// the data_mutate import uses (Host.WithTableResolver). nil = identity.
 	resolveTable func(table string) string
+	// sourceOwners resolves table→owners for source_unavailable classification
+	// (Host.WithSourceOwners); sourceInfoCache memoises it per invocation.
+	sourceOwners    SourceOwnersFn
+	sourceInfoCache map[string]SourceInfo
 	// modelOwner is the embedder-injected ModelKey→owning-addon resolver
 	// (Host.WithModelOwner) used to namespace data_mutate / data_batch
 	// canonical events. nil = publish under the caller addon.

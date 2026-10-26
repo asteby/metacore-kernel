@@ -35,6 +35,7 @@ keep them in sync.
 | 1.15    | proposal | adds `approval_consume` (redeem a supervisor PIN grant in one atomic host step), `approval_required` from `data_mutate` / `data_batch` guards, and the create stamp phase (`Host.WithCreateStamp`: snapshots and grant columns). See § 23 and § 24. |
 | 1.16    | proposal | adds `edge_command`: a guest sends a command to a physical device of its org (CashDro, printer...) and gets back the answer the host carried over the device agent's authenticated connection, not a copy relayed by the browser. It is gated by `edge:command <device_key>.<command_kind>`, and only for device classes from the addon's own `edge_devices[]`. Idempotent per key, with a timeout capped at 60 s, and the device wait does not count against the guest's budget. See § 25. |
 | 1.17    | proposal | adds `dns_resolve`: read-only DNS lookup (A/AAAA/CNAME/MX/TXT) of a name under a domain the invoking organization owns, for ownership proofs and record verification. Gated by a `domain:manage` capability AND the host policy `Host.WithDNS(resolver, authorize)` (fail-closed without it). Guests built against 1.0 – 1.16 keep working. See § 26. |
+| 1.18    | proposal | `data_query` / `data_mutate` / `data_batch` classify a structural absence by SQLSTATE (42P01 on the requested table, 42703) as `source_unavailable` with `legacy_code: "db_error"`, `details{source,reason,owners,installed_owners,sqlstate,degradable}` and the driver `message` untouched; optional `Host.WithSourceOwners`. Every other DB error stays `db_error`. Guests built against 1.0 – 1.17 keep working (a `42P01` text match still matches). See § 15.5.1. |
 | 1.10    | proposal | `http_fetch` / `http_request` responses whose body is **not valid UTF-8** now travel as `body_base64` (standard base64) with `body_is_base64: true` and an EMPTY `body`; UTF-8 bodies are unchanged. Fixes silent corruption of every binary response (PDF / ZIP / image / XLSX): `encoding/json` rewrites each invalid byte as U+FFFD, so guests received corrupt bytes with a 200 status and no error. See § 3.1. |
 | 1.6     | proposal | adds `http_request` (outbound HTTP with caller-supplied request headers as a JSON object — enables `Authorization`/`Accept` for authenticated third-party calls; same `http:fetch` capability + SSRF guard + 30 s timeout + 8 MiB cap as `http_fetch`, which is left unchanged and now delegates to the shared path with empty headers) and `connector_get` (resolves one org's credentials for a declared connector — the v3 `connectors` block — returning a JSON object; gated by `connector:read <key>` and tenant-scoped by the invocation `orgID`). Guests built against 1.0 – 1.5 keep working. |
 
@@ -1953,6 +1954,59 @@ SUCCESS with `rows: []` — `not_found` is not used by this import (it has no
 single-row contract to violate). `bus_unavailable` never occurs: data_query
 publishes nothing.
 
+### 15.5.1 `source_unavailable` — structural absence of a source (v1.18)
+
+`data_query`, `data_mutate` and `data_batch` classify a database error by its
+SQLSTATE (`pgconn.PgError.Code`, never by text). Only two are a *structural
+absence*; every other driver error (timeout 57014, connection loss 08xxx,
+permission 42501, constraint 23xxx, ...) stays `db_error` exactly as before and
+**must never be degraded** — a money/stock guard keeps failing closed.
+
+| SQLSTATE | `details.reason` | Meaning |
+|----------|------------------|---------|
+| 42P01 (undefined_table) | `addon_not_installed` | no owner of the table is installed in the org |
+| 42P01 | `addon_disabled` | an owner is installed in the org but disabled |
+| 42P01 | `table_missing` | owner unknown (uncatalogued table), or an owner IS installed (broken install: an anomaly) |
+| 42703 (undefined_column) | `schema_mismatch` | the table exists but lacks a column the request names |
+
+```jsonc
+{ "success": false,
+  "error": {
+    "code": "source_unavailable",
+    "legacy_code": "db_error",                       // what older clients matched
+    "message": "ERROR: relation \"fiscal_documents\" does not exist (SQLSTATE 42P01)", // driver text, UNTOUCHED
+    "message_key": "wasm.host.error.source_unavailable",
+    "details": { "source": "fiscal_documents", "reason": "addon_not_installed",
+                 "owners": ["fiscal_mexico"], "installed_owners": [],
+                 "sqlstate": "42P01", "degradable": true } },
+  "meta": { ... } }
+```
+
+- `details.source` is the LOGICAL table the guest asked for. `owners` /
+  `installed_owners` come from the embedder's `Host.WithSourceOwners`
+  (resolved at most once per table per invocation); without it both are `[]` and
+  the reason is `table_missing` / `schema_mismatch`.
+- `details.degradable` is `true` for reads (outside a transaction, see below)
+  and `false` for `data_mutate` / `data_batch`: the host never turns a write into a silent no-op, whatever the
+  reason. `schema_mismatch` is only tolerable on an *optional read*.
+- **Compatibility.** A guest published before v1.18 keeps working unchanged:
+  `message` still carries the driver text including `SQLSTATE 42P01`, so a
+  `strings.Contains(raw, "42P01")` match keeps matching, and `legacy_code` is the
+  old `db_error`. A guest that decodes `error` into a struct reads `code` and
+  `message` as before (unknown keys, including the nested `details` object, are
+  ignored); a guest that decodes `error` into `map[string]string` would fail on
+  `details` and must switch to a struct. New guests should compare
+  `code == "source_unavailable"` (or `legacy_code`) instead of grepping text.
+- `data_batch` keeps its `mutations[i]: ` message prefix.
+- **Attribution.** A 42P01 is classified only when the zero-row probe of the
+  *requested* table raised it. A 42P01 later in the same call (an extension table
+  in the `EXISTS` / `LEFT JOIN`, a trigger, a parent) names another relation and
+  stays `db_error` (text intact, as before) — the host never blames the requested
+  table for it.
+- **Inside a transaction.** `data_query` has no savepoint of its own: on the
+  caller's open transaction (`Host.InvokeInTx`) an absence aborts it (every later
+  statement fails with 25P02), so there `degradable` is `false` even for a read.
+
 ### 15.6 Limits
 
 | Limit            | Value  | On violation             |
@@ -2007,7 +2061,7 @@ grouped aggregates:
 ### 15.7 Wiring
 
 Same host setup as `data_mutate` (§ 14.8) — `WithDB`, `WithEnforcer` and
-`WithTableResolver`; no bus required.
+`WithTableResolver`; no bus required. Optionally `WithSourceOwners` (§ 15.5.1).
 
 Implementation: `runtime/wasm/dataquery_records.go` (named to avoid
 colliding with `dbquery.go`); tests:

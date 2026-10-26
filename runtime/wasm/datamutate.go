@@ -236,7 +236,9 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now, dynamic.ActorIDFromContext(ctx), dynamic.BranchIDFromContext(ctx), stageFor(inv, req.Table, req.Model), exts, updateStampFor(execCtx, inv, work, orgID, &req))
 	if mErr != nil {
 		rollback()
-		return fail(code, mErr.Error())
+		// A write to an absent table/column is `source_unavailable`, never a
+		// silent no-op (DISENO-DEGRADACION §B.1); every other failure is as before.
+		return dataMutateFailDB(inv, addonKey, code, req.Table, mErr, orgID, start, dynamic.CorrelationIDFromContext(ctx), false, "", fail)
 	}
 	action, rowID, before, after := res.action, res.rowID, res.before, res.after
 
@@ -407,7 +409,7 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 		// twice.
 		columns, err := tableColumns(work, tbl)
 		if err != nil {
-			return nil, "db_error", err
+			return nil, "db_error", baseProbeErr(err)
 		}
 
 		// Tenant column, when the table has one. A CHILD table (a document's
@@ -489,7 +491,7 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 		// the column, and it leaks no existence.
 		columns, err := tableColumns(work, tbl)
 		if err != nil {
-			return nil, "db_error", err
+			return nil, "db_error", baseProbeErr(err)
 		}
 		scope, err := resolveOrgScope(work, tbl, columns)
 		if err != nil {
@@ -564,7 +566,7 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 		// parent EXISTS when it does not.
 		columns, err := tableColumns(work, tbl)
 		if err != nil {
-			return nil, "db_error", err
+			return nil, "db_error", baseProbeErr(err)
 		}
 		scope, err := resolveOrgScope(work, tbl, columns)
 		if err != nil {
