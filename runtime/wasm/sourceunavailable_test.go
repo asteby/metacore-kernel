@@ -291,3 +291,288 @@ func TestSourceUnavailable_ReadInsideTxIsNotDegradable(t *testing.T) {
 		t.Fatalf("read on an aborted shared tx must be source_unavailable, not degradable: %s", out)
 	}
 }
+
+// ---- DG1.2: on_absent ----------------------------------------------------
+
+type absentOK struct {
+	Success bool `json:"success"`
+	Data    struct {
+		Rows      []map[string]any `json:"rows"`
+		Truncated bool             `json:"truncated"`
+	} `json:"data"`
+	Meta struct {
+		Absent *struct {
+			Source string   `json:"source"`
+			Reason string   `json:"reason"`
+			Owners []string `json:"owners"`
+		} `json:"absent"`
+	} `json:"meta"`
+}
+
+func decodeAbsentOK(t *testing.T, raw []byte) absentOK {
+	t.Helper()
+	var e absentOK
+	if err := json.Unmarshal(raw, &e); err != nil {
+		t.Fatalf("unmarshal: %v -- %s", err, raw)
+	}
+	return e
+}
+
+func rawData(t *testing.T, raw []byte) string {
+	t.Helper()
+	var m struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	return string(m.Data)
+}
+
+func fiscalOwners(info SourceInfo) func(uuid.UUID, string) SourceInfo {
+	return func(uuid.UUID, string) SourceInfo { return info }
+}
+
+// Flag ausente / "error" / "empty" / inválido sobre un 42P01 del probe.
+func TestOnAbsent_FlagMatrix(t *testing.T) {
+	owners := SourceInfo{Owners: []string{"fiscal_mexico"}}
+	var runInfo func(t *testing.T, payload string, probeErr bool, owners SourceInfo) []byte
+	run := func(t *testing.T, payload string, probeErr bool) []byte {
+		return runInfo(t, payload, probeErr, owners)
+	}
+	runInfo = func(t *testing.T, payload string, probeErr bool, owners SourceInfo) []byte {
+		gdb, mock, cleanup := newMockGorm(t)
+		defer cleanup()
+		if probeErr {
+			mock.ExpectQuery(`SELECT \* FROM "fiscal_documents" LIMIT 0`).WillReturnError(pgErr("42P01", `relation "fiscal_documents" does not exist`))
+		}
+		inv := testInvocation(gdb, nil, uuid.New(), fiscalReadEnforcer(), nil)
+		inv.sourceOwners = fiscalOwners(owners)
+		out := executeDataQueryRecords(context.Background(), inv, []byte(payload))
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("expectations: %v", err)
+		}
+		return out
+	}
+	for _, p := range []string{`{"table":"fiscal_documents"}`, `{"table":"fiscal_documents","on_absent":""}`, `{"table":"fiscal_documents","on_absent":"error"}`} {
+		e := decodeSU(t, run(t, p, true))
+		if e.Success || e.Error.Code != CodeSourceUnavailable || !e.Error.Details.Degradable {
+			t.Fatalf("%s: must stay source_unavailable error", p)
+		}
+	}
+	// Owner installed yet the table is missing (half-done install): the install
+	// rule does not apply, the probe's 42P01 does -> empty with table_missing.
+	out := runInfo(t, `{"table":"fiscal_documents","on_absent":"empty"}`, true, SourceInfo{Owners: []string{"fiscal_mexico"}, Installed: []string{"fiscal_mexico"}})
+	e := decodeAbsentOK(t, out)
+	if !e.Success || len(e.Data.Rows) != 0 || e.Meta.Absent == nil ||
+		e.Meta.Absent.Source != "fiscal_documents" || e.Meta.Absent.Reason != ReasonTableMissing ||
+		len(e.Meta.Absent.Owners) != 1 || e.Meta.Absent.Owners[0] != "fiscal_mexico" {
+		t.Fatalf("empty: %s", out)
+	}
+	if d := rawData(t, out); d != `{"rows":[],"truncated":false}` {
+		t.Fatalf("data shape: %s", d)
+	}
+	for _, p := range []string{`{"table":"fiscal_documents","on_absent":"EMPTY"}`, `{"table":"fiscal_documents","on_absent":"skip"}`} {
+		e := decodeSU(t, run(t, p, false)) // validated before touching the DB
+		if e.Success || e.Error.Code != "invalid_request" {
+			t.Fatalf("%s: want invalid_request", p)
+		}
+	}
+}
+
+// data vacío idéntico con y sin aggregate.
+func TestOnAbsent_EmptyIdenticalWithAndWithoutAggregate(t *testing.T) {
+	var datas []string
+	for _, p := range []string{
+		`{"table":"fiscal_documents","on_absent":"empty"}`,
+		`{"table":"fiscal_documents","on_absent":"empty","aggregate":{"group_by":["status"],"select":[{"fn":"count","as":"n"}]}}`,
+	} {
+		gdb, mock, cleanup := newMockGorm(t)
+		mock.ExpectQuery(`SELECT \* FROM "fiscal_documents" LIMIT 0`).WillReturnError(pgErr("42P01", "x"))
+		inv := testInvocation(gdb, nil, uuid.New(), fiscalReadEnforcer(), nil)
+		out := executeDataQueryRecords(context.Background(), inv, []byte(p))
+		cleanup()
+		if e := decodeAbsentOK(t, out); !e.Success || e.Meta.Absent == nil || e.Meta.Absent.Reason != ReasonTableMissing {
+			t.Fatalf("%s -> %s", p, out)
+		}
+		datas = append(datas, rawData(t, out))
+	}
+	if datas[0] != datas[1] || datas[0] != `{"rows":[],"truncated":false}` {
+		t.Fatalf("data differs: %v", datas)
+	}
+}
+
+// Regla por org: dueños conocidos y ninguno instalado -> ausente SIN tocar la BD
+// (el mock no espera ninguna consulta). Sin el flag, la tabla se lee como hoy.
+func TestOnAbsent_InstallRuleNeverTouchesDB(t *testing.T) {
+	cases := []struct {
+		name   string
+		info   SourceInfo
+		reason string
+	}{
+		{"no instalado", SourceInfo{Owners: []string{"fiscal_mexico"}}, ReasonAddonNotInstalled},
+		{"deshabilitado", SourceInfo{Owners: []string{"fiscal_mexico"}, Disabled: []string{"fiscal_mexico"}}, ReasonAddonDisabled},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			gdb, mock, cleanup := newMockGorm(t) // sin expectativas: cualquier SQL falla
+			defer cleanup()
+			inv := testInvocation(gdb, nil, uuid.New(), fiscalReadEnforcer(), nil)
+			inv.sourceOwners = fiscalOwners(c.info)
+			out := executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents","on_absent":"empty"}`))
+			e := decodeAbsentOK(t, out)
+			if !e.Success || e.Meta.Absent == nil || e.Meta.Absent.Reason != c.reason {
+				t.Fatalf("%s", out)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	t.Run("sin flag: la tabla existente se lee igual que hoy", func(t *testing.T) {
+		gdb, mock, cleanup := newMockGorm(t)
+		defer cleanup()
+		expectProbe(mock, `"fiscal_documents"`, "id", "organization_id")
+		mock.ExpectQuery(`SELECT \* FROM "fiscal_documents" WHERE`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
+		inv := testInvocation(gdb, nil, uuid.New(), fiscalReadEnforcer(), nil)
+		inv.sourceOwners = fiscalOwners(SourceInfo{Owners: []string{"fiscal_mexico"}})
+		if e := decodeAbsentOK(t, executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents"}`))); !e.Success || e.Meta.Absent != nil {
+			t.Fatal("without the flag the physical read must be unchanged")
+		}
+	})
+	t.Run("dueño instalado o tabla sin catalogar: consulta normal", func(t *testing.T) {
+		for _, info := range []SourceInfo{{Owners: []string{"fiscal_mexico"}, Installed: []string{"fiscal_mexico"}}, {}} {
+			gdb, mock, cleanup := newMockGorm(t)
+			expectProbe(mock, `"fiscal_documents"`, "id", "organization_id")
+			mock.ExpectQuery(`SELECT \* FROM "fiscal_documents" WHERE`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
+			inv := testInvocation(gdb, nil, uuid.New(), fiscalReadEnforcer(), nil)
+			inv.sourceOwners = fiscalOwners(info)
+			if e := decodeAbsentOK(t, executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents","on_absent":"empty"}`))); !e.Success || e.Meta.Absent != nil {
+				t.Fatalf("info %+v must read normally", info)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+			cleanup()
+		}
+	})
+	t.Run("el gate db:read va antes de la regla", func(t *testing.T) {
+		gdb, _, cleanup := newMockGorm(t)
+		defer cleanup()
+		inv := testInvocation(gdb, nil, uuid.New(), fiscalReadEnforcer(), nil)
+		inv.sourceOwners = fiscalOwners(SourceInfo{Owners: []string{"x"}})
+		e := decodeSU(t, executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"stock","on_absent":"empty"}`)))
+		if e.Success || e.Error.Code != "forbidden" {
+			t.Fatalf("forbidden expected: %+v", e)
+		}
+	})
+}
+
+// 42703 sin tx: degrada con el flag; con tx no degrada. 42501 y 42P01 posterior
+// al probe siguen siendo db_error aun con el flag.
+func TestOnAbsent_NonAbsencesAndSchemaMismatch(t *testing.T) {
+	t.Run("42703 fuera de tx -> vacío schema_mismatch", func(t *testing.T) {
+		gdb, mock, cleanup := newMockGorm(t)
+		defer cleanup()
+		expectProbe(mock, `"fiscal_documents"`, "id", "organization_id")
+		mock.ExpectQuery(`SELECT \* FROM "fiscal_documents" WHERE`).WillReturnError(pgErr("42703", `column "uuid" does not exist`))
+		inv := testInvocation(gdb, nil, uuid.New(), fiscalReadEnforcer(), nil)
+		out := executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents","where":{"uuid":"x"},"on_absent":"empty"}`))
+		if e := decodeAbsentOK(t, out); !e.Success || e.Meta.Absent == nil || e.Meta.Absent.Reason != ReasonSchemaMismatch {
+			t.Fatalf("%s", out)
+		}
+	})
+	t.Run("42703 dentro de tx -> error no degradable (la tx quedó abortada)", func(t *testing.T) {
+		tx, mock, cleanup := newMockGormTx(t)
+		defer cleanup()
+		mock.ExpectQuery(`to_regclass`).WillReturnRows(sqlmock.NewRows([]string{"x"}).AddRow(false))
+		expectProbe(mock, `"fiscal_documents"`, "id", "organization_id")
+		mock.ExpectQuery(`SELECT \* FROM "fiscal_documents" WHERE`).WillReturnError(pgErr("42703", `column "uuid" does not exist`))
+		inv := testInvocation(nil, nil, uuid.New(), fiscalReadEnforcer(), nil)
+		inv.tx, inv.db = tx, tx
+		e := decodeSU(t, executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents","where":{"uuid":"x"},"on_absent":"empty"}`)))
+		if e.Success || e.Error.Code != CodeSourceUnavailable || e.Error.Details.Degradable || e.Error.Details.Reason != ReasonSchemaMismatch {
+			t.Fatalf("%+v", e)
+		}
+	})
+	t.Run("42501 sigue db_error con el flag", func(t *testing.T) {
+		gdb, mock, cleanup := newMockGorm(t)
+		defer cleanup()
+		mock.ExpectQuery(`SELECT \* FROM "fiscal_documents" LIMIT 0`).WillReturnError(pgErr("42501", "permission denied for table fiscal_documents"))
+		inv := testInvocation(gdb, nil, uuid.New(), fiscalReadEnforcer(), nil)
+		e := decodeSU(t, executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents","on_absent":"empty"}`)))
+		if e.Success || e.Error.Code != "db_error" || e.Error.Details != nil {
+			t.Fatalf("%+v", e)
+		}
+	})
+	t.Run("42P01 posterior al probe sigue db_error con el flag", func(t *testing.T) {
+		gdb, mock, cleanup := newMockGorm(t)
+		defer cleanup()
+		expectProbe(mock, `"fiscal_documents"`, "id", "organization_id")
+		mock.ExpectQuery(`SELECT \* FROM "fiscal_documents" WHERE`).WillReturnError(pgErr("42P01", `relation "fiscal_documents_ext" does not exist`))
+		inv := testInvocation(gdb, nil, uuid.New(), fiscalReadEnforcer(), nil)
+		e := decodeSU(t, executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents","on_absent":"empty"}`)))
+		if e.Success || e.Error.Code != "db_error" {
+			t.Fatalf("%+v", e)
+		}
+	})
+}
+
+// Dentro de la tx del llamador la tabla base se comprueba con to_regclass (no
+// aborta): ausente -> éxito vacío; presente -> lectura normal sobre la misma tx.
+func TestOnAbsent_InTxUsesToRegclass(t *testing.T) {
+	t.Run("ausente", func(t *testing.T) {
+		tx, mock, cleanup := newMockGormTx(t)
+		defer cleanup()
+		mock.ExpectQuery(`SELECT to_regclass\(\$1\) IS NULL`).WithArgs(`"fiscal_documents"`).WillReturnRows(sqlmock.NewRows([]string{"x"}).AddRow(true))
+		inv := testInvocation(nil, nil, uuid.New(), fiscalReadEnforcer(), nil)
+		inv.tx, inv.db = tx, tx
+		out := executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents","on_absent":"empty"}`))
+		if e := decodeAbsentOK(t, out); !e.Success || e.Meta.Absent == nil || e.Meta.Absent.Reason != ReasonTableMissing {
+			t.Fatalf("%s", out)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("sin flag no hay to_regclass", func(t *testing.T) {
+		tx, mock, cleanup := newMockGormTx(t)
+		defer cleanup()
+		expectProbe(mock, `"fiscal_documents"`, "id", "organization_id")
+		mock.ExpectQuery(`SELECT \* FROM "fiscal_documents" WHERE`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
+		inv := testInvocation(nil, nil, uuid.New(), fiscalReadEnforcer(), nil)
+		inv.tx, inv.db = tx, tx
+		if e := decodeAbsentOK(t, executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents"}`))); !e.Success {
+			t.Fatal("read must succeed")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("error de to_regclass es db_error", func(t *testing.T) {
+		tx, mock, cleanup := newMockGormTx(t)
+		defer cleanup()
+		mock.ExpectQuery(`to_regclass`).WillReturnError(pgErr("57014", "canceling statement due to statement timeout"))
+		inv := testInvocation(nil, nil, uuid.New(), fiscalReadEnforcer(), nil)
+		inv.tx, inv.db = tx, tx
+		e := decodeSU(t, executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents","on_absent":"empty"}`)))
+		if e.Success || e.Error.Code != "db_error" {
+			t.Fatalf("%+v", e)
+		}
+	})
+}
+
+// data_mutate ignora on_absent (sigue source_unavailable no degradable).
+func TestOnAbsent_DataMutateIgnoresIt(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnError(pgErr("42P01", `relation "stock" does not exist`))
+	mock.ExpectRollback()
+	inv := testInvocation(gdb, events.NewBus(nil), uuid.New(), stockWriteEnforcer(), nil)
+	out := executeDataMutate(context.Background(), inv, []byte(`{"op":"create","table":"stock","model":"Stock","on_absent":"empty","data":{"quantity":1}}`))
+	e := decodeSU(t, out)
+	if e.Success || e.Error.Code != CodeSourceUnavailable || e.Error.Details.Degradable {
+		t.Fatalf("%s", out)
+	}
+}

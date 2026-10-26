@@ -196,6 +196,49 @@ func sourceUnavailableBody(message string, a *sourceAbsence, degradable bool, co
 	return errBody
 }
 
+// on_absent (DISENO-DEGRADACION §B.2, phase DG1.2): per-call opt-in of
+// data_query to serve a degradable structural absence as an empty SUCCESS.
+const (
+	OnAbsentError = "error" // default: source_unavailable error (same as omitted)
+	OnAbsentEmpty = "empty" // degradable absence -> success, empty data, meta.absent
+)
+
+// validOnAbsent reports whether v is an accepted on_absent value.
+func validOnAbsent(v string) bool { return v == "" || v == OnAbsentError || v == OnAbsentEmpty }
+
+// installRuleAbsence implements the per-org install rule (§B.2, P3), applied
+// ONLY with on_absent=empty and before touching the database: when the
+// embedder knows owners of the table and none is installed AND enabled in this
+// org, the source is absent for this org even if the physical table exists
+// (another org installed the addon). Uncatalogued tables (no owners) and
+// embedders without WithSourceOwners never match: they fall through to the
+// physical behaviour.
+func installRuleAbsence(inv *invocation, table string) *sourceAbsence {
+	info := inv.sourceInfo(table)
+	if len(info.Owners) == 0 || len(info.Installed) > 0 {
+		return nil
+	}
+	return &sourceAbsence{Source: table, SQLState: sqlStateUndefinedTable, Info: info, Reason: reasonForMissingTable(info)}
+}
+
+// absentEmpty is the success envelope of an absent source served as empty. The
+// data is IDENTICAL with and without `aggregate` ({"rows":[],"truncated":false})
+// so a guest needs no second code path.
+func absentEmpty(addonKey string, a *sourceAbsence, orgID uuid.UUID, start time.Time, corr string) []byte {
+	meta := dataMutateMeta(addonKey, orgID, start, corr)
+	meta["absent"] = map[string]any{
+		"source": a.Source,
+		"reason": a.Reason,
+		"owners": nonNil(a.Info.Owners),
+	}
+	b, _ := json.Marshal(map[string]any{
+		"success": true,
+		"data":    map[string]any{"rows": []map[string]any{}, "truncated": false},
+		"meta":    meta,
+	})
+	return b
+}
+
 // dataQueryFailDB / dataMutateFailDB / dataBatchFailDB are the failure path for
 // an error that came from the database while touching `table` (LOGICAL name):
 // a structural absence becomes `source_unavailable`, anything else keeps
@@ -205,14 +248,20 @@ func sourceEnvelope(addonKey string, errBody map[string]any, meta map[string]any
 	return b
 }
 
-func dataQueryFailDB(inv *invocation, addonKey, table string, err error, orgID uuid.UUID, start time.Time, corr string, fallback func(code, msg string) []byte) []byte {
+func dataQueryFailDB(inv *invocation, addonKey, table, onAbsent string, err error, orgID uuid.UUID, start time.Time, corr string, fallback func(code, msg string) []byte) []byte {
 	if a := classifySourceAbsence(inv, table, err); a != nil {
 		// A read that ran on the caller's open transaction (Host.InvokeInTx:
 		// data_query has no savepoint of its own) has just ABORTED it: every
 		// later statement of the invocation fails with 25P02. Serving "empty"
-		// and carrying on cannot work there, so the read is not degradable.
+		// and carrying on cannot work there, so the read is not degradable
+		// (42P01 and 42703 alike). `degradable` and the on_absent=empty
+		// decision below are the SAME boolean, so they cannot disagree.
 		inTx := inv != nil && inv.tx != nil && isTx(inv.tx)
-		return sourceEnvelope(addonKey, sourceUnavailableBody(err.Error(), a, !inTx, corr), dataMutateMeta(addonKey, orgID, start, corr))
+		degradable := !inTx
+		if degradable && onAbsent == OnAbsentEmpty {
+			return absentEmpty(addonKey, a, orgID, start, corr)
+		}
+		return sourceEnvelope(addonKey, sourceUnavailableBody(err.Error(), a, degradable, corr), dataMutateMeta(addonKey, orgID, start, corr))
 	}
 	return fallback("db_error", err.Error())
 }
