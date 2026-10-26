@@ -1,6 +1,9 @@
 package capability
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -29,6 +32,11 @@ const (
 	CommerceDiscountsEvaluate = "commerce.discounts.evaluate"
 	FiscalInvoiceCreate       = "fiscal.invoice.create"
 	FiscalInvoiceCancel       = "fiscal.invoice.cancel"
+	// FiscalInvoiceStatus and FiscalInvoiceDocument are the provider-neutral
+	// READ side of invoicing (customer account): state of the documents of an
+	// order and download of one file. See ADR 0005 and "Lectura de facturas".
+	FiscalInvoiceStatus   = "fiscal.invoice.status"
+	FiscalInvoiceDocument = "fiscal.invoice.document"
 )
 
 // Payments standard (docs/RFC-PAYMENTS-STANDARD.md): cancel, provider
@@ -196,6 +204,47 @@ var (
 	// rejected) followed by the parcel lifecycle of the shipment the
 	// warehouse dispatches.
 	FulfillmentStatuses = append([]string{"accepted", "on_hold", "rejected"}, TrackingStatuses...)
+)
+
+// Vocabularies of the read side of invoicing (fiscal.invoice.status|document).
+var (
+	// InvoiceDocStatuses is the normalized state of one fiscal document.
+	InvoiceDocStatuses = []string{"issued", "pending", "cancelled", "error"}
+	// InvoiceDocKinds: an invoice or a credit note (nota de crédito) that
+	// points at its invoice through related_to.
+	InvoiceDocKinds = []string{"invoice", "credit_note"}
+	// InvoiceFileKinds are the downloadable renditions of a document.
+	InvoiceFileKinds = []string{"pdf", "xml"}
+	// InvoiceFileContentTypes is the content type answered for each kind.
+	InvoiceFileContentTypes = []string{"application/pdf", "application/xml"}
+	// InvoiceEnvironments says where the document was stamped. A sandbox
+	// document is NOT a valid fiscal document and the UI must not present it
+	// as one.
+	InvoiceEnvironments = []string{"sandbox", "production"}
+	// InvoiceErrorReasons is the neutral reason of a status=error document;
+	// the provider maps its own (PAC / authority) codes onto it and never
+	// forwards raw messages with credentials or URLs.
+	InvoiceErrorReasons = []string{"invalid_customer_data", "invalid_tax_data", "rejected_by_authority", "provider_rejected", "unknown"}
+	// InvoiceReadErrors are the codes both read contracts may report with
+	// NewCodedError (Result.ErrorCode). not_found also covers a document that
+	// belongs to another order / organization: the provider must not tell
+	// them apart. not_configured is reported by a provider that is installed
+	// but has no credentials; the resolver reports the same code when every
+	// candidate is StatusNotConfigured (ErrNotConfigured).
+	InvoiceReadErrors = []string{"not_found", "not_ready", "provider_unavailable", "not_configured"}
+)
+
+// Limits of fiscal.invoice.document.
+const (
+	// InvoiceDocumentMaxBytes caps the decoded size of a file (PDF/XML of a
+	// CFDI are well below 1 MiB; this is a ceiling, not a target).
+	InvoiceDocumentMaxBytes = 5 << 20
+	// InvoiceDocumentMaxExpiry is the longest validity of a signed relative
+	// URL.
+	InvoiceDocumentMaxExpiry = 15 * time.Minute
+	// FiscalInvoiceDocumentTimeout: a PAC fetch of a file can be slower than
+	// a status read.
+	FiscalInvoiceDocumentTimeout = 15 * time.Second
 )
 
 // Default per-provider deadlines. Fan-out queries are tighter: a slow carrier
@@ -500,6 +549,80 @@ func commerceEvents() []EventContract {
 			),
 		},
 	}
+}
+
+// invoiceDocSchema is one fiscal document as the customer account sees it.
+// There is deliberately NO url field: files go through fiscal.invoice.document
+// so the PAC endpoints never leave the provider.
+var invoiceDocSchema = schema(
+	req("document_id", TypeString, "opaque id of the document inside the provider; pass it back to fiscal.invoice.document"),
+	enum(req("status", TypeString, ""), InvoiceDocStatuses),
+	enum(req("kind", TypeString, ""), InvoiceDocKinds),
+	opt("fiscal_uuid", TypeString, "folio fiscal (CFDI UUID) or the country's equivalent"),
+	opt("series", TypeString, ""),
+	opt("folio", TypeString, ""),
+	opt("total", TypeDecimal, ""),
+	opt("currency", TypeCurrency, ""),
+	opt("emitted_at", TypeString, "RFC 3339; absent while pending"),
+	opt("related_to", TypeString, "document_id of the invoice a credit_note applies to"),
+	strs(opt("available_files", TypeArray, "subset of pdf / xml that fiscal.invoice.document can serve now")),
+	opt("test_mode", TypeBoolean, TestModeDoc),
+	enum(opt("environment", TypeString, "sandbox | production; absent = the provider does not say"), InvoiceEnvironments),
+	enum(opt("error_reason", TypeString, "neutral reason when status=error"), InvoiceErrorReasons),
+	opt("error_message", TypeString, "short human text for the store owner, never provider internals, URLs or credentials"),
+)
+
+// CheckInvoiceDocument validates what the schema cannot say about a
+// fiscal.invoice.document output: exactly one of content_base64 / url,
+// decoded size <= InvoiceDocumentMaxBytes, content_type consistent with
+// kind, and a signed url that is RELATIVE (never a PAC or any absolute URL)
+// with a short expires_at. now is the reference clock (zero = time.Now()).
+func CheckInvoiceDocument(raw []byte, now time.Time) []string {
+	var o struct {
+		Kind          string `json:"kind"`
+		ContentType   string `json:"content_type"`
+		SizeBytes     int64  `json:"size_bytes"`
+		ContentBase64 string `json:"content_base64"`
+		URL           string `json:"url"`
+		ExpiresAt     string `json:"expires_at"`
+	}
+	if err := json.Unmarshal(raw, &o); err != nil {
+		return []string{"not a JSON object"}
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	var p []string
+	want := map[string]string{"pdf": "application/pdf", "xml": "application/xml"}[o.Kind]
+	if want != "" && o.ContentType != want {
+		p = append(p, "content_type: "+o.ContentType+" does not match kind "+o.Kind)
+	}
+	if o.SizeBytes < 0 || o.SizeBytes > InvoiceDocumentMaxBytes {
+		p = append(p, fmt.Sprintf("size_bytes: must be within 0..%d", InvoiceDocumentMaxBytes))
+	}
+	switch {
+	case (o.ContentBase64 == "") == (o.URL == ""):
+		p = append(p, "exactly one of content_base64 or url is required")
+	case o.ContentBase64 != "":
+		if base64.StdEncoding.DecodedLen(len(o.ContentBase64)) > InvoiceDocumentMaxBytes+2 {
+			p = append(p, "content_base64: larger than the size limit")
+		} else if b, err := base64.StdEncoding.DecodeString(o.ContentBase64); err != nil {
+			p = append(p, "content_base64: not valid base64")
+		} else if int64(len(b)) != o.SizeBytes {
+			p = append(p, "size_bytes: does not match the decoded content")
+		}
+	default:
+		exp, err := time.Parse(time.RFC3339, o.ExpiresAt)
+		switch {
+		case err != nil:
+			p = append(p, "expires_at: required (RFC 3339) with url")
+		case !exp.After(now):
+			p = append(p, "expires_at: already expired")
+		case exp.After(now.Add(InvoiceDocumentMaxExpiry)):
+			p = append(p, "expires_at: longer than "+InvoiceDocumentMaxExpiry.String())
+		}
+	}
+	return p
 }
 
 func commerceContracts() []Contract {
@@ -1130,6 +1253,38 @@ func commerceContractList() []Contract {
 				enum(req("status", TypeString, ""), []string{"cancelled", "pending", "rejected"}),
 				opt("message", TypeString, ""),
 			),
+		},
+		{
+			Key: FiscalInvoiceStatus, Kind: KindQuery, Cardinality: One,
+			Doc: "state of the fiscal documents (invoices and credit notes) of an order, normalized and free of provider URLs; read by the customer account",
+			Input: schema(
+				req("order_ref", TypeString, "order id/number in OPS; the provider checks that the documents belong to it and to the invoking org"),
+				opt("document_id", TypeString, "narrow the answer to one document of that order"),
+			),
+			Output: schema(
+				list(req("documents", TypeArray, "empty = nothing issued yet for a known order"), invoiceDocSchema),
+			),
+			Errors: InvoiceReadErrors,
+		},
+		{
+			Key: FiscalInvoiceDocument, Kind: KindQuery, Cardinality: One, Timeout: FiscalInvoiceDocumentTimeout,
+			Doc: "one file (pdf or xml) of a fiscal document: bytes or a short-lived RELATIVE signed url, never a provider URL; read by the customer account",
+			Input: schema(
+				req("order_ref", TypeString, "order the document must belong to (ownership check)"),
+				req("document_id", TypeString, "from fiscal.invoice.status"),
+				enum(req("kind", TypeString, ""), InvoiceFileKinds),
+			),
+			Output: schema(
+				enum(req("kind", TypeString, ""), InvoiceFileKinds),
+				req("filename", TypeString, "suggested file name, without path"),
+				enum(req("content_type", TypeString, ""), InvoiceFileContentTypes),
+				req("size_bytes", TypeInteger, "decoded size; at most InvoiceDocumentMaxBytes (5 MiB)"),
+				opt("content_base64", TypeString, "the file; exactly one of content_base64 or url"),
+				pattern(opt("url", TypeString, "RELATIVE signed path served by the provider addon (starts with a single /); never an absolute URL"), `^/[^/\\\s][^\s]*$`),
+				opt("expires_at", TypeString, "RFC 3339; required with url; at most 15 minutes ahead"),
+				opt("test_mode", TypeBoolean, TestModeDoc),
+			),
+			Errors: InvoiceReadErrors,
 		},
 	}
 }

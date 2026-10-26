@@ -76,7 +76,7 @@ creó va **fijado a ese proveedor** con `Query.Provider` (llave del addon):
 `payments.client`, `payments.notification.inspect`, `payments.notification.resolve`,
 `payments.health`, `shipping.cancel`,
 `shipping.track`, `fulfillment.cancel`, `fiscal.invoice.cancel`, `tax.commit` y
-`tax.reverse` (`Contract.PinRequired`). Sin `Provider`, `Engine.Query` responde
+`tax.reverse` (`Contract.PinRequired`). `fiscal.invoice.status|document` **no** se fijan: se resuelven por mercado (ver «Lectura de facturas»). Sin `Provider`, `Engine.Query` responde
 `ErrProviderRequired` sin invocar a nadie. El proveedor fijado debe estar
 instalado y habilitado en la organización y atender los países del mercado
 (`SelectPinned`); si no, `ErrNoProvider`. La selección por mercado, el
@@ -251,6 +251,27 @@ Reglas:
 - **No es prueba de entrega.** Igual que con los pagos, quien vaya a mover un
   pedido con el evento puede volver a leer el estado con
   `commerce.shipping.track` fijado al proveedor del envío.
+
+## Lectura de facturas: `fiscal.invoice.status` y `fiscal.invoice.document`
+
+Lado de **lectura** de la facturación, para la cuenta del cliente (ADR 0005). La
+cuenta no conoce al PAC: lee estado y descarga archivos de forma normalizada, y
+qué proveedor contesta (factura.com hoy, otro PAC u otro país mañana) es la
+selección habitual de `Select`.
+
+| Regla | Detalle |
+|---|---|
+| Tipo y ruteo | `query`, cardinalidad `one`, **sin** `Query.Provider` (no son de seguimiento fijado): `Select` por mercado/país, `Provider.Priority` y `StatusNotConfigured` igual que `commerce.shipping.*`. Sin proveedor que atienda el mercado (p. ej. EE. UU.) = `ErrNoProvider`: la cuenta responde «facturación no disponible». |
+| Dominio y permiso | Dominio `fiscal.invoice`. El addon invocador (el de cuenta del cliente) declara `capability:query fiscal.invoice.status` y `capability:query fiscal.invoice.document` (o el glob `fiscal.invoice.*`); el proveedor los declara en `provides_capabilities`. Ningún campo nuevo de manifest v3. |
+| Privacidad | La organización es la **de la invocación** (`Query.Org`, la pone el host); no hay `org` en la entrada. El proveedor DEBE comprobar que el documento pertenece a `order_ref` y a esa organización; si no, `not_found` (nunca distingue «no existe» de «es de otro»). El addon de cuenta, a su vez, solo pasa un `order_ref` que ya comprobó que es del cliente autenticado. |
+| Sin URLs del PAC | La salida de `status` no tiene campos de URL. `document` devuelve bytes o una URL **relativa** firmada (empieza con un solo `/`, validado por patrón) con caducidad ≤ 15 min (`InvoiceDocumentMaxExpiry`); nunca una URL del PAC. Las extensiones `x_` son del proveedor y el consumidor no las reenvía. |
+| Límites | Archivo decodificado ≤ 5 MiB (`InvoiceDocumentMaxBytes`); `size_bytes` debe coincidir. `CheckInvoiceDocument(raw, now)` valida lo que el esquema no expresa (exactamente uno de `content_base64`/`url`, tamaño, `content_type` según `kind`, caducidad). El host la aplica tras `ValidateOutput`. |
+| Errores (`Result.ErrorCode()`) | `not_found` (orden/documento desconocido o ajeno), `not_ready` (aún sin timbrar o sin ese archivo: reintentar luego), `provider_unavailable` (el PAC no contesta), `not_configured` (instalado sin credenciales; el resolvedor da el mismo código vía `ErrNotConfigured` si todos los candidatos lo están). Más `timeout`/`invalid_output` genéricos. |
+| Modo de prueba | `test_mode` y `environment` (`sandbox`/`production`): un documento de sandbox no es un documento fiscal válido y la UI no lo presenta como tal. |
+| Notas de crédito | Misma lista: `kind = credit_note` y `related_to` = `document_id` de su factura. |
+
+Contrato de esquema fijado por `capability/testdata/fiscal_invoice_read.golden.json`
+(solo aditivo; cambiarlo exige `go test ./capability -run Golden -update` y revisión).
 
 ## Errores con código del proveedor
 
@@ -1385,6 +1406,63 @@ Salida:
 | `pdf_url` | string |  |  |
 | `xml_url` | string |  |  |
 | `message` | string |  | authority/provider message when failed |
+
+### `fiscal.invoice.document`
+
+one file (pdf or xml) of a fiscal document: bytes or a short-lived RELATIVE signed url, never a provider URL; read by the customer account. Consulta · cardinalidad **one** · tiempo límite por proveedor **15s** · errores `not_found`, `not_ready`, `provider_unavailable`, `not_configured`.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `order_ref` | string | sí | order the document must belong to (ownership check) |
+| `document_id` | string | sí | from fiscal.invoice.status |
+| `kind` | string: pdf \| xml | sí |  |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `kind` | string: pdf \| xml | sí |  |
+| `filename` | string | sí | suggested file name, without path |
+| `content_type` | string: application/pdf \| application/xml | sí |  |
+| `size_bytes` | integer | sí | decoded size; at most InvoiceDocumentMaxBytes (5 MiB) |
+| `content_base64` | string |  | the file; exactly one of content_base64 or url |
+| `url` | string |  | RELATIVE signed path served by the provider addon (starts with a single /); never an absolute URL |
+| `expires_at` | string |  | RFC 3339; required with url; at most 15 minutes ahead |
+| `test_mode` | boolean |  | see test_mode above |
+
+### `fiscal.invoice.status`
+
+state of the fiscal documents (invoices and credit notes) of an order, normalized and free of provider URLs; read by the customer account. Consulta · cardinalidad **one** · tiempo límite por proveedor **8s** · errores `not_found`, `not_ready`, `provider_unavailable`, `not_configured`.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `order_ref` | string | sí | order id/number in OPS; the provider checks that the documents belong to it and to the invoking org |
+| `document_id` | string |  | narrow the answer to one document of that order |
+
+Salida:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `documents` | array<object> | sí | empty = nothing issued yet for a known order |
+| `documents[].document_id` | string | sí | opaque id of the document inside the provider; pass it back to fiscal.invoice.document |
+| `documents[].status` | string: issued \| pending \| cancelled \| error | sí |  |
+| `documents[].kind` | string: invoice \| credit_note | sí |  |
+| `documents[].fiscal_uuid` | string |  | folio fiscal (CFDI UUID) or the country's equivalent |
+| `documents[].series` | string |  |  |
+| `documents[].folio` | string |  |  |
+| `documents[].total` | decimal |  |  |
+| `documents[].currency` | currency |  |  |
+| `documents[].emitted_at` | string |  | RFC 3339; absent while pending |
+| `documents[].related_to` | string |  | document_id of the invoice a credit_note applies to |
+| `documents[].available_files` | array<string> |  | subset of pdf / xml that fiscal.invoice.document can serve now |
+| `documents[].test_mode` | boolean |  | the answer comes from the provider sandbox / test credentials (true) or from production (false); absent = the provider does not say |
+| `documents[].environment` | string: sandbox \| production |  | absent = the provider does not say |
+| `documents[].error_reason` | string: invalid_customer_data \| invalid_tax_data \| rejected_by_authority \| provider_rejected \| unknown |  | neutral reason when status=error |
+| `documents[].error_message` | string |  | short human text for the store owner, never provider internals, URLs or credentials |
 
 ## Pendiente / decisiones abiertas
 

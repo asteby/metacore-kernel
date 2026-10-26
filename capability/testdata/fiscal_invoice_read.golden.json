@@ -1,0 +1,218 @@
+[
+  {
+    "cardinality": "one",
+    "errors": [
+      "not_found",
+      "not_ready",
+      "provider_unavailable",
+      "not_configured"
+    ],
+    "idempotent": false,
+    "input": {
+      "fields": [
+        {
+          "name": "order_ref",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "document_id",
+          "type": "string"
+        }
+      ],
+      "open": false
+    },
+    "key": "fiscal.invoice.status",
+    "kind": "query",
+    "output": {
+      "fields": [
+        {
+          "name": "documents",
+          "of": {
+            "fields": [
+              {
+                "name": "document_id",
+                "required": true,
+                "type": "string"
+              },
+              {
+                "enum": [
+                  "issued",
+                  "pending",
+                  "cancelled",
+                  "error"
+                ],
+                "name": "status",
+                "required": true,
+                "type": "string"
+              },
+              {
+                "enum": [
+                  "invoice",
+                  "credit_note"
+                ],
+                "name": "kind",
+                "required": true,
+                "type": "string"
+              },
+              {
+                "name": "fiscal_uuid",
+                "type": "string"
+              },
+              {
+                "name": "series",
+                "type": "string"
+              },
+              {
+                "name": "folio",
+                "type": "string"
+              },
+              {
+                "name": "total",
+                "type": "decimal"
+              },
+              {
+                "name": "currency",
+                "type": "currency"
+              },
+              {
+                "name": "emitted_at",
+                "type": "string"
+              },
+              {
+                "name": "related_to",
+                "type": "string"
+              },
+              {
+                "elem": "string",
+                "name": "available_files",
+                "type": "array"
+              },
+              {
+                "name": "test_mode",
+                "type": "boolean"
+              },
+              {
+                "enum": [
+                  "sandbox",
+                  "production"
+                ],
+                "name": "environment",
+                "type": "string"
+              },
+              {
+                "enum": [
+                  "invalid_customer_data",
+                  "invalid_tax_data",
+                  "rejected_by_authority",
+                  "provider_rejected",
+                  "unknown"
+                ],
+                "name": "error_reason",
+                "type": "string"
+              },
+              {
+                "name": "error_message",
+                "type": "string"
+              }
+            ],
+            "open": false
+          },
+          "required": true,
+          "type": "array"
+        }
+      ],
+      "open": false
+    },
+    "pin_required": false,
+    "timeout_ms": 0
+  },
+  {
+    "cardinality": "one",
+    "errors": [
+      "not_found",
+      "not_ready",
+      "provider_unavailable",
+      "not_configured"
+    ],
+    "idempotent": false,
+    "input": {
+      "fields": [
+        {
+          "name": "order_ref",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "document_id",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "enum": [
+            "pdf",
+            "xml"
+          ],
+          "name": "kind",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "open": false
+    },
+    "key": "fiscal.invoice.document",
+    "kind": "query",
+    "output": {
+      "fields": [
+        {
+          "enum": [
+            "pdf",
+            "xml"
+          ],
+          "name": "kind",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "filename",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "enum": [
+            "application/pdf",
+            "application/xml"
+          ],
+          "name": "content_type",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "size_bytes",
+          "required": true,
+          "type": "integer"
+        },
+        {
+          "name": "content_base64",
+          "type": "string"
+        },
+        {
+          "name": "url",
+          "pattern": "^/[^/\\\\\\s][^\\s]*$",
+          "type": "string"
+        },
+        {
+          "name": "expires_at",
+          "type": "string"
+        },
+        {
+          "name": "test_mode",
+          "type": "boolean"
+        }
+      ],
+      "open": false
+    },
+    "pin_required": false,
+    "timeout_ms": 15000
+  }
+]

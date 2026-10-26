@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `capability`: `fiscal.invoice.status` y `fiscal.invoice.document` (KindQuery, cardinalidad `one`,
+  ruteo por mercado/país con `Priority` y `not_configured`): lectura de facturas y notas de crédito y
+  descarga de PDF/XML sin depender del PAC. Salida normalizada sin URLs del proveedor; archivo en
+  base64 (≤ 5 MiB) o URL relativa firmada ≤ 15 min; errores `not_found`, `not_ready`,
+  `provider_unavailable`, `not_configured`; `CheckInvoiceDocument`; golden de esquema. Sin campos
+  nuevos de manifest v3. Minor aditivo. Ver ADR 0005.
 - `events`: `Bus.PublishDurableOnly` (publica solo a los routers durables), `events.DurableError`
   (`SiblingsRan()`; `errors.Is(err, ErrDurableDelivery)`), `SubscribeDurableRouting`,
   `ErrDurableDelivery`. **Cambio de contrato:** `Publish`/`PublishWithCount` ahora pueden
