@@ -409,7 +409,7 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 		// twice.
 		columns, err := tableColumns(work, tbl)
 		if err != nil {
-			return nil, "db_error", err
+			return nil, "db_error", baseProbeErr(err)
 		}
 
 		// Tenant column, when the table has one. A CHILD table (a document's
@@ -491,7 +491,7 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 		// the column, and it leaks no existence.
 		columns, err := tableColumns(work, tbl)
 		if err != nil {
-			return nil, "db_error", err
+			return nil, "db_error", baseProbeErr(err)
 		}
 		scope, err := resolveOrgScope(work, tbl, columns)
 		if err != nil {
@@ -566,7 +566,7 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 		// parent EXISTS when it does not.
 		columns, err := tableColumns(work, tbl)
 		if err != nil {
-			return nil, "db_error", err
+			return nil, "db_error", baseProbeErr(err)
 		}
 		scope, err := resolveOrgScope(work, tbl, columns)
 		if err != nil {

@@ -337,7 +337,7 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 	// tenant-scoping strategy below.
 	tblCols, err := tableColumns(work, tbl)
 	if err != nil {
-		return failDB(err)
+		return failDB(baseProbeErr(err))
 	}
 	softDelete := tblCols["deleted_at"]
 

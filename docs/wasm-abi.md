@@ -35,6 +35,7 @@ keep them in sync.
 | 1.15    | proposal | adds `approval_consume` (redeem a supervisor PIN grant in one atomic host step), `approval_required` from `data_mutate` / `data_batch` guards, and the create stamp phase (`Host.WithCreateStamp`: snapshots and grant columns). See § 23 and § 24. |
 | 1.16    | proposal | adds `edge_command`: a guest sends a command to a physical device of its org (CashDro, printer...) and gets back the answer the host carried over the device agent's authenticated connection, not a copy relayed by the browser. It is gated by `edge:command <device_key>.<command_kind>`, and only for device classes from the addon's own `edge_devices[]`. Idempotent per key, with a timeout capped at 60 s, and the device wait does not count against the guest's budget. See § 25. |
 | 1.17    | proposal | adds `dns_resolve`: read-only DNS lookup (A/AAAA/CNAME/MX/TXT) of a name under a domain the invoking organization owns, for ownership proofs and record verification. Gated by a `domain:manage` capability AND the host policy `Host.WithDNS(resolver, authorize)` (fail-closed without it). Guests built against 1.0 – 1.16 keep working. See § 26. |
+| 1.18    | proposal | `data_query` / `data_mutate` / `data_batch` classify a structural absence by SQLSTATE (42P01 on the requested table, 42703) as `source_unavailable` with `legacy_code: "db_error"`, `details{source,reason,owners,installed_owners,sqlstate,degradable}` and the driver `message` untouched; optional `Host.WithSourceOwners`. Every other DB error stays `db_error`. Guests built against 1.0 – 1.17 keep working (a `42P01` text match still matches). See § 15.5.1. |
 | 1.10    | proposal | `http_fetch` / `http_request` responses whose body is **not valid UTF-8** now travel as `body_base64` (standard base64) with `body_is_base64: true` and an EMPTY `body`; UTF-8 bodies are unchanged. Fixes silent corruption of every binary response (PDF / ZIP / image / XLSX): `encoding/json` rewrites each invalid byte as U+FFFD, so guests received corrupt bytes with a 200 status and no error. See § 3.1. |
 | 1.6     | proposal | adds `http_request` (outbound HTTP with caller-supplied request headers as a JSON object — enables `Authorization`/`Accept` for authenticated third-party calls; same `http:fetch` capability + SSRF guard + 30 s timeout + 8 MiB cap as `http_fetch`, which is left unchanged and now delegates to the shared path with empty headers) and `connector_get` (resolves one org's credentials for a declared connector — the v3 `connectors` block — returning a JSON object; gated by `connector:read <key>` and tenant-scoped by the invocation `orgID`). Guests built against 1.0 – 1.5 keep working. |
 
@@ -1985,8 +1986,8 @@ permission 42501, constraint 23xxx, ...) stays `db_error` exactly as before and
   `installed_owners` come from the embedder's `Host.WithSourceOwners`
   (resolved at most once per table per invocation); without it both are `[]` and
   the reason is `table_missing` / `schema_mismatch`.
-- `details.degradable` is `true` for reads and `false` for `data_mutate` /
-  `data_batch`: the host never turns a write into a silent no-op, whatever the
+- `details.degradable` is `true` for reads (outside a transaction, see below)
+  and `false` for `data_mutate` / `data_batch`: the host never turns a write into a silent no-op, whatever the
   reason. `schema_mismatch` is only tolerable on an *optional read*.
 - **Compatibility.** A guest published before v1.18 keeps working unchanged:
   `message` still carries the driver text including `SQLSTATE 42P01`, so a
@@ -1997,6 +1998,14 @@ permission 42501, constraint 23xxx, ...) stays `db_error` exactly as before and
   `details` and must switch to a struct. New guests should compare
   `code == "source_unavailable"` (or `legacy_code`) instead of grepping text.
 - `data_batch` keeps its `mutations[i]: ` message prefix.
+- **Attribution.** A 42P01 is classified only when the zero-row probe of the
+  *requested* table raised it. A 42P01 later in the same call (an extension table
+  in the `EXISTS` / `LEFT JOIN`, a trigger, a parent) names another relation and
+  stays `db_error` (text intact, as before) — the host never blames the requested
+  table for it.
+- **Inside a transaction.** `data_query` has no savepoint of its own: on the
+  caller's open transaction (`Host.InvokeInTx`) an absence aborts it (every later
+  statement fails with 25P02), so there `degradable` is `false` even for a read.
 
 ### 15.6 Limits
 

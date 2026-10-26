@@ -16,8 +16,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   degradable}`, `legacy_code: "db_error"` y el `message` original intacto (un guest que busca
   `42P01` por texto sigue funcionando). Todo otro error de BD sigue siendo `db_error`. Opción
   `Host.WithSourceOwners(func(org, table) SourceInfo)` para distinguir «no instalado» de «tabla
-  ausente»; sin ella solo `table_missing` / `schema_mismatch`. Una escritura nunca degrada. Minor
-  aditivo, sin cambios de manifest.
+  ausente»; sin ella solo `table_missing` / `schema_mismatch`. Una escritura nunca degrada, ni una
+  lectura sobre la transacción abierta del llamador (queda abortada). Un 42P01 solo se clasifica si
+  lo dio el probe de la tabla pedida (extensión/trigger siguen `db_error`). Minor aditivo, sin
+  cambios de manifest.
 - `capability`: `fiscal.invoice.status` y `fiscal.invoice.document` (KindQuery, cardinalidad `one`,
   ruteo por mercado/país con `Priority` y `not_configured`): lectura de facturas y notas de crédito y
   descarga de PDF/XML sin depender del PAC. Salida normalizada sin URLs del proveedor; archivo en

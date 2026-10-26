@@ -105,12 +105,37 @@ func classifySourceAbsence(inv *invocation, table string, err error) *sourceAbse
 	}
 	switch pgErr.Code {
 	case sqlStateUndefinedTable:
+		// Only the zero-row probe of the REQUESTED table proves that table is
+		// absent. A 42P01 raised later in the same call (extension table in an
+		// EXISTS / LEFT JOIN, a parent probe, a trigger) names ANOTHER relation:
+		// blaming the requested table for it would invent an absence (and, on
+		// a read, a degradable one). Those keep the plain db_error of before.
+		var probe *baseProbeError
+		if !errors.As(err, &probe) {
+			return nil
+		}
 		info := inv.sourceInfo(table)
 		return &sourceAbsence{Source: table, SQLState: pgErr.Code, Info: info, Reason: reasonForMissingTable(info)}
 	case sqlStateUndefinedColumn:
 		return &sourceAbsence{Source: table, SQLState: pgErr.Code, Info: inv.sourceInfo(table), Reason: ReasonSchemaMismatch}
 	}
 	return nil
+}
+
+// baseProbeError marks an error raised by the zero-row probe of the REQUESTED
+// table (tableColumns on the resolved physical name), the first statement every
+// data_query / data_mutate / data_batch op runs against it. Error() is the
+// wrapped text, untouched, so the message the guest sees does not change.
+type baseProbeError struct{ err error }
+
+func (e *baseProbeError) Error() string { return e.err.Error() }
+func (e *baseProbeError) Unwrap() error { return e.err }
+
+func baseProbeErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &baseProbeError{err: err}
 }
 
 // reasonForMissingTable decides the reason of a 42P01. An owner that IS
@@ -152,8 +177,9 @@ func nonNil(s []string) []string {
 // sourceUnavailableBody is the `error` object of a source_unavailable failure.
 // `message` is the original driver text, untouched. `degradable` tells the
 // guest whether serving an empty result is allowed: only a READ of an absent
-// source is; a write is never degraded (the host never turns it into a no-op).
-func sourceUnavailableBody(message string, a *sourceAbsence, write bool, correlationID string) map[string]any {
+// source outside an open transaction is; a write is never degraded (the host
+// never turns it into a no-op).
+func sourceUnavailableBody(message string, a *sourceAbsence, degradable bool, correlationID string) map[string]any {
 	errBody := hostErrorBody(CodeSourceUnavailable, message)
 	errBody["legacy_code"] = "db_error"
 	errBody["details"] = map[string]any{
@@ -162,7 +188,7 @@ func sourceUnavailableBody(message string, a *sourceAbsence, write bool, correla
 		"owners":           nonNil(a.Info.Owners),
 		"installed_owners": nonNil(a.Info.Installed),
 		"sqlstate":         a.SQLState,
-		"degradable":       !write,
+		"degradable":       degradable,
 	}
 	if id := strings.TrimSpace(correlationID); id != "" {
 		errBody["correlation_id"] = id
@@ -181,7 +207,12 @@ func sourceEnvelope(addonKey string, errBody map[string]any, meta map[string]any
 
 func dataQueryFailDB(inv *invocation, addonKey, table string, err error, orgID uuid.UUID, start time.Time, corr string, fallback func(code, msg string) []byte) []byte {
 	if a := classifySourceAbsence(inv, table, err); a != nil {
-		return sourceEnvelope(addonKey, sourceUnavailableBody(err.Error(), a, false, corr), dataMutateMeta(addonKey, orgID, start, corr))
+		// A read that ran on the caller's open transaction (Host.InvokeInTx:
+		// data_query has no savepoint of its own) has just ABORTED it: every
+		// later statement of the invocation fails with 25P02. Serving "empty"
+		// and carrying on cannot work there, so the read is not degradable.
+		inTx := inv != nil && inv.tx != nil && isTx(inv.tx)
+		return sourceEnvelope(addonKey, sourceUnavailableBody(err.Error(), a, !inTx, corr), dataMutateMeta(addonKey, orgID, start, corr))
 	}
 	return fallback("db_error", err.Error())
 }
@@ -195,7 +226,7 @@ func dataMutateFailDB(inv *invocation, addonKey, code, table string, err error, 
 			if batch {
 				meta = dataBatchMeta(addonKey, orgID, start, corr)
 			}
-			return sourceEnvelope(addonKey, sourceUnavailableBody(msgPrefix+err.Error(), a, true, corr), meta)
+			return sourceEnvelope(addonKey, sourceUnavailableBody(msgPrefix+err.Error(), a, false, corr), meta)
 		}
 	}
 	return fallback(code, msgPrefix+err.Error())

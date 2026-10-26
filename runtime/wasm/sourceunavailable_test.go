@@ -236,3 +236,58 @@ func fiscalAndStockReadEnforcer() *security.Enforcer {
 	e.SetMode(security.ModeEnforce)
 	return e
 }
+
+// Solo el probe de la tabla PEDIDA prueba su ausencia. Un 42P01 posterior en la
+// misma llamada nombra OTRA relación (tabla de extensión en EXISTS/JOIN, un
+// trigger): atribuirlo a la tabla pedida inventaría una ausencia degradable. Se
+// queda en el db_error de siempre, con el texto (y su 42P01) intacto.
+func TestSourceUnavailable_42P01AfterProbeIsNotTheRequestedTable(t *testing.T) {
+	t.Run("data_query: SELECT tras probe OK", func(t *testing.T) {
+		gdb, mock, cleanup := newMockGorm(t)
+		defer cleanup()
+		expectProbe(mock, `"fiscal_documents"`, "id", "organization_id")
+		ext := pgErr("42P01", `relation "fiscal_documents_ext" does not exist`)
+		mock.ExpectQuery(`SELECT \* FROM "fiscal_documents" WHERE`).WillReturnError(ext)
+		inv := testInvocation(gdb, nil, uuid.New(), fiscalReadEnforcer(), nil)
+		calls := 0
+		inv.sourceOwners = func(uuid.UUID, string) SourceInfo { calls++; return SourceInfo{Owners: []string{"fiscal_mexico"}} }
+		out := executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents"}`))
+		e := decodeSU(t, out)
+		if e.Error.Code != "db_error" || e.Error.Details != nil || e.Error.LegacyCode != "" || e.Error.Message != ext.Error() {
+			t.Fatalf("42P01 of another relation must stay db_error: %s", out)
+		}
+		if calls != 0 {
+			t.Fatalf("owners resolver must not run for a non-absence (calls=%d)", calls)
+		}
+	})
+	t.Run("data_mutate: INSERT tras probe OK (trigger/extensión)", func(t *testing.T) {
+		gdb, mock, cleanup := newMockGorm(t)
+		defer cleanup()
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
+		mock.ExpectQuery(`INSERT INTO "stock"`).WillReturnError(pgErr("42P01", `relation "stock_audit" does not exist`))
+		mock.ExpectRollback()
+		inv := testInvocation(gdb, events.NewBus(nil), uuid.New(), stockWriteEnforcer(), nil)
+		out := executeDataMutate(context.Background(), inv, []byte(`{"op":"create","table":"stock","model":"Stock","data":{"quantity":1}}`))
+		if e := decodeSU(t, out); e.Success || e.Error.Code != "db_error" || e.Error.Details != nil {
+			t.Fatalf("42P01 after the probe must stay db_error: %s", out)
+		}
+	})
+}
+
+// data_query no abre savepoint: dentro de la transacción del llamador
+// (InvokeInTx) un 42P01 la ABORTA (25P02 en todo lo que sigue). Servir "vacío" y
+// seguir no funciona ahí, así que la lectura no es degradable.
+func TestSourceUnavailable_ReadInsideTxIsNotDegradable(t *testing.T) {
+	tx, mock, cleanup := newMockGormTx(t)
+	defer cleanup()
+	mock.ExpectQuery(`SELECT \* FROM "fiscal_documents" LIMIT 0`).WillReturnError(pgErr("42P01", `relation "fiscal_documents" does not exist`))
+	inv := testInvocation(nil, nil, uuid.New(), fiscalReadEnforcer(), nil)
+	inv.tx = tx
+	inv.db = tx
+	out := executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents"}`))
+	e := decodeSU(t, out)
+	if e.Error.Code != CodeSourceUnavailable || e.Error.Details == nil || e.Error.Details.Degradable {
+		t.Fatalf("read on an aborted shared tx must be source_unavailable, not degradable: %s", out)
+	}
+}
