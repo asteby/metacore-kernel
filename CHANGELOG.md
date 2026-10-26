@@ -13,8 +13,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   ruteo por mercado/país con `Priority` y `not_configured`): lectura de facturas y notas de crédito y
   descarga de PDF/XML sin depender del PAC. Salida normalizada sin URLs del proveedor; archivo en
   base64 (≤ 5 MiB) o URL relativa firmada ≤ 15 min; errores `not_found`, `not_ready`,
-  `provider_unavailable`, `not_configured`; `CheckInvoiceDocument`; golden de esquema. Sin campos
-  nuevos de manifest v3. Minor aditivo. Ver ADR 0005.
+  `provider_unavailable`, `not_configured`; `CheckInvoiceDocument` y `CheckInvoiceStatus`; golden de
+  esquema. Sin campos nuevos de manifest v3. Minor aditivo. Ver ADR 0005.
+- `capability`: `Contract.MaxOutputBytes` (tope de la salida cruda de un proveedor, rechazada como
+  `invalid_output` antes de decodificar) y `Contract.CheckOutput` (verificación del contrato que el
+  `Executor` aplica tras `ValidateOutput`). Las facturas los usan: las reglas que el esquema no expresa
+  (uno-de, tamaño real, URL relativa estricta, sin enlaces en `x_`, sin claves duplicadas) las aplica el
+  host, no cada consumidor.
 - `events`: `Bus.PublishDurableOnly` (publica solo a los routers durables), `events.DurableError`
   (`SiblingsRan()`; `errors.Is(err, ErrDurableDelivery)`), `SubscribeDurableRouting`,
   `ErrDurableDelivery`. **Cambio de contrato:** `Publish`/`PublishWithCount` ahora pueden

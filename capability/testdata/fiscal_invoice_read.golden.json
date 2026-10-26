@@ -24,6 +24,7 @@
     },
     "key": "fiscal.invoice.status",
     "kind": "query",
+    "max_output_bytes": 1048576,
     "output": {
       "fields": [
         {
@@ -80,11 +81,19 @@
                 "type": "string"
               },
               {
+                "name": "cancelled_at",
+                "type": "string"
+              },
+              {
                 "name": "related_to",
                 "type": "string"
               },
               {
                 "elem": "string",
+                "enum": [
+                  "pdf",
+                  "xml"
+                ],
                 "name": "available_files",
                 "type": "array"
               },
@@ -124,6 +133,7 @@
       ],
       "open": false
     },
+    "output_check": true,
     "pin_required": false,
     "timeout_ms": 0
   },
@@ -162,6 +172,7 @@
     },
     "key": "fiscal.invoice.document",
     "kind": "query",
+    "max_output_bytes": 7056044,
     "output": {
       "fields": [
         {
@@ -198,7 +209,7 @@
         },
         {
           "name": "url",
-          "pattern": "^/[^/\\\\\\s][^\\s]*$",
+          "pattern": "^/[A-Za-z0-9._~!$\u0026'()*+,;=:@%-][A-Za-z0-9._~!$\u0026'()*+,;=:@%/?-]*$",
           "type": "string"
         },
         {
@@ -212,6 +223,7 @@
       ],
       "open": false
     },
+    "output_check": true,
     "pin_required": false,
     "timeout_ms": 15000
   }

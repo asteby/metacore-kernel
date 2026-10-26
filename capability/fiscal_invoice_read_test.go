@@ -47,6 +47,7 @@ func goldenSchema(c Contract) map[string]any {
 		"key": c.Key, "kind": string(c.Kind), "cardinality": string(c.Cardinality),
 		"timeout_ms": c.Timeout.Milliseconds(), "idempotent": c.Idempotent, "pin_required": c.PinRequired,
 		"errors": c.Errors, "input": dump(c.Input), "output": dump(c.Output),
+		"max_output_bytes": c.MaxOutputBytes, "output_check": c.CheckOutput != nil,
 	}
 }
 

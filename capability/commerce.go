@@ -4,8 +4,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Well-known commerce and fiscal capability keys. The storefront core
@@ -245,6 +248,13 @@ const (
 	// FiscalInvoiceDocumentTimeout: a PAC fetch of a file can be slower than
 	// a status read.
 	FiscalInvoiceDocumentTimeout = 15 * time.Second
+	// InvoiceDocumentMaxOutputBytes caps the raw provider output of
+	// fiscal.invoice.document: the base64 of the largest file plus room for
+	// the other fields. Refused before decoding (Contract.MaxOutputBytes).
+	InvoiceDocumentMaxOutputBytes = (InvoiceDocumentMaxBytes+2)/3*4 + 64<<10
+	// InvoiceStatusMaxOutputBytes caps the raw output of fiscal.invoice.status
+	// (the documents of ONE order: a few KiB in practice).
+	InvoiceStatusMaxOutputBytes = 1 << 20
 )
 
 // Default per-provider deadlines. Fan-out queries are tighter: a slow carrier
@@ -564,8 +574,9 @@ var invoiceDocSchema = schema(
 	opt("total", TypeDecimal, ""),
 	opt("currency", TypeCurrency, ""),
 	opt("emitted_at", TypeString, "RFC 3339; absent while pending"),
+	opt("cancelled_at", TypeString, "RFC 3339; when status=cancelled"),
 	opt("related_to", TypeString, "document_id of the invoice a credit_note applies to"),
-	strs(opt("available_files", TypeArray, "subset of pdf / xml that fiscal.invoice.document can serve now")),
+	enum(strs(opt("available_files", TypeArray, "subset of pdf / xml that fiscal.invoice.document can serve now")), InvoiceFileKinds),
 	opt("test_mode", TypeBoolean, TestModeDoc),
 	enum(opt("environment", TypeString, "sandbox | production; absent = the provider does not say"), InvoiceEnvironments),
 	enum(opt("error_reason", TypeString, "neutral reason when status=error"), InvoiceErrorReasons),
@@ -574,45 +585,63 @@ var invoiceDocSchema = schema(
 
 // CheckInvoiceDocument validates what the schema cannot say about a
 // fiscal.invoice.document output: exactly one of content_base64 / url,
-// decoded size <= InvoiceDocumentMaxBytes, content_type consistent with
-// kind, and a signed url that is RELATIVE (never a PAC or any absolute URL)
-// with a short expires_at. now is the reference clock (zero = time.Now()).
+// decoded size <= InvoiceDocumentMaxBytes and equal to size_bytes,
+// content_type consistent with kind, a safe filename, a signed url that is a
+// host-relative path (never a PAC or any absolute URL, no dot segments,
+// encoded separators, control or non-ASCII bytes) with a short expires_at,
+// no link in an x_ extension, and no duplicate keys / invalid UTF-8 (the raw
+// output is forwarded as is, so every parser must read the same thing). now
+// is the reference clock (zero = time.Now()). The Executor applies it
+// (Contract.CheckOutput); messages never echo provider values.
 func CheckInvoiceDocument(raw []byte, now time.Time) []string {
-	var o struct {
-		Kind          string `json:"kind"`
-		ContentType   string `json:"content_type"`
-		SizeBytes     int64  `json:"size_bytes"`
-		ContentBase64 string `json:"content_base64"`
-		URL           string `json:"url"`
-		ExpiresAt     string `json:"expires_at"`
+	if p := strictJSONObject(raw); len(p) > 0 {
+		return p
 	}
-	if err := json.Unmarshal(raw, &o); err != nil {
+	// One shallow pass: the 5 MiB base64 is copied once and decoded as a
+	// stream (memory per call matters: see Contract.MaxOutputBytes).
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil || top == nil {
 		return []string{"not a JSON object"}
 	}
+	str := func(k string) string {
+		var s string
+		if v, ok := top[k]; ok {
+			_ = json.Unmarshal(v, &s)
+		}
+		return s
+	}
+	var size int64
+	if v, ok := top["size_bytes"]; ok {
+		_ = json.Unmarshal(v, &size)
+	}
+	kind, contentType, url := str("kind"), str("content_type"), str("url")
+	b64 := str("content_base64")
 	if now.IsZero() {
 		now = time.Now()
 	}
 	var p []string
-	want := map[string]string{"pdf": "application/pdf", "xml": "application/xml"}[o.Kind]
-	if want != "" && o.ContentType != want {
-		p = append(p, "content_type: "+o.ContentType+" does not match kind "+o.Kind)
+	want := map[string]string{"pdf": "application/pdf", "xml": "application/xml"}[kind]
+	if want != "" && contentType != want {
+		p = append(p, "content_type: does not match kind "+kind)
 	}
-	if o.SizeBytes < 0 || o.SizeBytes > InvoiceDocumentMaxBytes {
+	if size < 0 || size > InvoiceDocumentMaxBytes {
 		p = append(p, fmt.Sprintf("size_bytes: must be within 0..%d", InvoiceDocumentMaxBytes))
 	}
+	p = append(p, checkFilename(str("filename"))...)
 	switch {
-	case (o.ContentBase64 == "") == (o.URL == ""):
+	case (b64 == "") == (url == ""):
 		p = append(p, "exactly one of content_base64 or url is required")
-	case o.ContentBase64 != "":
-		if base64.StdEncoding.DecodedLen(len(o.ContentBase64)) > InvoiceDocumentMaxBytes+2 {
+	case b64 != "":
+		if base64.StdEncoding.DecodedLen(len(b64)) > InvoiceDocumentMaxBytes+2 {
 			p = append(p, "content_base64: larger than the size limit")
-		} else if b, err := base64.StdEncoding.DecodeString(o.ContentBase64); err != nil {
+		} else if n, err := io.Copy(io.Discard, base64.NewDecoder(base64.StdEncoding, strings.NewReader(b64))); err != nil {
 			p = append(p, "content_base64: not valid base64")
-		} else if int64(len(b)) != o.SizeBytes {
+		} else if n != size {
 			p = append(p, "size_bytes: does not match the decoded content")
 		}
 	default:
-		exp, err := time.Parse(time.RFC3339, o.ExpiresAt)
+		p = append(p, checkSignedPath(url)...)
+		exp, err := time.Parse(time.RFC3339, str("expires_at"))
 		switch {
 		case err != nil:
 			p = append(p, "expires_at: required (RFC 3339) with url")
@@ -622,7 +651,241 @@ func CheckInvoiceDocument(raw []byte, now time.Time) []string {
 			p = append(p, "expires_at: longer than "+InvoiceDocumentMaxExpiry.String())
 		}
 	}
+	ext := map[string]any{}
+	for k, v := range top {
+		if strings.HasPrefix(k, "x_") {
+			var x any
+			_ = json.Unmarshal(v, &x)
+			ext[k] = x
+		}
+	}
+	return append(p, extensionLinks("", ext)...)
+}
+
+// CheckInvoiceStatus validates what the schema cannot say about a
+// fiscal.invoice.status output: unique document_id, related_to only on a
+// credit_note, error_reason / error_message only on status=error,
+// available_files (unique) only on an issued or cancelled document,
+// test_mode coherent with environment, RFC 3339 timestamps, no link in
+// error_message nor in any x_ extension, and no duplicate keys / invalid
+// UTF-8. The Executor applies it (Contract.CheckOutput).
+func CheckInvoiceStatus(raw []byte, _ time.Time) []string {
+	if p := strictJSONObject(raw); len(p) > 0 {
+		return p
+	}
+	v, err := decodeObject(raw)
+	if err != nil {
+		return []string{err.Error()}
+	}
+	p := extensionLinks("", v)
+	docs, _ := v["documents"].([]any)
+	seen := map[string]bool{}
+	for i, el := range docs {
+		d, ok := el.(map[string]any)
+		if !ok {
+			continue
+		}
+		at := fmt.Sprintf("documents[%d]", i)
+		str := func(k string) string { s, _ := d[k].(string); return s }
+		if id := str("document_id"); id != "" {
+			if seen[id] {
+				p = append(p, at+".document_id: duplicated")
+			}
+			seen[id] = true
+		}
+		if str("related_to") != "" && str("kind") != "credit_note" {
+			p = append(p, at+".related_to: only a credit_note relates to an invoice")
+		}
+		if str("status") != "error" && (str("error_reason") != "" || str("error_message") != "") {
+			p = append(p, at+": error_reason / error_message only with status=error")
+		}
+		if looksLikeLink(str("error_message")) {
+			p = append(p, at+".error_message: must not carry a URL")
+		}
+		if files, ok := d["available_files"].([]any); ok && len(files) > 0 {
+			if st := str("status"); st != "issued" && st != "cancelled" {
+				p = append(p, at+".available_files: only an issued or cancelled document has files")
+			}
+			kinds := map[any]bool{}
+			for _, f := range files {
+				if kinds[f] {
+					p = append(p, at+".available_files: duplicated kind")
+				}
+				kinds[f] = true
+			}
+		}
+		if tm, ok := d["test_mode"].(bool); ok {
+			if env := str("environment"); env != "" && tm != (env == "sandbox") {
+				p = append(p, at+".test_mode: contradicts environment")
+			}
+		}
+		for _, k := range []string{"emitted_at", "cancelled_at"} {
+			if s, ok := d[k].(string); ok {
+				if _, err := time.Parse(time.RFC3339, s); err != nil {
+					p = append(p, at+"."+k+": not RFC 3339")
+				}
+			}
+		}
+	}
 	return p
+}
+
+// InvoiceSignedPathMaxLen caps a fiscal.invoice.document signed url.
+const InvoiceSignedPathMaxLen = 2048
+
+// checkSignedPath accepts only a host-relative path ("/a/b?q"): printable
+// ASCII, no backslash, fragment, "//", "://", dot segments, nor
+// percent-encoded separators, dots or control bytes (a consumer that
+// unescapes before redirecting must not get "//host" or "..").
+func checkSignedPath(u string) []string {
+	var p []string
+	if len(u) > InvoiceSignedPathMaxLen {
+		return []string{fmt.Sprintf("url: longer than %d bytes", InvoiceSignedPathMaxLen)}
+	}
+	for i := 0; i < len(u); i++ {
+		if c := u[i]; c <= 0x20 || c >= 0x7f || c == '\\' || c == '#' {
+			return []string{"url: control, space, non-ASCII, backslash or fragment character"}
+		}
+	}
+	if !strings.HasPrefix(u, "/") || strings.HasPrefix(u, "//") || strings.Contains(u, "://") {
+		p = append(p, "url: must be a host-relative path starting with a single /")
+	}
+	path, _, _ := strings.Cut(u, "?")
+	if strings.Contains(path, "//") {
+		p = append(p, "url: empty path segment")
+	}
+	for _, seg := range strings.Split(path, "/") {
+		if seg == "." || seg == ".." {
+			p = append(p, "url: dot segment")
+			break
+		}
+	}
+	for i := 0; i < len(u); i++ {
+		if u[i] != '%' {
+			continue
+		}
+		if i+2 >= len(u) || !isHex(u[i+1]) || !isHex(u[i+2]) {
+			p = append(p, "url: malformed percent-encoding")
+			break
+		}
+		b := unhex(u[i+1])<<4 | unhex(u[i+2])
+		if b < 0x20 || b == 0x7f || b == '/' || b == '\\' || b == '.' {
+			p = append(p, "url: percent-encoded separator, dot or control byte")
+			break
+		}
+	}
+	return p
+}
+
+func isHex(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
+}
+
+func unhex(c byte) byte {
+	switch {
+	case c <= '9':
+		return c - '0'
+	case c <= 'F':
+		return c - 'A' + 10
+	}
+	return c - 'a' + 10
+}
+
+// checkFilename: a bare file name, safe for Content-Disposition.
+func checkFilename(name string) []string {
+	if name == "" || name == "." || name == ".." || len(name) > 255 || !utf8.ValidString(name) {
+		return []string{"filename: must be a bare file name of 1..255 bytes"}
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f || r == '/' || r == '\\' || r == '"' || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) {
+			return []string{"filename: path separator, quote, control or bidi character"}
+		}
+	}
+	return nil
+}
+
+// looksLikeLink: an absolute or scheme/protocol-relative URL.
+func looksLikeLink(s string) bool {
+	t := strings.TrimSpace(s)
+	return strings.Contains(t, "://") || strings.HasPrefix(t, "//") || strings.HasPrefix(t, `\\`)
+}
+
+// extensionLinks reports any link inside an x_ extension (at any depth): the
+// normalized shape forbids provider URLs and an extension is no way around it.
+func extensionLinks(path string, v map[string]any) []string {
+	var p []string
+	var walk func(at string, val any, inExt bool)
+	walk = func(at string, val any, inExt bool) {
+		switch x := val.(type) {
+		case string:
+			if inExt && looksLikeLink(x) {
+				p = append(p, at+": extension must not carry a URL")
+			}
+		case []any:
+			for i, el := range x {
+				walk(fmt.Sprintf("%s[%d]", at, i), el, inExt)
+			}
+		case map[string]any:
+			for k, el := range x {
+				walk(join(at, k), el, inExt || strings.HasPrefix(k, "x_"))
+			}
+		}
+	}
+	walk(path, v, false)
+	sort.Strings(p)
+	return p
+}
+
+// strictJSONObject rejects invalid UTF-8, invalid JSON and duplicate object
+// keys at any depth: the host forwards the provider's raw bytes, and parsers
+// disagree on which duplicate wins (Go keeps the last, others the first).
+// Allocation-free scan except for the keys themselves.
+func strictJSONObject(raw []byte) []string {
+	if !utf8.Valid(raw) {
+		return []string{"output is not valid UTF-8"}
+	}
+	if !json.Valid(raw) {
+		return []string{"output is not valid JSON"}
+	}
+	type frame struct {
+		obj, wantKey bool
+		keys         map[string]struct{}
+	}
+	var stack []*frame
+	for i := 0; i < len(raw); i++ {
+		switch raw[i] {
+		case '{':
+			stack = append(stack, &frame{obj: true, wantKey: true, keys: map[string]struct{}{}})
+		case '[':
+			stack = append(stack, &frame{})
+		case '}', ']':
+			stack = stack[:len(stack)-1]
+		case ',':
+			if top := stack[len(stack)-1]; top.obj {
+				top.wantKey = true
+			}
+		case '"':
+			j := i + 1
+			for ; raw[j] != '"'; j++ {
+				if raw[j] == '\\' {
+					j++
+				}
+			}
+			if top := stack[len(stack)-1]; top.obj && top.wantKey {
+				key := string(raw[i+1 : j])
+				if strings.IndexByte(key, '\\') >= 0 {
+					_ = json.Unmarshal(raw[i:j+1], &key)
+				}
+				if _, dup := top.keys[key]; dup {
+					return []string{"output has a duplicated key"}
+				}
+				top.keys[key] = struct{}{}
+				top.wantKey = false
+			}
+			i = j
+		}
+	}
+	return nil
 }
 
 func commerceContracts() []Contract {
@@ -1264,6 +1527,7 @@ func commerceContractList() []Contract {
 			Output: schema(
 				list(req("documents", TypeArray, "empty = nothing issued yet for a known order"), invoiceDocSchema),
 			),
+			MaxOutputBytes: InvoiceStatusMaxOutputBytes, CheckOutput: CheckInvoiceStatus,
 			Errors: InvoiceReadErrors,
 		},
 		{
@@ -1280,10 +1544,11 @@ func commerceContractList() []Contract {
 				enum(req("content_type", TypeString, ""), InvoiceFileContentTypes),
 				req("size_bytes", TypeInteger, "decoded size; at most InvoiceDocumentMaxBytes (5 MiB)"),
 				opt("content_base64", TypeString, "the file; exactly one of content_base64 or url"),
-				pattern(opt("url", TypeString, "RELATIVE signed path served by the provider addon (starts with a single /); never an absolute URL"), `^/[^/\\\s][^\s]*$`),
+				pattern(opt("url", TypeString, "RELATIVE signed path served by the provider addon (starts with a single /); never an absolute URL"), `^/[A-Za-z0-9._~!$&'()*+,;=:@%-][A-Za-z0-9._~!$&'()*+,;=:@%/?-]*$`),
 				opt("expires_at", TypeString, "RFC 3339; required with url; at most 15 minutes ahead"),
 				opt("test_mode", TypeBoolean, TestModeDoc),
 			),
+			MaxOutputBytes: InvoiceDocumentMaxOutputBytes, CheckOutput: CheckInvoiceDocument,
 			Errors: InvoiceReadErrors,
 		},
 	}

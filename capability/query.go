@@ -751,10 +751,21 @@ func (e Executor) one(parent context.Context, c Contract, org uuid.UUID, market 
 		r.Err = fmt.Errorf("capability %s: provider %s: %w", c.Key, p.Addon, oc.err)
 		return r
 	}
+	if c.MaxOutputBytes > 0 && len(oc.out) > c.MaxOutputBytes {
+		r.Err = &OutputError{Capability: c.Key, Provider: p.Addon, Problems: []string{
+			fmt.Sprintf("output is %d bytes, over the contract limit of %d", len(oc.out), c.MaxOutputBytes)}}
+		return r
+	}
 	if !e.SkipOutputValidation {
 		if problems := c.ValidateOutput(oc.out); len(problems) > 0 {
 			r.Err = &OutputError{Capability: c.Key, Provider: p.Addon, Problems: problems}
 			return r
+		}
+		if c.CheckOutput != nil {
+			if problems := c.CheckOutput(oc.out, e.now()); len(problems) > 0 {
+				r.Err = &OutputError{Capability: c.Key, Provider: p.Addon, Problems: problems}
+				return r
+			}
 		}
 	}
 	r.Output = oc.out

@@ -92,6 +92,15 @@ type Contract struct {
 	Input *Schema
 	// Output is the normalized result shape of a query.
 	Output *Schema
+	// MaxOutputBytes, when > 0, caps the raw size of one provider output; a
+	// larger one is refused as invalid_output BEFORE it is decoded (memory
+	// bound per call: a provider is untrusted code). 0 = no contract cap.
+	MaxOutputBytes int
+	// CheckOutput, when set, validates what the Output schema cannot express
+	// (one-of, cross-field rules, size vs content, link hygiene). The
+	// Executor runs it after ValidateOutput, with its clock; problems make
+	// the result invalid_output, so a consumer never sees such an output.
+	CheckOutput func(raw []byte, now time.Time) []string `json:"-"`
 	// Errors lists the error codes a provider may report for this contract
 	// with NewCodedError (e.g. "invalid_input", "not_found"). A declared
 	// code reaches the consumer as Result.ErrorCode(); an undeclared one is
