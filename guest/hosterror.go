@@ -18,10 +18,14 @@ import (
 //   - Host nuevo (ABI >= 1.18, DG1.1): error.code == "source_unavailable" con
 //     error.details{source, reason, owners, installed_owners, sqlstate,
 //     degradable}.
-//   - Host viejo: error.code == "db_error" cuyo message trae el SQLSTATE
-//     tal como lo imprime pgx: "... (SQLSTATE 42P01)". Solo se reconoce el
-//     token "SQLSTATE <5 caracteres>"; nunca el texto libre "does not exist",
-//     que también sale de funciones, índices o roles.
+//   - Host viejo (sin details.classified): error.code == "db_error" cuyo
+//     message TERMINA en el sufijo que imprime pgx: "... (SQLSTATE 42P01)".
+//     Solo se acepta ese sufijo final (un dato de usuario dentro del mensaje,
+//     p. ej. `"SQLSTATE 42P01"`, no cuenta; un mensaje truncado sin sufijo no
+//     se clasifica) y nunca el texto libre "does not exist". Si el sobre trae
+//     details.classified == true (host >= 1.19) el host ya decidió: un db_error
+//     se queda como error (p. ej. un 42P01 posterior al probe es un fallo real)
+//     y la forma vieja NO se aplica.
 //   - Éxito con meta.absent (host con on_absent:"empty", DG1.2): la fuente se
 //     sirvió vacía y el host dice cuál faltó.
 //
@@ -61,9 +65,10 @@ type Absence struct {
 	// SQLState es 42P01 o 42703 cuando el origen fue Postgres.
 	SQLState string
 	// Degradable es lo que dijo el host. Un host viejo no lo dice: se asume
-	// true (no puede saberse si la lectura corrió sobre una transacción
-	// abierta; ahí el siguiente statement fallará con 25P02 y llegará como
-	// error normal).
+	// true SOLO si la operación es una lectura (ClassifyReadError / data_query;
+	// no puede saberse si la lectura corrió sobre una transacción abierta, ahí
+	// el siguiente statement fallará con 25P02 y llegará como error normal).
+	// La forma vieja de una escritura (ClassifyHostError) es siempre false.
 	Degradable bool
 	// Message es el texto original del driver, intacto ("" en meta.absent).
 	Message string
@@ -120,7 +125,22 @@ type HostOutcome struct {
 // ClassifyHostError clasifica el sobre `{success, data, error, meta}` de
 // data_query / data_mutate / data_batch. Es total: nunca entra en pánico y un
 // sobre ilegible vuelve como Err.
+//
+// Como no sabe si el sobre es de una lectura o de una escritura, la forma vieja
+// (db_error + SQLSTATE) sale con Degradable=false: una escritura nunca se
+// degrada. Para el sobre de un data_query usa ClassifyReadError.
 func ClassifyHostError(envelope []byte) HostOutcome {
+	return classifyEnvelope(envelope, false)
+}
+
+// ClassifyReadError es ClassifyHostError para el sobre de una LECTURA
+// (data_query): la forma vieja sale con Degradable=true. Es lo que usan Query y
+// QueryOptional.
+func ClassifyReadError(envelope []byte) HostOutcome {
+	return classifyEnvelope(envelope, true)
+}
+
+func classifyEnvelope(envelope []byte, read bool) HostOutcome {
 	if len(envelope) == 0 {
 		return HostOutcome{Err: &HostError{Code: "db_error", Message: "host returned empty envelope"}}
 	}
@@ -157,13 +177,14 @@ func ClassifyHostError(envelope []byte) HostOutcome {
 		}
 		return HostOutcome{Absent: a}
 	}
-	if code == "db_error" {
+	classified := env.Error.Details != nil && env.Error.Details.Classified != nil && *env.Error.Details.Classified
+	if code == "db_error" && !classified {
 		if st := sqlStateInMessage(env.Error.Message); st != "" {
 			if reason := reasonFromSQLState(st); reason != "" {
 				return HostOutcome{Absent: &Absence{
 					Reason:     reason,
 					SQLState:   st,
-					Degradable: true,
+					Degradable: read,
 					Message:    env.Error.Message,
 					Legacy:     true,
 				}}
@@ -183,22 +204,22 @@ func reasonFromSQLState(state string) string {
 	return ""
 }
 
-// sqlStateInMessage extrae el SQLSTATE de un texto de pgx ("... (SQLSTATE
-// 42P01)"). Devuelve el token de 5 caracteres alfanuméricos que sigue a
-// "SQLSTATE ", o "" si no hay. No interpreta ningún otro texto.
+// sqlStateInMessage extrae el SQLSTATE de un texto de pgx SOLO si es el sufijo
+// final "(SQLSTATE XXXXX)" (se ignora el espacio en blanco al final). Un
+// "SQLSTATE" en medio del mensaje es texto (posiblemente un dato de usuario) y
+// no se mira; un mensaje truncado sin sufijo devuelve "".
 func sqlStateInMessage(msg string) string {
-	const marker = "SQLSTATE "
-	rest := msg
-	for {
-		i := strings.Index(rest, marker)
-		if i < 0 {
-			return ""
-		}
-		rest = rest[i+len(marker):]
-		if len(rest) >= 5 && isSQLState(rest[:5]) && (len(rest) == 5 || !isAlnum(rest[5])) {
-			return rest[:5]
-		}
+	const open = "(SQLSTATE "
+	s := strings.TrimRight(msg, " \t\r\n")
+	n := len(open) + 5 + 1
+	if len(s) < n || s[len(s)-1] != ')' || s[len(s)-n:len(s)-6] != open {
+		return ""
 	}
+	st := s[len(s)-6 : len(s)-1]
+	if !isSQLState(st) {
+		return ""
+	}
+	return st
 }
 
 func isSQLState(s string) bool {
@@ -241,6 +262,9 @@ type absenceWireBody struct {
 	InstalledOwners []string `json:"installed_owners"`
 	SQLState        string   `json:"sqlstate"`
 	Degradable      *bool    `json:"degradable"`
+	// Classified (host >= 1.19): el host ya clasificó este sobre; un db_error
+	// con la marca es un fallo real y no se reinterpreta por SQLSTATE.
+	Classified *bool `json:"classified"`
 }
 
 func (b *absenceWireBody) toAbsence() *Absence {

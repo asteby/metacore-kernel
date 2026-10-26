@@ -1,9 +1,11 @@
 package guest
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -56,7 +58,7 @@ func TestQueryPagesExhausts(t *testing.T) {
 				t.Fatalf("rows=%d absent=%v err=%v", len(rows), absent, err)
 			}
 			for i, r := range rows {
-				if int(r["id"].(float64)) != i+1 {
+				if r["id"].(json.Number).String() != fmt.Sprint(i+1) {
 					t.Fatalf("orden roto en %d", i)
 				}
 			}
@@ -200,5 +202,99 @@ func TestDecodeDataQueryPageArrayShape(t *testing.T) {
 	rows, _, err := decodeDataQueryPage("t", []byte(`{"success":true,"data":[{"id":1}]}`))
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+}
+
+func TestQueryPagesNoIDColumnIsUsageError(t *testing.T) {
+	for _, env := range []string{
+		`{"success":false,"error":{"code":"source_unavailable","message":"ERROR: column \"id\" does not exist (SQLSTATE 42703)","details":{"source":"t","reason":"schema_mismatch","sqlstate":"42703","degradable":true}}}`,
+		`{"success":false,"error":{"code":"db_error","message":"ERROR: column t.id does not exist (SQLSTATE 42703)"}}`,
+	} {
+		h := &fakeHost{override: func(int) []byte { return []byte(env) }}
+		rows, absent, err := queryPages(h.call, "t", Q{}, "empty")
+		var de *DataQueryError
+		if absent != nil || rows != nil || !errors.As(err, &de) || de.Code != "invalid_query" {
+			t.Fatalf("absent=%v err=%v", absent, err)
+		}
+	}
+	// 42703 de OTRA columna sigue siendo ausencia (schema_mismatch).
+	h := &fakeHost{override: func(int) []byte {
+		return []byte(`{"success":false,"error":{"code":"db_error","message":"ERROR: column \"status\" does not exist (SQLSTATE 42703)"}}`)
+	}}
+	_, absent, err := queryPages(h.call, "t", Q{}, "empty")
+	if err != nil || absent == nil || absent.Reason != ReasonSchemaMismatch {
+		t.Fatalf("absent=%v err=%v", absent, err)
+	}
+}
+
+func TestOptionalResultNonDegradableIsError(t *testing.T) {
+	a := &Absence{Source: "t", Reason: ReasonSchemaMismatch, SQLState: "42703", Degradable: false, Message: "m"}
+	res, err := optionalResult(nil, a, nil)
+	var de *DataQueryError
+	var abs *Absence
+	if !errors.As(err, &de) || !errors.As(err, &abs) || res.Absent != nil {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+	a.Degradable = true
+	res, err = optionalResult(nil, a, nil)
+	if err != nil || res.Absent == nil {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+	// Via el sobre real: source_unavailable degradable:false.
+	h := &fakeHost{override: func(int) []byte {
+		return []byte(`{"success":false,"error":{"code":"source_unavailable","details":{"source":"t","reason":"schema_mismatch","sqlstate":"42703","degradable":false}}}`)
+	}}
+	if _, err := optionalResult(queryPages(h.call, "t", Q{}, "empty")); err == nil {
+		t.Fatal("esperaba error")
+	}
+}
+
+func TestQueryPagesLargeIDsKeepPrecision(t *testing.T) {
+	const big = "9007199254740993" // 2^53 + 1
+	var seen []string
+	calls := 0
+	call := func(req []byte) []byte {
+		calls++
+		var r struct {
+			Where map[string]any `json:"where"`
+		}
+		d := json.NewDecoder(bytes.NewReader(req))
+		d.UseNumber()
+		_ = d.Decode(&r)
+		if g, ok := r.Where["id"].(map[string]any); ok {
+			seen = append(seen, fmt.Sprint(g["gt"]))
+			return []byte(`{"success":true,"data":{"rows":[]}}`)
+		}
+		rows := make([]string, 200)
+		for i := range rows {
+			rows[i] = fmt.Sprintf(`{"id":%d}`, 9007199254740993+i)
+		}
+		return []byte(`{"success":true,"data":{"rows":[` + strings.Join(rows, ",") + `]}}`)
+	}
+	rows, _, err := queryPages(call, "t", Q{}, "")
+	if err != nil || len(rows) != 200 {
+		t.Fatalf("rows=%d err=%v", len(rows), err)
+	}
+	if got := fmt.Sprint(rows[0]["id"]); got != big {
+		t.Fatalf("id = %s, quería %s", got, big)
+	}
+	if len(seen) != 1 || seen[0] != "9007199254741192" {
+		t.Fatalf("cursor = %v", seen)
+	}
+}
+
+func TestQueryPagesCursorMustAdvance(t *testing.T) {
+	call := func([]byte) []byte {
+		rows := make([]map[string]any, 200)
+		for i := range rows {
+			rows[i] = map[string]any{"id": 7}
+		}
+		b, _ := json.Marshal(map[string]any{"success": true, "data": map[string]any{"rows": rows}})
+		return b
+	}
+	_, _, err := queryPages(call, "t", Q{}, "")
+	var de *DataQueryError
+	if !errors.As(err, &de) || de.Code != "invalid_query" || !strings.Contains(de.Message, "did not advance") {
+		t.Fatalf("err = %v", err)
 	}
 }

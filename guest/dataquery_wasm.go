@@ -38,14 +38,13 @@ func Query(table string, q Q) ([]Row, error) {
 // (forbidden, invalid_request, db_error transitorio...), que el autor debe
 // tratar como fallo (cerrado en guardias de dinero o stock).
 //
+// Una ausencia que el host marca degradable:false se devuelve como error
+// (*DataQueryError con Absent != nil), nunca como Optional.Absent.
+//
 // Manda on_absent:"empty"; un host que aún no lo implementa lo ignora y responde
 // con el error de siempre (source_unavailable o db_error + SQLSTATE 42P01 /
 // 42703), que se convierte en la misma Absence. Un host viejo no distingue
 // «addon no instalado»: la razón será table_missing / schema_mismatch.
 func QueryOptional(table string, q Q) (Optional, error) {
-	rows, absent, err := queryPages(callDataQuery, table, q, "empty")
-	if err != nil {
-		return Optional{Rows: rows}, err
-	}
-	return Optional{Rows: rows, Absent: absent}, nil
+	return optionalResult(queryPages(callDataQuery, table, q, "empty"))
 }

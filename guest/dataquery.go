@@ -1,27 +1,36 @@
 package guest
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 )
 
 // data_query (docs/wasm-abi.md § 15): lectura paginable y org-scoped de una
 // tabla LÓGICA. Este archivo es puro (sin imports de host); el import vive en
 // dataquery_wasm.go.
 
+// La tabla debe tener columna `id` (la paginación ordena por ella). Si no la
+// tiene, Query/QueryOptional devuelven *DataQueryError{Code:"invalid_query"}
+// (no una ausencia). El host responde con error "db_error" si una página de 200
+// filas supera su tope de 8 MiB de respuesta; no hay forma de achicar la página.
+
 // dataQueryPageSize es el tope por página del host (dataQueryMaxLimit en
 // runtime/wasm/dataquery_records.go: pide más y el host recorta a 200).
 const dataQueryPageSize = 200
 
-// Row es una fila de data_query: columna -> valor JSON (números float64).
+// Row es una fila de data_query: columna -> valor JSON. Los números llegan como
+// json.Number (no float64) para no perder precisión en enteros > 2^53; usa
+// Int64()/Float64()/String() o fmt.Sprint.
 type Row = map[string]any
 
 // Q es la consulta de Query / QueryOptional.
 type Q struct {
 	// Where son filtros: escalar = igualdad (nil = IS NULL); un objeto
 	// map[string]any{"gt": x} usa operadores (gt gte lt lte ne in). No admite
-	// "id" (lo usa el cursor) ni organization_id / deleted_at (los pone el host).
+	// "id" (RESERVADO: lo usa el cursor) ni organization_id / deleted_at (los pone el host).
 	Where map[string]any
 	// MaxRows es el tope explícito de filas. 0 = hasta agotar. Si hay más
 	// filas que el tope, se devuelven MaxRows y el error es ErrTruncated: el
@@ -91,7 +100,7 @@ type dataQueryOKWire struct {
 
 // decodeDataQueryPage clasifica y decodifica un sobre de data_query.
 func decodeDataQueryPage(table string, envelope []byte) ([]Row, *Absence, error) {
-	out := ClassifyHostError(envelope)
+	out := ClassifyReadError(envelope)
 	if out.Absent != nil {
 		if out.Absent.Source == "" {
 			out.Absent.Source = table
@@ -116,15 +125,27 @@ func decodeDataQueryPage(table string, envelope []byte) ([]Row, *Absence, error)
 	var obj struct {
 		Rows []Row `json:"rows"`
 	}
-	if err := json.Unmarshal(ok.Data, &obj); err == nil {
+	if err := unmarshalNumber(ok.Data, &obj); err == nil {
 		return obj.Rows, nil, nil
 	}
 	var arr []Row
-	if err := json.Unmarshal(ok.Data, &arr); err != nil {
+	if err := unmarshalNumber(ok.Data, &arr); err != nil {
 		return nil, nil, &DataQueryError{Code: "decode", Message: err.Error()}
 	}
 	return arr, nil, nil
 }
+
+// unmarshalNumber decodifica conservando los números como json.Number.
+func unmarshalNumber(b []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	return dec.Decode(v)
+}
+
+// idColumnMissing reconoce el 42703 de la columna `id` que la propia paginación
+// fuerza (order_by id): la tabla no tiene id, es un error de uso, no una
+// ausencia de fuente.
+var idColumnMissing = regexp.MustCompile(`column ("id"|[\w"]+\."id"|id|\w+\.id) (of relation \S+ )?does not exist`)
 
 // queryPages pagina por cursor (`order_by id` asc + `id > último`) usando
 // `call`, que envía un request JSON al host y devuelve el sobre. Devuelve las
@@ -166,6 +187,9 @@ func queryPages(call func(req []byte) []byte, table string, q Q, onAbsent string
 			return nil, nil, err
 		}
 		if absent != nil {
+			if absent.Reason == ReasonSchemaMismatch && idColumnMissing.MatchString(absent.Message) {
+				return nil, nil, &DataQueryError{Code: "invalid_query", Message: "table has no id column: Query paginates by id (" + absent.Message + ")"}
+			}
 			return nil, absent, nil
 		}
 		rows = append(rows, page...)
@@ -179,6 +203,21 @@ func queryPages(call func(req []byte) []byte, table string, q Q, onAbsent string
 		if last == nil {
 			return nil, nil, &DataQueryError{Code: "invalid_query", Message: "row without id: cannot paginate"}
 		}
+		if cursor != nil && fmt.Sprint(last) == fmt.Sprint(cursor) {
+			return nil, nil, &DataQueryError{Code: "invalid_query", Message: fmt.Sprintf("pagination cursor did not advance (id %v repeated)", last)}
+		}
 		cursor = last
 	}
+}
+
+// optionalResult arma el resultado de QueryOptional. Una ausencia con
+// Degradable=false (p. ej. 42703 dentro de InvokeInTx) es un fallo, no Absent.
+func optionalResult(rows []Row, absent *Absence, err error) (Optional, error) {
+	if err != nil {
+		return Optional{Rows: rows}, err
+	}
+	if absent != nil && !absent.Degradable {
+		return Optional{}, &DataQueryError{Code: CodeSourceUnavailable, Message: absent.Message, Absent: absent}
+	}
+	return Optional{Rows: rows, Absent: absent}, nil
 }

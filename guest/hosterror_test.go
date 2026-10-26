@@ -44,12 +44,12 @@ func TestClassifyHostError(t *testing.T) {
 		{
 			name:       "viejo: db_error con 42P01",
 			env:        `{"success":false,"error":{"code":"db_error","message":"ERROR: relation \"fiscal_documents\" does not exist (SQLSTATE 42P01)"}}`,
-			wantReason: ReasonTableMissing, legacy: true, degradable: true, sqlstate: "42P01",
+			wantReason: ReasonTableMissing, legacy: true, degradable: false, sqlstate: "42P01",
 		},
 		{
 			name:       "viejo: db_error con 42703 es schema_mismatch, no table_missing",
 			env:        `{"success":false,"error":{"code":"db_error","message":"ERROR: column \"x\" does not exist (SQLSTATE 42703)"}}`,
-			wantReason: ReasonSchemaMismatch, legacy: true, degradable: true, sqlstate: "42703",
+			wantReason: ReasonSchemaMismatch, legacy: true, degradable: false, sqlstate: "42703",
 		},
 		{
 			name:        "viejo: 'does not exist' sin SQLSTATE NO es ausencia",
@@ -70,6 +70,36 @@ func TestClassifyHostError(t *testing.T) {
 			name:        "42P01 en un code que no es db_error no se reinterpreta",
 			env:         `{"success":false,"error":{"code":"forbidden","message":"SQLSTATE 42P01"}}`,
 			wantErrCode: "forbidden",
+		},
+		{
+			name:        "inyeccion: SQLSTATE en dato de usuario, sufijo real 22P02",
+			env:         `{"success":false,"error":{"code":"db_error","message":"invalid input syntax for type uuid: \"SQLSTATE 42P01\" (SQLSTATE 22P02)"}}`,
+			wantErrCode: "db_error",
+		},
+		{
+			name:        "SQLSTATE a media frase sin sufijo (mensaje truncado) no se clasifica",
+			env:         `{"success":false,"error":{"code":"db_error","message":"relation \"t\" does not exist SQLSTATE 42P01 y mas texto"}}`,
+			wantErrCode: "db_error",
+		},
+		{
+			name:        "sufijo sin parentesis no se clasifica",
+			env:         `{"success":false,"error":{"code":"db_error","message":"x SQLSTATE 42P01"}}`,
+			wantErrCode: "db_error",
+		},
+		{
+			name:        "classified:true => db_error con 42P01 se queda como error",
+			env:         `{"success":false,"error":{"code":"db_error","message":"relation \"t\" does not exist (SQLSTATE 42P01)","details":{"classified":true}}}`,
+			wantErrCode: "db_error",
+		},
+		{
+			name:       "classified:false => sigue el fallback",
+			env:        `{"success":false,"error":{"code":"db_error","message":"relation \"t\" does not exist (SQLSTATE 42P01)","details":{"classified":false}}}`,
+			wantReason: ReasonTableMissing, legacy: true, sqlstate: "42P01",
+		},
+		{
+			name:       "sufijo con espacio final aun se acepta",
+			env:        `{"success":false,"error":{"code":"db_error","message":"x (SQLSTATE 42P01)\n"}}`,
+			wantReason: ReasonTableMissing, legacy: true, sqlstate: "42P01",
 		},
 		{name: "forbidden", env: `{"success":false,"error":{"code":"forbidden","message":"no db:read"}}`, wantErrCode: "forbidden"},
 		{name: "invalid_request", env: `{"success":false,"error":{"code":"invalid_request","message":"x"}}`, wantErrCode: "invalid_request"},
@@ -126,5 +156,19 @@ func TestAbsencePreservesMessage(t *testing.T) {
 	env := `{"success":false,"error":{"code":"source_unavailable","message":"orig (SQLSTATE 42P01)","details":{"reason":"table_missing"}}}`
 	if got := ClassifyHostError([]byte(env)).Absent.Message; got != "orig (SQLSTATE 42P01)" {
 		t.Fatalf("message = %q", got)
+	}
+}
+
+func TestClassifyReadErrorLegacyDegradableOnlyForReads(t *testing.T) {
+	env := []byte(`{"success":false,"error":{"code":"db_error","message":"x (SQLSTATE 42P01)"}}`)
+	if a := ClassifyHostError(env).Absent; a == nil || a.Degradable {
+		t.Fatalf("escritura/generico: forma vieja no debe ser degradable: %+v", a)
+	}
+	if a := ClassifyReadError(env).Absent; a == nil || !a.Degradable || !a.Legacy {
+		t.Fatalf("lectura: %+v", a)
+	}
+	classified := []byte(`{"success":false,"error":{"code":"db_error","message":"x (SQLSTATE 42P01)","details":{"classified":true}}}`)
+	if out := ClassifyReadError(classified); out.Absent != nil || out.Err == nil {
+		t.Fatalf("classified en lectura: %+v", out)
 	}
 }
