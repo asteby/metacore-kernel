@@ -185,7 +185,7 @@ func validateRollupSpec(where string, r Rollup, ownCols, childCols map[string]st
 var (
 	dashKinds = map[string]struct{}{
 		"stat": {}, "bar": {}, "line": {}, "area": {}, "pie": {},
-		"donut": {}, "list": {}, "progress": {}, "custom": {},
+		"donut": {}, "list": {}, "progress": {}, "map": {}, "custom": {},
 	}
 	dashAggregates = map[string]struct{}{
 		"count": {}, "sum": {}, "avg": {}, "min": {}, "max": {},
@@ -276,49 +276,58 @@ func validateDashboard(m *Manifest) []string {
 		} else {
 			seen[w.Key] = struct{}{}
 		}
-		if w.Title == "" {
-			errs = append(errs, fmt.Sprintf("%s.title is required", where))
-		}
-		if w.Kind == "" {
-			errs = append(errs, fmt.Sprintf("%s.kind is required", where))
-			// Without a kind the conditional rules below are meaningless.
-			continue
-		}
-		if _, ok := dashKinds[w.Kind]; !ok {
-			errs = append(errs, fmt.Sprintf("%s.kind %q is not one of stat|bar|line|area|pie|donut|list|progress|custom", where, w.Kind))
-		}
-		if w.Size != "" {
-			if _, ok := dashSizes[w.Size]; !ok {
-				errs = append(errs, fmt.Sprintf("%s.size %q is not one of sm|md|lg|full", where, w.Size))
-			}
-		}
-		if w.Format != "" {
-			if _, ok := dashFormats[w.Format]; !ok {
-				errs = append(errs, fmt.Sprintf("%s.format %q is not one of number|currency|percent|compact", where, w.Format))
-			}
-		}
+		errs = append(errs, validateWidgetBody(m, where, w)...)
+	}
+	return errs
+}
 
-		if w.Kind == "custom" {
-			// Federated escape hatch: needs an expose + a frontend bundle.
-			if w.Expose == "" {
-				errs = append(errs, fmt.Sprintf("%s is kind=custom and must declare expose", where))
-			}
-			if m.Frontend == nil {
-				errs = append(errs, fmt.Sprintf("%s is kind=custom and requires a top-level frontend block (federation)", where))
-			}
-			continue
+// validateWidgetBody enforces the per-widget rules shared by
+// contributions.dashboard[] and contributions.inject[kind=widget]: title, kind,
+// size, format, the federated escape hatch and the declarative query.
+func validateWidgetBody(m *Manifest, where string, w DashboardWidget) []string {
+	var errs []string
+	if w.Title == "" {
+		errs = append(errs, fmt.Sprintf("%s.title is required", where))
+	}
+	if w.Kind == "" {
+		errs = append(errs, fmt.Sprintf("%s.kind is required", where))
+		// Without a kind the conditional rules below are meaningless.
+		return errs
+	}
+	if _, ok := dashKinds[w.Kind]; !ok {
+		errs = append(errs, fmt.Sprintf("%s.kind %q is not one of stat|bar|line|area|pie|donut|list|progress|map|custom", where, w.Kind))
+	}
+	if w.Size != "" {
+		if _, ok := dashSizes[w.Size]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.size %q is not one of sm|md|lg|full", where, w.Size))
 		}
+	}
+	if w.Format != "" {
+		if _, ok := dashFormats[w.Format]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.format %q is not one of number|currency|percent|compact", where, w.Format))
+		}
+	}
 
-		// Declarative kinds: a query (with a model) is mandatory.
-		if w.Query == nil {
-			errs = append(errs, fmt.Sprintf("%s.query is required for kind=%s", where, w.Kind))
-			continue
+	if w.Kind == "custom" {
+		// Federated escape hatch: needs an expose + a frontend bundle.
+		if w.Expose == "" {
+			errs = append(errs, fmt.Sprintf("%s is kind=custom and must declare expose", where))
 		}
-		q := w.Query
-		errs = append(errs, validateWidgetQuery(where, w.Kind, q)...)
-		if w.Compare != nil && (q.DateField == "" || q.Range == "") {
-			errs = append(errs, fmt.Sprintf("%s.compare requires query.date_field and query.range", where))
+		if m.Frontend == nil {
+			errs = append(errs, fmt.Sprintf("%s is kind=custom and requires a top-level frontend block (federation)", where))
 		}
+		return errs
+	}
+
+	// Declarative kinds: a query (with a model) is mandatory.
+	if w.Query == nil {
+		errs = append(errs, fmt.Sprintf("%s.query is required for kind=%s", where, w.Kind))
+		return errs
+	}
+	q := w.Query
+	errs = append(errs, validateWidgetQuery(where, w.Kind, q)...)
+	if w.Compare != nil && (q.DateField == "" || q.Range == "") {
+		errs = append(errs, fmt.Sprintf("%s.compare requires query.date_field and query.range", where))
 	}
 	return errs
 }
@@ -342,7 +351,9 @@ func validateWidgetQuery(where, kind string, q *WidgetQuery) []string {
 		errs = append(errs, fmt.Sprintf("%s.query.field is required when aggregate=%s", where, agg))
 	}
 	switch kind {
-	case "bar", "pie", "donut", "list":
+	case "bar", "pie", "donut", "list", "map":
+		// kind=map paints one value per region: group_by names the geographic
+		// column (state, municipality, postal-code zone) the buckets key on.
 		if q.GroupBy == "" {
 			errs = append(errs, fmt.Sprintf("%s.query.group_by is required for kind=%s", where, kind))
 		}
@@ -1407,6 +1418,26 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	}
 
 	var errs []string
+
+	// An action aimed at "<this addon>.<Model>" (the qualified form the
+	// extensibility contract recommends) is an own-model action: it must name
+	// a declared model and gets exactly the checks of the bare key, so the
+	// rest of the validation sees the bare key (m is this call's copy).
+	if m.Contributions != nil {
+		own := make(map[string]struct{}, len(m.Models))
+		for _, mod := range m.Models {
+			own[mod.Key] = struct{}{}
+		}
+		for ai := range m.Contributions.Actions {
+			a := &m.Contributions.Actions[ai]
+			if mk := OwnModelOfTarget(m.Metadata.Key, a.TargetModel); mk != "" {
+				if _, ok := own[mk]; !ok {
+					errs = append(errs, fmt.Sprintf("contributions.actions[%d].target_model %q names this addon but %q is not one of its models", ai, a.TargetModel, mk))
+				}
+				a.TargetModel = mk
+			}
+		}
+	}
 	// tolerate files a finding of a legacy-tolerated rule: a hard error in
 	// strict mode, a warning otherwise (see compat.go).
 	tolerate := func(rule, msg string) {
@@ -1750,7 +1781,30 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 		}
 	}
 
+	{
+		var inject []Inject
+		if m.Contributions != nil {
+			inject = m.Contributions.Inject
+		}
+		if len(inject) > 0 || m.ExtensionPoints != nil {
+			errs = append(errs, ValidateInject(InjectEnv{
+				AddonKey:  m.Metadata.Key,
+				Cols:      colsByModel,
+				Federated: m.Frontend != nil && m.Frontend.Format == "federation",
+				ValidateWidget: func(where string, w DashboardWidget) []string {
+					return validateWidgetBody(&m, where, w)
+				},
+				Permissions: declaredPermissions(&m),
+			}, inject, m.ExtensionPoints)...)
+		}
+	}
+
 	if m.Contributions != nil {
+		for ai, a := range m.Contributions.Actions {
+			if msg := ActionTargetProblem(a.TargetModel); msg != "" {
+				errs = append(errs, fmt.Sprintf("contributions.actions[%d].target_model: %s", ai, msg))
+			}
+		}
 		errs = append(errs, validateDashboard(&m)...)
 		errs = append(errs, validateGuides(&m)...)
 		errs = append(errs, validateNavViewTypes(&m)...)
@@ -2034,6 +2088,9 @@ func validateConditions(m *Manifest) []string {
 	}
 	for i, w := range m.Contributions.Dashboard {
 		check(fmt.Sprintf("contributions.dashboard[%d]", i), w.Condition)
+	}
+	for i, in := range m.Contributions.Inject {
+		check(fmt.Sprintf("contributions.inject[%d]", i), in.Condition)
 	}
 	for i, r := range m.Contributions.Routes {
 		check(fmt.Sprintf("contributions.routes[%d]", i), r.Condition)
@@ -2486,4 +2543,15 @@ func validateRecordPresentation(mi int, mod Model, ownCols map[string]struct{}) 
 	}
 	sort.Strings(errs)
 	return errs
+}
+
+// declaredPermissions indexes rbac.permissions[].key (empty, never nil).
+func declaredPermissions(m *Manifest) map[string]struct{} {
+	out := map[string]struct{}{}
+	if m.RBAC != nil {
+		for _, p := range m.RBAC.Permissions {
+			out[p.Key] = struct{}{}
+		}
+	}
+	return out
 }

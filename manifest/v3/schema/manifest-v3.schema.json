@@ -1231,6 +1231,9 @@
         "document_forms": {
           "$ref": "#/$defs/DocumentForms"
         },
+        "import": {
+          "$ref": "#/$defs/ImportSpec"
+        },
         "form_layout": {
           "$ref": "#/$defs/FormLayout"
         },
@@ -2307,6 +2310,14 @@
           "items": {
             "$ref": "#/$defs/RuleDef"
           }
+        },
+        "inject": {
+          "type": "array",
+          "maxItems": 64,
+          "description": "Declarative UI pieces (panel, tab, computed list column, header badge, list filter, dashboard widget) this addon mounts on a model another addon owns, addressed by '<addon>.<Model>' or by role '@<domain>.<entity>'. Served per org and installation; nothing is copied into the owner.",
+          "items": {
+            "$ref": "#/$defs/Inject"
+          }
         }
       }
     },
@@ -2867,6 +2878,7 @@
             "donut",
             "list",
             "progress",
+            "map",
             "custom"
           ]
         },
@@ -4295,6 +4307,22 @@
           "description": "Names of own models that opt into accepting model extensions from other addons.",
           "items": {
             "type": "string"
+          }
+        },
+        "sealed": {
+          "type": "array",
+          "description": "Own models (Model keys) that refuse contributions.inject[] and cross-addon actions from other addons. Everything not sealed is open by default.",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Za-z0-9]*$"
+          }
+        },
+        "primary_from": {
+          "type": "array",
+          "description": "Addon keys allowed to contribute an action with priority 'primary' to this addon's models. Any other contributed action is capped at 'secondary'.",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]*$"
           }
         }
       }
@@ -5852,6 +5880,295 @@
         }
       }
     },
+    "Inject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "kind"
+      ],
+      "description": "One declarative contribution to a model (see Contributions.inject). The body is the block the kind names: panel|tab -> panel, column -> column, badge -> badge, filter -> filter, widget -> widget.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Unique within the addon; known to the host as '<addon>:<key>'."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "panel",
+            "tab",
+            "column",
+            "badge",
+            "filter",
+            "widget"
+          ]
+        },
+        "target": {
+          "type": "string",
+          "description": "Concrete '<addon>.<Model>' or role '@<domain>.<entity>' (resolves to the model its owner published as the read contract <domain>.<entity>@N). Required except for kind=widget.",
+          "examples": [
+            "customers.SalesOrder",
+            "@commerce.order"
+          ]
+        },
+        "slot": {
+          "type": "string",
+          "enum": [
+            "record.panels",
+            "record.tabs",
+            "record.header.badges",
+            "list.columns",
+            "list.filters",
+            "dashboard.widgets"
+          ],
+          "description": "Host slot from the slots@1 catalog. Must accept the kind."
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Ascending. Owner of the target: 0-199. Any other contributor: 200 or more (default 200)."
+        },
+        "permission": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_:]*)+$",
+          "description": "Permission key of the contributor (declared in its rbac.permissions when under its own prefix)."
+        },
+        "condition": {
+          "$ref": "#/$defs/Condition"
+        },
+        "panel": {
+          "$ref": "#/$defs/DetailPanel"
+        },
+        "column": {
+          "$ref": "#/$defs/InjectColumn"
+        },
+        "badge": {
+          "$ref": "#/$defs/InjectBadge"
+        },
+        "filter": {
+          "$ref": "#/$defs/InjectFilter"
+        },
+        "widget": {
+          "$ref": "#/$defs/DashboardWidget"
+        }
+      }
+    },
+    "ImportSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "columns"
+      ],
+      "description": "Spreadsheet-import template of the model: the columns of the generated file and the headers accepted when reading it back. Omitted = the kernel derives it from the importable columns.",
+      "properties": {
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImportColumn"
+          }
+        },
+        "max_rows": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Caps a single upload. 0 = kernel default."
+        },
+        "sheet_name": {
+          "type": "string"
+        },
+        "instructions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Free-form lines rendered on a second sheet."
+        }
+      }
+    },
+    "ImportColumn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "header"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Column (or dot-path) the cell value is written to."
+        },
+        "header": {
+          "type": "string",
+          "minLength": 1
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "type": {
+          "type": "string"
+        },
+        "example": {
+          "type": "string"
+        },
+        "hint": {
+          "type": "string"
+        },
+        "generator": {
+          "type": "string",
+          "description": "Host-registered value provider used when the cell is blank (e.g. random_secret)."
+        },
+        "transform": {
+          "type": "string",
+          "description": "Cell post-processor run after coercion (e.g. media_url)."
+        }
+      }
+    },
+    "InjectColumn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "from",
+        "foreign_key",
+        "pick"
+      ],
+      "description": "A computed list column: one value per target row from a model of this addon joined by foreign_key. pick=latest|first need field (latest also order_by); pick=agg needs aggregate (and field unless count).",
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "i18n key."
+        },
+        "from": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Za-z0-9]*$",
+          "description": "Key of one of this manifest's models."
+        },
+        "foreign_key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "pick": {
+          "type": "string",
+          "enum": [
+            "latest",
+            "first",
+            "agg"
+          ]
+        },
+        "field": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "order_by": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "aggregate": {
+          "type": "string",
+          "enum": [
+            "count",
+            "sum",
+            "avg",
+            "min",
+            "max"
+          ]
+        },
+        "where": {
+          "type": "object",
+          "maxProperties": 16,
+          "description": "Equality predicates on 'from' columns; null means IS NULL.",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "display": {
+          "type": "string",
+          "enum": [
+            "text",
+            "badge",
+            "date",
+            "datetime",
+            "number",
+            "currency"
+          ]
+        }
+      }
+    },
+    "InjectBadge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "foreign_key",
+        "field"
+      ],
+      "description": "A chip in the target record header: the latest value of a column of this addon's model joined by foreign_key, mapped to a tone.",
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "i18n key."
+        },
+        "from": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Za-z0-9]*$"
+        },
+        "foreign_key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "field": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "values": {
+          "type": "object",
+          "description": "Field value -> tone (success|warning|danger|info|neutral).",
+          "additionalProperties": {
+            "type": "string",
+            "enum": [
+              "success",
+              "warning",
+              "danger",
+              "info",
+              "neutral"
+            ]
+          }
+        }
+      }
+    },
+    "InjectFilter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "column"
+      ],
+      "description": "A fixed list filter over a computed column this same manifest injects.",
+      "properties": {
+        "column": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Key of a contributions.inject[] entry of kind=column."
+        },
+        "label": {
+          "type": "string",
+          "description": "i18n key."
+        }
+      }
+    },
     "Condition": {
       "type": "object",
       "additionalProperties": false,
@@ -6607,14 +6924,28 @@
       "RelationPanel": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "name"
+        "anyOf": [
+          {
+            "required": [
+              "name"
+            ]
+          },
+          {
+            "required": [
+              "via"
+            ]
+          }
         ],
         "properties": {
           "name": {
             "type": "string",
             "minLength": 1,
-            "description": "models[].relations[].name"
+            "description": "models[].relations[].name. Required in models[].detail panels."
+          },
+          "via": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Za-z0-9]*\\.[a-z][a-z0-9_]*$",
+            "description": "contributions.inject[] panels only: '<Model>.<foreign_key>' of the contributor's own model pointing at the target record (e.g. 'Shipment.sales_order_id')."
           },
           "columns": {
             "type": "array",

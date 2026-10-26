@@ -46,14 +46,6 @@ func TestSchemaCopiesIdentical(t *testing.T) {
 // explica por que. El test falla tanto si aparece una diferencia nueva como
 // si una entrada queda obsoleta (hay que borrarla al arreglar el schema).
 var knownParityGaps = map[string]string{
-	// BUG ABIERTO (auditoria B1): Model.Import existe en Go (types.go,
-	// *ImportSpec, 2026-07-27) pero $defs.Model del schema tiene
-	// additionalProperties:false y no declara "import": ningun manifest
-	// puede usarlo (0 addons lo usan; la feature nunca llego). Se corrige
-	// agregando "import" al schema en MD1/R2, no aqui; al hacerlo, borra
-	// esta entrada (el test falla por obsoleta).
-	"Manifest.models: go-only import": "BUG ABIERTO B1: Model.Import sin propiedad en el schema",
-
 	// Handler es un solo tipo Go (union de todos los tipos de handler) que
 	// el schema estrecha por sitio de uso. Estas son deuda conocida de
 	// forma, no un bug de un campo: el schema de estos sitios solo admite
