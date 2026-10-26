@@ -31,6 +31,11 @@ const (
 	InjectContributorOrderMin = 200
 )
 
+// MaxInjectPerAddon caps contributions.inject[] per addon. Every computed
+// column or badge costs the host one grouped query per page it serves, so the
+// list is bounded (also in the schema, maxItems) against a hostile manifest.
+const MaxInjectPerAddon = 64
+
 // Inject is one declarative contribution to a model another addon owns (or, for
 // the owner itself, to one of its own models).
 //
@@ -212,6 +217,27 @@ type InjectEnv struct {
 	// ValidateWidget checks a kind=widget body with the dashboard rules. nil
 	// skips it (the legacy carrier has no dashboard).
 	ValidateWidget func(where string, w DashboardWidget) []string
+	// Permissions are the keys declared in rbac.permissions. When non-nil, a
+	// contribution permission under this addon's own prefix must be one of
+	// them (a typo would hide the contribution from every role). nil skips
+	// the check (the legacy carrier).
+	Permissions map[string]struct{}
+}
+
+// maxInjectWhere caps the equality predicates of a computed column.
+const maxInjectWhere = 16
+
+// OwnModelOfTarget reports the model key a target names when it is a concrete
+// "<addon>.<Model>" of the addon addonKey itself, and "" otherwise (a bare
+// key, a role, or another addon's model).
+func OwnModelOfTarget(addonKey, target string) string {
+	if addonKey == "" {
+		return ""
+	}
+	if mm := concreteTargetRe.FindStringSubmatch(target); mm != nil && mm[1] == addonKey {
+		return mm[2]
+	}
+	return ""
 }
 
 // ValidateInject enforces contributions.inject[] and the sealed/primary_from
@@ -220,11 +246,19 @@ type InjectEnv struct {
 // "contributions.inject[shipment_panel].order 100 is below 200 ...".
 func ValidateInject(env InjectEnv, inject []Inject, ep *ExtensionPoints) []string {
 	var errs []string
+	if len(inject) > MaxInjectPerAddon {
+		errs = append(errs, fmt.Sprintf("contributions.inject has %d entries; at most %d per addon", len(inject), MaxInjectPerAddon))
+		return errs
+	}
 	seen := make(map[string]struct{}, len(inject))
-	columnKeys := map[string]struct{}{}
+	// columnTargets maps each kind=column key to its target, so a filter
+	// can only sit on the list that shows its column.
+	columnTargets := map[string]string{}
 	for _, in := range inject {
 		if in.Kind == InjectKindColumn && in.Key != "" {
-			columnKeys[in.Key] = struct{}{}
+			if _, dup := columnTargets[in.Key]; !dup {
+				columnTargets[in.Key] = in.Target
+			}
 		}
 	}
 	for i, in := range inject {
@@ -297,6 +331,10 @@ func ValidateInject(env InjectEnv, inject []Inject, ep *ExtensionPoints) []strin
 
 		if in.Permission != "" && !PermissionKeyRe.MatchString(in.Permission) {
 			addf("permission %q must match %s", in.Permission, PermissionKeyRe)
+		} else if in.Permission != "" && env.Permissions != nil && env.AddonKey != "" && strings.HasPrefix(in.Permission, env.AddonKey+".") {
+			if _, ok := env.Permissions[in.Permission]; !ok {
+				addf("permission %q is not declared in rbac.permissions", in.Permission)
+			}
 		}
 
 		// Exactly the body the kind names.
@@ -378,8 +416,16 @@ func ValidateInject(env InjectEnv, inject []Inject, ep *ExtensionPoints) []strin
 				}
 				col("column.field", c.From, cols, c.Field)
 				col("column.order_by", c.From, cols, c.OrderBy)
+				if len(c.Where) > maxInjectWhere {
+					addf("column.where has %d predicates; at most %d", len(c.Where), maxInjectWhere)
+				}
 				for _, k := range sortedAnyKeys(c.Where) {
 					col("column.where", c.From, cols, k)
+					switch c.Where[k].(type) {
+					case nil, string, bool, float64, int, int64:
+					default:
+						addf("column.where[%q] must be a string, number, boolean or null (equality only)", k)
+					}
 				}
 			}
 		case "badge":
@@ -408,8 +454,10 @@ func ValidateInject(env InjectEnv, inject []Inject, ep *ExtensionPoints) []strin
 			if f := in.Filter; f != nil {
 				if f.Column == "" {
 					addf("filter.column is required (the key of a kind=column inject)")
-				} else if _, ok := columnKeys[f.Column]; !ok {
+				} else if ct, ok := columnTargets[f.Column]; !ok {
 					addf("filter.column %q is not the key of a kind=column entry in contributions.inject[]", f.Column)
+				} else if ct != in.Target {
+					addf("filter.column %q targets %q but the filter targets %q: a filter sits on the list that shows its column", f.Column, ct, in.Target)
 				}
 			}
 		case "widget":

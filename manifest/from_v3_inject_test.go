@@ -76,3 +76,21 @@ func TestFromV3_ProjectsInjectAndValidatesOnLegacyPlane(t *testing.T) {
 		t.Fatalf("legacy plane must refuse a malformed role target, got: %v", err)
 	}
 }
+
+// "<own addon>.<Model>" is projected under the bare model key the host keys
+// own actions by, so the recommended qualified form never makes an own action
+// vanish from its model.
+func TestFromV3_OwnQualifiedActionTargetProjectsBare(t *testing.T) {
+	raw := strings.Replace(injectManifestJSON, `"target_model": "@commerce.order"`, `"target_model": "shipments.Shipment"`, 1)
+	m, err := v3.Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("v3.Parse: %v", err)
+	}
+	host := manifest.FromV3(m)
+	if len(host.Actions["Shipment"]) != 1 || len(host.Actions["shipments.Shipment"]) != 0 {
+		t.Fatalf("own qualified action must be keyed by the bare model: %+v", host.Actions)
+	}
+	if err := host.Validate("3.0.0"); err != nil {
+		t.Fatalf("legacy plane: %v", err)
+	}
+}

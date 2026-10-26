@@ -1218,7 +1218,13 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 		// Supervised action: the approval policy rides across so ExecAction can
 		// park the invocation as a pending ApprovalRequest instead of dispatching.
 		def.Approval = mapApprovalPolicy(a.Approval)
-		out[a.TargetModel] = append(out[a.TargetModel], def)
+		// "<this addon>.<Model>" is an own-model action: the host keys those
+		// by the bare model key.
+		key := a.TargetModel
+		if mk := v3.OwnModelOfTarget(m.Metadata.Key, key); mk != "" {
+			key = mk
+		}
+		out[key] = append(out[key], def)
 	}
 	return out
 }

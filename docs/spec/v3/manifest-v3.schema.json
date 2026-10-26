@@ -1231,6 +1231,9 @@
         "document_forms": {
           "$ref": "#/$defs/DocumentForms"
         },
+        "import": {
+          "$ref": "#/$defs/ImportSpec"
+        },
         "form_layout": {
           "$ref": "#/$defs/FormLayout"
         },
@@ -2310,6 +2313,7 @@
         },
         "inject": {
           "type": "array",
+          "maxItems": 64,
           "description": "Declarative UI pieces (panel, tab, computed list column, header badge, list filter, dashboard widget) this addon mounts on a model another addon owns, addressed by '<addon>.<Model>' or by role '@<domain>.<entity>'. Served per org and installation; nothing is copied into the owner.",
           "items": {
             "$ref": "#/$defs/Inject"
@@ -5923,10 +5927,13 @@
         },
         "order": {
           "type": "integer",
+          "minimum": 0,
           "description": "Ascending. Owner of the target: 0-199. Any other contributor: 200 or more (default 200)."
         },
         "permission": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_:]*)+$",
+          "description": "Permission key of the contributor (declared in its rbac.permissions when under its own prefix)."
         },
         "condition": {
           "$ref": "#/$defs/Condition"
@@ -5945,6 +5952,82 @@
         },
         "widget": {
           "$ref": "#/$defs/DashboardWidget"
+        }
+      }
+    },
+    "ImportSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "columns"
+      ],
+      "description": "Spreadsheet-import template of the model: the columns of the generated file and the headers accepted when reading it back. Omitted = the kernel derives it from the importable columns.",
+      "properties": {
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImportColumn"
+          }
+        },
+        "max_rows": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Caps a single upload. 0 = kernel default."
+        },
+        "sheet_name": {
+          "type": "string"
+        },
+        "instructions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Free-form lines rendered on a second sheet."
+        }
+      }
+    },
+    "ImportColumn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "header"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Column (or dot-path) the cell value is written to."
+        },
+        "header": {
+          "type": "string",
+          "minLength": 1
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "type": {
+          "type": "string"
+        },
+        "example": {
+          "type": "string"
+        },
+        "hint": {
+          "type": "string"
+        },
+        "generator": {
+          "type": "string",
+          "description": "Host-registered value provider used when the cell is blank (e.g. random_secret)."
+        },
+        "transform": {
+          "type": "string",
+          "description": "Cell post-processor run after coercion (e.g. media_url)."
         }
       }
     },
@@ -6001,7 +6084,16 @@
         },
         "where": {
           "type": "object",
-          "description": "Equality predicates on 'from' columns; null means IS NULL."
+          "maxProperties": 16,
+          "description": "Equality predicates on 'from' columns; null means IS NULL.",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
         },
         "display": {
           "type": "string",

@@ -1418,6 +1418,26 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	}
 
 	var errs []string
+
+	// An action aimed at "<this addon>.<Model>" (the qualified form the
+	// extensibility contract recommends) is an own-model action: it must name
+	// a declared model and gets exactly the checks of the bare key, so the
+	// rest of the validation sees the bare key (m is this call's copy).
+	if m.Contributions != nil {
+		own := make(map[string]struct{}, len(m.Models))
+		for _, mod := range m.Models {
+			own[mod.Key] = struct{}{}
+		}
+		for ai := range m.Contributions.Actions {
+			a := &m.Contributions.Actions[ai]
+			if mk := OwnModelOfTarget(m.Metadata.Key, a.TargetModel); mk != "" {
+				if _, ok := own[mk]; !ok {
+					errs = append(errs, fmt.Sprintf("contributions.actions[%d].target_model %q names this addon but %q is not one of its models", ai, a.TargetModel, mk))
+				}
+				a.TargetModel = mk
+			}
+		}
+	}
 	// tolerate files a finding of a legacy-tolerated rule: a hard error in
 	// strict mode, a warning otherwise (see compat.go).
 	tolerate := func(rule, msg string) {
@@ -1774,6 +1794,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 				ValidateWidget: func(where string, w DashboardWidget) []string {
 					return validateWidgetBody(&m, where, w)
 				},
+				Permissions: declaredPermissions(&m),
 			}, inject, m.ExtensionPoints)...)
 		}
 	}
@@ -2522,4 +2543,15 @@ func validateRecordPresentation(mi int, mod Model, ownCols map[string]struct{}) 
 	}
 	sort.Strings(errs)
 	return errs
+}
+
+// declaredPermissions indexes rbac.permissions[].key (empty, never nil).
+func declaredPermissions(m *Manifest) map[string]struct{} {
+	out := map[string]struct{}{}
+	if m.RBAC != nil {
+		for _, p := range m.RBAC.Permissions {
+			out[p.Key] = struct{}{}
+		}
+	}
+	return out
 }
