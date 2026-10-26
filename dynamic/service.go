@@ -131,6 +131,12 @@ type Config struct {
 	// replicas in tests).
 	DisableEventOutbox bool
 
+	// OnOutboxExhausted, when set, is called (from the relay goroutine) with
+	// the outbox row that just spent its last relay attempt without ever being
+	// recorded. The kernel always logs `kernel.outbox.exhausted` at error
+	// level; this hook is where the host opens an incident / pages someone.
+	OnOutboxExhausted func(ctx context.Context, row EventOutbox)
+
 	// AddonKeyForModel resolves the addon owner of a model name. The result
 	// is used both as the producer addonKey passed to Bus.Publish and as
 	// the leading segment of the canonical event name. nil (or returning
@@ -432,8 +438,9 @@ type Service struct {
 
 	// Transactional-outbox state (outbox.go). outboxEnabled arms after the
 	// table migrates at New; outboxStop terminates the background relay.
-	outboxEnabled bool
-	outboxStop    chan struct{}
+	outboxEnabled     bool
+	outboxStop        chan struct{}
+	onOutboxExhausted func(ctx context.Context, row EventOutbox)
 
 	// Approvals primitive state (approvals.go): who may decide, who a replay
 	// runs as, the per-op replay backends and the background expirer.
@@ -530,6 +537,8 @@ func New(cfg Config) *Service {
 		approvalRequesterResolver: cfg.ApprovalRequesterResolver,
 		approvalPINVerifier:       cfg.ApprovalPINVerifier,
 	}
+
+	svc.onOutboxExhausted = cfg.OnOutboxExhausted
 
 	// Arm the transactional outbox (outbox.go) when events can actually fan
 	// out. Migration failure degrades loudly to direct publish — never block

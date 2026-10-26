@@ -38,7 +38,10 @@
 //     handler ASYNCHRONOUSLY on a worker goroutine so a slow subscriber never
 //     blocks the CRUD mutation that produced the event;
 //  5. retries a failed delivery up to MaxAttempts — spaced by an exponential
-//     backoff, see WithRetryBackoff — then marks it dead.
+//     backoff, see WithRetryBackoff — then marks it dead. The ledger row is a
+//     DURABLE queue item (payload, next_attempt_at, lease; see ledger.go): a
+//     restart resumes what was still pending, and replicas share the work with
+//     FOR UPDATE SKIP LOCKED.
 //
 // SECURITY: the bus capability check bypasses the Enforcer for the literal
 // "kernel" key (events/events.go). The dispatcher subscribes under "kernel" so
@@ -54,6 +57,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/google/uuid"
@@ -266,8 +270,14 @@ func Wire(bus *events.Bus, invoker WasmInvoker, db *gorm.DB, provider Subscripti
 		opt(o)
 	}
 
-	if err := Migrate(db, o.tableName); err != nil {
+	if err := migrateTable(db, o.tableName); err != nil {
 		return noop, fmt.Errorf("dispatch: migrate %s: %w", o.tableName, err)
+	}
+	asyncIndex := db.Dialector.Name() == "postgres" && !dbInTx(db)
+	if !asyncIndex {
+		if err := ensureDueIndex(db, o.tableName); err != nil && !errors.Is(err, errDueIndexBusy) {
+			return noop, fmt.Errorf("dispatch: migrate %s: %w", o.tableName, err)
+		}
 	}
 
 	d := &Dispatcher{
@@ -277,15 +287,77 @@ func Wire(bus *events.Bus, invoker WasmInvoker, db *gorm.DB, provider Subscripti
 		provider: provider,
 		opts:     o,
 		logger:   o.logger,
+		workerID: uuid.NewString()[:8],
+	}
+	d.baseCtx, d.stop = context.WithCancel(context.Background())
+	if asyncIndex {
+		// CREATE INDEX CONCURRENTLY waits for older transactions and can take a
+		// while on a big ledger: keep it off the startup path. Until it lands
+		// the sweeper just scans; nothing is blocked meanwhile. It retries with
+		// backoff (another replica may be building it, the DB may blip) and
+		// stops with the Wire context (cancel).
+		go d.ensureIndexLoop(o.tableName)
 	}
 
-	if err := bus.SubscribeRouting(subscriberKey, "*", d.handle); err != nil {
+	if err := bus.SubscribeDurableRouting(subscriberKey, "*", d.handle, d.estimate); err != nil {
 		return noop, fmt.Errorf("dispatch: subscribe: %w", err)
 	}
 	d.logger.Info("dispatch.wired",
 		slog.String("table", o.tableName),
 		slog.Int("max_attempts", o.maxAttempts))
 
-	cancel = func() { bus.Unsubscribe(subscriberKey) }
+	// The sweeper: resumes `pending` deliveries a previous process left behind
+	// (it runs once immediately) and claims retries as they come due.
+	go d.pollLoop()
+
+	cancel = func() {
+		bus.Unsubscribe(subscriberKey)
+		d.stop()
+	}
 	return cancel, nil
+}
+
+const (
+	dueIndexRetryMin = time.Second
+	dueIndexRetryMax = 5 * time.Minute
+	// dueIndexMaxFailures bounds the real failures (not "another replica is
+	// building it") before the loop gives up: each retry may DROP and CREATE a
+	// big index, so it must not repeat forever.
+	dueIndexMaxFailures = 8
+)
+
+// ensureIndexLoop builds the sweeper index in the background, retrying with
+// exponential backoff (up to dueIndexMaxFailures real failures) until it is valid or Wire's context is cancelled.
+func (d *Dispatcher) ensureIndexLoop(table string) {
+	wait := dueIndexRetryMin
+	failures := 0
+	for {
+		err := ensureDueIndex(d.db.WithContext(d.baseCtx), table)
+		if err == nil {
+			return
+		}
+		if d.baseCtx.Err() != nil {
+			return
+		}
+		if errors.Is(err, errDueIndexBusy) {
+			d.logger.Info("dispatch.due_index_busy", slog.String("table", table), slog.Duration("retry_in", wait))
+		} else {
+			failures++
+			if failures >= dueIndexMaxFailures {
+				d.logger.Error("dispatch.due_index_gave_up",
+					slog.String("table", table), slog.String("err", err.Error()), slog.Int("failures", failures))
+				return
+			}
+			d.logger.Warn("dispatch.due_index_error",
+				slog.String("table", table), slog.String("err", err.Error()), slog.Duration("retry_in", wait))
+		}
+		t := time.NewTimer(wait)
+		select {
+		case <-d.baseCtx.Done():
+			t.Stop()
+			return
+		case <-t.C:
+		}
+		wait = min(wait*2, dueIndexRetryMax)
+	}
 }

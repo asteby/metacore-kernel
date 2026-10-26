@@ -151,7 +151,7 @@ func executeEdgeCommand(ctx context.Context, inv *invocation, reqJSON []byte) []
 	if inv.edgeCommander == nil {
 		return fail("edge_unavailable", "host has no edge commander configured")
 	}
-	if inv.tx != nil {
+	if inv.tx != nil && isTx(inv.tx) {
 		// Waiting for a device (up to the timeout) inside the action's
 		// transaction would hold its locks: refused, never silently slow.
 		return fail("in_transaction", "edge_command cannot run inside a transactional invocation (InvokeInTx)")

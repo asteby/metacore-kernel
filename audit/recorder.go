@@ -210,7 +210,7 @@ func Wire(bus *events.Bus, db *gorm.DB, opts ...Option) (cancel func(), err erro
 	// Subscribe under the trusted "kernel" key (see subscriberKey doc): the
 	// events.Bus bypasses the Enforcer's event:subscribe check for "kernel",
 	// so the audit trail works even when the host runs the bus in ModeEnforce.
-	if err := bus.Subscribe(subscriberKey, "*", r.Handle); err != nil {
+	if err := bus.SubscribeTap(subscriberKey, "*", r.Handle); err != nil {
 		return noop, fmt.Errorf("audit: subscribe: %w", err)
 	}
 	log.Printf("audit: wired universal audit trail (table=%s, wildcard subscription)", r.opts.tableName)

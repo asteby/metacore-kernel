@@ -10,8 +10,79 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - `manifest/v3` (X2.1a, primera mitad del bump de schema R2; sin tag, R2 se publica después de R1): `contributions.inject[]` (`kind` panel|tab|column|badge|filter|widget; `target` concreto `<addon>.<Model>` o por rol `@dominio.entidad`; `slot` del catálogo `slots@1`; `order` con bandas, dueño 0-199 y contribuyentes desde 200; cuerpos `panel`/`widget` reutilizan `DetailPanel`/`DashboardWidget`, `column` agrega `pick` latest|first|agg con `foreign_key`, además de `badge` y `filter`), `RelationPanel.via` (solo en `inject`), `actions[].target_model` acepta destino calificado o por rol, `extension_points.sealed[]` y `primary_from[]`, y `DashboardWidget.kind: "map"` (`query.group_by` geográfico obligatorio). Las dos copias del schema quedan byte-idénticas (prueba). Reglas compartidas en `v3.ValidateInject` y `v3.ActionTargetProblem`, también ejecutadas por el validador del portador legado (`manifest.Manifest.Inject/SealedModels/PrimaryFrom`, proyectados en `FromV3`). Aditivo: los manifests existentes validan sin cambios. Falta la segunda mitad (X2.1b: `read_models`, eventos con versión, `ordering`, `contract:read`).
+- `events`: `Bus.PublishDurableOnly` (publica solo a los routers durables), `events.DurableError`
+  (`SiblingsRan()`; `errors.Is(err, ErrDurableDelivery)`), `SubscribeDurableRouting`,
+  `ErrDurableDelivery`. **Cambio de contrato:** `Publish`/`PublishWithCount` ahora pueden
+  devolver el error de un router durable. `dynamic`: `EventOutbox.FannedOut` y `NextAttemptAt`
+  (columnas aditivas; filas viejas = sin marca, a tiempo), `Config.OnOutboxExhausted`,
+  `MaxEventNameLen`, `DurableOnlyPublisher`. Backoff exponencial del relay, log
+  `kernel.outbox.exhausted`, rechazo de nombres >512 antes de persistir. Minor.
+
+### Fixed
+
+- **Bus durable: el outbox ya no estampa `published_at` sobre un evento que el libro de
+  entregas no registró (pérdida silenciosa).** Antes `dispatch.handle` devolvía `(0, nil)` si
+  `SubscriptionsForOrg` fallaba, `enqueue` devolvía `false` sin error si fallaba el INSERT del
+  libro y `events.Bus` tragaba cualquier error de handler: el outbox lo daba por publicado.
+  Nuevo `events.Bus.SubscribeDurableRouting` (lo usa `dispatch.Wire`) y `events.ErrDurableDelivery`:
+  el error de un router durable lo devuelven `PublishWithCount` / `Publish` (agregado con
+  `errors.Join`, tras correr a los demás suscriptores); `enqueue` devuelve error cuando falla el
+  INSERT. `publishCanonical`, `OutboxPublisher` y el relay no estampan `published_at` en ese caso y
+  el relay reintenta (el libro deduplica lo que sí entró por id estable). Los handlers/suscriptores
+  planos y los taps siguen sin poder bloquear la publicación. Un emisor que llame
+  `Publish` ahora puede recibir un error que antes era siempre `nil`.
+  El relay no vuelve a ejecutar a los suscriptores planos (tap de auditoría, puentes): si el
+  intento en línea ya los alcanzó, la fila se marca `fanned_out` y el reintento va solo a los
+  routers durables (`PublishDurableOnly`); una fila sin marca (caída del proceso) sigue
+  recibiendo la publicación completa.
+- **wasm: `flushEmits` ya no trata un pool como transacción.** Las acciones Native invocan con
+  `actx.DB` = pool; los eventos de `event_emit` quedaban esperando un commit hook que nunca llegaba
+  (~40 s vía el relay, o descartados sin outbox armado). Con un handle que no es una transacción
+  (`isTx`) se persiste y publica por el camino normal.
+- **dispatch: el índice `..._due` del libro se crea con `CREATE INDEX CONCURRENTLY` en Postgres**
+  (fuera de transacción y fuera del arranque de `Wire`, en una goroutine) para no bloquear los
+  INSERT del libro; un índice que quedó inválido (`pg_index.indisvalid = false`) se borra y se
+  recrea. SQLite conserva el `CREATE INDEX IF NOT EXISTS`. `dispatch.Migrate` sigue siendo
+  síncrona. Un candado de aviso (`pg_try_advisory_lock`) evita que una réplica borre el índice
+  que otra está construyendo; la goroutine de `Wire` reintenta con backoff y se cancela con él.
+- wasm: `edge_command` y `approval_consume` usan `isTx` (con un pool ya no se rechaza por
+  `in_transaction`); `flushEmits` avisa si recibe un handle que no es transacción; el camino
+  legado de `event_emit` devuelve `durable_delivery_failed` (no `forbidden`).
+
+### Added
 
 - `capability` (X1.4 + X1.5, aditivo, sin cambios de manifest ni de schema): campo oficial opcional `test_mode` en la salida de `commerce.shipping.rates[]`, `commerce.shipping.label` y `commerce.fulfillment.create` (compatible con la extensión `x_environment` que ya emite skydropx; el anfitrión lee `test_mode` y cae a `x_environment`); evento `commerce.shipments.updated` (contrato v1, `ShipmentUpdatedSchema`, `ShipmentStatuses`, `ShipmentModes`, dominio reservado `commerce.shipments`); `incidents.DomainShipping`. `Provider.Priority` / `Provider.Status` (`ProviderStatus`: ready, not_configured, unhealthy), `Select` v2 con respaldo (dentro del nivel que decide se salta `not_configured` y gana la mejor prioridad; empate = `ErrAmbiguousProvider`, falla cerrado), `ErrNotConfigured` (código `not_configured` en `capability_query`), `Eligible` (misma resolución que `Select`), `Engine.ListProviders` y la implementación `executeCapabilityProviders` del import `capability_providers` (el registro del import en la tabla de capacidades del host va aparte). Sin prioridades ni estado el resultado es idéntico al anterior (prueba de equivalencia exhaustiva contra una copia del `Select` previo). Minor.
+
+- Bus de eventos duradero (R1 del plan de extensibilidad, X1.1-X1.3; `docs/events-bus.md`). Minor.
+  - **Emitir al confirmar**: `event_emit` del guest ya no publica al llamar. Valida y acumula en un
+    buffer por invocación; solo si la invocación termina bien se escribe en `kernel_event_outbox` y
+    se publica (`dynamic.OutboxPublisher`, `Host.WithEventPublisher`). Un guest que emite y luego
+    falla o hace trap no genera entregas; una caída entre el outbox y la publicación la recupera el
+    relay con la misma identidad. Tope: 256 eventos / 4 MiB por invocación.
+  - **Libro de entregas duradero**: `dispatch_deliveries` pasa de registro + goroutine a cola
+    (`payload`, `next_attempt_at`, lease, reclamo `FOR UPDATE SKIP LOCKED`, latido, escrituras
+    protegidas por token). Se elimina el bucle de reintentos en memoria; lo `pending` se retoma al
+    arrancar y en cada barrido (`WithPollInterval`, `WithLease`, `WithAttemptTimeout`). Estado
+    nuevo `cancelled` (suscripción desinstalada). Columnas nuevas por AutoMigrate (aditivas).
+  - **Envelope `metacore.event/1`** bajo la clave `envelope` del payload (`aggregate`, `sequence`,
+    `causation_id`, `generation`, …) y tabla `kernel_event_sequences`; `dynamic.Meta` / `WithMeta`.
+    Los eventos CRUD canónicos también lo llevan. `retryable` / `retry_after_ms` en la respuesta
+    del guest; `dispatch.Replay` con generación.
+  - Dentro de `InvokeInTx` / `InvokeForInTx` el evento se persiste en la transacción del llamador
+    y **no se publica en línea**; se publica tras el commit con `wasm.WithCommitHook` +
+    `Host.PublishCommitted` (sin gancho, lo publica el relay). Un rollback no entrega nada.
+  - `data.subscribers` de `event_emit` es una estimación (`events.Bus.EstimateSubscribers`; `-1` si
+    no se sabe; los taps del dispatcher y audit no cuentan). Nuevos `events.SubscribeTap`,
+    `SubscribeRoutingEstimated`, `Estimator`.
+  - `aggregate.type` / `aggregate.id` del guest se validan (1-128 bytes, `[A-Za-z0-9_.:-]`,
+    `invalid_payload`) y su secuencia se cuenta por emisor (`<addon>:<tipo>`);
+    `kernel_event_sequences.aggregate_type` pasa a 256.
+  - El outbox del host wasm se arma al cablear (`WithBus`/`WithDB`), con reintento y backoff;
+    `Host.WithDurableEmits(bool)` (alinear con `DisableEventOutbox`; ver `docs/events-bus.md`).
+  - **Aviso para hosts:** `dispatch.Wire` arranca un barrido de entregas cada 5 s y `Migrate`
+    ejecuta SQL adicional (columnas del libro, `kernel_event_outbox`/`kernel_event_sequences` al
+    cablear el host wasm): los tests de hosts con `sqlmock` estricto pueden romper y deben
+    esperar esas sentencias (o usar `WithPollInterval` alto y `WithDurableEmits(false)`).
 
 - `diag` (revisión 3 del PR #545): saneado de breadcrumbs acotado (borrado por valor sobre la línea completa y corte a 640 bytes antes de las regex; caso adverso 1,28 s -> 45 ms), limitador de tasa antes de `Sanitize`, URL recortadas antes del borrado por valor (sin fuga con secreto en query/ruta/userinfo/fragmento), deduplicación solo con correlación igual y no vacía, claves en español (`contraseña`, `clave`, `llave`, `pass`, `sid`, `refresh`, `session_id`), email Unicode y `%40`, prefiltro del sobre sin distinguir mayúsculas; se elimina `WithScrubber`/`ScrubberFrom`. `BenchmarkInvokeOK_*` corre con el benchtime por defecto.
 

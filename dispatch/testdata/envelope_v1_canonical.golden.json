@@ -1,0 +1,31 @@
+{
+  "action": "updated",
+  "actor_id": "11111111-1111-1111-1111-111111111111",
+  "addon_key": "pos",
+  "after": {
+    "id": "row-1",
+    "state": "paid"
+  },
+  "correlation_id": "req-7",
+  "emitter": "kernel",
+  "envelope": {
+    "schema": "metacore.event/1",
+    "id": "occ-1",
+    "name": "pos.order_created",
+    "version": 1,
+    "source": "kernel",
+    "org_id": "33333333-3333-3333-3333-333333333333",
+    "occurred_at": "2026-10-25T12:00:00Z",
+    "aggregate": {
+      "type": "SalesOrder",
+      "id": "row-1"
+    },
+    "sequence": 3,
+    "correlation_id": "req-7",
+    "actor_id": "11111111-1111-1111-1111-111111111111"
+  },
+  "event": "pos.order_created",
+  "id": "row-1",
+  "model": "SalesOrder",
+  "occurrence_id": "occ-1"
+}
