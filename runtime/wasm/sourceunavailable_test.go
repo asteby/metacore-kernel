@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/asteby/metacore-kernel/events"
@@ -32,8 +33,16 @@ type suEnvelope struct {
 			InstalledOwners []string `json:"installed_owners"`
 			SQLState        string   `json:"sqlstate"`
 			Degradable      bool     `json:"degradable"`
+			Classified      bool     `json:"classified"`
 		} `json:"details"`
 	} `json:"error"`
+}
+
+// onlyClassified: a plain db_error carries details{classified:true} and nothing
+// else (no source/reason: it is not an absence).
+func onlyClassified(e suEnvelope) bool {
+	d := e.Error.Details
+	return d != nil && d.Classified && d.Source == "" && d.Reason == "" && d.SQLState == ""
 }
 
 func decodeSU(t *testing.T, raw []byte) suEnvelope {
@@ -102,7 +111,7 @@ func TestSourceUnavailable_ClassificationTable(t *testing.T) {
 				t.Fatalf("message = %q, want %q", e.Error.Message, tc.err.Error())
 			}
 			if tc.wantCode == "db_error" {
-				if e.Error.Details != nil || e.Error.LegacyCode != "" {
+				if !onlyClassified(e) || e.Error.LegacyCode != "" {
 					t.Fatalf("db_error must stay as before (no details/legacy_code): %s", out)
 				}
 				return
@@ -194,7 +203,7 @@ func TestSourceUnavailable_WriteIsNeverDegradable(t *testing.T) {
 		mock.ExpectRollback()
 		inv := testInvocation(gdb, events.NewBus(nil), uuid.New(), stockWriteEnforcer(), nil)
 		out := executeDataMutate(context.Background(), inv, []byte(`{"op":"create","table":"stock","model":"Stock","data":{"quantity":1}}`))
-		if e := decodeSU(t, out); e.Error.Code != "db_error" || e.Error.Details != nil {
+		if e := decodeSU(t, out); e.Error.Code != "db_error" || !onlyClassified(e) {
 			t.Fatalf("transient write must stay db_error: %s", out)
 		}
 	})
@@ -253,7 +262,7 @@ func TestSourceUnavailable_42P01AfterProbeIsNotTheRequestedTable(t *testing.T) {
 		inv.sourceOwners = func(uuid.UUID, string) SourceInfo { calls++; return SourceInfo{Owners: []string{"fiscal_mexico"}} }
 		out := executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents"}`))
 		e := decodeSU(t, out)
-		if e.Error.Code != "db_error" || e.Error.Details != nil || e.Error.LegacyCode != "" || e.Error.Message != ext.Error() {
+		if e.Error.Code != "db_error" || !onlyClassified(e) || e.Error.LegacyCode != "" || e.Error.Message != ext.Error() {
 			t.Fatalf("42P01 of another relation must stay db_error: %s", out)
 		}
 		if calls != 0 {
@@ -269,7 +278,7 @@ func TestSourceUnavailable_42P01AfterProbeIsNotTheRequestedTable(t *testing.T) {
 		mock.ExpectRollback()
 		inv := testInvocation(gdb, events.NewBus(nil), uuid.New(), stockWriteEnforcer(), nil)
 		out := executeDataMutate(context.Background(), inv, []byte(`{"op":"create","table":"stock","model":"Stock","data":{"quantity":1}}`))
-		if e := decodeSU(t, out); e.Success || e.Error.Code != "db_error" || e.Error.Details != nil {
+		if e := decodeSU(t, out); e.Success || e.Error.Code != "db_error" || !onlyClassified(e) {
 			t.Fatalf("42P01 after the probe must stay db_error: %s", out)
 		}
 	})
@@ -501,7 +510,7 @@ func TestOnAbsent_NonAbsencesAndSchemaMismatch(t *testing.T) {
 		mock.ExpectQuery(`SELECT \* FROM "fiscal_documents" LIMIT 0`).WillReturnError(pgErr("42501", "permission denied for table fiscal_documents"))
 		inv := testInvocation(gdb, nil, uuid.New(), fiscalReadEnforcer(), nil)
 		e := decodeSU(t, executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents","on_absent":"empty"}`)))
-		if e.Success || e.Error.Code != "db_error" || e.Error.Details != nil {
+		if e.Success || e.Error.Code != "db_error" || !onlyClassified(e) {
 			t.Fatalf("%+v", e)
 		}
 	})
@@ -575,4 +584,61 @@ func TestOnAbsent_DataMutateIgnoresIt(t *testing.T) {
 	if e.Success || e.Error.Code != CodeSourceUnavailable || e.Error.Details.Degradable {
 		t.Fatalf("%s", out)
 	}
+}
+
+// DG1.2: every error envelope out of dataQueryFailDB / dataMutateFailDB carries
+// details.classified=true, absence or not, so a guest never re-reads a later
+// 42P01 as an absent source.
+func TestClassifiedMarkOnAllDBErrorEnvelopes(t *testing.T) {
+	raw := func(out []byte) map[string]any {
+		var m struct {
+			Error struct {
+				Code    string         `json:"code"`
+				Details map[string]any `json:"details"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(out, &m); err != nil {
+			t.Fatal(err)
+		}
+		if m.Error.Details["classified"] != true {
+			t.Fatalf("classified missing on %s: %s", m.Error.Code, out)
+		}
+		return m.Error.Details
+	}
+	t.Run("data_query db_error (42501)", func(t *testing.T) {
+		gdb, mock, cleanup := newMockGorm(t)
+		defer cleanup()
+		mock.ExpectQuery(`SELECT \* FROM "fiscal_documents" LIMIT 0`).WillReturnError(pgErr("42501", "permission denied"))
+		inv := testInvocation(gdb, nil, uuid.New(), fiscalReadEnforcer(), nil)
+		d := raw(executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents"}`)))
+		if _, ok := d["source"]; ok {
+			t.Fatalf("db_error must not look like an absence: %v", d)
+		}
+	})
+	t.Run("data_query 42P01 after the probe", func(t *testing.T) {
+		gdb, mock, cleanup := newMockGorm(t)
+		defer cleanup()
+		expectProbe(mock, `"fiscal_documents"`, "id", "organization_id")
+		mock.ExpectQuery(`SELECT \* FROM "fiscal_documents" WHERE`).WillReturnError(pgErr("42P01", `relation "x_ext" does not exist`))
+		inv := testInvocation(gdb, nil, uuid.New(), fiscalReadEnforcer(), nil)
+		raw(executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents"}`)))
+	})
+	t.Run("data_query source_unavailable", func(t *testing.T) {
+		gdb, mock, cleanup := newMockGorm(t)
+		defer cleanup()
+		mock.ExpectQuery(`SELECT \* FROM "fiscal_documents" LIMIT 0`).WillReturnError(pgErr("42P01", "missing"))
+		inv := testInvocation(gdb, nil, uuid.New(), fiscalReadEnforcer(), nil)
+		d := raw(executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents"}`)))
+		if d["source"] != "fiscal_documents" {
+			t.Fatalf("%v", d)
+		}
+	})
+	t.Run("data_mutate / data_batch helpers, any code", func(t *testing.T) {
+		fb := func(code, msg string) []byte { return dataMutateErr("a", code, msg, uuid.Nil, time.Now(), "") }
+		for _, code := range []string{"db_error", "constraint_violation"} {
+			raw(dataMutateFailDB(nil, "a", code, "t", errors.New("boom"), uuid.Nil, time.Now(), "", false, "", fb))
+			raw(dataMutateFailDB(nil, "a", code, "t", errors.New("boom"), uuid.Nil, time.Now(), "", true, "mutations[0]: ", fb))
+		}
+		raw(dataMutateFailDB(nil, "a", "db_error", "t", pgErr("42P01", "missing"), uuid.Nil, time.Now(), "", false, "", fb))
+	})
 }

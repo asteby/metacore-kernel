@@ -179,7 +179,7 @@ func TestSourceUnavailable_RealPostgres_PermissionDeniedStaysDBError(t *testing.
 	inv := testInvocation(tx, nil, uuid.New(), fiscalAndStockReadEnforcer(), func(string) string { return table })
 	out := executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"stock"}`))
 	e := decodeSU(t, out)
-	if e.Error.Code != "db_error" || e.Error.Details != nil {
+	if e.Error.Code != "db_error" || !onlyClassified(e) {
 		t.Fatalf("permission denied (42501) must stay db_error: %s", out)
 	}
 }
@@ -330,7 +330,7 @@ func TestOnAbsent_RealPostgres_TimeoutAndPermissionDoNotDegrade(t *testing.T) {
 		}
 		out := pgQuery(db, tx, uuid.New(), nil, func(string) string { return slow }, `{"table":"stock","on_absent":"empty"}`)
 		e := decodeSU(t, out)
-		if e.Success || e.Error.Code != "db_error" || e.Error.Details != nil {
+		if e.Success || e.Error.Code != "db_error" || !onlyClassified(e) {
 			t.Fatalf("57014 must stay db_error: %s", out)
 		}
 	})
@@ -354,7 +354,7 @@ func TestOnAbsent_RealPostgres_TimeoutAndPermissionDoNotDegrade(t *testing.T) {
 		// to_regclass is not NULL, the probe then fails with 42501.
 		out := pgQuery(db, tx, uuid.New(), nil, func(string) string { return table }, `{"table":"stock","on_absent":"empty"}`)
 		e := decodeSU(t, out)
-		if e.Success || e.Error.Code != "db_error" || e.Error.Details != nil {
+		if e.Success || e.Error.Code != "db_error" || !onlyClassified(e) {
 			t.Fatalf("42501 must stay db_error: %s", out)
 		}
 	})

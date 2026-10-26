@@ -2047,6 +2047,31 @@ permission 42501, constraint 23xxx, ...) stays `db_error` exactly as before and
 - **Never degraded** (stay `db_error` exactly as before): 42501 permission, 57014
   timeout, connection loss, constraints, and a 42P01 raised AFTER the probe of the
   requested table (extension table, trigger, parent): it names another relation.
+- **Contract of the per-org rule (embedder).** `SourceOwnersFn` runs on EVERY
+  successful read with `on_absent: "empty"` (once per table per invocation, memoised),
+  not only on failures: the implementation is on the hot path and must be cheap
+  (cache per org). `Installed` must list EVERY effective install of an owner for
+  the org, instance-level installs included, or live data is hidden. Core tables
+  (declared by no addon) have no `Owners`, so the rule never touches them. After
+  the addon is uninstalled its data is hidden (absent) even if rows remain.
+- **42703 served as empty: known limitation.** A 42703 with `on_absent: "empty"` is
+  a silent empty success. It may hide a misspelt column in `where` / `order_by` /
+  `aggregate`, and it is attributed to the requested table even if it came from an
+  extension table. The base probe is `SELECT * ... LIMIT 0`, so a 42703 can never
+  come from the probe itself and the host cannot require that origin. Mitigation:
+  the host logs every such case (`slog` warn `wasm.on_absent_schema_mismatch_served_empty`
+  with addon, org, table and the driver text) so it can be counted as an anomaly.
+  Guests should treat `reason: "schema_mismatch"` in `meta.absent` as suspicious
+  and test their column names against the owner's schema.
+- **`details.classified` (host marker).** Every error envelope of `data_query` /
+  `data_mutate` / `data_batch` that the host emits from its database-failure path
+  carries `error.details.classified: true`, including plain `db_error` /
+  `constraint_violation` that are NOT an absence (those have no other `details`
+  key). It means "the host already classified this error": a `42P01` in the
+  `message` of such an envelope (e.g. raised after the base-table probe, from an
+  extension table) is NOT an absent source and a guest must not re-derive one from
+  the text. Older hosts do not send it. Envelopes from validation errors
+  (`invalid_request`, `forbidden`, ...) do not carry it.
 - `data_mutate` / `data_batch` ignore the field; a write is never a silent no-op.
 - **Compatibility.** Opt-in per call. A host older than 1.19 ignores the key and
   returns the 1.18 `source_unavailable` (or the old `db_error`); guests must still
