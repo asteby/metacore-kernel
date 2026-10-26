@@ -9,6 +9,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `wasm`: marca de host clasificador `error.details.classified: true` en TODOS los sobres con
+  `code == "db_error"` o `"constraint_violation"` de `data_query`/`data_mutate`/`data_batch` (ABI 1.19; se
+  aplica en el cierre `fail` de las tres funciones, así que también cubre commit, escaneo, orgscope y
+  lectura de extensiones; ningún otro código la lleva), también los que no son ausencia, para que el guest no reinterprete
+  un 42P01 posterior al probe. Un 42703 servido como vacío con `on_absent=empty` ahora se registra
+  (`slog` warn `wasm.on_absent_schema_mismatch_served_empty`). Documentado en § 15.5.2: contrato de la
+  regla por org (`Installed` completo, tablas del núcleo sin dueños, datos ocultos tras desinstalar),
+  `SourceOwnersFn` en la ruta caliente y la limitación del 42703. `meta.absent.message` (texto del driver) solo con `reason=schema_mismatch`. La ausencia por regla por org ya no
+  usa un SQLSTATE 42P01 ficticio (`Synthetic`).
+
+- `wasm`: `data_query` acepta `on_absent` (`""`/`"error"`/`"empty"`; otro valor = `invalid_request`), ABI
+  v1.19, DG1.2 de DISENO-DEGRADACION. Con `"empty"`, una ausencia degradable (42P01 del probe de la
+  tabla pedida, 42703 fuera de transacción) responde éxito con `data: {"rows":[],"truncated":false}`
+  (igual con y sin `aggregate`) y `meta.absent{source,reason,owners}`. Además aplica la regla por org:
+  tras el gate `db:read` y antes del probe, si `WithSourceOwners` da dueños y ninguno está instalado y
+  habilitado en la org, responde ausente sin consultar la BD aunque la tabla exista. Dentro de
+  `InvokeInTx` la tabla base se comprueba con `to_regclass`, de modo que la transacción no se aborta.
+  42501, timeouts y un 42P01 posterior al probe siguen siendo `db_error`; `data_mutate`/`data_batch`
+  ignoran el campo. Sin el flag, nada cambia. Documentado en `docs/wasm-abi.md` § 15.5.2.
+
 - `wasm`: código de host `source_unavailable` (ABI v1.18, DG1.1 de DISENO-DEGRADACION). `data_query`,
   `data_mutate` y `data_batch` clasifican por SQLSTATE (`pgconn`, nunca por texto) la ausencia
   estructural de una fuente: 42P01 → `addon_not_installed` / `addon_disabled` / `table_missing`,

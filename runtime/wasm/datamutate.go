@@ -96,9 +96,12 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		addonKey = inv.addonKey
 		orgID = inv.orgID
 	}
-	fail := func(code, msg string) []byte {
+	// classifiedFail marks EVERY db_error / constraint_violation of this
+	// function (details.classified), not only those that went through the
+	// SQLSTATE classifier.
+	fail := classifiedFail(func(code, msg string) []byte {
 		return dataMutateErr(addonKey, code, msg, orgID, start, dynamic.CorrelationIDFromContext(ctx))
-	}
+	})
 
 	if inv == nil {
 		return fail("invalid_request", "invocation context missing")
