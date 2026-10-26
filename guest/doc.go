@@ -20,6 +20,17 @@
 //   - DbExec    — wraps metacore_host.db_exec, decodes
 //     {success, data: {rowsAffected, rows?, columns?}, meta} (§ 10.4)
 //     and preserves SQLSTATE on driver violations.
+//   - Query / QueryOptional — wrap metacore_host.data_query with cursor
+//     pagination (order_by id + id > last, 200 per page, explicit Q.MaxRows,
+//     never a silent truncation). QueryOptional sends on_absent:"empty" and
+//     returns Optional{Rows, Absent}: a missing data source (addon not
+//     installed or disabled, table or column absent) is a typed value, not
+//     an error. Works against hosts with and without source_unavailable.
+//   - ClassifyHostError — pure (no host import): classifies any data_query /
+//     data_mutate / data_batch envelope into HostOutcome{Absent, Err}. It
+//     recognises code=="source_unavailable" and the old db_error whose
+//     message carries SQLSTATE 42P01 (table_missing) or 42703
+//     (schema_mismatch), never loose "does not exist" text.
 //
 // # Usage
 //

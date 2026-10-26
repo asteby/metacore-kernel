@@ -13,8 +13,10 @@ i64, locate the buffer in guest memory, JSON-decode the envelope and
 branch on `success`. The helpers do that once.
 
 > **Scope (today).** `EmitEvent`, `Log`, `EnvGet`, `HttpFetch`,
-> `DbQuery` and `DbExec` — full coverage of the six host imports
-> documented in [`docs/wasm-abi.md` § 3](wasm-abi.md#3-host-imports-module-metacore_host).
+> `DbQuery` and `DbExec` — the six original host imports documented in
+> [`docs/wasm-abi.md` § 3](wasm-abi.md#3-host-imports-module-metacore_host) —
+> plus `Query` / `QueryOptional` (`data_query`) and the pure
+> `ClassifyHostError` (§ 11).
 
 ---
 
@@ -402,6 +404,60 @@ type DbExecError struct {
 host preserves Postgres SQLSTATE so guests can branch on the
 underlying violation without parsing the message.
 
+## 11. Query, QueryOptional and ClassifyHostError (data_query, source_unavailable)
+
+`data_query` is the read import for logical tables (org-scoped, soft-delete
+aware, `db:read` gated). The host caps a call at 200 rows (default 50), so a
+bare call truncates silently. `Query` pages by cursor instead (`order_by id` +
+`id > last`, 200 per page) until the table is exhausted or `Q.MaxRows`:
+
+```go
+rows, err := guest.Query("tickets", guest.Q{
+    Where:   map[string]any{"status": "open", "age": map[string]any{"gte": 3}},
+    MaxRows: 5000, // 0 = until exhausted
+})
+if errors.Is(err, guest.ErrTruncated) { /* rows holds the first MaxRows */ }
+```
+
+`Where.id` is reserved for the cursor. The table needs an `id` column.
+
+**Optional sources.** A guard that depends on another addon (money, stock)
+must tell "the module is not there" apart from "the read failed":
+
+```go
+res, err := guest.QueryOptional("fiscal_documents", guest.Q{
+    Where: map[string]any{"source_id": id},
+})
+switch {
+case err != nil:
+    // forbidden, invalid_request, transient db_error...: fail CLOSED.
+case res.Absent != nil && res.Absent.Reason == guest.ReasonAddonNotInstalled:
+    // no module, no guard
+case res.Absent != nil:
+    // table_missing / schema_mismatch / addon_disabled: decide per feature
+default:
+    use(res.Rows)
+}
+```
+
+`QueryOptional` sends `"on_absent":"empty"`. A host without that field (today's
+1.18) ignores it and answers with the usual error; the helper turns it into the
+same `Absent`. Reasons come from the host (`source_unavailable`, ABI 1.18) when
+it knows the owners; against a host that only returns the old `db_error` the
+reason is `table_missing` (SQLSTATE 42P01) or `schema_mismatch` (42703), and
+`Absent.Legacy` is true. `Query` (mandatory read) returns the same absence as
+`*DataQueryError` with `Absent != nil` (`errors.As(err, &absence)` also works).
+
+`ClassifyHostError(envelope []byte) HostOutcome` is pure (no host import): use
+it from an existing wrapper of `data_query`/`data_mutate`/`data_batch` instead
+of grepping `42P01`. It returns `Absent` (a missing source), `Err` (`*HostError`
+for anything else) or neither (success). A success carrying `meta.absent` is
+reported as `Absent` too. Only the typed forms are recognised (code
+`source_unavailable`, or `db_error` with `SQLSTATE 42P01` / `42703` in the
+message): `42703` is never table absence, and plain "does not exist" text is
+never matched. A write is never degraded: the host reports `degradable:false`
+or the caller decides before writing.
+
 ## 10. ABI version compatibility
 
 | Helper API     | Kernel envelope | Wire-compat note                                       |
@@ -412,6 +468,9 @@ underlying violation without parsing the message.
 | `HttpFetch` v1 | `{status, body}` (+ `{body_base64, body_is_base64}` for non-UTF-8 bodies, ABI 1.10) | Host envelope is flat (no `{success, data, meta}`); helper probes for the `{error, message}` failure shape first. |
 | `DbQuery` v1   | v1              | Decoder follows `{success, data, meta}` from § 9.4 verbatim.                                                   |
 | `DbExec` v1    | v1 (v0.11+)     | RETURNING projection lives under `data.rows` + `data.columns`; pre-v0.11 envelopes (no `rows`) decode cleanly with `Rows == nil`. |
+
+| `Query` / `QueryOptional` v1 | v1 (data_query) | Envelope `{success, data:{rows}, meta}`; `on_absent` is ignored by hosts that do not implement it. |
+| `ClassifyHostError` | >= 1.18 and older | Old `db_error`+SQLSTATE and new `source_unavailable` both map to `Absence`. |
 
 The helpers are **additive** — addons compiled against the raw host
 imports keep working untouched; new addons opt in by calling the

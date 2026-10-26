@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `guest`: `Query`, `QueryOptional` y `ClassifyHostError` (DG1.4 de DISENO-DEGRADACION). `Query` envuelve
+  `data_query` (import que el host ya ofrecía y el guest no exponía) con paginación por cursor
+  (`order_by id` + `id > último`, 200 por página, `Q.MaxRows` explícito y `ErrTruncated`: nunca
+  truncado silencioso). `QueryOptional` manda `on_absent:"empty"` y devuelve `Optional{Rows, Absent}`:
+  una fuente ausente es un valor tipado, no un error. `ClassifyHostError` (puro, sin import de host)
+  reconoce `source_unavailable` (ABI 1.18) y la forma vieja `db_error` con SQLSTATE 42P01
+  (`table_missing`) / 42703 (`schema_mismatch`), sin buscar texto libre; también `meta.absent` en éxito.
+  Funciona contra el host actual y contra el que implemente `on_absent`. Sin cambios de ABI, de
+  `importpolicy` ni de host.
 - `wasm`: código de host `source_unavailable` (ABI v1.18, DG1.1 de DISENO-DEGRADACION). `data_query`,
   `data_mutate` y `data_batch` clasifican por SQLSTATE (`pgconn`, nunca por texto) la ausencia
   estructural de una fuente: 42P01 → `addon_not_installed` / `addon_disabled` / `table_missing`,
