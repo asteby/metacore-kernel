@@ -244,13 +244,20 @@ func installRuleAbsence(inv *invocation, table string) *sourceAbsence {
 // absentEmpty is the success envelope of an absent source served as empty. The
 // data is IDENTICAL with and without `aggregate` ({"rows":[],"truncated":false})
 // so a guest needs no second code path.
-func absentEmpty(addonKey string, a *sourceAbsence, orgID uuid.UUID, start time.Time, corr string) []byte {
+func absentEmpty(addonKey string, a *sourceAbsence, orgID uuid.UUID, start time.Time, corr, driverMsg string) []byte {
 	meta := dataMutateMeta(addonKey, orgID, start, corr)
-	meta["absent"] = map[string]any{
+	absent := map[string]any{
 		"source": a.Source,
 		"reason": a.Reason,
 		"owners": nonNil(a.Info.Owners),
 	}
+	// Only a schema_mismatch (42703) is ambiguous (misspelt column vs. missing
+	// column), so only it carries the driver text, the same one db_error
+	// would have exposed. Other reasons never get a message.
+	if a.Reason == ReasonSchemaMismatch {
+		absent["message"] = driverMsg
+	}
+	meta["absent"] = absent
 	b, _ := json.Marshal(map[string]any{
 		"success": true,
 		"data":    map[string]any{"rows": []map[string]any{}, "truncated": false},
@@ -287,11 +294,11 @@ func dataQueryFailDB(inv *invocation, addonKey, table, onAbsent string, err erro
 				slog.Warn("wasm.on_absent_schema_mismatch_served_empty",
 					"addon_key", addonKey, "org_id", orgID.String(), "table", a.Source, "err", err.Error())
 			}
-			return absentEmpty(addonKey, a, orgID, start, corr)
+			return absentEmpty(addonKey, a, orgID, start, corr, err.Error())
 		}
 		return sourceEnvelope(addonKey, sourceUnavailableBody(err.Error(), a, degradable, corr), dataMutateMeta(addonKey, orgID, start, corr))
 	}
-	return markClassified(fallback("db_error", err.Error()))
+	return fallback("db_error", err.Error())
 }
 
 // dataMutateFailDB is the write-side twin: `msgPrefix` keeps data_batch's
@@ -306,12 +313,26 @@ func dataMutateFailDB(inv *invocation, addonKey, code, table string, err error, 
 			return sourceEnvelope(addonKey, sourceUnavailableBody(msgPrefix+err.Error(), a, false, corr), meta)
 		}
 	}
-	return markClassified(fallback(code, msgPrefix+err.Error()))
+	return fallback(code, msgPrefix+err.Error())
 }
 
-// markClassified sets error.details.classified=true on a failure envelope that
-// went through the host's SQLSTATE classifier (dataQueryFailDB /
-// dataMutateFailDB), whether or not it turned out to be an absence. A guest
+// classifiedFail wraps an error-envelope builder so that every envelope whose
+// code is db_error or constraint_violation carries details.classified=true.
+// Other codes (forbidden, not_found, invalid_request, ...) are left untouched:
+// the documented rule is exactly this one.
+func classifiedFail(base func(code, msg string) []byte) func(code, msg string) []byte {
+	return func(code, msg string) []byte {
+		raw := base(code, msg)
+		if code == "db_error" || code == "constraint_violation" {
+			return markClassified(raw)
+		}
+		return raw
+	}
+}
+
+// markClassified sets error.details.classified=true on a failure envelope of
+// the host's SQLSTATE-classified code family (db_error / constraint_violation),
+// whether or not it turned out to be an absence. A guest
 // that sees it knows the host already classified the error, so a later 42P01
 // in the message (after the base-table probe) must not be re-read as an absent
 // source. Hosts older than 1.19 never send it.

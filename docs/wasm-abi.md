@@ -36,7 +36,7 @@ keep them in sync.
 | 1.16    | proposal | adds `edge_command`: a guest sends a command to a physical device of its org (CashDro, printer...) and gets back the answer the host carried over the device agent's authenticated connection, not a copy relayed by the browser. It is gated by `edge:command <device_key>.<command_kind>`, and only for device classes from the addon's own `edge_devices[]`. Idempotent per key, with a timeout capped at 60 s, and the device wait does not count against the guest's budget. See § 25. |
 | 1.17    | proposal | adds `dns_resolve`: read-only DNS lookup (A/AAAA/CNAME/MX/TXT) of a name under a domain the invoking organization owns, for ownership proofs and record verification. Gated by a `domain:manage` capability AND the host policy `Host.WithDNS(resolver, authorize)` (fail-closed without it). Guests built against 1.0 – 1.16 keep working. See § 26. |
 | 1.18    | proposal | `data_query` / `data_mutate` / `data_batch` classify a structural absence by SQLSTATE (42P01 on the requested table, 42703) as `source_unavailable` with `legacy_code: "db_error"`, `details{source,reason,owners,installed_owners,sqlstate,degradable}` and the driver `message` untouched; optional `Host.WithSourceOwners`. Every other DB error stays `db_error`. Guests built against 1.0 – 1.17 keep working (a `42P01` text match still matches). See § 15.5.1. |
-| 1.19    | proposal | `data_query` accepts `on_absent` (`""` / `"error"` / `"empty"`; anything else is `invalid_request`). With `"empty"` a degradable structural absence is an empty SUCCESS (`data: {"rows":[],"truncated":false}`, identical with and without `aggregate`) carrying `meta.absent{source,reason,owners}`, and the host applies the per-org install rule (owners known, none installed in the org => absent without querying the database). Without the flag nothing changes. `data_mutate` / `data_batch` ignore it. A host older than 1.19 ignores the key and answers the 1.18 error. See § 15.5.2. |
+| 1.19    | proposal | `data_query` accepts `on_absent` (`""` / `"error"` / `"empty"`; anything else is `invalid_request`). With `"empty"` a degradable structural absence is an empty SUCCESS (`data: {"rows":[],"truncated":false}`, identical with and without `aggregate`) carrying `meta.absent{source,reason,owners}` (plus `message` only for `schema_mismatch`), and the host applies the per-org install rule (owners known, none installed in the org => absent without querying the database). Without the flag nothing changes. `data_mutate` / `data_batch` ignore it. A host older than 1.19 ignores the key and answers the 1.18 error. See § 15.5.2. |
 | 1.10    | proposal | `http_fetch` / `http_request` responses whose body is **not valid UTF-8** now travel as `body_base64` (standard base64) with `body_is_base64: true` and an EMPTY `body`; UTF-8 bodies are unchanged. Fixes silent corruption of every binary response (PDF / ZIP / image / XLSX): `encoding/json` rewrites each invalid byte as U+FFFD, so guests received corrupt bytes with a 200 status and no error. See § 3.1. |
 | 1.6     | proposal | adds `http_request` (outbound HTTP with caller-supplied request headers as a JSON object — enables `Authorization`/`Accept` for authenticated third-party calls; same `http:fetch` capability + SSRF guard + 30 s timeout + 8 MiB cap as `http_fetch`, which is left unchanged and now delegates to the shared path with empty headers) and `connector_get` (resolves one org's credentials for a declared connector — the v3 `connectors` block — returning a JSON object; gated by `connector:read <key>` and tenant-scoped by the invocation `orgID`). Guests built against 1.0 – 1.5 keep working. |
 
@@ -2062,16 +2062,22 @@ permission 42501, constraint 23xxx, ...) stays `db_error` exactly as before and
   the host logs every such case (`slog` warn `wasm.on_absent_schema_mismatch_served_empty`
   with addon, org, table and the driver text) so it can be counted as an anomaly.
   Guests should treat `reason: "schema_mismatch"` in `meta.absent` as suspicious
-  and test their column names against the owner's schema.
-- **`details.classified` (host marker).** Every error envelope of `data_query` /
-  `data_mutate` / `data_batch` that the host emits from its database-failure path
-  carries `error.details.classified: true`, including plain `db_error` /
-  `constraint_violation` that are NOT an absence (those have no other `details`
-  key). It means "the host already classified this error": a `42P01` in the
-  `message` of such an envelope (e.g. raised after the base-table probe, from an
-  extension table) is NOT an absent source and a guest must not re-derive one from
-  the text. Older hosts do not send it. Envelopes from validation errors
-  (`invalid_request`, `forbidden`, ...) do not carry it.
+  and test their column names against the owner's schema. To tell a misused
+  column/table apart, `meta.absent` carries `message` (the driver text, the same
+  one `db_error` would expose) ONLY when `reason == "schema_mismatch"`; other
+  reasons never have the key.
+- **`details.classified` (host marker).** EVERY error envelope with
+  `error.code == "db_error"` or `"constraint_violation"` emitted by `data_query` /
+  `data_mutate` / `data_batch` carries `error.details.classified: true`, wherever
+  it comes from (probe, org-scope, row scan, extension read, commit, size cap,
+  missing `*gorm.DB`), including plain ones that are NOT an absence (those have no
+  other `details` key). `source_unavailable` carries it too. It means "the host
+  already classified this error": a `42P01` in the `message` of such an envelope
+  (e.g. raised after the base-table probe, from an extension table: `read extension
+  X: ... (SQLSTATE 42P01)`) is NOT an absent source and a guest must not re-derive
+  one from the text. The rule is exactly that and no more: every other code
+  (`forbidden`, `not_found`, `invalid_transition`, `invalid_request`, ...) never
+  carries the marker. Older hosts do not send it.
 - `data_mutate` / `data_batch` ignore the field; a write is never a silent no-op.
 - **Compatibility.** Opt-in per call. A host older than 1.19 ignores the key and
   returns the 1.18 `source_unavailable` (or the old `db_error`); guests must still

@@ -9,13 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- `wasm`: marca de host clasificador `error.details.classified: true` en TODOS los sobres de error de
-  `data_query`/`data_mutate`/`data_batch` que salen de `dataQueryFailDB`/`dataMutateFailDB` (ABI 1.19),
-  también en `db_error` y `constraint_violation` que no son ausencia, para que el guest no reinterprete
+- `wasm`: marca de host clasificador `error.details.classified: true` en TODOS los sobres con
+  `code == "db_error"` o `"constraint_violation"` de `data_query`/`data_mutate`/`data_batch` (ABI 1.19; se
+  aplica en el cierre `fail` de las tres funciones, así que también cubre commit, escaneo, orgscope y
+  lectura de extensiones; ningún otro código la lleva), también los que no son ausencia, para que el guest no reinterprete
   un 42P01 posterior al probe. Un 42703 servido como vacío con `on_absent=empty` ahora se registra
   (`slog` warn `wasm.on_absent_schema_mismatch_served_empty`). Documentado en § 15.5.2: contrato de la
   regla por org (`Installed` completo, tablas del núcleo sin dueños, datos ocultos tras desinstalar),
-  `SourceOwnersFn` en la ruta caliente y la limitación del 42703. La ausencia por regla por org ya no
+  `SourceOwnersFn` en la ruta caliente y la limitación del 42703. `meta.absent.message` (texto del driver) solo con `reason=schema_mismatch`. La ausencia por regla por org ya no
   usa un SQLSTATE 42P01 ficticio (`Synthetic`).
 
 - `wasm`: `data_query` acepta `on_absent` (`""`/`"error"`/`"empty"`; otro valor = `invalid_request`), ABI

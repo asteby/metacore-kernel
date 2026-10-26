@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/security"
@@ -311,9 +313,10 @@ type absentOK struct {
 	} `json:"data"`
 	Meta struct {
 		Absent *struct {
-			Source string   `json:"source"`
-			Reason string   `json:"reason"`
-			Owners []string `json:"owners"`
+			Source  string   `json:"source"`
+			Reason  string   `json:"reason"`
+			Owners  []string `json:"owners"`
+			Message *string  `json:"message"`
 		} `json:"absent"`
 	} `json:"meta"`
 }
@@ -490,6 +493,9 @@ func TestOnAbsent_NonAbsencesAndSchemaMismatch(t *testing.T) {
 		if e := decodeAbsentOK(t, out); !e.Success || e.Meta.Absent == nil || e.Meta.Absent.Reason != ReasonSchemaMismatch {
 			t.Fatalf("%s", out)
 		}
+		if m := decodeAbsentOK(t, out).Meta.Absent.Message; m == nil || !strings.Contains(*m, `column "uuid" does not exist`) {
+			t.Fatalf("schema_mismatch must carry the driver message: %s", out)
+		}
 	})
 	t.Run("42703 dentro de tx -> error no degradable (la tx quedó abortada)", func(t *testing.T) {
 		tx, mock, cleanup := newMockGormTx(t)
@@ -634,11 +640,104 @@ func TestClassifiedMarkOnAllDBErrorEnvelopes(t *testing.T) {
 		}
 	})
 	t.Run("data_mutate / data_batch helpers, any code", func(t *testing.T) {
-		fb := func(code, msg string) []byte { return dataMutateErr("a", code, msg, uuid.Nil, time.Now(), "") }
+		fb := classifiedFail(func(code, msg string) []byte { return dataMutateErr("a", code, msg, uuid.Nil, time.Now(), "") })
 		for _, code := range []string{"db_error", "constraint_violation"} {
 			raw(dataMutateFailDB(nil, "a", code, "t", errors.New("boom"), uuid.Nil, time.Now(), "", false, "", fb))
 			raw(dataMutateFailDB(nil, "a", code, "t", errors.New("boom"), uuid.Nil, time.Now(), "", true, "mutations[0]: ", fb))
 		}
 		raw(dataMutateFailDB(nil, "a", "db_error", "t", pgErr("42P01", "missing"), uuid.Nil, time.Now(), "", false, "", fb))
 	})
+}
+
+// meta.absent.message exists ONLY for reason=schema_mismatch.
+func TestOnAbsent_MessageOnlyOnSchemaMismatch(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+	mock.ExpectQuery(`SELECT \* FROM "fiscal_documents" LIMIT 0`).WillReturnError(pgErr("42P01", "missing"))
+	inv := testInvocation(gdb, nil, uuid.New(), fiscalReadEnforcer(), nil)
+	out := executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"fiscal_documents","on_absent":"empty"}`))
+	if e := decodeAbsentOK(t, out); !e.Success || e.Meta.Absent == nil || e.Meta.Absent.Message != nil || strings.Contains(string(out), `"message"`) {
+		t.Fatalf("non-schema_mismatch absence must not carry message: %s", out)
+	}
+	// Install-rule (synthetic) absence neither.
+	inv2 := testInvocation(gdb, nil, uuid.New(), fiscalReadEnforcer(), nil)
+	inv2.sourceOwners = fiscalOwners(SourceInfo{Owners: []string{"fiscal_mexico"}})
+	out = executeDataQueryRecords(context.Background(), inv2, []byte(`{"table":"fiscal_documents","on_absent":"empty"}`))
+	if e := decodeAbsentOK(t, out); !e.Success || e.Meta.Absent == nil || e.Meta.Absent.Message != nil {
+		t.Fatalf("%s", out)
+	}
+}
+
+// Missing extension table after the probe: db_error carrying the mark.
+func TestClassifiedMark_ExtensionTableMissing(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+	orgID := uuid.New()
+	expectProbe(mock, `"products"`, "id", "organization_id", "name")
+	mock.ExpectQuery(`SELECT \* FROM "products" t WHERE`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow("r1", "Pilot"))
+	mock.ExpectQuery(`SELECT \* FROM "tire_specs" WHERE "id" IN`).
+		WillReturnError(pgErr("42P01", `relation "tire_specs" does not exist`))
+	inv := testInvocation(gdb, nil, orgID, nil, nil)
+	inv.extensions = func(table, model string) []dynamic.ExtensionTable {
+		return []dynamic.ExtensionTable{{Key: "TireSpec", Table: "tire_specs", Columns: []manifest.ColumnDef{{Name: "width", Type: "integer"}}}}
+	}
+	out := executeDataQueryRecords(context.Background(), inv, []byte(`{"table":"products","where":{"TireSpec.width":205}}`))
+	e := decodeSU(t, out)
+	if e.Success || e.Error.Code != "db_error" || !onlyClassified(e) || !strings.Contains(e.Error.Message, "read extension TireSpec") {
+		t.Fatalf("%s", out)
+	}
+}
+
+// classifiedFail marks exactly db_error and constraint_violation.
+func TestClassifiedFail_Rule(t *testing.T) {
+	f := classifiedFail(func(code, msg string) []byte { return dataMutateErr("a", code, msg, uuid.Nil, time.Now(), "") })
+	for code, want := range map[string]bool{"db_error": true, "constraint_violation": true, "forbidden": false, "not_found": false, "invalid_transition": false, "invalid_request": false} {
+		var m struct {
+			Error struct {
+				Details map[string]any `json:"details"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(f(code, "x"), &m); err != nil {
+			t.Fatal(err)
+		}
+		if got := m.Error.Details["classified"] == true; got != want {
+			t.Fatalf("%s: classified=%v want %v", code, got, want)
+		}
+	}
+	// Writes: FailDB with a non db_error/constraint code is never marked.
+	fb := classifiedFail(func(code, msg string) []byte { return dataMutateErr("a", code, msg, uuid.Nil, time.Now(), "") })
+	for _, code := range []string{"forbidden", "not_found", "invalid_transition"} {
+		out := dataMutateFailDB(nil, "a", code, "t", errors.New("x"), uuid.Nil, time.Now(), "", false, "", fb)
+		if strings.Contains(string(out), "classified") {
+			t.Fatalf("%s must not be marked: %s", code, out)
+		}
+	}
+}
+
+// Guard: the three functions must build every error through classifiedFail,
+// and nothing may bypass it by calling the raw envelope builders.
+func TestClassifiedFail_NoBypass(t *testing.T) {
+	cases := map[string][]string{
+		"dataquery_records.go": {"dataMutateErr("},
+		"datamutate.go":        {"dataMutateErr("},
+		"databatch.go":         {"dataBatchErr("},
+	}
+	for file, builders := range cases {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(b)
+		if !strings.Contains(src, "fail := classifiedFail(") {
+			t.Fatalf("%s: fail must be built with classifiedFail", file)
+		}
+		for _, bd := range builders {
+			// Allowed: the func definition and the single call inside the classifiedFail closure.
+			n := strings.Count(src, bd) - strings.Count(src, "func "+bd)
+			if n != 1 {
+				t.Fatalf("%s: %d direct calls to %s (only the classifiedFail closure may call it)", file, n, bd)
+			}
+		}
+	}
 }

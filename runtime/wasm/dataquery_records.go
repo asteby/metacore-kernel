@@ -189,9 +189,12 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 		addonKey = inv.addonKey
 		orgID = inv.orgID
 	}
-	fail := func(code, msg string) []byte {
+	// classifiedFail marks EVERY db_error / constraint_violation of this
+	// function (details.classified), not only those that went through the
+	// SQLSTATE classifier.
+	fail := classifiedFail(func(code, msg string) []byte {
 		return dataMutateErr(addonKey, code, msg, orgID, start, dynamic.CorrelationIDFromContext(ctx))
-	}
+	})
 
 	// failDB: a database error on the requested table. A structural absence
 	// (42P01 / 42703) becomes `source_unavailable` (sourceunavailable.go);
@@ -341,7 +344,7 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 	// always stays (an existing table of another org's install still reads).
 	if req.OnAbsent == OnAbsentEmpty {
 		if a := installRuleAbsence(inv, req.Table); a != nil {
-			return absentEmpty(addonKey, a, orgID, start, dynamic.CorrelationIDFromContext(ctx))
+			return absentEmpty(addonKey, a, orgID, start, dynamic.CorrelationIDFromContext(ctx), "")
 		}
 	}
 
@@ -362,7 +365,7 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 		if missing {
 			info := inv.sourceInfo(req.Table)
 			return absentEmpty(addonKey, &sourceAbsence{Source: req.Table, SQLState: sqlStateUndefinedTable, Info: info, Reason: reasonForMissingTable(info)},
-				orgID, start, dynamic.CorrelationIDFromContext(ctx))
+				orgID, start, dynamic.CorrelationIDFromContext(ctx), "")
 		}
 	}
 
