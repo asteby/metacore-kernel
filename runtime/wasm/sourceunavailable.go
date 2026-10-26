@@ -3,6 +3,7 @@ package wasm
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -69,10 +70,21 @@ type SourceInfo struct {
 	Disabled []string
 }
 
-// SourceOwnersFn resolves SourceInfo for (org, logical table). It runs only on
-// the failure path, at most once per table per invocation (the host memoises
-// the result on the invocation), so an implementation backed by
-// installer.InstalledSet costs one query per invocation that hits an absence.
+// SourceOwnersFn resolves SourceInfo for (org, logical table). At most once per
+// table per invocation (the host memoises the result on the invocation). It
+// runs on the failure path of any data_* call AND, for a data_query with
+// on_absent=empty, on EVERY read (per-org install rule, before the database is
+// touched), so the embedder's implementation sits on the hot path: back it
+// with a cache (e.g. installer.InstalledSet memoised per org), not a query per
+// call.
+//
+// Contract of the per-org rule (on_absent=empty):
+//   - Installed must include EVERY effective install of an owner for the org,
+//     instance-level installs included; a missing one hides live data.
+//   - Core tables (not declared by any addon) carry NO owners, so the rule never
+//     applies to them.
+//   - After the addon is uninstalled its data is hidden (served as absent) even
+//     if the rows still exist physically.
 type SourceOwnersFn func(orgID uuid.UUID, table string) SourceInfo
 
 // WithSourceOwners injects the embedder's table→owners resolution, the same
@@ -89,7 +101,10 @@ type sourceAbsence struct {
 	Source   string
 	Reason   string
 	SQLState string
-	Info     SourceInfo
+	// Synthetic: decided by the host's per-org install rule, no database error
+	// behind it (SQLState is empty).
+	Synthetic bool
+	Info      SourceInfo
 }
 
 // classifySourceAbsence returns the absence an error represents, or nil when it
@@ -189,11 +204,66 @@ func sourceUnavailableBody(message string, a *sourceAbsence, degradable bool, co
 		"installed_owners": nonNil(a.Info.Installed),
 		"sqlstate":         a.SQLState,
 		"degradable":       degradable,
+		"classified":       true,
 	}
 	if id := strings.TrimSpace(correlationID); id != "" {
 		errBody["correlation_id"] = id
 	}
 	return errBody
+}
+
+// on_absent (DISENO-DEGRADACION §B.2, phase DG1.2): per-call opt-in of
+// data_query to serve a degradable structural absence as an empty SUCCESS.
+const (
+	OnAbsentError = "error" // default: source_unavailable error (same as omitted)
+	OnAbsentEmpty = "empty" // degradable absence -> success, empty data, meta.absent
+)
+
+// validOnAbsent reports whether v is an accepted on_absent value.
+func validOnAbsent(v string) bool { return v == "" || v == OnAbsentError || v == OnAbsentEmpty }
+
+// installRuleAbsence implements the per-org install rule (§B.2, P3), applied
+// ONLY with on_absent=empty and before touching the database: when the
+// embedder knows owners of the table and none is installed AND enabled in this
+// org, the source is absent for this org even if the physical table exists
+// (another org installed the addon). Uncatalogued tables (no owners) and
+// embedders without WithSourceOwners never match: they fall through to the
+// physical behaviour.
+//
+// The absence is synthesised by the host, not raised by Postgres: SQLState is
+// left empty and Synthetic is set so it can never be mistaken for a real
+// 42P01 (it only reaches the guest inside meta.absent, which has no sqlstate).
+func installRuleAbsence(inv *invocation, table string) *sourceAbsence {
+	info := inv.sourceInfo(table)
+	if len(info.Owners) == 0 || len(info.Installed) > 0 {
+		return nil
+	}
+	return &sourceAbsence{Source: table, Synthetic: true, Info: info, Reason: reasonForMissingTable(info)}
+}
+
+// absentEmpty is the success envelope of an absent source served as empty. The
+// data is IDENTICAL with and without `aggregate` ({"rows":[],"truncated":false})
+// so a guest needs no second code path.
+func absentEmpty(addonKey string, a *sourceAbsence, orgID uuid.UUID, start time.Time, corr, driverMsg string) []byte {
+	meta := dataMutateMeta(addonKey, orgID, start, corr)
+	absent := map[string]any{
+		"source": a.Source,
+		"reason": a.Reason,
+		"owners": nonNil(a.Info.Owners),
+	}
+	// Only a schema_mismatch (42703) is ambiguous (misspelt column vs. missing
+	// column), so only it carries the driver text, the same one db_error
+	// would have exposed. Other reasons never get a message.
+	if a.Reason == ReasonSchemaMismatch {
+		absent["message"] = driverMsg
+	}
+	meta["absent"] = absent
+	b, _ := json.Marshal(map[string]any{
+		"success": true,
+		"data":    map[string]any{"rows": []map[string]any{}, "truncated": false},
+		"meta":    meta,
+	})
+	return b
 }
 
 // dataQueryFailDB / dataMutateFailDB / dataBatchFailDB are the failure path for
@@ -205,14 +275,28 @@ func sourceEnvelope(addonKey string, errBody map[string]any, meta map[string]any
 	return b
 }
 
-func dataQueryFailDB(inv *invocation, addonKey, table string, err error, orgID uuid.UUID, start time.Time, corr string, fallback func(code, msg string) []byte) []byte {
+func dataQueryFailDB(inv *invocation, addonKey, table, onAbsent string, err error, orgID uuid.UUID, start time.Time, corr string, fallback func(code, msg string) []byte) []byte {
 	if a := classifySourceAbsence(inv, table, err); a != nil {
 		// A read that ran on the caller's open transaction (Host.InvokeInTx:
 		// data_query has no savepoint of its own) has just ABORTED it: every
 		// later statement of the invocation fails with 25P02. Serving "empty"
-		// and carrying on cannot work there, so the read is not degradable.
+		// and carrying on cannot work there, so the read is not degradable
+		// (42P01 and 42703 alike). `degradable` and the on_absent=empty
+		// decision below are the SAME boolean, so they cannot disagree.
 		inTx := inv != nil && inv.tx != nil && isTx(inv.tx)
-		return sourceEnvelope(addonKey, sourceUnavailableBody(err.Error(), a, !inTx, corr), dataMutateMeta(addonKey, orgID, start, corr))
+		degradable := !inTx
+		if degradable && onAbsent == OnAbsentEmpty {
+			if a.SQLState == sqlStateUndefinedColumn {
+				// Served as a silent empty: it may hide a misspelt column in
+				// where/order_by/aggregate (the probe is SELECT *, so a 42703
+				// can never come from it) and may come from an extension
+				// table although it is attributed to the base one. Count it.
+				slog.Warn("wasm.on_absent_schema_mismatch_served_empty",
+					"addon_key", addonKey, "org_id", orgID.String(), "table", a.Source, "err", err.Error())
+			}
+			return absentEmpty(addonKey, a, orgID, start, corr, err.Error())
+		}
+		return sourceEnvelope(addonKey, sourceUnavailableBody(err.Error(), a, degradable, corr), dataMutateMeta(addonKey, orgID, start, corr))
 	}
 	return fallback("db_error", err.Error())
 }
@@ -230,4 +314,46 @@ func dataMutateFailDB(inv *invocation, addonKey, code, table string, err error, 
 		}
 	}
 	return fallback(code, msgPrefix+err.Error())
+}
+
+// classifiedFail wraps an error-envelope builder so that every envelope whose
+// code is db_error or constraint_violation carries details.classified=true.
+// Other codes (forbidden, not_found, invalid_request, ...) are left untouched:
+// the documented rule is exactly this one.
+func classifiedFail(base func(code, msg string) []byte) func(code, msg string) []byte {
+	return func(code, msg string) []byte {
+		raw := base(code, msg)
+		if code == "db_error" || code == "constraint_violation" {
+			return markClassified(raw)
+		}
+		return raw
+	}
+}
+
+// markClassified sets error.details.classified=true on a failure envelope of
+// the host's SQLSTATE-classified code family (db_error / constraint_violation),
+// whether or not it turned out to be an absence. A guest
+// that sees it knows the host already classified the error, so a later 42P01
+// in the message (after the base-table probe) must not be re-read as an absent
+// source. Hosts older than 1.19 never send it.
+func markClassified(raw []byte) []byte {
+	var env map[string]any
+	if json.Unmarshal(raw, &env) != nil {
+		return raw
+	}
+	eb, ok := env["error"].(map[string]any)
+	if !ok {
+		return raw
+	}
+	d, _ := eb["details"].(map[string]any)
+	if d == nil {
+		d = map[string]any{}
+	}
+	d["classified"] = true
+	eb["details"] = d
+	out, err := json.Marshal(env)
+	if err != nil {
+		return raw
+	}
+	return out
 }

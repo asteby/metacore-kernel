@@ -45,6 +45,11 @@ type dataQueryRequest struct {
 	// group": grouped sum/count/min/max/avg over the same org-scoped, filtered
 	// set. See dataQueryAggregate and docs/wasm-abi.md § 15.7.
 	Aggregate *dataQueryAggregate `json:"aggregate"`
+	// OnAbsent ("" | "error" | "empty") opts into serving a degradable
+	// structural absence as an empty success with meta.absent (docs/wasm-abi.md
+	// § 15.5.2). "" and "error" keep the source_unavailable error. Any other
+	// value is invalid_request.
+	OnAbsent string `json:"on_absent"`
 }
 
 // dataQueryOps are the operators accepted in the object form of a where value,
@@ -184,16 +189,19 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 		addonKey = inv.addonKey
 		orgID = inv.orgID
 	}
-	fail := func(code, msg string) []byte {
+	// classifiedFail marks EVERY db_error / constraint_violation of this
+	// function (details.classified), not only those that went through the
+	// SQLSTATE classifier.
+	fail := classifiedFail(func(code, msg string) []byte {
 		return dataMutateErr(addonKey, code, msg, orgID, start, dynamic.CorrelationIDFromContext(ctx))
-	}
+	})
 
 	// failDB: a database error on the requested table. A structural absence
 	// (42P01 / 42703) becomes `source_unavailable` (sourceunavailable.go);
 	// anything else is the same `db_error` as always.
 	var req dataQueryRequest
 	failDB := func(err error) []byte {
-		return dataQueryFailDB(inv, addonKey, req.Table, err, orgID, start, dynamic.CorrelationIDFromContext(ctx), fail)
+		return dataQueryFailDB(inv, addonKey, req.Table, req.OnAbsent, err, orgID, start, dynamic.CorrelationIDFromContext(ctx), fail)
 	}
 
 	if inv == nil {
@@ -213,6 +221,9 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 	if !dataMutateIdentRe.MatchString(req.Table) {
 		return fail("invalid_request",
 			fmt.Sprintf("table must be a logical unqualified identifier (got %q)", req.Table))
+	}
+	if !validOnAbsent(req.OnAbsent) {
+		return fail("invalid_request", fmt.Sprintf("on_absent must be \"error\" or \"empty\" (got %q)", req.OnAbsent))
 	}
 	if req.Limit < 0 {
 		return fail("invalid_request", "limit must be >= 0")
@@ -328,9 +339,35 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 		return fail("invalid_request", err.Error())
 	}
 
+	// on_absent=empty, per-org install rule: BEFORE the probe, without touching
+	// the database. Only with the flag; without it the physical behaviour of
+	// always stays (an existing table of another org's install still reads).
+	if req.OnAbsent == OnAbsentEmpty {
+		if a := installRuleAbsence(inv, req.Table); a != nil {
+			return absentEmpty(addonKey, a, orgID, start, dynamic.CorrelationIDFromContext(ctx), "")
+		}
+	}
+
 	execCtx, cancel := context.WithTimeout(ctx, dataQueryDeadline)
 	defer cancel()
 	work := inv.readDB().WithContext(execCtx)
+
+	// Inside the caller's transaction (InvokeInTx) a failed probe would ABORT
+	// it (25P02 afterwards). With on_absent=empty ask the catalog instead:
+	// to_regclass returns NULL for a missing relation and raises nothing, so the
+	// tx stays usable. Only a BASE table is checked (extension tables joined
+	// later keep their own behaviour, see "42P01 after the probe" in § 15.5.1).
+	if req.OnAbsent == OnAbsentEmpty && isTx(work) {
+		var missing bool
+		if err := work.Raw("SELECT to_regclass($1) IS NULL", tbl).Row().Scan(&missing); err != nil {
+			return fail("db_error", err.Error())
+		}
+		if missing {
+			info := inv.sourceInfo(req.Table)
+			return absentEmpty(addonKey, &sourceAbsence{Source: req.Table, SQLState: sqlStateUndefinedTable, Info: info, Reason: reasonForMissingTable(info)},
+				orgID, start, dynamic.CorrelationIDFromContext(ctx), "")
+		}
+	}
 
 	// Zero-row probe: result-set metadata yields the column set, which drives
 	// both the soft-delete filter (see the function doc) and the choice of
