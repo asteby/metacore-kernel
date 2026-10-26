@@ -18,6 +18,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`table_missing`) / 42703 (`schema_mismatch`), sin buscar texto libre; también `meta.absent` en éxito.
   Funciona contra el host actual y contra el que implemente `on_absent`. Sin cambios de ABI, de
   `importpolicy` ni de host.
+- `guest`: `ClassifyReadError` (como `ClassifyHostError` pero para `data_query`: la forma vieja sale
+  con `Degradable:true`; lo usan `Query`/`QueryOptional`). Marca `error.details.classified:true`: si el
+  sobre la trae, el host ya clasificó y un `db_error` con SQLSTATE no se reinterpreta como ausencia
+  (hosts >= 1.19; antes aplica la heurística vieja). La forma vieja solo se reconoce por el sufijo
+  `(SQLSTATE XXXXX)` estricto del mensaje, no por texto libre. Si un `schema_mismatch` llega por
+  `meta.absent` sin `message`, `Query` repite una página sin `on_absent` para detectar la tabla sin `id`.
+- `guest`: **cambio visible para autores de addons:** los números de `Row` (`Query`/`QueryOptional`)
+  son `json.Number`, no `float64`, para conservar ids por encima de 2^53; ajusta las aserciones de tipo.
 - `wasm`: código de host `source_unavailable` (ABI v1.18, DG1.1 de DISENO-DEGRADACION). `data_query`,
   `data_mutate` y `data_batch` clasifican por SQLSTATE (`pgconn`, nunca por texto) la ausencia
   estructural de una fuente: 42P01 → `addon_not_installed` / `addon_disabled` / `table_missing`,

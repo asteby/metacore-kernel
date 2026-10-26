@@ -422,7 +422,10 @@ if errors.Is(err, guest.ErrTruncated) { /* rows holds the first MaxRows */ }
 `Where.id` is **reserved** for the cursor (using it returns `invalid_query`). The
 table **needs an `id` column**: pagination always sends `order_by id`, and a
 `42703` on `"id"` is reported as `invalid_query` ("table has no id column"), not
-as an absence. Numbers in `Row` are `json.Number` (not `float64`) so ids above
+as an absence. (This relies on the driver text: if a `schema_mismatch` arrives
+through `meta.absent` without `message`, `Query`/`QueryOptional` repeat that one
+page once without `on_absent` to read the real error; if the repeat gives no
+text either, the table is reported as an absence.) Numbers in `Row` are `json.Number` (not `float64`) so ids above
 2^53 keep their precision. The cursor must advance on every page; a repeated
 last `id` returns `invalid_query` instead of looping. The host caps a response
 at 8 MiB: if 200 rows do not fit, the host answers `db_error` ("response exceeds
@@ -456,10 +459,13 @@ reason is `table_missing` (SQLSTATE 42P01) or `schema_mismatch` (42703), and
 `Absent.Legacy` is true. The old form is only recognised from the trailing
 `(SQLSTATE XXXXX)` suffix of the message (a `SQLSTATE` inside user data, or a
 truncated message, is not classified), and never when the envelope carries
-`error.details.classified: true`: host 1.19 (kernel PR #559) sets that mark on
-every `data_query`/`data_mutate` error envelope, meaning the host already
-decided and a `db_error` (e.g. a `42P01` after the probe) is a real failure.
-An absence with `degradable:false` (e.g. `42703` inside `InvokeInTx`) makes
+`error.details.classified: true`. From 1.19 (kernel PR #559) the host sets that
+mark on every `db_error` and `constraint_violation` envelope of the three
+`data_*` operations (`data_query`, `data_mutate`, `data_batch`), meaning the host
+already decided, so a `db_error` (e.g. a `42P01` after the probe) is a real
+failure. Before 1.19 hosts do not send the mark and the old heuristic applies,
+with its limit: a `42P01` raised by an extension table could be classified as an
+absence. An absence with `degradable:false` (e.g. `42703` inside `InvokeInTx`) makes
 `QueryOptional` return an error (`*DataQueryError` with `Absent != nil`), not
 `Optional.Absent`. `Query` (mandatory read) returns the same absence as
 `*DataQueryError` with `Absent != nil` (`errors.As(err, &absence)` also works).
@@ -486,7 +492,6 @@ never matched. A write is never degraded.
 | `HttpFetch` v1 | `{status, body}` (+ `{body_base64, body_is_base64}` for non-UTF-8 bodies, ABI 1.10) | Host envelope is flat (no `{success, data, meta}`); helper probes for the `{error, message}` failure shape first. |
 | `DbQuery` v1   | v1              | Decoder follows `{success, data, meta}` from § 9.4 verbatim.                                                   |
 | `DbExec` v1    | v1 (v0.11+)     | RETURNING projection lives under `data.rows` + `data.columns`; pre-v0.11 envelopes (no `rows`) decode cleanly with `Rows == nil`. |
-
 | `Query` / `QueryOptional` v1 | v1 (data_query) | Envelope `{success, data:{rows}, meta}`; `on_absent` is ignored by hosts that do not implement it. |
 | `ClassifyHostError` / `ClassifyReadError` | >= 1.19, 1.18 and older | Old `db_error`+SQLSTATE suffix (only without `details.classified`) and new `source_unavailable` both map to `Absence`. |
 

@@ -261,7 +261,10 @@ type absenceWireBody struct {
 	Owners          []string `json:"owners"`
 	InstalledOwners []string `json:"installed_owners"`
 	SQLState        string   `json:"sqlstate"`
-	Degradable      *bool    `json:"degradable"`
+	// Message (meta.absent, host >= 1.19): texto del driver. En error.details
+	// no viaja (el texto va en error.message).
+	Message    string `json:"message"`
+	Degradable *bool  `json:"degradable"`
 	// Classified (host >= 1.19): el host ya clasificó este sobre; un db_error
 	// con la marca es un fallo real y no se reinterpreta por SQLSTATE.
 	Classified *bool `json:"classified"`
@@ -274,6 +277,7 @@ func (b *absenceWireBody) toAbsence() *Absence {
 		Owners:          b.Owners,
 		InstalledOwners: b.InstalledOwners,
 		SQLState:        b.SQLState,
+		Message:         b.Message,
 	}
 }
 

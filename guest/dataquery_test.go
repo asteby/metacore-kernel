@@ -298,3 +298,50 @@ func TestQueryPagesCursorMustAdvance(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestQueryPagesNoIDColumnViaMetaAbsentWithoutMessage(t *testing.T) {
+	for name, tc := range map[string]struct {
+		probe   string
+		wantUse bool
+	}{
+		"id":        {`{"success":false,"error":{"code":"db_error","message":"ERROR: column \"id\" does not exist (SQLSTATE 42703)"}}`, true},
+		"otra":      {`{"success":false,"error":{"code":"db_error","message":"ERROR: column \"status\" does not exist (SQLSTATE 42703)"}}`, false},
+		"sin texto": {`{"success":false,"error":{"code":"db_error"}}`, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := &fakeHost{}
+			h.override = func(int) []byte {
+				if _, ok := h.reqs[len(h.reqs)-1]["on_absent"]; ok {
+					return []byte(`{"success":true,"data":{"rows":[]},"meta":{"absent":{"source":"t","reason":"schema_mismatch","sqlstate":"42703"}}}`)
+				}
+				return []byte(tc.probe)
+			}
+			_, absent, err := queryPages(h.call, "t", Q{}, "empty")
+			var de *DataQueryError
+			if tc.wantUse {
+				if absent != nil || !errors.As(err, &de) || de.Code != "invalid_query" {
+					t.Fatalf("absent=%v err=%v", absent, err)
+				}
+			} else if err != nil || absent == nil || absent.Reason != ReasonSchemaMismatch {
+				t.Fatalf("absent=%v err=%v", absent, err)
+			}
+			if len(h.reqs) != 2 {
+				t.Fatalf("esperaba 1 repeticion, hubo %d peticiones", len(h.reqs))
+			}
+			if _, ok := h.reqs[1]["on_absent"]; ok {
+				t.Fatal("la repeticion no debe llevar on_absent")
+			}
+		})
+	}
+}
+
+func TestQueryPagesMetaAbsentWithMessageDoesNotRetry(t *testing.T) {
+	h := &fakeHost{override: func(int) []byte {
+		return []byte(`{"success":true,"data":{"rows":[]},"meta":{"absent":{"source":"t","reason":"schema_mismatch","sqlstate":"42703","message":"ERROR: column \"id\" does not exist (SQLSTATE 42703)"}}}`)
+	}}
+	_, _, err := queryPages(h.call, "t", Q{}, "empty")
+	var de *DataQueryError
+	if !errors.As(err, &de) || de.Code != "invalid_query" || len(h.reqs) != 1 {
+		t.Fatalf("err=%v reqs=%d", err, len(h.reqs))
+	}
+}

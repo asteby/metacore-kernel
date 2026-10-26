@@ -187,8 +187,16 @@ func queryPages(call func(req []byte) []byte, table string, q Q, onAbsent string
 			return nil, nil, err
 		}
 		if absent != nil {
-			if absent.Reason == ReasonSchemaMismatch && idColumnMissing.MatchString(absent.Message) {
-				return nil, nil, &DataQueryError{Code: "invalid_query", Message: "table has no id column: Query paginates by id (" + absent.Message + ")"}
+			if absent.Reason == ReasonSchemaMismatch {
+				msg := absent.Message
+				if msg == "" && onAbsent != "" {
+					// meta.absent no trae el texto del driver (host sin message):
+					// una sola repetición sin on_absent obtiene el error real.
+					msg = probeAbsentMessage(call, req)
+				}
+				if idColumnMissing.MatchString(msg) {
+					return nil, nil, &DataQueryError{Code: "invalid_query", Message: "table has no id column: Query paginates by id (" + msg + ")"}
+				}
 			}
 			return nil, absent, nil
 		}
@@ -208,6 +216,31 @@ func queryPages(call func(req []byte) []byte, table string, q Q, onAbsent string
 		}
 		cursor = last
 	}
+}
+
+// probeAbsentMessage repite UNA vez la página sin on_absent para leer el texto
+// del driver cuando meta.absent llegó sin message. "" si no se pudo obtener.
+func probeAbsentMessage(call func(req []byte) []byte, req []byte) string {
+	var w map[string]json.RawMessage
+	if err := json.Unmarshal(req, &w); err != nil {
+		return ""
+	}
+	delete(w, "on_absent")
+	b, err := json.Marshal(w)
+	if err != nil {
+		return ""
+	}
+	out := ClassifyReadError(call(b))
+	switch {
+	case out.Absent != nil:
+		return out.Absent.Message
+	case out.Err != nil:
+		var he *HostError
+		if errors.As(out.Err, &he) {
+			return he.Message
+		}
+	}
+	return ""
 }
 
 // optionalResult arma el resultado de QueryOptional. Una ausencia con
