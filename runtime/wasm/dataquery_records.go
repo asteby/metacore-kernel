@@ -188,6 +188,14 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 		return dataMutateErr(addonKey, code, msg, orgID, start, dynamic.CorrelationIDFromContext(ctx))
 	}
 
+	// failDB: a database error on the requested table. A structural absence
+	// (42P01 / 42703) becomes `source_unavailable` (sourceunavailable.go);
+	// anything else is the same `db_error` as always.
+	var req dataQueryRequest
+	failDB := func(err error) []byte {
+		return dataQueryFailDB(inv, addonKey, req.Table, err, orgID, start, dynamic.CorrelationIDFromContext(ctx), fail)
+	}
+
 	if inv == nil {
 		return fail("invalid_request", "invocation context missing")
 	}
@@ -199,7 +207,6 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 			fmt.Sprintf("request exceeds %d byte cap", dataQueryMaxReqBytes))
 	}
 
-	var req dataQueryRequest
 	if err := json.Unmarshal(reqJSON, &req); err != nil {
 		return fail("invalid_request", "malformed request JSON: "+err.Error())
 	}
@@ -330,7 +337,7 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 	// tenant-scoping strategy below.
 	tblCols, err := tableColumns(work, tbl)
 	if err != nil {
-		return fail("db_error", err.Error())
+		return failDB(err)
 	}
 	softDelete := tblCols["deleted_at"]
 
@@ -416,7 +423,7 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 
 	rows, err := work.Raw(stmt, args...).Rows()
 	if err != nil {
-		return fail("db_error", err.Error())
+		return failDB(err)
 	}
 	defer func() { _ = rows.Close() }()
 	cols, err := rows.Columns()
@@ -440,7 +447,7 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 		rowsOut = append(rowsOut, row)
 	}
 	if err := rows.Err(); err != nil {
-		return fail("db_error", err.Error())
+		return failDB(err)
 	}
 	if agg == nil {
 		if err := mergeQueriedExtensions(work, exts, rowsOut); err != nil {

@@ -89,6 +89,9 @@ type Host struct {
 	db            *gorm.DB
 	enforcer      *security.Enforcer
 	tableResolver func(table string) string
+	// sourceOwners resolves who owns a logical table in an org, to classify a
+	// structural absence (see WithSourceOwners). nil = classify without owners.
+	sourceOwners SourceOwnersFn
 	// modelOwner resolves the addon that OWNS a ModelKey for canonical-event
 	// namespacing on data_mutate / data_batch (mirrors dynamic.Service's
 	// AddonKeyForModel). When unset, events stay under the CALLER addon.
@@ -828,6 +831,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		tx:                tx,
 		enforcer:          h.enforcer,
 		resolveTable:      h.tableResolver,
+		sourceOwners:      h.sourceOwners,
 		modelOwner:        h.modelOwner,
 		execSchema:        h.execSchema,
 		sequenceNext:      h.sequenceNext,

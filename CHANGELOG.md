@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `wasm`: código de host `source_unavailable` (ABI v1.18, DG1.1 de DISENO-DEGRADACION). `data_query`,
+  `data_mutate` y `data_batch` clasifican por SQLSTATE (`pgconn`, nunca por texto) la ausencia
+  estructural de una fuente: 42P01 → `addon_not_installed` / `addon_disabled` / `table_missing`,
+  42703 → `schema_mismatch`, con `error.details{source,reason,owners,installed_owners,sqlstate,
+  degradable}`, `legacy_code: "db_error"` y el `message` original intacto (un guest que busca
+  `42P01` por texto sigue funcionando). Todo otro error de BD sigue siendo `db_error`. Opción
+  `Host.WithSourceOwners(func(org, table) SourceInfo)` para distinguir «no instalado» de «tabla
+  ausente»; sin ella solo `table_missing` / `schema_mismatch`. Una escritura nunca degrada. Minor
+  aditivo, sin cambios de manifest.
 - `capability`: `fiscal.invoice.status` y `fiscal.invoice.document` (KindQuery, cardinalidad `one`,
   ruteo por mercado/país con `Priority` y `not_configured`): lectura de facturas y notas de crédito y
   descarga de PDF/XML sin depender del PAC. Salida normalizada sin URLs del proveedor; archivo en

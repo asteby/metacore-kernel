@@ -1953,6 +1953,51 @@ SUCCESS with `rows: []` — `not_found` is not used by this import (it has no
 single-row contract to violate). `bus_unavailable` never occurs: data_query
 publishes nothing.
 
+### 15.5.1 `source_unavailable` — structural absence of a source (v1.18)
+
+`data_query`, `data_mutate` and `data_batch` classify a database error by its
+SQLSTATE (`pgconn.PgError.Code`, never by text). Only two are a *structural
+absence*; every other driver error (timeout 57014, connection loss 08xxx,
+permission 42501, constraint 23xxx, ...) stays `db_error` exactly as before and
+**must never be degraded** — a money/stock guard keeps failing closed.
+
+| SQLSTATE | `details.reason` | Meaning |
+|----------|------------------|---------|
+| 42P01 (undefined_table) | `addon_not_installed` | no owner of the table is installed in the org |
+| 42P01 | `addon_disabled` | an owner is installed in the org but disabled |
+| 42P01 | `table_missing` | owner unknown (uncatalogued table), or an owner IS installed (broken install: an anomaly) |
+| 42703 (undefined_column) | `schema_mismatch` | the table exists but lacks a column the request names |
+
+```jsonc
+{ "success": false,
+  "error": {
+    "code": "source_unavailable",
+    "legacy_code": "db_error",                       // what older clients matched
+    "message": "ERROR: relation \"fiscal_documents\" does not exist (SQLSTATE 42P01)", // driver text, UNTOUCHED
+    "message_key": "wasm.host.error.source_unavailable",
+    "details": { "source": "fiscal_documents", "reason": "addon_not_installed",
+                 "owners": ["fiscal_mexico"], "installed_owners": [],
+                 "sqlstate": "42P01", "degradable": true } },
+  "meta": { ... } }
+```
+
+- `details.source` is the LOGICAL table the guest asked for. `owners` /
+  `installed_owners` come from the embedder's `Host.WithSourceOwners`
+  (resolved at most once per table per invocation); without it both are `[]` and
+  the reason is `table_missing` / `schema_mismatch`.
+- `details.degradable` is `true` for reads and `false` for `data_mutate` /
+  `data_batch`: the host never turns a write into a silent no-op, whatever the
+  reason. `schema_mismatch` is only tolerable on an *optional read*.
+- **Compatibility.** A guest published before v1.18 keeps working unchanged:
+  `message` still carries the driver text including `SQLSTATE 42P01`, so a
+  `strings.Contains(raw, "42P01")` match keeps matching, and `legacy_code` is the
+  old `db_error`. A guest that decodes `error` into a struct reads `code` and
+  `message` as before (unknown keys, including the nested `details` object, are
+  ignored); a guest that decodes `error` into `map[string]string` would fail on
+  `details` and must switch to a struct. New guests should compare
+  `code == "source_unavailable"` (or `legacy_code`) instead of grepping text.
+- `data_batch` keeps its `mutations[i]: ` message prefix.
+
 ### 15.6 Limits
 
 | Limit            | Value  | On violation             |
@@ -2007,7 +2052,7 @@ grouped aggregates:
 ### 15.7 Wiring
 
 Same host setup as `data_mutate` (§ 14.8) — `WithDB`, `WithEnforcer` and
-`WithTableResolver`; no bus required.
+`WithTableResolver`; no bus required. Optionally `WithSourceOwners` (§ 15.5.1).
 
 Implementation: `runtime/wasm/dataquery_records.go` (named to avoid
 colliding with `dbquery.go`); tests:
