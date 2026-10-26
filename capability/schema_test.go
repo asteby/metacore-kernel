@@ -89,7 +89,7 @@ func TestCommerceContractRegistry(t *testing.T) {
 		CommerceShippingRates: All, CommerceShippingLabel: One, CommerceShippingTrack: One,
 		CommerceFulfillmentCreate: One, CommerceFulfillmentCancel: One,
 		CommerceSearchQuery: One, CommerceDiscountsEvaluate: All,
-		FiscalInvoiceCreate: One, FiscalInvoiceCancel: One,
+		FiscalInvoiceCreate: One, FiscalInvoiceCancel: One, FiscalInvoiceStatus: One, FiscalInvoiceDocument: One,
 	}
 	for key, card := range want {
 		c := mustContract(t, key)
