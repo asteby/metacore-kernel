@@ -14,6 +14,13 @@ import "time"
 const (
 	GeoGeocode = "geo.geocode"
 	GeoRoute   = "geo.route"
+	// GeoAddressSuggest is the type-ahead of an address form: a few
+	// normalized candidates (street, number, colonia, postal code) for what the
+	// shopper has typed so far. It is a SUGGESTION source, never an authority:
+	// the region pack's postal catalog (region.postal.locate) is the only one
+	// that may lock a state or city. Separate from geo.geocode because its
+	// deadline, volume (one call per pause in typing) and caching differ.
+	GeoAddressSuggest = "geo.address.suggest"
 )
 
 // Geo vocabularies.
@@ -31,7 +38,20 @@ var (
 const (
 	GeocodeTimeout = 3 * time.Second
 	RouteTimeout   = 5 * time.Second
+	// AddressSuggestTimeout is shorter on purpose: type-ahead that answers
+	// after a second is worse than no type-ahead, and the form keeps working
+	// without it.
+	AddressSuggestTimeout = 1 * time.Second
 )
+
+// MaxAddressSuggestResults is the most candidates a geo.address.suggest
+// caller may ask for; providers clamp larger limits to it.
+const MaxAddressSuggestResults = 8
+
+// MinAddressSuggestQuery is the shortest query (in characters, without the
+// surrounding blanks) a provider is asked about. The host rejects shorter
+// ones before invoking anyone, so no third party sees a half-typed word.
+const MinAddressSuggestQuery = 3
 
 // MaxRouteWaypoints is the largest waypoint list a geo.route caller may send.
 const MaxRouteWaypoints = 25
@@ -50,10 +70,13 @@ var (
 		enum(req("precision", TypeString, "how exact the point is; a postal code centroid is postal_centroid"), GeoPrecisions),
 		opt("label", TypeString, "formatted address / place name"),
 		opt("postal_code", TypeString, ""),
+		opt("street", TypeString, "street name without the house number"),
+		opt("house_number", TypeString, "house or building number as written (a string: 12-B, S/N)"),
 		opt("neighborhood", TypeString, "colonia / district"),
 		opt("city", TypeString, "city / municipio"),
 		opt("state", TypeString, "state / province (code or name)"),
 		opt("country", TypeCountry, "ISO 3166-1 alpha-2"),
+		opt("place_id", TypeString, "opaque provider id of the match; stable enough to re-resolve it, never to be parsed"),
 		opt("confidence", TypeNumber, "0..1, provider-defined"),
 		nums(opt("bbox", TypeArray, "[west, south, east, north] in degrees, when the match is an area")),
 	)
@@ -64,6 +87,8 @@ var (
 		req("duration_s", TypeNumber, "seconds"),
 	)
 )
+
+func object(f Field, of *Schema) Field { f.Type = TypeObject; f.Of = of; return f }
 
 func nums(f Field) Field { f.Type = TypeArray; f.Elem = TypeNumber; return f }
 
@@ -90,6 +115,21 @@ func geoContracts() []Contract {
 			),
 			Output: schema(
 				list(req("results", TypeArray, "best match first; empty when nothing matched"), GeoPlaceSchema),
+			),
+		},
+		{
+			Key: GeoAddressSuggest, Kind: KindQuery, Cardinality: One, Timeout: AddressSuggestTimeout,
+			Doc: "address candidates for a partially typed street (type-ahead of an address form)",
+			Input: schema(
+				pattern(req("query", TypeString, "what the shopper typed: at least 3 characters once trimmed"), `(?s)^\s*\S.+\S\s*$`),
+				opt("country", TypeCountry, "ISO 3166-1 alpha-2; restricts the search (the market's country)"),
+				opt("postal_code", TypeString, "postal code already chosen in the form; biases and filters the candidates"),
+				object(opt("near", TypeObject, "bias point (e.g. the postal code centroid); never a filter"), GeoPointSchema),
+				opt("limit", TypeInteger, "max candidates, 1..8 (providers clamp; default 5)"),
+				opt("locale", TypeString, "language of the labels (es, en…)"),
+			),
+			Output: schema(
+				list(req("results", TypeArray, "best candidate first, at most 8; empty when nothing matched"), GeoPlaceSchema),
 			),
 		},
 		{

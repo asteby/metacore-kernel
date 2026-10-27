@@ -16,15 +16,22 @@ func TestRegionPostalLocateContract(t *testing.T) {
 	if strings.Join(c.Required, ",") != "postal_code" {
 		t.Fatalf("required = %v", c.Required)
 	}
-	for _, in := range []string{"06600", "64000"} {
+	// The format of a postal code belongs to each country's pack
+	// (region_address_fields), not to the host: any string reaches the provider,
+	// which answers invalid_input for what its country does not use.
+	for _, in := range []string{"06600", "64000", "SW1A 1AA", "K1A 0B1", "90210-1234"} {
 		if p := c.CheckInput(map[string]any{"postal_code": in}); len(p) != 0 {
 			t.Fatalf("%q rejected: %v", in, p)
 		}
 	}
-	for _, in := range []any{"6600", "066000", "0660A", " 06600", 6600} {
-		if p := c.CheckInput(map[string]any{"postal_code": in}); len(p) == 0 {
-			t.Fatalf("%v accepted, want 5 digits", in)
-		}
+	if p := c.CheckInput(map[string]any{"postal_code": 6600}); len(p) == 0 {
+		t.Fatal("a number lost its leading zero: it must be a string")
+	}
+	if p := c.CheckInput(map[string]any{"postal_code": "06600", "country": "MX"}); len(p) != 0 {
+		t.Fatalf("country must be accepted: %v", p)
+	}
+	if p := c.CheckInput(map[string]any{"postal_code": "06600", "country": "mex"}); len(p) == 0 {
+		t.Fatal("country must be ISO alpha-2")
 	}
 	if p := c.CheckInput(map[string]any{}); len(p) != 1 || !strings.Contains(p[0], "required") {
 		t.Fatalf("missing postal_code: %v", p)
@@ -36,6 +43,20 @@ func TestRegionPostalLocateContract(t *testing.T) {
 	}
 	if p := c.ValidateOutput([]byte(`{"lat":19.4,"lng":-99.1,"state":"CDMX","precision":"postal_centroid"}`)); len(p) != 0 {
 		t.Fatalf("city must be optional: %v", p)
+	}
+	// Additive fields: every provider that predates them keeps validating (above).
+	rich := `{"lat":19.4326,"lng":-99.1332,"city":"Cuauhtémoc","cities":["Cuauhtémoc"],"state":"Ciudad de México","state_code":"CDMX","country":"MX","neighborhoods":["Centro","Doctores"],"precision":"postal_centroid"}`
+	if p := c.ValidateOutput([]byte(rich)); len(p) != 0 {
+		t.Fatalf("neighborhoods/cities/state_code/country rejected: %v", p)
+	}
+	for name, out := range map[string]string{
+		"neighborhoods not strings": `{"lat":1,"lng":1,"state":"X","precision":"postal_centroid","neighborhoods":[1]}`,
+		"cities not an array":       `{"lat":1,"lng":1,"state":"X","precision":"postal_centroid","cities":"A"}`,
+		"country not alpha-2":       `{"lat":1,"lng":1,"state":"X","precision":"postal_centroid","country":"Mexico"}`,
+	} {
+		if p := c.ValidateOutput([]byte(out)); len(p) == 0 {
+			t.Fatalf("%s: accepted", name)
+		}
 	}
 	bad := map[string]string{
 		"rooftop precision": `{"lat":1,"lng":1,"state":"X","precision":"rooftop"}`,

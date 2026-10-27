@@ -17,7 +17,8 @@ Entrada:
 
 | Campo | Tipo | Req. | Notas |
 |---|---|---|---|
-| `postal_code` | string, patrón `^[0-9]{5}$` | sí | 5-digit postal code (MX código postal) |
+| `postal_code` | string | sí | postal code in the country's own format; each region pack validates it (`invalid_input`) |
+| `country` | country |  | ISO 3166-1 alpha-2 of the market; a pack of another country answers `not_found` |
 
 Salida (cerrada):
 
@@ -27,14 +28,18 @@ Salida (cerrada):
 | `lng` | number | sí | WGS84 longitude of the postal code centroid, decimal degrees [-180, 180] |
 | `city` | string |  | city or municipality; omitted when the postal table has none |
 | `state` | string | sí | state (name or code, as the region pack publishes it) |
+| `state_code` | string |  | short or ISO code of the state (e.g. MX-CMX, CDMX), when the pack has one |
+| `country` | country |  | ISO 3166-1 alpha-2 of the pack that answered |
+| `neighborhoods` | array<string> |  | colonias / districts of the code, official spelling; omitted when the table has none |
+| `cities` | array<string> |  | every municipality the code covers when more than one; `city` is the first |
 | `precision` | string: postal_centroid | sí | always postal_centroid: draw it as an area, never as a rooftop pin |
 
 Errores:
 
 | Código | Quién | Cuándo |
 |---|---|---|
-| `validation_error` / `ErrInvalidInput` | host, antes de invocar | falta `postal_code` o no son 5 dígitos |
-| `invalid_input` | proveedor (`NewCodedError`) | 5 dígitos que no son un código válido para su país (rango reservado) |
+| `validation_error` / `ErrInvalidInput` | host, antes de invocar | falta `postal_code` o no es una cadena |
+| `invalid_input` | proveedor (`NewCodedError`) | un código que no tiene el formato de su país (México: 5 dígitos) o es un rango reservado |
 | `not_found` | proveedor (`NewCodedError`) | el código no está en la tabla del proveedor |
 
 Notas:
@@ -44,5 +49,12 @@ Notas:
   más cercana; no para rutas de entrega puerta a puerta.
 - `city` es opcional porque las tablas postales (SEPOMEX) no traen ciudad para
   muchos códigos rurales; `state` siempre viene.
-- La entrada son cinco dígitos (México). Otro país con otro formato necesitará
-  su propio contrato o un campo `country` con patrón por país.
+- El **formato** del código lo valida cada paquete de región (el host ya no
+  impone `^[0-9]{5}$`, que era de México): lo declara `region_address_fields` y el
+  proveedor responde `invalid_input`. El código viaja como cadena (un número pierde
+  el cero inicial de `06600`).
+- `neighborhoods`, `cities`, `state_code` y `country` son **opcionales y aditivos**: un
+  proveedor anterior sigue siendo válido y el consumidor degrada a lo que sí venga.
+  Esta consulta, con el catálogo oficial del paquete, es la única fuente
+  **autoritativa** de estado, municipio y colonia de una dirección; los
+  sugeridores de calle (`geo.address.suggest`) nunca la sustituyen.
