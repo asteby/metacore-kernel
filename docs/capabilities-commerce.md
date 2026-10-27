@@ -908,6 +908,12 @@ Salida:
 
 poll a payment's normalized status (return-URL fallback, reconciliation); same output as confirm. Consulta · requiere `Query.Provider` · cardinalidad **one** · tiempo límite por proveedor **8s**.
 
+Errores (`Result.ErrorCode()`): `not_found` **autoritativo**: el proveedor buscó la referencia de forma exhaustiva
+y no tiene ningún pago para ella. Una búsqueda que no puede ser exhaustiva (un índice local, una API que exige
+ventana de fechas) **no** debe devolver `not_found`: usa otro código, que llega como `provider_error`. Un
+consumidor puede vencer un intento de resultado desconocido tras varios `not_found` seguidos, nunca ante
+`provider_error`, `timeout` u otro error ambiguo.
+
 Entrada:
 
 | Campo | Tipo | Req. | Notas |

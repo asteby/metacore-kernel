@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `capability`: `commerce.payments.status` declara el error tipado `not_found` (`PaymentsStatusNotFound`), con
+  sentido **autoritativo**: el proveedor no tiene ningún pago para esa referencia tras una búsqueda exhaustiva.
+  Antes el código del proveedor llegaba al consumidor como `provider_error`. Una búsqueda no exhaustiva usa otro
+  código y sigue llegando como `provider_error`. Lo usa `storefront_cart` para vencer, con varias confirmaciones,
+  un intento de pago con la respuesta perdida. Aditivo, pero ojo: los proveedores que ya contestaban `not_found` (stripe, conekta, clip, payments_manual, openpay, paypal, cash-recycler) ahora llegan tipados sin auditar si su búsqueda es exhaustiva; ningún consumidor actual decide con ese código salvo `storefront_cart`, que solo lo usa con proveedores listados explícitamente.
+
 - `wasm`: marca de host clasificador `error.details.classified: true` en TODOS los sobres con
   `code == "db_error"` o `"constraint_violation"` de `data_query`/`data_mutate`/`data_batch` (ABI 1.19; se
   aplica en el cierre `fail` de las tres funciones, así que también cubre commit, escaneo, orgscope y
