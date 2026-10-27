@@ -11,17 +11,17 @@ import (
 	"unicode/utf8"
 )
 
+// PaymentsStatusNotFound is the typed error of commerce.payments.status
+// (NewCodedError): the provider looked the reference up exhaustively and holds
+// no payment for it. Anything less certain is another code (provider_error).
+const PaymentsStatusNotFound = "not_found"
+
 // Well-known commerce and fiscal capability keys. The storefront core
 // (cart, checkout, order) only ever names these keys; which addon answers
 // (mercadopago, stripe, skydropx, envia, region_mx, factura_com …) is an
 // install + per-market selection decision. Money is ALWAYS a decimal string
 // next to an ISO 4217 currency. The reference with every field lives in
 // docs/capabilities-commerce.md.
-// PaymentsStatusNotFound is the typed error of commerce.payments.status
-// (NewCodedError): the provider looked the reference up exhaustively and holds
-// no payment for it. Anything less certain is another code (provider_error).
-const PaymentsStatusNotFound = "not_found"
-
 const (
 	CommercePaymentsSession   = "commerce.payments.session"
 	CommercePaymentsConfirm   = "commerce.payments.confirm"
