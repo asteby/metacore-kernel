@@ -17,6 +17,11 @@ import (
 // install + per-market selection decision. Money is ALWAYS a decimal string
 // next to an ISO 4217 currency. The reference with every field lives in
 // docs/capabilities-commerce.md.
+// PaymentsStatusNotFound is the typed error of commerce.payments.status
+// (NewCodedError): the provider looked the reference up exhaustively and holds
+// no payment for it. Anything less certain is another code (provider_error).
+const PaymentsStatusNotFound = "not_found"
+
 const (
 	CommercePaymentsSession   = "commerce.payments.session"
 	CommercePaymentsConfirm   = "commerce.payments.confirm"
@@ -1018,6 +1023,13 @@ func commerceContractList() []Contract {
 		{
 			Key: CommercePaymentsStatus, Kind: KindQuery, Cardinality: One,
 			Doc: "poll a payment's normalized status (return-URL fallback, reconciliation); same output as confirm",
+			// not_found is AUTHORITATIVE: the provider looked the reference up
+			// exhaustively and holds no payment for it. A lookup that cannot be
+			// exhaustive (a local index, an API that needs a date window) must
+			// report another code (it then reaches the consumer as
+			// provider_error): consumers may release an attempt of unknown
+			// outcome on repeated not_found, never on an ambiguous failure.
+			Errors: []string{PaymentsStatusNotFound},
 			Input: schema(
 				opt("provider_ref", TypeString, "provider payment/order id"),
 				opt("order_ref", TypeString, "lookup by external reference when provider_ref is unknown"),
