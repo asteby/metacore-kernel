@@ -9,6 +9,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `capability`: `geo.address.suggest` (consulta, cardinalidad `one`, plazo 1 s): autocompletado de calle y número de un formulario de dirección. Entrada `query` (mín. 3 caracteres recortados), `country`, `postal_code`, `near{lat,lng}`, `limit` (≤ 8, constantes `MaxAddressSuggestResults` / `MinAddressSuggestQuery`), `locale`; salida `results[GeoPlace]`. Separada de `geo.geocode`. Solo contrato: el kernel no trae proveedor. `GeoPlace` gana `street`, `house_number` y `place_id` opcionales (también para `geo.geocode`).
+- `capability`: `region.postal.locate` gana salida opcional `neighborhoods[]`, `cities[]`, `state_code` y `country`, y entrada opcional `country`. **Cambio de comportamiento de la entrada:** se quita el patrón `^[0-9]{5}$` (era de México): el host solo exige una cadena y el formato lo valida cada paquete de región (`invalid_input`). Los proveedores que ya existen siguen siendo válidos; un proveedor que empiece a emitir los campos nuevos necesita un kernel con este cambio (su salida es cerrada).
+
 - `capability`: `commerce.payments.status` declara el error tipado `not_found` (`PaymentsStatusNotFound`), con
   sentido **autoritativo**: el proveedor no tiene ningún pago para esa referencia tras una búsqueda exhaustiva.
   Antes el código del proveedor llegaba al consumidor como `provider_error`. Una búsqueda no exhaustiva usa otro
