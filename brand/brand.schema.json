@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metacore.asteby.com/schemas/brand.json",
+  "title": "Metacore brand pack (brand.json)",
+  "description": "Product identity as data. Loaded by brand.LoadFS; a pack is a folder with brand.json and the artwork it references (flat names or assets/<name>).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["key", "name", "assets"],
+  "properties": {
+    "key": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,31}$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 60 },
+    "short_name": { "type": "string", "maxLength": 60 },
+    "description": { "type": "string", "maxLength": 500 },
+    "names": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$" },
+      "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 60 }
+    },
+    "color": { "$ref": "#/$defs/color" },
+    "theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "primary": { "$ref": "#/$defs/color" },
+        "accent": { "$ref": "#/$defs/color" },
+        "background": { "$ref": "#/$defs/color" },
+        "foreground": { "$ref": "#/$defs/color" },
+        "dark": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "primary": { "$ref": "#/$defs/color" },
+            "accent": { "$ref": "#/$defs/color" },
+            "background": { "$ref": "#/$defs/color" },
+            "foreground": { "$ref": "#/$defs/color" }
+          }
+        },
+        "gradient": { "type": "array", "minItems": 2, "maxItems": 4, "items": { "$ref": "#/$defs/color" } },
+        "theme_color": { "$ref": "#/$defs/color" },
+        "background_color": { "$ref": "#/$defs/color" }
+      }
+    },
+    "assistant": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "maxLength": 40 },
+        "avatar": { "$ref": "#/$defs/assetPath" },
+        "mascot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "tooth_shape", "antenna", "screen_tone", "colors"],
+          "properties": {
+            "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,31}$" },
+            "name": { "type": "string", "maxLength": 40 },
+            "tooth_shape": { "enum": ["tire-tread", "gear-teeth", "hex-frame"] },
+            "antenna": { "type": "boolean" },
+            "screen_tone": { "enum": ["light", "dark"] },
+            "colors": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["tire", "tread_or_tooth", "accent", "glow", "screen", "screen_center"],
+              "properties": {
+                "tire": { "$ref": "#/$defs/color" },
+                "tread_or_tooth": { "$ref": "#/$defs/color" },
+                "accent": { "$ref": "#/$defs/color" },
+                "glow": { "$ref": "#/$defs/color" },
+                "screen": { "$ref": "#/$defs/color" },
+                "screen_center": { "$ref": "#/$defs/color" }
+              }
+            },
+            "face": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "stroke": { "$ref": "#/$defs/color" },
+                "stroke_width": { "type": "number", "minimum": 0, "maximum": 20 },
+                "tread_dot": { "$ref": "#/$defs/color" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "storage_namespace": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,31}$" },
+    "assets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["icon"],
+      "properties": {
+        "icon": { "$ref": "#/$defs/assetPath" },
+        "logo": { "$ref": "#/$defs/assetPath" },
+        "logo_dark": { "$ref": "#/$defs/assetPath" },
+        "favicon": { "$ref": "#/$defs/assetPath" },
+        "maskable": { "$ref": "#/$defs/assetPath" },
+        "monochrome": { "$ref": "#/$defs/assetPath" },
+        "animated": { "$ref": "#/$defs/assetPath" },
+        "animated_dark": { "$ref": "#/$defs/assetPath" },
+        "og": { "$ref": "#/$defs/assetPath" }
+      }
+    }
+  },
+  "$defs": {
+    "color": { "type": "string", "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$" },
+    "assetPath": {
+      "type": "string",
+      "pattern": "^(assets/)?[A-Za-z0-9][A-Za-z0-9._-]*\\.(svg|png|ico|jpe?g|webp)$"
+    }
+  }
+}
