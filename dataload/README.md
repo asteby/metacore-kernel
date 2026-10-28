@@ -143,6 +143,21 @@ cierra; un rechazo que llega entre la escritura y la marca `applied` deja el
 dato escrito y la entrada `rejected`
 (`TestReview_WithoutConditionalStoreALateRejectStillLeavesTheRowWritten`).
 
+## Lotes con manifest
+
+`dataload/batch` (subpaquete: quien solo usa `dataload` no lo compila) importa un directorio que un productor externo escribe por lotes. Contrato con el productor: cada archivo se escribe de forma atómica (`.tmp` + rename) y `manifest.json` **al final**, como señal de lote completo: `{"files": {"corpus.json": "<sha256>"}, "generated_at": "...", "producer": "...", "schema": "..."}`.
+
+El consumidor declara un `Contract` (nombres fijos, orden de importación, archivos opcionales, topes de tamaño) y llama a `batch.Process(ctx, fsys, contract, ledger, scope)` en cada revisión (o deja que un `Watcher` lo haga cada `Poll`):
+
+- sin `manifest.json` no pasa nada; un manifest ya procesado, o uno nuevo con los mismos archivos del último lote (`ContentPrint` ignora `generated_at`), no se reimporta;
+- los nombres salen del contrato, nunca del manifest: una entrada `../x` solo produce un aviso y no se abre; el tamaño se acota antes de leer;
+- se verifican **todos** los sha256 antes de importar nada; se importa en el orden del contrato; si algo falla no se registra y la siguiente revisión reintenta todo (los `Import` deben ser idempotentes);
+- los avisos y errores llevan código estable (`dataload.batch.*`, es/en) como el resto del motor.
+
+`Ledger` es una interfaz (`batch.NewMemoryLedger` para pruebas; `batch/gormledger` guarda en `dataload_batches` con `Migrate`). `batch.SourceFor(file, "csv"|"json"|"bundle:ruta")` presenta un archivo del lote como `dataload.Source` para alimentar un `Profile` existente. `batch.ConfigFromEnv("PREFIJO")` lee `PREFIJO_DIR`, `PREFIJO_POLL_MINUTES` y `PREFIJO_TIMEOUT_MINUTES`. `batch.JSStringifyHash` calcula el `content_hash` estilo `JSON.stringify` de los productores JS/TS/Python. Ejemplo: `dataload/batch/example_test.go`.
+
+Un ledger antiguo que guardó el sha del manifest donde ahora va la huella de contenido simplemente no coincide: el lote se reimporta una vez, sin duplicar.
+
 ## Mensajes
 
 El motor no escribe textos fijos: cada error, problema de fila (`RowIssue.Code`)

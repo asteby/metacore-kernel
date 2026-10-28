@@ -31,6 +31,17 @@ type Message struct {
 	Params Params `json:"params,omitempty"`
 }
 
+// NewMessage arma un Message con código y pares nombre/valor, para paquetes
+// que extienden el motor (dataload/batch) y no pueden usar el constructor
+// interno.
+func NewMessage(code Code, kv ...any) Message { return msg(code, kv...) }
+
+// NewError arma un error del motor con código estable y parámetros.
+func NewError(code Code, kv ...any) *Error { return newErr(code, kv...) }
+
+// WrapError envuelve una causa con un código del motor.
+func WrapError(cause error, code Code, kv ...any) *Error { return wrapErr(cause, code, kv...) }
+
 // msg arma un Message a partir de pares nombre/valor.
 func msg(code Code, kv ...any) Message {
 	m := Message{Code: code}

@@ -176,4 +176,20 @@ const (
 	CodeReviewNegative         Code = "dataload.review_item.negative"
 	CodeReviewRange            Code = "dataload.review_item.range"
 	CodeReviewRepeated         Code = "dataload.review_item.repeated"
+
+	// Lotes con manifest (paquete dataload/batch)
+	CodeBatchManifestRead    Code = "dataload.batch.manifest_read"
+	CodeBatchManifestInvalid Code = "dataload.batch.manifest_invalid"
+	CodeBatchManifestEmpty   Code = "dataload.batch.manifest_empty"
+	CodeBatchContractInvalid Code = "dataload.batch.contract_invalid"
+	CodeBatchSHA256Mismatch  Code = "dataload.batch.sha256_mismatch"
+	CodeBatchUnknownFile     Code = "dataload.batch.unknown_file"
+	CodeBatchMissingFile     Code = "dataload.batch.missing_file"
+	CodeBatchTooLarge        Code = "dataload.batch.too_large"
+	CodeBatchFileRead        Code = "dataload.batch.file_read"
+	CodeBatchFileWarning     Code = "dataload.batch.file_warning"
+	CodeBatchImportFailed    Code = "dataload.batch.import_failed"
+	CodeBatchLedger          Code = "dataload.batch.ledger"
+	CodeBatchRecord          Code = "dataload.batch.record"
+	CodeBatchFormat          Code = "dataload.batch.format"
 )

@@ -160,5 +160,19 @@
   "dataload.recover.not_resumable": "the run cannot be resumed",
   "dataload.recover.deferred": "could not resume for now; retried on the next pass",
   "dataload.recover.review_run": "the approved-rows apply was interrupted; RecoverApplying closes its reserved rows",
-  "dataload.row.duplicate_held": "repeated identity of row {first}; none is loaded until it is decided in review"
+  "dataload.row.duplicate_held": "repeated identity of row {first}; none is loaded until it is decided in review",
+  "dataload.batch.manifest_read": "batch: could not read the manifest",
+  "dataload.batch.manifest_invalid": "batch: invalid manifest",
+  "dataload.batch.manifest_empty": "batch: the manifest lists no files",
+  "dataload.batch.contract_invalid": "batch: the contract declares an invalid or repeated file ({file})",
+  "dataload.batch.sha256_mismatch": "batch: {file} has sha256 {got} but the manifest says {want}; retried on the next pass",
+  "dataload.batch.unknown_file": "batch: manifest file \"{file}\" is not part of the contract and is ignored",
+  "dataload.batch.missing_file": "batch: {file} is not in the manifest and is skipped",
+  "dataload.batch.too_large": "batch: {file} is {size} bytes and the limit is {limit}",
+  "dataload.batch.file_read": "batch: could not read {file}",
+  "dataload.batch.file_warning": "{file}: {text}",
+  "dataload.batch.import_failed": "batch: importing {file} failed",
+  "dataload.batch.ledger": "batch: could not query the batch ledger",
+  "dataload.batch.record": "batch: could not record the imported batch",
+  "dataload.batch.format": "batch: unknown file format \"{format}\""
 }

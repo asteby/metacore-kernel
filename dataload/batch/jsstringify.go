@@ -1,6 +1,3 @@
-// Package batch implements manifest-based batch imports for dataload: a
-// producer writes atomic files plus a manifest.json last, and the consumer
-// verifies and imports them idempotently.
 package batch
 
 import (

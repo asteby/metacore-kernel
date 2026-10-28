@@ -160,5 +160,19 @@
   "dataload.recover.not_resumable": "la corrida no se puede reanudar",
   "dataload.recover.deferred": "no se pudo reanudar por ahora; se reintenta en la siguiente pasada",
   "dataload.recover.review_run": "la aplicación de filas aprobadas se interrumpió; sus filas reservadas las cierra RecoverApplying",
-  "dataload.row.duplicate_held": "identidad repetida de la fila {first}; ninguna se carga hasta que se decida en revisión"
+  "dataload.row.duplicate_held": "identidad repetida de la fila {first}; ninguna se carga hasta que se decida en revisión",
+  "dataload.batch.manifest_read": "lote: no se pudo leer el manifest",
+  "dataload.batch.manifest_invalid": "lote: manifest inválido",
+  "dataload.batch.manifest_empty": "lote: el manifest no lista archivos",
+  "dataload.batch.contract_invalid": "lote: el contrato declara un archivo inválido o repetido ({file})",
+  "dataload.batch.sha256_mismatch": "lote: {file} tiene sha256 {got} y el manifest dice {want}; se reintenta en la siguiente revisión",
+  "dataload.batch.unknown_file": "lote: el archivo \"{file}\" del manifest no es parte del contrato y se ignora",
+  "dataload.batch.missing_file": "lote: {file} no viene en el manifest y se omite",
+  "dataload.batch.too_large": "lote: {file} pesa {size} bytes y el tope es {limit}",
+  "dataload.batch.file_read": "lote: no se pudo leer {file}",
+  "dataload.batch.file_warning": "{file}: {text}",
+  "dataload.batch.import_failed": "lote: falló la importación de {file}",
+  "dataload.batch.ledger": "lote: no se pudo consultar el historial de lotes",
+  "dataload.batch.record": "lote: no se pudo registrar el lote importado",
+  "dataload.batch.format": "lote: formato de archivo desconocido \"{format}\""
 }
