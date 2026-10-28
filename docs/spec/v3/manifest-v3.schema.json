@@ -5376,6 +5376,42 @@
         }
       }
     },
+    "MascotSkin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "tooth_shape", "antenna", "screen_tone", "colors"],
+      "description": "Declarative assistant mascot (mirror of kernel brand/skin.MascotSkin and the SDK MascotSkin).",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,31}$" },
+        "name": { "type": "string", "maxLength": 40 },
+        "tooth_shape": { "enum": ["tire-tread", "gear-teeth", "hex-frame"] },
+        "antenna": { "type": "boolean" },
+        "screen_tone": { "enum": ["light", "dark"] },
+        "colors": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tire", "tread_or_tooth", "accent", "glow", "screen", "screen_center"],
+          "properties": {
+            "tire": { "$ref": "#/$defs/MascotColor" },
+            "tread_or_tooth": { "$ref": "#/$defs/MascotColor" },
+            "accent": { "$ref": "#/$defs/MascotColor" },
+            "glow": { "$ref": "#/$defs/MascotColor" },
+            "screen": { "$ref": "#/$defs/MascotColor" },
+            "screen_center": { "$ref": "#/$defs/MascotColor" }
+          }
+        },
+        "face": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "stroke": { "$ref": "#/$defs/MascotColor" },
+            "stroke_width": { "type": "number", "minimum": 0, "maximum": 20 },
+            "tread_dot": { "$ref": "#/$defs/MascotColor" }
+          }
+        }
+      }
+    },
+    "MascotColor": { "type": "string", "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$" },
     "LoginCopy": {
       "type": "object",
       "additionalProperties": false,
@@ -5515,6 +5551,7 @@
                 "support_url": { "type": ["string", "null"] },
                 "mascot_name": { "type": ["string", "null"] },
                 "mascot_skin": { "type": ["string", "null"] },
+                "mascot": { "anyOf": [ { "$ref": "#/$defs/MascotSkin" }, { "type": "null" } ], "description": "Declarative mascot skin (palette + tooth shape); wins over mascot_skin. null removes the base's skin." },
                 "theme_key": { "type": ["string", "null"] },
                 "font": { "type": ["string", "null"] },
                 "density": { "type": ["string", "null"] },

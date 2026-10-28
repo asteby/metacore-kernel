@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/asteby/metacore-kernel/brand/skin"
 )
 
 // Branding is the typed brand kit a preset ships in preset.defaults.branding
@@ -33,7 +35,12 @@ type Branding struct {
 	SupportEmail string `json:"support_email,omitempty"`
 	SupportURL   string `json:"support_url,omitempty"`
 	MascotName   string `json:"mascot_name,omitempty"`
-	MascotSkin   string `json:"mascot_skin,omitempty"`
+	// MascotSkin is the id of a built-in skin; Mascot declares one as data
+	// (and wins when both are set).
+	MascotSkin string `json:"mascot_skin,omitempty"`
+	// Mascot is a declarative mascot skin (palette + tooth shape), shared with
+	// the product brand (brand.Assistant.Mascot).
+	Mascot *skin.MascotSkin `json:"mascot,omitempty"`
 	// ThemeKey, Font and Density mirror preset.defaults.ui_theme; a host
 	// reading both lets branding win.
 	ThemeKey string `json:"theme_key,omitempty"`
@@ -263,6 +270,13 @@ func (b Branding) Validate() []string {
 	}
 	if b.SupportURL != "" && !isHTTPURL(b.SupportURL) {
 		errs = append(errs, fmt.Sprintf("branding.support_url %q must be an http(s) URL", b.SupportURL))
+	}
+	if b.Mascot != nil {
+		if err := b.Mascot.Validate(); err != nil {
+			for _, line := range strings.Split(err.Error(), "\n") {
+				errs = append(errs, "branding."+line)
+			}
+		}
 	}
 	errs = append(errs, b.Login.Validate()...)
 	return errs

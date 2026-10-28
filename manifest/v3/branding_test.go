@@ -106,3 +106,63 @@ func TestBranding_Fonts(t *testing.T) {
 		t.Fatalf("parse fonts: %v %+v", errs, b)
 	}
 }
+
+func skinFixture() map[string]interface{} {
+	return map[string]interface{}{
+		"id": "hex-navy", "name": "Asistente", "tooth_shape": "hex-frame", "antenna": false, "screen_tone": "dark",
+		"colors": map[string]interface{}{"tire": "#051C35", "tread_or_tooth": "#102E6B", "accent": "#2160DE", "glow": "#628FEA", "screen": "#041324", "screen_center": "#071A36"},
+		"face":   map[string]interface{}{"stroke": "#f4f8ff", "stroke_width": 6.5, "tread_dot": "#f4f8ff"},
+	}
+}
+
+func TestBranding_Mascot(t *testing.T) {
+	b, errs := ParseBranding(map[string]interface{}{"mascot": skinFixture(), "mascot_skin": "gear-lime"})
+	if len(errs) != 0 || b.Mascot == nil || b.Mascot.ID != "hex-navy" || b.Mascot.Face == nil || b.Mascot.Face.StrokeWidth != 6.5 {
+		t.Fatalf("parse mascot: %v %+v", errs, b)
+	}
+	if errs := b.Validate(); len(errs) != 0 {
+		t.Fatalf("valid mascot: %v", errs)
+	}
+	m := b.ToMap()
+	if _, ok := m["mascot"].(map[string]interface{}); !ok || m["mascot_skin"] != "gear-lime" {
+		t.Fatalf("ToMap: %v", m)
+	}
+
+	bad := skinFixture()
+	bad["tooth_shape"] = "star"
+	b, errs = ParseBranding(map[string]interface{}{"mascot": bad})
+	if len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	if errs := b.Validate(); len(errs) == 0 || !strings.Contains(strings.Join(errs, "|"), "branding.mascot: tooth_shape") {
+		t.Fatalf("want a tooth_shape error, got %v", errs)
+	}
+	if _, errs := ParseBranding(map[string]interface{}{"mascot": map[string]interface{}{"colour": "x"}}); len(errs) == 0 {
+		t.Fatal("unknown mascot key accepted")
+	}
+}
+
+func TestValidate_PresetBrandingMascotSchema(t *testing.T) {
+	preset := func(mascot interface{}) []byte {
+		return mustJSON(t, presetManifest(map[string]interface{}{
+			"addons":   []interface{}{map[string]interface{}{"key": "pos", "version": "^0.1.0"}},
+			"defaults": map[string]interface{}{"branding": map[string]interface{}{"mascot": mascot}},
+		}))
+	}
+	if err := Validate(preset(skinFixture())); err != nil {
+		t.Fatalf("valid mascot in schema: %v", err)
+	}
+	if err := Validate(preset(nil)); err != nil {
+		t.Fatalf("null mascot (removes the base's): %v", err)
+	}
+	bad := skinFixture()
+	bad["tooth_shape"] = "star"
+	if err := Validate(preset(bad)); err == nil {
+		t.Fatal("schema accepted tooth_shape star")
+	}
+	bad = skinFixture()
+	delete(bad, "colors")
+	if err := Validate(preset(bad)); err == nil {
+		t.Fatal("schema accepted a skin without colors")
+	}
+}
