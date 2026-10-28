@@ -21,3 +21,21 @@ func TestTitleCase(t *testing.T) {
 		}
 	}
 }
+
+func TestFold(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", ""},
+		{"abc", "abc"},
+		{"Ñandú Pérez", "nandu perez"},
+		{"  Ñandú   PÉREZ \t\n", "nandu perez"},
+		{"ÁÉÍÓÚ üÜ", "aeiou uu"},
+		{"café", "cafe"}, // already decomposed input
+		{"Straße", "straße"},
+		{"   ", ""},
+	}
+	for _, c := range cases {
+		if got := Fold(c.in); got != c.want {
+			t.Errorf("Fold(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
