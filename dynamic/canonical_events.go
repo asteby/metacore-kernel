@@ -107,6 +107,27 @@ func ActorIDFromContext(ctx context.Context) string {
 	return v
 }
 
+// beforeRowKey is the unexported typed key for the row a mutation replaced.
+type beforeRowKey struct{}
+
+// WithBeforeRow returns a child context carrying the row an UPDATE replaced
+// (nil/empty returns ctx unchanged). The wasm data_mutate / data_batch paths set
+// it before the declarative compute pass, whose signature has no `before`
+// parameter, so cross-record rules can tell an untouched relation from a
+// changed one exactly as they do on the dynamic.Service path.
+func WithBeforeRow(ctx context.Context, before map[string]any) context.Context {
+	if len(before) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, beforeRowKey{}, before)
+}
+
+// BeforeRowFromContext returns the row stored by WithBeforeRow, nil when none.
+func BeforeRowFromContext(ctx context.Context) map[string]any {
+	v, _ := ctx.Value(beforeRowKey{}).(map[string]any)
+	return v
+}
+
 // branchIDKey is the unexported typed key for the acting user's active branch
 // (the sucursal the host's branch switcher has selected). It rides next to the
 // actor so a create issued from a guest (data_mutate / data_batch) lands in the

@@ -445,3 +445,48 @@ func TestUniqueRule_WasmComputeRejectsDuplicate(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The wasm path hands the prior row of an update through the context: a write
+// that leaves the relation untouched is not refused because the parent has since
+// moved to a state the rule rejects (an invoice of an already issued sale), while
+// a changed relation, a create, and an embedder that sets no before keep being
+// evaluated.
+func TestCrossRecordCompute_UpdateWithUntouchedRelationHonoursBefore(t *testing.T) {
+	_, db, user, _, closed, order := rxSetup(t)
+	fn := CrossRecordCompute(
+		func(tbl string) []manifest.CrossRuleDef {
+			if tbl == "rx_payments" {
+				return rxRules
+			}
+			return nil
+		},
+		func(tbl string) string { return tbl },
+		func(model string) (string, error) { return model, nil },
+	)
+	org := user.GetOrganizationID()
+	id := uuid.NewString()
+	row := map[string]any{"id": id, "session_id": closed, "order_id": order, "amount": 1.0, "status": "completed"}
+	before := map[string]any{"id": id, "session_id": closed, "order_id": order, "amount": 0.5, "status": "completed"}
+
+	// No before (legacy / create): evaluated, refused.
+	wantRuleKey(t, fn(context.Background(), db, org, "rx_payments", "updated", row), "pos.session_closed")
+	// Update that does not touch the relation: not re-checked.
+	ctx := WithBeforeRow(context.Background(), before)
+	if err := fn(ctx, db, org, "rx_payments", "updated", row); err != nil {
+		t.Fatalf("an untouched relation must not be refused: %v", err)
+	}
+	// Update that points to the closed session: refused.
+	moved := map[string]any{"id": id, "session_id": uuid.NewString(), "order_id": order, "amount": 0.5, "status": "completed"}
+	if err := fn(WithBeforeRow(context.Background(), moved), db, org, "rx_payments", "updated", row); err == nil {
+		t.Fatal("a changed relation to a closed session must be refused")
+	}
+	// A create never uses a before, even if one rides on the context.
+	wantRuleKey(t, fn(ctx, db, org, "rx_payments", "created", row), "pos.session_closed")
+
+	if got := BeforeRowFromContext(context.Background()); got != nil {
+		t.Fatal("no before on a bare context")
+	}
+	if WithBeforeRow(context.Background(), nil) != context.Background() {
+		t.Fatal("an empty before leaves the context alone")
+	}
+}

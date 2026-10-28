@@ -267,7 +267,11 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		if action == "deleted" {
 			computeRow = before
 		}
-		if cErr := inv.mutationCompute(execCtx, work, orgID, req.Table, action, computeRow); cErr != nil {
+		computeCtx := execCtx
+		if action != "deleted" {
+			computeCtx = dynamic.WithBeforeRow(execCtx, before) // so cross-record rules see what changed
+		}
+		if cErr := inv.mutationCompute(computeCtx, work, orgID, req.Table, action, computeRow); cErr != nil {
 			rollback()
 			return fail(computeErrCode(cErr), cErr.Error())
 		}

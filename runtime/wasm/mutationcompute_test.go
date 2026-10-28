@@ -8,6 +8,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+
+	"github.com/asteby/metacore-kernel/dynamic"
 )
 
 // TestExecuteDataMutate_ComputeRunsOnUpdate is the ops#1403 regression at the
@@ -38,8 +40,10 @@ func TestExecuteDataMutate_ComputeRunsOnUpdate(t *testing.T) {
 	var gotTable, gotAction string
 	var gotRow map[string]any
 	var gotTx *gorm.DB
-	inv.mutationCompute = func(_ context.Context, tx *gorm.DB, _ uuid.UUID, table, action string, row map[string]any) error {
+	var gotBefore map[string]any
+	inv.mutationCompute = func(ctx context.Context, tx *gorm.DB, _ uuid.UUID, table, action string, row map[string]any) error {
 		gotTx, gotTable, gotAction, gotRow = tx, table, action, row
+		gotBefore = dynamic.BeforeRowFromContext(ctx)
 		return nil
 	}
 
@@ -64,6 +68,11 @@ func TestExecuteDataMutate_ComputeRunsOnUpdate(t *testing.T) {
 	}
 	if gotTx == nil {
 		t.Fatal("compute must receive the open transaction, got nil")
+	}
+	// The prior row rides on the context so cross-record rules can tell an
+	// untouched relation from a changed one (ref_state on an update).
+	if gotBefore == nil || (gotBefore["quantity"] != float64(5) && gotBefore["quantity"] != int64(5)) {
+		t.Fatalf("compute must see the replaced row on ctx, got %#v", gotBefore)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations not met: %v", err)
