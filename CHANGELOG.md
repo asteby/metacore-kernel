@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `wasm`/`dynamic`: las reglas entre registros (`Model.rules`, `ref_state`) ya no rechazan en `data_mutate`/`data_batch` un UPDATE que no toca la relación. La ruta wasm no pasaba la fila anterior (`before`), así que cada escritura a la factura volvía a evaluar «la venta debe estar en none/requested/failed» contra el estado ACTUAL de la venta: con la venta ya `issued`, escribir `fiscal_uuid`, el estado o el saldo de su propia factura fallaba con `customers.invoice.sale_already_invoiced` y `fiscal.document_settled` terminaba en dead-letter (FAC-00002: timbrada, sin `fiscal_uuid`). Ahora el UPDATE lleva la fila previa en el contexto (`dynamic.WithBeforeRow` / `BeforeRowFromContext`, sin cambiar la firma de `MutationComputeFn`) y `CrossRecordCompute` la usa como en `dynamic.Service.Update`: relación sin cambios = no se reevalúa (salvo `enforce: always`). Un create, un cambio de relación o un embedder que no pone `before` siguen evaluándose igual.
+
 ### Added
 
 - `capability`: `geo.address.suggest` (consulta, cardinalidad `one`, plazo 1 s): autocompletado de calle y número de un formulario de dirección. Entrada `query` (mín. 3 caracteres recortados), `country`, `postal_code`, `near{lat,lng}`, `limit` (≤ 8, constantes `MaxAddressSuggestResults` / `MinAddressSuggestQuery`), `locale`; salida `results[GeoPlace]`. Separada de `geo.geocode`. Solo contrato: el kernel no trae proveedor. `GeoPlace` gana `street`, `house_number` y `place_id` opcionales (también para `geo.geocode`).

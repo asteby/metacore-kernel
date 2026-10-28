@@ -219,7 +219,11 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 			if res.action == "deleted" {
 				computeRow = res.before
 			}
-			if cErr := inv.mutationCompute(execCtx, work, orgID, p.req.Table, res.action, computeRow); cErr != nil {
+			computeCtx := execCtx
+			if res.action != "deleted" {
+				computeCtx = dynamic.WithBeforeRow(execCtx, res.before) // so cross-record rules see what changed
+			}
+			if cErr := inv.mutationCompute(computeCtx, work, orgID, p.req.Table, res.action, computeRow); cErr != nil {
 				rollbackScope()
 				return fail(computeErrCode(cErr), fmt.Sprintf("mutations[%d]: %s", i, cErr.Error()))
 			}

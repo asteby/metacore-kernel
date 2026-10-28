@@ -315,7 +315,16 @@ func CrossRecordCompute(rulesFor func(logicalTable string) []manifest.CrossRuleD
 		if action == "deleted" {
 			return EvalCrossRecordDeleteRules(ctx, tx, rules, ownTable(logicalTable), orgID, row, parentTable)
 		}
-		// The wasm path has no `before`: ref_state/sum_lte re-check on updates.
-		return EvalCrossRecordRules(ctx, tx, rules, ownTable(logicalTable), orgID, row, nil, parentTable)
+		// The prior row of an update rides on ctx (WithBeforeRow, set by the wasm
+		// data_mutate / data_batch paths): a ref_state rule then skips an
+		// untouched relation exactly as on dynamic.Service.Update, so a write to
+		// an unrelated column of a row whose parent has since moved on (an
+		// invoice of an already `issued` sale) is not refused. With no before
+		// (a create, or an embedder that sets none) every rule is evaluated.
+		var before map[string]any
+		if action != "created" {
+			before = BeforeRowFromContext(ctx)
+		}
+		return EvalCrossRecordRules(ctx, tx, rules, ownTable(logicalTable), orgID, row, before, parentTable)
 	}
 }
