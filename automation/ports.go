@@ -111,7 +111,7 @@ type AuditEvent struct {
 	OrganizationID uuid.UUID
 	AutomationID   uuid.UUID
 	ActorID        uuid.UUID // person (uuid.Nil = system / scheduler)
-	AssistedBy     string    // "Gobi" when the agent proposed or acted
+	AssistedBy     string    // "Asistente" when the agent proposed or acted
 	Action         string    // proposed | created | confirmed | updated | paused | resumed | archived | error | run
 	Detail         string
 	At             time.Time
@@ -126,12 +126,12 @@ type Auditor interface {
 type Event struct {
 	ID             string         `json:"id"` // stable id (idempotency)
 	OrganizationID uuid.UUID      `json:"organization_id"`
-	Name           string         `json:"name"` // "gobiernos.alert.opened"
+	Name           string         `json:"name"` // "support.ticket.opened"
 	Payload        map[string]any `json:"payload"`
 	OccurredAt     time.Time      `json:"occurred_at"`
 }
 
-// UserNames resolves display names for the "persona con Gobi" label
+// UserNames resolves display names for the "persona con Asistente" label
 // (optional).
 type UserNames interface {
 	Names(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) map[uuid.UUID]string

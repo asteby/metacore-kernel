@@ -63,18 +63,18 @@ func TestToolCallProvenance(t *testing.T) {
 
 	// Person's manual provenance → agent on behalf of the person.
 	ctx := provenance.WithContext(context.Background(), provenance.Human(user, provenance.ViaUI))
-	p, ok := provenance.FromContext(toolCallProvenance(ctx, "Gobi", call, conv))
-	if !ok || p.ActorKind != provenance.ActorAgent || p.OnBehalfOf == nil || *p.OnBehalfOf != user || p.RefID != "call-1" || p.Mode != provenance.ModeAutomated || p.ActorName != "Gobi" {
+	p, ok := provenance.FromContext(toolCallProvenance(ctx, "Asistente", call, conv))
+	if !ok || p.ActorKind != provenance.ActorAgent || p.OnBehalfOf == nil || *p.OnBehalfOf != user || p.RefID != "call-1" || p.Mode != provenance.ModeAutomated || p.ActorName != "Asistente" {
 		t.Fatalf("chat tool: %+v", p)
 	}
 	// Upstream agent/automation keeps its actor and gains the ref.
-	actx := provenance.WithContext(context.Background(), provenance.Agent("Gobi", provenance.ViaAutomation).WithOrigin("Resumen"))
-	p, _ = provenance.FromContext(toolCallProvenance(actx, "Gobi", call, nil))
+	actx := provenance.WithContext(context.Background(), provenance.Agent("Asistente", provenance.ViaAutomation).WithOrigin("Resumen"))
+	p, _ = provenance.FromContext(toolCallProvenance(actx, "Asistente", call, nil))
 	if p.Via != provenance.ViaAutomation || p.RefKind != provenance.RefToolCall {
 		t.Fatalf("automation tool: %+v", p)
 	}
 	// Nothing known → untouched.
-	if _, ok := provenance.FromContext(toolCallProvenance(context.Background(), "Gobi", call, nil)); ok {
+	if _, ok := provenance.FromContext(toolCallProvenance(context.Background(), "Asistente", call, nil)); ok {
 		t.Fatal("no person and no provenance must stay unstamped")
 	}
 }

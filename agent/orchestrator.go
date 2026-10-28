@@ -67,7 +67,7 @@ type AudioToSend struct {
 // OrchestratorConfig wires an AgentOrchestrator to the host.
 type OrchestratorConfig struct {
 	// AgentName labels the agent in the provenance of what its tools write
-	// ("Gobi"). Optional.
+	// ("Asistente"). Optional.
 	AgentName string
 	// Tools are the base tools; each turn works on a Clone.
 	Tools *tools.ToolRegistry
@@ -1656,7 +1656,7 @@ func isDeferredNarration(msg string) bool {
 		return false
 	}
 	// A short reply that ends announcing what comes next ("Ahora traigo el
-	// resumen de Manzanillo:") delivers nothing: the content it introduces
+	// resumen de Zona Norte:") delivers nothing: the content it introduces
 	// never came.
 	if strings.HasSuffix(strings.TrimRight(m, " *_"), ":") && len([]rune(m)) <= narrationHeadRunes && !strings.Contains(m, "\n") {
 		return true

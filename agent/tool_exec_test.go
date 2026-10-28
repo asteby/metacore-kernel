@@ -244,12 +244,12 @@ func TestAgentLoop_TurnBudgetForcesAnswerWithoutTools(t *testing.T) {
 }
 
 func TestIsDeferredNarration_TrailingColonAnnouncement(t *testing.T) {
-	for _, m := range []string{"Ahora traigo el resumen de Manzanillo:", "Enseguida reviso las alertas."} {
+	for _, m := range []string{"Ahora traigo el resumen de Zona Norte:", "Enseguida reviso las alertas."} {
 		if !isDeferredNarration(m) {
 			t.Fatalf("%q announces work it did not do", m)
 		}
 	}
-	if isDeferredNarration("Resumen:\n- Colima: 12 hallazgos\n- Manzanillo: 9") {
+	if isDeferredNarration("Resumen:\n- Zona Sur: 12 hallazgos\n- Zona Norte: 9") {
 		t.Fatalf("a finished multi-line answer is not narration")
 	}
 }

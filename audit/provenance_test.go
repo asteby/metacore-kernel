@@ -16,7 +16,7 @@ func TestRecorder_StoresProvenance(t *testing.T) {
 	}
 	r := NewRecorder(db)
 	user := uuid.New()
-	p := provenance.Assisted("Gobi", user, provenance.ViaChat).WithSummary("Propuso crear")
+	p := provenance.Assisted("Asistente", user, provenance.ViaChat).WithSummary("Propuso crear")
 	ev := &dynamic.CanonicalEvent{ID: uuid.NewString(), Model: "findings", Action: "created", ActorID: user.String(), After: map[string]any{"title": "x"}, Provenance: &p}
 	if err := r.Handle(context.Background(), uuid.New(), ev); err != nil {
 		t.Fatal(err)

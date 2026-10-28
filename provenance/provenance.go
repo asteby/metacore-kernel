@@ -94,7 +94,7 @@ type Provenance struct {
 	// ActorID is the person (human) or the agent/integration id when it has
 	// one. Agents and system processes usually leave it nil.
 	ActorID *uuid.UUID `json:"actor_id,omitempty"`
-	// ActorName is the agent or integration label ("Gobi", "gobiernos-intel").
+	// ActorName is the agent or integration label ("Asistente", "data-sync").
 	// Never a person's name: the host resolves people from ids at read time.
 	ActorName string `json:"actor_name,omitempty"`
 	// OnBehalfOf is the person the agent acted for (automation owner, the

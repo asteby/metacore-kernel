@@ -13,7 +13,7 @@ func TestCanonicalEventCarriesProvenance(t *testing.T) {
 		t.Fatal("no provenance in ctx → nil")
 	}
 	u := uuid.New()
-	ctx := provenance.WithContext(context.Background(), provenance.Assisted("Gobi", u, provenance.ViaChat))
+	ctx := provenance.WithContext(context.Background(), provenance.Assisted("Asistente", u, provenance.ViaChat))
 	p := provenanceFromContext(ctx)
 	if p == nil || p.Mode != provenance.ModeAssisted || *p.AuthorizedBy != u {
 		t.Fatalf("got %+v", p)

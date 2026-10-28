@@ -1,6 +1,6 @@
 // Package automation is the kernel runtime for declarative automations and
 // dynamic tools: "remind me tomorrow at 9", "every morning at 7 send me the
-// security news of Manzanillo", "tell me when a topic spikes in Tecomán".
+// security news of the northern zone", "tell me when a topic spikes in a branch".
 //
 // An automation is a JSON spec (automation/v1, validated by an embedded JSON
 // Schema and semantically against the host's tool allowlist) with a trigger

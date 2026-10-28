@@ -65,12 +65,12 @@ func TestNormalizeModes(t *testing.T) {
 		want Mode
 	}{
 		{"human", Human(u, ViaUI), ModeManual},
-		{"agent alone", Agent("Gobi", ViaJob), ModeAutomated},
-		{"agent on behalf", Agent("Gobi", ViaAutomation).OnBehalf(u), ModeAutomated},
-		{"assisted", Assisted("Gobi", u, ViaChat), ModeAssisted},
-		{"proposed", Agent("Gobi", ViaChat).OnBehalf(u).Propose(), ModeAutomated},
+		{"agent alone", Agent("Asistente", ViaJob), ModeAutomated},
+		{"agent on behalf", Agent("Asistente", ViaAutomation).OnBehalf(u), ModeAutomated},
+		{"assisted", Assisted("Asistente", u, ViaChat), ModeAssisted},
+		{"proposed", Agent("Asistente", ViaChat).OnBehalf(u).Propose(), ModeAutomated},
 		{"system", System(ViaSeed, "Datos semilla"), ModeAutomated},
-		{"integration", Integration("gobiernos-intel", ViaImport, ""), ModeAutomated},
+		{"integration", Integration("data-sync", ViaImport, ""), ModeAutomated},
 	}
 	for _, c := range cases {
 		got := c.p.Normalize()
@@ -82,7 +82,7 @@ func TestNormalizeModes(t *testing.T) {
 		}
 	}
 	// Proposed then authorized → assisted, authorized_at set.
-	p := Agent("Gobi", ViaChat).OnBehalf(u).Propose().Authorize(u, time.Now())
+	p := Agent("Asistente", ViaChat).OnBehalf(u).Propose().Authorize(u, time.Now())
 	if n := p.Normalize(); n.Mode != ModeAssisted || n.Proposed || n.AuthorizedAt == nil {
 		t.Fatalf("confirm: %+v", n)
 	}
@@ -99,13 +99,13 @@ func TestAccountable(t *testing.T) {
 	if a := Human(u, ViaUI).Accountable(); a == nil || *a != u {
 		t.Fatal("human accountable")
 	}
-	if a := Agent("Gobi", ViaChat).OnBehalf(u).Authorize(v, time.Now()).Accountable(); a == nil || *a != v {
+	if a := Agent("Asistente", ViaChat).OnBehalf(u).Authorize(v, time.Now()).Accountable(); a == nil || *a != v {
 		t.Fatal("authorized_by wins over on_behalf_of")
 	}
-	if a := Agent("Gobi", ViaAutomation).OnBehalf(u).Accountable(); a == nil || *a != u {
+	if a := Agent("Asistente", ViaAutomation).OnBehalf(u).Accountable(); a == nil || *a != u {
 		t.Fatal("on_behalf_of")
 	}
-	if System(ViaSeed, "").Accountable() != nil || Agent("Gobi", ViaJob).Accountable() != nil {
+	if System(ViaSeed, "").Accountable() != nil || Agent("Asistente", ViaJob).Accountable() != nil {
 		t.Fatal("unattended work never gets a fake person")
 	}
 }
@@ -128,7 +128,7 @@ func TestContextAndJSON(t *testing.T) {
 	if _, ok := FromContext(Without(ctx)); ok {
 		t.Fatal("Without must clear it")
 	}
-	js := Assisted("Gobi", u, ViaChat).WithSummary("Propuso crear un hallazgo").JSON()
+	js := Assisted("Asistente", u, ViaChat).WithSummary("Propuso crear un hallazgo").JSON()
 	back := Parse(js)
 	if back.Mode != ModeAssisted || back.AuthorizedBy == nil || *back.AuthorizedBy != u || back.Summary == "" {
 		t.Fatalf("roundtrip: %s", js)
@@ -163,7 +163,7 @@ func exerciseHook(t *testing.T, db *gorm.DB) {
 
 	// 2. Person with agent: created_by_id = approver, lateral row assisted.
 	w1 := widget{ID: uuid.New(), OrganizationID: org, Name: "assisted"}
-	actx := WithContext(ctx, Agent("Gobi", ViaChat).OnBehalf(person).Authorize(approver, time.Now()).
+	actx := WithContext(ctx, Agent("Asistente", ViaChat).OnBehalf(person).Authorize(approver, time.Now()).
 		WithRef(RefProposal, "p-1").WithSummary("Propuso crear assisted"))
 	if err := db.WithContext(actx).Create(&w1).Error; err != nil {
 		t.Fatal(err)
@@ -207,7 +207,7 @@ func exerciseHook(t *testing.T, db *gorm.DB) {
 	if w1.UpdatedByID == nil || *w1.UpdatedByID != person {
 		t.Fatalf("updated_by_id: %+v", w1.UpdatedByID)
 	}
-	if err := db.WithContext(WithContext(ctx, Agent("Gobi", ViaAutomation).OnBehalf(person))).
+	if err := db.WithContext(WithContext(ctx, Agent("Asistente", ViaAutomation).OnBehalf(person))).
 		Model(&w1).Updates(map[string]any{"name": "by automation"}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -260,10 +260,10 @@ func exerciseHook(t *testing.T, db *gorm.DB) {
 
 	// 9. Models without audit columns still get the lateral row.
 	p := plain{ID: uuid.New(), Name: "x"}
-	if err := db.WithContext(WithContext(ctx, Integration("gobiernos-intel", ViaImport, "Plano de datos"))).Create(&p).Error; err != nil {
+	if err := db.WithContext(WithContext(ctx, Integration("data-sync", ViaImport, "Plano de datos"))).Create(&p).Error; err != nil {
 		t.Fatal(err)
 	}
-	if got := store.Created(ctx, uuid.Nil, "plains", []string{p.ID.String()}); got[p.ID.String()].ActorName != "gobiernos-intel" {
+	if got := store.Created(ctx, uuid.Nil, "plains", []string{p.ID.String()}); got[p.ID.String()].ActorName != "data-sync" {
 		t.Fatalf("plain: %v", got)
 	}
 }
@@ -286,9 +286,9 @@ func TestRecordFailureKeepsTheWrite(t *testing.T) {
 
 func TestPresentation(t *testing.T) {
 	u, a := uuid.New(), uuid.New()
-	e := NewEntry(uuid.New(), "findings", "r1", ActionCreated, Agent("Gobi", ViaChat).OnBehalf(u).Authorize(a, time.Now()).WithSummary("Propuso crear"), time.Now())
+	e := NewEntry(uuid.New(), "findings", "r1", ActionCreated, Agent("Asistente", ViaChat).OnBehalf(u).Authorize(a, time.Now()).WithSummary("Propuso crear"), time.Now())
 	m := e.Presentation(map[uuid.UUID]Person{a: {Name: "Ana Pérez", Avatar: "/a.png"}})
-	if m["mode"] != "assisted" || m["authorized_by_name"] != "Ana Pérez" || m["authorized_by_avatar"] != "/a.png" || m["actor_name"] != "Gobi" {
+	if m["mode"] != "assisted" || m["authorized_by_name"] != "Ana Pérez" || m["authorized_by_avatar"] != "/a.png" || m["actor_name"] != "Asistente" {
 		t.Fatalf("presentation: %v", m)
 	}
 	if got := People(e); len(got) != 2 {

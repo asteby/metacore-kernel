@@ -17,7 +17,7 @@ type View struct {
 	Automation
 	Spec             json.RawMessage `json:"spec"`
 	TriggerLabel     string          `json:"trigger_label"`
-	Authorship       string          `json:"authorship"` // "Ana Pérez con Gobi" | "Ana Pérez"
+	Authorship       string          `json:"authorship"` // "Ana Pérez con Asistente" | "Ana Pérez"
 	CreatorName      string          `json:"creator_name,omitempty"`
 	AuthorizedByName string          `json:"authorized_by_name,omitempty"`
 	UsesLLM          bool            `json:"uses_llm"`

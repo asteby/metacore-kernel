@@ -160,7 +160,7 @@ func newHarness(t *testing.T, db *gorm.DB, mutate func(*Policy)) *harness {
 	p := DefaultPolicy()
 	p.DefaultTimezone = "America/Mexico_City"
 	p.Channels = []string{ChannelInApp, ChannelPush, ChannelWhatsApp}
-	p.AssistantName = "Gobi"
+	p.AssistantName = "Asistente"
 	if mutate != nil {
 		mutate(&p)
 	}
@@ -232,20 +232,20 @@ func newsSpec(llm bool) json.RawMessage {
 	}
 	return json.RawMessage(`{
 	  "schema_version": "automation/v1",
-	  "name": "Noticias de seguridad en Manzanillo",
+	  "name": "Noticias de seguridad en Zona Norte",
 	  "trigger": {"type": "cron", "cron": "0 7 * * *", "timezone": "America/Mexico_City"},
 	  "steps": [
-	    {"id": "buscar", "type": "tool", "tool": "buscar_hallazgos", "args": {"territorio": "Manzanillo", "texto": "seguridad", "limite": 10}},
+	    {"id": "buscar", "type": "tool", "tool": "buscar_hallazgos", "args": {"territorio": "Zona Norte", "texto": "seguridad", "limite": 10}},
 	    {"id": "nuevos", "type": "filter", "from": "buscar.items", "unseen": true},
 	    {"id": "hay", "type": "condition", "if": {"field": "nuevos.count", "op": "gt", "value": 0}},
 	    {"id": "texto", "type": "summarize", "from": "nuevos.items", "mode": "` + mode + `", "template": "{{count}} hallazgos nuevos:\n{{lista}}"},
-	    {"id": "enviar", "type": "deliver", "channels": ["in_app", "whatsapp"], "title": "Seguridad · Manzanillo", "body": "{{texto.text}}", "items_from": "nuevos.items", "link": "/m/findings"}
+	    {"id": "enviar", "type": "deliver", "channels": ["in_app", "whatsapp"], "title": "Seguridad · Zona Norte", "body": "{{texto.text}}", "items_from": "nuevos.items", "link": "/m/findings"}
 	  ]
 	}`)
 }
 
 func item(id, title string) map[string]any {
-	return map[string]any{"id": id, "titulo": title, "territorio": "Manzanillo", "evidencia": map[string]any{"url": "https://ejemplo.mx/" + id, "fecha": "2026-10-12"}}
+	return map[string]any{"id": id, "titulo": title, "territorio": "Zona Norte", "evidencia": map[string]any{"url": "https://ejemplo.mx/" + id, "fecha": "2026-10-12"}}
 }
 
 // ---- tests ---------------------------------------------------------------------
@@ -277,7 +277,7 @@ func TestProposalLifecycleAndCronSchedule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Status != StatusProposed || a.NextRunAt != nil || a.AssistedBy != "Gobi" || a.AuthorizedBy != nil {
+	if a.Status != StatusProposed || a.NextRunAt != nil || a.AssistedBy != "Asistente" || a.AuthorizedBy != nil {
 		t.Fatalf("agent creation must be an unconfirmed proposal: %+v", a)
 	}
 	if n, _ := h.svc.Tick(ctx); n != 0 {
@@ -297,7 +297,7 @@ func TestProposalLifecycleAndCronSchedule(t *testing.T) {
 		t.Fatalf("confirmed: %+v next=%v want %v", a, a.NextRunAt, want)
 	}
 	v := h.svc.ViewOf(ctx, a)
-	if !strings.Contains(v.Authorship, "con Gobi") || !strings.HasPrefix(v.TriggerLabel, "Cada día a las 07:00") {
+	if !strings.Contains(v.Authorship, "con Asistente") || !strings.HasPrefix(v.TriggerLabel, "Cada día a las 07:00") {
 		t.Fatalf("view: %q / %q", v.Authorship, v.TriggerLabel)
 	}
 	if err := h.svc.CardUI(v, nil).Validate(); err != nil {
@@ -392,20 +392,20 @@ func TestPersonalReminderRunsOnceAndCompletes(t *testing.T) {
 	h := newHarness(t, sqliteDB(t), nil)
 	ctx := context.Background()
 	spec := `{"schema_version":"automation/v1","name":"Llamar al alcalde","trigger":{"type":"once","at":"2026-10-14T09:00","timezone":"America/Mexico_City"},
-	  "steps":[{"id":"aviso","type":"deliver","channels":["in_app","push"],"title":"Recordatorio","body":"Llamar al alcalde de Tecomán"}]}`
+	  "steps":[{"id":"aviso","type":"deliver","channels":["in_app","push"],"title":"Recordatorio","body":"Llamar al alcalde de Zona Norte"}]}`
 	a, err := h.svc.Create(ctx, h.id(), CreateInput{Spec: json.RawMessage(spec), Origin: OriginChat, Assisted: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Status != StatusActive || a.AuthorizedBy == nil || a.AssistedBy != "Gobi" {
-		t.Fatalf("trivial personal reminder should start active (persona con Gobi): %+v", a)
+	if a.Status != StatusActive || a.AuthorizedBy == nil || a.AssistedBy != "Asistente" {
+		t.Fatalf("trivial personal reminder should start active (persona con Asistente): %+v", a)
 	}
 	h.clk.Set(time.Date(2026, 10, 14, 9, 0, 30, 0, mx))
 	h.svc.Tick(ctx)
 	h.drain()
 	h.svc.Tick(ctx)
 	h.drain()
-	if h.del.count() != 1 || h.del.last().Body != "Llamar al alcalde de Tecomán" {
+	if h.del.count() != 1 || h.del.last().Body != "Llamar al alcalde de Zona Norte" {
 		t.Fatalf("reminder deliveries=%d", h.del.count())
 	}
 	if got := h.get(a.ID); got.Status != StatusCompleted || got.NextRunAt != nil {
@@ -455,38 +455,38 @@ func TestFailuresAutoPauseAndPermissionLossIsPermanent(t *testing.T) {
 func TestEventTriggerFiltersDedupesAndCoolsDown(t *testing.T) {
 	h := newHarness(t, sqliteDB(t), nil)
 	ctx := context.Background()
-	spec := `{"schema_version":"automation/v1","name":"Tema que se dispara en Tecomán",
-	  "trigger":{"type":"event","event":"gobiernos.alert.opened","where":[{"field":"territorio","op":"eq","value":"Tecomán"},{"field":"severidad","op":"in","value":["high","critical"]}],"cooldown":"30m"},
-	  "steps":[{"id":"aviso","type":"deliver","channels":["in_app","push"],"title":"Se disparó un tema en Tecomán","body":"{{event.titulo}}","link":"/m/alerts"}]}`
+	spec := `{"schema_version":"automation/v1","name":"Tema que se dispara en Zona Norte",
+	  "trigger":{"type":"event","event":"support.ticket.opened","where":[{"field":"territorio","op":"eq","value":"Zona Norte"},{"field":"severidad","op":"in","value":["high","critical"]}],"cooldown":"30m"},
+	  "steps":[{"id":"aviso","type":"deliver","channels":["in_app","push"],"title":"Se disparó un tema en Zona Norte","body":"{{event.titulo}}","link":"/m/alerts"}]}`
 	a, err := h.svc.Create(ctx, h.id(), CreateInput{Spec: json.RawMessage(spec), Origin: OriginUI})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ev := func(id, terr, sev string) Event {
-		return Event{ID: id, OrganizationID: h.org, Name: "gobiernos.alert.opened", Payload: map[string]any{"territorio": terr, "severidad": sev, "titulo": "Bloqueo en la carretera " + id}}
+		return Event{ID: id, OrganizationID: h.org, Name: "support.ticket.opened", Payload: map[string]any{"territorio": terr, "severidad": sev, "titulo": "Bloqueo en la carretera " + id}}
 	}
 	// Through the transactional outbox.
-	if err := h.db.Transaction(func(tx *gorm.DB) error { return h.svc.EnqueueEventTx(tx, ev("e1", "Tecomán", "high")) }); err != nil {
+	if err := h.db.Transaction(func(tx *gorm.DB) error { return h.svc.EnqueueEventTx(tx, ev("e1", "Zona Norte", "high")) }); err != nil {
 		t.Fatal(err)
 	}
 	h.drain()
 	if h.del.count() != 1 || h.del.last().Body != "Bloqueo en la carretera e1" {
 		t.Fatalf("event delivery: %d", h.del.count())
 	}
-	if n, _ := h.svc.Ingest(ctx, ev("e1", "Tecomán", "high")); n != 0 {
+	if n, _ := h.svc.Ingest(ctx, ev("e1", "Zona Norte", "high")); n != 0 {
 		t.Fatalf("same event fired twice")
 	}
-	if n, _ := h.svc.Ingest(ctx, ev("e2", "Colima", "critical")); n != 0 {
+	if n, _ := h.svc.Ingest(ctx, ev("e2", "Zona Sur", "critical")); n != 0 {
 		t.Fatalf("other territory matched")
 	}
-	if n, _ := h.svc.Ingest(ctx, ev("e3", "Tecomán", "low")); n != 0 {
+	if n, _ := h.svc.Ingest(ctx, ev("e3", "Zona Norte", "low")); n != 0 {
 		t.Fatalf("low severity matched")
 	}
-	if n, _ := h.svc.Ingest(ctx, ev("e4", "Tecomán", "critical")); n != 0 {
+	if n, _ := h.svc.Ingest(ctx, ev("e4", "Zona Norte", "critical")); n != 0 {
 		t.Fatalf("cooldown ignored")
 	}
 	h.clk.Set(h.clk.Now().Add(31 * time.Minute))
-	if n, _ := h.svc.Ingest(ctx, ev("e5", "Tecomán", "critical")); n != 1 {
+	if n, _ := h.svc.Ingest(ctx, ev("e5", "Zona Norte", "critical")); n != 1 {
 		t.Fatalf("after cooldown: %d", n)
 	}
 	h.drain()
@@ -558,7 +558,7 @@ func TestLimitsPerUser(t *testing.T) {
 func TestDynamicToolAndAgentTools(t *testing.T) {
 	h := newHarness(t, sqliteDB(t), nil)
 	ctx := context.Background()
-	h.cat.set(item("f1", "Robo"), map[string]any{"id": "f2", "titulo": "Bache", "territorio": "Colima", "evidencia": map[string]any{}})
+	h.cat.set(item("f1", "Robo"), map[string]any{"id": "f2", "titulo": "Bache", "territorio": "Zona Sur", "evidencia": map[string]any{}})
 	toolSpec := `{"schema_version":"automation/v1","name":"Hallazgos por municipio","description":"Hallazgos recientes de un municipio",
 	  "inputs":[{"name":"municipio","type":"string","required":true}],
 	  "steps":[{"id":"buscar","type":"tool","tool":"buscar_hallazgos","args":{"territorio":"{{inputs.municipio}}","limite":5}},
@@ -604,7 +604,7 @@ func TestDynamicToolAndAgentTools(t *testing.T) {
 	if _, req := dyn[0].Parameters()["municipio"].(map[string]any)["required"]; !req {
 		t.Fatal("input schema not exposed")
 	}
-	out, err := dyn[0].Execute(ctx, map[string]any{"municipio": "Manzanillo"}, agentCtx)
+	out, err := dyn[0].Execute(ctx, map[string]any{"municipio": "Zona Norte"}, agentCtx)
 	if err != nil {
 		t.Fatal(err)
 	}

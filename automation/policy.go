@@ -35,14 +35,14 @@ type Policy struct {
 	// AutoApprovePersonalReminders lets a trivial personal reminder requested
 	// by its own beneficiary start active without a separate confirmation.
 	AutoApprovePersonalReminders bool
-	// AssistantName labels agent-assisted authorship ("Gobi").
+	// AssistantName labels agent-assisted authorship ("Asistente").
 	AssistantName string
 	// MaxOnceHorizon bounds how far in the future a one-shot can be set.
 	MaxOnceHorizon time.Duration
 	// RunTimeout bounds a single run.
 	RunTimeout time.Duration
 	// EventLabels names the host's domain events in descriptions
-	// ("gobiernos.alert.opened" → "se abra una alerta").
+	// ("support.ticket.opened" → "se abra un ticket").
 	EventLabels map[string]string
 }
 
