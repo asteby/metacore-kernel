@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -70,12 +71,22 @@ func TestStores_Conformance(t *testing.T) {
 		now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 		env := Envelope{Source: "erp", Entity: "e", ExternalID: "x1", Op: OpUpsert, SourceVersion: "v", Aggregate: Aggregate{Root: map[string]any{"a": "b"}}}
 		_ = s.PutPending(ctx, PendingEnvelope{Org: org, System: "erp", Envelope: env, Missing: []Dependency{{Entity: "p", ExternalID: "1"}}, Attempts: 1, FirstSeen: now, NextAttempt: now.Add(time.Minute)})
-		if due, _ := s.DuePending(ctx, now, 10); len(due) != 0 {
+		if due, _ := s.DuePending(ctx, org, "erp", now, 10); len(due) != 0 {
 			t.Fatal("no vence todavía")
 		}
-		due, _ := s.DuePending(ctx, now.Add(2*time.Minute), 10)
-		if len(due) != 1 || due[0].Envelope.Aggregate.Root["a"] != "b" || len(due[0].Missing) != 1 {
+		// Muchos pendientes más viejos de otro origen (p. ej. una org que ya no
+		// tiene el puente configurado) no tapan los de este.
+		for i := 0; i < 5; i++ {
+			old := env
+			old.ExternalID = fmt.Sprintf("viejo-%d", i)
+			_ = s.PutPending(ctx, PendingEnvelope{Org: "org-sin-config", System: "erp", Envelope: old, FirstSeen: now, NextAttempt: now.Add(-time.Hour)})
+		}
+		due, _ := s.DuePending(ctx, org, "erp", now.Add(2*time.Minute), 3)
+		if len(due) != 1 || due[0].Org != org || due[0].Envelope.Aggregate.Root["a"] != "b" || len(due[0].Missing) != 1 {
 			t.Fatalf("vencidos = %+v", due)
+		}
+		if other, _ := s.DuePending(ctx, "org-sin-config", "erp", now, 3); len(other) != 3 {
+			t.Fatalf("los del otro origen = %d", len(other))
 		}
 		_ = s.DeletePending(ctx, org, "erp", "e", "x1")
 		if n, _ := s.CountPending(ctx, org, "erp"); n != 0 {
