@@ -101,3 +101,39 @@ func TestInvoke_ConsultsResolverOnlyWithOrg(t *testing.T) {
 		t.Fatalf("InvokeFor must consult the resolver once, got %d", f.calls)
 	}
 }
+
+type fakeMarketResolver struct {
+	fakeResolver
+	market string
+	mcalls int
+}
+
+func (f *fakeMarketResolver) ResolveSettingsInMarket(_ context.Context, _ uuid.UUID, _, _, market string, _ map[string]string) (map[string]string, error) {
+	f.mcalls++
+	f.market = market
+	return map[string]string{"k": "market"}, nil
+}
+
+func TestResolveSettings_UsesMarketFromContext(t *testing.T) {
+	f := &fakeMarketResolver{fakeResolver: fakeResolver{out: map[string]string{"k": "plain"}}}
+	h := (&Host{}).WithSettingsResolver(f)
+	org := uuid.New()
+	got := h.resolveSettings(dynamic.WithMarket(context.Background(), "us"), org, "a", map[string]string{})
+	if got["k"] != "market" || f.market != "us" || f.calls != 0 {
+		t.Fatalf("got=%v market=%q plain calls=%d", got, f.market, f.calls)
+	}
+	// No market on the context: the plain entry point, as before.
+	got = h.resolveSettings(context.Background(), org, "a", map[string]string{})
+	if got["k"] != "plain" || f.mcalls != 1 {
+		t.Fatalf("no market: got=%v mcalls=%d", got, f.mcalls)
+	}
+}
+
+func TestResolveSettings_MarketIgnoredByPlainResolver(t *testing.T) {
+	f := &fakeResolver{out: map[string]string{"k": "plain"}}
+	h := (&Host{}).WithSettingsResolver(f)
+	got := h.resolveSettings(dynamic.WithMarket(context.Background(), "us"), uuid.New(), "a", map[string]string{})
+	if got["k"] != "plain" || f.calls != 1 {
+		t.Fatalf("got=%v calls=%d", got, f.calls)
+	}
+}

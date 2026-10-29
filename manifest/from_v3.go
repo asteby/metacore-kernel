@@ -1126,10 +1126,9 @@ func mapNavItems(in []v3.NavItem, modelTable map[string]string) []NavItem {
 // default,options} → legacy {Key,Type,Label,DefaultValue,Options}. v3 has no
 // Secret flag, so legacy Secret stays false.
 //
-// v3 Setting.Description has no legacy SettingDef slot, so it intentionally does
-// NOT round-trip here — consumers read it off the v3-served metadata. We do not
-// grow legacy SettingDef for it. (v3 Setting.Type "number" likewise carries
-// across as the raw type string; no special-casing is needed.)
+// Description, OptionsSource and Ref (dynamic_select) also project onto the
+// legacy def, so /api/addons/:key/settings serves them. (v3 Setting.Type
+// "number" carries across as the raw type string; no special-casing.)
 func mapSettings(in []v3.Setting) []SettingDef {
 	if len(in) == 0 {
 		return nil
@@ -1144,6 +1143,10 @@ func mapSettings(in []v3.Setting) []SettingDef {
 			Scope:        s.Scope,
 			VisibleWhen:  s.VisibleWhen,
 			WriteOnly:    s.WriteOnly,
+
+			Description:   s.Description,
+			OptionsSource: s.OptionsSource,
+			Ref:           s.Ref,
 		}
 		for _, o := range s.Options {
 			def.Options = append(def.Options, Option{Value: o.Value, Label: o.Label})

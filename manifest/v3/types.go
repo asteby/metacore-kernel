@@ -3096,6 +3096,11 @@ type Setting struct {
 	// (e.g. factura.com /v4/series). The export returns
 	// {success,data:{options:[{value,label}]}}. Empty = static Options only.
 	OptionsSource string `json:"options_source,omitempty"`
+	// Ref (type "dynamic_select") names the model whose rows are the options
+	// ("Warehouse"), resolved declaratively and bounded to the tenant — the same
+	// primitive as a column's ref, without a WASM export. Use it OR
+	// OptionsSource, not both.
+	Ref string `json:"ref,omitempty"`
 	// Section binds this setting to a FormLayout section (by its key), exactly
 	// like a Column.Section — lets a connector's credentials group into the
 	// connector's form_layout sections / wizard steps. Empty = the implicit
@@ -3108,7 +3113,10 @@ type Setting struct {
 	// per organization. "branch" lets each branch override it: the effective
 	// value for a branch is its own override, else the org value, else Default
 	// (see manifest.ResolveSetting). Lets a chain run a strict stock policy in
-	// one store and a permissive one in another (POS-1).
+	// one store and a permissive one in another (POS-1). "market" does the same
+	// per market ("mx", "us"): market override, else org value, else Default
+	// (see manifest.ResolveSettingScoped; precedence market > branch > org >
+	// default).
 	Scope string `json:"scope,omitempty"`
 	// VisibleWhen shows this setting only while a SIBLING setting (same
 	// settings[] list, or the same connector's credentials) has a given value

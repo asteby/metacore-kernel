@@ -4879,15 +4879,19 @@
           "type": "string",
           "description": "When type=dynamic_select: names a WASM export the host invokes to fetch options at config time. For a connector credential it runs with the org's connector context (connector_get resolves the same connector), returning {success,data:{options:[{value,label}]}}."
         },
+        "ref": {
+          "type": "string",
+          "description": "When type=dynamic_select: the model key whose rows are the options (declarative, tenant-bound; same primitive as a column's ref). Alternative to options_source; not both."
+        },
         "section": {
           "type": "string",
           "description": "Binds this setting to a form_layout section (by key), like a column's section — groups a connector's credentials into its wizard steps/sections."
         },
         "scope": {
           "type": "string",
-          "enum": ["org", "branch"],
+          "enum": ["org", "branch", "market"],
           "default": "org",
-          "description": "Level the value lives at. 'branch' lets each branch override the org value (effective value = branch override, else org value, else default)."
+          "description": "Level the value lives at. 'branch' lets each branch override the org value (effective value = branch override, else org value, else default); 'market' does the same per market (market > branch > org > default)."
         },
         "options": {
           "type": "array",

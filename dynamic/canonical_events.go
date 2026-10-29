@@ -151,6 +151,27 @@ func BranchIDFromContext(ctx context.Context) string {
 	return v
 }
 
+// marketKey is the unexported typed key for the market ("mx", "us") the call
+// acts in. Hosts set it from the request principal / domain (see
+// runtime/apiroute Principal.Market); "" = organization level.
+type marketKey struct{}
+
+// WithMarket returns a child context carrying the market the call acts in.
+// An empty market returns ctx unchanged.
+func WithMarket(ctx context.Context, market string) context.Context {
+	if market == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, marketKey{}, market)
+}
+
+// MarketFromContext extracts the market previously stored by WithMarket,
+// "" when none was set.
+func MarketFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(marketKey{}).(string)
+	return v
+}
+
 // EventBranchID resolves the branch a canonical event carries: the mutated
 // row's own branch_id (after, else before) — the document's branch wins over
 // whoever touched it — else the caller's active branch on ctx. It returns ""

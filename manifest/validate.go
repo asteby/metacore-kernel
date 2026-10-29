@@ -350,8 +350,8 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 		return fmt.Errorf("manifest: version %q is not semver: %w", m.Version, err)
 	}
 	for i, st := range m.Settings {
-		if st.Scope != "" && st.Scope != SettingScopeOrg && st.Scope != SettingScopeBranch {
-			return fmt.Errorf("manifest: settings[%d].scope %q is not one of org|branch", i, st.Scope)
+		if st.Scope != "" && st.Scope != SettingScopeOrg && st.Scope != SettingScopeBranch && st.Scope != SettingScopeMarket {
+			return fmt.Errorf("manifest: settings[%d].scope %q is not one of org|branch|market", i, st.Scope)
 		}
 	}
 	if err := m.checkKernelRange(kernelVersion); err != nil {

@@ -595,6 +595,14 @@ func validateSettingExtras(where string, list []Setting) []string {
 		if s.Type == "secret" && s.Default != nil {
 			errs = append(errs, w+".secret cannot declare a default (a secret is write-only and a default would ship in the signed manifest)")
 		}
+		if s.Ref != "" {
+			if s.Type != "dynamic_select" {
+				errs = append(errs, w+".ref requires type dynamic_select")
+			}
+			if s.OptionsSource != "" {
+				errs = append(errs, w+".ref and options_source are mutually exclusive")
+			}
+		}
 		vw := s.VisibleWhen
 		if vw == nil {
 			continue

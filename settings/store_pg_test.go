@@ -32,7 +32,7 @@ func pgStore(t *testing.T) (*gorm.DB, *settings.Store) {
 	sqlDB.SetMaxOpenConns(60)
 	if err := db.Exec(`CREATE TABLE IF NOT EXISTS metacore_addon_settings (
 		org_id UUID NOT NULL, addon_key TEXT NOT NULL,
-		scope_kind TEXT NOT NULL CHECK (scope_kind IN ('org','branch')),
+		scope_kind TEXT NOT NULL CHECK (scope_kind IN ('org','branch','market')),
 		scope_id TEXT NOT NULL DEFAULT '', "values" JSONB NOT NULL DEFAULT '{}',
 		rev BIGINT NOT NULL DEFAULT 1, updated_by UUID,
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
