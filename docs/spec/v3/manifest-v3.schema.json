@@ -5781,7 +5781,7 @@
         },
         "when": {
           "type": "object",
-          "description": "Optional equality filters over the event payload (e.g. {'after.state': ['done']}). Keys are dotted paths; values are a string or list of strings.",
+          "description": "Optional equality filters over the event (e.g. {'after.state': ['done']}). Keys are paths: after.<field>, before.<field>, a bare <field> (looked up in after, then before) or one of id, model, action, addon_key, actor_id. Paths are one level deep (no nested objects). Values MUST be a string or a list of strings: the field is compared as text, exactly (case-insensitive); a list means ANY of them (OR); several keys must ALL match (AND). Booleans and numbers are compared as their text, so write 'true' or '5', never the JSON literal true (it never matches). There is no negation, comparison or substring; an empty string matches an absent field.",
           "additionalProperties": {
             "oneOf": [
               {
