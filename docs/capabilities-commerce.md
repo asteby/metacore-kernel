@@ -291,6 +291,20 @@ Un campo de texto puede fijar `Field.Pattern` (RE2, con anclas): la entrada que
 no cumple se rechaza antes de invocar (`ErrInvalidInput`; `validation_error` en
 `capability_query`) y una salida que no cumple es `invalid_output`.
 
+## Textos para pantallas de administración
+
+Cada contrato bien conocido trae `Title` y `Description` (`capability.Text`,
+por idioma: `es`, `en`) y pertenece a un dominio de negocio
+(`capability.DomainOf(key)` → `capability.Domains`: Pagos, Envíos, Surtido,
+Impuestos, Facturación, Mensajería…, con icono lucide y orden). Los hosts
+agrupan las capacidades por dominio, eligen un proveedor por dominio y mercado
+y muestran estos textos en lugar de la llave; la llave técnica solo va en un
+detalle técnico. `Contract.Checkout` marca los contratos sin los que el
+checkout no puede cerrar en un mercado (`commerce.payments.session`,
+`.confirm`, `.status`): el host avisa si un mercado se queda sin proveedor
+para alguno. `Text.Get(locale)` cae al idioma base, luego a `es` y a `en`.
+Un contrato registrado por el host con sus propios textos los conserva.
+
 ## API Go (host-neutral)
 
 ```go

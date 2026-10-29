@@ -108,6 +108,15 @@ type Contract struct {
 	Errors []string
 	// Doc is a one-line description.
 	Doc string
+	// Title and Description are the human copy admin screens show instead
+	// of the key ("Cobrar en línea", "Crea el cobro…"), per locale. Register
+	// fills them from the built-in catalog (describe.go) when left empty.
+	Title       Text
+	Description Text
+	// Checkout marks a contract the storefront checkout cannot complete
+	// without in a market (payments session / confirm / status): admin
+	// screens warn when a market is left without a provider for it.
+	Checkout bool
 }
 
 // IsQuery reports whether the contract returns outputs.
@@ -226,10 +235,12 @@ var Contracts = map[string]Contract{
 		Optional: []string{"cc", "bcc", "from", "reply_to", "subject", "text", "html", "template", "variables", "attachments", "in_reply_to", "thread_id", "idempotency_key"},
 	},
 	MessagingWhatsAppSend: {
-		Key:      MessagingWhatsAppSend,
-		Kind:     KindAction,
-		Required: []string{"to"},
-		Optional: []string{"message", "media_url", "media_type", "device_id"},
+		Key:         MessagingWhatsAppSend,
+		Kind:        KindAction,
+		Required:    []string{"to"},
+		Optional:    []string{"message", "media_url", "media_type", "device_id"},
+		Title:       contractTexts[MessagingWhatsAppSend].title,
+		Description: contractTexts[MessagingWhatsAppSend].description,
 	},
 }
 
@@ -294,6 +305,7 @@ func Register(c Contract) error {
 	if c.Input != nil {
 		c.Required, c.Optional = c.Input.Required(), c.Input.Optional()
 	}
+	describeContract(&c)
 	Contracts[c.Key] = c
 	return nil
 }
