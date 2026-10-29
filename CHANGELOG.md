@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **legacybridge: `PendingStore.DuePending` y `Applier.RetryWaiting` son por
+  origen `(org, system)`.** La cola global ordenada por `next_attempt` dejaba al
+  frente los pendientes de un origen sin configuración y, con 200 o más, los de
+  las demás organizaciones no se reintentaban. Índice nuevo
+  `idx_bridge_pending_org_due (org_id, system, next_attempt)` en `Schema`.
+
 ### Added
 
 - `capability`: `commerce.shipping.tracking_updated` gana `eta` (RFC 3339, fecha de entrega que promete la paquetería) y `commerce.fulfillment.updated` gana `location` y `eta`, todos opcionales: un payload anterior sigue validando y un tipo equivocado se rechaza. Permite que la tienda y el panel muestren el recorrido del paquete con lugar y fecha estimada sin que cada paquetería invente campos `x_`.
