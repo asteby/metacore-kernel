@@ -2880,6 +2880,19 @@ type Subscription struct {
 // (contributions.notifications[]). The host matches `On` against canonical
 // CRUD event names (addon.Model.action), renders Title/Body/Link with a tiny
 // Mustache subset, and fans out to the audience described by To.
+//
+// When filters on the event (ops evaluates it in notification_bridge.go):
+//   - keys are paths: "after.<field>", "before.<field>", a bare "<field>" (read
+//     from after, then before) or one of id, model, action, addon_key, actor_id.
+//     Paths are one level deep: nested objects are not reachable.
+//   - values must be a string or a list of strings. The field is compared as
+//     TEXT, exactly but ignoring case; a list matches ANY of its items (OR);
+//     all keys must match (AND). A JSON boolean or number never matches: write
+//     "true" or "5". There is no negation, comparison or substring, and an
+//     empty string matches an absent field.
+//
+// Entered fires only when Field changed between before and after and the new
+// value is one of Values (any non-empty value when Values is empty).
 type NotificationRule struct {
 	Key          string               `json:"key"`
 	On           string               `json:"on"`

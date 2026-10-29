@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `capability`: `commerce.shipping.tracking_updated` gana `eta` (RFC 3339, fecha de entrega que promete la paquetería) y `commerce.fulfillment.updated` gana `location` y `eta`, todos opcionales: un payload anterior sigue validando y un tipo equivocado se rechaza. Permite que la tienda y el panel muestren el recorrido del paquete con lugar y fecha estimada sin que cada paquetería invente campos `x_`.
+
+### Docs
+
+- `manifest/v3`: `NotificationRule.When` y su descripción en `manifest-v3.schema.json` (y la copia de `docs/spec/v3`) documentan la semántica real que evalúa ops: rutas `after.`/`before.`/campo suelto de un nivel, valores solo texto exacto sin distinguir mayúsculas, lista = O, varias claves = Y, booleano como `"true"`, sin negación.
+
 ### Fixed
 
 - `wasm`/`dynamic`: las reglas entre registros (`Model.rules`, `ref_state`) ya no rechazan en `data_mutate`/`data_batch` un UPDATE que no toca la relación. La ruta wasm no pasaba la fila anterior (`before`), así que cada escritura a la factura volvía a evaluar «la venta debe estar en none/requested/failed» contra el estado ACTUAL de la venta: con la venta ya `issued`, escribir `fiscal_uuid`, el estado o el saldo de su propia factura fallaba con `customers.invoice.sale_already_invoiced` y `fiscal.document_settled` terminaba en dead-letter (FAC-00002: timbrada, sin `fiscal_uuid`). Ahora el UPDATE lleva la fila previa en el contexto (`dynamic.WithBeforeRow` / `BeforeRowFromContext`, sin cambiar la firma de `MutationComputeFn`) y `CrossRecordCompute` la usa como en `dynamic.Service.Update`: relación sin cambios = no se reevalúa (salvo `enforce: always`). Un create, un cambio de relación o un embedder que no pone `before` siguen evaluándose igual.

@@ -124,3 +124,27 @@ func TestShippingDomainsProviders(t *testing.T) {
 		}
 	}
 }
+
+// eta (both events) and location (fulfillment) are additive: the previous
+// payloads keep validating and the new fields are typed.
+func TestTrackingEtaAndFulfillmentLocationAreAdditive(t *testing.T) {
+	tr, _ := LookupEvent(CommerceShippingTrackingUpdated)
+	ff, _ := LookupEvent(CommerceFulfillmentUpdated)
+	for name, c := range map[string]struct {
+		e   EventContract
+		raw string
+		ok  bool
+	}{
+		"tracking with eta":                     {tr, `{"provider":"skydropx","event_id":"e","status":"in_transit","occurred_at":"2026-10-29T10:00:00Z","location":"Toluca","eta":"2026-10-31T00:00:00Z"}`, true},
+		"tracking without eta (previous shape)": {tr, `{"provider":"skydropx","event_id":"e","status":"in_transit","occurred_at":"2026-10-29T10:00:00Z"}`, true},
+		"tracking eta wrong type":               {tr, `{"provider":"skydropx","event_id":"e","status":"in_transit","occurred_at":"x","eta":5}`, false},
+		"fulfillment with location and eta":     {ff, `{"provider":"emissary","event_id":"e","fulfillment_id":"f","order_ref":"o","status":"in_transit","occurred_at":"2026-10-29T10:00:00Z","location":"Monterrey","eta":"2026-10-31T00:00:00Z"}`, true},
+		"fulfillment previous shape":            {ff, `{"provider":"emissary","event_id":"e","fulfillment_id":"f","order_ref":"o","status":"accepted","occurred_at":"2026-10-29T10:00:00Z"}`, true},
+		"fulfillment location wrong type":       {ff, `{"provider":"emissary","event_id":"e","fulfillment_id":"f","order_ref":"o","status":"accepted","occurred_at":"x","location":{"city":"x"}}`, false},
+	} {
+		got := len(c.e.ValidatePayload([]byte(c.raw))) == 0
+		if got != c.ok {
+			t.Errorf("%s: valid=%v, want %v", name, got, c.ok)
+		}
+	}
+}

@@ -388,6 +388,7 @@ var (
 		opt("provider_status", TypeString, "carrier wording / code of the status, untranslated"),
 		opt("description", TypeString, ""),
 		opt("location", TypeString, ""),
+		opt("eta", TypeString, "RFC 3339 date the carrier promises delivery by, when it says so"),
 		opt("test_mode", TypeBoolean, "update from the provider sandbox"),
 	)
 
@@ -406,6 +407,8 @@ var (
 		opt("tracking_url", TypeString, ""),
 		opt("provider_status", TypeString, "provider wording / code of the status, untranslated"),
 		opt("description", TypeString, ""),
+		opt("location", TypeString, "city / place of the scan, as the provider words it"),
+		opt("eta", TypeString, "RFC 3339 date the provider promises delivery by, when it says so"),
 		opt("test_mode", TypeBoolean, "update from the provider sandbox"),
 	)
 

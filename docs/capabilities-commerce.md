@@ -134,7 +134,7 @@ Reglas:
 
 ## Cotización y guía de envíos: `rates` y `label` (aditivo)
 
-Los dos contratos conservan su llave (`commerce.shipping.rates`, `commerce.shipping.label`; el sufijo `@1` no es una llave válida) y evolucionan **solo** con campos opcionales, como el pago integrado. Un proveedor construido contra la forma anterior (`envia`, `skydropx`, `noventa9minutos`, `shipping_flat`) sigue validando sin cambios, y el host puede ignorar todo campo nuevo. Los eventos `commerce.shipping.tracking_updated` y `commerce.fulfillment.updated` no cambian. Decisión y lista exacta de campos: `docs/adr/0001-contratos-envios-aditivos.md`.
+Los dos contratos conservan su llave (`commerce.shipping.rates`, `commerce.shipping.label`; el sufijo `@1` no es una llave válida) y evolucionan **solo** con campos opcionales, como el pago integrado. Un proveedor construido contra la forma anterior (`envia`, `skydropx`, `noventa9minutos`, `shipping_flat`) sigue validando sin cambios, y el host puede ignorar todo campo nuevo. Los eventos `commerce.shipping.tracking_updated` y `commerce.fulfillment.updated` ganan solo campos opcionales (`eta`, y `location` en el segundo). Decisión y lista exacta de campos: `docs/adr/0001-contratos-envios-aditivos.md`.
 
 Reparto de responsabilidades (el kernel solo fija el vocabulario):
 
@@ -201,6 +201,7 @@ Payload (`CommerceShippingTrackingUpdated`, `capability.TrackingUpdatedSchema`):
 | `label_url` | string |  | cuando ya hay guía (las guías asíncronas llegan después) |
 | `label_ready` | boolean |  | este cambio es el que dejó lista la guía |
 | `provider_status`, `description`, `location` | string |  | texto o código del proveedor, sin traducir |
+| `eta` | string |  | RFC 3339: fecha de entrega que promete la paquetería, cuando la dice |
 | `test_mode` | boolean |  | evento del sandbox |
 
 Payload (`CommerceFulfillmentUpdated`, `capability.FulfillmentUpdatedSchema`):
@@ -215,7 +216,8 @@ Payload (`CommerceFulfillmentUpdated`, `capability.FulfillmentUpdatedSchema`):
 | `occurred_at` | string | sí | RFC 3339 |
 | `previous_status` | string |  | mismo vocabulario |
 | `warehouse`, `carrier`, `tracking_number`, `tracking_url` | string |  |  |
-| `provider_status`, `description` | string |  | texto o código del proveedor, sin traducir |
+| `provider_status`, `description`, `location` | string |  | texto o código del proveedor, sin traducir; `location` es la ciudad o lugar del escaneo |
+| `eta` | string |  | RFC 3339: fecha de entrega que promete el proveedor, cuando la dice |
 | `test_mode` | boolean |  | evento del sandbox |
 
 Los dos esquemas son cerrados: un campo propio del proveedor va con prefijo
