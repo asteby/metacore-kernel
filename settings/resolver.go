@@ -23,12 +23,14 @@ const (
 	SourceDefault Source = "default"
 	SourceOrg     Source = "org"
 	SourceBranch  Source = "branch"
+	SourceMarket  Source = "market"
 )
 
-// Scope is the resolution context. An empty BranchID means "no branch": the
-// org value applies.
+// Scope is the resolution context. An empty BranchID / MarketID means "no
+// branch" / "no market": the org value applies.
 type Scope struct {
 	BranchID string
+	MarketID string
 }
 
 // Effective is the resolved settings of one addon for one scope.
@@ -42,20 +44,23 @@ type Effective struct {
 	// row).
 	OrgRev    int64
 	BranchRev int64
+	MarketRev int64
 }
 
 // Rev is a combined etag: it changes whenever either layer changes (each
 // layer's revision only ever grows).
-func (e Effective) Rev() int64 { return e.OrgRev + e.BranchRev }
+func (e Effective) Rev() int64 { return e.OrgRev + e.BranchRev + e.MarketRev }
 
 // Resolver computes effective settings.
 //
 // Precedence (lowest to highest):
 //
-//	manifest default < org value < branch override
+//	manifest default < org value < branch override < market override
 //
-// The branch layer applies only to keys the INSTALLED manifest declares with
-// scope "branch" and only when Scope.BranchID is set. A stored key the
+// A setting has one scope, so for a given key only one override layer is
+// consulted: the branch layer applies only to keys the INSTALLED manifest
+// declares with scope "branch" and only when Scope.BranchID is set; the market
+// layer only to scope "market" keys and only when Scope.MarketID is set. A stored key the
 // manifest no longer declares is ignored (logged), never an error. Defaults
 // come from the manifest at resolve time and are never stored.
 type Resolver struct {
@@ -88,20 +93,31 @@ func (r *Resolver) Resolve(ctx context.Context, org uuid.UUID, addon string, sco
 		}
 	}
 
+	var mkVals Values
+	var mkRev int64
+	if scope.MarketID != "" {
+		mkVals, mkRev, err = readRow(db, org, addon, ScopeMarket, scope.MarketID)
+		if err != nil {
+			return Effective{}, 0, err
+		}
+	}
+
 	declared := make(map[string]struct{}, len(defs))
-	eff := Effective{Values: Values{}, Sources: map[string]Source{}, OrgRev: orgRev, BranchRev: brRev}
+	eff := Effective{Values: Values{}, Sources: map[string]Source{}, OrgRev: orgRev, BranchRev: brRev, MarketRev: mkRev}
 	for _, d := range defs {
 		declared[d.Key] = struct{}{}
 		if sensitive(d) {
 			continue
 		}
 		// Reuse the manifest's precedence rule instead of re-implementing it.
-		v := manifest.ResolveSetting(d, orgVals, brVals)
+		v := manifest.ResolveSettingScoped(d, orgVals, brVals, mkVals)
 		if v == nil {
 			continue
 		}
 		eff.Values[d.Key] = v
 		switch {
+		case d.Scope == manifest.SettingScopeMarket && present(mkVals, d.Key):
+			eff.Sources[d.Key] = SourceMarket
 		case d.Scope == manifest.SettingScopeBranch && present(brVals, d.Key):
 			eff.Sources[d.Key] = SourceBranch
 		case present(orgVals, d.Key):
@@ -112,6 +128,7 @@ func (r *Resolver) Resolve(ctx context.Context, org uuid.UUID, addon string, sco
 	}
 	warnUndeclared(addon, "org", orgVals, declared)
 	warnUndeclared(addon, "branch", brVals, declared)
+	warnUndeclared(addon, "market", mkVals, declared)
 	return eff, eff.Rev(), nil
 }
 
@@ -167,7 +184,13 @@ type WasmResolver struct{ R *Resolver }
 
 // ResolveSettings implements wasm.SettingsResolver.
 func (w WasmResolver) ResolveSettings(ctx context.Context, org uuid.UUID, addon, branchID string, base map[string]string) (map[string]string, error) {
-	eff, _, err := w.R.Resolve(ctx, org, addon, Scope{BranchID: branchID})
+	return w.ResolveSettingsInMarket(ctx, org, addon, branchID, "", base)
+}
+
+// ResolveSettingsInMarket implements wasm.MarketSettingsResolver: the same
+// layering as ResolveSettings with the call's market override on top.
+func (w WasmResolver) ResolveSettingsInMarket(ctx context.Context, org uuid.UUID, addon, branchID, marketID string, base map[string]string) (map[string]string, error) {
+	eff, _, err := w.R.Resolve(ctx, org, addon, Scope{BranchID: branchID, MarketID: marketID})
 	if err != nil {
 		return nil, err
 	}

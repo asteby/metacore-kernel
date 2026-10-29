@@ -22,6 +22,15 @@ type SettingsResolver interface {
 	ResolveSettings(ctx context.Context, orgID uuid.UUID, addonKey, branchID string, base map[string]string) (map[string]string, error)
 }
 
+// MarketSettingsResolver is the optional extension of SettingsResolver for
+// resolvers that also layer market overrides. Host.resolveSettings prefers it
+// when the call carries a market (dynamic.MarketFromContext) and falls back to
+// SettingsResolver otherwise, so existing implementations keep working.
+type MarketSettingsResolver interface {
+	SettingsResolver
+	ResolveSettingsInMarket(ctx context.Context, orgID uuid.UUID, addonKey, branchID, marketID string, base map[string]string) (map[string]string, error)
+}
+
 // WithSettingsResolver enables scoped settings resolution for every
 // invocation that carries an org (InvokeFor / InvokeForInTx). Without it
 // (the default) the settings map passed to Invoke* is served as is, exactly as
@@ -41,7 +50,16 @@ func (h *Host) resolveSettings(ctx context.Context, orgID uuid.UUID, addonKey st
 	if h.settingsResolver == nil || orgID == uuid.Nil {
 		return settings
 	}
-	got, err := h.settingsResolver.ResolveSettings(ctx, orgID, addonKey, dynamic.BranchIDFromContext(ctx), settings)
+	var (
+		got map[string]string
+		err error
+	)
+	branch := dynamic.BranchIDFromContext(ctx)
+	if mr, ok := h.settingsResolver.(MarketSettingsResolver); ok && dynamic.MarketFromContext(ctx) != "" {
+		got, err = mr.ResolveSettingsInMarket(ctx, orgID, addonKey, branch, dynamic.MarketFromContext(ctx), settings)
+	} else {
+		got, err = h.settingsResolver.ResolveSettings(ctx, orgID, addonKey, branch, settings)
+	}
 	if err != nil {
 		slog.Warn("wasm.settings_resolver_failed", "addon_key", addonKey, "org_id", orgID.String(), "err", err.Error())
 		return settings

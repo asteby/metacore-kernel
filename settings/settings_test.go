@@ -20,6 +20,7 @@ var defs = []manifest.SettingDef{
 	{Key: "limit", Type: "integer", DefaultValue: float64(10), Scope: manifest.SettingScopeBranch},
 	{Key: "printer", Type: "string", Scope: manifest.SettingScopeBranch},
 	{Key: "enabled", Type: "boolean"},
+	{Key: "free_over", Type: "integer", Scope: manifest.SettingScopeMarket},
 	{Key: "token", Type: "secret"},
 	{Key: "api_key", Type: "string", WriteOnly: true},
 	{Key: "legacy_secret", Type: "string", Secret: true},

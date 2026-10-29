@@ -694,9 +694,20 @@ type SettingDef struct {
 	DefaultValue interface{} `json:"default_value,omitempty"`
 	Options      []Option    `json:"options,omitempty"`
 	Secret       bool        `json:"secret,omitempty"`
-	// Scope is "org" (default, "" = org) or "branch": each branch may override
-	// the org value. See ResolveSetting.
+	// Scope is "org" (default, "" = org), "branch" (each branch may override
+	// the org value) or "market" (each market, e.g. "mx"/"us", may override
+	// it). See ResolveSettingScoped for the precedence.
 	Scope string `json:"scope,omitempty"`
+	// Description projects v3 Setting.description: help text under the field
+	// (an i18n key or literal; the SDK resolves it against the addon bundle).
+	Description string `json:"description,omitempty"`
+	// OptionsSource projects v3 Setting.options_source (type "dynamic_select"):
+	// the WASM export that returns the options at config time.
+	OptionsSource string `json:"options_source,omitempty"`
+	// Ref projects v3 Setting.ref (type "dynamic_select"): the model key whose
+	// rows are the options, resolved declaratively (same primitive as a
+	// column's ref) and bounded to the tenant. Alternative to OptionsSource.
+	Ref string `json:"ref,omitempty"`
 	// VisibleWhen / WriteOnly project v3 Setting.visible_when / write_only:
 	// conditional visibility among sibling settings, and a value the host
 	// never serves back. A "secret" is always write-only.
@@ -740,6 +751,7 @@ func (r *ReasonRequiredDef) RequiresAction(key string) bool {
 const (
 	SettingScopeOrg    = "org"
 	SettingScopeBranch = "branch"
+	SettingScopeMarket = "market"
 )
 
 // ResolveSetting returns the effective value of one setting for a branch:
@@ -747,7 +759,31 @@ const (
 // one, else the org value, else the manifest default. branchValues may be nil
 // (no branch context — the org value applies). A nil/absent override never
 // shadows the org value, so clearing an override means deleting the key.
+//
+// It is ResolveSettingScoped without a market; kept with its original
+// signature for existing callers.
 func ResolveSetting(def SettingDef, orgValues, branchValues map[string]any) any {
+	return ResolveSettingScoped(def, orgValues, branchValues, nil)
+}
+
+// ResolveSettingScoped resolves one setting with the full precedence
+//
+//	market override > branch override > org value > manifest default
+//
+// A layer only participates when the setting's Scope names it: a
+// "market"-scoped setting reads marketValues, a "branch"-scoped one reads
+// branchValues, an org-scoped one (or "") reads neither, so values stored in a
+// layer the manifest does not declare are ignored. A setting has a single
+// scope; when both maps are supplied only the declared one is consulted.
+// Either map may be nil (no market / branch context: the org value applies —
+// exactly the behaviour before markets existed). A nil/absent override never
+// shadows a lower layer; clearing an override means deleting the key.
+func ResolveSettingScoped(def SettingDef, orgValues, branchValues, marketValues map[string]any) any {
+	if def.Scope == SettingScopeMarket {
+		if v, ok := marketValues[def.Key]; ok && v != nil {
+			return v
+		}
+	}
 	if def.Scope == SettingScopeBranch {
 		if v, ok := branchValues[def.Key]; ok && v != nil {
 			return v
