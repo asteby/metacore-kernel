@@ -125,6 +125,31 @@ func ApplyWithOptions(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolati
 			return err
 		}
 		tx := db.Begin()
+		// Serialise this addon's migrations across connections, processes and
+		// instances (see lockAddonDDL). Once the lock is ours, re-read the
+		// ledger: another runner may have applied and recorded this file while
+		// we waited, and running it again would re-execute already-applied SQL.
+		if err := lockAddonDDL(tx, addonKey); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("apply %s@%s: %w", addonKey, f.Version, err)
+		}
+		var raced Migration
+		err = tx.Table("public.metacore_addon_migrations").
+			Where("addon_key = ? AND version = ?", addonKey, f.Version).
+			First(&raced).Error
+		if err == nil {
+			tx.Rollback()
+			if raced.Checksum != got && !declaresInPlaceEdit(f.SQL) {
+				return fmt.Errorf(
+					"migration %s@%s checksum mismatch: recorded %s, file %s (refusing to re-apply mutated SQL)",
+					addonKey, f.Version, raced.Checksum, got)
+			}
+			continue
+		}
+		if !isNotFound(err) {
+			tx.Rollback()
+			return err
+		}
 		// Scope session search_path so bare table names resolve to the schema
 		// the addon's model tables really live in (see ApplyOptions).
 		path, err := migrationSearchPath(tx, schema, opts)
@@ -254,6 +279,10 @@ func ReplayAfterModels(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolat
 			continue
 		}
 		tx := db.Begin()
+		if err := lockAddonDDL(tx, addonKey); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("replay %s@%s: %w", addonKey, f.Version, err)
+		}
 		path, err := migrationSearchPath(tx, schema, opts)
 		if err != nil {
 			tx.Rollback()
@@ -270,6 +299,33 @@ func ReplayAfterModels(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolat
 		if err := tx.Commit().Error; err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// addonDDLLockPrefix namespaces the advisory-lock key of an addon's
+// migrations so it cannot collide with other advisory locks of the host.
+const addonDDLLockPrefix = "metacore.addon-migrations:"
+
+// lockAddonDDL takes, inside tx, a transaction-scoped Postgres advisory lock
+// keyed by the addon. Every transaction that applies (ApplyWithOptions) or
+// replays (ReplayAfterModels) an addon's migrations takes it first, so two
+// runners of the same addon — two boot paths of one process, an install racing
+// a boot replay, or two instances during a blue-green deploy — run one after
+// the other instead of interleaving. Without it two concurrent
+// CREATE OR REPLACE FUNCTION of the same function make Postgres abort one with
+// "tuple concurrently updated" (SQLSTATE XX000), and worse, a replay of an
+// older file (inventory@020) could commit after a newer one that redefines the
+// same function (inventory@024) and silently leave the old body in place.
+// The lock is released on commit or rollback. Other addons are not blocked.
+// On any dialect other than Postgres (SQLite in tests and embedders) it is a
+// no-op: there is a single writer and no advisory locks.
+func lockAddonDDL(tx *gorm.DB, addonKey string) error {
+	if tx == nil || tx.Dialector == nil || tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended(?, 0))`, addonDDLLockPrefix+addonKey).Error; err != nil {
+		return fmt.Errorf("lock addon migrations %s: %w", addonKey, err)
 	}
 	return nil
 }
