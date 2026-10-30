@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -226,11 +227,24 @@ func columnToField(c manifest.ColumnDef) (reflect.StructField, error) {
 	// json/jsonb/int/bigint/vector are intentionally left as-is (empty string is a
 	// legitimate value, jsonb has its own handling, ints have no ambiguous NULL vs
 	// zero need here).
-	if lit, ok := manifest.DefaultLiteral(c.Default); !c.Required && !(ok && lit != "") {
+	lit, hasLit := manifest.DefaultLiteral(c.Default)
+	declared := hasLit && lit != ""
+	if !c.Required && !declared {
 		switch goType {
 		case timeType, float64Type, boolType:
 			goType = reflect.PtrTo(goType)
 		}
+	}
+	// The mirror case: a bool/numeric whose declared Default is NOT the Go zero
+	// value (bool default true, numeric default 5). As a value, GORM treats the
+	// zero value (false / 0) as "unset" and OMITS it from the INSERT, so the
+	// column DEFAULT wins and an explicit `false` / `0` posted through the API is
+	// silently stored as true / 5 (UPDATE does write it). As a POINTER an unset
+	// field stays nil → the column DEFAULT applies, and an explicit false / 0 is
+	// a non-nil pointer → written verbatim. Holds for required columns too (the
+	// DEFAULT already satisfies NOT NULL).
+	if declared && nonZeroDefault(goType, lit) {
+		goType = reflect.PtrTo(goType)
 	}
 	name := exportName(c.Name)
 	tags := []string{fmt.Sprintf(`json:"%s"`, c.Name)}
@@ -360,4 +374,19 @@ func exportName(s string) string {
 		parts[i] = strings.ToUpper(p[:1]) + p[1:]
 	}
 	return strings.Join(parts, "")
+}
+
+// nonZeroDefault reports whether a declared column default differs from the Go
+// zero value of its (non-pointer) type, i.e. whether GORM would swallow an
+// explicit zero on INSERT. Only bool and float64 are in scope: time defaults are
+// expressions (now()) whose zero time is never a meaningful explicit value.
+func nonZeroDefault(t reflect.Type, lit string) bool {
+	switch t {
+	case boolType:
+		return strings.EqualFold(lit, "true")
+	case float64Type:
+		n, err := strconv.ParseFloat(lit, 64)
+		return err != nil || n != 0
+	}
+	return false
 }
