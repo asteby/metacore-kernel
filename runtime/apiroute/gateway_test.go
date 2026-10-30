@@ -552,3 +552,31 @@ func TestGateway_InsufficientScopeBody(t *testing.T) {
 		t.Fatalf("plain forbidden changed: %s", plain.Body)
 	}
 }
+
+// X-Storefront-Market (contrato storefront 1.22.0): el handler nombra el
+// mercado con el que resolvió la respuesta; el gateway no debe descartarlo
+// (antes no estaba en ResponseHeaders y se perdía en todas las rutas, así que
+// el cliente no podía distinguir «sin mercado» de «mercado ignorado»).
+func TestGateway_KeepsStorefrontMarketHeader(t *testing.T) {
+	d := &recorder{resp: Response{
+		Headers: map[string]string{"Vary": "Authorization, X-Storefront-Domain", "x-storefront-market": "us"},
+		Body:    json.RawMessage(`{"ok":true}`),
+	}}
+	gw := newTestGateway(t, d)
+	resp, err := gw.Handle(context.Background(), get("/storefront/products/x", tokenPrincipal("catalog:read")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Headers["X-Storefront-Market"]; got != "us" {
+		t.Fatalf("X-Storefront-Market = %q, want us (headers %v)", got, resp.Headers)
+	}
+	// Sin mercado el handler no lo pone y el gateway no lo inventa.
+	d.resp.Headers = map[string]string{"Vary": "Authorization, X-Storefront-Domain"}
+	resp, err = gw.Handle(context.Background(), get("/storefront/products/x", tokenPrincipal("catalog:read")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := resp.Headers["X-Storefront-Market"]; ok {
+		t.Fatalf("X-Storefront-Market sin mercado: %v", resp.Headers)
+	}
+}

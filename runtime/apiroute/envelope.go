@@ -34,6 +34,10 @@ var DefaultRequestHeaders = []string{
 
 // ResponseHeaders is the allowlist of response headers a handler may set, in
 // their canonical spelling. Any other header is dropped.
+//
+// X-Storefront-Market (storefront contract 1.22.0) names the market a
+// per-market answer was resolved with (informative; the cache varies on
+// X-Storefront-Domain, which carries host#market).
 var ResponseHeaders = []string{
 	"Cache-Control",
 	"ETag",
@@ -43,6 +47,7 @@ var ResponseHeaders = []string{
 	"Content-Language",
 	"Last-Modified",
 	"Retry-After",
+	"X-Storefront-Market",
 }
 
 var responseHeaderIndex = func() map[string]string {

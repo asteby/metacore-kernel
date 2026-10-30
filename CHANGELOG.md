@@ -17,6 +17,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `apiroute`: `X-Storefront-Market` entra en `ResponseHeaders`. El gateway descartaba la cabecera que los handlers ponen según el contrato storefront 1.22.0 (mercado con el que se resolvió la respuesta), así que nunca llegaba al cliente en ninguna ruta aunque el mercado sí viajara en `Request.Market` y ops la expusiera por CORS. Sin mercado el handler no la pone y nada cambia.
 - `wasm`/`dynamic`: las reglas entre registros (`Model.rules`, `ref_state`) ya no rechazan en `data_mutate`/`data_batch` un UPDATE que no toca la relación. La ruta wasm no pasaba la fila anterior (`before`), así que cada escritura a la factura volvía a evaluar «la venta debe estar en none/requested/failed» contra el estado ACTUAL de la venta: con la venta ya `issued`, escribir `fiscal_uuid`, el estado o el saldo de su propia factura fallaba con `customers.invoice.sale_already_invoiced` y `fiscal.document_settled` terminaba en dead-letter (FAC-00002: timbrada, sin `fiscal_uuid`). Ahora el UPDATE lleva la fila previa en el contexto (`dynamic.WithBeforeRow` / `BeforeRowFromContext`, sin cambiar la firma de `MutationComputeFn`) y `CrossRecordCompute` la usa como en `dynamic.Service.Update`: relación sin cambios = no se reevalúa (salvo `enforce: always`). Un create, un cambio de relación o un embedder que no pone `before` siguen evaluándose igual.
 
 ### Added
