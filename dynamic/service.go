@@ -52,8 +52,18 @@ type Config struct {
 	// mistake surfaces as "forbidden" rather than as silent full access.
 	// Hosts that deliberately authorize elsewhere leave it false.
 	RequirePermissions bool
-	Hooks              *HookRegistry // optional
-	Scoper             TenantScoper  // optional — default OrganizationScoper
+
+	// PermissionsEnforcedByHost declares that the host authorizes every
+	// request in its own layer (middlewares/handlers) BEFORE it reaches the
+	// dynamic runtime. It only changes the startup log: with no Permissions
+	// service and RequirePermissions false, New logs a one-line informational
+	// "authorization delegated to the host" instead of the "authorization
+	// DISABLED" warning. It does NOT change any authorization decision — a
+	// nil Permissions still allows, and RequirePermissions still denies.
+	PermissionsEnforcedByHost bool
+
+	Hooks  *HookRegistry // optional
+	Scoper TenantScoper  // optional — default OrganizationScoper
 
 	// OptionsConfigResolver returns the OptionsConfig for a model. Apps
 	// typically check (a) a compiled HasMetadata interface on the model and
@@ -479,6 +489,8 @@ func New(cfg Config) *Service {
 	if cfg.Perms() == nil {
 		if cfg.RequirePermissions {
 			log.Printf("dynamic: no permission service wired; RequirePermissions is set, so every dynamic request will be DENIED")
+		} else if cfg.PermissionsEnforcedByHost {
+			log.Printf("dynamic: authorization delegated to the host (Config.PermissionsEnforcedByHost)")
 		} else {
 			log.Printf("dynamic: WARNING — authorization DISABLED for the dynamic runtime: no permission service wired. " +
 				"Every dynamic read/write will be allowed. Pass Config.Permissions, or set Config.RequirePermissions to fail closed.")
