@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `dynamic`: una columna bool con `default: true` (o numérica con default distinto de cero) se construye ahora como puntero. Como valor, GORM trata `false`/`0` como «sin valor» y lo omite del INSERT, así que crear un registro por la API con `requires_review=false` lo guardaba como `true` (el PUT sí lo guardaba). Sin valor sigue aplicando el DEFAULT de la columna; un `false`/`0` explícito se escribe tal cual.
+
 ### Added
 
 - `dynamic`: `Config.PermissionsEnforcedByHost` (bool, por omisión `false`). Un host que autoriza en su propia capa (middlewares/handlers) antes del runtime dinámico lo declara y, sin `Permissions` ni `RequirePermissions`, `New` registra una línea informativa `dynamic: authorization delegated to the host` en vez del aviso `WARNING — authorization DISABLED`. Solo cambia el log: la decisión de autorización (`Permissions` nil permite, `RequirePermissions` deniega) es idéntica, y los hosts que no ponen la marca siguen viendo la advertencia igual que antes. Aditivo (minor).
