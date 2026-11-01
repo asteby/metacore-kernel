@@ -212,6 +212,11 @@ type ColumnDef struct {
 	// keys, so the round-trip is lossless); pure UI.
 	DisplayFor string `json:"display_for,omitempty"`
 	CardRole   string `json:"card_role,omitempty"`
+	// Upload is the declarative file upload of the column (see manifest/v3
+	// Column.upload): picker accept / max_size / multiple and the sibling
+	// columns (fills) the SDK fills with width/height/size/mime measured in the
+	// browser. Pure UI; omitted = the usual single-file behaviour.
+	Upload *UploadConfig `json:"upload,omitempty"`
 	// Readonly marks a SYSTEM-GENERATED column (see manifest/v3 Column.readonly):
 	// the host projects it so form derivation excludes it from create and marks
 	// it read-only in edit. The column still renders in tables/detail. Pure UI.
@@ -417,6 +422,10 @@ type FieldDef struct {
 	// The SDK hides a readonly field from the create form and disables it in the
 	// edit form; the value still shows in read views. Pure UI metadata.
 	Readonly bool `json:"readonly,omitempty"`
+
+	// Upload mirrors ColumnDef.Upload on the form field (same JSON shape) so the
+	// SDK's file input reads its picker limits and fill targets from the field.
+	Upload *UploadConfig `json:"upload,omitempty"`
 
 	// ItemFields declares the columns of a repeatable line-items group, set on a
 	// field with Type "array" (e.g. the debit/credit lines of a journal entry).
@@ -662,3 +671,14 @@ type OptionCondition struct {
 // KV is an alias retained for backwards compatibility with older call-sites
 // that referred to the option pair as KV.
 type KV = OptionDef
+
+// UploadConfig is the served form of manifest/v3 Column.upload. Fills maps a
+// measured property (width, height, size, mime) to the sibling column key that
+// receives it; those columns are served read-only. The SDK measures, the
+// kernel does not. Same JSON keys as the manifest.
+type UploadConfig struct {
+	Accept   string            `json:"accept,omitempty"`
+	MaxSize  int64             `json:"max_size,omitempty"`
+	Multiple bool              `json:"multiple,omitempty"`
+	Fills    map[string]string `json:"fills,omitempty"`
+}

@@ -399,6 +399,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 		if err := validateRecordPresentation(md); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d]: %w", i, err)
 		}
+		if err := validateColumnUploads(md); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d]: %w", i, err)
+		}
 		if err := validateRelations(md.Relations); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
@@ -2163,6 +2166,22 @@ func (m *Manifest) validateSetup() error {
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("manifest.%s", strings.Join(errs, "; manifest."))
+	}
+	return nil
+}
+
+// validateColumnUploads is the legacy twin of the v3 check of Column.upload:
+// it delegates to v3.ValidateColumnUpload so both planes reject the same
+// manifests (widget, max_size, fills keys/targets/types).
+func validateColumnUploads(md ModelDefinition) error {
+	types := make(map[string]string, len(md.Columns))
+	for _, c := range md.Columns {
+		types[c.Name] = c.Type
+	}
+	for _, c := range md.Columns {
+		if msgs := v3.ValidateColumnUpload(c.Name, c.Widget, c.Upload, types); len(msgs) > 0 {
+			return fmt.Errorf("columns[%s].upload %s", c.Name, strings.Join(msgs, "; "))
+		}
 	}
 	return nil
 }

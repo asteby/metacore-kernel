@@ -633,6 +633,10 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// column this one is the label of, and its mobile-card role.
 				DisplayFor: c.DisplayFor,
 				CardRole:   c.CardRole,
+				// Upload rides through (pure UI, copied so the host manifest does
+				// not alias the v3 one): the declarative file upload and the
+				// sibling columns the client fills with what it measures.
+				Upload: cloneColumnUpload(c.Upload),
 				// Readonly rides through so DeriveFormFields excludes the
 				// system-generated column from create and marks it read-only in edit.
 				Readonly: c.Readonly,
@@ -2019,4 +2023,20 @@ func mapColumnGrant(g *v3.GrantBinding) *GrantDef {
 		return nil
 	}
 	return &GrantDef{Policy: g.Policy, Sets: g.Sets, ContextEq: g.ContextEq, ContextGte: g.ContextGte}
+}
+
+// cloneColumnUpload copies a v3 Column.upload (including its fills map) so the
+// projected host ColumnDef shares no memory with the parsed v3 manifest.
+func cloneColumnUpload(u *v3.ColumnUpload) *v3.ColumnUpload {
+	if u == nil {
+		return nil
+	}
+	out := *u
+	if u.Fills != nil {
+		out.Fills = make(map[string]string, len(u.Fills))
+		for k, v := range u.Fills {
+			out.Fills[k] = v
+		}
+	}
+	return &out
 }

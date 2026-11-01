@@ -99,6 +99,9 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			// the denormalized label in the detail and lays out the mobile card.
 			DisplayFor: c.DisplayFor,
 			CardRole:   c.CardRole,
+			// Upload rides through so a consumer deriving the modal from table
+			// metadata still sees the picker limits and the fill targets.
+			Upload: toUploadConfig(c.Upload),
 			// Section rides through onto the served column so a consumer that
 			// derives the modal from table metadata still sees the form grouping.
 			Section: c.Section,
@@ -365,6 +368,38 @@ func DeriveDocumentForms(def manifest.ModelDefinition) *modelbase.DocumentForms 
 
 // toVisibleWhen projects the legacy conditional-visibility carrier onto the
 // served modelbase.VisibleWhen the SDK reads. Nil stays nil (always visible).
+// toUploadConfig projects a manifest Column.upload onto the served modelbase
+// shape, copying the fills map. Nil in, nil out.
+func toUploadConfig(in *v3.ColumnUpload) *modelbase.UploadConfig {
+	if in == nil {
+		return nil
+	}
+	out := &modelbase.UploadConfig{Accept: in.Accept, MaxSize: in.MaxSize, Multiple: in.Multiple}
+	if len(in.Fills) > 0 {
+		out.Fills = make(map[string]string, len(in.Fills))
+		for k, v := range in.Fills {
+			out.Fills[k] = v
+		}
+	}
+	return out
+}
+
+// uploadFillTargets returns the set of columns that are the target of some
+// column's upload.fills: they are DERIVED (the client fills them), so the form
+// serves them read-only even when the manifest does not say readonly.
+func uploadFillTargets(def manifest.ModelDefinition) map[string]bool {
+	out := map[string]bool{}
+	for _, c := range def.Columns {
+		if c.Upload == nil {
+			continue
+		}
+		for _, target := range c.Upload.Fills {
+			out[target] = true
+		}
+	}
+	return out
+}
+
 func toVisibleWhen(in *manifest.VisibleWhenDef) *modelbase.VisibleWhen {
 	if in == nil {
 		return nil
@@ -395,6 +430,7 @@ func toModelbaseValidation(in *manifest.ValidationRule) *modelbase.ValidationRul
 // it with its own dictionary.
 func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 	out := make([]modelbase.FieldDef, 0, len(def.Columns))
+	uploadFilled := uploadFillTargets(def)
 	for _, c := range def.Columns {
 		if _, managed := managedFormColumns[c.Name]; managed {
 			continue
@@ -467,7 +503,10 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 			// create form and disables it in edit (the value is written
 			// server-side, e.g. by an addon's outbound sync). A Protected column
 			// is read-only too: the generic write gate rejects any change to it.
-			Readonly: c.Readonly || c.Protected,
+			Readonly: c.Readonly || c.Protected || uploadFilled[c.Name],
+			// Upload projects the declarative file upload (accept/max_size/multiple
+			// and fills) so the SDK's file input measures and fills the siblings.
+			Upload: toUploadConfig(c.Upload),
 			// VisibleWhen projects the conditional-visibility predicate onto the
 			// served form field so the SDK renders it only when the referenced
 			// sibling field's value matches. A hidden field never gates submit.

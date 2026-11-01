@@ -1633,6 +1633,10 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 		// Record presentation vocabulary (display_for, card_role, title_field,
 		// subtitle_field): references must resolve against the model's columns.
 		errs = append(errs, validateRecordPresentation(mi, mod, ownCols)...)
+		// Declarative upload (Column.upload): widget, max_size and fills targets.
+		errs = append(errs, validateColumnUploads(mi, mod)...)
+		// Declarative upload (Column.upload): widget, max_size and fills targets.
+		errs = append(errs, validateColumnUploads(mi, mod)...)
 		// Guided document create flow (document_forms): types, fields and lines.
 		errs = append(errs, validateDocumentForms(fmt.Sprintf("models[%d].document_forms", mi), mod.DocumentForms, ownCols, colsByModel)...)
 		// Row-locking strategy (guards): only ""/"row" are understood.
@@ -2440,6 +2444,80 @@ func serverDerivedPaymentInputs(where, key string, input map[string]string) []st
 // CardRoles is the closed set of Column.card_role values.
 var CardRoles = map[string]struct{}{
 	"title": {}, "subtitle": {}, "metric": {}, "status": {}, "hidden": {},
+}
+
+// validateColumnUploads applies ValidateColumnUpload to every column of a model
+// that declares `upload`, with the location prefix of the v3 messages.
+func validateColumnUploads(mi int, mod Model) []string {
+	var errs []string
+	types := make(map[string]string, len(mod.Columns))
+	for _, c := range mod.Columns {
+		types[c.Name] = c.Type
+	}
+	for ci, c := range mod.Columns {
+		if c.Upload == nil {
+			continue
+		}
+		where := fmt.Sprintf("models[%d].columns[%d].upload", mi, ci)
+		for _, msg := range ValidateColumnUpload(c.Name, c.Widget, c.Upload, types) {
+			errs = append(errs, where+" "+msg)
+		}
+	}
+	return errs
+}
+
+// ValidateColumnUpload checks the upload declaration of column `name` (whose
+// widget is `widget`) against the storage types of the model's columns
+// (`types`, by name). Messages carry no location: callers prefix them. Shared
+// with the legacy validator so both planes reject the same manifests.
+func ValidateColumnUpload(name, widget string, u *ColumnUpload, types map[string]string) []string {
+	if u == nil {
+		return nil
+	}
+	var errs []string
+	if _, ok := UploadWidgets[widget]; !ok {
+		errs = append(errs, fmt.Sprintf("is only allowed on columns with widget image|upload|file (column %q has widget %q)", name, widget))
+	}
+	if u.MaxSize < 0 {
+		errs = append(errs, fmt.Sprintf("max_size %d must be >= 0", u.MaxSize))
+	}
+	keys := make([]string, 0, len(u.Fills))
+	for k := range u.Fills {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	seen := map[string]string{}
+	for _, k := range keys {
+		target := u.Fills[k]
+		allowed, ok := UploadFillKeys[k]
+		if !ok {
+			errs = append(errs, fmt.Sprintf("fills key %q is not one of width|height|size|mime", k))
+			continue
+		}
+		typ, declared := types[target]
+		switch {
+		case target == name:
+			errs = append(errs, fmt.Sprintf("fills.%s %q cannot point at the column itself", k, target))
+			continue
+		case !declared:
+			errs = append(errs, fmt.Sprintf("fills.%s %q is not a declared column of the model", k, target))
+			continue
+		}
+		if prev, dup := seen[target]; dup {
+			errs = append(errs, fmt.Sprintf("fills.%s and fills.%s both target column %q", prev, k, target))
+		}
+		seen[target] = k
+		okType := false
+		for _, a := range allowed {
+			if typ == a || (a == "text" && strings.HasPrefix(typ, "varchar(")) {
+				okType = true
+			}
+		}
+		if !okType {
+			errs = append(errs, fmt.Sprintf("fills.%s %q must be a %s column (is %q)", k, target, strings.Join(allowed, "|"), typ))
+		}
+	}
+	return errs
 }
 
 // ActionPriorities is the closed set of Action.priority values ("" = auto).

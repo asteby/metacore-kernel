@@ -1582,6 +1582,37 @@
           "enum": ["title", "subtitle", "metric", "status", "hidden"],
           "description": "Role of this column in the mobile record card. Omitted = the SDK decides heuristically. Pure UI."
         },
+        "upload": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Declarative file upload of this column. Only valid when the column's widget is image, upload or file. The SDK shows the picker (accept / max_size), uploads the file, stores the returned path in this column and fills the sibling columns named in fills with values it measures in the browser; the kernel measures nothing. The fills targets are served read-only. With multiple, a child-relation panel picks several files at once and creates one row per file (consecutive position when the model has that column). Pure UI metadata.",
+          "properties": {
+            "accept": {
+              "type": "string",
+              "description": "File-picker allow-list: MIME types and/or extensions, comma separated (e.g. image/*, .pdf). Same semantics as an action upload field."
+            },
+            "max_size": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Per-file byte cap enforced by the SDK picker. 0 or omitted = no cap."
+            },
+            "multiple": {
+              "type": "boolean",
+              "description": "Allow picking several files at once; in a child-relation panel each file becomes one row."
+            },
+            "fills": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Maps a property the client measures to the NAME of another column of the same model that receives it. width/height/size must target an integer or bigint column, mime a text column; no target may be the column itself nor repeat.",
+              "properties": {
+                "width": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$", "description": "Image naturalWidth in pixels." },
+                "height": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$", "description": "Image naturalHeight in pixels." },
+                "size": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$", "description": "File size in bytes." },
+                "mime": { "type": "string", "pattern": "^[a-z][a-z0-9_]+$", "description": "File MIME type." }
+              }
+            }
+          }
+        },
         "section": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",

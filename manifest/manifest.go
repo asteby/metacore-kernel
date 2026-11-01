@@ -1842,6 +1842,12 @@ type ColumnDef struct {
 	DisplayFor string `json:"display_for,omitempty"`
 	CardRole   string `json:"card_role,omitempty"`
 
+	// Upload is the projection of v3 Column.upload: the declarative file
+	// upload (accept / max_size / multiple) and the sibling columns the client
+	// fills with what it measures (fills). Pure UI; the fill targets are served
+	// read-only by DeriveFormFields.
+	Upload *v3.ColumnUpload `json:"upload,omitempty"`
+
 	// Searchable opts the column into the model's full-text/contains search
 	// index. It is intentionally separate from Index (which is a DDL btree
 	// declaration) because UI search and DB indexing are independent

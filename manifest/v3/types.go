@@ -1284,6 +1284,17 @@ type Column struct {
 	// Pure UI metadata. Optional.
 	CardRole string `json:"card_role,omitempty"`
 
+	// Upload turns the column into a declarative FILE UPLOAD: the SDK shows a
+	// file picker (accept / max_size), uploads the file, stores the returned
+	// path in this column and fills the sibling columns named in Upload.Fills
+	// with values it measures in the browser (image width/height, file size,
+	// MIME type). Multiple lets a child-relation panel pick several files at
+	// once and create one row per file. Only valid on a column whose widget is
+	// image, upload or file. The kernel measures nothing: it validates the
+	// declaration and serves it; the fill targets are projected as read-only.
+	// Pure UI metadata. Optional.
+	Upload *ColumnUpload `json:"upload,omitempty"`
+
 	// Readonly marks a SYSTEM-GENERATED column: a value the addon/host populates
 	// (e.g. an id or number a remote API returns after a write), NOT something a
 	// user types. It is pure UI-plane metadata that the host projects onto
@@ -1367,6 +1378,39 @@ type VisibleWhen struct {
 	// CONTRACT-item-master.md §3.2.
 	Class string `json:"class,omitempty"`
 }
+
+// ColumnUpload is the declarative upload contract of a Column (Column.upload).
+// JSON tags match the host contract (manifest.UploadDef, modelbase.UploadConfig)
+// so it round-trips byte-for-byte through the served metadata.
+type ColumnUpload struct {
+	// Accept is the file-picker allow-list (MIME types and/or extensions,
+	// comma separated), same semantics as ActionField.Accept.
+	Accept string `json:"accept,omitempty"`
+	// MaxSize is the per-file byte cap enforced by the SDK picker. 0 = no cap.
+	MaxSize int64 `json:"max_size,omitempty"`
+	// Multiple lets a child-relation panel pick several files at once and
+	// create one row per file (with a consecutive `position` when the model
+	// has that column).
+	Multiple bool `json:"multiple,omitempty"`
+	// Fills maps a measured property of the picked file to the NAME of a
+	// sibling column of the same model that receives it. Closed keys: width,
+	// height, size (integer/bigint columns) and mime (text column). The client
+	// measures (naturalWidth/naturalHeight, file.size, file.type); the kernel
+	// does not.
+	Fills map[string]string `json:"fills,omitempty"`
+}
+
+// UploadFillKeys is the closed set of Column.upload.fills keys, with the column
+// storage types each one may target.
+var UploadFillKeys = map[string][]string{
+	"width":  {"integer", "bigint"},
+	"height": {"integer", "bigint"},
+	"size":   {"integer", "bigint"},
+	"mime":   {"text"},
+}
+
+// UploadWidgets is the set of Column.widget values that may carry an upload.
+var UploadWidgets = map[string]struct{}{"image": {}, "upload": {}, "file": {}}
 
 // FormLayout declares declarative GROUPING for the model's native create/edit
 // form. Mode "sections" renders the Sections as titled, collapsible blocks on a
