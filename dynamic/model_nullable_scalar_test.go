@@ -57,7 +57,13 @@ func TestColumnToField_NullableScalarFamily(t *testing.T) {
 			if err != nil {
 				t.Fatalf("columnToField(default %s): %v", tc.typ, err)
 			}
-			if withDef.Type != tc.elem {
+			// An optional bool is the exception: pointer even with a default, so
+			// a stored NULL is not rewritten as false (model_bool_nullable_test.go).
+			if tc.elem == boolType {
+				if withDef.Type.Kind() != reflect.Ptr || withDef.Type.Elem() != boolType {
+					t.Fatalf("optional %s WITH default = %v, want *bool", tc.typ, withDef.Type)
+				}
+			} else if withDef.Type != tc.elem {
 				t.Fatalf("optional %s WITH default = %v, want value %v", tc.typ, withDef.Type, tc.elem)
 			}
 

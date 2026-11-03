@@ -20,7 +20,10 @@ func TestColumnToField_NonZeroDefaultIsPointer(t *testing.T) {
 	}{
 		{"bool default true", manifest.ColumnDef{Name: "v", Type: "boolean", Default: true}, boolType},
 		{"bool default true required", manifest.ColumnDef{Name: "v", Type: "boolean", Default: true, Required: true}, boolType},
-		{"bool default false stays value", manifest.ColumnDef{Name: "v", Type: "boolean", Default: false}, nil},
+		{"bool default false required stays value", manifest.ColumnDef{Name: "v", Type: "boolean", Default: false, Required: true}, nil},
+		// Optional (nullable) bool with default false: pointer so a stored NULL
+		// survives read + Save (model_bool_nullable_test.go).
+		{"bool default false optional is pointer", manifest.ColumnDef{Name: "v", Type: "boolean", Default: false}, boolType},
 		{"numeric default 5", manifest.ColumnDef{Name: "v", Type: "numeric", Default: 5}, float64Type},
 		{"numeric default 0 stays value", manifest.ColumnDef{Name: "v", Type: "numeric", Default: 0}, nil},
 		{"bool required no default stays value", manifest.ColumnDef{Name: "v", Type: "boolean", Required: true}, nil},

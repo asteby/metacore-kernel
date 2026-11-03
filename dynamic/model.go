@@ -235,6 +235,22 @@ func columnToField(c manifest.ColumnDef) (reflect.StructField, error) {
 			goType = reflect.PtrTo(goType)
 		}
 	}
+	// An OPTIONAL bool is a pointer EVEN WHEN it declares a Default. The column
+	// is created nullable (only Required adds NOT NULL), so NULL is a value the
+	// row can hold — an addon may store it on purpose as a third state
+	// (mp_payments.sandbox: NULL = "mode unknown"). As a value type a NULL loads
+	// as false, reads back as `false` in the JSON, and the generic Update
+	// (First + Save rewrites every column) persists that false on the next edit
+	// or stage move of the row — so an unknown-mode payment silently became a
+	// real one. As *bool: NULL loads as nil, serializes as null and Save writes
+	// it back as NULL; an explicit true/false is written verbatim; a JSON null
+	// in the payload clears the column; an unset field on INSERT is nil, which
+	// GORM omits so the column DEFAULT still applies (same as the value form,
+	// where false was the zero GORM also omitted). Required bools keep the value
+	// form (NOT NULL), unless the non-zero-default rule below applies.
+	if goType == boolType && !c.Required {
+		goType = reflect.PtrTo(goType)
+	}
 	// The mirror case: a bool/numeric whose declared Default is NOT the Go zero
 	// value (bool default true, numeric default 5). As a value, GORM treats the
 	// zero value (false / 0) as "unset" and OMITS it from the INSERT, so the

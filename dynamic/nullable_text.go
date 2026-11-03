@@ -135,3 +135,57 @@ func omitUnsentNullableText(ctx context.Context, db *gorm.DB, table string, inst
 	}
 	return db
 }
+
+// nilScalarIntoNotNullFields lists the struct field names of `instance` that are
+// a scalar POINTER (*bool, *float64, *time.Time — the nullable forms columnToField
+// builds), are nil right now, and map to a column the database declares NOT NULL.
+//
+// A manifest column that is not `required` is built as a pointer because the
+// kernel creates it nullable, but an addon migration may still have tightened it
+// to NOT NULL. A row read from such a column is never nil, so nil only comes from
+// a JSON null in the payload: written as-is the statement fails with 23502. The
+// value form used to ignore that null (encoding/json leaves a non-pointer
+// untouched), so omitting the field keeps that contract: an UPDATE leaves the
+// stored value, an INSERT lets the column DEFAULT apply. Nullable columns are not
+// listed — there a nil is a real NULL and is written.
+func nilScalarIntoNotNullFields(ctx context.Context, db *gorm.DB, table string, instance any) []string {
+	stmt := &gorm.Statement{DB: db}
+	if err := stmt.Parse(instance); err != nil || stmt.Schema == nil {
+		return nil
+	}
+	rv := reflect.ValueOf(instance)
+	for rv.Kind() == reflect.Ptr {
+		if rv.IsNil() {
+			return nil
+		}
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Struct {
+		return nil
+	}
+	var nullable map[string]bool
+	var omit []string
+	for _, f := range stmt.Schema.Fields {
+		if f.DBName == "" || f.PrimaryKey || !f.Creatable || f.FieldType.Kind() != reflect.Ptr {
+			continue
+		}
+		switch f.FieldType.Elem() {
+		case boolType, float64Type, timeType:
+		default:
+			continue
+		}
+		fv := rv.FieldByIndex(f.StructField.Index)
+		if !fv.IsNil() {
+			continue
+		}
+		if nullable == nil {
+			if nullable = nullableColumns(db.Session(&gorm.Session{NewDB: true, Context: ctx}), table); nullable == nil {
+				return nil
+			}
+		}
+		if n, known := nullable[f.DBName]; known && !n {
+			omit = append(omit, f.DBName)
+		}
+	}
+	return omit
+}
