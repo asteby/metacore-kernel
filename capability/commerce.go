@@ -1294,7 +1294,8 @@ func commerceContractList() []Contract {
 		},
 		{
 			Key: CommerceShippingLabel, Kind: KindQuery, Cardinality: One,
-			Doc: "buy a label for a quoted rate",
+			Doc:    "buy a label for a quoted rate",
+			Errors: ShippingLabelErrors,
 			Input: schema(
 				req("rate_id", TypeString, "id of a commerce.shipping.rates rate from this provider"),
 				req("order_ref", TypeString, ""),
