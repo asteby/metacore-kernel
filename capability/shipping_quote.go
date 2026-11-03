@@ -58,7 +58,10 @@ var (
 	//   - insufficient_credits / insufficient_balance: the carrier account has
 	//     no prepaid credits / balance (carriers name it either way);
 	//   - carta_porte_missing, origin_not_configured, not_configured: a
-	//     configuration gap of the store or the carrier account.
+	//     configuration gap of the store or the carrier account;
+	//   - no_coverage: the carrier does not serve that route;
+	//   - environment_mismatch: the payment and the carrier connector are in
+	//     different environments (test vs production), so nothing is bought.
 	//
 	// A provider MUST NOT report one of them once a shipment may exist (a
 	// failure reading back a shipment it already created, a timeout, a 5xx):
@@ -70,6 +73,7 @@ var (
 		"invalid_input", "address_incomplete", "rejected",
 		"insufficient_credits", "insufficient_balance",
 		"carta_porte_missing", "origin_not_configured", "not_configured",
+		"no_coverage", "environment_mismatch",
 	}
 
 	// ShippingOriginSchema is one candidate ship-from location: an Address plus

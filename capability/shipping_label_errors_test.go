@@ -67,7 +67,7 @@ func TestShippingLabelDoubtfulAnswersStayGeneric(t *testing.T) {
 	for _, code := range []string{
 		"provider_unavailable", "http_error", "in_progress", "rate_limited", "bad_response",
 		"not_found", "auth_failed", "db_error", "label_failed", "label_unconfirmed",
-		"label_incomplete", "indeterminate", "environment_mismatch", "quota_exceeded",
+		"label_incomplete", "indeterminate", "label_ambiguous", "order_conflict", "connector_unconfigured", "quota_exceeded",
 	} {
 		r := runLabel(t, c, failWith(NewCodedError(code, "detalle")))
 		want := "capability commerce.shipping.label: provider skydropx: " + code + ": detalle"
