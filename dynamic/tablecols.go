@@ -185,11 +185,13 @@ func (s *Service) tableDB(ctx context.Context, db *gorm.DB, table string, instan
 }
 
 // writeDB is tableDB for INSERT/UPDATE handles: it also omits the unsent
-// nullable text fields (omitUnsentNullableText) and every audit column the table
+// nullable text fields (omitUnsentNullableText), the nil scalar pointers whose
+// column is NOT NULL (nilScalarIntoNotNullFields) and every audit column the table
 // lacks, so the statement never names a column that is not there.
 func (s *Service) writeDB(ctx context.Context, db *gorm.DB, table string, instance any, input map[string]any) *gorm.DB {
 	q := s.tableDB(ctx, db, table, instance)
 	omit := unsentNullableStringFields(ctx, q, table, instance, input)
+	omit = append(omit, nilScalarIntoNotNullFields(ctx, q, table, instance)...)
 	for _, c := range s.absentAuditColumns(ctx, table, instance) {
 		omit = append(omit, c)
 	}
