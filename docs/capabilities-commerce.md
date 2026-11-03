@@ -1147,6 +1147,8 @@ Salida:
 
 buy a label for a quoted rate. Consulta · cardinalidad **one** · tiempo límite por proveedor **30s** · mutante (idempotente).
 
+Códigos de error del proveedor: `invalid_input`, `address_incomplete`, `rejected`, `insufficient_credits`, `insufficient_balance`, `carta_porte_missing`, `origin_not_configured`, `not_configured`, `no_coverage`, `environment_mismatch` (`ShippingLabelErrors`). Solo para un rechazo **antes** de crear nada en la paquetería (no se compró nada; repetir con la misma entrada no compra). Una respuesta dudosa (falla al releer un envío ya creado, 5xx, tiempo agotado) usa cualquier otro código y llega como `provider_error`, para que el consumidor reintente con la misma `idempotency_key`.
+
 Entrada:
 
 | Campo | Tipo | Req. | Notas |

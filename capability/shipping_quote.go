@@ -46,6 +46,36 @@ var (
 	// ShippingPurposes is the direction of a label.
 	ShippingPurposes = []string{"outbound", "return"}
 
+	// ShippingLabelErrors are the codes a commerce.shipping.label provider
+	// reports with NewCodedError when it refused BEFORE anything was created
+	// at the carrier: nothing was bought, and asking again with the same input
+	// cannot buy. They reach the consumer as Result.ErrorCode() so it stops
+	// instead of retrying a definitive refusal:
+	//
+	//   - invalid_input: the request itself is unusable (no parcels, bad rate_id…);
+	//   - address_incomplete: the sale's address lacks a field the carrier demands;
+	//   - rejected: the carrier refused the purchase (a clean 4xx);
+	//   - insufficient_credits / insufficient_balance: the carrier account has
+	//     no prepaid credits / balance (carriers name it either way);
+	//   - carta_porte_missing, origin_not_configured, not_configured: a
+	//     configuration gap of the store or the carrier account;
+	//   - no_coverage: the carrier does not serve that route;
+	//   - environment_mismatch: the payment and the carrier connector are in
+	//     different environments (test vs production), so nothing is bought.
+	//
+	// A provider MUST NOT report one of them once a shipment may exist (a
+	// failure reading back a shipment it already created, a timeout, a 5xx):
+	// that answer is doubtful and goes out with any other code, which the
+	// kernel reports as provider_error, so the consumer retries with the SAME
+	// idempotency_key. Append only; a provider that never reports these codes
+	// is unaffected.
+	ShippingLabelErrors = []string{
+		"invalid_input", "address_incomplete", "rejected",
+		"insufficient_credits", "insufficient_balance",
+		"carta_porte_missing", "origin_not_configured", "not_configured",
+		"no_coverage", "environment_mismatch",
+	}
+
 	// ShippingOriginSchema is one candidate ship-from location: an Address plus
 	// the location id in the host (multi-origin quote).
 	ShippingOriginSchema = &Schema{Fields: append([]Field{
