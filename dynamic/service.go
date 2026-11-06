@@ -50,7 +50,8 @@ type Config struct {
 	// request instead of allowing it. Without this, `perms == nil` fails OPEN:
 	// the safest default a host can pick is to fail closed, so a wiring
 	// mistake surfaces as "forbidden" rather than as silent full access.
-	// Hosts that deliberately authorize elsewhere leave it false.
+	// Desde la fase 1 de seguridad, sin Permissions se deniega aunque esto sea
+	// false; ver AllowUnconfiguredPermissions / PermissionsEnforcedByHost.
 	RequirePermissions bool
 
 	// PermissionsEnforcedByHost declares that the host authorizes every
@@ -58,9 +59,9 @@ type Config struct {
 	// dynamic runtime. It only changes the startup log: with no Permissions
 	// service and RequirePermissions false, New logs a one-line informational
 	// "authorization delegated to the host" instead of the "authorization
-	// DISABLED" warning. It does NOT change any authorization decision — a
-	// nil Permissions still allows, and RequirePermissions still denies.
-	PermissionsEnforcedByHost bool // desde la seguridad fase 1 tambien PERMITE sin Permissions
+	// DISABLED" warning. Sin Permissions, declararlo PERMITE (el host
+	// asume la autorizacion); RequirePermissions sigue denegando.
+	PermissionsEnforcedByHost bool
 
 	// AllowUnconfiguredPermissions es la salida EXPLICITA al comportamiento
 	// historico (fail-open): sin Permissions, el runtime permite todo. Por
