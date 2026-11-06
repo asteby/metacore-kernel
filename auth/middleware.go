@@ -151,3 +151,19 @@ func GetEmail(c fiber.Ctx) string {
 	}
 	return ""
 }
+
+// HasAnyRole reporta si el rol del JWT de la peticion es alguno de roles
+// (sin distinguir mayusculas). Pensado para autorizadores de handlers
+// sensibles (instalar addons): auth.HasAnyRole(c, "admin", "owner").
+func HasAnyRole(c fiber.Ctx, roles ...string) bool {
+	role := strings.TrimSpace(GetRole(c))
+	if role == "" {
+		return false
+	}
+	for _, r := range roles {
+		if strings.EqualFold(role, strings.TrimSpace(r)) {
+			return true
+		}
+	}
+	return false
+}
