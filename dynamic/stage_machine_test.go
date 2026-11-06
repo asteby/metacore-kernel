@@ -65,6 +65,7 @@ func setupStageFixture(t *testing.T, hooks []manifest.TransitionHookDef) *stageF
 	wasm := &stubDispatcher{}
 	meta := metadata.New(metadata.Config{CacheTTL: -1})
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: meta,
 		StageMachineResolver: func(_ context.Context, model string) (*StageMachine, bool) {

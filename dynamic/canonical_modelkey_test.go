@@ -36,6 +36,7 @@ func TestCanonicalEventUsesModelKeyNotTable(t *testing.T) {
 	})
 
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:               db,
 		Metadata:         meta,
 		Bus:              bus,

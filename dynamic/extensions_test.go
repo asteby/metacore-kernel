@@ -55,6 +55,7 @@ func setupExtensionService(t *testing.T) (*Service, *gorm.DB) {
 	}
 	modelbase.Register("test_products", func() modelbase.ModelDefiner { return &TestProduct{} })
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		// SQLite has no ILIKE.

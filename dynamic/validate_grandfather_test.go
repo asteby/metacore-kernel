@@ -21,6 +21,7 @@ func TestValidate_UnchangedLegacyValueIsGrandfatheredOnUpdate(t *testing.T) {
 	db := setupValidationDB(t)
 	modelbase.Register("val_items", func() modelbase.ModelDefiner { return &ValItem{} })
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		ValidationSchemaResolver: func(_ context.Context, model string) ([]manifest.ColumnDef, bool) {

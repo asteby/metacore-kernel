@@ -62,6 +62,7 @@ func TestList_SearchReachesThroughSearchRefs(t *testing.T) {
 	modelbase.Register("test_ref_customers", func() modelbase.ModelDefiner { return &TestRefCustomer{} })
 	modelbase.Register("test_ref_orders", func() modelbase.ModelDefiner { return &TestRefOrder{} })
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		SearchMatchClause: func(col, q string) (string, any) {

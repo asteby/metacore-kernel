@@ -73,6 +73,7 @@ func setupActionFixture(t *testing.T) *actionFixture {
 
 	meta := metadata.New(metadata.Config{CacheTTL: -1})
 	fx.svc = New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: meta,
 		ActionResolver: func(_ context.Context, model, key string) (*manifest.ActionDef, bool) {
@@ -374,7 +375,7 @@ func TestAction_501_NoActionResolver(t *testing.T) {
 	db := setupTestDB(t)
 	modelbase.Register("test_products", func() modelbase.ModelDefiner { return &TestProduct{} })
 	meta := metadata.New(metadata.Config{CacheTTL: -1})
-	svc := New(Config{DB: db, Metadata: meta}) // no ActionResolver wired
+	svc := New(Config{AllowUnconfiguredPermissions: true, DB: db, Metadata: meta}) // no ActionResolver wired
 	user := newUser(uuid.New())
 	created := createProduct(t, svc, user, "X", 1)
 	id, _ := uuid.Parse(created["id"].(string))

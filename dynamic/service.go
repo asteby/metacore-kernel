@@ -60,7 +60,15 @@ type Config struct {
 	// "authorization delegated to the host" instead of the "authorization
 	// DISABLED" warning. It does NOT change any authorization decision — a
 	// nil Permissions still allows, and RequirePermissions still denies.
-	PermissionsEnforcedByHost bool
+	PermissionsEnforcedByHost bool // desde la seguridad fase 1 tambien PERMITE sin Permissions
+
+	// AllowUnconfiguredPermissions es la salida EXPLICITA al comportamiento
+	// historico (fail-open): sin Permissions, el runtime permite todo. Por
+	// omision, sin Permissions el runtime DENIEGA (fail-closed), salvo que el
+	// host declare PermissionsEnforcedByHost (autoriza en su propia capa) o
+	// ponga esta opcion. Usarla en produccion sin otra capa de autorizacion
+	// deja el CRUD dinamico abierto a cualquier usuario autenticado.
+	AllowUnconfiguredPermissions bool
 
 	Hooks  *HookRegistry // optional
 	Scoper TenantScoper  // optional — default OrganizationScoper
@@ -491,9 +499,12 @@ func New(cfg Config) *Service {
 			log.Printf("dynamic: no permission service wired; RequirePermissions is set, so every dynamic request will be DENIED")
 		} else if cfg.PermissionsEnforcedByHost {
 			log.Printf("dynamic: authorization delegated to the host (Config.PermissionsEnforcedByHost)")
+		} else if cfg.AllowUnconfiguredPermissions {
+			log.Printf("dynamic: WARNING — authorization DISABLED for the dynamic runtime (Config.AllowUnconfiguredPermissions): no permission service wired. " +
+				"Every dynamic read/write will be allowed. Pass Config.Permissions to enforce.")
 		} else {
-			log.Printf("dynamic: WARNING — authorization DISABLED for the dynamic runtime: no permission service wired. " +
-				"Every dynamic read/write will be allowed. Pass Config.Permissions, or set Config.RequirePermissions to fail closed.")
+			log.Printf("dynamic: no permission service wired; every dynamic request will be DENIED (fail-closed). " +
+				"Pass Config.Permissions, or set Config.PermissionsEnforcedByHost / Config.AllowUnconfiguredPermissions to opt out explicitly.")
 		}
 	}
 
@@ -510,7 +521,7 @@ func New(cfg Config) *Service {
 		db:                cfg.DB,
 		meta:              cfg.Metadata,
 		perms:             cfg.Perms(),
-		requirePerms:      cfg.RequirePermissions,
+		requirePerms:      cfg.RequirePermissions || !(cfg.PermissionsEnforcedByHost || cfg.AllowUnconfiguredPermissions),
 		requireTenant:     cfg.RequireTenantScope,
 		hooks:             cfg.Hooks,
 		scope:             cfg.Scoper,

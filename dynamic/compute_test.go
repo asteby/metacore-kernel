@@ -563,7 +563,7 @@ func TestServiceCreate_FormulaIntoIntegerColumn(t *testing.T) {
 	modelbase.Register("test_cents_lines", func() modelbase.ModelDefiner { return &TestCentsLine{} })
 	reg := NewHookRegistry()
 	RegisterComputeHooks(reg, centsManifest())
-	svc := New(Config{DB: db, Metadata: metadata.New(metadata.Config{CacheTTL: -1}), Hooks: reg})
+	svc := New(Config{AllowUnconfiguredPermissions: true, DB: db, Metadata: metadata.New(metadata.Config{CacheTTL: -1}), Hooks: reg})
 
 	user := newUser(uuid.New())
 	out, err := svc.Create(context.Background(), "test_cents_lines", user, map[string]any{

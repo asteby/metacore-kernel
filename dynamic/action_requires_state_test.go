@@ -72,6 +72,7 @@ func setupOrderFixture(t *testing.T) (*actionFixture, uuid.UUID) {
 
 	meta := metadata.New(metadata.Config{CacheTTL: -1})
 	fx.svc = New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: meta,
 		ActionResolver: func(_ context.Context, model, key string) (*manifest.ActionDef, bool) {

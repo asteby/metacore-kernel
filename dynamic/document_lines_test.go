@@ -208,6 +208,7 @@ func newDocLinesService(t *testing.T, withResolver bool, hooks ...*HookRegistry)
 		modelbase.Register(name, func() modelbase.ModelDefiner { return dlMeta{table: table} })
 	}
 	cfg := Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		ModelResolver: func(_ context.Context, name string) (any, bool) {

@@ -37,6 +37,7 @@ func sequenceService(t *testing.T, db *gorm.DB, ms *ModelSequences) *Service {
 	modelbase.Register("test_products", func() modelbase.ModelDefiner { return &TestProduct{} })
 	meta := metadata.New(metadata.Config{CacheTTL: -1})
 	return New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: meta,
 		SequenceResolver: func(_ context.Context, model string) (*ModelSequences, bool) {
@@ -259,6 +260,7 @@ func TestSequences_AliasesShareCanonicalCounter(t *testing.T) {
 	ms.Model = "TestProduct"
 	modelbase.Register("test_products", func() modelbase.ModelDefiner { return &TestProduct{} })
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		SequenceResolver: func(_ context.Context, model string) (*ModelSequences, bool) {

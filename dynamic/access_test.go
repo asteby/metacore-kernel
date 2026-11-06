@@ -170,6 +170,7 @@ func newAccFixture(t *testing.T, db *gorm.DB, tables map[string]string, cfg func
 	t.Helper()
 	registerAccModels()
 	c := Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		TableNameResolver: func(_ context.Context, model string) (string, bool) {

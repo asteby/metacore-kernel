@@ -94,7 +94,7 @@ func setupService(t *testing.T, db *gorm.DB) *Service {
 	t.Helper()
 	modelbase.Register("test_products", func() modelbase.ModelDefiner { return &TestProduct{} })
 	meta := metadata.New(metadata.Config{CacheTTL: -1})
-	return New(Config{DB: db, Metadata: meta})
+	return New(Config{AllowUnconfiguredPermissions: true, DB: db, Metadata: meta})
 }
 
 func newUser(orgID uuid.UUID) *fakeUser {
@@ -331,6 +331,7 @@ func TestEvents_FanOut(t *testing.T) {
 	subscribe("deleted")
 
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:               db,
 		Metadata:         meta,
 		Bus:              bus,
@@ -475,7 +476,7 @@ func TestEvents_CorrelationIDPropagation(t *testing.T) {
 		return nil
 	})
 
-	svc := New(Config{DB: db, Metadata: meta, Bus: bus})
+	svc := New(Config{AllowUnconfiguredPermissions: true, DB: db, Metadata: meta, Bus: bus})
 	user := newUser(uuid.New())
 
 	const wantCorrID = "req-abc-123"
@@ -512,7 +513,7 @@ func TestEvents_NoCorrelationID(t *testing.T) {
 		return nil
 	})
 
-	svc := New(Config{DB: db, Metadata: meta, Bus: bus})
+	svc := New(Config{AllowUnconfiguredPermissions: true, DB: db, Metadata: meta, Bus: bus})
 	user := newUser(uuid.New())
 
 	if _, err := svc.Create(context.Background(), "test_products", user, map[string]any{"name": "No corr", "price": 2.0}); err != nil {
@@ -549,7 +550,7 @@ func TestEvents_BackwardCompatFields(t *testing.T) {
 		return nil
 	})
 
-	svc := New(Config{DB: db, Metadata: meta, Bus: bus})
+	svc := New(Config{AllowUnconfiguredPermissions: true, DB: db, Metadata: meta, Bus: bus})
 	user := newUser(uuid.New())
 	ctx := context.Background()
 
@@ -639,7 +640,7 @@ func TestModelResolver_CustomResolverInvoked(t *testing.T) {
 		return inst, true
 	}
 
-	svc := New(Config{DB: db, Metadata: meta, ModelResolver: resolver})
+	svc := New(Config{AllowUnconfiguredPermissions: true, DB: db, Metadata: meta, ModelResolver: resolver})
 	user := newUser(uuid.New())
 
 	out, err := svc.Create(context.Background(), "test_products", user, map[string]any{
@@ -706,7 +707,7 @@ func TestModelResolver_ReturnsFalseYieldsNotFound(t *testing.T) {
 	meta := metadata.New(metadata.Config{CacheTTL: -1})
 
 	resolver := func(_ context.Context, _ string) (any, bool) { return nil, false }
-	svc := New(Config{DB: db, Metadata: meta, ModelResolver: resolver})
+	svc := New(Config{AllowUnconfiguredPermissions: true, DB: db, Metadata: meta, ModelResolver: resolver})
 	user := newUser(uuid.New())
 
 	_, _, err := svc.List(context.Background(), "test_products", user, query.Params{Page: 1, PerPage: 10})
@@ -729,7 +730,7 @@ func TestEvents_DefaultAddonKeyKernel(t *testing.T) {
 		return nil
 	})
 
-	svc := New(Config{DB: db, Metadata: meta, Bus: bus}) // no AddonKeyForModel
+	svc := New(Config{AllowUnconfiguredPermissions: true, DB: db, Metadata: meta, Bus: bus}) // no AddonKeyForModel
 	user := newUser(uuid.New())
 
 	createProduct(t, svc, user, "X", 1)
@@ -809,6 +810,7 @@ func TestTableNameResolver_MethodlessModel(t *testing.T) {
 	}
 
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:                db,
 		Metadata:          meta,
 		ModelResolver:     resolver,

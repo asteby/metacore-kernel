@@ -51,6 +51,7 @@ func TestUnsentNullableText_StaysNull(t *testing.T) {
 		{Name: "Note", Type: reflect.TypeOf(""), Tag: `json:"note" gorm:"column:note;type:text"`},
 	})
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		ModelResolver: func(_ context.Context, name string) (any, bool) {

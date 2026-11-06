@@ -66,7 +66,7 @@ func TestApp_AccessPolicyWithRoleResolver(t *testing.T) {
 			}
 			return nil
 		},
-		ConfigureDynamic: func(c *dynamic.Config) { configured = c.Metadata != nil },
+		ConfigureDynamic: func(c *dynamic.Config) { configured = c.Metadata != nil; c.AllowUnconfiguredPermissions = true },
 	})
 	if !configured {
 		t.Fatal("ConfigureDynamic must receive the built dynamic.Config")

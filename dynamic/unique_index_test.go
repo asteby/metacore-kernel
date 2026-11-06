@@ -25,6 +25,7 @@ func pgUniqueSetup(t *testing.T) (*Service, *gorm.DB, string) {
 	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS " + table) })
 	modelbase.Register("rx_registers", func() modelbase.ModelDefiner { return &RxRegister{} })
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		TableNameResolver: func(_ context.Context, model string) (string, bool) {

@@ -135,6 +135,7 @@ func newCRFixture(t *testing.T, cfg func(*Config)) *crFixture {
 	}, nil)
 	bus := &capturingBus{}
 	c := Config{
+		AllowUnconfiguredPermissions: true,
 		DB:                 db,
 		Metadata:           metadata.New(metadata.Config{CacheTTL: -1}),
 		Permissions:        permission.New(permission.Config{Store: store}),
@@ -553,14 +554,14 @@ func TestColumnRead_MaskDecisions(t *testing.T) {
 	})
 	t.Run("no permission service fails open by default", func(t *testing.T) {
 		registerCRModels()
-		svc := New(Config{DB: setupTestDB(t), Metadata: metadata.New(metadata.Config{CacheTTL: -1})})
+		svc := New(Config{AllowUnconfiguredPermissions: true, DB: setupTestDB(t), Metadata: metadata.New(metadata.Config{CacheTTL: -1})})
 		if m := svc.maskOf(ctx, "cr_products", &fakeUser{id: uuid.New(), orgID: uuid.New()}); !m.Empty() {
 			t.Fatalf("mask: %v", m.Columns())
 		}
 	})
 	t.Run("RequirePermissions without a service hides gated columns", func(t *testing.T) {
 		registerCRModels()
-		svc := New(Config{DB: setupTestDB(t), Metadata: metadata.New(metadata.Config{CacheTTL: -1}), RequirePermissions: true})
+		svc := New(Config{AllowUnconfiguredPermissions: true, DB: setupTestDB(t), Metadata: metadata.New(metadata.Config{CacheTTL: -1}), RequirePermissions: true})
 		m := svc.maskOf(ctx, "cr_products", &fakeUser{id: uuid.New(), orgID: uuid.New()})
 		if !m.Denied("cost") || m.Denied("price") {
 			t.Fatalf("mask: %v", m.Columns())

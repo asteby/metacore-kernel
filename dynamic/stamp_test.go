@@ -174,6 +174,7 @@ func TestServiceCreateRunsStampPhase(t *testing.T) {
 		nil,
 	)
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB: db, Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		StampResolver: func(_ context.Context, model string) (*ModelStamps, bool) {
 			return st, model == "test_products"
@@ -468,6 +469,7 @@ func TestServiceUpdateRunsStampPhase(t *testing.T) {
 		nil,
 	)
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB: db, Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		StampResolver: func(_ context.Context, model string) (*ModelStamps, bool) { return st, model == "test_products" },
 	})

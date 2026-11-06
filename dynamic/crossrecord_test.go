@@ -67,6 +67,7 @@ func rxSetup(t *testing.T) (*Service, *gorm.DB, *fakeUser, string, string, strin
 	modelbase.Register("rx_orders", func() modelbase.ModelDefiner { return &RxOrder{} })
 	modelbase.Register("rx_payments", func() modelbase.ModelDefiner { return &RxPayment{} })
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		ConstraintResolver: func(_ context.Context, model string) (*ModelConstraints, bool) {
@@ -346,6 +347,7 @@ func rxUniqueSetup(t *testing.T) (*Service, *gorm.DB, *fakeUser, string, string)
 		legacy, org.String(), branch, uuid.NewString(), org.String(), branch)
 	modelbase.Register("rx_registers", func() modelbase.ModelDefiner { return &RxRegister{} })
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		ConstraintResolver: func(_ context.Context, model string) (*ModelConstraints, bool) {

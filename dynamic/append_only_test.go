@@ -19,6 +19,7 @@ func appendOnlyService(t *testing.T, models ...string) *Service {
 		set[m] = true
 	}
 	return New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:                 setupTestDB(t),
 		Metadata:           metadata.New(metadata.Config{CacheTTL: -1}),
 		AppendOnlyResolver: func(_ context.Context, model string) bool { return set[model] },

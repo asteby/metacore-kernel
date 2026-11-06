@@ -35,6 +35,7 @@ func newLegacyAuditService(t *testing.T, createSQL string) (*Service, *gorm.DB, 
 		t.Fatal(err)
 	}
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		ModelResolver: func(_ context.Context, name string) (any, bool) {

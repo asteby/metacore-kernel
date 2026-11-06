@@ -211,7 +211,7 @@ func setupBrandService(t *testing.T, db *gorm.DB, fd FileDeleter) *Service {
 	t.Helper()
 	modelbase.Register("test_brands", func() modelbase.ModelDefiner { return &TestBrand{} })
 	meta := metadata.New(metadata.Config{CacheTTL: -1})
-	return New(Config{DB: db, Metadata: meta, FileDeleter: fd})
+	return New(Config{AllowUnconfiguredPermissions: true, DB: db, Metadata: meta, FileDeleter: fd})
 }
 
 func TestServiceDelete_CallsFileDeleter(t *testing.T) {
@@ -250,7 +250,7 @@ func TestServiceDelete_NoFileColumnsNoCall(t *testing.T) {
 	// test_products has no file columns.
 	modelbase.Register("test_products", func() modelbase.ModelDefiner { return &TestProduct{} })
 	meta := metadata.New(metadata.Config{CacheTTL: -1})
-	svc := New(Config{DB: db, Metadata: meta, FileDeleter: rec.deleter})
+	svc := New(Config{AllowUnconfiguredPermissions: true, DB: db, Metadata: meta, FileDeleter: rec.deleter})
 	user := newUser(uuid.New())
 
 	created := createProduct(t, svc, user, "Widget", 1)
