@@ -28,9 +28,18 @@ type MiddlewareConfig struct {
 	// Unauthorized lets apps customize the 401 response. When nil the
 	// middleware responds with {"success": false, "message": "..."}.
 	Unauthorized func(c fiber.Ctx, err error) error
+	// AllowQueryToken habilita leer el JWT de `?token=`. Por defecto false:
+	// los tokens en la URL terminan en logs, historial y Referer. Actívalo
+	// solo para rutas que no pueden enviar cabeceras (WebSocket del navegador,
+	// descargas), idealmente combinado con Skipper/rutas dedicadas.
+	AllowQueryToken bool
+	// ValidateClaims es un hook OPCIONAL para que el host valide el token
+	// contra su BD (rol actual, usuario activo, token_valid_after…). Si
+	// devuelve error, la petición se rechaza con 401. nil = sin chequeo extra.
+	ValidateClaims func(c fiber.Ctx, claims *Claims) error
 }
 
-// Middleware returns a Fiber handler that validates a bearer (or ?token=)
+// Middleware returns a Fiber handler that validates a bearer (or ?token= when AllowQueryToken)
 // JWT and, on success, stashes the claims plus convenience fields in
 // c.Locals. It intentionally does NOT touch X-Branch-ID — that is
 // app-specific and belongs in a chained middleware.
@@ -45,7 +54,7 @@ func Middleware(config MiddlewareConfig) fiber.Handler {
 			return c.Next()
 		}
 
-		token := extractToken(c)
+		token := extractToken(c, config.AllowQueryToken)
 		if token == "" {
 			return unauthorized(c, ErrMissingToken)
 		}
@@ -53,6 +62,12 @@ func Middleware(config MiddlewareConfig) fiber.Handler {
 		claims, err := ValidateToken(token, config.Secret)
 		if err != nil {
 			return unauthorized(c, err)
+		}
+
+		if config.ValidateClaims != nil {
+			if err := config.ValidateClaims(c, claims); err != nil {
+				return unauthorized(c, ErrInvalidToken)
+			}
 		}
 
 		c.Locals(LocalClaims, claims)
@@ -67,7 +82,7 @@ func Middleware(config MiddlewareConfig) fiber.Handler {
 
 // extractToken pulls a token from `Authorization: Bearer <token>` or the
 // `?token=` query parameter (useful for browser file downloads / websockets).
-func extractToken(c fiber.Ctx) string {
+func extractToken(c fiber.Ctx, allowQuery bool) string {
 	if h := c.Get(fiber.HeaderAuthorization); h != "" {
 		parts := strings.SplitN(h, " ", 2)
 		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
@@ -76,7 +91,10 @@ func extractToken(c fiber.Ctx) string {
 		// Some clients send the raw token; accept that too rather than 401.
 		return strings.TrimSpace(h)
 	}
-	return c.Query("token")
+	if allowQuery {
+		return c.Query("token")
+	}
+	return ""
 }
 
 func defaultUnauthorized(c fiber.Ctx, err error) error {

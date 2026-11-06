@@ -81,9 +81,24 @@ func TestMiddleware_ValidToken(t *testing.T) {
 	}
 }
 
-func TestMiddleware_QueryParamToken(t *testing.T) {
+func TestMiddleware_QueryParamToken_DisabledByDefault(t *testing.T) {
 	secret := []byte("s2")
 	app := newTestApp(secret)
+	token, _, _ := GenerateToken(Claims{UserID: uuid.New()}, secret, time.Hour)
+	resp, err := app.Test(httptest.NewRequest("GET", "/protected?token="+token, nil))
+	if err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+	if resp.StatusCode != 401 {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestMiddleware_QueryParamToken(t *testing.T) {
+	secret := []byte("s2")
+	app := fiber.New()
+	app.Use(Middleware(MiddlewareConfig{Secret: secret, AllowQueryToken: true}))
+	app.Get("/protected", func(c fiber.Ctx) error { return c.SendString("ok") })
 
 	token, _, err := GenerateToken(Claims{UserID: uuid.New()}, secret, time.Hour)
 	if err != nil {
