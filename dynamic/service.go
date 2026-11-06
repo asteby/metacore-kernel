@@ -71,6 +71,13 @@ type Config struct {
 	// deja el CRUD dinamico abierto a cualquier usuario autenticado.
 	AllowUnconfiguredPermissions bool
 
+	// UpdateDenyFields lista campos que Update descarta del body ademas de los
+	// siempre protegidos (id, organization_id y las columnas de auditoria).
+	// La clave es el nombre del modelo; "*" aplica a todos. Util para modelos
+	// de usuario: {"users": {"role", "email", "password_hash"}} evita que un
+	// PATCH escale privilegios por mass assignment.
+	UpdateDenyFields map[string][]string
+
 	Hooks  *HookRegistry // optional
 	Scoper TenantScoper  // optional — default OrganizationScoper
 
@@ -426,6 +433,7 @@ type Service struct {
 	listSearchClause  SearchMatchClause // explicit-only; threaded into List's builder search
 	modelResolver     ModelResolver
 	requirePerms      bool
+	updateDeny        map[string][]string
 	requireTenant     bool
 	tableNameResolver TableNameResolver
 	bus               Publisher
@@ -522,6 +530,7 @@ func New(cfg Config) *Service {
 		db:                cfg.DB,
 		meta:              cfg.Metadata,
 		perms:             cfg.Perms(),
+		updateDeny:        cfg.UpdateDenyFields,
 		requirePerms:      cfg.RequirePermissions || !(cfg.PermissionsEnforcedByHost || cfg.AllowUnconfiguredPermissions),
 		requireTenant:     cfg.RequireTenantScope,
 		hooks:             cfg.Hooks,
@@ -1167,6 +1176,9 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 
 	// Audit columns are runtime-owned: discard what the client sent for them.
 	stripAuditInput(input)
+	// Mass assignment: la identidad de la fila y su tenant no se mueven por
+	// el body, y el host puede vedar mas campos (UpdateDenyFields).
+	s.stripUpdateDeny(model, input)
 
 	// Declarative guards: when the model declares column Constraints AND
 	// Locking=="row", the load → evaluate → save must share ONE transaction so
@@ -1772,5 +1784,18 @@ func zeroFieldByJSONName(target any, name string) {
 			v.Field(i).Set(reflect.Zero(t.Field(i).Type))
 			return
 		}
+	}
+}
+
+// stripUpdateDeny descarta del body de Update los campos que el cliente nunca
+// debe fijar: id, organization_id y los que el host vede en UpdateDenyFields.
+func (s *Service) stripUpdateDeny(model string, input map[string]any) {
+	delete(input, "id")
+	delete(input, "organization_id")
+	for _, k := range s.updateDeny["*"] {
+		delete(input, k)
+	}
+	for _, k := range s.updateDeny[model] {
+		delete(input, k)
 	}
 }
