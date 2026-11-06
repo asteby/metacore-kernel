@@ -21,6 +21,7 @@ import (
 	"github.com/asteby/metacore-kernel/domains"
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
+	"github.com/asteby/metacore-kernel/netguard"
 	"github.com/asteby/metacore-kernel/runtime/wasm/importpolicy"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
@@ -802,7 +803,10 @@ func connectorFetchHosts(ctx context.Context, inv *invocation) []string {
 
 // newHTTPClient builds the outbound client (a var so tests can stub the
 // transport; the loopback guard in CanFetch rules out a local test server).
-var newHTTPClient = func() *http.Client { return &http.Client{Timeout: 30 * time.Second} }
+var newHTTPClient = func() *http.Client {
+	// netguard valida la IP resuelta en cada conexion y los redirects (SSRF).
+	return netguard.NewClient(netguard.Options{Timeout: 30 * time.Second})
+}
 
 func doHTTP(ctx context.Context, mod api.Module, inv *invocation, url, method string, headers map[string]string, body []byte) uint64 {
 	if method == "" {
