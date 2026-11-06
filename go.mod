@@ -13,7 +13,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.12.0
-	github.com/mattn/go-sqlite3 v1.14.52
+	github.com/mattn/go-sqlite3 v1.14.53
 	github.com/pganalyze/pg_query_go/v6 v6.2.5
 	github.com/pgvector/pgvector-go v0.4.1
 	github.com/pressly/goose/v3 v3.29.0
