@@ -50,7 +50,8 @@ type Config struct {
 	// request instead of allowing it. Without this, `perms == nil` fails OPEN:
 	// the safest default a host can pick is to fail closed, so a wiring
 	// mistake surfaces as "forbidden" rather than as silent full access.
-	// Hosts that deliberately authorize elsewhere leave it false.
+	// Desde la fase 1 de seguridad, sin Permissions se deniega aunque esto sea
+	// false; ver AllowUnconfiguredPermissions / PermissionsEnforcedByHost.
 	RequirePermissions bool
 
 	// PermissionsEnforcedByHost declares that the host authorizes every
@@ -58,9 +59,24 @@ type Config struct {
 	// dynamic runtime. It only changes the startup log: with no Permissions
 	// service and RequirePermissions false, New logs a one-line informational
 	// "authorization delegated to the host" instead of the "authorization
-	// DISABLED" warning. It does NOT change any authorization decision — a
-	// nil Permissions still allows, and RequirePermissions still denies.
+	// DISABLED" warning. Sin Permissions, declararlo PERMITE (el host
+	// asume la autorizacion); RequirePermissions sigue denegando.
 	PermissionsEnforcedByHost bool
+
+	// AllowUnconfiguredPermissions es la salida EXPLICITA al comportamiento
+	// historico (fail-open): sin Permissions, el runtime permite todo. Por
+	// omision, sin Permissions el runtime DENIEGA (fail-closed), salvo que el
+	// host declare PermissionsEnforcedByHost (autoriza en su propia capa) o
+	// ponga esta opcion. Usarla en produccion sin otra capa de autorizacion
+	// deja el CRUD dinamico abierto a cualquier usuario autenticado.
+	AllowUnconfiguredPermissions bool
+
+	// UpdateDenyFields lista campos que Update descarta del body ademas de los
+	// siempre protegidos (id, organization_id y las columnas de auditoria).
+	// La clave es el nombre del modelo; "*" aplica a todos. Util para modelos
+	// de usuario: {"users": {"role", "email", "password_hash"}} evita que un
+	// PATCH escale privilegios por mass assignment.
+	UpdateDenyFields map[string][]string
 
 	Hooks  *HookRegistry // optional
 	Scoper TenantScoper  // optional — default OrganizationScoper
@@ -417,6 +433,7 @@ type Service struct {
 	listSearchClause  SearchMatchClause // explicit-only; threaded into List's builder search
 	modelResolver     ModelResolver
 	requirePerms      bool
+	updateDeny        map[string][]string
 	requireTenant     bool
 	tableNameResolver TableNameResolver
 	bus               Publisher
@@ -491,9 +508,12 @@ func New(cfg Config) *Service {
 			log.Printf("dynamic: no permission service wired; RequirePermissions is set, so every dynamic request will be DENIED")
 		} else if cfg.PermissionsEnforcedByHost {
 			log.Printf("dynamic: authorization delegated to the host (Config.PermissionsEnforcedByHost)")
+		} else if cfg.AllowUnconfiguredPermissions {
+			log.Printf("dynamic: WARNING — authorization DISABLED for the dynamic runtime (Config.AllowUnconfiguredPermissions): no permission service wired. " +
+				"Every dynamic read/write will be allowed. Pass Config.Permissions to enforce.")
 		} else {
-			log.Printf("dynamic: WARNING — authorization DISABLED for the dynamic runtime: no permission service wired. " +
-				"Every dynamic read/write will be allowed. Pass Config.Permissions, or set Config.RequirePermissions to fail closed.")
+			log.Printf("dynamic: no permission service wired; every dynamic request will be DENIED (fail-closed). " +
+				"Pass Config.Permissions, or set Config.PermissionsEnforcedByHost / Config.AllowUnconfiguredPermissions to opt out explicitly.")
 		}
 	}
 
@@ -510,7 +530,8 @@ func New(cfg Config) *Service {
 		db:                cfg.DB,
 		meta:              cfg.Metadata,
 		perms:             cfg.Perms(),
-		requirePerms:      cfg.RequirePermissions,
+		updateDeny:        cfg.UpdateDenyFields,
+		requirePerms:      cfg.RequirePermissions || !(cfg.PermissionsEnforcedByHost || cfg.AllowUnconfiguredPermissions),
 		requireTenant:     cfg.RequireTenantScope,
 		hooks:             cfg.Hooks,
 		scope:             cfg.Scoper,
@@ -1155,6 +1176,9 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 
 	// Audit columns are runtime-owned: discard what the client sent for them.
 	stripAuditInput(input)
+	// Mass assignment: la identidad de la fila y su tenant no se mueven por
+	// el body, y el host puede vedar mas campos (UpdateDenyFields).
+	s.stripUpdateDeny(model, input)
 
 	// Declarative guards: when the model declares column Constraints AND
 	// Locking=="row", the load → evaluate → save must share ONE transaction so
@@ -1760,5 +1784,18 @@ func zeroFieldByJSONName(target any, name string) {
 			v.Field(i).Set(reflect.Zero(t.Field(i).Type))
 			return
 		}
+	}
+}
+
+// stripUpdateDeny descarta del body de Update los campos que el cliente nunca
+// debe fijar: id, organization_id y los que el host vede en UpdateDenyFields.
+func (s *Service) stripUpdateDeny(model string, input map[string]any) {
+	delete(input, "id")
+	delete(input, "organization_id")
+	for _, k := range s.updateDeny["*"] {
+		delete(input, k)
+	}
+	for _, k := range s.updateDeny[model] {
+		delete(input, k)
 	}
 }

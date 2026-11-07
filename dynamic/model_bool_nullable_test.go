@@ -153,6 +153,7 @@ func runBoolNullableScenario(t *testing.T, db *gorm.DB, ddl string) {
 	}
 	modelbase.Register("dyn_pays", func() modelbase.ModelDefiner { return &dynPayMeta{} })
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		ModelResolver: func(_ context.Context, name string) (any, bool) {

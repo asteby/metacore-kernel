@@ -175,6 +175,7 @@ func TestUpdate_SetPersistsAndSurfacesInEvent(t *testing.T) {
 	pub := &capturePublisher{}
 	meta := metadata.New(metadata.Config{CacheTTL: -1})
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: meta,
 		Bus:      pub,

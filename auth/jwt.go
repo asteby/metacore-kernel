@@ -16,7 +16,14 @@ type Claims struct {
 	OrganizationID uuid.UUID `json:"org,omitempty"`
 	Email          string    `json:"email,omitempty"`
 	Role           string    `json:"role,omitempty"`
+	// Purpose distingue tokens de propósito especial (2FA, reset, invitación…)
+	// de los de sesión. Vacío o "session" = sesión; ValidateToken rechaza
+	// cualquier otro valor para que un token de otro flujo no valga como sesión.
+	Purpose string `json:"purpose,omitempty"`
 }
+
+// PurposeSession es el valor explícito de Claims.Purpose para tokens de sesión.
+const PurposeSession = "session"
 
 // GetUserID lets *Claims satisfy adapters.ClaimsAccessor without forcing apps
 // to write a wrapper. The accessor methods are read-only and do not change
@@ -100,12 +107,15 @@ func ValidateTokenWithClaims(tokenStr string, secret []byte, claims jwt.Claims) 
 	if tokenStr == "" {
 		return ErrMissingToken
 	}
+	if len(secret) == 0 {
+		return ErrInvalidToken // falla cerrado: nunca validar con secreto vacío
+	}
 	parsed, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, ErrInvalidToken
 		}
 		return secret, nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}))
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			return ErrExpiredToken
@@ -125,13 +135,16 @@ func ValidateToken(tokenStr string, secret []byte) (*Claims, error) {
 	if tokenStr == "" {
 		return nil, ErrMissingToken
 	}
+	if len(secret) == 0 {
+		return nil, ErrInvalidToken // falla cerrado: nunca validar con secreto vacío
+	}
 
 	parsed, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, ErrInvalidToken
 		}
 		return secret, nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}))
 
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
@@ -142,6 +155,9 @@ func ValidateToken(tokenStr string, secret []byte) (*Claims, error) {
 
 	claims, ok := parsed.Claims.(*Claims)
 	if !ok || !parsed.Valid {
+		return nil, ErrInvalidToken
+	}
+	if claims.Purpose != "" && claims.Purpose != PurposeSession {
 		return nil, ErrInvalidToken
 	}
 

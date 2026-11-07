@@ -208,6 +208,9 @@ func TestEngineHTTPRequestNode(t *testing.T) {
 		_, _ = w.Write([]byte(`{"ok":true,"echo":"` + r.URL.Query().Get("name") + `"}`))
 	}))
 	defer srv.Close()
+	prev := httpClientFactory
+	httpClientFactory = func() *http.Client { return srv.Client() }
+	defer func() { httpClientFactory = prev }()
 
 	engine := NewEngine(Config{})
 	flow := newSimpleFlow(
@@ -420,4 +423,22 @@ func TestEngineMaxNodeExecsGuard(t *testing.T) {
 
 func uuidLike(i int) string {
 	return "n" + string(rune('a'+i))
+}
+
+func TestHTTPRequestNodeBlocksLoopback(t *testing.T) {
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
+	defer srv.Close()
+	engine := NewEngine(Config{})
+	flow := newSimpleFlow(
+		[]FlowNode{
+			{ID: "trigger", Type: NodeTypeTrigger},
+			{ID: "http", Type: NodeTypeHTTPRequest, Data: FlowNodeData{Config: map[string]interface{}{"method": "GET", "url": srv.URL}}},
+		},
+		[]FlowEdge{{ID: "e1", Source: "trigger", Target: "http"}},
+	)
+	got, _ := engine.TestFlowInline(flow, map[string]interface{}{}, nil)
+	if hit || got == nil || got.Status == "completed" {
+		t.Fatalf("el nodo debe bloquear loopback (hit=%v, got=%+v)", hit, got)
+	}
 }

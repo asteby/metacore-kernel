@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
@@ -73,14 +74,22 @@ func (h *Handler) Register(c fiber.Ctx) error {
 	}
 
 	result, err := h.service.Register(c, RegisterInput{
-		Name:             req.Name,
-		Email:            req.Email,
-		Password:         req.Password,
-		Role:             req.Role,
+		Name:     req.Name,
+		Email:    req.Email,
+		Password: req.Password,
+		// SEGURIDAD: el registro público NUNCA acepta el rol del body
+		// (req.Role se ignora). Service.Register asigna el rol por
+		// defecto ("owner" de la organización recién creada). Un rol
+		// distinto solo se concede por una API autenticada de admin que
+		// llame a Service.Register directamente.
+		Role:             "",
 		OrganizationName: req.OrganizationName,
-		Extra:            req.Extra,
+		Extra:            sanitizeRegisterExtra(req.Extra),
 	})
 	if err != nil {
+		// NOTA: el 409 permite enumerar emails registrados. Se mantiene por
+		// compatibilidad con el frontend; los hosts expuestos deben limitar
+		// la tasa de /auth/register (rate limit por IP) o colapsar el 409.
 		if errors.Is(err, ErrUserExists) {
 			return respondError(c, fiber.StatusConflict, MsgUserExists)
 		}
@@ -155,4 +164,28 @@ func respondError(c fiber.Ctx, status int, msg string) error {
 		"success": false,
 		"message": msg,
 	})
+}
+
+// privilegedExtraKeys son claves de RegisterRequest.Extra que un cliente
+// anónimo no puede inyectar hacia los hooks del host.
+var privilegedExtraKeys = map[string]struct{}{
+	"role": {}, "roles": {}, "is_admin": {}, "admin": {}, "is_superuser": {},
+	"is_staff": {}, "permissions": {}, "scopes": {}, "organization_id": {},
+	"org_id": {}, "tenant_id": {}, "id": {}, "user_id": {}, "password_hash": {},
+	"email_verified": {}, "verified": {}, "plan": {}, "status": {},
+}
+
+// sanitizeRegisterExtra devuelve una copia de extra sin campos privilegiados.
+func sanitizeRegisterExtra(extra map[string]any) map[string]any {
+	if extra == nil {
+		return nil
+	}
+	out := make(map[string]any, len(extra))
+	for k, v := range extra {
+		if _, bad := privilegedExtraKeys[strings.ToLower(strings.TrimSpace(k))]; bad {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }

@@ -32,6 +32,7 @@ func setupRelationService(t *testing.T, db *gorm.DB, rels []Relation) *Service {
 	modelbase.Register("test_products", func() modelbase.ModelDefiner { return &TestProduct{} })
 	meta := metadata.New(metadata.Config{CacheTTL: -1})
 	return New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: meta,
 		RelationResolver: func(ctx context.Context, model string) ([]Relation, bool) {

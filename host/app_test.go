@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"github.com/asteby/metacore-kernel/dynamic"
 	"sync"
 	"testing"
 
@@ -39,7 +40,7 @@ type hostFakeUser struct {
 	orgID uuid.UUID
 }
 
-func (u *hostFakeUser) GetID() uuid.UUID            { return u.id }
+func (u *hostFakeUser) GetID() uuid.UUID             { return u.id }
 func (u *hostFakeUser) GetOrganizationID() uuid.UUID { return u.orgID }
 func (u *hostFakeUser) GetEmail() string             { return "host-test@example.com" }
 func (u *hostFakeUser) GetRole() string              { return "admin" }
@@ -82,8 +83,9 @@ func TestApp_BusWiredIntoDynamic(t *testing.T) {
 	modelbase.Register("host_test_products", func() modelbase.ModelDefiner { return &hostTestProduct{} })
 
 	app := NewApp(AppConfig{
-		DB:        db,
-		JWTSecret: []byte("test-secret-32-bytes-long-xxxxxx"),
+		DB:               db,
+		JWTSecret:        []byte("test-secret-32-bytes-long-xxxxxx"),
+		ConfigureDynamic: func(c *dynamic.Config) { c.AllowUnconfiguredPermissions = true },
 	})
 
 	if app.Bus == nil {
@@ -130,8 +132,9 @@ func TestApp_AddonKeyForModelResolverFlowsThrough(t *testing.T) {
 	modelbase.Register("host_test_products", func() modelbase.ModelDefiner { return &hostTestProduct{} })
 
 	app := NewApp(AppConfig{
-		DB:        db,
-		JWTSecret: []byte("test-secret-32-bytes-long-xxxxxx"),
+		DB:               db,
+		JWTSecret:        []byte("test-secret-32-bytes-long-xxxxxx"),
+		ConfigureDynamic: func(c *dynamic.Config) { c.AllowUnconfiguredPermissions = true },
 		AddonKeyForModel: func(_ context.Context, model string) string {
 			if model == "host_test_products" {
 				return "shop"

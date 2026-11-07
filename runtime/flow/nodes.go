@@ -9,7 +9,16 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/asteby/metacore-kernel/netguard"
 )
+
+// httpClientFactory construye el cliente saliente del nodo http_request. Es
+// una variable para que los tests (o un host con red interna legitima) lo
+// sustituyan; por defecto es el cliente anti-SSRF de netguard.
+var httpClientFactory = func() *http.Client {
+	return netguard.NewClient(netguard.Options{Timeout: 30 * time.Second})
+}
 
 // registerBuiltins is invoked by NewEngine. It installs the domain-free node
 // executors the kernel ships with. Apps can replace any of these by calling
@@ -134,7 +143,11 @@ func (HTTPRequestNode) Execute(ctx context.Context, node *FlowNode, ec *Executio
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	// SSRF: la URL sale de la config del flujo (editable por el tenant) y se
+	// interpola con datos del evento. El cliente valida la IP resuelta en cada
+	// conexion (loopback/privadas/link-local/metadata) y limita redirects.
+	// Un host puede reemplazarlo (tests, red interna legitima) via httpClientFactory.
+	client := httpClientFactory()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http_request failed: %w", err)

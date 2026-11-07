@@ -31,6 +31,7 @@ func newLegacySQLiteService(t *testing.T, ddl string) (*Service, *gorm.DB, strin
 		t.Fatal(err)
 	}
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		ModelResolver: func(_ context.Context, name string) (any, bool) {

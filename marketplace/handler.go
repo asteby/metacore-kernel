@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -149,6 +148,7 @@ func (Installation) TableName() string { return "marketplace_installations" }
 type Handler struct {
 	db            *gorm.DB
 	installer     *installer.Installer
+	authorize     func(fiber.Ctx) bool
 	httpc         *http.Client
 	updateChecker UpdateChecker
 	// bundleHosts is the allowlist of lowercase host[:port] origins a
@@ -327,6 +327,28 @@ func WithInstaller(inst *installer.Installer) HandlerOption {
 	return func(h *Handler) { h.installer = inst }
 }
 
+// WithAuthorizer exige que fn devuelva true para install/uninstall/upgrade/
+// rollback; si no, responde 403. Sin autorizador (comportamiento historico)
+// cualquier usuario autenticado de la organizacion puede instalar addons, que
+// ejecutan codigo y piden capacidades: los hosts deben poner uno, p. ej.
+// WithAuthorizer(func(c fiber.Ctx) bool { return auth.HasAnyRole(c, "admin", "owner") }).
+func WithAuthorizer(fn func(fiber.Ctx) bool) HandlerOption {
+	return func(h *Handler) { h.authorize = fn }
+}
+
+// guard aplica el autorizador a las rutas de gestion de addons.
+func (h *Handler) guard(next fiber.Handler) fiber.Handler {
+	return func(c fiber.Ctx) error {
+		if h.authorize != nil && !h.authorize(c) {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+				"success": false,
+				"message": "insufficient role to manage addons",
+			})
+		}
+		return next(c)
+	}
+}
+
 // WithHTTPClient overrides the bundle-download HTTP client (default: 30s
 // timeout). Useful for tests or for hosts with custom retry/cert config.
 func WithHTTPClient(c *http.Client) HandlerOption {
@@ -377,10 +399,10 @@ func (h *Handler) Mount(r fiber.Router, middleware ...fiber.Handler) {
 		}
 	}
 	g := r.Group("/marketplace", mws...)
-	g.Post("/install", h.install)
-	g.Post("/uninstall", h.uninstall)
-	g.Post("/upgrade", h.upgrade)
-	g.Post("/rollback/:installationID", h.rollback)
+	g.Post("/install", h.guard(h.install))
+	g.Post("/uninstall", h.guard(h.uninstall))
+	g.Post("/upgrade", h.guard(h.upgrade))
+	g.Post("/rollback/:installationID", h.guard(h.rollback))
 	g.Get("/installs", h.list)
 }
 
@@ -419,23 +441,7 @@ type installRequest struct {
 func (h *Handler) install(c fiber.Ctx) error {
 	orgID := auth.GetOrganizationID(c)
 	userID := auth.GetUserID(c)
-	// Verbose diagnostic — temporary while we hunt the 401 in production.
-	// Logs the raw locals types + claim dump so we can tell apart "no
-	// auth middleware ran" from "auth ran but JWT lacked OrgID" from
-	// "Locals key collision".
-	claims := auth.GetClaims(c)
-	claimsDump := "<nil>"
-	if claims != nil {
-		claimsDump = fmt.Sprintf("user=%s org=%s role=%s email=%s",
-			claims.UserID, claims.OrganizationID, claims.Role, claims.Email)
-	}
-	rawOrg := c.Locals(auth.LocalOrganizationID)
-	rawUser := c.Locals(auth.LocalUserID)
-	log.Printf("[kernel-install] enter orgID=%s userID=%s rawOrgType=%T rawUserType=%T claims={%s} authHeader=%v",
-		orgID, userID, rawOrg, rawUser, claimsDump, c.Get(fiber.HeaderAuthorization) != "")
 	if orgID == uuid.Nil || userID == uuid.Nil {
-		log.Printf("[kernel-install] AUTH FAIL → 401: orgID=%s userID=%s claims={%s}",
-			orgID, userID, claimsDump)
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"success": false,
 			"message": "authenticated organization required",

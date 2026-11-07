@@ -41,13 +41,24 @@ func TestCheckPermDeniesWhenTheHostRequiresPermissions(t *testing.T) {
 	}
 }
 
-func TestCheckPermKeepsAllowingWhenTheHostDidNotOptIn(t *testing.T) {
+func TestCheckPermDeniesByDefaultWithoutPermissions(t *testing.T) {
 	svc := serviceWithoutPerms(t, false)
+	if err := svc.checkPerm(context.Background(), nil, "test_products", "delete"); !errors.Is(err, ErrPermissionServiceMissing) {
+		t.Errorf("sin Permissions debe denegar por defecto, got %v", err)
+	}
+}
 
-	// The legacy posture: hosts that authorize in their own handler layer keep
-	// working untouched. New() warns about it at construction.
-	if err := svc.checkPerm(context.Background(), nil, "test_products", "delete"); err != nil {
-		t.Errorf("legacy behaviour must be preserved, got %v", err)
+func TestCheckPermAllowsWhenHostOptsOutExplicitly(t *testing.T) {
+	for name, cfg := range map[string]Config{
+		"AllowUnconfiguredPermissions": {AllowUnconfiguredPermissions: true},
+		"PermissionsEnforcedByHost":    {PermissionsEnforcedByHost: true},
+	} {
+		cfg.DB = setupTestDB(t)
+		cfg.Metadata = metadata.New(metadata.Config{CacheTTL: -1})
+		svc := New(cfg)
+		if err := svc.checkPerm(context.Background(), nil, "test_products", "delete"); err != nil {
+			t.Errorf("%s: opt-out explicito debe permitir, got %v", name, err)
+		}
 	}
 }
 

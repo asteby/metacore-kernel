@@ -70,6 +70,13 @@ type Deps struct {
 	// CatalogDir is the directory ListCatalog scans for .tar.gz bundles.
 	// Defaults to METACORE_CATALOG_DIR env var when empty.
 	CatalogDir string
+
+	// Authorizer, si no es nil, debe devolver true para que Install y Upgrade
+	// procedan; si no responden 403. Optional por compatibilidad: sin el,
+	// cualquier usuario con contexto de organizacion puede instalar addons
+	// (codigo + capacidades). Los hosts deben fijarlo, p. ej.
+	// func(c fiber.Ctx) bool { return auth.HasAnyRole(c, "admin", "owner") }.
+	Authorizer func(fiber.Ctx) bool
 }
 
 // Handler holds the kernel collaborators needed by the kernel-scoped
@@ -188,6 +195,9 @@ func (h *Handler) Navigation(c fiber.Ctx) error {
 //
 // POST /api/metacore/installations/:key
 func (h *Handler) Install(c fiber.Ctx) error {
+	if h.deps.Authorizer != nil && !h.deps.Authorizer(c) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"success": false, "message": "insufficient role to manage addons"})
+	}
 	orgID, ok := orgIDFromCtx(c)
 	if !ok {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
@@ -314,6 +324,9 @@ func (h *Handler) Install(c fiber.Ctx) error {
 //
 // PUT /api/metacore/installations/:key/version
 func (h *Handler) Upgrade(c fiber.Ctx) error {
+	if h.deps.Authorizer != nil && !h.deps.Authorizer(c) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"success": false, "message": "insufficient role to manage addons"})
+	}
 	orgID, ok := orgIDFromCtx(c)
 	if !ok {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
@@ -491,7 +504,16 @@ func (h *Handler) ServeAddonFrontend(c fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).SendString("file not found")
 	}
 
-	c.Set(fiber.HeaderContentType, mimeForExt(filepath.Ext(filePath)))
+	ext := strings.ToLower(filepath.Ext(filePath))
+	c.Set(fiber.HeaderContentType, mimeForExt(ext))
+	// Contenido de addon = contenido de terceros servido bajo el origen del
+	// host: sin sniffing, y los documentos que el navegador puede ejecutar
+	// (html/svg) abiertos como pagina quedan en un sandbox sin scripts ni
+	// origen propio. No afecta a los .js/.css que carga la federacion.
+	c.Set("X-Content-Type-Options", "nosniff")
+	if ext == ".html" || ext == ".svg" {
+		c.Set("Content-Security-Policy", "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'")
+	}
 	// Content-hashed chunks are safe to cache forever, but the federation
 	// ENTRY (remoteEntry.js) keeps a STABLE name across addon upgrades: its
 	// content changes with every publish while the URL does not. Serving it

@@ -82,6 +82,7 @@ func validationService(t *testing.T, db *gorm.DB) *Service {
 	modelbase.Register("val_categories", func() modelbase.ModelDefiner { return &ValCategory{} })
 	meta := metadata.New(metadata.Config{CacheTTL: -1})
 	return New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: meta,
 		ValidationSchemaResolver: func(_ context.Context, model string) ([]manifest.ColumnDef, bool) {
@@ -287,6 +288,7 @@ func TestValidate_RegexAndMin(t *testing.T) {
 	modelbase.Register("val_items", func() modelbase.ModelDefiner { return &ValItem{} })
 	modelbase.Register("val_categories", func() modelbase.ModelDefiner { return &ValCategory{} })
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		ValidationSchemaResolver: func(_ context.Context, model string) ([]manifest.ColumnDef, bool) {

@@ -484,6 +484,11 @@ var ErrSameVersionUpgrade = errors.New("installer: upgrade target version matche
 func New(db *gorm.DB, kernelVersion string) *Installer {
 	pubs, _ := loadTrustedKeysFromEnv()
 	allowUnsigned := envFlag("ALLOW_UNSIGNED_BUNDLES")
+	if allowUnsigned && isProductionEnv() && !envFlag("ALLOW_UNSIGNED_BUNDLES_IN_PRODUCTION") {
+		slog.Warn("installer.allow_unsigned_ignored_in_production",
+			"hint", "ALLOW_UNSIGNED_BUNDLES se ignora en produccion (APP_ENV/GO_ENV/ENV/ENVIRONMENT=production); se exige firma. Para forzarlo: ALLOW_UNSIGNED_BUNDLES_IN_PRODUCTION=true")
+		allowUnsigned = false
+	}
 	// Central trust anchor: when no key is pinned via env we try to fetch
 	// the hub's marketplace pubkey at boot. Best-effort + logged — see
 	// central_trust.go for the contract. Skipped when the operator has
@@ -601,6 +606,18 @@ func loadTrustedKeysFromEnv() ([]ed25519.PublicKey, error) {
 		out = append(out, k...)
 	}
 	return out, nil
+}
+
+// isProductionEnv detecta un despliegue de produccion por las variables de
+// entorno habituales.
+func isProductionEnv() bool {
+	for _, k := range []string{"APP_ENV", "GO_ENV", "ENV", "ENVIRONMENT"} {
+		switch strings.ToLower(strings.TrimSpace(os.Getenv(k))) {
+		case "production", "prod":
+			return true
+		}
+	}
+	return false
 }
 
 func envFlag(name string) bool {

@@ -50,6 +50,7 @@ func constraintService(t *testing.T, db *gorm.DB, mc *ModelConstraints) *Service
 	modelbase.Register("test_products", func() modelbase.ModelDefiner { return &TestProduct{} })
 	meta := metadata.New(metadata.Config{CacheTTL: -1})
 	return New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: meta,
 		ConstraintResolver: func(_ context.Context, model string) (*ModelConstraints, bool) {

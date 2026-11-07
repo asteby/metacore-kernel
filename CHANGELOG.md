@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+
+- `dynamic` (**cambio de comportamiento**): sin `Config.Permissions` el CRUD dinámico ahora DENIEGA (fail-closed) en vez de permitir todo. Salidas explícitas: `Config.PermissionsEnforcedByHost` (el host autoriza en su capa; ahora SÍ cambia la decisión) o `Config.AllowUnconfiguredPermissions` (comportamiento histórico, con advertencia en el log). `AccessPolicy` solo estrecha y no se cambia: un modelo sin política sigue regido por el chequeo de capacidades.
+
+- `dynamic`: `Update` descarta `id` y `organization_id` del body (mass assignment: mover una fila de tenant o cambiar su id) y `Config.UpdateDenyFields` (modelo o `"*"` -> campos) permite vedar más, p. ej. `role`/`email` en modelos de usuario. Las columnas de auditoría (`created_by_id`, `deleted_at`…) ya se descartaban.
+
+- `runtime/flow` y `runtime/wasm`: el nodo `http_request` y el `http` de los addons wasm usan `netguard.NewClient` (bloquea loopback/privadas/link-local/metadata sobre la IP resuelta en cada conexión y limita redirects). `runtime/flow.httpClientFactory` permite a un host con red interna legítima sustituirlo. (El importador de medios ya usaba netguard y solo acepta image/* sniffed.)
+
+- `httpx/metacore`: `ServeAddonFrontend` envía `X-Content-Type-Options: nosniff` y, para `.html`/`.svg`, `Content-Security-Policy: sandbox …`. `Deps.Authorizer` (opcional) restringe Install/Upgrade (403); sin él, el comportamiento histórico se mantiene.
+- `marketplace`: `WithAuthorizer(fn)` restringe install/uninstall/upgrade/rollback (403); se elimina el log verboso de claims/email en `install`. Nuevo `auth.HasAnyRole(c, roles...)`.
+- `installer`: `ALLOW_UNSIGNED_BUNDLES` se ignora (con aviso) cuando `APP_ENV`/`GO_ENV`/`ENV`/`ENVIRONMENT` es `production`/`prod`, salvo `ALLOW_UNSIGNED_BUNDLES_IN_PRODUCTION=true`.
+
 ### Fixed
 
 - `capability`: `commerce.shipping.label` declara los rechazos definitivos de la paquetería (`ShippingLabelErrors`: `invalid_input`, `address_incomplete`, `rejected`, `insufficient_credits`, `insufficient_balance`, `carta_porte_missing`, `origin_not_configured`, `not_configured`, `no_coverage`, `environment_mismatch`), que ahora llegan tal cual en `Result.ErrorCode()` y en `errors[].code` del sobre. Antes el contrato no declaraba ninguno y todo error del proveedor llegaba como `provider_error`; warehouse lo leía como respuesta dudosa y reintentaba hasta 8 veces (ProtekAuto SO-00020: Skydropx sin créditos). El mensaje conserva la misma forma (`capability <key>: provider <addon>: <code>: <mensaje>`). Cualquier otro código (`provider_unavailable`, `http_error`, `in_progress`, `not_found`, `auth_failed`…), un error sin código y el tiempo agotado del kernel siguen igual (`provider_error` / `timeout` indeterminado). `rates`, `cancel` y `track` no cambian. Un proveedor que no reporta estos códigos no se ve afectado.

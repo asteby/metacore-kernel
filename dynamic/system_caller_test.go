@@ -138,7 +138,7 @@ func TestSystemCallerCannotBeForgedByRoleString(t *testing.T) {
 func TestNormalHTTPPathUnaffectedByPermissive(t *testing.T) {
 	db := setupTestDB(t)
 	modelbase.Register("test_products", func() modelbase.ModelDefiner { return &TestProduct{} })
-	svc := New(Config{DB: db, Metadata: metadata.New(metadata.Config{CacheTTL: -1})})
+	svc := New(Config{DB: db, Metadata: metadata.New(metadata.Config{CacheTTL: -1}), AllowUnconfiguredPermissions: true})
 
 	user := newUser(uuid.New())
 	if err := svc.checkPerm(context.Background(), user, "test_products", "create"); err != nil {

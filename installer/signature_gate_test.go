@@ -245,3 +245,21 @@ func TestVerifySignatureRejectsTamperedEntry(t *testing.T) {
 		}
 	})
 }
+
+// En produccion ALLOW_UNSIGNED_BUNDLES se ignora salvo opt-in explicito.
+func TestNewIgnoresAllowUnsignedInProduction(t *testing.T) {
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }))
+	defer hub.Close()
+	t.Setenv("MARKETPLACE_URL", hub.URL)
+	t.Setenv("MARKETPLACE_PUBKEY", "")
+	t.Setenv("MARKETPLACE_PUBKEYS", "")
+	t.Setenv("ALLOW_UNSIGNED_BUNDLES", "true")
+	t.Setenv("APP_ENV", "production")
+	if New(nil, "test").AllowUnsigned {
+		t.Fatal("ALLOW_UNSIGNED_BUNDLES debe ignorarse en produccion")
+	}
+	t.Setenv("ALLOW_UNSIGNED_BUNDLES_IN_PRODUCTION", "true")
+	if !New(nil, "test").AllowUnsigned {
+		t.Fatal("el opt-in explicito debe permitirlo")
+	}
+}

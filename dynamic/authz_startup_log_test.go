@@ -27,13 +27,17 @@ func captureNewLog(t *testing.T, cfg Config) string {
 
 const authzDisabledWarning = "authorization DISABLED for the dynamic runtime"
 
-func TestNewWarnsAuthorizationDisabledByDefault(t *testing.T) {
+func TestNewLogsFailClosedByDefault(t *testing.T) {
 	out := captureNewLog(t, Config{})
-	if !strings.Contains(out, authzDisabledWarning) {
-		t.Fatalf("without PermissionsEnforcedByHost the warning must stay; log:\n%s", out)
+	if !strings.Contains(out, "fail-closed") {
+		t.Fatalf("por defecto debe anunciar fail-closed; log:\n%s", out)
 	}
-	if strings.Contains(out, "delegated to the host") {
-		t.Fatalf("the delegated line must not appear by default; log:\n%s", out)
+}
+
+func TestNewWarnsWhenAllowUnconfiguredPermissions(t *testing.T) {
+	out := captureNewLog(t, Config{AllowUnconfiguredPermissions: true})
+	if !strings.Contains(out, authzDisabledWarning) {
+		t.Fatalf("la salida explicita debe advertir; log:\n%s", out)
 	}
 }
 
@@ -47,17 +51,10 @@ func TestNewDoesNotWarnWhenHostEnforcesPermissions(t *testing.T) {
 	}
 }
 
-// The flag is log-only: RequirePermissions keeps failing closed and its own
-// log line wins, and the decision without it stays fail-open.
-func TestPermissionsEnforcedByHostDoesNotChangeTheDecision(t *testing.T) {
+// RequirePermissions gana sobre PermissionsEnforcedByHost: sigue denegando.
+func TestRequirePermissionsWinsOverEnforcedByHost(t *testing.T) {
 	out := captureNewLog(t, Config{PermissionsEnforcedByHost: true, RequirePermissions: true})
 	if !strings.Contains(out, "every dynamic request will be DENIED") {
 		t.Fatalf("RequirePermissions must keep its log; log:\n%s", out)
-	}
-
-	svc := serviceWithoutPerms(t, false)
-	svc2 := New(Config{DB: setupTestDB(t), Metadata: metadata.New(metadata.Config{CacheTTL: -1}), PermissionsEnforcedByHost: true})
-	if svc.requirePerms != svc2.requirePerms || svc2.perms != nil {
-		t.Fatal("PermissionsEnforcedByHost must not alter the authorization wiring")
 	}
 }

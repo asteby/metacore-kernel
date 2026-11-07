@@ -27,6 +27,7 @@ func pinFixture(t *testing.T) (*Service, *fakeUser, *fakeUser) {
 	cashier := &fakeUser{id: uuid.New(), orgID: org, role: "cashier"}
 	manager := &fakeUser{id: uuid.New(), orgID: org, role: "manager"}
 	svc := New(Config{
+		AllowUnconfiguredPermissions: true,
 		DB:       db,
 		Metadata: metadata.New(metadata.Config{CacheTTL: -1}),
 		ApprovalPINVerifier: func(_ context.Context, o uuid.UUID, policy, pin string) (modelbase.AuthUser, error) {
@@ -85,7 +86,7 @@ func TestGrantPINApprovalRejections(t *testing.T) {
 		t.Fatalf("foreign approver: %v", err)
 	}
 	// No verifier wired.
-	bare := New(Config{DB: setupTestDB(t), Metadata: metadata.New(metadata.Config{CacheTTL: -1})})
+	bare := New(Config{AllowUnconfiguredPermissions: true, DB: setupTestDB(t), Metadata: metadata.New(metadata.Config{CacheTTL: -1})})
 	if _, err := bare.GrantPINApproval(ctx, cashier, PINGrantInput{PolicyKey: "p", Reason: "r", PIN: "1"}); !errors.Is(err, ErrApprovalPINUnavailable) {
 		t.Fatalf("unwired: %v", err)
 	}
