@@ -326,6 +326,7 @@ func (l *Ledger) publish(ctx context.Context, org uuid.UUID, row paymentRow, o p
 	if o.Kind == payments.KindRefund {
 		result.Amount = o.Amount
 	}
+	result.XEnvironment = verifiedEnvironment(o.XEnvironment, result.TestMode)
 	payload := map[string]any{
 		"provider":        p.Provider,
 		"result":          result,
@@ -339,6 +340,21 @@ func (l *Ledger) publish(ctx context.Context, org uuid.UUID, row paymentRow, o p
 	if err := l.cfg.Publish(ctx, p.Provider, capability.CommercePaymentsConfirmed, org, payload); err != nil {
 		log.Printf("payments ledger: publish %s payment=%s: %v", capability.CommercePaymentsConfirmed, p.ID, err)
 	}
+}
+
+// verifiedEnvironment is the provider's x_environment as the event may carry it:
+// exactly "sandbox" or "production", else "" (unknown). "production" never
+// travels next to a test payment (the stored test_mode wins).
+func verifiedEnvironment(env string, testMode bool) string {
+	switch env {
+	case "sandbox":
+		return env
+	case "production":
+		if !testMode {
+			return env
+		}
+	}
+	return ""
 }
 
 func (l *Ledger) raise(ctx context.Context, a Anomaly) {
