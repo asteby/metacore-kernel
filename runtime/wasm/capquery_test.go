@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/asteby/metacore-kernel/capability"
 	"github.com/asteby/metacore-kernel/manifest"
@@ -128,5 +129,74 @@ func TestCapQueryErrorCodeNotConfigured(t *testing.T) {
 	}
 	if got := capQueryErrorCode(capability.ErrAmbiguousProvider); got != "ambiguous_provider" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// slowQuerier answers after wait (or when its ctx ends) and reports the
+// deadline of the ctx it was given.
+type slowQuerier struct {
+	wait     time.Duration
+	deadline time.Time
+	hasDl    bool
+}
+
+func (s *slowQuerier) Query(ctx context.Context, _ capability.Query) (capability.QueryResult, error) {
+	s.deadline, s.hasDl = ctx.Deadline()
+	select {
+	case <-time.After(s.wait):
+		return capability.QueryResult{Capability: "commerce.shipping.label"}, nil
+	case <-ctx.Done():
+		return capability.QueryResult{}, ctx.Err()
+	}
+}
+
+// A provider that takes longer than the guest's budget (a carrier quote and
+// then the label purchase, 10 s budget) must not tear the guest down: the wait
+// is given back, as for outbound HTTP.
+func TestCapabilityQueryWaitDoesNotConsumeGuestBudget(t *testing.T) {
+	ctx, d, cancel := withGuestDeadline(context.Background(), 80*time.Millisecond, time.Second)
+	defer cancel()
+	q := &slowQuerier{wait: 200 * time.Millisecond}
+	inv := &invocation{
+		addonKey:   "warehouse",
+		orgID:      uuid.New(),
+		caps:       security.Compile("warehouse", []manifest.Capability{{Kind: "capability:query", Target: "commerce.shipping.*"}}),
+		capQuerier: q,
+		deadline:   d,
+	}
+	ok, data := capEnv(t, executeCapabilityQuery(ctx, inv, []byte(`{"capability":"commerce.shipping.label"}`)))
+	if !ok {
+		t.Fatalf("a slow provider must still answer: %v", data)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("the provider wait consumed the guest budget")
+	}
+	// The wait is bounded by the hard cap, never unbounded.
+	if !q.hasDl || time.Until(q.deadline) > time.Second {
+		t.Fatalf("the provider call must carry the hard cap as deadline: has=%v", q.hasDl)
+	}
+	// What is left of the budget still runs out: guest CPU time counts.
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("the remaining budget never ran out")
+	}
+}
+
+// The hard cap bounds the wait: a provider that never answers is cut at it.
+func TestCapabilityQueryWaitIsBoundedByHardCap(t *testing.T) {
+	ctx, d, cancel := withGuestDeadline(context.Background(), 50*time.Millisecond, 120*time.Millisecond)
+	defer cancel()
+	inv := &invocation{
+		addonKey:   "warehouse",
+		orgID:      uuid.New(),
+		caps:       security.Compile("warehouse", []manifest.Capability{{Kind: "capability:query", Target: "commerce.shipping.*"}}),
+		capQuerier: &slowQuerier{wait: 5 * time.Second},
+		deadline:   d,
+	}
+	start := time.Now()
+	ok, _ := capEnv(t, executeCapabilityQuery(ctx, inv, []byte(`{"capability":"commerce.shipping.label"}`)))
+	if ok || time.Since(start) > time.Second {
+		t.Fatalf("the hard cap must cut the wait (ok=%v after %s)", ok, time.Since(start))
 	}
 }
