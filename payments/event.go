@@ -98,21 +98,25 @@ type Confirmed struct {
 // Outcome is the commerce.payments.confirm / commerce.payments.status output
 // (and each item of commerce.payments.reconcile).
 type Outcome struct {
-	OrderRef       string      `json:"order_ref"`
-	Status         Status      `json:"status"`
-	Amount         string      `json:"amount"`
-	Currency       string      `json:"currency"`
-	ProviderRef    string      `json:"provider_ref"`
-	EventID        string      `json:"event_id,omitempty"`
-	Kind           EventKind   `json:"kind,omitempty"`
-	Method         string      `json:"method,omitempty"`
-	Installments   int         `json:"installments,omitempty"`
-	PaidAt         string      `json:"paid_at,omitempty"`
-	OccurredAt     string      `json:"occurred_at,omitempty"`
-	AmountRefunded string      `json:"amount_refunded,omitempty"`
-	Fee            string      `json:"fee,omitempty"`
-	NetAmount      string      `json:"net_amount,omitempty"`
-	TestMode       bool        `json:"test_mode,omitempty"`
+	OrderRef       string    `json:"order_ref"`
+	Status         Status    `json:"status"`
+	Amount         string    `json:"amount"`
+	Currency       string    `json:"currency"`
+	ProviderRef    string    `json:"provider_ref"`
+	EventID        string    `json:"event_id,omitempty"`
+	Kind           EventKind `json:"kind,omitempty"`
+	Method         string    `json:"method,omitempty"`
+	Installments   int       `json:"installments,omitempty"`
+	PaidAt         string    `json:"paid_at,omitempty"`
+	OccurredAt     string    `json:"occurred_at,omitempty"`
+	AmountRefunded string    `json:"amount_refunded,omitempty"`
+	Fee            string    `json:"fee,omitempty"`
+	NetAmount      string    `json:"net_amount,omitempty"`
+	TestMode       bool      `json:"test_mode,omitempty"`
+	// XEnvironment is the provider's x_environment extension: the environment
+	// ("sandbox" | "production") it VERIFIED for this payment. Subscribers of
+	// commerce.payments.confirmed read it; anything else is dropped on publish.
+	XEnvironment   string      `json:"x_environment,omitempty"`
 	Channel        Channel     `json:"channel,omitempty"`
 	SessionID      string      `json:"session_id,omitempty"`
 	DeviceID       string      `json:"device_id,omitempty"`
