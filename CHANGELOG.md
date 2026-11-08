@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `capability`: `commerce.shipping.rates` acepta `purpose` (`checkout` por omisión | `label`) y el contrato declara `PurposeTimeouts`. Una cotización para comprar la guía de un pedido ya pagado (`purpose: "label"`) espera hasta `ShippingLabelQuoteTimeout` (15 s) en vez de los 4 s del checkout: en God's un transportista lento (`provider timeout: emissary after 4s`) retrasaba la guía ~1 min hasta el reintento del horario. Retrocompatible: sin `purpose` el plazo es el de siempre (4 s) y `Provider.Timeout` sigue ganando. Para aprovecharlo, el addon que cotiza la guía debe enviar `purpose: "label"` (addon `warehouse`, cambio aparte).
+
 ### Security
 
 - `dynamic` (**cambio de comportamiento**): sin `Config.Permissions` el CRUD dinámico ahora DENIEGA (fail-closed) en vez de permitir todo. Salidas explícitas: `Config.PermissionsEnforcedByHost` (el host autoriza en su capa; ahora SÍ cambia la decisión) o `Config.AllowUnconfiguredPermissions` (comportamiento histórico, con advertencia en el log). `AccessPolicy` solo estrecha y no se cambia: un modelo sin política sigue regido por el chequeo de capacidades.

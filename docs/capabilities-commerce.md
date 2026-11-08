@@ -16,7 +16,7 @@ mercado (PLAN-HEADLESS H12/H13).
 |---|---|
 | **Tipo** | `action` (dispara al proveedor, sin salida para el consumidor; p. ej. `messaging.whatsapp.send`) o `query` (declara `Output`; el consumidor recibe la salida normalizada). Todos los contratos de esta página son `query`. |
 | **Cardinalidad** | `one`: el proveedor seleccionado. `all`: fan-out en paralelo a todos los proveedores elegibles, cada uno con su tiempo límite; devuelve resultados parciales y una lista de errores por proveedor. Nunca falla toda la llamada porque un proveedor falló. |
-| **Tiempo límite** | Por proveedor: `Provider.Timeout` > `Contract.Timeout` > `Executor.Timeout` > 8 s. Contratos mutantes 30 s, `commerce.shipping.rates` 4 s, `commerce.search.query` y `commerce.discounts.evaluate` 2 s. |
+| **Tiempo límite** | Por proveedor: `Provider.Timeout` > `Contract.PurposeTimeouts[input.purpose]` > `Contract.Timeout` > `Executor.Timeout` > 8 s. Contratos mutantes 30 s, `commerce.shipping.rates` 4 s (checkout) o 15 s con `purpose: "label"` (cotización de una guía ya pagada: nadie espera en el checkout), `commerce.search.query` y `commerce.discounts.evaluate` 2 s. Sin `purpose` el plazo no cambia. |
 | **Dinero** | Siempre cadena decimal (`"1499.00"`, regex `^-?(0\|[1-9][0-9]*)(\.[0-9]+)?$`) junto a una moneda ISO 4217 (`"MXN"`). Nunca flotantes ni unidades menores. |
 | **Países** | ISO 3166-1 alfa-2 en mayúsculas (`"MX"`). |
 | **Coordenadas** | `latitude` / `longitude`: número JSON en grados decimales WGS84, en `[-90, 90]` / `[-180, 180]`; nunca cadena. Ver [capabilities-geo.md](capabilities-geo.md). |
