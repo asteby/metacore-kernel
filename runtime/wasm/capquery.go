@@ -82,13 +82,32 @@ func executeCapabilityQuery(ctx context.Context, inv *invocation, reqJSON []byte
 		return fail("capability_depth", "capability_query nested too deeply")
 	}
 	qctx := context.WithValue(ctx, capQueryDepthKey{}, depth+1)
-	res, err := inv.capQuerier.Query(qctx, capability.Query{
-		Org:        orgID,
-		Market:     capability.Market{Code: strings.TrimSpace(req.Market)},
-		Capability: req.Capability,
-		Input:      req.Input,
-		Provider:   strings.TrimSpace(req.Provider),
-		Caller:     addonKey,
+	var (
+		res capability.QueryResult
+		err error
+	)
+	// Like outbound HTTP, the wait for a provider is not guest work: it is
+	// bounded by the contract's own deadline (a label purchase 30 s, a quote
+	// 4-15 s) and by the invocation's hard cap, so it is given back to the
+	// guest budget. Counting it killed warehouse mid-purchase: a 7 s carrier
+	// quote left 3 s of the 10 s budget for the 30 s label call, the guest was
+	// torn down with the attempt row stuck in `purchasing` and the label only
+	// came minutes later from the schedule (God's SO-00020 / SO-00022).
+	inv.deadline.excluding(func() {
+		wctx := qctx
+		if left, ok := inv.deadline.hardRemaining(); ok {
+			var cancelWait context.CancelFunc
+			wctx, cancelWait = context.WithTimeout(qctx, left)
+			defer cancelWait()
+		}
+		res, err = inv.capQuerier.Query(wctx, capability.Query{
+			Org:        orgID,
+			Market:     capability.Market{Code: strings.TrimSpace(req.Market)},
+			Capability: req.Capability,
+			Input:      req.Input,
+			Provider:   strings.TrimSpace(req.Provider),
+			Caller:     addonKey,
+		})
 	})
 	if err != nil {
 		return fail(capQueryErrorCode(err), err.Error())
