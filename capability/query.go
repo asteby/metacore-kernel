@@ -611,10 +611,12 @@ func (e Executor) now() time.Time {
 	return time.Now()
 }
 
-func (e Executor) timeoutFor(c Contract, p Provider) time.Duration {
+func (e Executor) timeoutFor(c Contract, p Provider, input map[string]any) time.Duration {
 	switch {
 	case p.Timeout > 0:
 		return p.Timeout
+	case c.purposeTimeout(input) > 0:
+		return c.purposeTimeout(input)
 	case c.Timeout > 0:
 		return c.Timeout
 	case e.Timeout > 0:
@@ -703,7 +705,7 @@ func (e Executor) one(parent context.Context, c Contract, org uuid.UUID, market 
 	if c.Idempotent {
 		idemKey, _ = input["idempotency_key"].(string)
 	}
-	timeout := e.timeoutFor(c, p)
+	timeout := e.timeoutFor(c, p, input)
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 

@@ -271,8 +271,21 @@ const (
 	// early only produces an indeterminate outcome.
 	MutatingTimeout      = 30 * time.Second
 	ShippingRatesTimeout = 4 * time.Second
-	SearchTimeout        = 2 * time.Second
-	DiscountsTimeout     = 2 * time.Second
+	// ShippingLabelQuoteTimeout is the deadline of a rates quote asked AFTER the
+	// sale is paid, to buy a label (purpose "label"). Nobody is waiting at a
+	// checkout and a timeout only delays the shipment (a retry runs minutes
+	// later), so a slow carrier gets time to answer.
+	ShippingLabelQuoteTimeout = 15 * time.Second
+	SearchTimeout             = 2 * time.Second
+	DiscountsTimeout          = 2 * time.Second
+)
+
+// Purposes of a commerce.shipping.rates quote (input field `purpose`).
+const (
+	// ShippingPurposeCheckout is the default: quote the buyer's delivery options.
+	ShippingPurposeCheckout = "checkout"
+	// ShippingPurposeLabel quotes a paid sale to buy its label.
+	ShippingPurposeLabel = "label"
 )
 
 // IdempotencyDoc documents the required key of mutating contracts.
@@ -1244,7 +1257,8 @@ func commerceContractList() []Contract {
 		// ---------------------------------------------------------- shipping
 		{
 			Key: CommerceShippingRates, Kind: KindQuery, Cardinality: All, Timeout: ShippingRatesTimeout,
-			Doc: "quote delivery options; every eligible carrier addon answers in parallel",
+			PurposeTimeouts: map[string]time.Duration{ShippingPurposeLabel: ShippingLabelQuoteTimeout},
+			Doc:             "quote delivery options; every eligible carrier addon answers in parallel",
 			Input: schema(
 				obj(req("origin", TypeObject, ""), AddressSchema),
 				obj(req("destination", TypeObject, ""), AddressSchema),
@@ -1254,6 +1268,7 @@ func commerceContractList() []Contract {
 				opt("cod_amount", TypeDecimal, "cash on delivery to collect"),
 				list(opt("items", TypeArray, ""), ShipItemSchema),
 				opt("order_ref", TypeString, "cart/order id"),
+				enum(opt("purpose", TypeString, "why the quote is asked: checkout (default, short deadline: the buyer waits) | label (paid sale, long deadline: nobody waits)"), []string{ShippingPurposeCheckout, ShippingPurposeLabel}),
 				opt("market", TypeString, "market code the quote is for (the host also selects providers by it)"),
 				opt("subtotal_basis", TypeDecimal, "cart subtotal AFTER line / amount discounts and coupons, in currency: the one basis a provider must use for its own 'free over' rule (declared_value stays the insured value)"),
 				list(opt("origins", TypeArray, "candidate ship-from locations (multi-origin); origin stays the primary one"), ShippingOriginSchema),

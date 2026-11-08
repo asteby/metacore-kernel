@@ -77,6 +77,13 @@ type Contract struct {
 	Cardinality Cardinality
 	// Timeout is the per-provider deadline of a query; 0 = the Executor's.
 	Timeout time.Duration
+	// PurposeTimeouts overrides Timeout for calls whose `purpose` input field
+	// matches a key (case-insensitive). The same capability can be asked in
+	// moments where waiting costs very different things: a checkout quote holds
+	// the buyer (short), a post-payment label quote holds nobody (long). A call
+	// without `purpose`, or with an unlisted one, keeps Timeout, so adding an
+	// entry never changes existing callers. A provider's own Timeout still wins.
+	PurposeTimeouts map[string]time.Duration
 	// Idempotent marks a MUTATING query (money moves or an irreversible side
 	// effect: charge, refund, label, fulfillment, invoice, tax ledger). The
 	// Executor refuses it without a non-blank `idempotency_key` input, hands
@@ -108,6 +115,15 @@ type Contract struct {
 	Errors []string
 	// Doc is a one-line description.
 	Doc string
+}
+
+// purposeTimeout is the deadline PurposeTimeouts gives to this input (0 = none).
+func (c Contract) purposeTimeout(input map[string]any) time.Duration {
+	if len(c.PurposeTimeouts) == 0 {
+		return 0
+	}
+	purpose, _ := input["purpose"].(string)
+	return c.PurposeTimeouts[strings.ToLower(strings.TrimSpace(purpose))]
 }
 
 // IsQuery reports whether the contract returns outputs.
