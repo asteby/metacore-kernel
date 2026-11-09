@@ -28,6 +28,12 @@ type Policy struct {
 	// "*.domain", netguard syntax; a host with a non-default port must be
 	// listed with the port). Empty = any public host on 443.
 	AllowHosts []string
+	// AllowPathPrefixes restricts handler.path (after expansion, compared on
+	// the decoded lower-cased path) to these prefixes, e.g. "/core/v1/licenses/".
+	// The request is signed with the instance key, so an addon-declared path
+	// must not reach arbitrary routes. REQUIRED: empty denies every path
+	// (fail-closed), because the signature does not bind the host or route.
+	AllowPathPrefixes []string
 	// AllowInsecureHTTP permits plain http://, but ONLY toward a host that is
 	// also in AllowInternal: cleartext never crosses the public internet.
 	AllowInsecureHTTP bool
@@ -50,6 +56,9 @@ func (p Policy) check(u *url.URL) error {
 	host := strings.ToLower(u.Hostname())
 	if host == "" {
 		return fmt.Errorf("%w: empty host", ErrDestinationBlocked)
+	}
+	if err := p.checkPath(u.Path); err != nil {
+		return err
 	}
 	internal := matchInternal(p.AllowInternal, u)
 	switch u.Scheme {
@@ -116,4 +125,15 @@ func (p Policy) newHTTPClient() *http.Client {
 		Transport:     tr,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
+}
+
+func (p Policy) checkPath(path string) error {
+	lp := strings.ToLower(path)
+	for _, pre := range p.AllowPathPrefixes {
+		pre = strings.ToLower(strings.TrimSpace(pre))
+		if pre != "" && strings.HasPrefix(lp, pre) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: path %q is not in Policy.AllowPathPrefixes", ErrDestinationBlocked, path)
 }

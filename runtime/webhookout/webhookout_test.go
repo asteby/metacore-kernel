@@ -60,7 +60,7 @@ func recv(t *testing.T, status int, resp string, seen *[]captured) (*httptest.Se
 	}))
 	t.Cleanup(srv.Close)
 	u, _ := url.Parse(srv.URL)
-	return srv, Policy{AllowInternal: []string{u.Host}, AllowInsecureHTTP: true}
+	return srv, Policy{AllowPathPrefixes: []string{"/"}, AllowInternal: []string{u.Host}, AllowInsecureHTTP: true}
 }
 
 func baseReq(srvURL string) Request {
@@ -245,7 +245,7 @@ func TestSameInvocationSameKeyAcrossRetries(t *testing.T) {
 	}))
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL)
-	c := New(Config{Signer: signer, Policy: Policy{AllowInternal: []string{u.Host}, AllowInsecureHTTP: true}})
+	c := New(Config{Signer: signer, Policy: Policy{AllowPathPrefixes: []string{"/"}, AllowInternal: []string{u.Host}, AllowInsecureHTTP: true}})
 	req := baseReq(srv.URL)
 	two := 2
 	req.Handler.Retries = &two
@@ -308,7 +308,7 @@ func TestRedirectNotFollowed(t *testing.T) {
 	defer srv.Close()
 	u1, _ := url.Parse(srv.URL)
 	u2, _ := url.Parse(target.URL)
-	c := New(Config{Signer: signer, Policy: Policy{AllowInternal: []string{u1.Host, u2.Host}, AllowInsecureHTTP: true}})
+	c := New(Config{Signer: signer, Policy: Policy{AllowPathPrefixes: []string{"/"}, AllowInternal: []string{u1.Host, u2.Host}, AllowInsecureHTTP: true}})
 	if _, err := c.Do(context.Background(), baseReq(srv.URL)); err == nil {
 		t.Fatal("3xx must fail")
 	}
@@ -326,7 +326,7 @@ func TestRetryOn5xxNotOn4xx(t *testing.T) {
 			w.WriteHeader(tc.status)
 		}))
 		u, _ := url.Parse(srv.URL)
-		c := New(Config{Signer: signer, Policy: Policy{AllowInternal: []string{u.Host}, AllowInsecureHTTP: true}})
+		c := New(Config{Signer: signer, Policy: Policy{AllowPathPrefixes: []string{"/"}, AllowInternal: []string{u.Host}, AllowInsecureHTTP: true}})
 		req := baseReq(srv.URL)
 		two := 2
 		req.Handler.Retries = &two
@@ -350,7 +350,7 @@ func TestTimeoutBudget(t *testing.T) {
 	defer srv.Close()
 	defer close(release)
 	u, _ := url.Parse(srv.URL)
-	c := New(Config{Signer: signer, Policy: Policy{AllowInternal: []string{u.Host}, AllowInsecureHTTP: true}})
+	c := New(Config{Signer: signer, Policy: Policy{AllowPathPrefixes: []string{"/"}, AllowInternal: []string{u.Host}, AllowInsecureHTTP: true}})
 	req := baseReq(srv.URL)
 	req.Handler.TimeoutMS = 1000
 	start := time.Now()
@@ -383,7 +383,7 @@ func TestSSRFDefaultsDeny(t *testing.T) {
 	signer, _ := testSigner(t)
 	var seen []captured
 	srv, _ := recv(t, 200, `{}`, &seen)
-	c := New(Config{Signer: signer}) // zero policy
+	c := New(Config{Signer: signer, Policy: Policy{AllowPathPrefixes: []string{"/"}}}) // default egress, any path
 	for _, base := range []string{
 		srv.URL,                      // loopback http
 		"https://127.0.0.1",          // loopback literal
@@ -428,7 +428,7 @@ func TestSSRFExplicitInternalOnlyForThatDestination(t *testing.T) {
 		t.Fatalf("unauthorized loopback port reached: %v", err)
 	}
 	// Cleartext needs AllowInsecureHTTP even for an authorized host.
-	c2 := New(Config{Signer: signer, Policy: Policy{AllowInternal: pol.AllowInternal}})
+	c2 := New(Config{Signer: signer, Policy: Policy{AllowPathPrefixes: []string{"/"}, AllowInternal: pol.AllowInternal}})
 	if _, err := c2.Do(context.Background(), baseReq(srv.URL)); !errors.Is(err, ErrDestinationBlocked) {
 		t.Fatalf("http without AllowInsecureHTTP: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestDialTimeGuardBlocksResolvedPrivateIP(t *testing.T) {
 		t.Fatalf("dial to loopback must be blocked, got %v", err)
 	}
 	// Authorized by name: dial goes through.
-	pol := Policy{AllowInternal: []string{ln.Addr().String()}}
+	pol := Policy{AllowPathPrefixes: []string{"/"}, AllowInternal: []string{ln.Addr().String()}}
 	tr = pol.newHTTPClient().Transport.(*http.Transport)
 	conn, err := tr.DialContext(context.Background(), "tcp", ln.Addr().String())
 	if err != nil {
@@ -458,7 +458,7 @@ func TestDialTimeGuardBlocksResolvedPrivateIP(t *testing.T) {
 }
 
 func TestPublicHostAllowList(t *testing.T) {
-	p := Policy{AllowHosts: []string{"core.example.com"}}
+	p := Policy{AllowPathPrefixes: []string{"/"}, AllowHosts: []string{"core.example.com"}}
 	for host, ok := range map[string]bool{
 		"https://core.example.com":      true,
 		"https://other.example.com":     false,
@@ -638,6 +638,83 @@ func TestErrorsNeverCarryKeysOrSignatures(t *testing.T) {
 	for _, leak := range []string{sig, strings.TrimPrefix(sig, "ed25519:"), strings.Repeat("07", 32)} {
 		if strings.Contains(err.Error(), leak) {
 			t.Fatalf("error leaks %q", leak)
+		}
+	}
+}
+
+func TestPathAllowlistFailClosed(t *testing.T) {
+	signer, _ := testSigner(t)
+	var seen []captured
+	srv, pol := recv(t, 200, `{"success":true}`, &seen)
+	cases := []struct {
+		prefixes []string
+		ok       bool
+	}{
+		{nil, false},                           // no allowlist: deny
+		{[]string{"/api/addons/"}, false},      // other tree
+		{[]string{"/core/v1/licenses/"}, true}, // covers it
+		{[]string{"/CORE/v1/"}, true},          // case-insensitive config
+	}
+	for _, tc := range cases {
+		p := pol
+		p.AllowPathPrefixes = tc.prefixes
+		c := New(Config{Signer: signer, Policy: p})
+		_, err := c.Do(context.Background(), baseReq(srv.URL))
+		if tc.ok && err != nil {
+			t.Errorf("%v: unexpected %v", tc.prefixes, err)
+		}
+		if !tc.ok && !errors.Is(err, ErrDestinationBlocked) {
+			t.Errorf("%v: want blocked, got %v", tc.prefixes, err)
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("only the two allowed calls may reach the server, got %d", len(seen))
+	}
+}
+
+func TestInvocationIDRequired(t *testing.T) {
+	signer, _ := testSigner(t)
+	var seen []captured
+	srv, pol := recv(t, 200, `{"success":true}`, &seen)
+	c := New(Config{Signer: signer, Policy: pol})
+	for _, id := range []string{"", "   "} {
+		req := baseReq(srv.URL)
+		req.InvocationID = id
+		_, err := c.Do(context.Background(), req)
+		var ae *ActionError
+		if !errors.As(err, &ae) || ae.Code != CodeMisconfigured {
+			t.Fatalf("id %q: want misconfigured, got %v", id, err)
+		}
+	}
+	if len(seen) != 0 {
+		t.Fatal("a request went out without an InvocationID")
+	}
+}
+
+func TestRequireEnvelope(t *testing.T) {
+	signer, _ := testSigner(t)
+	for body, ok := range map[string]bool{
+		`{"success":true,"data":{}}`: true,
+		`{"success":false}`:          false,
+		``:                           false,
+		`<html>proxy</html>`:         false,
+		`{"data":1}`:                 false,
+		`[1]`:                        false,
+	} {
+		var seen []captured
+		srv, pol := recv(t, 200, body, &seen)
+		strict := New(Config{Signer: signer, Policy: pol, RequireEnvelope: true})
+		_, err := strict.Do(context.Background(), baseReq(srv.URL))
+		var ae *ActionError
+		if ok && err != nil {
+			t.Errorf("%q: unexpected %v", body, err)
+		}
+		if !ok && (!errors.As(err, &ae) || ae.Code != CodeBadResponse) {
+			t.Errorf("%q: want %s, got %v", body, CodeBadResponse, err)
+		}
+		// Without the option the legacy behaviour is unchanged.
+		if _, err := New(Config{Signer: signer, Policy: pol}).Do(context.Background(), baseReq(srv.URL)); err != nil {
+			t.Errorf("%q: default must not require the envelope: %v", body, err)
 		}
 	}
 }

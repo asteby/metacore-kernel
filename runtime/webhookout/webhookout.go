@@ -21,7 +21,6 @@ package webhookout
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -59,6 +58,11 @@ type Config struct {
 	MaxResponseBytes int64
 	// ExtraSecretKeys adds JSON keys to redact in the returned body.
 	ExtraSecretKeys []string
+	// RequireEnvelope makes a 2xx count as success only if the body is a JSON
+	// object with "success": true (the hub envelope). Anything else (HTML from
+	// a proxy, empty body, {"success":false}, truncated body) is returned as
+	// CodeBadResponse. Hosts that talk to the hub should set it.
+	RequireEnvelope bool
 	// Now is the clock (tests). nil = time.Now.
 	Now func() time.Time
 }
@@ -105,8 +109,8 @@ type Request struct {
 	// Idempotency identity of the invocation. InvocationID must be stable for
 	// one logical user action (the request id the client generated, or the
 	// stored delivery id) so a re-submit reuses the same Idempotency-Key; it is
-	// the same on every retry. If empty a random one is generated for this call
-	// and returned in Result.IdempotencyKey.
+	// the same on every retry. REQUIRED: an empty value is rejected as
+	// webhook_misconfigured before anything is sent.
 	AddonKey, OrgID, Model, Action, RecordID, InvocationID string
 }
 
@@ -189,13 +193,11 @@ func (c *Client) Do(ctx context.Context, r Request) (*Result, error) {
 		return nil, misconfigured(err, "the payload cannot be encoded as a flat JSON object")
 	}
 
-	invocation := r.InvocationID
+	// A random key would make a re-submit after a timeout or a double click a
+	// NEW write at the destination (idempotency fail-open), so it is required.
+	invocation := strings.TrimSpace(r.InvocationID)
 	if invocation == "" {
-		var rnd [16]byte
-		if _, err := rand.Read(rnd[:]); err != nil {
-			return nil, misconfigured(err, "no entropy for the idempotency key")
-		}
-		invocation = hex.EncodeToString(rnd[:])
+		return nil, misconfigured(nil, "InvocationID is required: it must be stable per user action so a re-submit reuses the Idempotency-Key; nothing was sent")
 	}
 	idem := DeriveIdempotencyKey(r.AddonKey, r.OrgID, r.Model, r.Action, r.RecordID, invocation)
 
@@ -344,6 +346,10 @@ func (c *Client) once(ctx context.Context, method string, d *destination, idem, 
 		return nil, &ActionError{Code: CodeTimeout, Message: "the answer was cut off; check the result before retrying", Status: resp.StatusCode, cause: rerr}
 	}
 
+	if c.cfg.RequireEnvelope && (truncated || !envelopeOK(raw)) {
+		return nil, &ActionError{Code: CodeBadResponse, Message: "the destination answered 2xx but not with a verifiable success envelope; check the result before retrying", Status: resp.StatusCode}
+	}
+
 	res := &Result{Status: resp.StatusCode, Truncated: truncated}
 	if !truncated {
 		res.Data, res.Body = redactJSON(raw, c.secrets)
@@ -354,6 +360,14 @@ func (c *Client) once(ctx context.Context, method string, d *destination, idem, 
 		}
 	}
 	return res, nil
+}
+
+// envelopeOK reports whether raw is a JSON object with "success": true.
+func envelopeOK(raw []byte) bool {
+	var v struct {
+		Success *bool `json:"success"`
+	}
+	return json.Unmarshal(raw, &v) == nil && v.Success != nil && *v.Success
 }
 
 // remoteMessage extracts the destination's short error text from

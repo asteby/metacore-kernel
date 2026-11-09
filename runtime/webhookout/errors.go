@@ -19,6 +19,9 @@ const (
 	// CodeMisconfigured: the handler, the base URL, the signer or the egress
 	// policy do not allow the request. Nothing was sent.
 	CodeMisconfigured = "webhook_misconfigured"
+	// CodeBadResponse: a 2xx that is not the expected success envelope (only
+	// when Config.RequireEnvelope is set). The effect is unknown.
+	CodeBadResponse = "webhook_bad_response"
 	// CodeConfirmMismatch: confirm_typed was not satisfied. Nothing was sent.
 	CodeConfirmMismatch = "confirm_mismatch"
 )
