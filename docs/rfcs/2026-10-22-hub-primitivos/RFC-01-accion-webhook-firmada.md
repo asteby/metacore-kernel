@@ -189,6 +189,8 @@ real es nulo.
 
 ### Fase 2 (kernel runtime + ops)
 
+> Estado: `runtime/webhookout` implementa el esquema `instance-ed25519-v1` como `asteby-req-v1` con cuerpo JSON plano (ligado a metodo, ruta, query, `Idempotency-Key` y `X-Actor`; ver `docs/spec/v3/webhook-signing.md`), que sustituye a la cadena con host y nonce propuesta en §2.2 para ese esquema. `metacore-hmac-v1` queda pendiente.
+
 - Kernel, paquete nuevo `runtime/webhookout` (host-neutral):
   `Invoke(ctx, Request{Trigger, AddonKey, Model, Action, OrgID, InstallationID, Actor, Reason, Record,
   Payload}, Deps{Secrets connectors.Resolver, Settings SettingsReader, Caps *security.Capabilities,
