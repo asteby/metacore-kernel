@@ -3315,6 +3315,22 @@
         "permission": {
           "type": "string"
         },
+        "props": {
+          "type": "object",
+          "description": "Static JSON passed to the mounted component as props. Optional."
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 30000,
+          "description": "How long the host waits for the remote component before applying fallback (1000..30000 ms)."
+        },
+        "fallback": {
+          "type": "string",
+          "enum": ["hide", "notice"],
+          "default": "hide",
+          "description": "What the host renders when the contribution fails to load: hide (default) or notice."
+        },
         "condition": {
           "$ref": "#/$defs/Condition",
           "description": "Optional server-side gate: only serve this contribution to organizations satisfying the predicate."

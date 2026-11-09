@@ -1941,6 +1941,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	errs = append(errs, validateIngest(&m, rls)...)
 	errs = append(errs, validateDashboardHub(&m)...)
 	validateRBACPermissionResolves(&m, warnOnly)
+	validateSlotsAndPrivate(&m, warnOnly)
 
 	if len(errs) > 0 {
 		return fmt.Errorf("v3: manifest validation failed:\n  - %s", strings.Join(errs, "\n  - "))
@@ -2486,4 +2487,131 @@ func validateRecordPresentation(mi int, mod Model, ownCols map[string]struct{}) 
 	}
 	sort.Strings(errs)
 	return errs
+}
+
+// HostSlotCatalogOpsV1 is the closed catalog of slot kinds the Ops host
+// publishes (`ops.host/v1`, documented in docs/spec/v3/slots.md). It is a
+// KNOWN LIST only: the kernel carries no host code. A contributions.slots[]
+// slot_kind outside this list and outside the manifest's own
+// extension_points.slot_kinds is reported as the tolerated rule
+// slot_kind_unknown (it may be published by another addon, which a single
+// manifest cannot see).
+var HostSlotCatalogOpsV1 = []string{
+	"dashboard.widget",
+	"record.panel",
+	"record.action",
+	"list.toolbar",
+	"settings.section",
+	"topbar.item",
+	"page.header",
+}
+
+// validateSlotsAndPrivate runs the C1 rules that are warnings in both modes:
+// slot_kind_unknown, private_frontend_integrity, private_explicit_capabilities.
+// The hard checks on the new slot fields (timeout_ms range, fallback enum) are
+// in the JSON schema.
+func validateSlotsAndPrivate(m *Manifest, warn func(rule, msg string)) {
+	if m.Contributions != nil && len(m.Contributions.Slots) > 0 {
+		known := make(map[string]struct{}, len(HostSlotCatalogOpsV1))
+		for _, k := range HostSlotCatalogOpsV1 {
+			known[k] = struct{}{}
+		}
+		if m.ExtensionPoints != nil {
+			for _, s := range m.ExtensionPoints.SlotKinds {
+				// The schema requires the published name to be the fully
+				// qualified '<addon_key>.<slot_name>'.
+				known[s.Name] = struct{}{}
+			}
+		}
+		for i, s := range m.Contributions.Slots {
+			if _, ok := known[s.SlotKind]; !ok {
+				warn(RuleSlotKindUnknown, fmt.Sprintf("contributions.slots[%d].slot_kind %q is not in the ops.host/v1 catalog nor published by this manifest's extension_points.slot_kinds; the host ignores a slot kind it does not publish", i, s.SlotKind))
+			}
+		}
+	}
+
+	if m.Metadata.Visibility != VisibilityPrivate {
+		return
+	}
+	if m.Frontend != nil && strings.TrimSpace(m.Frontend.Integrity) == "" {
+		warn(RulePrivateFrontendIntegrity, "a private addon with a frontend must declare frontend.integrity (SRI hash of the remote entry)")
+	}
+	if !hasExplicitCapabilities(m) && declaresWasmHandler(m) {
+		warn(RulePrivateExplicitCapabilities, "a private addon with a wasm handler must declare capabilities[] explicitly (least privilege)")
+	}
+}
+
+// declaresWasmHandler reports whether any handler of the manifest runs wasm.
+func declaresWasmHandler(m *Manifest) bool {
+	for _, mod := range m.Models {
+		for _, h := range mod.OnTransition {
+			if strings.HasPrefix(h.Do, "wasm:") {
+				return true
+			}
+		}
+		for _, f := range mod.Formulas {
+			if f.Tier == 3 || strings.HasPrefix(f.Handler, "wasm:") {
+				return true
+			}
+		}
+	}
+	for _, d := range m.EdgeDevices {
+		for _, e := range d.Events {
+			if strings.HasPrefix(e.Do, "wasm:") {
+				return true
+			}
+		}
+	}
+	for _, pc := range m.ProvidesCapabilities {
+		if pc.Handler.Type == "wasm" {
+			return true
+		}
+	}
+	for _, w := range m.Webhooks {
+		if strings.HasPrefix(w.Do, "wasm:") {
+			return true
+		}
+	}
+	for _, s := range m.Schedules {
+		if strings.HasPrefix(s.Do, "wasm:") {
+			return true
+		}
+	}
+	if m.Contributions == nil {
+		return false
+	}
+	for _, r := range m.Contributions.API {
+		if strings.HasPrefix(r.Do, "wasm:") {
+			return true
+		}
+	}
+	for _, a := range m.Contributions.Actions {
+		if a.Handler.Type == "wasm" {
+			return true
+		}
+	}
+	for _, s := range m.Contributions.Subscriptions {
+		if s.Handler.Type == "wasm" {
+			return true
+		}
+	}
+	for _, t := range m.Contributions.Tools {
+		if t.Handler.Type == "wasm" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasExplicitCapabilities reports whether the manifest declares at least one
+// capability with a concrete target. A bare wildcard target ("*" or empty) is a
+// blanket grant, not the least-privilege declaration the rule asks for.
+func hasExplicitCapabilities(m *Manifest) bool {
+	for _, c := range m.Capabilities {
+		t := strings.TrimSpace(c.Target)
+		if t != "" && t != "*" {
+			return true
+		}
+	}
+	return false
 }

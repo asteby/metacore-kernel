@@ -9,6 +9,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `manifest/v3` (contrato C1, retrocompatible): `contributions.slots[]` acepta `props` (JSON estatico), `timeout_ms` (1000..30000) y `fallback` (`hide` por omision | `notice`), todos opcionales; schema editado en las dos copias. Catalogo de slots del host `ops.host/v1` (`v3.HostSlotCatalogOpsV1`, documentado en `docs/spec/v3/slots.md`). Tres reglas toleradas, solo aviso en ambos modos durante una minor: `slot_kind_unknown`, `private_frontend_integrity` (privado con `frontend` sin `integrity`) y `private_explicit_capabilities` (privado con handler `wasm` y sin `capabilities[]`). Un addon ya publicado nunca se rechaza por ellas.
+- `runtime/setfields` y `runtime/ingest`: ejecutores neutrales al host de `handler.type: set_fields` (RFC-02) y del sumidero `Model.ingest` (RFC-04). Firma estable; el host solo los cablea (transaccion, org de la ruta, principal de sistema).
 - `capability`: `commerce.shipping.rates` acepta `purpose` (`checkout` por omisión | `label`) y el contrato declara `PurposeTimeouts`. Una cotización para comprar la guía de un pedido ya pagado (`purpose: "label"`) espera hasta `ShippingLabelQuoteTimeout` (15 s) en vez de los 4 s del checkout: en God's un transportista lento (`provider timeout: emissary after 4s`) retrasaba la guía ~1 min hasta el reintento del horario. Retrocompatible: sin `purpose` el plazo es el de siempre (4 s) y `Provider.Timeout` sigue ganando. Para aprovecharlo, el addon que cotiza la guía debe enviar `purpose: "label"` (addon `warehouse`, cambio aparte).
 
 ### Security
