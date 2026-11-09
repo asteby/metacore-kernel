@@ -2157,7 +2157,7 @@ func (m *Manifest) validateSetup() error {
 			if cr.Secret {
 				typ = "secret"
 			}
-			creds = append(creds, v3.Setting{Key: cr.Key, Type: typ, Default: cr.Default, VisibleWhen: cr.VisibleWhen, WriteOnly: cr.WriteOnly})
+			creds = append(creds, v3.Setting{Key: cr.Key, Type: typ, Default: cr.Default, VisibleWhen: cr.VisibleWhen, WriteOnly: cr.WriteOnly, Auto: cr.Auto})
 		}
 		errs = append(errs, v3.ValidateSettingExtras(fmt.Sprintf("connectors[%d].credentials", ci), creds)...)
 	}

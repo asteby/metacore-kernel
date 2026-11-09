@@ -3153,6 +3153,15 @@ type Setting struct {
 	// type "secret"; use it for string/json settings that hold credentials.
 	// A write_only setting cannot declare a default.
 	WriteOnly bool `json:"write_only,omitempty"`
+	// Auto marks a connector credential the HOST generates instead of asking a
+	// person to invent and paste it. Only valid on a connector credential of
+	// type "secret" (never a third-party key: Stripe, Mercado Pago, Emissary,
+	// YSell cannot be self-generated). Known values: see SettingAuto*. The
+	// host creates the value when the addon is installed or upgraded, stores it
+	// encrypted, hides the field in the connect form and offers "rotate". A
+	// required auto credential is never reported missing. Empty = a person
+	// supplies it (today's behaviour).
+	Auto string `json:"auto,omitempty"`
 }
 
 // SettingOption is a value/label pair for select-typed settings.

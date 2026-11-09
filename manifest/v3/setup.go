@@ -595,6 +595,9 @@ func validateSettingExtras(where string, list []Setting) []string {
 		if s.Type == "secret" && s.Default != nil {
 			errs = append(errs, w+".secret cannot declare a default (a secret is write-only and a default would ship in the signed manifest)")
 		}
+		if s.Auto != "" {
+			errs = append(errs, validateSettingAuto(where, w, s)...)
+		}
 		if s.Ref != "" {
 			if s.Type != "dynamic_select" {
 				errs = append(errs, w+".ref requires type dynamic_select")
