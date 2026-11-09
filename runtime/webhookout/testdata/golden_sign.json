@@ -1,0 +1,6 @@
+{
+  "canonical": "asteby-req-v1\nPOST\n/core/v1/licenses/lic_1/revoke\n\nmc1-abc\nstaff@example.com\n1780000000\n64a16bbfb6ebeda8282cd548aa1b561185cdbb5d6d723c295edfc8fc1b11f3fb",
+  "idempotency_key": "mc1-0ff4776234ebd685b34dbc3a68237b1cba9c57efe3cfd105a71857b2fe187377",
+  "x_signature": "ed25519:3FID6cCVWFJtbZamvsqTluFdLLznFehJU0ZGV2T7IHuzKKHO0I030Bt5QwkfKVz1h0TvlBooV0K68UqCNtJUDQ==",
+  "x_signature_timestamp": "1780000000"
+}
