@@ -15,7 +15,7 @@ const slotsFromV3JSON = `{
   "metadata": { "key": "slotdemo", "name": "Slot demo", "version": "1.0.0", "visibility": "private" },
   "compatibility": { "requires": [{ "key": "kernel", "version": ">=3.1.0 <4.0.0" }] },
   "tenancy": { "isolation": "shared", "rls_column": "organization_id" },
-  "frontend": { "entry": "remoteEntry.js", "format": "module", "container": "slotdemo", "expose": "./RecordPanel" },
+  "frontend": { "entry": "remoteEntry.js", "format": "federation", "container": "slotdemo", "expose": "./RecordPanel" },
   "contributions": {
     "slots": [
       { "slot_kind": "record.panel", "entry": "./RecordPanel", "order": 10,

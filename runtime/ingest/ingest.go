@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"strings"
 	"time"
 
@@ -187,6 +188,28 @@ func normalizeCursor(v any) (cursorVal, error) {
 		return cursorVal{n: n}, nil
 	case int:
 		return cursorVal{n: int64(x)}, nil
+	case int8:
+		return cursorVal{n: int64(x)}, nil
+	case int16:
+		return cursorVal{n: int64(x)}, nil
+	case uint8:
+		return cursorVal{n: int64(x)}, nil
+	case uint16:
+		return cursorVal{n: int64(x)}, nil
+	case uint32:
+		return cursorVal{n: int64(x)}, nil
+	case uint, uint64:
+		u := reflect.ValueOf(x).Uint()
+		if u > math.MaxInt64 {
+			return cursorVal{}, fmt.Errorf("cursor %d overflows int64", u)
+		}
+		return cursorVal{n: int64(u)}, nil
+	case float32:
+		f := float64(x)
+		if f != math.Trunc(f) || math.Abs(f) > 1<<24 {
+			return cursorVal{}, fmt.Errorf("cursor %v is not a safe integer", x)
+		}
+		return cursorVal{n: int64(f)}, nil
 	case int32:
 		return cursorVal{n: int64(x)}, nil
 	case int64:
@@ -254,7 +277,7 @@ func contains(list []string, s string) bool {
 // column, the key and (when declared) the cursor are always writable, anything
 // else only when Fields is empty (all non-managed) or lists it.
 func writable(spec v3.IngestSpec, col string) bool {
-	if v3.ManagedColumn(col) {
+	if isManaged(col) {
 		return false
 	}
 	if contains(spec.Key, col) || (spec.Cursor != "" && col == spec.Cursor) {
@@ -417,7 +440,14 @@ func Apply(ctx context.Context, spec v3.IngestSpec, b Batch, st Store) (Result, 
 			if !found {
 				continue
 			}
-			if spec.Cursor != "" && it.Cursor != nil && row[spec.Cursor] != nil {
+			if spec.Cursor != "" && it.Cursor == nil {
+				// A delete on a cursor-ordered model must carry its cursor:
+				// without it a replayed or out-of-order batch could delete a
+				// row that was re-created later.
+				reject(i, CodeValidation, spec.Cursor)
+				continue
+			}
+			if spec.Cursor != "" && row[spec.Cursor] != nil {
 				cmp, err := CompareCursor(it.Cursor, row[spec.Cursor])
 				if err != nil {
 					reject(i, CodeValidation, spec.Cursor)
@@ -443,4 +473,23 @@ func Apply(ctx context.Context, spec v3.IngestSpec, b Batch, st Store) (Result, 
 	}
 	res.HighWater = high
 	return res, nil
+}
+
+// isManaged is v3.ManagedColumn hardened against spelling variants a Store
+// built on an ORM naming strategy would still map onto a managed column
+// ("ID", "OrganizationID", "DeletedAt", "created_By_Id").
+func isManaged(col string) bool {
+	n := strings.ToLower(strings.TrimSpace(col))
+	if v3.ManagedColumn(n) {
+		return true
+	}
+	if n == "organizationid" {
+		return true
+	}
+	for _, p := range []string{"createdat", "createdby", "updatedat", "updatedby", "deletedat", "deletedby"} {
+		if strings.HasPrefix(n, p) {
+			return true
+		}
+	}
+	return false
 }

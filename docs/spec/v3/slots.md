@@ -59,7 +59,7 @@ publish because of them. Warnings read `[rule_id] message`.
 
 | Rule | Fires when |
 |---|---|
-| `slot_kind_unknown` | a `contributions.slots[].slot_kind` is not in the catalog above and not published by this manifest's own `extension_points.slot_kinds` (it may be published by another addon, which one manifest cannot see). Both `name` and `<addon_key>.<name>` match. |
+| `slot_kind_unknown` | a `contributions.slots[].slot_kind` is not in the catalog above and not published by this manifest's own `extension_points.slot_kinds` (it may be published by another addon, which one manifest cannot see). The schema requires the published name to be the qualified `<addon_key>.<name>`, so only that form matches. |
 | `private_frontend_integrity` | `metadata.visibility = private`, a `frontend` block exists and `frontend.integrity` is empty. |
 | `private_explicit_capabilities` | `metadata.visibility = private`, any handler is `wasm` (actions, subscriptions, tools, `provides_capabilities`, `webhooks[].do` / `schedules[].do` of `wasm:<export>`) and `capabilities[]` is empty. |
 

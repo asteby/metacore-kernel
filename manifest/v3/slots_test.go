@@ -14,7 +14,7 @@ const slotsBase = `{
   "metadata": { "key": "slotdemo", "name": "Slot demo", "version": "1.0.0" },
   "compatibility": { "requires": [{ "key": "kernel", "version": ">=3.1.0 <4.0.0" }] },
   "tenancy": { "isolation": "shared", "rls_column": "organization_id" },
-  "frontend": { "entry": "remoteEntry.js", "format": "module", "container": "slotdemo", "expose": "./RecordPanel" },
+  "frontend": { "entry": "remoteEntry.js", "format": "federation", "container": "slotdemo", "expose": "./RecordPanel" },
   "contributions": {
     "slots": [
       { "slot_kind": "record.panel", "entry": "./RecordPanel", "order": 10,
@@ -130,11 +130,11 @@ func TestSlotKindUnknown_WarnsInBothModes(t *testing.T) {
 			t.Fatalf("strict=%v: want slot_kind_unknown warning, got %v", strict, warns)
 		}
 	}
-	// Published by the manifest itself: known, qualified or not.
-	for _, kind := range []string{"detail", "slotdemo.detail"} {
+	// Published by the manifest itself (the schema requires the qualified name).
+	for _, kind := range []string{"slotdemo.detail"} {
 		raw := slotsMutate(t, func(m map[string]any) {
 			slot0(m)["slot_kind"] = kind
-			m["extension_points"] = map[string]any{"slot_kinds": []any{map[string]any{"name": "detail"}}}
+			m["extension_points"] = map[string]any{"slot_kinds": []any{map[string]any{"name": "slotdemo.detail"}}}
 		})
 		warns, err := ValidateWithOptions(raw, Options{Strict: true})
 		if err != nil || hasRule(warns, RuleSlotKindUnknown) {
@@ -214,5 +214,38 @@ func TestSlotRules_RegisteredInCompatWindow(t *testing.T) {
 		if _, ok := warnOnlyWindow[r]; !ok {
 			t.Fatalf("%s must be warn-only in both modes", r)
 		}
+	}
+}
+
+func TestPrivateExplicitCapabilities_CoversHooksAndRejectsWildcard(t *testing.T) {
+	base := func(m map[string]any) {
+		m["metadata"].(map[string]any)["visibility"] = "private"
+		m["frontend"].(map[string]any)["integrity"] = "sha384-abc"
+		m["models"] = []any{map[string]any{"key": "Thing", "table": "things",
+			"columns": []any{
+				map[string]any{"name": "id", "type": "uuid", "primary_key": true},
+				map[string]any{"name": "organization_id", "type": "uuid", "not_null": true},
+				map[string]any{"name": "status", "type": "text"},
+			},
+			"stage_field": "status",
+			"stages":      []any{map[string]any{"key": "a", "label": "A"}, map[string]any{"key": "b", "label": "B"}},
+			"transitions": []any{map[string]any{"from": "a", "to": "b"}},
+			"on_transition": []any{map[string]any{"from": "a", "to": "b", "do": "wasm:on_ab"}},
+		}}
+	}
+	warns, err := ValidateWithOptions(slotsMutate(t, base), Options{})
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	if !hasRule(warns, RulePrivateExplicitCapabilities) {
+		t.Fatalf("wasm only in on_transition[].do must warn, got %v", warns)
+	}
+	wild := slotsMutate(t, func(m map[string]any) {
+		base(m)
+		m["capabilities"] = []any{map[string]any{"kind": "db:write", "target": "*"}}
+	})
+	warns, err = ValidateWithOptions(wild, Options{})
+	if err != nil || !hasRule(warns, RulePrivateExplicitCapabilities) {
+		t.Fatalf("a bare wildcard capability must not count as explicit: err=%v warns=%v", err, warns)
 	}
 }

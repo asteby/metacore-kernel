@@ -188,7 +188,7 @@ func TestApply_MixedBatchRejectsOnlyTheBadItems(t *testing.T) {
 func TestApply_ManagedColumnsNeverWritable(t *testing.T) {
 	s := v3.IngestSpec{Key: []string{"instance_id"}} // no Fields = every non-managed column
 	st := newMem()
-	for _, col := range []string{"id", "organization_id", "created_at", "updated_by_id", "deleted_at"} {
+	for _, col := range []string{"id", "organization_id", "created_at", "updated_by_id", "deleted_at", "ID", "OrganizationID", "DeletedAt", "Created_At"} {
 		b := Batch{Items: []Item{{Op: OpUpsert, Data: map[string]any{"instance_id": "i", col: "x"}}}}
 		res, err := Apply(context.Background(), s, b, st)
 		if err != nil || res.Rejected != 1 || res.Errors[0].Code != CodeUnknownField || res.Errors[0].Field != col {
@@ -300,6 +300,30 @@ func TestMaxBatch(t *testing.T) {
 	for in, want := range map[int]int{0: 500, -1: 500, 10: 10, 1000: 1000, 5000: 1000} {
 		if got := MaxBatch(v3.IngestSpec{MaxBatch: in}); got != want {
 			t.Fatalf("MaxBatch(%d)=%d want %d", in, got, want)
+		}
+	}
+}
+
+func TestApply_DeleteWithoutCursorRejectedOnCursorModel(t *testing.T) {
+	s := spec()
+	st := newMem()
+	ctx := context.Background()
+	b := decode(t, s, `{"items":[{"op":"upsert","cursor":10,"data":{"instance_id":"i1","name":"a"}}]}`)
+	if res, err := Apply(ctx, s, b, st); err != nil || res.Applied != 1 {
+		t.Fatalf("seed: %+v %v", res, err)
+	}
+	b = decode(t, s, `{"items":[{"op":"delete","key":{"instance_id":"i1"}}]}`)
+	res, err := Apply(ctx, s, b, st)
+	if err != nil || res.Deleted != 0 || res.Rejected != 1 || st.deleted["i1"] {
+		t.Fatalf("a delete without cursor must be rejected: %+v err=%v", res, err)
+	}
+}
+
+func TestCompareCursor_SmallIntegerTypes(t *testing.T) {
+	for _, v := range []any{int8(3), int16(3), uint8(3), uint16(3), uint32(3), uint(3), uint64(3), float32(3)} {
+		c, err := CompareCursor(v, int64(2))
+		if err != nil || c != 1 {
+			t.Fatalf("%T: c=%d err=%v", v, c, err)
 		}
 	}
 }

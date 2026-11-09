@@ -2518,8 +2518,9 @@ func validateSlotsAndPrivate(m *Manifest, warn func(rule, msg string)) {
 		}
 		if m.ExtensionPoints != nil {
 			for _, s := range m.ExtensionPoints.SlotKinds {
+				// The schema requires the published name to be the fully
+				// qualified '<addon_key>.<slot_name>'.
 				known[s.Name] = struct{}{}
-				known[m.Metadata.Key+"."+s.Name] = struct{}{}
 			}
 		}
 		for i, s := range m.Contributions.Slots {
@@ -2535,13 +2536,32 @@ func validateSlotsAndPrivate(m *Manifest, warn func(rule, msg string)) {
 	if m.Frontend != nil && strings.TrimSpace(m.Frontend.Integrity) == "" {
 		warn(RulePrivateFrontendIntegrity, "a private addon with a frontend must declare frontend.integrity (SRI hash of the remote entry)")
 	}
-	if len(m.Capabilities) == 0 && declaresWasmHandler(m) {
+	if !hasExplicitCapabilities(m) && declaresWasmHandler(m) {
 		warn(RulePrivateExplicitCapabilities, "a private addon with a wasm handler must declare capabilities[] explicitly (least privilege)")
 	}
 }
 
 // declaresWasmHandler reports whether any handler of the manifest runs wasm.
 func declaresWasmHandler(m *Manifest) bool {
+	for _, mod := range m.Models {
+		for _, h := range mod.OnTransition {
+			if strings.HasPrefix(h.Do, "wasm:") {
+				return true
+			}
+		}
+		for _, f := range mod.Formulas {
+			if f.Tier == 3 || strings.HasPrefix(f.Handler, "wasm:") {
+				return true
+			}
+		}
+	}
+	for _, d := range m.EdgeDevices {
+		for _, e := range d.Events {
+			if strings.HasPrefix(e.Do, "wasm:") {
+				return true
+			}
+		}
+	}
 	for _, pc := range m.ProvidesCapabilities {
 		if pc.Handler.Type == "wasm" {
 			return true
@@ -2560,6 +2580,11 @@ func declaresWasmHandler(m *Manifest) bool {
 	if m.Contributions == nil {
 		return false
 	}
+	for _, r := range m.Contributions.API {
+		if strings.HasPrefix(r.Do, "wasm:") {
+			return true
+		}
+	}
 	for _, a := range m.Contributions.Actions {
 		if a.Handler.Type == "wasm" {
 			return true
@@ -2572,6 +2597,19 @@ func declaresWasmHandler(m *Manifest) bool {
 	}
 	for _, t := range m.Contributions.Tools {
 		if t.Handler.Type == "wasm" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasExplicitCapabilities reports whether the manifest declares at least one
+// capability with a concrete target. A bare wildcard target ("*" or empty) is a
+// blanket grant, not the least-privilege declaration the rule asks for.
+func hasExplicitCapabilities(m *Manifest) bool {
+	for _, c := range m.Capabilities {
+		t := strings.TrimSpace(c.Target)
+		if t != "" && t != "*" {
 			return true
 		}
 	}

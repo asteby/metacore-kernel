@@ -96,6 +96,8 @@ func TestResolve_Errors(t *testing.T) {
 		{"object value", map[string]any{"a": map[string]any{"x": 1}}, Input{}, ErrBadToken},
 		{"no actor", map[string]any{"a": "$actor.id"}, Input{}, ErrMissingValue},
 		{"missing payload", map[string]any{"a": "$payload.reason"}, Input{Payload: map[string]any{}}, ErrMissingValue},
+		{"null payload", map[string]any{"a": "$payload.reason"}, Input{Payload: map[string]any{"reason": nil}}, ErrMissingValue},
+		{"managed spelling", map[string]any{"OrganizationID": "x"}, Input{}, ErrManagedColumn},
 		{"missing record col", map[string]any{"a": "$record.name"}, Input{Record: map[string]any{}}, ErrMissingValue},
 	}
 	for _, c := range cases {

@@ -135,7 +135,7 @@ func Resolve(set map[string]any, in Input) (map[string]any, error) {
 
 	out := make(map[string]any, len(set))
 	for _, col := range Columns(set) {
-		if v3.ManagedColumn(col) {
+		if isManaged(col) {
 			return nil, fmt.Errorf("%w: %q", ErrManagedColumn, col)
 		}
 		sv, err := v3.ParseSetValue(set[col])
@@ -156,10 +156,12 @@ func Resolve(set map[string]any, in Input) (map[string]any, error) {
 			out[col] = in.ActorID
 		case v3.SetPayload:
 			v, ok := in.Payload[sv.Name]
-			if !ok {
+			if !ok || v == nil {
+				// null counts as missing: only an explicit "$null" token
+				// writes NULL (fail closed).
 				return nil, fmt.Errorf("%w: set.%s needs $payload.%s", ErrMissingValue, col, sv.Name)
 			}
-			out[col] = v
+			out[col] = cloneValue(v)
 		case v3.SetRecord:
 			v, ok := in.Record[sv.Name]
 			if !ok {
@@ -196,4 +198,40 @@ func Apply(spec Spec, in Input) (Result, error) {
 		after[c] = v
 	}
 	return Result{Updates: updates, Before: before, After: after}, nil
+}
+
+// isManaged is v3.ManagedColumn hardened against spelling variants an ORM
+// naming strategy would still map onto a managed column ("ID",
+// "OrganizationID", "DeletedAt").
+func isManaged(col string) bool {
+	n := strings.ToLower(strings.TrimSpace(col))
+	if v3.ManagedColumn(n) || n == "organizationid" {
+		return true
+	}
+	for _, p := range []string{"createdat", "createdby", "updatedat", "updatedby", "deletedat", "deletedby"} {
+		if strings.HasPrefix(n, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// cloneValue deep-copies JSON-shaped maps and slices so the resolved update
+// never aliases the caller's payload.
+func cloneValue(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		c := make(map[string]any, len(x))
+		for k, e := range x {
+			c[k] = cloneValue(e)
+		}
+		return c
+	case []any:
+		c := make([]any, len(x))
+		for i, e := range x {
+			c[i] = cloneValue(e)
+		}
+		return c
+	}
+	return v
 }
