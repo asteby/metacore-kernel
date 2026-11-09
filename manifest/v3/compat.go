@@ -45,19 +45,45 @@ const (
 // warnings come back from ValidateWithOptions / ParseWithOptions in either
 // mode; promote them to `tolerate` (and then to plain errors) in the next minor.
 
+// Slot / private-addon rules (C1, docs/spec/v3/slots.md), emitted by
+// validateSlotsAndPrivate (validate.go). Warning-only in BOTH modes for their
+// first minor (warnOnlyWindow): a published addon that contributes to another
+// addon's slot kind, or a private addon without integrity/capabilities, must
+// not be rejected at publish by the release that introduces the rule.
+const (
+	// RuleSlotKindUnknown: contributions.slots[].slot_kind is neither in the
+	// ops.host/v1 catalog nor published by this manifest's own
+	// extension_points.slot_kinds.
+	RuleSlotKindUnknown = "slot_kind_unknown"
+
+	// RulePrivateFrontendIntegrity: metadata.visibility=private and a frontend
+	// block require frontend.integrity.
+	RulePrivateFrontendIntegrity = "private_frontend_integrity"
+
+	// RulePrivateExplicitCapabilities: metadata.visibility=private and any wasm
+	// handler require a non-empty capabilities[].
+	RulePrivateExplicitCapabilities = "private_explicit_capabilities"
+)
+
 // legacyTolerated lists the rules currently inside their compatibility window.
 var legacyTolerated = []string{
 	RuleRequiresStateInStages,
 	RuleAuditColumnType,
 	RuleWebhookActionSigning,
 	RuleRBACPermissionResolves,
+	RuleSlotKindUnknown,
+	RulePrivateFrontendIntegrity,
+	RulePrivateExplicitCapabilities,
 }
 
 // warnOnlyWindow marks the legacyTolerated rules that are reported as warnings
 // even when Options.Strict is set (see the note above).
 var warnOnlyWindow = map[string]struct{}{
-	RuleWebhookActionSigning:   {},
-	RuleRBACPermissionResolves: {},
+	RuleWebhookActionSigning:        {},
+	RuleRBACPermissionResolves:      {},
+	RuleSlotKindUnknown:             {},
+	RulePrivateFrontendIntegrity:    {},
+	RulePrivateExplicitCapabilities: {},
 }
 
 // LegacyTolerated returns the rule ids currently inside their compatibility

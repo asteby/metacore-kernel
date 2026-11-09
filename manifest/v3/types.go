@@ -2253,6 +2253,17 @@ type SlotContribution struct {
 	Order      int    `json:"order,omitempty"`
 	Permission string `json:"permission,omitempty"`
 
+	// Props is static JSON handed to the mounted component as its `props`
+	// (docs/spec/v3/slots.md). Optional.
+	Props map[string]any `json:"props,omitempty"`
+	// TimeoutMS bounds how long the host waits for the remote component to
+	// load before applying Fallback, 1000..30000. 0 = host default.
+	TimeoutMS int `json:"timeout_ms,omitempty"`
+	// Fallback is what the host renders when the contribution fails to load or
+	// throws: "hide" (default; render nothing) or "notice" (a neutral inline
+	// notice). A broken remote never takes the host shell down.
+	Fallback string `json:"fallback,omitempty"`
+
 	// Condition gates this contribution server-side: when set, the host only
 	// serves it to organizations where the predicate holds (e.g. another addon
 	// is installed). Nil = always served. See Condition.
