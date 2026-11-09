@@ -322,6 +322,9 @@ type CredentialDef struct {
 	// VisibleWhen / WriteOnly project v3 Setting.visible_when / write_only.
 	VisibleWhen *v3.VisibleWhen `json:"visible_when,omitempty"`
 	WriteOnly   bool            `json:"write_only,omitempty"`
+	// Auto projects v3 Setting.auto: the host generates the secret (see
+	// v3.SettingAutoStorefrontBearer) instead of asking for it.
+	Auto string `json:"auto,omitempty"`
 }
 
 // ScheduleDef is the host/runtime projection of a v3 Schedule: a cron job the

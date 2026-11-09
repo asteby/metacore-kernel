@@ -289,6 +289,7 @@ func mapCredentials(in []v3.Setting) []CredentialDef {
 			Section:       s.Section,
 			VisibleWhen:   s.VisibleWhen,
 			WriteOnly:     s.WriteOnly,
+			Auto:          s.Auto,
 		})
 	}
 	return out
