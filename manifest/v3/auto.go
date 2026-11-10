@@ -14,6 +14,12 @@ const (
 	// replaces "invent a 32+ char secret and paste it in two places".
 	SettingAutoStorefrontBearer = "storefront_bearer"
 
+	// SettingAutoWebhookSigning is the secret the host generates to sign and
+	// verify inbound webhooks with verify "hmac-sha256" (secret_ref
+	// "<connector>.<key>"). It replaces "invent a 32+ char secret and paste it
+	// in two places".
+	SettingAutoWebhookSigning = "webhook_signing"
+
 	// AutoSecretPrefix marks a host-generated secret so a leaked one is
 	// recognisable in logs and secret scanners.
 	AutoSecretPrefix = "mcs_"
@@ -22,7 +28,9 @@ const (
 )
 
 // IsKnownSettingAuto reports whether v is a supported Setting.auto value.
-func IsKnownSettingAuto(v string) bool { return v == SettingAutoStorefrontBearer }
+func IsKnownSettingAuto(v string) bool {
+	return v == SettingAutoStorefrontBearer || v == SettingAutoWebhookSigning
+}
 
 // GenerateAutoSecret returns a fresh random secret for an auto credential:
 // AutoSecretPrefix + 43 base64url characters (256 bits from crypto/rand).
@@ -42,7 +50,7 @@ func validateSettingAuto(where, w string, s Setting) []string {
 		errs = append(errs, w+".auto is only valid on a connector credential")
 	}
 	if !IsKnownSettingAuto(s.Auto) {
-		errs = append(errs, fmt.Sprintf("%s.auto %q is not supported (supported: %s)", w, s.Auto, SettingAutoStorefrontBearer))
+		errs = append(errs, fmt.Sprintf("%s.auto %q is not supported (supported: %s, %s)", w, s.Auto, SettingAutoStorefrontBearer, SettingAutoWebhookSigning))
 	}
 	if s.Type != "secret" {
 		errs = append(errs, w+".auto requires type secret")
