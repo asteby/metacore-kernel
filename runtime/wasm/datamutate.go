@@ -316,9 +316,23 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		Before:        before,
 		After:         after,
 	}
-	if err := inv.bus.Publish(ctx, "kernel", event, orgID, payload); err != nil && inv.logger != nil {
-		inv.logger.Printf("metacore.wasm data_mutate publish_error addon=%s event=%s err=%v",
-			eventAddon, event, err)
+	publish := func(pctx context.Context) {
+		if err := inv.bus.Publish(pctx, "kernel", event, orgID, payload); err != nil && inv.logger != nil {
+			inv.logger.Printf("metacore.wasm data_mutate publish_error addon=%s event=%s err=%v",
+				eventAddon, event, err)
+		}
+	}
+	// Inside a caller's REAL transaction (InvokeInTx) the commit above only
+	// released a SAVEPOINT: nothing is visible to other connections yet. Announcing
+	// the row now let async subscribers (which read through the pool) run before
+	// the outer commit and see the parent without its children — e.g. a
+	// GoodsReceipt.updated handler found zero goods_receipt_items and booked no
+	// stock. Defer the publication to the ctx's CommitHook (run after the outer
+	// commit, dropped on rollback). Without a hook the previous behaviour stands.
+	if hook := dynamic.CommitHookFrom(ctx); hook != nil && inv.tx != nil && isTx(inv.tx) {
+		hook.Add(publish)
+	} else {
+		publish(ctx)
 	}
 
 	dataOut := map[string]any{

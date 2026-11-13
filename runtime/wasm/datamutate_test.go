@@ -1095,3 +1095,80 @@ func TestExecuteDataMutate_StageGate_RejectsUndeclaredCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Inside an InvokeInTx transaction the data_mutate "commit" is only a
+// RELEASE SAVEPOINT: the canonical event must wait for the OUTER commit (via the
+// ctx CommitHook), otherwise an async subscriber reads the parent through the
+// pool before the children are visible (GoodsReceipt.updated saw 0 items).
+func TestExecuteDataMutate_InTxPublishesOnlyAfterOuterCommit(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+
+	orgID := uuid.New()
+	rowID := uuid.NewString()
+	bus, getEvents, _ := captureBus(t, "inventory.Stock.updated")
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`SAVEPOINT`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
+	mock.ExpectQuery(`SELECT \* FROM "stock" WHERE id = \$1 AND organization_id = \$2`).
+		WithArgs(rowID, orgID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "quantity"}).AddRow(rowID, int64(10)))
+	mock.ExpectQuery(`UPDATE "stock"`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "quantity"}).AddRow(rowID, int64(7)))
+	mock.ExpectExec(`RELEASE SAVEPOINT`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	tx := gdb.Begin()
+	inv := testInvocation(gdb, bus, orgID, stockWriteEnforcer(), nil)
+	inv.tx = tx
+	ctx, hook := dynamic.WithCommitHook(context.Background())
+
+	out := executeDataMutate(ctx, inv, []byte(`{"op":"update","table":"stock","model":"Stock","id":"`+rowID+`","inc":{"quantity":-3}}`))
+	if env := unmarshalMutate(t, out); !env.Success {
+		t.Fatalf("expected success, got %s", out)
+	}
+	if n := len(getEvents()); n != 0 {
+		t.Fatalf("event published before the outer commit (%d); subscribers would read uncommitted state", n)
+	}
+	if err := tx.Commit().Error; err != nil {
+		t.Fatal(err)
+	}
+	hook.Run(ctx)
+	if n := len(getEvents()); n != 1 {
+		t.Fatalf("expected the event after the outer commit, got %d", n)
+	}
+}
+
+// A rolled-back outer transaction must never announce the write.
+func TestExecuteDataMutate_InTxRollbackDiscardsEvent(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+
+	orgID := uuid.New()
+	rowID := uuid.NewString()
+	bus, getEvents, _ := captureBus(t, "inventory.Stock.updated")
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`SAVEPOINT`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT \* FROM "stock" LIMIT 0`).WillReturnRows(sqlmock.NewRows([]string{"id", "organization_id"}))
+	mock.ExpectQuery(`SELECT \* FROM "stock" WHERE id = \$1 AND organization_id = \$2`).
+		WithArgs(rowID, orgID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "quantity"}).AddRow(rowID, int64(10)))
+	mock.ExpectQuery(`UPDATE "stock"`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "quantity"}).AddRow(rowID, int64(7)))
+	mock.ExpectExec(`RELEASE SAVEPOINT`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectRollback()
+
+	tx := gdb.Begin()
+	inv := testInvocation(gdb, bus, orgID, stockWriteEnforcer(), nil)
+	inv.tx = tx
+	ctx, hook := dynamic.WithCommitHook(context.Background())
+	executeDataMutate(ctx, inv, []byte(`{"op":"update","table":"stock","model":"Stock","id":"`+rowID+`","inc":{"quantity":-3}}`))
+	tx.Rollback()
+	hook.Discard()
+	hook.Run(ctx)
+	if n := len(getEvents()); n != 0 {
+		t.Fatalf("rolled-back write was announced (%d events)", n)
+	}
+}

@@ -34,6 +34,12 @@ func CommitHookFrom(ctx context.Context) *CommitHook {
 	return h
 }
 
+// Add queues fn to run once the caller's transaction commits (Run) and drops it
+// if the transaction rolls back (Discard). It is the exported twin of the
+// staging the outbox does, for publishers outside this package (the wasm
+// data_mutate import).
+func (h *CommitHook) Add(fn func(context.Context)) { h.add(fn) }
+
 func (h *CommitHook) add(fn func(context.Context)) {
 	h.mu.Lock()
 	h.fns = append(h.fns, fn)
