@@ -104,5 +104,6 @@ func (r ToolResult) FormatForLLMLimit(maxBytes int) (text string, truncated bool
 		cut = cut[:len(cut)-1]
 	}
 	return cut + fmt.Sprintf("\n[RESULTADO TRUNCADO: se omitieron %d bytes. Lo anterior está incompleto; "+
-		"no lo presentes como total. Pide menos filas, usa filtros o la siguiente página.]", omitted), true
+		"no lo presentes como total. Para ver el resto, repite la consulta más acotada: agrega filtros, "+
+		"pide menos columnas, baja el limit o pide la siguiente página; para totales o conteos usa una agregación.]", omitted), true
 }

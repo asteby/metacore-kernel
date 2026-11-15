@@ -105,6 +105,19 @@ type OrchestratorConfig struct {
 	// result size, error) so the host can audit it. Optional; it runs on the
 	// loop goroutine, so keep it fast (enqueue, don't write synchronously).
 	OnToolTrace func(ctx context.Context, convCtx *contextmgr.ConversationContext, tr ToolTrace)
+
+	// ToolsInPrompt also renders every tool's description and parameters as
+	// text in the system prompt (AppendToolsSection). The tools always travel
+	// natively in the request, so this only pays for them twice; it stays as
+	// an opt-in for providers without native function calling. Off by
+	// default: the system prompt gets only the short closing rules.
+	ToolsInPrompt bool
+
+	// OnPromptBudget receives the approximate token size of every LLM call by
+	// section (system, tools, history, turn context, tool results), so the
+	// host can persist it. Optional; it runs on the loop goroutine, so keep it
+	// fast. The same numbers are always logged with slog ("agent prompt budget").
+	OnPromptBudget func(ctx context.Context, b PromptBudget)
 }
 
 // toolPolicy is the execution policy copied from OrchestratorConfig.
@@ -132,6 +145,8 @@ type AgentOrchestrator struct {
 	streamCallback StreamCallback
 	policy         toolPolicy
 	agentName      string
+	toolsInPrompt  bool
+	onBudget       func(ctx context.Context, b PromptBudget)
 }
 
 // NewAgentOrchestrator builds an orchestrator from cfg.
@@ -152,6 +167,8 @@ func NewAgentOrchestrator(cfg OrchestratorConfig) *AgentOrchestrator {
 		models:        cfg.Models,
 		maxIterations: max,
 		agentName:     cfg.AgentName,
+		toolsInPrompt: cfg.ToolsInPrompt,
+		onBudget:      cfg.OnPromptBudget,
 		policy: toolPolicy{
 			ToolTimeout:        cfg.ToolTimeout,
 			ToolRetries:        cfg.ToolRetries,
@@ -193,11 +210,36 @@ type Turn struct {
 	// UserMessage is the incoming text.
 	UserMessage string
 	// SystemPrompt is the host-authored prompt WITHOUT the tools section; the
-	// runtime appends the tool list and the closing rules.
+	// runtime appends the closing rules (and the tool list when
+	// OrchestratorConfig.ToolsInPrompt is set). Keep it stable across turns:
+	// anything that changes per turn (clock, per-request data) belongs in
+	// TurnContext, or the provider's prompt cache never hits.
 	SystemPrompt string
+	// TurnContext is a short block of per-turn facts (today's date, zone)
+	// attached after this turn's user message in what the model sees. It is
+	// not stored in the history, so earlier turns stay byte-identical and
+	// cacheable. Optional.
+	TurnContext string
 	// ExtraTools are registered on top of the base tools for this turn only
 	// (per-agent dynamic tools, per-turn guides).
 	ExtraTools []tools.BaseTool
+	// MaxToolResultBytes overrides OrchestratorConfig.MaxToolResultBytes for
+	// this turn. Zero keeps the orchestrator policy; negative disables the cap.
+	MaxToolResultBytes int
+	// HistoryTokenBudget keeps only the newest history messages that fit this
+	// many estimated tokens (EstimateTokens); the current user message is
+	// always kept. Zero or negative keeps the whole loaded history.
+	HistoryTokenBudget int
+}
+
+// turnOptions carries per-turn knobs from Turn into the loop.
+type turnOptions struct {
+	// turnContext is appended to messages[userIndex] in each model call.
+	turnContext string
+	// userIndex is the position of the turn's user message (-1: none).
+	userIndex int
+	// maxResultBytes overrides the orchestrator result cap (0: policy).
+	maxResultBytes int
 }
 
 // ProcessMessage runs one turn. The caller stamps the context with whatever
@@ -208,29 +250,26 @@ func (o *AgentOrchestrator) ProcessMessage(ctx context.Context, turn Turn) (*Age
 	o.emitActivity(turn.ConversationID, "thinking", "", "sparkles|Recibí tu solicitud…", true)
 
 	// 1. Registry: base + per-turn tools.
-	registry := o.toolRegistry.Clone()
-	for _, t := range turn.ExtraTools {
-		registry.Register(t)
-	}
-	// Guides the browser announced this turn (dynamic catalog).
-	if gt := GuideTurnFrom(ctx); gt != nil && len(gt.catalog) > 0 {
-		registry.Register(NewStartGuideTool(gt))
-	}
+	registry := o.turnRegistry(ctx, turn)
 
 	// 2. Conversation context.
 	convCtx := o.contextMgr.GetContext(turn.ConversationID)
 	convCtx.AgentID = turn.AgentID
 	convCtx.MessageCount++
 
-	// 3. System prompt with the tools section.
-	systemPrompt := AppendToolsSection(turn.SystemPrompt, registry)
+	// 3. System prompt: host prompt + closing rules (+ tool list if opted in).
+	systemPrompt := o.turnSystemPrompt(turn.SystemPrompt, registry)
 
 	// 4. History.
-	messages := o.buildMessageHistory(convCtx, turn.UserMessage)
+	messages := o.buildMessageHistory(convCtx, turn.UserMessage, turn.HistoryTokenBudget)
 	convCtx.History = append(convCtx.History, contextmgr.Message{Role: "user", Content: turn.UserMessage})
 
 	// 5. Reasoning loop.
-	response, err := o.agentLoop(ctx, messages, systemPrompt, convCtx, registry)
+	response, err := o.agentLoopTurn(ctx, messages, systemPrompt, convCtx, registry, turnOptions{
+		turnContext:    strings.TrimSpace(turn.TurnContext),
+		userIndex:      len(messages) - 1,
+		maxResultBytes: turn.MaxToolResultBytes,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("agent loop failed: %w", err)
 	}
@@ -250,8 +289,40 @@ func (o *AgentOrchestrator) ProcessMessage(ctx context.Context, turn Turn) (*Age
 	return response, nil
 }
 
+// turnRegistry is the base registry plus the turn's own tools. The guide
+// tools are registered whenever the browser attached a guide turn, with a
+// fixed definition whatever the catalog holds, so the tools block stays
+// byte-identical (and cacheable) across turns and users.
+func (o *AgentOrchestrator) turnRegistry(ctx context.Context, turn Turn) *tools.ToolRegistry {
+	registry := o.toolRegistry.Clone()
+	for _, t := range turn.ExtraTools {
+		registry.Register(t)
+	}
+	if gt := GuideTurnFrom(ctx); gt != nil {
+		registry.Register(NewStartGuideTool(gt))
+		registry.Register(NewSearchGuidesTool(gt))
+	}
+	return registry
+}
+
+// turnSystemPrompt closes the host prompt with the behavior rules. The tool
+// list is rendered as text only when ToolsInPrompt asks for it: the tools are
+// always sent natively, so the text copy would pay for them twice.
+func (o *AgentOrchestrator) turnSystemPrompt(prompt string, registry *tools.ToolRegistry) string {
+	if o.toolsInPrompt {
+		return AppendToolsSection(prompt, registry)
+	}
+	return prompt + "\n\n" + closingRules
+}
+
+// closingRules is the fixed paragraph that ends every system prompt.
+const closingRules = "Si la pregunta se responde sin datos de la organización (quién eres, cómo se hace algo, un saludo), responde directo con final_answer. " +
+	"Si hace falta un registro, un conteo o un cambio, llama la herramienta y no afirmes el resultado antes. " +
+	"Prohibido narrar el siguiente paso (\"voy a…\", \"ahora creo…\"): o llamas la herramienta, o respondes."
+
 // AppendToolsSection renders the tool list and the closing behavior rules
-// after the host's system prompt.
+// after the host's system prompt. The orchestrator uses it only when
+// OrchestratorConfig.ToolsInPrompt is set.
 func AppendToolsSection(prompt string, registry *tools.ToolRegistry) string {
 	var sb strings.Builder
 	sb.WriteString(prompt)
@@ -303,9 +374,7 @@ func AppendToolsSection(prompt string, registry *tools.ToolRegistry) string {
 			sb.WriteString(fmt.Sprintf("\n    • %s (%s)%s: %s", paramName, paramType, reqMark, paramDesc))
 		}
 	}
-	sb.WriteString("\n\nSi la pregunta se responde sin datos de la organización (quién eres, cómo se hace algo, un saludo), responde directo con final_answer. " +
-		"Si hace falta un registro, un conteo o un cambio, llama la herramienta y no afirmes el resultado antes. " +
-		"Prohibido narrar el siguiente paso (\"voy a…\", \"ahora creo…\"): o llamas la herramienta, o respondes.")
+	sb.WriteString("\n\n" + closingRules)
 	return sb.String()
 }
 
@@ -350,7 +419,22 @@ func (noModels) EnumValueLabel(_, _, value string) string { return value }
 
 // agentLoop ejecuta el loop de razonamiento del agente
 func (o *AgentOrchestrator) agentLoop(ctx context.Context, messages []map[string]interface{}, systemPrompt string, convCtx *contextmgr.ConversationContext, registry *tools.ToolRegistry) (*AgentResponse, error) {
+	return o.agentLoopTurn(ctx, messages, systemPrompt, convCtx, registry, turnOptions{userIndex: -1})
+}
+
+// agentLoopTurn is agentLoop with the turn's options (turn context, result cap).
+func (o *AgentOrchestrator) agentLoopTurn(ctx context.Context, messages []map[string]interface{}, systemPrompt string, convCtx *contextmgr.ConversationContext, registry *tools.ToolRegistry, opts turnOptions) (*AgentResponse, error) {
 	toolDefs := registry.ToOpenAIFormat()
+	resultCap := o.resultCap(opts.maxResultBytes)
+	budgeter := newPromptBudgeter(systemPrompt, toolDefs)
+	// generate is the only way the loop calls the model: it attaches the turn
+	// context to what is sent (never to the loop's own messages) and reports
+	// the prompt budget of the call.
+	generate := func(iteration int, defs []map[string]interface{}) (*AIResponse, error) {
+		out := withTurnContext(messages, opts.userIndex, opts.turnContext)
+		o.reportBudget(ctx, convCtx, budgeter.measure(iteration, out, defs, opts.turnContext))
+		return o.aiService.GenerateChatWithTools(ctx, out, systemPrompt, defs)
+	}
 
 	response := &AgentResponse{
 		Images:   []ImageToSend{},
@@ -400,7 +484,7 @@ func (o *AgentOrchestrator) agentLoop(ctx context.Context, messages []map[string
 
 		// Llamar al LLM con tools
 		stats.LLMCalls++
-		aiResp, err := o.aiService.GenerateChatWithTools(ctx, messages, systemPrompt, toolDefs)
+		aiResp, err := generate(iteration+1, toolDefs)
 		if err != nil {
 			if lastToolFailure != nil {
 				err = &ToolTurnError{Tool: lastToolFailure.ToolName, ToolErr: lastToolFailure.Error, Err: err}
@@ -515,7 +599,7 @@ func (o *AgentOrchestrator) agentLoop(ctx context.Context, messages []map[string
 
 						// Reintentar llamada al LLM
 						stats.LLMCalls++
-						retryResp, retryErr := o.aiService.GenerateChatWithTools(ctx, messages, systemPrompt, toolDefs)
+						retryResp, retryErr := generate(iteration+1, toolDefs)
 						if retryErr != nil {
 							log.Printf("⚠️ Retry %d error: %v", retryCount, retryErr)
 							continue
@@ -745,9 +829,9 @@ func (o *AgentOrchestrator) agentLoop(ctx context.Context, messages []map[string
 				// Herramientas informativas: JSON compacto con tope de tamaño;
 				// el recorte lleva aviso explícito para el modelo.
 				var cut bool
-				formattedResult, cut = result.FormatForLLMLimit(o.maxResultBytes())
+				formattedResult, cut = result.FormatForLLMLimit(resultCap)
 				if cut {
-					log.Printf("✂️ Tool %s result truncated to %d bytes", result.ToolName, o.maxResultBytes())
+					log.Printf("✂️ Tool %s result truncated to %d bytes", result.ToolName, resultCap)
 				}
 				for ti := range turnTraces {
 					if turnTraces[ti].CallID == result.ToolCallID && turnTraces[ti].Tool == result.ToolName {
@@ -822,8 +906,10 @@ func (o *AgentOrchestrator) executeToolCalls(ctx context.Context, calls []tools.
 	return results
 }
 
-// buildMessageHistory construye el historial de mensajes
-func (o *AgentOrchestrator) buildMessageHistory(convCtx *contextmgr.ConversationContext, currentMessage string) []map[string]interface{} {
+// buildMessageHistory builds the model messages from the stored history plus
+// the current message. A positive tokenBudget keeps only the newest messages
+// that fit it (see trimHistoryToBudget).
+func (o *AgentOrchestrator) buildMessageHistory(convCtx *contextmgr.ConversationContext, currentMessage string, tokenBudget int) []map[string]interface{} {
 	messages := []map[string]interface{}{}
 
 	for _, historyMsg := range convCtx.History {
@@ -859,6 +945,13 @@ func (o *AgentOrchestrator) buildMessageHistory(convCtx *contextmgr.Conversation
 		messages[len(messages)-1]["images"] = paths
 	}
 
+	if tokenBudget > 0 {
+		before := len(messages)
+		messages = trimHistoryToBudget(messages, tokenBudget)
+		if dropped := before - len(messages); dropped > 0 {
+			log.Printf("📚 History budget (%d tokens): dropped %d oldest message(s)", tokenBudget, dropped)
+		}
+	}
 	log.Printf("📚 Built history: %d previous messages + 1 current", len(messages)-1)
 	return messages
 }

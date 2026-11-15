@@ -29,12 +29,11 @@ func TestStartGuideToolOnlyAcceptsAdvertisedIDs(t *testing.T) {
 	turn := NewGuideTurn([]GuideDescriptor{{ID: "synth.create.customers", Title: "Crear cliente"}})
 	tool := NewStartGuideTool(turn)
 
-	enum := tool.Parameters()["guide_id"].(map[string]interface{})["enum"].([]string)
-	if len(enum) != 1 || enum[0] != "synth.create.customers" {
-		t.Fatalf("enum = %v", enum)
+	if _, has := tool.Parameters()["guide_id"].(map[string]interface{})["enum"]; has {
+		t.Fatal("guide_id must not carry an enum of the catalog")
 	}
-	if !strings.Contains(tool.Description(), "synth.create.customers: Crear cliente") {
-		t.Fatalf("description misses catalog: %s", tool.Description())
+	if strings.Contains(tool.Description(), "synth.create.customers") {
+		t.Fatalf("description must not list the catalog: %s", tool.Description())
 	}
 
 	if _, err := tool.Execute(context.Background(), map[string]interface{}{"guide_id": "inventado"}, nil); err == nil {

@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/asteby/metacore-kernel/agent/contextmgr"
@@ -81,5 +83,35 @@ func TestToOpenAIFormat(t *testing.T) {
 				t.Fatalf("y %v %v", req, props)
 			}
 		}
+	}
+}
+
+// The tool definitions head every request: their bytes must not depend on
+// registration order or map iteration, or the provider's prompt cache misses.
+func TestToOpenAIFormatIsDeterministic(t *testing.T) {
+	build := func(order []string) string {
+		r := NewToolRegistry()
+		for _, name := range order {
+			r.Register(&BaseToolImpl{NameVal: name, CategoryVal: "data", DescriptionVal: "tool " + name,
+				ParametersVal: map[string]interface{}{
+					"zeta":  map[string]interface{}{"type": "string", "description": "z", "required": true},
+					"alpha": map[string]interface{}{"type": "integer", "description": "a", "required": true},
+					"mid":   map[string]interface{}{"type": "object", "description": "m", "properties": map[string]interface{}{"y": map[string]interface{}{"type": "string"}, "b": map[string]interface{}{"type": "string"}}},
+				}})
+		}
+		raw, err := json.Marshal(r.ToOpenAIFormat())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	want := build([]string{"a", "b", "c", "d", "e"})
+	for i := 0; i < 50; i++ {
+		if got := build([]string{"e", "c", "a", "d", "b"}); got != want {
+			t.Fatalf("serialization not deterministic:\n%s\n%s", want, got)
+		}
+	}
+	if !strings.Contains(want, `"required":["alpha","zeta"]`) || strings.Index(want, `"name":"a"`) > strings.Index(want, `"name":"b"`) {
+		t.Fatalf("want sorted tools and required: %s", want)
 	}
 }
