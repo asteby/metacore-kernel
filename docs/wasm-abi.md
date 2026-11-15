@@ -37,6 +37,7 @@ keep them in sync.
 | 1.17    | proposal | adds `dns_resolve`: read-only DNS lookup (A/AAAA/CNAME/MX/TXT) of a name under a domain the invoking organization owns, for ownership proofs and record verification. Gated by a `domain:manage` capability AND the host policy `Host.WithDNS(resolver, authorize)` (fail-closed without it). Guests built against 1.0 – 1.16 keep working. See § 26. |
 | 1.18    | proposal | `data_query` / `data_mutate` / `data_batch` classify a structural absence by SQLSTATE (42P01 on the requested table, 42703) as `source_unavailable` with `legacy_code: "db_error"`, `details{source,reason,owners,installed_owners,sqlstate,degradable}` and the driver `message` untouched; optional `Host.WithSourceOwners`. Every other DB error stays `db_error`. Guests built against 1.0 – 1.17 keep working (a `42P01` text match still matches). See § 15.5.1. |
 | 1.19    | proposal | `data_query` accepts `on_absent` (`""` / `"error"` / `"empty"`; anything else is `invalid_request`). With `"empty"` a degradable structural absence is an empty SUCCESS (`data: {"rows":[],"truncated":false}`, identical with and without `aggregate`) carrying `meta.absent{source,reason,owners}` (plus `message` only for `schema_mismatch`), and the host applies the per-org install rule (owners known, none installed in the org => absent without querying the database). Without the flag nothing changes. `data_mutate` / `data_batch` ignore it. A host older than 1.19 ignores the key and answers the 1.18 error. See § 15.5.2. |
+| 1.20    | proposal | adds `smtp_send`: deliver ONE ready-made RFC 5322 message over SMTP through the organization's own mail server (company mailbox, Office 365, Google Workspace, a relay). Gated by the `smtp:send` capability (a fixed host glob, or `connector:<connector>.<credential>` so the host comes from the org's connector, never from the guest), the SSRF rules of `http_request` (plus a connect-time IP check), submission ports only (25/465/587/2525), mandatory TLS (implicit TLS or a STARTTLS that must succeed), bounded recipients (50) / size (25 MiB) / time (60 s, not counted against the guest's budget). Guests built against 1.0 – 1.19 keep working. See § 27. |
 | 1.10    | proposal | `http_fetch` / `http_request` responses whose body is **not valid UTF-8** now travel as `body_base64` (standard base64) with `body_is_base64: true` and an EMPTY `body`; UTF-8 bodies are unchanged. Fixes silent corruption of every binary response (PDF / ZIP / image / XLSX): `encoding/json` rewrites each invalid byte as U+FFFD, so guests received corrupt bytes with a 200 status and no error. See § 3.1. |
 | 1.6     | proposal | adds `http_request` (outbound HTTP with caller-supplied request headers as a JSON object — enables `Authorization`/`Accept` for authenticated third-party calls; same `http:fetch` capability + SSRF guard + 30 s timeout + 8 MiB cap as `http_fetch`, which is left unchanged and now delegates to the shared path with empty headers) and `connector_get` (resolves one org's credentials for a declared connector — the v3 `connectors` block — returning a JSON object; gated by `connector:read <key>` and tenant-scoped by the invocation `orgID`). Guests built against 1.0 – 1.5 keep working. |
 
@@ -2849,3 +2850,24 @@ not the system one, which may answer internal names.
 `dns_lookup_failed`, `rate_limited` (64 lookups per invocation, plus the per-organization budget; 5 s per lookup).
 Implementation: `runtime/wasm/dnsresolve.go`; resolver interface and the
 record logic: package `domains` (docs/org-domains.md).
+
+
+## 27. `smtp_send`: SMTP through the organization's own mail server (v1.20)
+
+```
+smtp_send(reqPtr i32, reqLen i32) -> i64          [v1.20]
+```
+
+Request (JSON): `{host, port, security: "tls"|"starttls", username, password, helo, from, to: [..], message_base64, verify_only, timeout_ms}`. `message_base64` is the complete RFC 5322 message (headers + body, already MIME-encoded by the guest). `verify_only: true` connects, negotiates TLS and authenticates, then quits without sending (a "test connection").
+
+Response: `{"ok":true,"message":"..."}`, or the standard error envelope with one of `bad_request`, `forbidden` (capability / SSRF), `transport`, `smtp_tls`, `smtp_auth`, `smtp_rejected` (plus `smtp_code` when the server answered).
+
+Policy:
+
+- **Capability.** The addon declares `{ "kind": "smtp:send", "target": "connector:email.smtp_host" }` (host taken from the org's connector credential) and/or a fixed host. A guest can never choose an arbitrary host.
+- **SSRF.** Loopback, private ranges and cloud metadata are refused even when granted; `netguard.DialControl` re-checks the resolved IP when connecting.
+- **TLS is mandatory.** `security` is `tls` (implicit, usually 465) or `starttls` (usually 587; if the server does not offer STARTTLS the session aborts before any command or credential is sent). There is no plaintext mode.
+- **Auth.** `AUTH PLAIN` or `AUTH LOGIN`, only over TLS. The password is registered with the diagnostics bag so it is scrubbed from logs, and is never returned.
+- **Limits.** Ports 25/465/587/2525; at most 50 recipients; message up to 25 MiB; timeout default 30 s, cap 60 s (the wait does not count against the guest's execution budget, like `http_request`). CR/LF/NUL are refused in `host`, `username`, `helo`, `from` and every recipient (header/command injection).
+
+Implementation: `runtime/wasm/smtp.go` (gate + envelope) and `runtime/wasm/smtpsend` (the session).

@@ -466,7 +466,7 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 		// Bare `*` would grant access to everything — including link-local
 		// metadata addresses (169.254.169.254), loopback, and private
 		// ranges. Require a concrete host segment for egress permissions.
-		if c.Kind == "http:fetch" && strings.HasPrefix(c.Target, "connector:") {
+		if (c.Kind == "http:fetch" || c.Kind == "smtp:send") && strings.HasPrefix(c.Target, "connector:") {
 			// Host resolved at runtime from the org's connector credential
 			// (security.ConnectorHostRef), e.g. "connector:woocommerce.store_url".
 			conn, cred, ok := strings.Cut(strings.TrimPrefix(c.Target, "connector:"), ".")
@@ -487,7 +487,7 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 			}
 			continue
 		}
-		if c.Kind == "http:fetch" {
+		if c.Kind == "http:fetch" || c.Kind == "smtp:send" {
 			if c.Target == "*" || c.Target == "*.*" || strings.HasPrefix(c.Target, "*.") && !strings.Contains(strings.TrimPrefix(c.Target, "*."), ".") {
 				return fmt.Errorf("manifest.capabilities[%d].target: %q is too broad for http:fetch (require a concrete TLD like api.example.com or *.example.com)", i, c.Target)
 			}
