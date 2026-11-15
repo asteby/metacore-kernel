@@ -318,6 +318,20 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 		}).
 		Export("http_request")
 
+	// smtp_send(reqPtr, reqLen) -> ptr|len
+	// Delivers ONE ready-made RFC 5322 message over SMTP to a server the org configured (ABI 1.20).
+	// Gated by `smtp:send` (fixed host or `connector:<c>.<credential>`), same SSRF rules as
+	// http_request, TLS mandatory, submission ports only. See smtp.go.
+	b.NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module, reqPtr, reqLen uint32) uint64 {
+			inv := invocationFrom(ctx)
+			if inv == nil {
+				return 0
+			}
+			return doSMTP(ctx, mod, inv, readBytes(mod, reqPtr, reqLen))
+		}).
+		Export("smtp_send")
+
 	// connector_get(keyPtr, keyLen) -> ptr|len
 	// Resolves the org's credentials for a connector (the v3 `connectors` block)
 	// and returns them as a JSON object envelope. Gated by the addon's

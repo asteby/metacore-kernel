@@ -24,6 +24,10 @@ type Capabilities struct {
 	// ("connector:<connector>.<credential>", e.g. a store_url). The runtime
 	// resolves them per invocation; see CanFetchHosts.
 	connHost  []ConnectorHostRef
+	// smtp:send grants (smtp_send host import): fixed host globs, and hosts read from the org
+	// connector ("connector:<c>.<credential>").
+	smtpHost []string
+	smtpConn []ConnectorHostRef
 	eventPub  []string
 	eventSub  []string
 	connRead  []string        // connector keys: "github", "*" for any
@@ -48,6 +52,12 @@ func Compile(addonKey string, caps []manifest.Capability) *Capabilities {
 				continue
 			}
 			c.httpHost = append(c.httpHost, cap.Target)
+		case "smtp:send":
+			if ref, ok := ParseConnectorHostRef(cap.Target); ok {
+				c.smtpConn = append(c.smtpConn, ref)
+				continue
+			}
+			c.smtpHost = append(c.smtpHost, cap.Target)
 		case "event:emit":
 			c.eventPub = append(c.eventPub, cap.Target)
 		case "event:subscribe":
@@ -356,4 +366,44 @@ func matchAny(patterns []string, value string) bool {
 		}
 	}
 	return false
+}
+
+// SMTPHostRefs returns the connector-derived smtp:send grants.
+func (c *Capabilities) SMTPHostRefs() []ConnectorHostRef {
+	if c == nil {
+		return nil
+	}
+	return append([]ConnectorHostRef(nil), c.smtpConn...)
+}
+
+// CanSMTPHosts reports whether the addon may open an SMTP session to host (a bare
+// host name, no port). The host must be granted by a fixed smtp:send pattern or be
+// one of hosts (resolved per invocation from the org connector; see
+// SMTPHostRefs). Loopback, private ranges and cloud metadata are refused even when
+// granted (SSRF guard); the connection itself is checked again on the resolved IP
+// by netguard.DialControl.
+func (c *Capabilities) CanSMTPHosts(host string, hosts []string) error {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" || strings.ContainsAny(host, "/@ \r\n") {
+		return fmt.Errorf("invalid smtp host %q", host)
+	}
+	if isBlockedEgressHost(host) {
+		return fmt.Errorf("egress to %q is blocked (SSRF guard)", host)
+	}
+	if matchHTTPHost(c.smtpHost, host) {
+		return nil
+	}
+	for _, h := range hosts {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" {
+			continue
+		}
+		if i := strings.LastIndex(h, ":"); i > 0 && !strings.Contains(h[i:], "]") {
+			h = h[:i]
+		}
+		if h == host {
+			return nil
+		}
+	}
+	return fmt.Errorf("addon %q lacks smtp:send %q", c.addonKey, host)
 }
