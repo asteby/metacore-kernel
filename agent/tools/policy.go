@@ -82,6 +82,23 @@ func IsParallelSafe(t BaseTool) bool {
 	return false
 }
 
+// LLMTexter is a tool result that renders its own text for the model (for
+// example a compact Markdown table instead of the JSON of its rows). The
+// structured value still reaches embeds and hooks; an empty text falls back
+// to JSON.
+type LLMTexter interface {
+	LLMText() string
+}
+
+func llmText(v interface{}) (string, bool) {
+	t, ok := v.(LLMTexter)
+	if !ok || t == nil {
+		return "", false
+	}
+	s := t.LLMText()
+	return s, s != ""
+}
+
 // FormatForLLMLimit renders the result as compact JSON (indentation costs
 // ~30% more tokens for nothing) and caps it at maxBytes. A capped result ends
 // with an explicit notice so the model knows data is missing and asks for less
@@ -90,6 +107,8 @@ func IsParallelSafe(t BaseTool) bool {
 func (r ToolResult) FormatForLLMLimit(maxBytes int) (text string, truncated bool) {
 	if !r.Success {
 		text = fmt.Sprintf("Error executing %s: %s", r.ToolName, r.Error)
+	} else if s, ok := llmText(r.Result); ok {
+		text = fmt.Sprintf("Result of %s:\n%s", r.ToolName, s)
 	} else if b, err := json.Marshal(r.Result); err != nil {
 		text = fmt.Sprintf("Result of %s: %v", r.ToolName, r.Result)
 	} else {

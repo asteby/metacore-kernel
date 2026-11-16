@@ -310,6 +310,9 @@ func (r ToolResult) FormatForLLM() string {
 		return fmt.Sprintf("Error executing %s: %s", r.ToolName, r.Error)
 	}
 
+	if s, ok := llmText(r.Result); ok {
+		return fmt.Sprintf("Result of %s:\n%s", r.ToolName, s)
+	}
 	result := r.Result
 	// A generative-UI spec is for the screen, not for the model: drop it to
 	// save tokens and keep the model from echoing markup.
