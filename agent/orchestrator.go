@@ -960,6 +960,7 @@ func (o *AgentOrchestrator) buildMessageHistory(convCtx *contextmgr.Conversation
 var introspectionTools = map[string]bool{
 	"list_models":    true,
 	"describe_model": true,
+	"catalog_search": true,
 }
 
 // buildFallbackFromToolResults construye una respuesta a partir de resultados de herramientas
@@ -1388,6 +1389,12 @@ func scrubGoMapDump(s string) string {
 func (o *AgentOrchestrator) cleanToolResult(content string) string {
 	// Remover prefijos técnicos
 	content = strings.TrimPrefix(content, "Resultado de ")
+	// Text results (LLMTexter: Markdown tables) arrive as "Result of x:\n…".
+	if strings.HasPrefix(content, "Result of ") {
+		if i := strings.Index(content, ":\n"); i > 0 {
+			content = content[i+2:]
+		}
+	}
 
 	// Si contiene "Información encontrada", extraer solo eso
 	if idx := strings.Index(content, "Información encontrada"); idx >= 0 {

@@ -223,3 +223,44 @@ copilot, err := agent.NewCopilotService(agent.CopilotConfig{
 constants `claude.DirectBaseURL` / `claude.DirectToken` are the exported
 spellings of what used to be package-private in `services`
 (`createLLM` uses them for the `openai-proxy` provider).
+
+## 7. Semantic catalog (opt-in, `CopilotConfig.SemanticCatalog`)
+
+One switch turns on the bundle for copilot turns (`semantic_catalog.go`):
+
+* the system prompt gains `CatalogPromptClause` (the fixed ERP-Card legend and
+  one rule; stable, so it stays in the cached prefix);
+* before the first model call the cards of the models matching the user's
+  message are retrieved (lexical BM25, or hybrid with an `Embedder`) and
+  appended to the turn context, after the user's message — never to the
+  system prompt;
+* `catalog_search`, `list_models`, `describe_model` and `query_data` are
+  served by the kernel over `CopilotConfig.CRUD` (they override the host's
+  tools of the same name for copilot turns only). `query_data` takes the
+  strict query tree `{model, fields, where:[[field, op, value]], order, limit,
+  offset, group_by, aggregates, search}` and answers with a Markdown table;
+  `aggregate_data` keeps working.
+
+```go
+kagent.NewCopilotService(kagent.CopilotConfig{
+    // ...
+    CRUD:            kcrud,
+    SemanticCatalog: true,
+    Catalog: kagent.SemanticCatalogOptions{
+        CatalogOptions: kagent.CatalogOptions{
+            Labels:   opsFieldLabels{},                       // optional
+            Embedder: kagent.OllamaEmbedder{BaseURL: "https://ia.example.com"}, // optional (bge-m3)
+        },
+        Index: sharedIndex, // optional: one index for every preset copilot
+    },
+})
+```
+
+Metadata is read from what the host already passes: `ModelMeta.Schema`
+`columns` / `fields` (key/name, label, type, ref, options, required,
+readonly), `filters`, and the optional `relations`, `synonyms` and
+`description` keys; `ModelSynonymSource` and `CatalogOptions.Synonyms` add
+curated names. Hosts that keep their own tools can call
+`CRUDService.SearchCards`, `ListModelsCompact`, `DescribeModelCard` and
+`QueryTree`, or convert a validated tree to the legacy ports with
+`QueryTree.ToQueryRequest` / `ToAggregateRequest`.

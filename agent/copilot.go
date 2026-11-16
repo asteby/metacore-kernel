@@ -119,13 +119,22 @@ type CopilotConfig struct {
 	// ProposalOrigin labels where approvals happen ("Borrador aprobado en el
 	// chat"). Optional.
 	ProposalOrigin string
+	// SemanticCatalog turns on the semantic catalog bundle (see
+	// semantic_catalog.go): the ERP-Card legend in the system prompt, the
+	// per-turn card prefetch in the turn context, and the kernel's
+	// catalog_search / list_models / describe_model / query_data tools.
+	// Requires CRUD. Off by default.
+	SemanticCatalog bool
+	// Catalog tunes the semantic catalog bundle. Optional.
+	Catalog SemanticCatalogOptions
 }
 
 // CopilotService runs turns of the embedded copilot and applies the changes
 // the user approves in chat. Storage is separate from any business inbox:
 // history comes from the copilot thread and the agent is transient.
 type CopilotService struct {
-	cfg CopilotConfig
+	cfg     CopilotConfig
+	catalog *CatalogIndex // semantic catalog (SemanticCatalog)
 }
 
 // Copilot defaults (see CopilotConfig).
@@ -151,7 +160,11 @@ func NewCopilotService(cfg CopilotConfig) (*CopilotService, error) {
 	if cfg.LiveSuffix == "" {
 		cfg.LiveSuffix = DefaultLiveSuffix
 	}
-	return &CopilotService{cfg: cfg}, nil
+	s := &CopilotService{cfg: cfg}
+	if err := s.initSemanticCatalog(); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // BrandClause tells the model which commercial name to use (white-label):
@@ -217,6 +230,7 @@ func (s *CopilotService) SystemPrompt(orgID, userID uuid.UUID, live bool) (promp
 	if s.cfg.InjectCapabilities && s.cfg.Capabilities != nil {
 		prompt += s.cfg.Capabilities.PromptClause(orgID, userID)
 	}
+	prompt += s.catalogPromptClause()
 	if live {
 		prompt += s.cfg.LiveSuffix
 	}
@@ -296,7 +310,7 @@ func (s *CopilotService) ProcessCopilotMessage(ctx context.Context, orgID, userI
 		AgentID:            uuid.Nil, // transient agent: no tools row to look up
 		UserMessage:        enriched,
 		SystemPrompt:       prompt,
-		TurnContext:        s.TurnContext(orgID, userID),
+		TurnContext:        s.turnContextFor(ctx, orgID, userID, userMessage),
 		ExtraTools:         s.turnTools(ctx, orgID, userID),
 		MaxToolResultBytes: maxResult,
 		HistoryTokenBudget: historyBudget,
@@ -309,11 +323,14 @@ func (s *CopilotService) ProcessCopilotMessage(ctx context.Context, orgID, userI
 	return result, nil
 }
 
+// turnTools are the kernel catalog tools (SemanticCatalog) followed by the
+// host's per-turn tools, which win on a name clash.
 func (s *CopilotService) turnTools(ctx context.Context, orgID, userID uuid.UUID) []tools.BaseTool {
-	if s.cfg.TurnTools == nil {
-		return nil
+	out := s.catalogTools()
+	if s.cfg.TurnTools != nil {
+		out = append(out, s.cfg.TurnTools(ctx, orgID, userID)...)
 	}
-	return s.cfg.TurnTools(ctx, orgID, userID)
+	return out
 }
 
 // ApplyProposal executes or rejects a pending mutation after the user decides

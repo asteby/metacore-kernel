@@ -58,6 +58,17 @@ type QueryResult struct {
 	Model   string           `json:"model"`
 	Count   int              `json:"count"`
 	Records []map[string]any `json:"records"`
+	// Text, when set, is what the model reads instead of the JSON of the
+	// records (a compact Markdown table, see RenderRowsTable).
+	Text string `json:"-"`
+}
+
+// LLMText implements tools.LLMTexter.
+func (q *QueryResult) LLMText() string {
+	if q == nil {
+		return ""
+	}
+	return q.Text
 }
 
 // EmbedBuilder converts tool results into chat embeds (record cards, counts,
