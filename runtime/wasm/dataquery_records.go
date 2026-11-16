@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/asteby/metacore-kernel/dynamic"
+	"github.com/asteby/metacore-kernel/runtime/entityscope"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -417,6 +419,17 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 	conds := append([]string{}, orgConds...)
 	args := []any{orgID}
 	n := 1
+	// Entity wall (RFC 0001): in enforce mode a table with a branch_id is
+	// narrowed to the branches of the entity the call acts for. Off / log add
+	// nothing; log observes after the read (below).
+	entScope, entOn := inv.entityScopeFor(ctx)
+	if entOn {
+		if frag, eargs := entityscope.Clause(entScope, inv.entityMode, tblCols, n+1); frag != "" {
+			conds = append(conds, frag)
+			args = append(args, eargs...)
+			n += len(eargs)
+		}
+	}
 	for _, p := range preds {
 		var frag string
 		switch p.op {
@@ -485,6 +498,13 @@ func executeDataQueryRecords(ctx context.Context, inv *invocation, reqJSON []byt
 	}
 	if err := rows.Err(); err != nil {
 		return failDB(err)
+	}
+	if entOn && inv.entityMode == entityscope.Log && agg == nil {
+		if out := entityscope.OutOfScope(rowsOut, entScope); out > 0 {
+			slog.Warn("wasm.entity_scope_would_filter",
+				"addon_key", addonKey, "org_id", orgID.String(), "entity_id", entScope.EntityID,
+				"table", req.Table, "rows_read", len(rowsOut), "rows_out_of_scope", out)
+		}
 	}
 	if agg == nil {
 		if err := mergeQueriedExtensions(work, exts, rowsOut); err != nil {

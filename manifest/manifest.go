@@ -697,9 +697,10 @@ type SettingDef struct {
 	DefaultValue interface{} `json:"default_value,omitempty"`
 	Options      []Option    `json:"options,omitempty"`
 	Secret       bool        `json:"secret,omitempty"`
-	// Scope is "org" (default, "" = org), "branch" (each branch may override
-	// the org value) or "market" (each market, e.g. "mx"/"us", may override
-	// it). See ResolveSettingScoped for the precedence.
+	// Scope is "org" (default, "" = org), "entity" (each entity / razón social
+	// may override the org value), "branch" (each branch may override the org
+	// value, inheriting its entity's) or "market" (each market, e.g. "mx"/"us",
+	// may override it). See ResolveSettingScopedEntity for the precedence.
 	Scope string `json:"scope,omitempty"`
 	// Description projects v3 Setting.description: help text under the field
 	// (an i18n key or literal; the SDK resolves it against the addon bundle).
@@ -755,6 +756,11 @@ const (
 	SettingScopeOrg    = "org"
 	SettingScopeBranch = "branch"
 	SettingScopeMarket = "market"
+	// SettingScopeEntity: each entity (razón social, RFC 0001) may override the
+	// org value. A "branch"-scoped key also INHERITS the entity override, so an
+	// entity can set one value for all of its branches and a branch can still
+	// override it.
+	SettingScopeEntity = "entity"
 )
 
 // ResolveSetting returns the effective value of one setting for a branch:
@@ -782,6 +788,25 @@ func ResolveSetting(def SettingDef, orgValues, branchValues map[string]any) any 
 // exactly the behaviour before markets existed). A nil/absent override never
 // shadows a lower layer; clearing an override means deleting the key.
 func ResolveSettingScoped(def SettingDef, orgValues, branchValues, marketValues map[string]any) any {
+	return ResolveSettingScopedEntity(def, orgValues, nil, branchValues, marketValues)
+}
+
+// ResolveSettingScopedEntity is ResolveSettingScoped with the entity layer
+// (RFC 0001): the full precedence is
+//
+//	market override > branch override > entity override > org value > manifest default
+//
+// A layer only participates when the setting's Scope allows it:
+//
+//   - "market": market, then org (entity is not consulted);
+//   - "branch": branch, then ENTITY (inherited: the entity's value is the
+//     default for all of its branches), then org;
+//   - "entity": entity, then org;
+//   - "org" / "": org only.
+//
+// A nil entityValues map (no entity context) reproduces ResolveSettingScoped
+// exactly, so callers that never set an entity see no change.
+func ResolveSettingScopedEntity(def SettingDef, orgValues, entityValues, branchValues, marketValues map[string]any) any {
 	if def.Scope == SettingScopeMarket {
 		if v, ok := marketValues[def.Key]; ok && v != nil {
 			return v
@@ -789,6 +814,11 @@ func ResolveSettingScoped(def SettingDef, orgValues, branchValues, marketValues 
 	}
 	if def.Scope == SettingScopeBranch {
 		if v, ok := branchValues[def.Key]; ok && v != nil {
+			return v
+		}
+	}
+	if def.Scope == SettingScopeBranch || def.Scope == SettingScopeEntity {
+		if v, ok := entityValues[def.Key]; ok && v != nil {
 			return v
 		}
 	}

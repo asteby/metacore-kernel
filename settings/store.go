@@ -21,6 +21,7 @@ const (
 	ScopeOrg    = manifest.SettingScopeOrg
 	ScopeBranch = manifest.SettingScopeBranch
 	ScopeMarket = manifest.SettingScopeMarket
+	ScopeEntity = manifest.SettingScopeEntity
 )
 
 // EventSettingsChanged is the event name published by Store.Write when a
@@ -50,6 +51,9 @@ var (
 	ErrNotBranchScoped = errors.New("settings: key is not branch-scoped in the manifest")
 	// ErrNotMarketScoped: a market write for a key not declared scope "market".
 	ErrNotMarketScoped = errors.New("settings: key is not market-scoped in the manifest")
+	// ErrNotEntityScoped: an entity write for a key declared neither scope
+	// "entity" nor scope "branch" (a branch key may carry an entity default).
+	ErrNotEntityScoped = errors.New("settings: key is not entity-scoped in the manifest")
 	// ErrInvalidValue: the value does not match the declared type.
 	ErrInvalidValue = errors.New("settings: invalid value for declared type")
 	// ErrInvalidScope: unknown scope kind or malformed scope id.
@@ -134,6 +138,10 @@ func checkScope(kind, id string) error {
 	case ScopeMarket:
 		if strings.TrimSpace(id) == "" || len(id) > 128 {
 			return fmt.Errorf("%w: market scope needs a scope id", ErrInvalidScope)
+		}
+	case ScopeEntity:
+		if strings.TrimSpace(id) == "" || len(id) > 128 {
+			return fmt.Errorf("%w: entity scope needs a scope id", ErrInvalidScope)
 		}
 	default:
 		return fmt.Errorf("%w: kind %q", ErrInvalidScope, kind)
@@ -225,6 +233,9 @@ func (s *Store) Write(ctx context.Context, org uuid.UUID, addon, scopeKind, scop
 		}
 		if scopeKind == ScopeMarket && def.Scope != manifest.SettingScopeMarket && v != nil {
 			return 0, fmt.Errorf("%w: %q", ErrNotMarketScoped, k)
+		}
+		if scopeKind == ScopeEntity && def.Scope != manifest.SettingScopeEntity && def.Scope != manifest.SettingScopeBranch && v != nil {
+			return 0, fmt.Errorf("%w: %q", ErrNotEntityScoped, k)
 		}
 		if v != nil {
 			if err := validateValue(def, v); err != nil {

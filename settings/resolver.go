@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/manifest"
 )
 
@@ -22,6 +23,7 @@ type Source string
 const (
 	SourceDefault Source = "default"
 	SourceOrg     Source = "org"
+	SourceEntity  Source = "entity"
 	SourceBranch  Source = "branch"
 	SourceMarket  Source = "market"
 )
@@ -31,6 +33,9 @@ const (
 type Scope struct {
 	BranchID string
 	MarketID string
+	// EntityID is the entity (razón social, RFC 0001) the call acts for. Empty
+	// = no entity layer: the resolution is exactly what it was before entities.
+	EntityID string
 }
 
 // Effective is the resolved settings of one addon for one scope.
@@ -45,22 +50,25 @@ type Effective struct {
 	OrgRev    int64
 	BranchRev int64
 	MarketRev int64
+	EntityRev int64
 }
 
 // Rev is a combined etag: it changes whenever either layer changes (each
 // layer's revision only ever grows).
-func (e Effective) Rev() int64 { return e.OrgRev + e.BranchRev + e.MarketRev }
+func (e Effective) Rev() int64 { return e.OrgRev + e.BranchRev + e.MarketRev + e.EntityRev }
 
 // Resolver computes effective settings.
 //
 // Precedence (lowest to highest):
 //
-//	manifest default < org value < branch override < market override
+//	manifest default < org value < entity override < branch override < market override
 //
-// A setting has one scope, so for a given key only one override layer is
+// A setting has one scope, so for a given key only its own override layers are
 // consulted: the branch layer applies only to keys the INSTALLED manifest
 // declares with scope "branch" and only when Scope.BranchID is set; the market
-// layer only to scope "market" keys and only when Scope.MarketID is set. A stored key the
+// layer only to scope "market" keys and only when Scope.MarketID is set; the
+// entity layer to scope "entity" keys and, as the inherited default of every
+// branch of the entity, to scope "branch" keys, only when Scope.EntityID is set. A stored key the
 // manifest no longer declares is ignored (logged), never an error. Defaults
 // come from the manifest at resolve time and are never stored.
 type Resolver struct {
@@ -93,6 +101,15 @@ func (r *Resolver) Resolve(ctx context.Context, org uuid.UUID, addon string, sco
 		}
 	}
 
+	var entVals Values
+	var entRev int64
+	if scope.EntityID != "" {
+		entVals, entRev, err = readRow(db, org, addon, ScopeEntity, scope.EntityID)
+		if err != nil {
+			return Effective{}, 0, err
+		}
+	}
+
 	var mkVals Values
 	var mkRev int64
 	if scope.MarketID != "" {
@@ -103,14 +120,14 @@ func (r *Resolver) Resolve(ctx context.Context, org uuid.UUID, addon string, sco
 	}
 
 	declared := make(map[string]struct{}, len(defs))
-	eff := Effective{Values: Values{}, Sources: map[string]Source{}, OrgRev: orgRev, BranchRev: brRev, MarketRev: mkRev}
+	eff := Effective{Values: Values{}, Sources: map[string]Source{}, OrgRev: orgRev, BranchRev: brRev, MarketRev: mkRev, EntityRev: entRev}
 	for _, d := range defs {
 		declared[d.Key] = struct{}{}
 		if sensitive(d) {
 			continue
 		}
 		// Reuse the manifest's precedence rule instead of re-implementing it.
-		v := manifest.ResolveSettingScoped(d, orgVals, brVals, mkVals)
+		v := manifest.ResolveSettingScopedEntity(d, orgVals, entVals, brVals, mkVals)
 		if v == nil {
 			continue
 		}
@@ -120,6 +137,8 @@ func (r *Resolver) Resolve(ctx context.Context, org uuid.UUID, addon string, sco
 			eff.Sources[d.Key] = SourceMarket
 		case d.Scope == manifest.SettingScopeBranch && present(brVals, d.Key):
 			eff.Sources[d.Key] = SourceBranch
+		case (d.Scope == manifest.SettingScopeBranch || d.Scope == manifest.SettingScopeEntity) && present(entVals, d.Key):
+			eff.Sources[d.Key] = SourceEntity
 		case present(orgVals, d.Key):
 			eff.Sources[d.Key] = SourceOrg
 		default:
@@ -127,6 +146,7 @@ func (r *Resolver) Resolve(ctx context.Context, org uuid.UUID, addon string, sco
 		}
 	}
 	warnUndeclared(addon, "org", orgVals, declared)
+	warnUndeclared(addon, "entity", entVals, declared)
 	warnUndeclared(addon, "branch", brVals, declared)
 	warnUndeclared(addon, "market", mkVals, declared)
 	return eff, eff.Rev(), nil
@@ -171,6 +191,16 @@ func StringMap(v Values) map[string]string {
 	return out
 }
 
+// entityOf is the entity the call acts for: the scope the host resolved, else
+// the entity id it was asked for. "" when the call is not entity-scoped (the
+// legacy path, where the resolution is unchanged).
+func entityOf(ctx context.Context) string {
+	if s, ok := dynamic.EntityScopeFromContext(ctx); ok && s.EntityID != "" {
+		return s.EntityID
+	}
+	return dynamic.EntityIDFromContext(ctx)
+}
+
 // WasmResolver adapts a Resolver to the runtime/wasm SettingsResolver hook.
 // Layering over the legacy per-invocation map (base):
 //
@@ -190,7 +220,7 @@ func (w WasmResolver) ResolveSettings(ctx context.Context, org uuid.UUID, addon,
 // ResolveSettingsInMarket implements wasm.MarketSettingsResolver: the same
 // layering as ResolveSettings with the call's market override on top.
 func (w WasmResolver) ResolveSettingsInMarket(ctx context.Context, org uuid.UUID, addon, branchID, marketID string, base map[string]string) (map[string]string, error) {
-	eff, _, err := w.R.Resolve(ctx, org, addon, Scope{BranchID: branchID, MarketID: marketID})
+	eff, _, err := w.R.Resolve(ctx, org, addon, Scope{BranchID: branchID, MarketID: marketID, EntityID: entityOf(ctx)})
 	if err != nil {
 		return nil, err
 	}

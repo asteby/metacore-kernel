@@ -7,9 +7,10 @@
 //     with an optimistic-concurrency revision. Manifest defaults are never
 //     written to it.
 //   - Resolver computes the effective values with one explicit precedence:
-//     manifest default < org value < branch override < market override (only
-//     keys the manifest declares with scope "branch" / "market"; a setting has
-//     one scope).
+//     manifest default < org value < entity override < branch override <
+//     market override (only keys the manifest declares with scope "entity" /
+//     "branch" / "market"; a setting has one scope, and a "branch" key
+//     inherits its entity override).
 //   - Secrets and write-only settings are NOT stored here (use
 //     org_integrations); keys starting with "_" are reserved for the system.
 //

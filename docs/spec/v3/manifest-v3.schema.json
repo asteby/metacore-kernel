@@ -4906,9 +4906,9 @@
         },
         "scope": {
           "type": "string",
-          "enum": ["org", "branch", "market"],
+          "enum": ["org", "branch", "market", "entity"],
           "default": "org",
-          "description": "Level the value lives at. 'branch' lets each branch override the org value (effective value = branch override, else org value, else default); 'market' does the same per market (market > branch > org > default)."
+          "description": "Level the value lives at. 'branch' lets each branch override the org value (effective value = branch override, else org value, else default); 'market' does the same per market (market > branch > entity > org > default). 'entity' does the same per entity / razón social (entity > org > default); a 'branch' value also inherits its entity override."
         },
         "options": {
           "type": "array",
