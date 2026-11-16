@@ -19,6 +19,8 @@ Un grupo empresarial como Grupo Llantero 7Leguas opera varias razones sociales (
 | D6 | Un **ERP externo** (V2 para 7Leguas) sincroniza entidades y sucursales por un contrato genérico, con `external_ref` y bandera de fuente de verdad. Ops no inventa datos fiscales que el ERP ya tiene. |
 | D7 | Sin configuración, nada cambia: toda organización tiene una **entidad implícita** por defecto. |
 | D8 | El rollout es por fases con banderas, y cada fase trae su prueba de aislamiento. |
+| D9 | La sucursal tiene **tipo** (`physical`, `channel`, `virtual_warehouse`). Una sucursal de canal (p. ej. «Siete Leguas Mercado Libre») pertenece a una entidad y a una cuenta de canal; su **almacén de surtido se define aparte** y la plataforma marca la operación intercompañía cuando la entidad del pedido y la del almacén difieren. |
+| D10 | La jerarquía se visualiza con un **contrato de datos único** y un componente independiente del framework (V2 es Vue 3; Ops es React), para que Ops y V2 no dupliquen la pantalla. |
 
 ## 1. Lo que existe hoy (evidencia en el código)
 
@@ -45,7 +47,20 @@ Se revisó el código; lo que no se encontró se declara como tal.
 - El SDK ya lleva la sucursal en la entrega: `DeliveryInput { method, rate_id?, branch_id? }` y `PickupOption` (`metacore-sdk/packages/storefront/src/types.ts:438,474`).
 
 ### 1.6 Estado real de 7Leguas
-- **Ops (148.113.175.214):** 3 sucursales visibles (Servillantas 7 Leguas, San Felipe, Servillantas 7 Leguas Sucursal Bordo), ninguna con entidad.
+- **Estructura confirmada por el negocio** (diagrama «Jerarquía de sucursales – 7 Leguas», 2026-11-15):
+
+```mermaid
+flowchart TD
+  G["Grupo 7 Leguas"] --> R1["RFC 1 — Servillantas 7 Leguas<br/>3 sucursales"]
+  G --> R2["RFC 2 — Siete Leguas Llantas y Servicios<br/>1 sucursal"]
+  R1 --> S1["San Felipe"]
+  R1 --> S2["Servillantas 7 Leguas"]
+  R1 --> S3["Servillantas 7 Leguas Bordeaux"]
+  R2 --> C1["Siete Leguas Mercado Libre<br/>(sucursal de canal)"]
+```
+
+  **Regla del sistema (del negocio):** las sucursales del RFC 1 comparten la misma entidad fiscal; Mercado Libre pertenece a una entidad fiscal independiente (RFC 2). Sport Llantas y Axel **quedan por confirmar**: no forman parte de esta estructura hasta que el negocio lo diga.
+- **Ops (148.113.175.214):** 3 sucursales visibles (Servillantas 7 Leguas, San Felipe, Servillantas 7 Leguas Sucursal Bordo), ninguna con entidad ni con la sucursal de canal «Siete Leguas Mercado Libre». **Diferencia de nombre a confirmar:** el diagrama dice «Bordeaux»; Ops dice «Sucursal Bordo».
 - **7leguas-v2 (sandbox):** 1 grupo, 1 empresa, 4 sucursales, 2 razones sociales y 0 cuentas de canal; las fases A–D del plan de V2 están en `sandbox`, no en producción (217 commits por delante de `main`).
 - **Contrato V2 ↔ Ops** (§0): Ops no decide empresa ni sucursal; manda `channel_account` y V2 resuelve almacén y emisor.
 
@@ -81,6 +96,23 @@ flowchart TD
 |---|---|
 | `loc_entities` | `id`, `org_id`, `code` (estable, único por org), `legal_name`, `display_name`, `country`, `fiscal` (jsonb), `is_default`, `source` (`ops` \| `external:<sistema>`), `external_ref`, `active` |
 | `branches.entity_id` | nullable durante la migración; no nulo después; índice `(org_id, entity_id)` |
+
+#### 3.2.1 Tipos de sucursal: física, canal y almacén virtual
+
+El caso real de 7Leguas lo exige: «Siete Leguas Mercado Libre» es una **sucursal de canal** que pertenece a una entidad fiscal propia (RFC 2) y **no tiene un local físico**. Se modela con un tipo de sucursal, sin crear otro concepto:
+
+| Columna | Valores | Para qué |
+|---|---|---|
+| `branches.kind` | `physical` (por omisión) \| `channel` \| `virtual_warehouse` | Define qué se espera de la sucursal |
+| `branches.channel_account_ref` | nulo \| referencia a la cuenta de canal | Solo `channel`: cuenta de Mercado Libre, Amazon u otra que vende en nombre de esa sucursal |
+| `branches.fulfillment_warehouse_id` | nulo \| almacén | De dónde **sale la mercancía** (ver abajo) |
+
+- **`physical`:** local con dirección, horario y recolección (lo que `locations` modela hoy).
+- **`channel`:** sin dirección ni recolección; no aparece en la tienda ni en «Cerca de mí». Existe para que los pedidos de esa cuenta de canal **hereden entidad, serie y emisor** por la regla de §3.3. Una cuenta de canal pertenece a **una** sucursal de canal.
+- **`virtual_warehouse`:** agrupa existencias sin local (por ejemplo, mercancía en tránsito o en consignación); no vende.
+- **El almacén de surtido se define aparte de la entidad.** La entidad de un pedido es la de su sucursal (`channel` → RFC 2) y **no** la del almacén que surte. Así un pedido de Mercado Libre puede salir de una bodega física del RFC 1 y aun así facturarse con el RFC 2.
+- **Consecuencia fiscal que el diseño hace visible:** cuando `entidad(pedido) ≠ entidad(almacén de surtido)`, hay una **operación intercompañía** (venta o traspaso interno entre RFC 1 y RFC 2). La plataforma la **marca** (`intercompany = true`) y la entrega al ERP; no decide por sí misma cómo se factura (ver decisión abierta 6).
+- **Reglas de validación:** una sucursal `channel` exige `channel_account_ref`; una `physical` no puede tenerla; el `fulfillment_warehouse_id` puede apuntar a un almacén de otra entidad **solo** si la organización habilita `intercompany`.
 
 - **Datos fiscales genéricos:** `fiscal = { tax_id_type, tax_id, regime, postal_code, … }`. El **tipo** y la validación los aporta el addon de región (`region_mx` define RFC y régimen SAT; otro país aporta NIT, CUIT, RIF…). El núcleo no asume RFC.
 - **Identificador estable:** `code` es la clave de mapeo con sistemas externos; los nombres nunca se usan como clave.
@@ -151,6 +183,7 @@ flowchart LR
 ```
 
 - **El pedido hereda la entidad de su sucursal** (la de recolección o la de origen del envío).
+- **Dos puertas de entrada, dos entidades (caso 7Leguas):** una compra de la tienda con recolección en San Felipe nace en una sucursal `physical` del **RFC 1**; un pedido de Mercado Libre nace en la sucursal `channel` «Siete Leguas Mercado Libre» y se factura con el **RFC 2**, aunque la mercancía salga de una bodega del RFC 1 (§3.2.1).
 - **Cobro:** `commerce.payments.session` se enruta por entidad (conector y proveedor por alcance). Un checkout lo cobra **una sola** entidad.
 - **Carrito con artículos de varias entidades:** v1 pide separar en dos pedidos (una entidad por checkout) con aviso claro. v2: cobro dividido por vendedor, reutilizando el modelo del RFC de pagos (D10: cobro por vendedor con comisión).
 - **Catálogo y precios:** compartidos por la organización; precio por entidad o mercado como capa opcional.
@@ -173,7 +206,47 @@ flowchart LR
 - **En 7Leguas:** `companies` → entidades, `branch.company_id` → `entity_id`. Los pedidos bajan a V2 con la sucursal y la `channel_account`; V2 sigue siendo el emisor de la factura (contrato V2 ↔ Ops §0).
 - **Sin ERP:** la entidad se administra en Ops (`source = ops`).
 
-### 3.9 Compatibilidad hacia atrás
+### 3.9 Visualización de la jerarquía (componente reutilizable)
+
+El negocio ya definió cómo quiere **ver** la estructura (diagrama «Jerarquía de sucursales – 7 Leguas»): una tarjeta por entidad con su razón social, las sucursales dentro, un contador («3 sucursales») y una **regla del sistema** en una nota. Lo necesitan dos pantallas: el panel de **Ops** y la pantalla del ERP **V2**.
+
+**Hallazgo que condiciona la solución:** el frontend de V2 es **Vue 3** (`7leguas-v2/frontend/package.json`) y el panel de Ops y `@asteby/metacore-ui` son **React**. Un componente React no sirve a V2. Para no duplicar se separan dos cosas:
+
+1. **Un contrato de datos único** (JSON, versionado), que cualquier backend puede producir:
+
+```ts
+type HierarchyView = {
+  version: 1
+  group: { code: string; name: string; logo?: string }
+  entities: Array<{
+    code: string                    // clave estable (mapeo con ERP)
+    legalName: string
+    taxId?: { type: string; masked: string }   // «RFC», con máscara; nunca el valor completo
+    source: 'ops' | `external:${string}`
+    status: 'complete' | 'incomplete' | 'unsynced'  // estado de configuración
+    missing?: string[]              // qué falta (p. ej. 'serie', 'pac', 'cp_fiscal')
+    branches: Array<{
+      code: string; name: string
+      kind: 'physical' | 'channel' | 'virtual_warehouse'
+      active: boolean
+      channelLabel?: string         // p. ej. «Mercado Libre»
+      fulfillmentWarehouse?: string // almacén de surtido, si difiere de la entidad
+      intercompany?: boolean
+    }>
+  }>
+  rules?: Array<{ level: 'info' | 'warning'; text: string }>   // «regla del sistema»
+  pending?: Array<{ name: string; note?: string }>             // entidades por confirmar
+}
+```
+
+2. **Un solo renderizador independiente del framework:** un *Web Component* (`<mc-org-hierarchy>`) con el contrato como propiedad, los tokens de diseño por CSS variables (tema claro/oscuro) y eventos `entity-select` / `branch-select`. Vue 3 consume elementos personalizados de forma nativa (V2) y React los admite (Ops; para React < 19 con un envoltorio de 20 líneas). **Alternativa si el equipo prefiere componentes nativos de cada framework:** dos renderizadores finos (React en `@asteby/metacore-ui` y Vue en V2) **sobre el mismo contrato y los mismos tokens**, con una prueba visual común; el costo es mantener dos implementaciones.
+
+- **Qué muestra cada tarjeta:** razón social, RFC con máscara, contador de sucursales, fuente (Ops o ERP), estado de configuración y qué falta; cada sucursal con su tipo (icono de local o de canal) y, si aplica, su almacén de surtido y la marca `intercompany`. La **regla del sistema** va en una nota al pie; las entidades por confirmar (Sport Llantas, Axel) se muestran **punteadas**, sin inventar datos.
+- **Dónde vive:** el contrato y el componente en `metacore-sdk` (paquete nuevo `packages/org-hierarchy`, sin dependencias de React); Ops lo monta en la administración de organización y V2 en su pantalla de empresas.
+- **Quién produce el contrato:** Ops lo arma desde `loc_entities` y `branches`; V2, desde `company_groups`, `companies` y `branches`. Ninguno depende del otro.
+- **Coordinación:** el agente que construye la pantalla de V2 (`acd855330d71e7727`) debe consumir este contrato en lugar de definir otro; las diferencias se acuerdan en este RFC.
+
+### 3.10 Compatibilidad hacia atrás
 
 - **Entidad implícita:** la migración crea una entidad por defecto por organización y asigna todas las sucursales a ella. Una organización sin entidades configuradas se comporta exactamente como hoy.
 - **Capabilities:** el contrato es cerrado. Los campos nuevos son **opcionales** y las versiones se anuncian; ninguna capability existente cambia de forma.
@@ -211,7 +284,8 @@ flowchart LR
 | Fase | Alcance | Repos | Riesgo | Tamaño |
 |---|---|---|---|---|
 | **F0** | Este RFC y las decisiones abiertas | kernel | Bajo | S |
-| **F1** | Modelo de entidad y entidad implícita (migración reversible, banderas apagadas) | `addons` (`locations`) | Bajo: aditivo | M |
+| **F1** | Modelo de entidad, tipos de sucursal (`kind`, sucursal de canal) y entidad implícita (migración reversible, banderas apagadas) | `addons` (`locations`) | Bajo: aditivo | M |
+| **F1b** | Contrato `HierarchyView` y componente de jerarquía (§3.9), consumido por Ops y por la pantalla de V2 | `metacore-sdk`, Ops, V2 | Bajo: solo lectura | S |
 | **F2** | Alcance por conjunto de sucursales: `X-Entity-ID`, `f_branch_id IN`, contexto WASM `{org, entity, branches}`, selector en el panel | kernel, Ops | Medio: toca el camino de lectura | L |
 | **F3** | Cadena de herencia: ajustes `entity`, conectores con alcance, `routing` por entidad | kernel, Ops, addons | Medio | L |
 | **F4** | Ecommerce: pedido hereda la entidad, cobro por entidad, foto fiscal, remitente | `storefront_cart`, `channel_orders`, `mercadopago`, SDK | Alto: dinero y facturación | L |
@@ -235,7 +309,10 @@ flowchart LR
 2. ¿El carrito con artículos de varias entidades se **separa en dos pedidos** (v1) o se cobra dividido (v2)? (Recomendado: v1.)
 3. ¿Precio por entidad desde la F4 o solo catálogo único? (Recomendado: catálogo único, precio por entidad después.)
 4. ¿Escaparates por entidad: en el alcance del RFC o diferido? (Recomendado: diferido; el modelo ya lo admite.)
-5. Para 7Leguas: datos reales de cada entidad (razón social, RFC, régimen, CP fiscal, serie, PAC) y qué sucursales le pertenecen. **No se cargan ni se inventan** hasta tenerlos.
+5. Para 7Leguas: de la estructura confirmada falta el dato fiscal de cada RFC (RFC, régimen, CP fiscal, serie, PAC). Sport Llantas y Axel siguen **por confirmar**. **No se cargan ni se inventan** hasta tenerlos.
+6. **Surtido de la sucursal de canal.** Un pedido de Mercado Libre se factura con el RFC 2 pero la mercancía suele estar en bodegas del RFC 1. ¿Cómo se documenta esa operación intercompañía? (a) el RFC 2 tiene **stock propio** en un almacén designado (sin intercompañía); (b) el RFC 1 hace una **venta o traspaso interno** automático al RFC 2 por cada pedido; (c) el negocio la regulariza **periódicamente** (lote). La plataforma marca el caso en cualquiera de las tres; la elección es **fiscal y contable** y la debe confirmar el contador.
+7. **Tecnología del componente de jerarquía:** Web Component único (recomendado) o dos renderizadores (React y Vue) sobre el mismo contrato.
+8. Nombre de la tercera sucursal del RFC 1: «Bordeaux» (diagrama del negocio) o «Sucursal Bordo» (Ops hoy).
 
 ## 9. Referencias de código
 
