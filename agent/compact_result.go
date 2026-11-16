@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -284,6 +285,7 @@ func autoColumns(m CatalogModel, rows []map[string]any, n int) []string {
 // formatCell renders one value: many2one as "Name [id]", enum as its label,
 // bool as sí/no, dates trimmed, text clipped and escaped.
 func formatCell(m CatalogModel, col string, v any, refNames map[string]map[string]string) string {
+	v = derefValue(v)
 	if isEmptyValue(v) {
 		return ""
 	}
@@ -345,6 +347,7 @@ func trimTimestamp(s string) string {
 }
 
 func formatNumberish(v any) string {
+	v = derefValue(v)
 	switch t := v.(type) {
 	case nil:
 		return "0"
@@ -367,6 +370,7 @@ func formatNumberish(v any) string {
 }
 
 func scalarText(v any) string {
+	v = derefValue(v)
 	switch t := v.(type) {
 	case nil:
 		return ""
@@ -381,6 +385,7 @@ func scalarText(v any) string {
 }
 
 func isEmptyValue(v any) bool {
+	v = derefValue(v)
 	switch t := v.(type) {
 	case nil:
 		return true
@@ -408,4 +413,29 @@ func clipBytes(s string, n int) string {
 		cut = cut[:len(cut)-1]
 	}
 	return cut
+}
+
+// derefValue unwraps pointers some drivers return for computed columns
+// (aggregates scanned into a map come back as *int64, *float64…).
+func derefValue(v any) any {
+	for v != nil {
+		rv := reflect.ValueOf(v)
+		if rv.Kind() != reflect.Pointer {
+			return v
+		}
+		if rv.IsNil() {
+			return nil
+		}
+		v = rv.Elem().Interface()
+	}
+	return v
+}
+
+// derefRows unwraps pointer values of rows in place.
+func derefRows(rows []map[string]any) {
+	for _, r := range rows {
+		for k, v := range r {
+			r[k] = derefValue(v)
+		}
+	}
 }

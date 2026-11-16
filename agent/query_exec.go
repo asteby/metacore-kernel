@@ -159,6 +159,7 @@ func (s *CRUDService) QueryTree(ctx context.Context, identity *AgentIdentity, t 
 		if err := q.Find(&rows).Error; err != nil {
 			return nil, fmt.Errorf("aggregate failed: %w", err)
 		}
+		derefRows(rows)
 		var refs map[string]map[string]string
 		if !opt.NoRefNames {
 			refs = s.refNames(ctx, identity, cm, t.GroupBy, rows, opt)
@@ -179,6 +180,7 @@ func (s *CRUDService) QueryTree(ctx context.Context, identity *AgentIdentity, t 
 	if err := q.Limit(t.Limit).Offset(t.Offset).Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
+	derefRows(rows)
 	for i := range rows {
 		stripSensitive(rows[i])
 		mask.redact(rows[i])
