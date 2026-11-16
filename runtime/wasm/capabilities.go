@@ -358,14 +358,14 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 				inv.logf("audit connector_get addon=%s connector=%s org=%s decision=denied: %v", inv.addonKey, key, inv.orgID, err)
 				return writeToGuest(ctx, mod, jsonError("forbidden", err.Error()))
 			}
-			inv.logf("audit connector_get addon=%s connector=%s org=%s decision=allowed", inv.addonKey, key, inv.orgID)
+			inv.logf("audit connector_get addon=%s connector=%s org=%s scope=%s decision=allowed", inv.addonKey, key, inv.orgID, invocationScope(ctx))
 			if inv.connectors == nil {
 				return writeToGuest(ctx, mod, jsonError("connector_unavailable", "host has no connectors resolver configured"))
 			}
 			if inv.orgID == uuid.Nil {
 				return writeToGuest(ctx, mod, jsonError("no_active_org", "invocation has no bound orgID"))
 			}
-			creds, err := inv.connectors.Get(ctx, inv.orgID, key)
+			creds, err := scopedConnectorGet(ctx, inv, key)
 			if err != nil {
 				return writeToGuest(ctx, mod, jsonError("not_found", err.Error()))
 			}
@@ -801,7 +801,7 @@ func connectorFetchHosts(ctx context.Context, inv *invocation) []string {
 		if inv.caps.CanReadConnector(ref.Connector) != nil {
 			continue
 		}
-		creds, err := inv.connectors.Get(ctx, inv.orgID, ref.Connector)
+		creds, err := scopedConnectorGet(ctx, inv, ref.Connector)
 		if err != nil {
 			continue
 		}

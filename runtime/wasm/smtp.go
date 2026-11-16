@@ -39,7 +39,7 @@ func smtpConnectorHosts(ctx context.Context, inv *invocation) []string {
 		if inv.caps.CanReadConnector(ref.Connector) != nil {
 			continue
 		}
-		creds, err := inv.connectors.Get(ctx, inv.orgID, ref.Connector)
+		creds, err := scopedConnectorGet(ctx, inv, ref.Connector)
 		if err != nil {
 			continue
 		}
