@@ -14,13 +14,15 @@ import (
 
 // captureAI records the prompt and tools of each call and replays steps.
 type captureAI struct {
-	steps   []*AIResponse
-	prompts []string
-	defs    [][]map[string]interface{}
+	steps    []*AIResponse
+	prompts  []string
+	defs     [][]map[string]interface{}
+	messages [][]map[string]interface{}
 }
 
-func (c *captureAI) GenerateChatWithTools(_ context.Context, _ []map[string]interface{}, system string, defs []map[string]interface{}) (*AIResponse, error) {
+func (c *captureAI) GenerateChatWithTools(_ context.Context, msgs []map[string]interface{}, system string, defs []map[string]interface{}) (*AIResponse, error) {
 	c.prompts = append(c.prompts, system)
+	c.messages = append(c.messages, msgs)
 	c.defs = append(c.defs, defs)
 	i := len(c.prompts) - 1
 	if i >= len(c.steps) {
@@ -61,8 +63,11 @@ func TestProcessMessageDeliversFinalAnswerAndKeepsHistory(t *testing.T) {
 		t.Fatalf("metadata %v", resp.Metadata)
 	}
 	p := ai.prompts[0]
-	if !strings.HasPrefix(p, "Eres Aby.") || !strings.Contains(p, "## HERRAMIENTAS DISPONIBLES") || !strings.Contains(p, "**final_answer**") || !strings.Contains(p, "*REQUERIDO*") {
-		t.Fatalf("system prompt missing host prompt or tools section:\n%s", p)
+	if p != "Eres Aby.\n\n"+closingRules {
+		t.Fatalf("system prompt must be the host prompt plus the closing rules (tools travel natively):\n%s", p)
+	}
+	if len(ai.defs[0]) == 0 || ai.defs[0][0]["name"] != "final_answer" {
+		t.Fatalf("tools must be sent natively: %v", ai.defs[0])
 	}
 	ctx := o.contextMgr.GetContext(conv)
 	if len(ctx.History) != 2 || ctx.History[0].Role != "user" || ctx.History[1].Content != "Hola, soy tu asistente." {

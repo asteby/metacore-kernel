@@ -66,13 +66,34 @@ type CopilotConfig struct {
 	Orchestrator *AgentOrchestrator
 	// CRUD applies approved proposals. Required for ApplyProposal.
 	CRUD *CRUDService
-	// Capabilities renders the authoritative capability clause. Optional.
+	// Capabilities renders the authoritative capability clause. Optional, and
+	// only used when InjectCapabilities is set.
 	Capabilities *CapabilityRegistry
+	// InjectCapabilities appends the capability clause (a JSON list of up to
+	// 120 model/action entries) to the system prompt. Off by default: it cost
+	// 1-3.6k tokens and many permission checks per turn, and permissions are
+	// enforced by the tools anyway.
+	InjectCapabilities bool
 	// Brand supplies the persona (base prompt, mascot name, platform name,
 	// tone addendum) per org. Required.
 	Brand BrandProvider
 	// Clock gives the org-local "now". Optional; UTC when nil.
 	Clock ClockZone
+	// ClockInSystemPrompt restores the legacy clock: NowClause (minute
+	// precision) inside the system prompt. It changes the prompt every minute,
+	// so no provider can cache it. Off by default: today's date (day
+	// precision) travels in the turn context after the user's message.
+	ClockInSystemPrompt bool
+	// ClockTimeOfDay adds the local time (HH:MM) to the turn context.
+	ClockTimeOfDay bool
+	// MaxToolResultBytes caps each tool result fed back to the model during
+	// copilot turns. Zero takes DefaultCopilotMaxToolResultBytes; negative
+	// defers to the orchestrator's MaxToolResultBytes.
+	MaxToolResultBytes int
+	// HistoryTokenBudget bounds the history sent each turn (newest first, by
+	// EstimateTokens; the user's message is always kept). Zero takes
+	// DefaultCopilotHistoryTokenBudget; negative sends the whole loaded history.
+	HistoryTokenBudget int
 	// Conversations reads earlier turns' attachments. Optional.
 	Conversations ConversationStore
 	// Proposals is the pending-mutation store (default GlobalProposalStore).
@@ -106,6 +127,12 @@ type CopilotConfig struct {
 type CopilotService struct {
 	cfg CopilotConfig
 }
+
+// Copilot defaults (see CopilotConfig).
+const (
+	DefaultCopilotMaxToolResultBytes = 8_000
+	DefaultCopilotHistoryTokenBudget = 4_000
+)
 
 // DefaultLiveSuffix is the voice-mode instruction.
 const DefaultLiveSuffix = "\n\nMODO LIVE (voz): responde en 1–3 frases cortas y hablables. Sigue usando tools y previews de aprobación; no narres schemas ni dumps técnicos."
@@ -155,28 +182,79 @@ func PersonalityClause(p Personality) string {
 }
 
 // NowClause is the "current date/time" line in the org's zone, so "hoy"
-// matches the business's local day.
+// matches the business's local day. It is minute-precise, so a prompt that
+// carries it changes every minute; the copilot only uses it with
+// CopilotConfig.ClockInSystemPrompt (see TodayClause).
 func NowClause(now time.Time) string {
 	return "\nFecha y hora actual (" + now.Location().String() + "): " + now.Format("Monday 2006-01-02 15:04") +
 		". Usa esta fecha/hora como \"hoy\" y \"ahora\" — ya está en la zona horaria del negocio; NUNCA inventes la fecha ni la conviertas a otra zona."
 }
 
+var spanishWeekdays = [...]string{"domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"}
+
+// TodayClause is the turn-context line with today's date (day precision) in
+// the org's zone, and the local time when withTime is set. It goes after the
+// user's message, never in the system prompt, so the cached prefix survives.
+func TodayClause(now time.Time, withTime bool) string {
+	when := spanishWeekdays[now.Weekday()] + " " + now.Format("2006-01-02")
+	if withTime {
+		when += ", " + now.Format("15:04")
+	}
+	return "[Contexto del turno] Hoy es " + when + " (zona " + now.Location().String() + "). " +
+		"Usa esta fecha como \"hoy\" — ya está en la zona horaria del negocio; NUNCA inventes la fecha ni la conviertas a otra zona."
+}
+
 // SystemPrompt assembles the copilot prompt for a user: the host's base prompt
-// followed by the brand, tone, clock and capability clauses.
+// followed by the brand and tone clauses (plus the legacy clock and the
+// capability clause when configured). It only holds content that is stable
+// across turns, so the provider can cache it.
 func (s *CopilotService) SystemPrompt(orgID, userID uuid.UUID, live bool) (prompt string, p Personality) {
 	p = s.cfg.Brand.PersonalityFor(orgID)
-	now := time.Now().UTC()
-	if s.cfg.Clock != nil {
-		now = s.cfg.Clock.Now(orgID, userID)
+	prompt = p.SystemPrompt + BrandClause(p) + PersonalityClause(p)
+	if s.cfg.ClockInSystemPrompt {
+		prompt += NowClause(s.now(orgID, userID))
 	}
-	prompt = p.SystemPrompt + BrandClause(p) + PersonalityClause(p) + NowClause(now)
-	if s.cfg.Capabilities != nil {
+	if s.cfg.InjectCapabilities && s.cfg.Capabilities != nil {
 		prompt += s.cfg.Capabilities.PromptClause(orgID, userID)
 	}
 	if live {
 		prompt += s.cfg.LiveSuffix
 	}
 	return prompt, p
+}
+
+// TurnContext is the per-turn block attached after the user's message:
+// today's date in the org's zone ("" with the legacy ClockInSystemPrompt).
+func (s *CopilotService) TurnContext(orgID, userID uuid.UUID) string {
+	if s.cfg.ClockInSystemPrompt {
+		return ""
+	}
+	return TodayClause(s.now(orgID, userID), s.cfg.ClockTimeOfDay)
+}
+
+func (s *CopilotService) now(orgID, userID uuid.UUID) time.Time {
+	if s.cfg.Clock != nil {
+		return s.cfg.Clock.Now(orgID, userID)
+	}
+	return time.Now().UTC()
+}
+
+// turnLimits resolves the copilot's tool result cap and history budget into
+// Turn values (0 = orchestrator policy / no budget).
+func (s *CopilotService) turnLimits() (maxResultBytes, historyBudget int) {
+	switch {
+	case s.cfg.MaxToolResultBytes == 0:
+		maxResultBytes = DefaultCopilotMaxToolResultBytes
+	case s.cfg.MaxToolResultBytes > 0:
+		maxResultBytes = s.cfg.MaxToolResultBytes
+	}
+	switch {
+	case s.cfg.HistoryTokenBudget == 0:
+		historyBudget = DefaultCopilotHistoryTokenBudget
+	case s.cfg.HistoryTokenBudget > 0:
+		historyBudget = s.cfg.HistoryTokenBudget
+	}
+	return maxResultBytes, historyBudget
 }
 
 // ProcessCopilotMessage runs one copilot turn.
@@ -212,12 +290,16 @@ func (s *CopilotService) ProcessCopilotMessage(ctx context.Context, orgID, userI
 	mgr.SaveContext(convCtx)
 
 	prompt, _ := s.SystemPrompt(orgID, userID, live)
+	maxResult, historyBudget := s.turnLimits()
 	response, err := s.cfg.Orchestrator.ProcessMessage(ctx, Turn{
-		ConversationID: sessionID,
-		AgentID:        uuid.Nil, // transient agent: no tools row to look up
-		UserMessage:    enriched,
-		SystemPrompt:   prompt,
-		ExtraTools:     s.turnTools(ctx, orgID, userID),
+		ConversationID:     sessionID,
+		AgentID:            uuid.Nil, // transient agent: no tools row to look up
+		UserMessage:        enriched,
+		SystemPrompt:       prompt,
+		TurnContext:        s.TurnContext(orgID, userID),
+		ExtraTools:         s.turnTools(ctx, orgID, userID),
+		MaxToolResultBytes: maxResult,
+		HistoryTokenBudget: historyBudget,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("copilot processing failed: %w", err)

@@ -67,7 +67,7 @@ func TestSystemPromptAssembly(t *testing.T) {
 	if pers.Name != "Llantonio" {
 		t.Fatal("personality not returned")
 	}
-	order := []string{"Eres Llantonio.", "Pitsline", "PERSONALIDAD", "America/Mexico_City", "2026-10-11 09:30", "MODO LIVE"}
+	order := []string{"Eres Llantonio.", "Pitsline", "PERSONALIDAD", "MODO LIVE"}
 	last := -1
 	for _, w := range order {
 		i := strings.Index(p, w)
@@ -78,6 +78,9 @@ func TestSystemPromptAssembly(t *testing.T) {
 	}
 	if strings.Contains(p, "MODO LIVE") != true {
 		t.Fatal("live suffix")
+	}
+	if strings.Contains(p, "2026-10-11") || strings.Contains(p, "America/Mexico_City") {
+		t.Fatalf("the clock must not be in the system prompt:\n%s", p)
 	}
 	if p2, _ := svc.SystemPrompt(uuid.New(), uuid.New(), false); strings.Contains(p2, "MODO LIVE") {
 		t.Fatal("live suffix must be opt-in")
@@ -114,6 +117,16 @@ func TestProcessCopilotMessageEndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(ai.prompts[0], "Eres Llantonio.") || !strings.Contains(ai.prompts[0], "MODO LIVE") {
 		t.Fatal("prompt not assembled for the turn")
+	}
+	sent := ai.messages[0]
+	last, _ := sent[len(sent)-1]["content"].(string)
+	if !strings.HasPrefix(last, "hola") || !strings.Contains(last, "[Contexto del turno] Hoy es domingo 2026-10-11 (zona America/Mexico_City)") {
+		t.Fatalf("turn context must follow the user message: %q", last)
+	}
+	for _, h := range svc.cfg.Orchestrator.contextMgr.GetContext(session).History {
+		if strings.Contains(h.Content, "Contexto del turno") {
+			t.Fatal("turn context must not be stored in history")
+		}
 	}
 	ctx := svc.cfg.Orchestrator.contextMgr.GetContext(session)
 	if ctx.UserID != user || ctx.OrganizationID != org {
