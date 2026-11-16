@@ -207,15 +207,23 @@ func TestCompactListAndDescribe(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func newSemanticCopilot(t *testing.T, ai AIService, semantic bool, base ...tools.BaseTool) (*CopilotService, uuid.UUID) {
+	return newSemanticCopilotWith(t, ai, semantic, nil, base...)
+}
+
+func newSemanticCopilotWith(t *testing.T, ai AIService, semantic bool, mut func(*CopilotConfig), base ...tools.BaseTool) (*CopilotService, uuid.UUID) {
 	t.Helper()
 	crud, org := newCatalogCRUD(t, nil)
 	o := newTurnOrchestrator(t, ai, base...)
-	svc, err := NewCopilotService(CopilotConfig{
+	cfg := CopilotConfig{
 		Orchestrator: o, CRUD: crud, Proposals: NewProposalStore(),
 		Brand:           fakeBrand{Personality{Name: "Aby", SystemPrompt: "Eres Aby."}},
 		Clock:           fixedClock{time.Date(2026, 11, 15, 9, 30, 0, 0, time.UTC)},
 		SemanticCatalog: semantic,
-	})
+	}
+	if mut != nil {
+		mut(&cfg)
+	}
+	svc, err := NewCopilotService(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,5 +341,41 @@ func TestSemanticCatalogCutsCallsPerLookup(t *testing.T) {
 	t.Logf("LLM calls per lookup: %d -> %d", before, after)
 	if before != 4 || after != 2 {
 		t.Fatalf("want 4 -> 2 calls, got %d -> %d", before, after)
+	}
+}
+
+// Both opt-in bundles together: the cached prefix (system + tools) stays
+// byte-identical across turns and calls, and each bundle adds its per-turn
+// block after the user's message.
+func TestSemanticCatalogWithLayeredMemoryKeepsPrefixStable(t *testing.T) {
+	ai := &captureAI{}
+	svc, org := newSemanticCopilotWith(t, ai, true, func(c *CopilotConfig) { c.LayeredMemory = true })
+	user, session := uuid.New(), uuid.New()
+	msgs := []string{"¿cuántos pedidos de venta confirmados hay?", "existencias por sucursal", "facturas pendientes del cliente Juan", "gracias"}
+	for _, msg := range msgs {
+		if _, err := svc.ProcessCopilotMessage(context.Background(), org, user, session, msg, nil, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(ai.prompts) < len(msgs) {
+		t.Fatalf("calls: %d", len(ai.prompts))
+	}
+	d0, _ := json.Marshal(ai.defs[0])
+	for i := range ai.prompts {
+		di, _ := json.Marshal(ai.defs[i])
+		if ai.prompts[i] != ai.prompts[0] || string(di) != string(d0) {
+			t.Fatalf("call %d: system prompt or tools changed", i)
+		}
+	}
+	for _, name := range []string{`"catalog_search"`, `"query_data"`, `"recall_turn"`} {
+		if !strings.Contains(string(d0), name) {
+			t.Errorf("tools miss %s", name)
+		}
+	}
+	if !strings.Contains(ai.prompts[0], ERPCardLegend) || strings.Contains(ai.prompts[0], prefetchHeader) {
+		t.Fatal("legend in the prompt, cards never")
+	}
+	if u := lastUserContent(ai.messages[1]); !strings.Contains(u, `stock "Existencias"`) {
+		t.Fatalf("prefetch with memory on:\n%s", u)
 	}
 }

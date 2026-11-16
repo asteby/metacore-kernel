@@ -94,6 +94,15 @@ type CopilotConfig struct {
 	// EstimateTokens; the user's message is always kept). Zero takes
 	// DefaultCopilotHistoryTokenBudget; negative sends the whole loaded history.
 	HistoryTokenBudget int
+	// LayeredMemory replaces the raw history with layered memory: a recent
+	// window of exchanges, an index of the older turns at the head of the
+	// history, the recall_turn/remember_fact/forget_fact tools, durable
+	// per-user facts and related-turn prefetch in the turn context (see
+	// memory.go). Off by default. HistoryTokenBudget still caps the window.
+	LayeredMemory bool
+	// Memory tunes LayeredMemory (store, embedder, budgets). Zero values take
+	// the defaults; without Store, memory is process-local.
+	Memory MemoryConfig
 	// Conversations reads earlier turns' attachments. Optional.
 	Conversations ConversationStore
 	// Proposals is the pending-mutation store (default GlobalProposalStore).
@@ -134,7 +143,8 @@ type CopilotConfig struct {
 // history comes from the copilot thread and the agent is transient.
 type CopilotService struct {
 	cfg     CopilotConfig
-	catalog *CatalogIndex // semantic catalog (SemanticCatalog)
+	memory  *copilotMemory // nil unless LayeredMemory
+	catalog *CatalogIndex  // semantic catalog (SemanticCatalog)
 }
 
 // Copilot defaults (see CopilotConfig).
@@ -160,11 +170,14 @@ func NewCopilotService(cfg CopilotConfig) (*CopilotService, error) {
 	if cfg.LiveSuffix == "" {
 		cfg.LiveSuffix = DefaultLiveSuffix
 	}
-	s := &CopilotService{cfg: cfg}
-	if err := s.initSemanticCatalog(); err != nil {
+	svc := &CopilotService{cfg: cfg}
+	if cfg.LayeredMemory {
+		svc.memory = newCopilotMemory(cfg.Memory)
+	}
+	if err := svc.initSemanticCatalog(); err != nil {
 		return nil, err
 	}
-	return s, nil
+	return svc, nil
 }
 
 // BrandClause tells the model which commercial name to use (white-label):
@@ -305,7 +318,7 @@ func (s *CopilotService) ProcessCopilotMessage(ctx context.Context, orgID, userI
 
 	prompt, _ := s.SystemPrompt(orgID, userID, live)
 	maxResult, historyBudget := s.turnLimits()
-	response, err := s.cfg.Orchestrator.ProcessMessage(ctx, Turn{
+	turn := Turn{
 		ConversationID:     sessionID,
 		AgentID:            uuid.Nil, // transient agent: no tools row to look up
 		UserMessage:        enriched,
@@ -314,9 +327,22 @@ func (s *CopilotService) ProcessCopilotMessage(ctx context.Context, orgID, userI
 		ExtraTools:         s.turnTools(ctx, orgID, userID),
 		MaxToolResultBytes: maxResult,
 		HistoryTokenBudget: historyBudget,
-	})
+	}
+	var mem *memoryTurn
+	if s.memory != nil {
+		mem = s.memory.beginTurn(ctx, sessionID, orgID, userID, userMessage)
+		turn.TurnContext = joinTurnContext(turn.TurnContext, mem.contextBlock)
+		turn.ExtraTools = append(turn.ExtraTools, s.memory.tools()...)
+		turn.HistoryExchanges = mem.window
+		turn.HistoryPreamble = mem.preamble
+		turn.OnToolResult = mem.observe
+	}
+	response, err := s.cfg.Orchestrator.ProcessMessage(ctx, turn)
 	if err != nil {
 		return nil, fmt.Errorf("copilot processing failed: %w", err)
+	}
+	if mem != nil {
+		mem.finish(ctx, response.Message)
 	}
 	result := ToProcessResult(response)
 	result.Proposals = s.cfg.Proposals.ListPending(sessionID, userID)

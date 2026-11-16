@@ -224,7 +224,49 @@ constants `claude.DirectBaseURL` / `claude.DirectToken` are the exported
 spellings of what used to be package-private in `services`
 (`createLLM` uses them for the `openai-proxy` provider).
 
-## 7. Semantic catalog (opt-in, `CopilotConfig.SemanticCatalog`)
+## 7. Copilot layered memory (opt-in)
+
+`CopilotConfig.LayeredMemory = true` replaces the copilot's raw history with
+four layers (see `agent/memory.go`):
+
+1. **Recent window**: the last `Memory.RecentExchanges` (default 3) exchanges
+   verbatim. The window start advances in steps of that size (3–5 exchanges),
+   so the history sent is append-only between steps and the provider's prefix
+   cache keeps hitting. `HistoryTokenBudget` still caps it.
+2. **Conversation index**: one line per older turn (`#14 · título → resultado`,
+   capped at `Memory.IndexTokenBudget`, default 800 tokens), sent as the
+   opening user message of the history (plus a fixed assistant ack). It only
+   changes when the window steps, so it stays in the cached prefix.
+3. **Recall**: the `recall_turn` tool (`turn` or `query`) returns a turn's
+   question, answer, model facts and tool digests (capped at
+   `Memory.RecallMaxBytes`).
+4. **Long-term facts** per user+org: `remember_fact` / `forget_fact`, rendered
+   (stable order, `Memory.MaxFacts` / `Memory.FactsTokenBudget`) in the turn
+   context, which also carries the previous turn's facts/tool digests and the
+   older turn most related to the new message (semantic prefetch with
+   `Memory.Embedder`, a `vector.Embedder` such as bge-m3; lexical otherwise).
+
+Titles, summaries and facts come from optional `final_answer` fields
+(`title`, `summary`, `facts`) with deterministic fallbacks; tool digests are
+computed from the results. No extra LLM call is made. System prompt and tools
+stay byte-identical across turns.
+
+Storage: `Memory.Store` defaults to a process-local store. In production use
+
+```go
+if err := agent.MigrateTurnMemory(db); err != nil { ... } // or run agent.MemoryDDLPostgres
+copilot, _ := agent.NewCopilotService(agent.CopilotConfig{
+    // ...
+    LayeredMemory: true,
+    Memory: agent.MemoryConfig{Store: agent.NewGormTurnStore(db), Embedder: bgeM3},
+})
+```
+
+Tables: `copilot_memory_turns` (PK `session_id, turn`) and
+`copilot_memory_facts` (by `organization_id, user_id`). Deleting a copilot
+session should also delete its `copilot_memory_turns` rows.
+
+## 8. Semantic catalog (opt-in, `CopilotConfig.SemanticCatalog`)
 
 One switch turns on the bundle for copilot turns (`semantic_catalog.go`):
 
