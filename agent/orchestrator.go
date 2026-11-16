@@ -230,6 +230,20 @@ type Turn struct {
 	// many estimated tokens (EstimateTokens); the current user message is
 	// always kept. Zero or negative keeps the whole loaded history.
 	HistoryTokenBudget int
+	// HistoryExchanges keeps at most this many earlier exchanges (a user
+	// message and the replies after it) before the current message, on top of
+	// HistoryTokenBudget. Zero or negative keeps them all.
+	HistoryExchanges int
+	// HistoryPreamble, when set, is called with the number of earlier
+	// exchanges finally kept; a non-empty text opens the conversation as a
+	// user message (acknowledged by a fixed assistant line) before the kept
+	// history. Like TurnContext it is never stored in the history. Layered
+	// memory puts the index of the older turns here.
+	HistoryPreamble func(keptExchanges int) string
+	// OnToolResult observes every tool result of the turn (final_answer
+	// included) with the call that produced it. Optional; it runs on the loop
+	// goroutine, so keep it fast.
+	OnToolResult func(call tools.ToolCall, result tools.ToolResult)
 }
 
 // turnOptions carries per-turn knobs from Turn into the loop.
@@ -240,6 +254,8 @@ type turnOptions struct {
 	userIndex int
 	// maxResultBytes overrides the orchestrator result cap (0: policy).
 	maxResultBytes int
+	// onToolResult observes each tool result (optional).
+	onToolResult func(call tools.ToolCall, result tools.ToolResult)
 }
 
 // ProcessMessage runs one turn. The caller stamps the context with whatever
@@ -262,6 +278,9 @@ func (o *AgentOrchestrator) ProcessMessage(ctx context.Context, turn Turn) (*Age
 
 	// 4. History.
 	messages := o.buildMessageHistory(convCtx, turn.UserMessage, turn.HistoryTokenBudget)
+	if turn.HistoryExchanges > 0 || turn.HistoryPreamble != nil {
+		messages = shapeHistory(messages, turn.HistoryExchanges, turn.HistoryPreamble)
+	}
 	convCtx.History = append(convCtx.History, contextmgr.Message{Role: "user", Content: turn.UserMessage})
 
 	// 5. Reasoning loop.
@@ -269,6 +288,7 @@ func (o *AgentOrchestrator) ProcessMessage(ctx context.Context, turn Turn) (*Age
 		turnContext:    strings.TrimSpace(turn.TurnContext),
 		userIndex:      len(messages) - 1,
 		maxResultBytes: turn.MaxToolResultBytes,
+		onToolResult:   turn.OnToolResult,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("agent loop failed: %w", err)
@@ -681,6 +701,9 @@ func (o *AgentOrchestrator) agentLoopTurn(ctx context.Context, messages []map[st
 					params = call.Parameters
 					break
 				}
+			}
+			if opts.onToolResult != nil {
+				opts.onToolResult(tools.ToolCall{ID: result.ToolCallID, ToolName: result.ToolName, Parameters: params}, result)
 			}
 			if result.ToolName != "final_answer" {
 				o.emitActivity(convCtx.ConversationID, "tool_result", result.ToolName,
