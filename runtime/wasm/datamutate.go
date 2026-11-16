@@ -236,6 +236,10 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		rollback()
 		return fail(code, cErr.Error())
 	}
+	if code, eErr := checkEntityWrite(ctx, inv, addonKey, req.Table, orgID, data); eErr != nil {
+		rollback()
+		return fail(code, eErr.Error())
+	}
 	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now, dynamic.ActorIDFromContext(ctx), dynamic.BranchIDFromContext(ctx), stageFor(inv, req.Table, req.Model), exts, updateStampFor(execCtx, inv, work, orgID, &req))
 	if mErr != nil {
 		rollback()

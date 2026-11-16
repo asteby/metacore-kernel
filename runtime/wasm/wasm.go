@@ -39,6 +39,7 @@ import (
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/manifest"
+	"github.com/asteby/metacore-kernel/runtime/entityscope"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
 	"github.com/tetratelabs/wazero"
@@ -83,6 +84,10 @@ type Host struct {
 	// settingsResolver, when set, supplies the per-invocation settings (see
 	// SettingsResolver). nil keeps the caller-passed map as the only source.
 	settingsResolver SettingsResolver
+	// entityResolver / entityMode: the entity wall (see WithEntityScope). nil /
+	// off = every call sees the whole organization, as before.
+	entityResolver EntityScopeResolver
+	entityMode     entityscope.Mode
 	// diag, when set, captures a sanitized diagnostic of every failed
 	// invocation (see WithDiagnostics). nil = no capture, as before.
 	diag          *diag.Recorder
@@ -724,6 +729,8 @@ func (h *Host) InvokeForInTx(ctx context.Context, tx *gorm.DB, orgID, installati
 }
 
 func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, installation uuid.UUID, addonKey, funcName string, payload []byte, settings map[string]string) (out []byte, err error) {
+	// The entity wall first: the settings resolver reads the entity from ctx too.
+	ctx = h.withEntityScope(ctx, orgID)
 	settings = h.resolveSettings(ctx, orgID, addonKey, settings)
 	start := time.Now()
 	defer func() { h.metrics.invoked(addonKey, err, time.Since(start)) }()
@@ -831,6 +838,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		tx:                tx,
 		enforcer:          h.enforcer,
 		resolveTable:      h.tableResolver,
+		entityMode:        h.entityMode,
 		sourceOwners:      h.sourceOwners,
 		modelOwner:        h.modelOwner,
 		execSchema:        h.execSchema,

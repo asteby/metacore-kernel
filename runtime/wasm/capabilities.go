@@ -22,6 +22,7 @@ import (
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/events"
 	"github.com/asteby/metacore-kernel/netguard"
+	"github.com/asteby/metacore-kernel/runtime/entityscope"
 	"github.com/asteby/metacore-kernel/runtime/wasm/importpolicy"
 	"github.com/asteby/metacore-kernel/security"
 	"github.com/google/uuid"
@@ -84,6 +85,9 @@ type invocation struct {
 	// resolveTable is the embedder-injected logical→physical table mapping
 	// the data_mutate import uses (Host.WithTableResolver). nil = identity.
 	resolveTable func(table string) string
+	// entityMode is the host's entity-wall mode for this invocation
+	// (Host.WithEntityScope); off = no wall.
+	entityMode entityscope.Mode
 	// sourceOwners resolves table→owners for source_unavailable classification
 	// (Host.WithSourceOwners); sourceInfoCache memoises it per invocation.
 	sourceOwners    SourceOwnersFn
