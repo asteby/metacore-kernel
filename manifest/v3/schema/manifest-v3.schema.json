@@ -69,6 +69,9 @@
     "extension_points": {
       "$ref": "#/$defs/ExtensionPoints"
     },
+    "events": {
+      "$ref": "#/$defs/EventsDecl"
+    },
     "lifecycle": {
       "$ref": "#/$defs/Lifecycle"
     },
@@ -4313,6 +4316,86 @@
           "items": {
             "type": "string"
           }
+        }
+      }
+    },
+    "EventsDecl": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Event catalog (RFC 0003): the events this addon emits and, optionally, consumes. Declarative data for the integrations panel; grants no capability.",
+      "properties": {
+        "emits": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "$ref": "#/$defs/EmittedEvent"
+          }
+        },
+        "consumes": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "$ref": "#/$defs/ConsumedEvent"
+          }
+        }
+      }
+    },
+    "EmittedEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
+          "description": "<domain>.<entity>.<action>, e.g. sales.order.created."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "i18n key of the human description."
+        },
+        "aggregate": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Entity the event sequence belongs to."
+        },
+        "payload_schema": {
+          "type": "object",
+          "description": "Bounded JSON Schema of the payload (<=16 KiB, depth<=8, <=500 nodes, only local #/ refs; enforced by the kernel validator)."
+        },
+        "sensitivity": {
+          "type": "string",
+          "enum": [
+            "public",
+            "internal",
+            "personal"
+          ],
+          "description": "Personal-data exposure; defaults to internal."
+        },
+        "since": {
+          "type": "string",
+          "description": "Addon version (semver) that started emitting the event."
+        }
+      }
+    },
+    "ConsumedEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "i18n key."
         }
       }
     },

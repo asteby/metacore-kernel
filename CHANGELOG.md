@@ -10,6 +10,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - `inbound` (RFC 0003 F4, paquete nuevo, retrocompatible, nada cambia hasta que un host lo monte): recepción genérica `POST /api/inbound/{org}/{contract}`. Contratos declarativos (`Contract`: clave, versión, JSON Schema sin `$ref` remotos, ruta `model|command` + `create|update|upsert`, `mapping` campo→ruta, `match`, `defaults`, plantilla de idempotencia, perfil de autenticación) cargados con `Registry.Register`/`LoadJSON`: un evento nuevo es un dato más un comando ya registrado, sin ruta por tipo. `Handler` (`net/http`) con puerto mínimo `Verifier` (los perfiles de producción los publica `webhooks`) e implementación local `HMACCanonicalV1` (`"{ts}.{nonce}.{METHOD}.{path}.{sha256hex(body)}"`, ±300 s, nonce 10 min por organización, rotación de secretos). `DynamicExecutor` aplica sobre `dynamic.Service` como principal de sistema de la organización de la ruta (nunca del cuerpo), con sucursal/entidad (RFC 0001). Idempotencia atómica por organización+contrato+llave (`replayed`, `409` si cambia el cuerpo, arriendo para reclamar procesos caídos) y bitácora `metacore_inbound_receipts` consultable sin cuerpo ni datos personales en claro (llave hasheada salvo `log.key_in_clear`). Errores uniformes (401/404/413/415/422/409/429/500; los 422 solo traen ruta y palabra clave, jamás valores; los 500 son genéricos), límite de tamaño y `TokenBucket` opcional. Endurecido tras revisión adversarial (nonces por organización con expiración amortizada y consumo diferido hasta pasar limitador/esquema, `TokenBucket` LRU y `TrustedProxies`, alcance entidad/sucursal obligatorio y fail-closed, `match` validado al registrar, cerca por intento en recibos, tope de rechazos). Docs en `docs/inbound-events.md`.
+
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
+
 - `runtime/wasm` + `runtime/entityscope` + `dynamic` + `settings` + `manifest` (RFC 0001, retrocompatible, **apagado por omisión**): muro de **entidad** (razón social) dentro de una organización. `Host.WithEntityScope(resolver, mode)` con `mode` off|log|enforce (`entityscope.ParseMode`; todo valor desconocido = off). El host deriva el alcance `{entidad, sucursales}` de la sucursal/entidad del contexto (`dynamic.WithEntityID`, `dynamic.BranchIDFromContext`; los eventos reproducidos ya traen la sucursal del evento) mediante `EntityScopeResolver` (lo implementa el embedder; el kernel no sabe qué es una entidad). `data_query` en enforce acota las tablas con `branch_id` a las sucursales de la entidad (`branch_id IN (…)`, tras el predicado de organización; las filas sin sucursal son de la entidad por defecto); en log solo cuenta lo que se habría ocultado (`wasm.entity_scope_would_filter`). `data_mutate` rechaza (`forbidden`) un create/update que nombre una sucursal de otra entidad. Un resolver caído nunca ensancha el muro (alcance `Unresolved`: en enforce no se lee nada de tablas con sucursal). Ajustes: nueva capa `entity` (`manifest.SettingScopeEntity`, `ResolveSettingScopedEntity`; precedencia `default < org < entidad < sucursal < mercado`; una clave `scope: branch` hereda el valor de su entidad), `settings.Scope.EntityID`, `settings.SourceEntity`, `ErrNotEntityScoped`, migración `0011` (el CHECK de `scope_kind` admite `entity`; reversible) y `entity` en el enum `Setting.scope` de las dos copias del schema (**el hub debe actualizar su copia del schema antes de publicar un addon con `scope: entity`**). Nada cambia mientras el host no llame a `WithEntityScope` ni un manifest declare `scope: entity`. Diseño, política (tablas sin `branch_id`, filas sin sucursal), despliegue off→log→enforce, rendimiento y lista de adopción por addon en `docs/entity-scope.md`. Sin cerrar aún: update/delete por id de una fila de otra entidad dentro del host WASM (lo cubre hoy la comprobación por registro de Ops).
 
 - `agent` (Aby 2, fase 0+1, "dieta del prompt"): el prefijo cacheable del copiloto (system + tools) queda estable entre turnos y baja de ~16.7k a ~3.6k tokens estimados en el fixture de regresión (19 tools, 60 guías, 40 modelos). Cambios: (A) las tools ya no se escriben como texto en el system prompt (van nativas); `OrchestratorConfig.ToolsInPrompt` restaura la sección `AppendToolsSection` — esto aplica a todos los agentes del orquestador, también WhatsApp, que siguen recibiendo las tools nativas. (B) el reloj sale del system prompt: `Turn.TurnContext` va pegado al mensaje del usuario en lo que se envía (no se guarda en historial); el copiloto manda `TodayClause` (fecha a nivel día + zona; `CopilotConfig.ClockTimeOfDay` añade HH:MM; `ClockInSystemPrompt` vuelve al `NowClause` anterior). (C) la cláusula de capacidades ya no se inyecta por omisión ni se calcula (`CopilotConfig.InjectCapabilities`). (D) `start_guide` tiene definición fija (sin catálogo ni `enum`) y llega con la nueva `search_guides` (búsqueda por palabras sin acentos sobre id/título/descripción, máx. 8); un id desconocido devuelve sugerencias. Las dos se registran siempre que el turno trae `WithGuideTurn`, aun con catálogo vacío. (F) tope de resultado por turno (`Turn.MaxToolResultBytes`; copiloto 8 KB por omisión, `CopilotConfig.MaxToolResultBytes`) y aviso de truncado que dice cómo acotar. (G) presupuesto de historial (`Turn.HistoryTokenBudget`; copiloto 4k tokens, `CopilotConfig.HistoryTokenBudget`, negativo = sin tope). (H) telemetría: cada llamada al LLM registra `slog.Info("agent prompt budget", …)` con tokens estimados por sección y llama `OrchestratorConfig.OnPromptBudget` (`PromptBudget`, sin contenido). `EstimateTokens` (caracteres/3.5) exportado.
@@ -48,6 +51,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - `dynamic`: `Config.PermissionsEnforcedByHost` (bool, por omisión `false`). Un host que autoriza en su propia capa (middlewares/handlers) antes del runtime dinámico lo declara y, sin `Permissions` ni `RequirePermissions`, `New` registra una línea informativa `dynamic: authorization delegated to the host` en vez del aviso `WARNING — authorization DISABLED`. Solo cambia el log: la decisión de autorización (`Permissions` nil permite, `RequirePermissions` deniega) es idéntica, y los hosts que no ponen la marca siguen viendo la advertencia igual que antes. Aditivo (minor).
 - `capability`: `commerce.shipping.tracking_updated` gana `eta` (RFC 3339, fecha de entrega que promete la paquetería) y `commerce.fulfillment.updated` gana `location` y `eta`, todos opcionales: un payload anterior sigue validando y un tipo equivocado se rechaza. Permite que la tienda y el panel muestren el recorrido del paquete con lugar y fecha estimada sin que cada paquetería invente campos `x_`.
 
@@ -63,6 +67,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - `manifest`/`settings`/`wasm`: ajustes dinamicos y por mercado de los addons (aditivo, compatible hacia atras; minor). (1) `SettingDef` gana `Description`, `OptionsSource` y `Ref` (`ref: "<Modelo>"`, `type: dynamic_select`, alternativa declarativa a `options_source` sin export WASM); `mapSettings` (v3 -> legado) los propaga y el schema v3 declara `settings[].ref`. Validacion v3: `ref` solo con `dynamic_select` y excluyente con `options_source` (la existencia del modelo no se valida aqui). (2) Nuevo scope `market` junto a `branch` (schema v3, `Validate`, `settings.ScopeMarket`, `Scope.MarketID`, `SourceMarket`, `ErrNotMarketScoped`, migracion `0010` que amplia el CHECK de `scope_kind` recreando la tabla, portable Postgres/SQLite). Nueva `manifest.ResolveSettingScoped(def, org, branch, market)` con precedencia market > branch > org > default (cada ajuste tiene un solo scope: solo se consulta su capa); `ResolveSetting(def, org, branch)` queda con su firma y es identica a la nueva sin mercado. (3) `env_get`: `dynamic.WithMarket`/`MarketFromContext` y la interfaz opcional `wasm.MarketSettingsResolver` (`settings.WasmResolver` la implementa); el host la usa si la llamada trae mercado y, sin mercado o con un resolver antiguo, llama a `ResolveSettings` como antes. El host de OPS debe poner el mercado en el contexto (`dynamic.WithMarket`) para que aplique.
 
 - `capability`: `geo.address.suggest` (consulta, cardinalidad `one`, plazo 1 s): autocompletado de calle y número de un formulario de dirección. Entrada `query` (mín. 3 caracteres recortados), `country`, `postal_code`, `near{lat,lng}`, `limit` (≤ 8, constantes `MaxAddressSuggestResults` / `MinAddressSuggestQuery`), `locale`; salida `results[GeoPlace]`. Separada de `geo.geocode`. Solo contrato: el kernel no trae proveedor. `GeoPlace` gana `street`, `house_number` y `place_id` opcionales (también para `geo.geocode`).
@@ -173,6 +178,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - `capability` (X1.4 + X1.5, aditivo, sin cambios de manifest ni de schema): campo oficial opcional `test_mode` en la salida de `commerce.shipping.rates[]`, `commerce.shipping.label` y `commerce.fulfillment.create` (compatible con la extensión `x_environment` que ya emite skydropx; el anfitrión lee `test_mode` y cae a `x_environment`); evento `commerce.shipments.updated` (contrato v1, `ShipmentUpdatedSchema`, `ShipmentStatuses`, `ShipmentModes`, dominio reservado `commerce.shipments`); `incidents.DomainShipping`. `Provider.Priority` / `Provider.Status` (`ProviderStatus`: ready, not_configured, unhealthy), `Select` v2 con respaldo (dentro del nivel que decide se salta `not_configured` y gana la mejor prioridad; empate = `ErrAmbiguousProvider`, falla cerrado), `ErrNotConfigured` (código `not_configured` en `capability_query`), `Eligible` (misma resolución que `Select`), `Engine.ListProviders` y la implementación `executeCapabilityProviders` del import `capability_providers` (el registro del import en la tabla de capacidades del host va aparte). Sin prioridades ni estado el resultado es idéntico al anterior (prueba de equivalencia exhaustiva contra una copia del `Select` previo). Minor.
 
 - Bus de eventos duradero (R1 del plan de extensibilidad, X1.1-X1.3; `docs/events-bus.md`). Minor.
@@ -289,6 +295,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **`webhookin`: alias `raw_body`** (`PayloadRawBody`) en el payload de
   `BuildPayload`: el cuerpo exacto como texto, solo si es UTF-8 válido (ausente
   en cuerpos binarios). Corrige `raw_body_missing` en addons (skydropx,
@@ -451,6 +458,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **licensing: gracia de revocación persistente (`RevokeAnchorStore`, opcional) y
   política `LICENSING_REVOKE_ENFORCE` / `LICENSING_REVOKE_GRACE_HOURS` (apagada
   por defecto).** Un 403 `license_revoked` del renew fija el ancla de la primera
@@ -621,6 +629,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **`money/`: tipo `Money` exacto (solo biblioteca estándar).** Importe en
   unidades menores `int64` + `Spec` (código, `MinorUnits`, `CashIncrementMinor`,
   `Scope`) con tabla ISO 4217 (`ISO`), `Decimal` sobre `math/big`
@@ -669,6 +678,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **Estándar de pagos de la plataforma, fase K1: contrato** ([RFC](docs/RFC-PAYMENTS-STANDARD.md)).
   Paquete nuevo `payments` (Go puro, sin base de datos): los registros canónicos
   `Payment`, `Refund` y `PaymentEvent`, el ciclo de vida normalizado con la
@@ -877,6 +887,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **capability: eventos de contrato `commerce.shipping.tracking_updated` y
   `commerce.fulfillment.updated`** — reservan `commerce.shipping.*` a quien
   provee una capacidad `commerce.shipping.*` (paqueterías) y
@@ -1085,6 +1096,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **manifest: páginas federadas, vistas declarativas y paneles de detalle** —
   contrato aditivo (v3 y portador legacy), sin cambios para manifests ya
   publicados:
@@ -1415,6 +1427,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **dates: lenient `Date` / `Time` column types** — accept `YYYY-MM-DD`,
   `YYYY-MM-DDTHH:MM[:SS]` and RFC 3339 on JSON decode and DB scan; serialize
   as `YYYY-MM-DD` / RFC 3339 UTC; zero ⇄ JSON null ⇄ SQL NULL. Lets compiled
@@ -1492,6 +1505,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **Declarative option display: `models[].option_display` + `option_metrics[]`.**
   A model declares how its rows read as picker options — `title` (column or
   `{a} · {b}` template), `subtitle` parts, `image`, right-aligned `trailing`
@@ -1578,6 +1592,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **`stages[].locked`: a record in a locked stage is read-only.** New opt-in
   flag on a v3 stage (schema, `manifest.StageDef.Locked`, `FromV3`). With it,
   `Service.Update` refuses (422 `record_locked`, per changed field) any change
@@ -1697,6 +1712,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **`correlation_id` on kernel errors.** HTTP middleware now keeps the request
   context and stamps `X-Request-ID` with `dynamic.WithCorrelationID`, so a
   dynamic CRUD error and the `data_mutate` / `data_query` / `data_batch`
@@ -1854,6 +1870,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **`unique` rules: partial UNIQUE index and duplicates report.** After
   Install/Upgrade the installer backs each `unique` rule with
   `uq_<table>_<hash>` — `CREATE UNIQUE INDEX CONCURRENTLY … (organization_id,
@@ -2088,6 +2105,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **Cross-record rules: `enforce: "always"` freezes a child row.** A
   `ref_state` rule was only checked on create and when its `ref` changed, so
   the lines of an ACCEPTED quote could still be edited or deleted and the
@@ -2160,6 +2178,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **`wasm.Host.IsCompiled` / `CompiledKeys`:** process-wide readiness signal — has
   an addon's wasm module been compiled into this process since boot? Right
   after a restart the compile cache is empty and every wasm action 422s
@@ -2246,6 +2265,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **`EdgeDevice.capabilities`:** replaces `kind` as the discriminator an
   addon uses to describe what a paired device class can do. `kind` was a
   closed enum hardcoded in the kernel (`cash_recycler | card_terminal |
@@ -2397,6 +2417,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **`null` / `not_null` en el `where` de una agregación.** Un widget puede por
   fin contar las filas de una columna vacía —"productos sin categoría
   asignada"—, que era justo lo que no se podía expresar: `{"col": {"null":
@@ -2542,6 +2563,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **`provides_options[]`: catálogos de opciones declarativos.** Un addon
   PUBLICA uno de sus modelos como catálogo reutilizable y cualquier otro
   addon lo consume nombrando su `key` en el `options_source` de una columna o
@@ -2602,6 +2624,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **`contributions.public_routes[]` — public, token-addressed views of a
   record.** An addon can now declare login-less, org-scoped URLs the host
   serves at `GET /p/<orgRef>/<addon>/<key>/<token>[.pdf|.json]` (shareable
@@ -2669,6 +2692,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **manifest v3: `NavItem.requires` + `requires_capabilities`** — screens declare
   their public data surface as `requires: [{model, actions}]` (Product + index →
   host projects `product.index`); flat `requires_capabilities` remains as an
@@ -2848,6 +2872,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **dynamic: column facets endpoint (`GET /:model/facets`).** A new read path
   returns the distinct values of a column together with their row counts,
   org/branch scoped, so a text-column filter can offer the values that actually
@@ -2872,6 +2897,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **manifest/v3: stage machine on models (`stage_field`, `stages[]`,
   `transitions[]`, `on_transition[]`).** A model can now declare a Bitrix-style
   pipeline: `stage_field` names the lifecycle column, `stages[]` enumerates its
@@ -2983,6 +3009,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **manifest/v3: `contributions.dashboard[]` — declarative + federated dashboard
   widgets.** Addons can now contribute tiles to the host's modular dashboard
   without per-app code. New types `DashboardWidget`, `WidgetQuery` and
@@ -3103,6 +3130,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **feat(runtime/wasm): `metacore_host.data_query` — org-scoped logical-table
   read, the read sibling of `data_mutate` (ABI v1.5, § 15 of
   docs/wasm-abi.md).** The guest sends `{table, where?, limit?}` and gets
@@ -3165,6 +3193,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **feat(dynamic): table footer totals — a declarative per-column SUM over the
   FILTERED set.** A column opts in via its manifest `display_config.aggregate:
   "sum"` (mapped by the kernel to `styleConfig.aggregate = "sum"` at runtime —
@@ -3202,6 +3231,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **feat(compute): declarative compute engine — Tier-1 ROLLUP and Tier-2 FORMULA
   fields, recomputed automatically by a generic, domain-agnostic kernel engine
   with ZERO addon code (Salesforce Roll-Up Summary + Odoo stored-computed
@@ -3374,6 +3404,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **feat(marketplace): dep-block + cascade on uninstall.** The uninstall
   handler now refuses to remove an addon some OTHER active installation in
   the same org declares under `compatibility.requires[]`; without the gate
@@ -3437,6 +3468,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **feat(installer): central marketplace trust anchor (Let's Encrypt style).**
   The installer's `New()` constructor now resolves trusted Ed25519 keys in
   this priority order:
@@ -3471,6 +3503,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **feat(installer): cover the fullstack install pipeline (#93).** The
   installer now drives the four artifact families a v3 bundle ships, not
   just SQL + lifecycle hooks. Closes the gaps that historically forced
@@ -3551,6 +3584,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **feat(manifest): `metadata.countries` regional catalog scoping (#92).**
   v3 manifests may declare `metadata.countries` (ISO 3166-1 alpha-2, e.g.
   `["MX"]`; empty = global). Schema + `v3.Metadata.Countries` +
@@ -3563,6 +3597,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **feat(manifest): `metadata.i18n` catalog localization (#91).** v3 manifests
   may declare `metadata.i18n` (a map `locale → {name, description, features}`).
   Distinct from the top-level `manifest.i18n` block (pointers to the app's
@@ -3593,6 +3628,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **feat(preset): resolve + install `kind: "Preset"` verticals as a unit
   (#89).** New `preset/` package that turns a `kind: "Preset"` v3 manifest
   (e.g. Pitsline) into an ordered addon list and drives an idempotent,
@@ -3612,6 +3648,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **feat(v3): declarative line-items (repeatable group) action field (#88).**
   `ActionField` grows `ItemFields []ActionField` so a field with `type: "array"`
   can declare the columns of a repeatable line-items group (e.g. the item rows
@@ -3628,6 +3665,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **feat(manifest/v3): accept `Setting.description`, `Setting.type "number"`,
   `Column.comment`, handler `"compiled"` (#87).** The strict v3 contract
   (`additionalProperties:false` + `DisallowUnknownFields`) rejected legitimate
@@ -3645,6 +3683,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **feat(v3): action modals (fields/modal/confirm) + frontend federation
   (#86).** The v3 `Action` was a thin `{key, label, handler, target_model}` and
   the v3 `Manifest` had no frontend block, even though the legacy types, SDK
@@ -3669,6 +3708,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **feat(bundle): dual-read v2 and v3 manifests on ingestion (#85).**
   `bundle.Read` unmarshalled `manifest.json` directly into the legacy
   `manifest.Manifest`, so any v3-authored addon (all of `asteby-hq/addons`)
@@ -3776,6 +3816,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **feat(guest): complete TinyGo helpers for `db_query`, `db_exec`,
   `http_fetch`, `env_get`, `log`.** Closes out the helper matrix the
   initial `EmitEvent` PR (#66) called out as roadmap in
@@ -3848,6 +3889,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **ABI WASM v1.0 contract frozen + documented (PR #56).** The full host
   import / export contract, manifest schema, capability axes, and host
   envelope shapes are now codified in
@@ -4182,6 +4224,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **`host.App` now wires the in-process `events.Bus` into `dynamic.Service`
   so canonical CRUD events fan out to subscribers post-commit.** Previously
   `host.NewApp` constructed `dynamic.New(...)` without a `Bus`, which turned
@@ -4222,6 +4265,7 @@ afectar a un manifest o host fuera de ese conjunto:
 
 ### Added
 
+- `manifest/v3` (RFC 0003, retrocompatible, minor): bloque opcional `events` (`emits[]` con `name` `dominio.entidad.accion`, `description` clave i18n, `aggregate`, `payload_schema` acotado sin `$ref` remotos, `sensitivity` public|internal|personal, `since`; `consumes[]` informativo), validado al cargar (`validateEvents`, límites 200 eventos, 16 KiB, profundidad 8, 500 nodos) y `v3.Catalog(manifests, CatalogFilter)`, función pura que agrega los eventos emitidos con filtro por addon y sensibilidad. Schema editado en las dos copias; documentado en `docs/events-bus.md`. Es dato para la pantalla de integraciones: no concede capacidad ni toca el bus. Los addons existentes no cambian.
 - **`installer.ManifestChangeBroadcaster` — push hot-swap signals over the
   WebSocket hub without polling.** The installer now snapshots a manifest's
   SHA-256 fingerprint on every install and, when it differs from the

@@ -195,3 +195,30 @@ host; un valor escrito por el emisor se reemplaza). El payload anterior no cambi
 | `generation` | 0 original, N en el N-ésimo `Replay` |
 
 Golden: `dispatch/testdata/envelope_v1_*.golden.json` (`go test ./dispatch -run Golden -update`).
+
+## Catálogo de eventos declarado (`events`, RFC 0003)
+
+Un addon declara en su manifest v3, de forma **opcional y retrocompatible**, qué eventos emite y cuáles consume. Es dato para la pantalla *Integraciones → Eventos* (selector agrupado por addon y editor de mapeo con el `payload_schema`); **no concede capacidad ni cambia el bus**: emitir sigue exigiendo la capability y el camino de `event_emit`.
+
+```json
+"events": {
+  "emits": [{
+    "name": "sales.order.created",
+    "description": "events.sales.order.created",
+    "aggregate": "order",
+    "sensitivity": "personal",
+    "since": "1.2.0",
+    "payload_schema": { "type": "object", "properties": { "id": { "type": "string" } } }
+  }],
+  "consumes": [{ "name": "payments.payment.captured" }]
+}
+```
+
+Reglas (se validan al cargar, `manifest/v3/event_catalog.go`):
+
+- `name`: `dominio.entidad.accion`, tres segmentos en minúsculas/dígitos/`_`; único dentro del addon.
+- `description`: **clave i18n** (no prosa). `aggregate`: snake_case. `since`: semver.
+- `sensitivity`: `public | internal | personal`; omitida = `internal`.
+- `payload_schema`: objeto JSON Schema acotado a 16 KiB, profundidad 8 y 500 nodos; solo `$ref` locales (`#/...`); `$id`, `$anchor`, `$dynamicRef` y `$recursiveRef` se rechazan. Máximo 200 eventos por addon.
+
+Consulta: `v3.Catalog(manifests []*v3.Manifest, v3.CatalogFilter{Addons, Sensitivity})` es una función pura que agrega los eventos emitidos por los manifests dados (los instalados de la organización), ordenada por addon y nombre, con filtro por addon y sensibilidad. El host decide qué manifests pasa; el catálogo no sustituye el permiso para emitir ni para suscribirse.
