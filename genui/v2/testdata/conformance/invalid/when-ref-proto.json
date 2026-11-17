@@ -1,0 +1,23 @@
+{
+  "description": "when.ref con state.__proto__.",
+  "input": {
+    "version": "genui/v2",
+    "state": {
+      "a": 1
+    },
+    "blocks": [
+      {
+        "type": "text",
+        "text": "x",
+        "when": {
+          "ref": "state.__proto__",
+          "equals": 1
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

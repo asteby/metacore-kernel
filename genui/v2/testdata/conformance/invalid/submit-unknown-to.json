@@ -1,0 +1,28 @@
+{
+  "description": "Destino de submit fuera de la lista.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "form",
+        "id": "f",
+        "fields": [
+          {
+            "key": "a",
+            "label": "A",
+            "kind": "text"
+          }
+        ],
+        "submit": {
+          "do": "submit",
+          "form": "f",
+          "to": "http.post"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.enum"
+  }
+}

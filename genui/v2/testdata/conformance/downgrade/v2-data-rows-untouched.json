@@ -1,0 +1,52 @@
+{
+  "description": "Una fila con clave \"do\" es un dato, no una acción: no se filtra.",
+  "input": {
+    "spec": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "table",
+          "columns": [
+            {
+              "key": "do",
+              "label": "Do"
+            }
+          ],
+          "rows": [
+            {
+              "do": "close"
+            }
+          ]
+        }
+      ]
+    },
+    "caps": {
+      "versions": [
+        "genui/v2"
+      ],
+      "verbs": []
+    }
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "table",
+          "columns": [
+            {
+              "key": "do",
+              "label": "Do"
+            }
+          ],
+          "rows": [
+            {
+              "do": "close"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

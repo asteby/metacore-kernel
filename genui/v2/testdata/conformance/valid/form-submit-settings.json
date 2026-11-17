@@ -1,0 +1,69 @@
+{
+  "description": "Formulario con campos del manifest enviado a settings.write.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "form",
+        "id": "ajustes",
+        "title": "Ajustes",
+        "fields": [
+          {
+            "key": "min_stock",
+            "label": "Stock mínimo",
+            "kind": "integer",
+            "required": true,
+            "value": 5,
+            "validation": {
+              "min": 0
+            }
+          },
+          {
+            "key": "nombre",
+            "label": "Nombre",
+            "kind": "text",
+            "value": "Almacén"
+          },
+          {
+            "key": "activo",
+            "label": "Activo",
+            "kind": "boolean",
+            "value": true
+          },
+          {
+            "key": "modo",
+            "label": "Modo",
+            "kind": "select",
+            "options": [
+              {
+                "value": "a",
+                "label": "A"
+              }
+            ],
+            "visible_when": {
+              "field": "activo",
+              "equals": true
+            }
+          }
+        ],
+        "submit": {
+          "do": "submit",
+          "label": "Guardar",
+          "form": "ajustes",
+          "to": "settings.write"
+        }
+      },
+      {
+        "type": "settings",
+        "addon": "inventory",
+        "scope": "org",
+        "keys": [
+          "min_stock"
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

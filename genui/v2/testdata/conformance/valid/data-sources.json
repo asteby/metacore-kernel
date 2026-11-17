@@ -1,0 +1,83 @@
+{
+  "description": "Las cuatro formas de fuente de datos y su uso con $ref, stats, table y chart.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "orders": {
+        "q": "t:customers.SalesOrder?status=eq:confirmed&limit=20"
+      },
+      "meta": {
+        "q": "mm:customers.SalesOrder"
+      },
+      "kpis": {
+        "widget": "customers.dashboard.open_orders"
+      },
+      "home": {
+        "plan": "dashboard.home",
+        "args": {
+          "range": "7d"
+        }
+      },
+      "fixed": {
+        "inline": [
+          {
+            "d": "lun",
+            "n": 3
+          }
+        ]
+      }
+    },
+    "blocks": [
+      {
+        "type": "stats",
+        "source": "data.kpis",
+        "format": "compact"
+      },
+      {
+        "type": "table",
+        "source": "data.orders",
+        "columns": [
+          {
+            "key": "folio",
+            "label": "Folio"
+          },
+          {
+            "key": "total",
+            "label": "Total",
+            "format": "currency"
+          }
+        ],
+        "filters": [
+          "status"
+        ],
+        "sort": {
+          "key": "folio",
+          "dir": "desc"
+        },
+        "page_size": 20
+      },
+      {
+        "type": "chart",
+        "kind": "donut",
+        "x": "d",
+        "series": [
+          {
+            "key": "n",
+            "label": "N"
+          }
+        ],
+        "source": "data.fixed",
+        "summary": "Distribución"
+      },
+      {
+        "type": "text",
+        "text": {
+          "$ref": "ctx.locale"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

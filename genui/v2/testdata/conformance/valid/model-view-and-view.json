@@ -1,0 +1,48 @@
+{
+  "description": "model_view y view por referencia, slot y ext.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "model_view",
+        "model": "orders",
+        "view": "kanban",
+        "filters": {
+          "status": "open"
+        },
+        "allowed_actions": [
+          "approve"
+        ]
+      },
+      {
+        "type": "view",
+        "model": "orders",
+        "record": {
+          "$ref": "record.id"
+        },
+        "fields": [
+          "folio"
+        ],
+        "panels": [
+          "lines"
+        ]
+      },
+      {
+        "type": "slot",
+        "name": "record.panels"
+      },
+      {
+        "type": "ext",
+        "ext": "shipments.route_map@1",
+        "props": {
+          "zoom": 3,
+          "mode": "ruta"
+        },
+        "fallback": "Mapa de ruta"
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "description": "Un overlay cuyos bloques se descartan desaparece y se poda la acción open que lo abría.",
+  "input": {
+    "spec": {
+      "version": "genui/v2",
+      "overlays": {
+        "det": {
+          "kind": "modal",
+          "blocks": [
+            {
+              "type": "media",
+              "src": "asset:a",
+              "alt": "x",
+              "width": 1,
+              "height": 1
+            }
+          ]
+        }
+      },
+      "blocks": [
+        {
+          "type": "card",
+          "title": "x",
+          "actions": [
+            {
+              "do": "open",
+              "overlay": "det"
+            },
+            {
+              "do": "close"
+            }
+          ]
+        }
+      ]
+    },
+    "caps": {
+      "versions": [
+        "genui/v2"
+      ],
+      "blocks": [
+        "card",
+        "text"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "card",
+          "title": "x",
+          "actions": [
+            {
+              "do": "close"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

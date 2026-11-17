@@ -1,0 +1,5 @@
+{
+  "description": "__proto__ como clave en la raíz.",
+  "input": {"version":"genui/v2","blocks":[{"type":"text","text":"x"}],"__proto__":{"polluted":true}},
+  "expect": {"ok":false,"code":"genui.forbidden_key"}
+}

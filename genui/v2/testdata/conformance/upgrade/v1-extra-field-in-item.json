@@ -1,0 +1,22 @@
+{
+  "description": "Campo html extra en un ítem de kpi.",
+  "input": {
+    "version": "genui/v1",
+    "blocks": [
+      {
+        "type": "kpi",
+        "items": [
+          {
+            "label": "A",
+            "value": "1",
+            "html": "<b>x</b>"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.field_not_allowed"
+  }
+}

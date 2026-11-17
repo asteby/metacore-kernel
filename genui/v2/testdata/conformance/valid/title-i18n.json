@@ -1,0 +1,35 @@
+{
+  "description": "Título y texto con clave i18n y vinculación.",
+  "input": {
+    "version": "genui/v2",
+    "title": {
+      "$t": "orders.title"
+    },
+    "i18n": "keys",
+    "data": {
+      "orders": {
+        "inline": [
+          {
+            "n": 1
+          }
+        ]
+      }
+    },
+    "blocks": [
+      {
+        "type": "text",
+        "text": {
+          "$t": "orders.count",
+          "args": {
+            "n": {
+              "$ref": "data.orders.0.n"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

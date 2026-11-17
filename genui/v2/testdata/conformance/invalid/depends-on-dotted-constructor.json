@@ -1,0 +1,29 @@
+{
+  "description": "formField.depends_on a.constructor.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "form",
+        "id": "f",
+        "fields": [
+          {
+            "key": "a",
+            "label": "A",
+            "kind": "text",
+            "depends_on": "a.constructor"
+          },
+          {
+            "key": "b",
+            "label": "B",
+            "kind": "text"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

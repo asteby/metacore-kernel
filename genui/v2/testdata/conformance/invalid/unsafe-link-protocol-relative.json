@@ -1,0 +1,17 @@
+{
+  "description": "Enlace //host.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "link": "//evil.example/x"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unsafe_link"
+  }
+}

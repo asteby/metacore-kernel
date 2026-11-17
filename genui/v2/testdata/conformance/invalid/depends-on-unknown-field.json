@@ -1,0 +1,29 @@
+{
+  "description": "formField.depends_on apunta a una clave que no es campo del formulario.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "form",
+        "id": "f",
+        "fields": [
+          {
+            "key": "a",
+            "label": "A",
+            "kind": "text",
+            "depends_on": "zzz"
+          },
+          {
+            "key": "b",
+            "label": "B",
+            "kind": "text"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_target"
+  }
+}

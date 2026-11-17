@@ -1,0 +1,70 @@
+{
+  "description": "Overlays modal/drawer abiertos con la acción open; set, refresh, close.",
+  "input": {
+    "version": "genui/v2",
+    "state": {
+      "n": 0
+    },
+    "data": {
+      "rows": {
+        "q": "t:customers.Customer?limit=5"
+      }
+    },
+    "overlays": {
+      "detalle": {
+        "kind": "drawer",
+        "title": "Pedido",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Detalle"
+          },
+          {
+            "type": "card",
+            "title": "Cerrar",
+            "actions": [
+              {
+                "do": "close"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "blocks": [
+      {
+        "type": "card",
+        "title": "Acciones",
+        "actions": [
+          {
+            "do": "open",
+            "label": "Abrir",
+            "overlay": "detalle"
+          },
+          {
+            "do": "set",
+            "label": "Inc",
+            "path": "state.n",
+            "value": 1
+          },
+          {
+            "do": "refresh",
+            "label": "Recargar",
+            "source": "rows"
+          },
+          {
+            "do": "emit",
+            "label": "Avisar",
+            "id": "automations.confirm",
+            "params": {
+              "id": "x"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

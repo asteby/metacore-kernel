@@ -1,0 +1,27 @@
+{
+  "description": "id de nodo repetido.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "diagram",
+        "summary": "Flujo de servicios",
+        "nodes": [
+          {
+            "id": "a",
+            "label": "A"
+          },
+          {
+            "id": "a",
+            "label": "B"
+          }
+        ],
+        "edges": []
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.duplicate_id"
+  }
+}

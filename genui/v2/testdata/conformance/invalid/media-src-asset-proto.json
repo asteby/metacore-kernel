@@ -1,0 +1,19 @@
+{
+  "description": "media.src asset:__proto__ (patrón, sin segmentos).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "media",
+        "src": "asset:__proto__",
+        "alt": "x",
+        "width": 10,
+        "height": 10
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.pattern"
+  }
+}

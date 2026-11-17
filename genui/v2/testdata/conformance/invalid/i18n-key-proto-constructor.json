@@ -1,0 +1,19 @@
+{
+  "description": "Clave i18n $t con segmento prohibido (constructor).",
+  "input": {
+    "version": "genui/v2",
+    "i18n": "keys",
+    "blocks": [
+      {
+        "type": "text",
+        "text": {
+          "$t": "constructor"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

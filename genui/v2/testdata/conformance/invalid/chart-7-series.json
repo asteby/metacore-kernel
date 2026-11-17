@@ -1,0 +1,49 @@
+{
+  "description": "Gráfica con más de 6 series.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "chart",
+        "kind": "line",
+        "x": "d",
+        "series": [
+          {
+            "key": "s0",
+            "label": "S"
+          },
+          {
+            "key": "s1",
+            "label": "S"
+          },
+          {
+            "key": "s2",
+            "label": "S"
+          },
+          {
+            "key": "s3",
+            "label": "S"
+          },
+          {
+            "key": "s4",
+            "label": "S"
+          },
+          {
+            "key": "s5",
+            "label": "S"
+          },
+          {
+            "key": "s6",
+            "label": "S"
+          }
+        ],
+        "rows": [],
+        "summary": "s"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.series"
+  }
+}

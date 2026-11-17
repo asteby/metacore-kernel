@@ -1,0 +1,16 @@
+{
+  "description": "Tipo de bloque fuera de la lista cerrada.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "script",
+        "text": "x"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_block"
+  }
+}

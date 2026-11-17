@@ -1,0 +1,19 @@
+{
+  "description": "Fuente de datos vacía.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "d": {}
+    },
+    "blocks": [
+      {
+        "type": "text",
+        "text": "Hola"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.required"
+  }
+}

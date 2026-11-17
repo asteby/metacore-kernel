@@ -1,0 +1,26 @@
+{
+  "description": "tref.args admite valores escalares y vinculaciones {\"$ref\"} legítimas (la regla de claves $ solo afecta al propio mapa).",
+  "input": {
+    "version": "genui/v2",
+    "state": {
+      "n": 3
+    },
+    "blocks": [
+      {
+        "type": "text",
+        "text": {
+          "$t": "stock.low",
+          "args": {
+            "name": "Tuerca",
+            "count": {
+              "$ref": "state.n"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

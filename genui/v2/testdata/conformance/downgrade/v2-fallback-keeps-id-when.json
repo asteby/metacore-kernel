@@ -1,0 +1,51 @@
+{
+  "description": "El fallback conserva id y when del bloque original.",
+  "input": {
+    "spec": {
+      "version": "genui/v2",
+      "state": {
+        "a": 1
+      },
+      "blocks": [
+        {
+          "type": "markdown",
+          "id": "m",
+          "when": {
+            "ref": "state.a",
+            "equals": 1
+          },
+          "markdown": "x",
+          "fallback": "x plano"
+        }
+      ]
+    },
+    "caps": {
+      "versions": [
+        "genui/v2"
+      ],
+      "blocks": [
+        "text"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v2",
+      "state": {
+        "a": 1
+      },
+      "blocks": [
+        {
+          "type": "text",
+          "id": "m",
+          "when": {
+            "ref": "state.a",
+            "equals": 1
+          },
+          "text": "x plano"
+        }
+      ]
+    }
+  }
+}

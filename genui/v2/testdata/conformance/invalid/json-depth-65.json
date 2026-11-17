@@ -1,0 +1,5 @@
+{
+  "description": "Anidamiento JSON de 65 niveles dentro de state.",
+  "input": {"version":"genui/v2","blocks":[{"type":"text","text":"x"}],"state":{"a":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}},
+  "expect": {"ok":false,"code":"genui.limit.depth"}
+}

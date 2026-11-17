@@ -1,0 +1,45 @@
+{
+  "description": "Más de 8 fuentes de datos.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "d0": {
+        "inline": []
+      },
+      "d1": {
+        "inline": []
+      },
+      "d2": {
+        "inline": []
+      },
+      "d3": {
+        "inline": []
+      },
+      "d4": {
+        "inline": []
+      },
+      "d5": {
+        "inline": []
+      },
+      "d6": {
+        "inline": []
+      },
+      "d7": {
+        "inline": []
+      },
+      "d8": {
+        "inline": []
+      }
+    },
+    "blocks": [
+      {
+        "type": "text",
+        "text": "Hola"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.sources"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "description": "Campos con la misma clave.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "form",
+        "fields": [
+          {
+            "key": "a",
+            "label": "A",
+            "kind": "text"
+          },
+          {
+            "key": "a",
+            "label": "B",
+            "kind": "text"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.duplicate_id"
+  }
+}

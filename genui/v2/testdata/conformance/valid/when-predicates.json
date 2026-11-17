@@ -1,0 +1,52 @@
+{
+  "description": "Predicados when con equals, in, not_in, empty.",
+  "input": {
+    "version": "genui/v2",
+    "state": {
+      "tab": "a",
+      "xs": []
+    },
+    "blocks": [
+      {
+        "type": "text",
+        "text": "a",
+        "when": {
+          "ref": "state.tab",
+          "equals": "a"
+        }
+      },
+      {
+        "type": "text",
+        "text": "b",
+        "when": {
+          "ref": "state.tab",
+          "in": [
+            "a",
+            "b"
+          ]
+        }
+      },
+      {
+        "type": "text",
+        "text": "c",
+        "when": {
+          "ref": "state.tab",
+          "not_in": [
+            "z"
+          ]
+        }
+      },
+      {
+        "type": "text",
+        "text": "d",
+        "when": {
+          "ref": "state.xs",
+          "empty": true
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

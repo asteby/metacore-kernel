@@ -1,0 +1,46 @@
+{
+  "description": "Con emit soportado el confirm se conserva.",
+  "input": {
+    "spec": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "confirm",
+          "title": "¿Activar?",
+          "actions": [
+            {
+              "id": "automations.confirm",
+              "label": "Confirmar"
+            }
+          ]
+        }
+      ]
+    },
+    "caps": {
+      "versions": [
+        "genui/v2"
+      ],
+      "verbs": [
+        "emit"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "confirm",
+          "title": "¿Activar?",
+          "actions": [
+            {
+              "id": "automations.confirm",
+              "label": "Confirmar"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

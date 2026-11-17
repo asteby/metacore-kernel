@@ -1,0 +1,108 @@
+{
+  "description": "Los 8 bloques de v1 con su forma, bajo genui/v2.",
+  "input": {
+    "version": "genui/v2",
+    "title": "Resumen",
+    "blocks": [
+      {
+        "type": "text",
+        "text": "Hola",
+        "tone": "muted"
+      },
+      {
+        "type": "kpi",
+        "items": [
+          {
+            "label": "Hallazgos",
+            "value": "12",
+            "trend": "up"
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "Noticias",
+        "badges": [
+          {
+            "label": "Propuesta",
+            "tone": "warning"
+          }
+        ],
+        "fields": [
+          {
+            "label": "Cuándo",
+            "value": "07:00"
+          }
+        ],
+        "link": "/automatizaciones"
+      },
+      {
+        "type": "table",
+        "columns": [
+          {
+            "key": "n",
+            "label": "Nombre"
+          }
+        ],
+        "rows": [
+          {
+            "n": "a"
+          }
+        ]
+      },
+      {
+        "type": "links",
+        "items": [
+          {
+            "title": "Nota",
+            "url": "/notas/1"
+          }
+        ]
+      },
+      {
+        "type": "timeline",
+        "items": [
+          {
+            "title": "Corrida",
+            "status": "completed"
+          }
+        ]
+      },
+      {
+        "type": "chart",
+        "kind": "bar",
+        "x": "d",
+        "series": [
+          {
+            "key": "n",
+            "label": "N"
+          }
+        ],
+        "rows": [
+          {
+            "d": "lun",
+            "n": 3
+          }
+        ],
+        "summary": "3 el lunes"
+      },
+      {
+        "type": "confirm",
+        "title": "¿Activar?",
+        "actions": [
+          {
+            "id": "automations.confirm",
+            "label": "Confirmar",
+            "variant": "primary",
+            "params": {
+              "id": "x"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

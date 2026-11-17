@@ -1,0 +1,213 @@
+{
+  "description": "Los 8 bloques de v1 suben sin pérdida: solo cambia version (el v1 trae un enlace externo, así que el host lo permite).",
+  "options": {
+    "allowExternalLinks": true
+  },
+  "input": {
+    "version": "genui/v1",
+    "title": "Resumen",
+    "blocks": [
+      {
+        "type": "text",
+        "text": "Hola",
+        "tone": "muted"
+      },
+      {
+        "type": "kpi",
+        "items": [
+          {
+            "label": "Hallazgos",
+            "value": "12",
+            "trend": "up"
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "Noticias",
+        "badges": [
+          {
+            "label": "Propuesta",
+            "tone": "warning"
+          }
+        ],
+        "fields": [
+          {
+            "label": "Cuándo",
+            "value": "07:00"
+          }
+        ],
+        "link": "/automatizaciones"
+      },
+      {
+        "type": "table",
+        "columns": [
+          {
+            "key": "n",
+            "label": "Nombre"
+          }
+        ],
+        "rows": [
+          {
+            "n": "a"
+          }
+        ]
+      },
+      {
+        "type": "links",
+        "items": [
+          {
+            "title": "Nota",
+            "url": "https://ejemplo.mx/a"
+          }
+        ]
+      },
+      {
+        "type": "timeline",
+        "items": [
+          {
+            "title": "Corrida",
+            "status": "completed"
+          }
+        ]
+      },
+      {
+        "type": "chart",
+        "kind": "bar",
+        "x": "d",
+        "series": [
+          {
+            "key": "n",
+            "label": "N"
+          }
+        ],
+        "rows": [
+          {
+            "d": "lun",
+            "n": 3
+          }
+        ],
+        "summary": "3 el lunes"
+      },
+      {
+        "type": "confirm",
+        "title": "¿Activar?",
+        "actions": [
+          {
+            "id": "automations.confirm",
+            "label": "Confirmar",
+            "variant": "primary",
+            "params": {
+              "id": "x"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v2",
+      "title": "Resumen",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "Hola",
+          "tone": "muted"
+        },
+        {
+          "type": "kpi",
+          "items": [
+            {
+              "label": "Hallazgos",
+              "value": "12",
+              "trend": "up"
+            }
+          ]
+        },
+        {
+          "type": "card",
+          "title": "Noticias",
+          "badges": [
+            {
+              "label": "Propuesta",
+              "tone": "warning"
+            }
+          ],
+          "fields": [
+            {
+              "label": "Cuándo",
+              "value": "07:00"
+            }
+          ],
+          "link": "/automatizaciones"
+        },
+        {
+          "type": "table",
+          "columns": [
+            {
+              "key": "n",
+              "label": "Nombre"
+            }
+          ],
+          "rows": [
+            {
+              "n": "a"
+            }
+          ]
+        },
+        {
+          "type": "links",
+          "items": [
+            {
+              "title": "Nota",
+              "url": "https://ejemplo.mx/a"
+            }
+          ]
+        },
+        {
+          "type": "timeline",
+          "items": [
+            {
+              "title": "Corrida",
+              "status": "completed"
+            }
+          ]
+        },
+        {
+          "type": "chart",
+          "kind": "bar",
+          "x": "d",
+          "series": [
+            {
+              "key": "n",
+              "label": "N"
+            }
+          ],
+          "rows": [
+            {
+              "d": "lun",
+              "n": 3
+            }
+          ],
+          "summary": "3 el lunes"
+        },
+        {
+          "type": "confirm",
+          "title": "¿Activar?",
+          "actions": [
+            {
+              "id": "automations.confirm",
+              "label": "Confirmar",
+              "variant": "primary",
+              "params": {
+                "id": "x"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

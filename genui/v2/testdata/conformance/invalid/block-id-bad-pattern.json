@@ -1,0 +1,17 @@
+{
+  "description": "id con caracteres no permitidos.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "text",
+        "text": "Hola",
+        "id": "a b"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.pattern"
+  }
+}

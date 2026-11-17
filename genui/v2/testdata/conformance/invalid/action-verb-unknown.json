@@ -1,0 +1,22 @@
+{
+  "description": "Verbo de acción fuera de la lista cerrada.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "fetch",
+            "url": "https://evil.example"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.enum"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "description": "record.update sin record.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "form",
+        "id": "f",
+        "fields": [
+          {
+            "key": "a",
+            "label": "A",
+            "kind": "text"
+          }
+        ],
+        "submit": {
+          "do": "submit",
+          "form": "f",
+          "to": "record.update",
+          "model": "customers"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.required"
+  }
+}

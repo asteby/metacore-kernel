@@ -1,0 +1,23 @@
+{
+  "description": "invoke.action con segmento constructor.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "invoke",
+            "label": "x",
+            "action": "a.constructor"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

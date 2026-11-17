@@ -1,0 +1,107 @@
+{
+  "description": "Más de 8 pestañas.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "tabs",
+        "tabs": [
+          {
+            "key": "t0",
+            "label": "T",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ]
+          },
+          {
+            "key": "t1",
+            "label": "T",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ]
+          },
+          {
+            "key": "t2",
+            "label": "T",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ]
+          },
+          {
+            "key": "t3",
+            "label": "T",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ]
+          },
+          {
+            "key": "t4",
+            "label": "T",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ]
+          },
+          {
+            "key": "t5",
+            "label": "T",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ]
+          },
+          {
+            "key": "t6",
+            "label": "T",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ]
+          },
+          {
+            "key": "t7",
+            "label": "T",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ]
+          },
+          {
+            "key": "t8",
+            "label": "T",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.tabs"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "description": "El documento no es un objeto.",
+  "input": [
+    1
+  ],
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_document"
+  }
+}

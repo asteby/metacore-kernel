@@ -1,0 +1,26 @@
+{
+  "description": "Clave de fila de table.rows con segmento prohibido (a.__proto__).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "table",
+        "columns": [
+          {
+            "key": "a",
+            "label": "A"
+          }
+        ],
+        "rows": [
+          {
+            "a.__proto__": 1
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

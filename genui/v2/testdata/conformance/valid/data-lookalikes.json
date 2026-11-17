@@ -1,0 +1,103 @@
+{
+  "description": "Datos con claves ref/state/type/source/url/link/do/src/path no se interpretan como estructura.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "d": {
+        "inline": [
+          {
+            "ref": "A-123",
+            "state": "CDMX",
+            "type": "web",
+            "source": "google",
+            "url": "https://x.example/a",
+            "link": "javascript:alert(1)",
+            "do": "open",
+            "overlay": "nada",
+            "src": "//x",
+            "path": "../x",
+            "id": 7,
+            "when": "hoy"
+          }
+        ]
+      }
+    },
+    "state": {
+      "ref": "abc",
+      "source": "x",
+      "url": "https://ejemplo.mx",
+      "do": "close"
+    },
+    "blocks": [
+      {
+        "type": "table",
+        "columns": [
+          {
+            "key": "ref",
+            "label": "Ref"
+          },
+          {
+            "key": "url",
+            "label": "URL"
+          }
+        ],
+        "rows": [
+          {
+            "ref": "A-123",
+            "state": "CDMX",
+            "type": "web",
+            "source": "google",
+            "url": "https://x.example/a",
+            "link": "javascript:alert(1)",
+            "do": "open",
+            "overlay": "nada",
+            "src": "//x",
+            "path": "../x",
+            "id": 7,
+            "when": "hoy"
+          }
+        ]
+      },
+      {
+        "type": "chart",
+        "kind": "bar",
+        "x": "ref",
+        "series": [
+          {
+            "key": "id",
+            "label": "Id"
+          }
+        ],
+        "rows": [
+          {
+            "ref": "A-123",
+            "state": "CDMX",
+            "type": "web",
+            "source": "google",
+            "url": "https://x.example/a",
+            "link": "javascript:alert(1)",
+            "do": "open",
+            "overlay": "nada",
+            "src": "//x",
+            "path": "../x",
+            "id": 7,
+            "when": "hoy"
+          }
+        ],
+        "summary": "s"
+      },
+      {
+        "type": "ext",
+        "ext": "a.b@1",
+        "props": {
+          "ref": "x",
+          "url": "https://ejemplo.mx",
+          "do": "open"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "description": "Dos bloques con el mismo id.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "text",
+        "text": "Hola",
+        "id": "x"
+      },
+      {
+        "type": "text",
+        "text": "Hola",
+        "id": "x"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.duplicate_id"
+  }
+}

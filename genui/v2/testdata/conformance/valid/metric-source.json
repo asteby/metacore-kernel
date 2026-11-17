@@ -1,0 +1,24 @@
+{
+  "description": "metric con valor y sparkline leídos de una fuente.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "kpi": {
+        "widget": "sales.dashboard.revenue"
+      }
+    },
+    "blocks": [
+      {
+        "type": "metric",
+        "label": "Ingresos",
+        "source": "data.kpi",
+        "field": "total",
+        "format": "currency",
+        "spark_field": "history"
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

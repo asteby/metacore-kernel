@@ -1,0 +1,16 @@
+{
+  "description": "source apunta a una fuente no declarada.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "stats",
+        "source": "data.nope"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_target"
+  }
+}

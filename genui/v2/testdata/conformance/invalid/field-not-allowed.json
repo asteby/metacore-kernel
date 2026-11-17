@@ -1,0 +1,17 @@
+{
+  "description": "Campo no permitido en un bloque conocido (className).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "text",
+        "text": "x",
+        "className": "p-4"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.field_not_allowed"
+  }
+}

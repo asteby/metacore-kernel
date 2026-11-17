@@ -1,0 +1,19 @@
+{
+  "description": "Clave i18n $t con segmento prohibido (a.__proto__.b).",
+  "input": {
+    "version": "genui/v2",
+    "i18n": "keys",
+    "blocks": [
+      {
+        "type": "text",
+        "text": {
+          "$t": "a.__proto__.b"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

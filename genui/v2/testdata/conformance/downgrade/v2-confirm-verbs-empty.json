@@ -1,0 +1,47 @@
+{
+  "description": "Los confirm de v1 cuentan como emit: con verbs [] el bloque usa su fallback.",
+  "input": {
+    "spec": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "confirm",
+          "title": "¿Activar?",
+          "actions": [
+            {
+              "id": "automations.confirm",
+              "label": "Confirmar"
+            }
+          ],
+          "fallback": "Confirma desde la web"
+        },
+        {
+          "type": "text",
+          "text": "fin"
+        }
+      ]
+    },
+    "caps": {
+      "versions": [
+        "genui/v2"
+      ],
+      "verbs": []
+    }
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "Confirma desde la web"
+        },
+        {
+          "type": "text",
+          "text": "fin"
+        }
+      ]
+    }
+  }
+}

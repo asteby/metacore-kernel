@@ -1,0 +1,23 @@
+{
+  "description": "Lista de objetos en state.",
+  "input": {
+    "version": "genui/v2",
+    "state": {
+      "a": [
+        {
+          "b": 1
+        }
+      ]
+    },
+    "blocks": [
+      {
+        "type": "text",
+        "text": "Hola"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.type"
+  }
+}

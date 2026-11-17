@@ -1,0 +1,21 @@
+{
+  "description": "source: data.constructor.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "a": {
+        "inline": []
+      }
+    },
+    "blocks": [
+      {
+        "type": "stats",
+        "source": "data.constructor"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_target"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "description": "ext debe ser <addon>.<nombre>@<mayor>.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "ext",
+        "ext": "route_map"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.pattern"
+  }
+}

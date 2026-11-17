@@ -1,0 +1,19 @@
+{
+  "description": "ext.props: {\"$ref\"} como mapa.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "ext",
+        "ext": "a.b@1",
+        "props": {
+          "$ref": "ctx.secret"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.ref_not_allowed"
+  }
+}

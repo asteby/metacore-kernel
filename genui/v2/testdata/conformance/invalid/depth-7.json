@@ -1,0 +1,46 @@
+{
+  "description": "Profundidad 7 supera el límite.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "stack",
+        "blocks": [
+          {
+            "type": "stack",
+            "blocks": [
+              {
+                "type": "stack",
+                "blocks": [
+                  {
+                    "type": "stack",
+                    "blocks": [
+                      {
+                        "type": "stack",
+                        "blocks": [
+                          {
+                            "type": "stack",
+                            "blocks": [
+                              {
+                                "type": "text",
+                                "text": "Hola"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.depth"
+  }
+}

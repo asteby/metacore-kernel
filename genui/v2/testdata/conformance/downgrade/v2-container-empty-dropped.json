@@ -1,0 +1,44 @@
+{
+  "description": "Un contenedor cuyos hijos se descartan todos desaparece; la raíz vacía queda con un aviso.",
+  "input": {
+    "spec": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "stack",
+          "blocks": [
+            {
+              "type": "media",
+              "src": "asset:a",
+              "alt": "x",
+              "width": 1,
+              "height": 1
+            }
+          ]
+        }
+      ]
+    },
+    "caps": {
+      "versions": [
+        "genui/v2"
+      ],
+      "blocks": [
+        "stack",
+        "text"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "Contenido no disponible en este cliente.",
+          "tone": "muted"
+        }
+      ]
+    }
+  }
+}

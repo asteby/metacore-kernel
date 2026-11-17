@@ -1,0 +1,75 @@
+{
+  "description": "Composición: stack, grid, section y tabs con estado.",
+  "input": {
+    "version": "genui/v2",
+    "state": {
+      "tab": "lista",
+      "filtro": {
+        "almacen": null
+      }
+    },
+    "blocks": [
+      {
+        "type": "stack",
+        "id": "raiz",
+        "direction": "vertical",
+        "blocks": [
+          {
+            "type": "grid",
+            "columns": 2,
+            "blocks": [
+              {
+                "type": "text",
+                "text": "a"
+              },
+              {
+                "type": "text",
+                "text": "b"
+              }
+            ]
+          },
+          {
+            "type": "section",
+            "title": "Detalle",
+            "collapsible": true,
+            "blocks": [
+              {
+                "type": "markdown",
+                "markdown": "Texto **seguro** con [enlace](/m/pedidos)"
+              }
+            ]
+          },
+          {
+            "type": "tabs",
+            "state": "state.tab",
+            "tabs": [
+              {
+                "key": "lista",
+                "label": "Lista",
+                "blocks": [
+                  {
+                    "type": "text",
+                    "text": "l"
+                  }
+                ]
+              },
+              {
+                "key": "grafica",
+                "label": "Gráfica",
+                "blocks": [
+                  {
+                    "type": "text",
+                    "text": "g"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

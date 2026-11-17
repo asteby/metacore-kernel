@@ -1,0 +1,21 @@
+{
+  "description": "Un v1 con enlace externo se rechaza si el host no habilita allowExternalLinks.",
+  "input": {
+    "version": "genui/v1",
+    "blocks": [
+      {
+        "type": "links",
+        "items": [
+          {
+            "title": "Nota",
+            "url": "https://ejemplo.mx/a"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.external_link_disabled"
+  }
+}

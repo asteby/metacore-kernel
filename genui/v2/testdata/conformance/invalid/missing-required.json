@@ -1,0 +1,24 @@
+{
+  "description": "chart sin summary accesible.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "chart",
+        "kind": "bar",
+        "x": "d",
+        "series": [
+          {
+            "key": "n",
+            "label": "N"
+          }
+        ],
+        "rows": []
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.required"
+  }
+}

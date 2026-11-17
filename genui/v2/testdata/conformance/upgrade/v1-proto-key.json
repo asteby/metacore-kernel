@@ -1,0 +1,5 @@
+{
+  "description": "__proto__ en una fila v1: se rechaza antes de actualizar.",
+  "input": {"version":"genui/v1","blocks":[{"type":"table","columns":[{"key":"a","label":"A"}],"rows":[{"__proto__":"x"}]}]},
+  "expect": {"ok":false,"code":"genui.forbidden_key"}
+}

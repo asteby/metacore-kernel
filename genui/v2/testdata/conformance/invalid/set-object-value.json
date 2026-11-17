@@ -1,0 +1,25 @@
+{
+  "description": "set solo escribe literales escalares.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "set",
+            "path": "state.a",
+            "value": {
+              "b": 1
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.type"
+  }
+}

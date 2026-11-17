@@ -1,0 +1,78 @@
+{
+  "description": "Más de 8 pasos.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "wizard",
+        "fields": [
+          {
+            "key": "a",
+            "label": "A",
+            "kind": "text"
+          }
+        ],
+        "steps": [
+          {
+            "title": "P",
+            "fields": [
+              "a"
+            ]
+          },
+          {
+            "title": "P",
+            "fields": [
+              "a"
+            ]
+          },
+          {
+            "title": "P",
+            "fields": [
+              "a"
+            ]
+          },
+          {
+            "title": "P",
+            "fields": [
+              "a"
+            ]
+          },
+          {
+            "title": "P",
+            "fields": [
+              "a"
+            ]
+          },
+          {
+            "title": "P",
+            "fields": [
+              "a"
+            ]
+          },
+          {
+            "title": "P",
+            "fields": [
+              "a"
+            ]
+          },
+          {
+            "title": "P",
+            "fields": [
+              "a"
+            ]
+          },
+          {
+            "title": "P",
+            "fields": [
+              "a"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.steps"
+  }
+}

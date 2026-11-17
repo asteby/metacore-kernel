@@ -1,0 +1,24 @@
+{
+  "description": "los nodos no llevan html/estilo.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "diagram",
+        "summary": "Flujo de servicios",
+        "nodes": [
+          {
+            "id": "a",
+            "label": "A",
+            "html": "<b>x</b>"
+          }
+        ],
+        "edges": []
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.field_not_allowed"
+  }
+}

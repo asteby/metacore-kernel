@@ -1,0 +1,22 @@
+{
+  "description": "La entrada se valida antes de degradar.",
+  "input": {
+    "spec": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "script"
+        }
+      ]
+    },
+    "caps": {
+      "versions": [
+        "genui/v2"
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_block"
+  }
+}

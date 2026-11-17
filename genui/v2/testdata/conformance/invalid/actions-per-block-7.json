@@ -1,0 +1,39 @@
+{
+  "description": "Más de 6 acciones en un bloque.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.actions"
+  }
+}

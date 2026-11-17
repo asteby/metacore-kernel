@@ -1,0 +1,28 @@
+{
+  "description": "invoke.values no es un valor: {\"$ref\"} como mapa.",
+  "input": {
+    "version": "genui/v2",
+    "state": {
+      "a": 1
+    },
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "invoke",
+            "action": "customers.Order.cancel",
+            "values": {
+              "$ref": "state.a"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.ref_not_allowed"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "description": "Documento mínimo: un bloque text.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "text",
+        "text": "Hola"
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "description": "state solo admite escalares, listas y objetos de escalares.",
+  "input": {
+    "version": "genui/v2",
+    "state": {
+      "a": {
+        "b": {
+          "c": 1
+        }
+      }
+    },
+    "blocks": [
+      {
+        "type": "text",
+        "text": "Hola"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.type"
+  }
+}

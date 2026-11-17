@@ -1,0 +1,156 @@
+{
+  "description": "Más de 32 acciones en el documento (6 por bloque está dentro del límite).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.actions"
+  }
+}

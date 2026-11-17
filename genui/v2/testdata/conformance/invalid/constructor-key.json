@@ -1,0 +1,5 @@
+{
+  "description": "constructor como clave en un bloque.",
+  "input": {"version":"genui/v2","blocks":[{"type":"text","text":"x","constructor":{"x":1}}]},
+  "expect": {"ok":false,"code":"genui.forbidden_key"}
+}

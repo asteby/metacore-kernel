@@ -1,0 +1,15 @@
+{
+  "description": "wizard sin steps/fields ni ref.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "wizard"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.required"
+  }
+}

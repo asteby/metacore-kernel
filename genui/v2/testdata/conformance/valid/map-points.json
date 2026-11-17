@@ -1,0 +1,59 @@
+{
+  "description": "map con puntos en línea, tonos por estado, leyenda, cluster, tooltip y panel de detalle.",
+  "input": {
+    "version": "genui/v2",
+    "overlays": {
+      "detalle": {
+        "kind": "drawer",
+        "title": "Detalle",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "x"
+          }
+        ]
+      }
+    },
+    "blocks": [
+      {
+        "type": "map",
+        "summary": "Mapa de puntos",
+        "points": [
+          {
+            "key": "a",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto a",
+            "status": "ok"
+          },
+          {
+            "key": "b",
+            "lat": 19.5,
+            "lng": -99.2,
+            "label": "Punto b",
+            "status": "late",
+            "group": "mx"
+          }
+        ],
+        "title": "Instancias",
+        "status_tones": {
+          "ok": "success",
+          "late": "danger"
+        },
+        "group_by": "status",
+        "legend": true,
+        "cluster": true,
+        "tooltip": true,
+        "detail_panel": true,
+        "height": "md",
+        "on_select": {
+          "do": "open",
+          "overlay": "detalle"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

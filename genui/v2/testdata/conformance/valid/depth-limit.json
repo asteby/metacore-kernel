@@ -1,0 +1,40 @@
+{
+  "description": "Profundidad 6 (el máximo permitido).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "stack",
+        "blocks": [
+          {
+            "type": "stack",
+            "blocks": [
+              {
+                "type": "stack",
+                "blocks": [
+                  {
+                    "type": "stack",
+                    "blocks": [
+                      {
+                        "type": "stack",
+                        "blocks": [
+                          {
+                            "type": "text",
+                            "text": "Hola"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

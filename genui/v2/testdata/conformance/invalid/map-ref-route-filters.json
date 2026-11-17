@@ -1,0 +1,28 @@
+{
+  "description": "route.filters no es un valor: {\"$ref\"} como mapa.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "navigate",
+            "route": {
+              "name": "list",
+              "model": "customers",
+              "filters": {
+                "$ref": "record.__proto__.x"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.ref_not_allowed"
+  }
+}

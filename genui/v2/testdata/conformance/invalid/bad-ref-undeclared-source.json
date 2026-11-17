@@ -1,0 +1,18 @@
+{
+  "description": "$ref a una fuente data no declarada.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "text",
+        "text": {
+          "$ref": "data.nope.0.x"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.bad_ref"
+  }
+}

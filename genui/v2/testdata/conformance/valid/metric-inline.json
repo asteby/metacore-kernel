@@ -1,0 +1,38 @@
+{
+  "description": "metric con tendencia, umbrales por severidad y sparkline en línea.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "metric",
+        "label": "Pedidos abiertos",
+        "value": 42,
+        "format": "number",
+        "trend": "up",
+        "delta": "+8%",
+        "compare": "vs ayer",
+        "thresholds": [
+          {
+            "at": 30,
+            "tone": "warning"
+          },
+          {
+            "at": 50,
+            "tone": "danger"
+          }
+        ],
+        "spark": [
+          1,
+          3,
+          2,
+          5,
+          8,
+          13
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

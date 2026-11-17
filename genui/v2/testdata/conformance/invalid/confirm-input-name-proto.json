@@ -1,0 +1,29 @@
+{
+  "description": "confirm.inputs[].name __proto__.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "confirm",
+        "title": "x",
+        "inputs": [
+          {
+            "name": "__proto__",
+            "label": "x",
+            "kind": "text"
+          }
+        ],
+        "actions": [
+          {
+            "id": "a.b",
+            "label": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

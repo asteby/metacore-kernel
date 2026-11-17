@@ -1,0 +1,33 @@
+{
+  "description": "open hacia \"constructor\": no hereda del prototipo.",
+  "input": {
+    "version": "genui/v2",
+    "overlays": {
+      "a": {
+        "kind": "modal",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      }
+    },
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "open",
+            "overlay": "constructor"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

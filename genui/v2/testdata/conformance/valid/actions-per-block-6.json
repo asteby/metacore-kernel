@@ -1,0 +1,35 @@
+{
+  "description": "Seis acciones en un bloque (el máximo).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          },
+          {
+            "do": "close"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

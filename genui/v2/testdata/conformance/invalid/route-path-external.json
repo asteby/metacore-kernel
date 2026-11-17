@@ -1,0 +1,27 @@
+{
+  "description": "route.path no admite http(s).",
+  "options": {
+    "allowExternalLinks": true
+  },
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "navigate",
+            "route": {
+              "path": "https://evil.example"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unsafe_link"
+  }
+}

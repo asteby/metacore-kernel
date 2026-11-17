@@ -1,0 +1,16 @@
+{
+  "description": "metric sin value ni source.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "metric",
+        "label": "X"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.required"
+  }
+}

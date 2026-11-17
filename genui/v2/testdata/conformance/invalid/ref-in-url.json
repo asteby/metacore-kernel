@@ -1,0 +1,32 @@
+{
+  "description": "$ref nunca puede ir en url.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "a": {
+        "inline": [
+          {
+            "u": "/x"
+          }
+        ]
+      }
+    },
+    "blocks": [
+      {
+        "type": "links",
+        "items": [
+          {
+            "title": "x",
+            "url": {
+              "$ref": "data.a.0.u"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.ref_not_allowed"
+  }
+}

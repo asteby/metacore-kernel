@@ -1,0 +1,1224 @@
+{
+  "description": "más de 200 puntos en línea.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "map",
+        "summary": "Mapa de puntos",
+        "points": [
+          {
+            "key": "p0",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p0"
+          },
+          {
+            "key": "p1",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p1"
+          },
+          {
+            "key": "p2",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p2"
+          },
+          {
+            "key": "p3",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p3"
+          },
+          {
+            "key": "p4",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p4"
+          },
+          {
+            "key": "p5",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p5"
+          },
+          {
+            "key": "p6",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p6"
+          },
+          {
+            "key": "p7",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p7"
+          },
+          {
+            "key": "p8",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p8"
+          },
+          {
+            "key": "p9",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p9"
+          },
+          {
+            "key": "p10",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p10"
+          },
+          {
+            "key": "p11",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p11"
+          },
+          {
+            "key": "p12",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p12"
+          },
+          {
+            "key": "p13",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p13"
+          },
+          {
+            "key": "p14",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p14"
+          },
+          {
+            "key": "p15",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p15"
+          },
+          {
+            "key": "p16",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p16"
+          },
+          {
+            "key": "p17",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p17"
+          },
+          {
+            "key": "p18",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p18"
+          },
+          {
+            "key": "p19",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p19"
+          },
+          {
+            "key": "p20",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p20"
+          },
+          {
+            "key": "p21",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p21"
+          },
+          {
+            "key": "p22",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p22"
+          },
+          {
+            "key": "p23",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p23"
+          },
+          {
+            "key": "p24",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p24"
+          },
+          {
+            "key": "p25",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p25"
+          },
+          {
+            "key": "p26",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p26"
+          },
+          {
+            "key": "p27",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p27"
+          },
+          {
+            "key": "p28",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p28"
+          },
+          {
+            "key": "p29",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p29"
+          },
+          {
+            "key": "p30",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p30"
+          },
+          {
+            "key": "p31",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p31"
+          },
+          {
+            "key": "p32",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p32"
+          },
+          {
+            "key": "p33",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p33"
+          },
+          {
+            "key": "p34",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p34"
+          },
+          {
+            "key": "p35",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p35"
+          },
+          {
+            "key": "p36",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p36"
+          },
+          {
+            "key": "p37",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p37"
+          },
+          {
+            "key": "p38",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p38"
+          },
+          {
+            "key": "p39",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p39"
+          },
+          {
+            "key": "p40",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p40"
+          },
+          {
+            "key": "p41",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p41"
+          },
+          {
+            "key": "p42",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p42"
+          },
+          {
+            "key": "p43",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p43"
+          },
+          {
+            "key": "p44",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p44"
+          },
+          {
+            "key": "p45",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p45"
+          },
+          {
+            "key": "p46",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p46"
+          },
+          {
+            "key": "p47",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p47"
+          },
+          {
+            "key": "p48",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p48"
+          },
+          {
+            "key": "p49",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p49"
+          },
+          {
+            "key": "p50",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p50"
+          },
+          {
+            "key": "p51",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p51"
+          },
+          {
+            "key": "p52",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p52"
+          },
+          {
+            "key": "p53",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p53"
+          },
+          {
+            "key": "p54",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p54"
+          },
+          {
+            "key": "p55",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p55"
+          },
+          {
+            "key": "p56",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p56"
+          },
+          {
+            "key": "p57",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p57"
+          },
+          {
+            "key": "p58",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p58"
+          },
+          {
+            "key": "p59",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p59"
+          },
+          {
+            "key": "p60",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p60"
+          },
+          {
+            "key": "p61",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p61"
+          },
+          {
+            "key": "p62",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p62"
+          },
+          {
+            "key": "p63",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p63"
+          },
+          {
+            "key": "p64",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p64"
+          },
+          {
+            "key": "p65",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p65"
+          },
+          {
+            "key": "p66",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p66"
+          },
+          {
+            "key": "p67",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p67"
+          },
+          {
+            "key": "p68",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p68"
+          },
+          {
+            "key": "p69",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p69"
+          },
+          {
+            "key": "p70",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p70"
+          },
+          {
+            "key": "p71",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p71"
+          },
+          {
+            "key": "p72",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p72"
+          },
+          {
+            "key": "p73",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p73"
+          },
+          {
+            "key": "p74",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p74"
+          },
+          {
+            "key": "p75",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p75"
+          },
+          {
+            "key": "p76",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p76"
+          },
+          {
+            "key": "p77",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p77"
+          },
+          {
+            "key": "p78",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p78"
+          },
+          {
+            "key": "p79",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p79"
+          },
+          {
+            "key": "p80",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p80"
+          },
+          {
+            "key": "p81",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p81"
+          },
+          {
+            "key": "p82",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p82"
+          },
+          {
+            "key": "p83",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p83"
+          },
+          {
+            "key": "p84",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p84"
+          },
+          {
+            "key": "p85",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p85"
+          },
+          {
+            "key": "p86",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p86"
+          },
+          {
+            "key": "p87",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p87"
+          },
+          {
+            "key": "p88",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p88"
+          },
+          {
+            "key": "p89",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p89"
+          },
+          {
+            "key": "p90",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p90"
+          },
+          {
+            "key": "p91",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p91"
+          },
+          {
+            "key": "p92",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p92"
+          },
+          {
+            "key": "p93",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p93"
+          },
+          {
+            "key": "p94",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p94"
+          },
+          {
+            "key": "p95",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p95"
+          },
+          {
+            "key": "p96",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p96"
+          },
+          {
+            "key": "p97",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p97"
+          },
+          {
+            "key": "p98",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p98"
+          },
+          {
+            "key": "p99",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p99"
+          },
+          {
+            "key": "p100",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p100"
+          },
+          {
+            "key": "p101",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p101"
+          },
+          {
+            "key": "p102",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p102"
+          },
+          {
+            "key": "p103",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p103"
+          },
+          {
+            "key": "p104",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p104"
+          },
+          {
+            "key": "p105",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p105"
+          },
+          {
+            "key": "p106",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p106"
+          },
+          {
+            "key": "p107",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p107"
+          },
+          {
+            "key": "p108",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p108"
+          },
+          {
+            "key": "p109",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p109"
+          },
+          {
+            "key": "p110",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p110"
+          },
+          {
+            "key": "p111",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p111"
+          },
+          {
+            "key": "p112",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p112"
+          },
+          {
+            "key": "p113",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p113"
+          },
+          {
+            "key": "p114",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p114"
+          },
+          {
+            "key": "p115",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p115"
+          },
+          {
+            "key": "p116",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p116"
+          },
+          {
+            "key": "p117",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p117"
+          },
+          {
+            "key": "p118",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p118"
+          },
+          {
+            "key": "p119",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p119"
+          },
+          {
+            "key": "p120",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p120"
+          },
+          {
+            "key": "p121",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p121"
+          },
+          {
+            "key": "p122",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p122"
+          },
+          {
+            "key": "p123",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p123"
+          },
+          {
+            "key": "p124",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p124"
+          },
+          {
+            "key": "p125",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p125"
+          },
+          {
+            "key": "p126",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p126"
+          },
+          {
+            "key": "p127",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p127"
+          },
+          {
+            "key": "p128",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p128"
+          },
+          {
+            "key": "p129",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p129"
+          },
+          {
+            "key": "p130",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p130"
+          },
+          {
+            "key": "p131",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p131"
+          },
+          {
+            "key": "p132",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p132"
+          },
+          {
+            "key": "p133",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p133"
+          },
+          {
+            "key": "p134",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p134"
+          },
+          {
+            "key": "p135",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p135"
+          },
+          {
+            "key": "p136",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p136"
+          },
+          {
+            "key": "p137",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p137"
+          },
+          {
+            "key": "p138",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p138"
+          },
+          {
+            "key": "p139",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p139"
+          },
+          {
+            "key": "p140",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p140"
+          },
+          {
+            "key": "p141",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p141"
+          },
+          {
+            "key": "p142",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p142"
+          },
+          {
+            "key": "p143",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p143"
+          },
+          {
+            "key": "p144",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p144"
+          },
+          {
+            "key": "p145",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p145"
+          },
+          {
+            "key": "p146",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p146"
+          },
+          {
+            "key": "p147",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p147"
+          },
+          {
+            "key": "p148",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p148"
+          },
+          {
+            "key": "p149",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p149"
+          },
+          {
+            "key": "p150",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p150"
+          },
+          {
+            "key": "p151",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p151"
+          },
+          {
+            "key": "p152",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p152"
+          },
+          {
+            "key": "p153",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p153"
+          },
+          {
+            "key": "p154",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p154"
+          },
+          {
+            "key": "p155",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p155"
+          },
+          {
+            "key": "p156",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p156"
+          },
+          {
+            "key": "p157",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p157"
+          },
+          {
+            "key": "p158",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p158"
+          },
+          {
+            "key": "p159",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p159"
+          },
+          {
+            "key": "p160",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p160"
+          },
+          {
+            "key": "p161",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p161"
+          },
+          {
+            "key": "p162",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p162"
+          },
+          {
+            "key": "p163",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p163"
+          },
+          {
+            "key": "p164",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p164"
+          },
+          {
+            "key": "p165",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p165"
+          },
+          {
+            "key": "p166",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p166"
+          },
+          {
+            "key": "p167",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p167"
+          },
+          {
+            "key": "p168",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p168"
+          },
+          {
+            "key": "p169",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p169"
+          },
+          {
+            "key": "p170",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p170"
+          },
+          {
+            "key": "p171",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p171"
+          },
+          {
+            "key": "p172",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p172"
+          },
+          {
+            "key": "p173",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p173"
+          },
+          {
+            "key": "p174",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p174"
+          },
+          {
+            "key": "p175",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p175"
+          },
+          {
+            "key": "p176",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p176"
+          },
+          {
+            "key": "p177",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p177"
+          },
+          {
+            "key": "p178",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p178"
+          },
+          {
+            "key": "p179",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p179"
+          },
+          {
+            "key": "p180",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p180"
+          },
+          {
+            "key": "p181",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p181"
+          },
+          {
+            "key": "p182",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p182"
+          },
+          {
+            "key": "p183",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p183"
+          },
+          {
+            "key": "p184",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p184"
+          },
+          {
+            "key": "p185",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p185"
+          },
+          {
+            "key": "p186",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p186"
+          },
+          {
+            "key": "p187",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p187"
+          },
+          {
+            "key": "p188",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p188"
+          },
+          {
+            "key": "p189",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p189"
+          },
+          {
+            "key": "p190",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p190"
+          },
+          {
+            "key": "p191",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p191"
+          },
+          {
+            "key": "p192",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p192"
+          },
+          {
+            "key": "p193",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p193"
+          },
+          {
+            "key": "p194",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p194"
+          },
+          {
+            "key": "p195",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p195"
+          },
+          {
+            "key": "p196",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p196"
+          },
+          {
+            "key": "p197",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p197"
+          },
+          {
+            "key": "p198",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p198"
+          },
+          {
+            "key": "p199",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p199"
+          },
+          {
+            "key": "p200",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto p200"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.items"
+  }
+}

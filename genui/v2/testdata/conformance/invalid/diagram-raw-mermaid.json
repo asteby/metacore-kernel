@@ -1,0 +1,37 @@
+{
+  "description": "no se acepta mermaid crudo.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "diagram",
+        "summary": "Flujo de servicios",
+        "nodes": [
+          {
+            "id": "api",
+            "label": "API",
+            "kind": "service"
+          },
+          {
+            "id": "db",
+            "label": "DB",
+            "kind": "database",
+            "tone": "success"
+          }
+        ],
+        "edges": [
+          {
+            "from": "api",
+            "to": "db",
+            "label": "SQL"
+          }
+        ],
+        "mermaid": "graph TD; A-->B"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.field_not_allowed"
+  }
+}

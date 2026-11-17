@@ -1,0 +1,44 @@
+{
+  "description": "diagrama de nodos y aristas con estado por tono y navegación a una ruta de la app.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "diagram",
+        "summary": "Flujo de servicios",
+        "nodes": [
+          {
+            "id": "api",
+            "label": "API",
+            "kind": "service",
+            "tone": "success",
+            "detail": "v1.2",
+            "route": {
+              "path": "/ops/services/api"
+            }
+          },
+          {
+            "id": "db",
+            "label": "DB",
+            "kind": "database",
+            "tone": "danger"
+          }
+        ],
+        "edges": [
+          {
+            "from": "api",
+            "to": "db",
+            "label": "SQL",
+            "tone": "danger",
+            "style": "dashed"
+          }
+        ],
+        "title": "Arquitectura",
+        "direction": "lr"
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

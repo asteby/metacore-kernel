@@ -1,0 +1,47 @@
+{
+  "description": "Wizard con pasos que refieren campos existentes.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "wizard",
+        "id": "alta",
+        "fields": [
+          {
+            "key": "a",
+            "label": "A",
+            "kind": "text"
+          },
+          {
+            "key": "b",
+            "label": "B",
+            "kind": "text"
+          }
+        ],
+        "steps": [
+          {
+            "title": "Uno",
+            "fields": [
+              "a"
+            ]
+          },
+          {
+            "title": "Dos",
+            "fields": [
+              "b"
+            ]
+          }
+        ],
+        "submit": {
+          "do": "submit",
+          "form": "alta",
+          "to": "record.create",
+          "model": "customers"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

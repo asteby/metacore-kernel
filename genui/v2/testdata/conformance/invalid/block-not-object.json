@@ -1,0 +1,13 @@
+{
+  "description": "Un bloque que no es objeto.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      "x"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.type"
+  }
+}

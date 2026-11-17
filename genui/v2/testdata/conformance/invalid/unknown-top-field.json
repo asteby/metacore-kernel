@@ -1,0 +1,17 @@
+{
+  "description": "Campo desconocido en la raíz.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "text",
+        "text": "Hola"
+      }
+    ],
+    "extra": 1
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.field_not_allowed"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "description": "tref.args: {\"$ref\"} como mapa.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "text",
+        "text": {
+          "$t": "k",
+          "args": {
+            "$ref": "data.zzz"
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.ref_not_allowed"
+  }
+}

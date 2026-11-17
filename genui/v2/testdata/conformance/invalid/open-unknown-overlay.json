@@ -1,0 +1,22 @@
+{
+  "description": "open hacia un overlay inexistente.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "open",
+            "overlay": "nada"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_overlay"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "description": "la fuente no está en data.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "map",
+        "summary": "x",
+        "source": "data.nope"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_target"
+  }
+}

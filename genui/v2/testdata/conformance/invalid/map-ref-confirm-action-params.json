@@ -1,0 +1,28 @@
+{
+  "description": "confirm.actions[].params no es un valor: {\"$ref\"} como mapa.",
+  "input": {
+    "version": "genui/v2",
+    "state": {
+      "a": 1
+    },
+    "blocks": [
+      {
+        "type": "confirm",
+        "title": "x",
+        "actions": [
+          {
+            "id": "a.b",
+            "label": "ok",
+            "params": {
+              "$ref": "state.a"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.ref_not_allowed"
+  }
+}

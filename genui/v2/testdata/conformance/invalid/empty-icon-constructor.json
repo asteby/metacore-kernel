@@ -1,0 +1,17 @@
+{
+  "description": "Icono de empty constructor.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "empty",
+        "title": "x",
+        "icon": "constructor"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}
