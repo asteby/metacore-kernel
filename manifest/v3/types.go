@@ -41,6 +41,9 @@ type Manifest struct {
 	Runtime         *Runtime         `json:"runtime,omitempty"`
 	Contributions   *Contributions   `json:"contributions,omitempty"`
 	ExtensionPoints *ExtensionPoints `json:"extension_points,omitempty"`
+	// Events declares the event catalog (RFC 0003): what this addon emits and
+	// consumes. Optional; see event_catalog.go.
+	Events *EventsDecl `json:"events,omitempty"`
 	Lifecycle       *Lifecycle       `json:"lifecycle,omitempty"`
 	I18n            *I18n            `json:"i18n,omitempty"`
 	RBAC            *RBAC            `json:"rbac,omitempty"`
