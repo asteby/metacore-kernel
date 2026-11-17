@@ -235,5 +235,17 @@ timeout tras el commit) el reintento encuentra la fila y no la duplica. En ese r
 `Operation.CreateDefaults` y el ejecutor los aplica únicamente al crear la fila, nunca al
 actualizar (un `status: new` no revierte el estado en cada upsert).
 
+**Cerca de arriendo y alcance en la cadena.** `ReceiptStore.SaveProgress(ctx, id, attempt, steps) (owned, err)`
+lleva la misma cerca que `FinishAttempt` (`WHERE id AND attempts AND status='processing'`) y
+renueva el arriendo. La cadena lo llama antes y después de cada acción: si otro worker
+reclamó el evento, aborta con `409 lease_lost` **antes** de aplicar el siguiente efecto y no
+pisa el recibo del nuevo dueño (el cierre usa `FinishAttempt`). El alcance se declara por
+acción (`scope.branch`/`scope.entity` en cada `record.*`): si falta en el evento, `422
+scope_required` antes de cualquier efecto y antes de consumir el nonce (`PreparedVerifier`);
+cada paso pasa `RequireBranch/RequireEntity` al ejecutor (entidad sin resolver -> `403
+scope_unresolved`, rama fuera de alcance -> `403 scope_forbidden`). Al registrar
+(`New`/`Check`/`RegisterContract`) `ContractChecker` valida también los `match` y el
+`idempotency_field` de cada acción `record.*` contra las columnas del modelo.
+
 **Cableado.** `Config.Emitter`, `Config.Notifier`, `Config.Automation`; `New`/`Check` fallan
 al arrancar si una cadena usa una acción sin su puerto o un comando no registrado.
