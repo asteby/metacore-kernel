@@ -21,6 +21,7 @@ Este RFC propone que emitir y recibir eventos sea una **capacidad de plataforma 
 | D6 | Una **pantalla declarativa** (`genui`) administra suscripciones y entradas: casillas para eventos y canales, no JSON a mano. Se arregla una vez y mejora a todos los addons. |
 | D7 | Los destinos concretos (V2, un ERP X) son **presets**: paquetes de datos versionados. |
 | D8 | `erp_bridge` se retira cuando existan D1–D6; su configuración migra a un preset. |
+| D9 | **Entradas y salidas son dos caras del mismo panel** (modelo Bitrix24): una **salida** avisa a una URL cuando pasa algo en Ops; una **entrada** le da a un tercero una URL con credencial, y lo que llega **dispara acciones** declaradas (ver §2.4). Ambas comparten catálogo de eventos, mapeo, firma, bitácora y repetición. |
 
 ## 1. Lo que existe hoy (evidencia en el código)
 
@@ -82,6 +83,29 @@ POST /api/inbound/{org}/{contract}      (firmado; mismo catálogo de perfiles)
 
 Esto cubre lo que hoy falta en `erp_bridge`: existencias (V2 → Ops), estado y guía del pedido, publicaciones y banners.
 
+### 2.4 Acciones al entrar (entradas que hacen cosas)
+
+Un contrato de entrada no solo escribe un registro: declara una **cadena corta de acciones** que corren cuando el evento llega y es válido.
+
+```json
+{
+  "key": "crm-cliente-nuevo",
+  "schema": { "…": "…" },
+  "idempotency": "{{payload.id}}",
+  "actions": [
+    { "do": "record.upsert", "model": "customers", "match": ["external_ref"], "mapping": { "name": "{{payload.nombre}}", "email": "{{payload.correo}}" } },
+    { "do": "event.emit", "name": "customers.customer.imported", "payload": { "id": "{{result.id}}" } },
+    { "do": "notify", "template": "cliente_importado", "when": { "path": "result.created", "eq": true } }
+  ],
+  "on_error": "stop"
+}
+```
+
+- **Lista cerrada de acciones** (`record.create|update|upsert`, `event.emit`, `notify`, `command.run`, y `automation.enqueue` cuando exista el disparador por evento en `automation`). Añadir una acción nueva es un cambio del kernel con pruebas; la cadena la escribe el cliente como dato.
+- Cada acción ve `payload`, `event` y el `result` de la anterior; sin ejecutar código del cliente.
+- Las acciones corren **dentro del mismo recibo idempotente**: un duplicado no repite ninguna. Si una acción falla, el recibo queda `failed` y se puede **repetir** desde la pantalla.
+- `event.emit` permite **encadenar**: una entrada puede provocar una salida (un CRM crea un cliente → Ops lo registra → emite `customers.customer.created` hacia el ERP).
+
 ## 3. El mismo modelo en 7 Leguas V2 (sin nada hardcodeado)
 
 V2 usa el mismo patrón en sus dos sentidos:
@@ -92,7 +116,13 @@ V2 usa el mismo patrón en sus dos sentidos:
 
 ## 4. Pantalla declarativa
 
-Una pantalla *Integraciones → Eventos* (generada con `genui`):
+Una pantalla *Integraciones → Eventos* (generada con `genui`), con tres pestañas, **Salidas**, **Entradas** y **Registro**:
+
+- **Salidas:** elige addon y evento, pone la URL de destino y la credencial; define filtro y mapeo.
+- **Entradas:** crea una entrada con nombre; el sistema genera su **URL y credencial** (se muestra una sola vez), se elige el contrato o se arma uno de plantilla, y se arma la **cadena de acciones** con bloques (sin escribir JSON).
+- **Registro:** entregas y recepciones juntas, con estado, repetición y filtros (SmartDataTable por metadatos).
+
+Detalle común:
 
 - Casillas de eventos agrupadas por dominio (clientes, pedidos, pagos…), buscables.
 - Selector de destino desde presets; editor de mapeo de campos con vista previa del cuerpo sobre un evento de ejemplo.
