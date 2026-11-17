@@ -1,6 +1,7 @@
 package installer
 
 import (
+	"errors"
 	"context"
 	"sync"
 	"testing"
@@ -163,5 +164,28 @@ func TestUpgrade_FailureStillBumps(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("bumps = %d, want 1", n)
+	}
+}
+
+// A same-version upgrade is a no-op rejected before any DB/schema work: it must
+// not be reported as addon.upgrade.failed (nor flush anything).
+func TestUpgrade_SameVersion_IsNotReportedAsFailed(t *testing.T) {
+	db := upgradeTestDB(t)
+	orgID := uuid.New()
+	seedInstallation(t, db, orgID, "demo", "1.0.0", nil)
+	reg := cachecoherence.NewRegistry()
+	var seen []cachecoherence.Event
+	reg.Subscribe(func(ev cachecoherence.Event) { seen = append(seen, ev) })
+	inst := &Installer{
+		DB: db, KernelVersion: "2.0.0", Lifecycles: lifecycle.NewRegistry(), AllowUnsigned: true,
+		schemaApplier: &recordingApplier{}, Broadcaster: NoopBroadcaster{}, BackendRuntime: NoopBackendRuntimeLoader{},
+		Coherence: reg,
+	}
+	_, err := inst.Upgrade(context.Background(), orgID, makeBundle("demo", "1.0.0", nil))
+	if !errors.Is(err, ErrSameVersionUpgrade) {
+		t.Fatalf("want ErrSameVersionUpgrade, got %v", err)
+	}
+	if len(seen) != 0 {
+		t.Fatalf("same-version upgrade bumped coherence: %+v", seen)
 	}
 }
