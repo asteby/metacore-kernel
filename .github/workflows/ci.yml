@@ -57,9 +57,9 @@ jobs:
       # candado entre réplicas). Sin este paso se SALTAN en silencio.
       - run: go test -count=1 -race -v -run 'DurablePG' ./dispatch/
       - run: go test -count=1 -race -v -run '/Postgres' ./idempotency/ ./outbox/
-      # Ledger de pagos: holds y cobros concurrentes, índices parciales, NUMERIC.
       # Recibos de inbound: reserva atómica con conexiones concurrentes reales, reclamo de arriendo vencido y cerca por intento.
       - run: go test -count=1 -race -v -run '/Postgres' ./inbound/
+      # Ledger de pagos: holds y cobros concurrentes, índices parciales, NUMERIC.
       - run: go test -count=1 -race -v -run '/Postgres' ./payments/ledger/
       # Puente legado: candado por fila y cursor con dos aplicadores a la vez.
       - run: go test -count=1 -race -v -run '/postgres' ./legacybridge/
