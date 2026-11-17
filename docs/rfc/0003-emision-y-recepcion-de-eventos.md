@@ -29,6 +29,11 @@ Este RFC propone que emitir y recibir eventos sea una **capacidad de plataforma 
 - `outbox/`: cola duradera y transaccional (`metacore_outbox_jobs`) con reintento, `Permanent(err)` a dead-letter y llave de idempotencia (`job.ID`).
 - `events/` + `docs/events-bus.md`: bus at-least-once con `kernel_event_outbox` y libro de entregas por `delivery_id`.
 - `genui/`: especificación declarativa cerrada (`genui/v1`) con renderizador en el SDK.
+- `runtime/webhookin`: receptor de entrada **ya existente**, por addon y organización, con esquemas de verificación (`hmac-sha256`, `bearer`, proveedores como Stripe/PayPal), `secret_ref` vía `connectors` y despacho a `wasm`/`compiled`/`webhook`. Está pensado para webhooks de **proveedores hacia addons**.
+- `runtime/webhookout`: cliente de salida con `ssrf.go`, `sign.go`, `redact.go` y `confirm.go`.
+- `automation`: **ya tiene disparador por evento** (`Scheduler.Ingest`, condiciones `Where`, cooldown, idempotencia por (automatización, evento), encolado en `outbox` con `WithDedupeKey`).
+- `dispatch`: enruta el bus a las suscripciones de los addons con ledger `event_deliveries`. `notifications.Render`: plantillas Mustache mínimas. `connectors`: credenciales por organización.
+- `link` (host): `OrgWebhook` + `webhookqueue` (salidas por organización con salud y autodesactivación) y `gateway/` (servicio de canales con spool y firma por organización); `hub`: broker de webhooks con re-firma por instalación, push/pull y dead-letter.
 - `ops` **no monta** `webhooks` ni `outbox` (no hay referencias en `backend/`). El kernel los tiene; la instancia no.
 - `addons/packages/erp_bridge`: reimplementa cola, firma y reintentos como addon WASM, solo para pedidos.
 - `7leguas-v2`: API de canales v1 con endpoints fijos por tipo (pedidos, devoluciones, publicaciones, banners) y `webhook_url` por cliente para eventos hacia afuera; firma HMAC canónica `"{ts}.{nonce}.{METHOD}.{path}.{sha256(body)}"` con ventana de ±300 s y nonce de 10 min; idempotencia por (canal, `external_reference`).
@@ -101,10 +106,31 @@ Un contrato de entrada no solo escribe un registro: declara una **cadena corta d
 }
 ```
 
-- **Lista cerrada de acciones** (`record.create|update|upsert`, `event.emit`, `notify`, `command.run`, y `automation.enqueue` cuando exista el disparador por evento en `automation`). Añadir una acción nueva es un cambio del kernel con pruebas; la cadena la escribe el cliente como dato.
+- **Lista cerrada de acciones** (`record.create|update|upsert`, `event.emit`, `notify`, `command.run`, y `automation.enqueue` (vía `Scheduler.Ingest`, que ya existe)). Añadir una acción nueva es un cambio del kernel con pruebas; la cadena la escribe el cliente como dato.
 - Cada acción ve `payload`, `event` y el `result` de la anterior; sin ejecutar código del cliente.
 - Las acciones corren **dentro del mismo recibo idempotente**: un duplicado no repite ninguna. Si una acción falla, el recibo queda `failed` y se puede **repetir** desde la pantalla.
 - `event.emit` permite **encadenar**: una entrada puede provocar una salida (un CRM crea un cliente → Ops lo registra → emite `customers.customer.created` hacia el ERP).
+
+### 2.5 Reconciliación con lo que ya existe
+
+| Pieza del RFC | Decisión |
+|---|---|
+| Recepción (D5) | `inbound` es la capa de **contratos y acciones sobre registros dinámicos**. Reutiliza de `runtime/webhookin` los esquemas de verificación y la lista de cabeceras permitidas, y de `connectors` el `secret_ref`; no duplica el receptor de proveedores→addon, que sigue siendo de `webhookin`. |
+| Salida (D1–D4) | Extiende `webhooks` y reutiliza `webhookout/sign.go`, `ssrf.go` y `redact.go` (no una tercera variante de firma ni de anti-SSRF). |
+| `automation.enqueue` | **Disponible hoy**: llama a `automation.Scheduler.Ingest`. No requiere un disparador nuevo. Un "paso HTTP" dentro de automation **no** se agrega: una automatización que llame a una URL pasa por una suscripción de salida. |
+| `notify` | `notifications.Render` para plantillas internas; las plantillas aprobadas por un proveedor (Meta) se referencian por clave. |
+| Migración de link | `OrgWebhook`, `webhookqueue` y el spool del gateway migran al modelo común sin romper a los consumidores (7 Leguas V2 usa un POST firmado a `/messages/send`). |
+
+### 2.6 Salud, errores e idempotencia (tomado de link)
+
+- **Salud:** contadores de éxito/fallo, fallos consecutivos y **autodesactivación** al superar un umbral, con alerta y reanudación manual.
+- **Clasificación de respuestas:** 4xx (salvo 408/429) **no** se reintenta; 5xx, 408, 429 y errores de red sí; dead-letter con repetición desde la pantalla.
+- **Idempotencia con huella:** llave + hash de petición; la misma llave con **otro cuerpo** responde 409 `idempotency_conflict`, el mismo cuerpo responde `replayed`.
+- **Límite de tasa** por destino y por organización; **rotación de secretos** con ventana de solape.
+
+### 2.7 Librería primero, servicio de entrega después
+
+El plano de control (suscripciones, contratos, acciones, catálogo, firma, `genui`) es **librería del kernel** montada en cada host: conserva el aislamiento por organización (RFC 0001) y la transaccionalidad con `outbox` (`EnqueueTx` en la misma transacción que el cambio de dominio). El plano de entrega puede **extraerse a un servicio** (workers, backoff, SSRF, secretos en un solo sitio) cuando haya varios hosts, volumen o secretos que no deban estar en cada host. El **contrato** (suscripción, evento, firma) no cambia al extraerlo. `link/gateway` y el broker del hub ya demuestran el patrón de servicio para canales y proveedores.
 
 ## 3. El mismo modelo en 7 Leguas V2 (sin nada hardcodeado)
 
@@ -138,6 +164,7 @@ Un preset es un paquete versionado de datos: suscripciones, contratos de entrada
 - **SSRF:** destinos validados con `netguard` (https, dominio, sin IP ni redes internas), como ya hace `erp_bridge`.
 - **Secretos:** nunca se guardan en la suscripción; se referencian por conector/secreto cifrado y no se muestran ni registran.
 - **Datos personales:** el payload retenido en cola es personal; se borra al entregarse y su lectura exige un permiso aparte (patrón de `ERPDeliveryPayload`).
+- **Secretos:** por organización vía `connectors` (no variables de entorno globales como hoy en link).
 - **Sin ejecución de código del cliente:** la transformación es declarativa; los perfiles de firma son una lista cerrada.
 - **Aislamiento por organización y alcance** (RFC 0001): una suscripción solo ve eventos de su organización y de las sucursales/entidades de su alcance.
 
