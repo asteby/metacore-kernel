@@ -4,6 +4,9 @@
 package host
 
 import (
+	"log/slog"
+	"sync"
+
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/asteby/metacore-kernel/installer"
 	"github.com/asteby/metacore-kernel/lifecycle"
@@ -27,6 +30,9 @@ type Host struct {
 
 	db       *gorm.DB
 	services map[string]any
+
+	// driftWarned rate-limits InstalledManifests warnings.
+	driftWarned sync.Map
 }
 
 // Config configures a new Host.
@@ -121,6 +127,22 @@ func (h *Host) Navigation(orgID uuid.UUID, core []navigation.Group) ([]navigatio
 
 // InstalledManifests returns manifests of every enabled addon for an org —
 // used by the frontend to drive federation loading and slot registration.
+//
+// The reported Version ALWAYS comes from the metacore_installations row (the
+// source of truth), never from the in-memory lifecycle registry. The registry
+// is populated at boot / Install / Upgrade and can lag the table (another
+// replica upgraded, a same-version Upgrade that was rejected, a manual SQL
+// fix...); the UI compares this version against the marketplace to decide
+// whether to show "Actualizar", so a stale value made the badge stick until a
+// service restart. When memory and table disagree the manifest is returned as
+// a COPY with Version overridden (the shared registry entry is not mutated)
+// and a rate-limited warning is logged to expose the drift.
+//
+// An enabled installation with NO lifecycle in memory is omitted (and logged,
+// once per key): without the manifest there is nothing to drive federation
+// loading, slots or navigation, and fabricating a stub manifest from the row
+// would hand the frontend an addon with empty contributions. This matches
+// Navigation, which also skips such rows. The log makes the gap visible.
 func (h *Host) InstalledManifests(orgID uuid.UUID) ([]manifest.Manifest, error) {
 	var installs []installer.Installation
 	if err := h.db.
@@ -132,9 +154,25 @@ func (h *Host) InstalledManifests(orgID uuid.UUID) ([]manifest.Manifest, error) 
 	for _, inst := range installs {
 		lc, ok := h.Lifecycles.Get(inst.AddonKey)
 		if !ok {
+			h.warnOnce("missing:"+inst.AddonKey, "metacore: enabled installation has no lifecycle in memory; omitted from installed manifests",
+				"addon", inst.AddonKey, "table_version", inst.Version)
 			continue
 		}
-		out = append(out, lc.Manifest())
+		m := lc.Manifest() // by value: safe to adjust without touching the registry
+		if inst.Version != "" && m.Version != inst.Version {
+			h.warnOnce("drift:"+inst.AddonKey+":"+inst.Version+":"+m.Version,
+				"metacore: in-memory manifest version differs from metacore_installations; reporting the table version",
+				"addon", inst.AddonKey, "table_version", inst.Version, "memory_version", m.Version)
+			m.Version = inst.Version
+		}
+		out = append(out, m)
 	}
 	return out, nil
+}
+
+// warnOnce logs msg at most once per dedupe key for the life of the Host.
+func (h *Host) warnOnce(dedupe, msg string, args ...any) {
+	if _, loaded := h.driftWarned.LoadOrStore(dedupe, struct{}{}); !loaded {
+		slog.Warn(msg, args...)
+	}
 }

@@ -1429,6 +1429,15 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	fromVersion := existing.Version
 	toVersion := newBundle.Manifest.Version
 	if err := guardUpgradeVersion(fromVersion, toVersion); err != nil {
+		if errors.Is(err, ErrSameVersionUpgrade) {
+			// The table already holds this version (another replica, a
+			// previous Install, a manual fix) but THIS process may still hold
+			// an older manifest in memory; we return before the refresh below,
+			// which left the "Actualizar" badge stuck until a restart. Align
+			// the registry with the bundle (same version == same release);
+			// compiled lifecycles are preserved by the helper.
+			refreshDeclarativeLifecycle(i.Lifecycles, newBundle.Manifest)
+		}
 		return nil, err
 	}
 
