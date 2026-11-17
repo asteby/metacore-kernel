@@ -87,6 +87,9 @@ func (f *fakeExec) Execute(ctx context.Context, op Operation) (Outcome, error) {
 		}
 	}
 	row := map[string]any{"id": uuid.NewString()}
+	for k, v := range op.CreateDefaults {
+		row[k] = v
+	}
 	for k, v := range op.Values {
 		row[k] = v
 	}
@@ -190,7 +193,7 @@ func TestStockChangedUpsertEndToEnd(t *testing.T) {
 	if code != 200 || out["status"] != "applied" || out["created"] != true {
 		t.Fatalf("first: %d %v", code, out)
 	}
-	if got := e.exec.last.Values["source"]; got != "inbound" {
+	if got := e.exec.rows[e.orgA][0]["source"]; got != "inbound" {
 		t.Fatalf("defaults not applied: %v", e.exec.last.Values)
 	}
 	if v := e.exec.last.Values["quantity"]; v != int64(10) {

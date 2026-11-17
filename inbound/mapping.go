@@ -90,12 +90,9 @@ func normalize(v any) any {
 }
 
 // applyMapping builds the target values. Absent optional sources are skipped
-// (the schema decides what is required). Mapped data wins over defaults.
+// (the schema decides what is required). Route.Defaults are NOT merged here: they travel as Operation.CreateDefaults and apply on create only.
 func applyMapping(r Route, payload any) map[string]any {
-	out := make(map[string]any, len(r.Mapping)+len(r.Defaults))
-	for k, v := range r.Defaults {
-		out[k] = v
-	}
+	out := make(map[string]any, len(r.Mapping))
 	for to, from := range r.Mapping {
 		if v, ok := lookup(payload, from); ok {
 			out[to] = normalize(v)

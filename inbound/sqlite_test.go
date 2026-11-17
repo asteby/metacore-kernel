@@ -227,3 +227,62 @@ func TestDynamicExecutorEndToEndOverHTTP(t *testing.T) {
 		t.Fatalf("%v", out)
 	}
 }
+
+func TestGormReceiptProgressResume(t *testing.T) {
+	db := openSQLite(t)
+	st, err := NewGormReceiptStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	org := uuid.New()
+	r := Receipt{OrgID: org, Contract: "c", Version: 1, KeyHash: HashKey(org, "c", "k"), BodyHash: "b1"}
+	cur, claimed, err := st.Begin(ctx, r, time.Minute)
+	if err != nil || !claimed {
+		t.Fatal(err)
+	}
+	steps := []ActionStep{{Index: 0, Do: ActionRecordUpsert, Status: StepDone, RecordID: "r1", Created: true},
+		{Index: 1, Do: ActionEventEmit, Status: StepFailed, ErrorCode: "internal"}}
+	if ok, err := st.SaveProgress(ctx, cur.ID, cur.Attempts, steps); err != nil || !ok {
+		t.Fatal(err)
+	}
+	if err := st.Finish(ctx, cur.ID, StatusFailed, "", "internal"); err != nil {
+		t.Fatal(err)
+	}
+	// another body cannot resume a partially applied chain
+	other := r
+	other.BodyHash = "b2"
+	if _, c, _ := st.Begin(ctx, other, time.Minute); c {
+		t.Fatal("different body resumed")
+	}
+	got, c, err := st.Begin(ctx, r, time.Minute)
+	if err != nil || !c || len(got.Progress) != 2 || got.Progress[0].RecordID != "r1" || got.Attempts != 2 {
+		t.Fatalf("%+v %v %v", got, c, err)
+	}
+	if i, ok := got.FailedAction(); !ok || i != 1 {
+		t.Fatal("failed action")
+	}
+}
+
+func TestGormSaveProgressIsFenced(t *testing.T) {
+	db := openSQLite(t)
+	st, err := NewGormReceiptStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	org := uuid.New()
+	r := Receipt{OrgID: org, Contract: "c", Version: 1, KeyHash: HashKey(org, "c", "k"), BodyHash: "b"}
+	first, _, _ := st.Begin(ctx, r, time.Minute)
+	_ = st.Finish(ctx, first.ID, StatusFailed, "", "internal")
+	second, claimed, _ := st.Begin(ctx, r, time.Minute)
+	if !claimed || second.Attempts != 2 {
+		t.Fatalf("%+v", second)
+	}
+	if ok, err := st.SaveProgress(ctx, first.ID, 1, []ActionStep{{Index: 0, Do: "x", Status: StepDone}}); ok || err != nil {
+		t.Fatalf("stale attempt wrote: %v %v", ok, err)
+	}
+	if ok, err := st.SaveProgress(ctx, second.ID, 2, []ActionStep{{Index: 0, Do: "x", Status: StepDone}}); !ok || err != nil {
+		t.Fatalf("owner could not write: %v %v", ok, err)
+	}
+}

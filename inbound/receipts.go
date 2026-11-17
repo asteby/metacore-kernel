@@ -37,6 +37,9 @@ type Receipt struct {
 	RecordID  string    `gorm:"size:64" json:"record_id,omitempty"`
 	ErrorCode string    `gorm:"size:64" json:"error_code,omitempty"`
 	Attempts  int       `json:"attempts"`
+	// Progress is the per-action state of a chain (ids and codes only, never
+	// the body); a retry resumes after the last finished action.
+	Progress []ActionStep `gorm:"serializer:json;type:text" json:"actions,omitempty"`
 	// Claim is org|contract|keyhash while the event key is reserved; NULL for
 	// rejected rows. The unique index makes the reservation atomic.
 	Claim     *string   `gorm:"size:256;uniqueIndex" json:"-"`
@@ -65,6 +68,10 @@ type ReceiptStore interface {
 	Begin(ctx context.Context, r Receipt, lease time.Duration) (cur Receipt, claimed bool, err error)
 	// Finish records the outcome of a claimed receipt.
 	Finish(ctx context.Context, id uuid.UUID, status, recordID, errCode string) error
+	// SaveProgress persists the per-action state of a claimed receipt, fenced
+	// by attempt (WHERE id AND attempts AND status=processing), and
+	// renews its lease.
+	SaveProgress(ctx context.Context, id uuid.UUID, attempt int, steps []ActionStep) (owned bool, err error)
 	// Record stores a receipt that is not reserved (rejected events).
 	Record(ctx context.Context, r Receipt) error
 	// List returns the org's receipts, newest first.
@@ -127,9 +134,14 @@ func (m *MemoryReceiptStore) Begin(_ context.Context, r Receipt, lease time.Dura
 	if id, ok := m.claim[c]; ok {
 		cur := m.rows[id]
 		stale := cur.Status == StatusProcessing && now.Sub(cur.UpdatedAt) > lease
+		if (cur.Status == StatusFailed || stale) && resumeBlocked(*cur, r.BodyHash) {
+			return *cur, false, nil
+		}
 		if cur.Status == StatusFailed || stale {
 			cur.Status, cur.Attempts, cur.UpdatedAt, cur.ErrorCode = StatusProcessing, cur.Attempts+1, now, ""
-			cur.BodyHash = r.BodyHash
+			if !hasDone(cur.Progress) {
+				cur.BodyHash = r.BodyHash
+			}
 			return *cur, true, nil
 		}
 		return *cur, false, nil
@@ -272,6 +284,9 @@ func (g *GormReceiptStore) Begin(ctx context.Context, r Receipt, lease time.Dura
 	if cur.Status != StatusFailed && !stale {
 		return cur, false, nil
 	}
+	if resumeBlocked(cur, r.BodyHash) {
+		return cur, false, nil
+	}
 	// Re-claim atomically: only one racer matches the old (status, updated_at).
 	up := g.db.WithContext(ctx).Model(&Receipt{}).
 		Where("id = ? AND status = ? AND updated_at = ?", cur.ID, cur.Status, cur.UpdatedAt).
@@ -355,4 +370,55 @@ func (g *GormReceiptStore) List(ctx context.Context, org uuid.UUID, f ReceiptFil
 	var out []Receipt
 	err := q.Order("created_at DESC").Limit(lim).Find(&out).Error
 	return out, err
+}
+
+// hasDone reports whether any action of the chain already took effect.
+func hasDone(steps []ActionStep) bool {
+	for _, s := range steps {
+		if s.Status == StepDone || s.Status == StepError {
+			return true
+		}
+	}
+	return false
+}
+
+// resumeBlocked: a chain with applied actions can only resume with the SAME
+// body; another body under the same key is an idempotency conflict.
+func resumeBlocked(cur Receipt, bodyHash string) bool {
+	return hasDone(cur.Progress) && cur.BodyHash != bodyHash
+}
+
+// FailedAction is the index of the action that stopped the chain.
+func (r Receipt) FailedAction() (int, bool) {
+	for _, s := range r.Progress {
+		if s.Status == StepFailed {
+			return s.Index, true
+		}
+	}
+	return 0, false
+}
+
+// SaveProgress is fenced by the owning attempt: it writes (and renews the
+// lease) only while the receipt is still processing under `attempt`. owned=false
+// means another worker re-claimed the event; the caller must stop applying
+// effects.
+func (m *MemoryReceiptStore) SaveProgress(_ context.Context, id uuid.UUID, attempt int, steps []ActionStep) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.rows[id]
+	if !ok {
+		return false, errors.New("receipt not found")
+	}
+	if r.Attempts != attempt || r.Status != StatusProcessing {
+		return false, nil
+	}
+	r.Progress, r.UpdatedAt = append([]ActionStep(nil), steps...), m.now()
+	return true, nil
+}
+
+func (g *GormReceiptStore) SaveProgress(ctx context.Context, id uuid.UUID, attempt int, steps []ActionStep) (bool, error) {
+	res := g.db.WithContext(ctx).Model(&Receipt{}).
+		Where("id = ? AND attempts = ? AND status = ?", id, attempt, StatusProcessing).
+		Select("Progress", "UpdatedAt").Updates(&Receipt{Progress: steps, UpdatedAt: time.Now()})
+	return res.RowsAffected == 1, res.Error
 }

@@ -156,3 +156,96 @@ Las peticiones sin autenticar no escriben en la bitácora.
 - **Recibos.** `Finish` queda para compatibilidad; el manejador usa `AttemptFinisher.FinishAttempt` (ambos stores) con cerca por intento: un proceso lento tras vencer el arriendo no pisa al que reclamó. Los rechazos (`rejected`) se acotan por organización (`MaxRejected`, 500 por omisión) y se podan los más viejos. `ReceiptFilter.EventKey` exige `Contract` en todos los stores (`ErrEventKeyNeedsContract`).
 - **Números.** Valores que no caben en `float64` (`1e999`) se rechazan con 422 (`number_range`).
 - **Contrato desconocido.** Se autentica antes de revelar si existe: sin firma válida la respuesta es 401 para contratos conocidos y desconocidos por igual. Con firma válida se responde 404 `unknown_contract`. El perfil usado es `Config.DefaultAuth`; vacío = los contratos desconocidos siempre responden 401.
+
+## Cadena de acciones (RFC 0003 §2.4)
+
+Un contrato puede declarar `actions` en lugar de `route` (son excluyentes; sin
+`actions` todo se comporta como antes). La lista de acciones es **cerrada**:
+
+| `do` | Campos | Efecto |
+|---|---|---|
+| `record.create` / `record.update` / `record.upsert` | `model`, `mapping`, `match`, `defaults`, `scope` | reusa el `Executor` (mismo muro de organización y de modelo) |
+| `event.emit` | `name`, `payload` | `EventEmitter.Emit` (puerto mínimo; este paquete no importa `webhooks`) |
+| `automation.enqueue` | `name`, `payload` | `AutomationIngester.IngestEvent`, que el host adapta a `automation.Scheduler.Ingest` |
+| `notify` | `template`, `payload` (parámetros) | `Notifier.Notify`; el host renderiza con `notifications.Render` |
+| `command.run` | `command`, `mapping`, `op` | `CommandRegistry` existente |
+
+No hay acción HTTP saliente: eso son suscripciones de salida.
+
+```json
+{ "key": "crm-cliente-nuevo", "version": 1, "auth": "hmac_canonical_v1",
+  "idempotency": "{id}", "json_schema": { "...": "..." }, "on_error": "stop",
+  "actions": [
+    { "do": "record.upsert", "model": "customers", "match": ["external_ref"],
+      "mapping": { "external_ref": "{{payload.id}}", "name": "{{payload.nombre}}" } },
+    { "do": "event.emit", "name": "customers.customer.imported", "payload": { "id": "{{result.id}}" } },
+    { "do": "notify", "template": "cliente_importado", "when": { "path": "result.created", "eq": true } }
+  ] }
+```
+
+**Plantillas `{{ref}}`.** `payload.<ruta>` (cuerpo), `event.key|contract|version|org`,
+`result.id|created` (resultado de la última acción de registro/comando; `event.emit`,
+`notify` y `automation.enqueue` no lo cambian). Un valor `"{{x}}"` completo conserva su
+tipo JSON; mezclado con texto produce cadena. Se validan **al registrar**: una ruta
+`payload.*` debe estar declarada en `properties` del esquema (un escalar no tiene hijos;
+si el esquema es opaco por `$ref/allOf/anyOf/oneOf` se acepta), `result.*` no existe en la
+primera acción, un campo ajeno a la acción, un `match` fuera del `mapping`, más de 10
+acciones o un `do` desconocido fallan con `ErrInvalidContract`. En ejecución un valor
+ausente omite el campo (valor completo) o falla con `template_value_missing` (mezclado).
+
+**`when`.** `{"path": "...", "eq": <escalar>}` o `{"path": "...", "exists": true|false}`;
+falso = paso `skipped`.
+
+**`on_error`.** `stop` (por omisión) o `continue`, por contrato o por acción. Con `continue`
+el paso queda `error` en el recibo y el evento termina `applied`.
+
+**Recibo e idempotencia.** Las acciones corren dentro del mismo recibo: duplicado ->
+`replayed` sin repetir nada (misma llave con otro cuerpo -> `409 idempotency_conflict`).
+Tras cada acción se guarda su progreso (`Receipt.Progress`: índice, `do`, estado, `record_id`,
+`created`, código de error; nunca valores del cuerpo). Si una falla, el recibo queda
+`failed`, la respuesta trae `error.failed_action` y **el mismo evento reintentado reanuda**
+en esa acción, sin repetir las ya aplicadas (y con su `result`). Un reintento con otro
+cuerpo tras un efecto parcial es `409`. Si el contrato cambia de `do` entre intentos:
+`409 contract_changed`. Garantía: *al menos una vez* para la acción que murió entre su
+efecto y el guardado del progreso; `event.emit`, `notify` y `automation.enqueue` reciben
+una `IdempotencyKey` estable (`<recibo>:<índice>`) para que el destino deduplique.
+Si el proceso se cae con el recibo `processing`, se reanuda al vencer el arriendo.
+
+**Origen y bucles.** Todo lo que causa la cadena lleva `Origin = "inbound:<contrato>"`
+(`Operation.Origin`, `EmitRequest.Origin`, `NotifyRequest.Origin`, `AutomationEvent.Origin`,
+`inbound.OriginFrom(ctx)`). `event.emit` además escribe dentro del **cuerpo** del evento
+saliente (y por tanto firmado con él) `_origin` y `_hop` (saltos acumulados, +1 por emisión);
+los nombres `_origin`/`_hop` están reservados. Un endpoint de entrada los lee y los quita
+antes de validar el esquema (valores mal formados: `422 invalid_origin`) y responde
+`200 {"status":"ignored"}` sin efecto (recibo `rejected`/`origin_loop`) si el origen es su
+propio contrato, coincide con `ignore_origins` (exacto o `prefijo*`) o `_hop >= Config.MaxHops`
+(3 por omisión). Ya **no** se confía en ninguna cabecera (iría sin firmar). El emisor/entrega
+debe enviar el cuerpo tal cual; las suscripciones de salida pueden excluir el origen con
+`inbound.OriginExcluded(origin, []string{"inbound:*"})`. Contratos de ida y vuelta (A emite
+hacia B y B hacia A) deben listarse mutuamente en `ignore_origins`; el límite de saltos es la
+red de seguridad si no lo hacen.
+
+**`record.create` y reintentos.** `record.create` exige `idempotency_field`: columna del
+modelo (no mapeada) donde se guarda `<recibo>:<índice>`. La creación corre como *upsert* sobre esa
+columna, de modo que si la escritura confirmó pero falló el guardado del progreso (o hubo un
+timeout tras el commit) el reintento encuentra la fila y no la duplica. En ese reintento
+`result.created` es `false`. `Operation.IdempotencyKey` lleva la misma llave a los comandos.
+
+**Defaults solo al crear.** `defaults` (en `route` y en las acciones `record.*`) viajan como
+`Operation.CreateDefaults` y el ejecutor los aplica únicamente al crear la fila, nunca al
+actualizar (un `status: new` no revierte el estado en cada upsert).
+
+**Cerca de arriendo y alcance en la cadena.** `ReceiptStore.SaveProgress(ctx, id, attempt, steps) (owned, err)`
+lleva la misma cerca que `FinishAttempt` (`WHERE id AND attempts AND status='processing'`) y
+renueva el arriendo. La cadena lo llama antes y después de cada acción: si otro worker
+reclamó el evento, aborta con `409 lease_lost` **antes** de aplicar el siguiente efecto y no
+pisa el recibo del nuevo dueño (el cierre usa `FinishAttempt`). El alcance se declara por
+acción (`scope.branch`/`scope.entity` en cada `record.*`): si falta en el evento, `422
+scope_required` antes de cualquier efecto y antes de consumir el nonce (`PreparedVerifier`);
+cada paso pasa `RequireBranch/RequireEntity` al ejecutor (entidad sin resolver -> `403
+scope_unresolved`, rama fuera de alcance -> `403 scope_forbidden`). Al registrar
+(`New`/`Check`/`RegisterContract`) `ContractChecker` valida también los `match` y el
+`idempotency_field` de cada acción `record.*` contra las columnas del modelo.
+
+**Cableado.** `Config.Emitter`, `Config.Notifier`, `Config.Automation`; `New`/`Check` fallan
+al arrancar si una cadena usa una acción sin su puerto o un comando no registrado.
