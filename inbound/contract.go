@@ -324,3 +324,12 @@ func (r *Registry) all() []*compiled {
 	}
 	return out
 }
+
+func (r *Registry) put(c *compiled) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.m[c.Key] == nil {
+		r.m[c.Key] = map[int]*compiled{}
+	}
+	r.m[c.Key][c.Version] = c
+}

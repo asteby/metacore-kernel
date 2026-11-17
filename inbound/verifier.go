@@ -70,13 +70,15 @@ type HMACCanonicalV1 struct {
 	TimestampHeader, NonceHeader, SignatureHeader string
 	Skew                                          time.Duration
 	NonceTTL                                      time.Duration
-	// MaxNonces caps remembered nonces (default 100000). When full of live
-	// entries the verifier fails closed.
+	// MaxNonces caps remembered nonces PER ORGANIZATION (default 20000);
+	// MaxOrgs caps tracked organizations (default 10000). Full -> fail closed
+	// for that organization only.
 	MaxNonces int
+	MaxOrgs   int
 	Now       func() time.Time
 
-	mu     sync.Mutex
-	nonces map[string]time.Time
+	mu   sync.Mutex
+	orgs map[uuid.UUID]*orgNonces
 }
 
 // SignCanonicalV1 computes the canonical signature (helper for clients and tests).
@@ -99,15 +101,32 @@ func (v *HMACCanonicalV1) hdr(set, def string) string {
 	return def
 }
 
-// Verify implements Verifier.
+// PreparedVerifier is an optional Verifier extension. Prepare authenticates
+// the request WITHOUT consuming anything with side effects; the returned
+// commit (called by the handler only after the cheap checks, rate limit and
+// schema validation passed) records the replay nonce. A request rejected with
+// 415/422/429 therefore never burns a nonce, and an unauthenticated or
+// rejected request can never fill the nonce cache.
+type PreparedVerifier interface {
+	Verifier
+	Prepare(ctx context.Context, req VerifyRequest) (commit func() error, err error)
+}
+
+// Verify implements Verifier (authenticate and record the nonce at once).
 func (v *HMACCanonicalV1) Verify(ctx context.Context, req VerifyRequest) error {
+	commit, err := v.Prepare(ctx, req)
+	if err != nil {
+		return err
+	}
+	return commit()
+}
+
+// Prepare implements PreparedVerifier.
+func (v *HMACCanonicalV1) Prepare(ctx context.Context, req VerifyRequest) (func() error, error) {
 	if v.Secrets == nil {
-		return errors.New("no secret resolver")
+		return nil, errors.New("no secret resolver")
 	}
-	now := time.Now
-	if v.Now != nil {
-		now = v.Now
-	}
+	now := v.now()
 	skew := v.Skew
 	if skew <= 0 {
 		skew = DefaultSkew
@@ -116,26 +135,26 @@ func (v *HMACCanonicalV1) Verify(ctx context.Context, req VerifyRequest) error {
 	nonce := req.Header.Get(v.hdr(v.NonceHeader, "X-Metacore-Nonce"))
 	sig := strings.TrimPrefix(strings.TrimSpace(req.Header.Get(v.hdr(v.SignatureHeader, "X-Metacore-Signature"))), "sha256=")
 	if tsStr == "" || nonce == "" || sig == "" || len(nonce) > maxNonceLen {
-		return errBadSignature
+		return nil, errBadSignature
 	}
 	ts, err := strconv.ParseInt(tsStr, 10, 64)
 	if err != nil {
-		return errBadSignature
+		return nil, errBadSignature
 	}
 	d := now().Sub(time.Unix(ts, 0))
 	if d < 0 {
 		d = -d
 	}
 	if d > skew {
-		return errBadSignature
+		return nil, errBadSignature
 	}
 	got, err := hex.DecodeString(sig)
 	if err != nil {
-		return errBadSignature
+		return nil, errBadSignature
 	}
 	secrets, err := v.Secrets(ctx, req.Org)
 	if err != nil || len(secrets) == 0 {
-		return errBadSignature
+		return nil, errBadSignature
 	}
 	ok := false
 	for _, s := range secrets {
@@ -145,38 +164,111 @@ func (v *HMACCanonicalV1) Verify(ctx context.Context, req VerifyRequest) error {
 		}
 	}
 	if !ok {
-		return errBadSignature
+		return nil, errBadSignature
 	}
-	return v.record(req.Org.String()+"|"+nonce, now())
+	// Peek so an obvious replay is refused before any further work.
+	if v.seen(req.Org, nonce, now()) {
+		return nil, errReplay
+	}
+	org := req.Org
+	return func() error { return v.record(org, nonce, now()) }, nil
 }
 
-func (v *HMACCanonicalV1) record(key string, now time.Time) error {
-	ttl := v.NonceTTL
+func (v *HMACCanonicalV1) now() func() time.Time {
+	if v.Now != nil {
+		return v.Now
+	}
+	return time.Now
+}
+
+type nonceEnt struct {
+	key string
+	exp time.Time
+}
+
+// orgNonces is one organization's replay window: a set plus a FIFO of expiries
+// (TTL is constant, so insertion order is expiry order and eviction is
+// amortized O(1) without scanning the set).
+type orgNonces struct {
+	set  map[string]time.Time
+	q    []nonceEnt
+	head int
+}
+
+func (o *orgNonces) expire(now time.Time) {
+	for o.head < len(o.q) && !now.Before(o.q[o.head].exp) {
+		e := o.q[o.head]
+		if cur, ok := o.set[e.key]; ok && !now.Before(cur) {
+			delete(o.set, e.key)
+		}
+		o.head++
+	}
+	if o.head > 1024 && o.head*2 > len(o.q) {
+		o.q = append([]nonceEnt(nil), o.q[o.head:]...)
+		o.head = 0
+	}
+}
+
+func (v *HMACCanonicalV1) limits() (perOrg, orgs int, ttl time.Duration) {
+	perOrg, orgs, ttl = v.MaxNonces, v.MaxOrgs, v.NonceTTL
+	if perOrg <= 0 {
+		perOrg = 20000
+	}
+	if orgs <= 0 {
+		orgs = 10000
+	}
 	if ttl <= 0 {
 		ttl = DefaultNonceTTL
 	}
-	max := v.MaxNonces
-	if max <= 0 {
-		max = 100000
-	}
+	return
+}
+
+func (v *HMACCanonicalV1) seen(org uuid.UUID, nonce string, now time.Time) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.nonces == nil {
-		v.nonces = map[string]time.Time{}
+	o := v.orgs[org]
+	if o == nil {
+		return false
 	}
-	if exp, ok := v.nonces[key]; ok && now.Before(exp) {
-		return errReplay
+	o.expire(now)
+	exp, ok := o.set[nonce]
+	return ok && now.Before(exp)
+}
+
+// record stores the nonce. The cap is PER ORGANIZATION: one tenant filling its
+// own window can only lock itself out, never other organizations.
+func (v *HMACCanonicalV1) record(org uuid.UUID, nonce string, now time.Time) error {
+	perOrg, maxOrgs, ttl := v.limits()
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.orgs == nil {
+		v.orgs = map[uuid.UUID]*orgNonces{}
 	}
-	if len(v.nonces) >= max {
-		for k, exp := range v.nonces {
-			if !now.Before(exp) {
-				delete(v.nonces, k)
+	o := v.orgs[org]
+	if o == nil {
+		if len(v.orgs) >= maxOrgs {
+			for k, x := range v.orgs { // drop idle orgs; bounded by maxOrgs
+				x.expire(now)
+				if len(x.set) == 0 {
+					delete(v.orgs, k)
+				}
+			}
+			if len(v.orgs) >= maxOrgs {
+				return errors.New("nonce cache full")
 			}
 		}
-		if len(v.nonces) >= max {
-			return errors.New("nonce cache full")
-		}
+		o = &orgNonces{set: map[string]time.Time{}}
+		v.orgs[org] = o
 	}
-	v.nonces[key] = now.Add(ttl)
+	o.expire(now)
+	if exp, ok := o.set[nonce]; ok && now.Before(exp) {
+		return errReplay
+	}
+	if len(o.set) >= perOrg {
+		return errors.New("nonce cache full for organization")
+	}
+	exp := now.Add(ttl)
+	o.set[nonce] = exp
+	o.q = append(o.q, nonceEnt{nonce, exp})
 	return nil
 }

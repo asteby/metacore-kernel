@@ -39,7 +39,7 @@ type Receipt struct {
 	Attempts  int       `json:"attempts"`
 	// Claim is org|contract|keyhash while the event key is reserved; NULL for
 	// rejected rows. The unique index makes the reservation atomic.
-	Claim     *string   `gorm:"size:200;uniqueIndex" json:"-"`
+	Claim     *string   `gorm:"size:256;uniqueIndex" json:"-"`
 	CreatedAt time.Time `gorm:"index:idx_inbound_org_created,priority:2" json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -71,6 +71,21 @@ type ReceiptStore interface {
 	List(ctx context.Context, org uuid.UUID, f ReceiptFilter) ([]Receipt, error)
 }
 
+// DefaultMaxRejected is how many rejected rows are kept per organization.
+const DefaultMaxRejected = 500
+
+// ErrEventKeyNeedsContract: the key hash is scoped by contract, so searching
+// by event key requires the contract (same rule in every store).
+var ErrEventKeyNeedsContract = errors.New("inbound: EventKey filter requires Contract")
+
+// AttemptFinisher is an optional ReceiptStore extension. FinishAttempt
+// finishes the receipt only if attempt is still the owner (fencing) and
+// reports whether it did. Both built-in stores implement it and the handler
+// prefers it over Finish.
+type AttemptFinisher interface {
+	FinishAttempt(ctx context.Context, id uuid.UUID, attempt int, status, recordID, errCode string) (bool, error)
+}
+
 // HashKey is the stable hash used for event keys (scoped by org and contract).
 func HashKey(org uuid.UUID, contract, key string) string {
 	sum := sha256.Sum256([]byte(org.String() + "|" + contract + "|" + key))
@@ -88,6 +103,8 @@ type MemoryReceiptStore struct {
 	rows  map[uuid.UUID]*Receipt
 	claim map[string]uuid.UUID
 	Now   func() time.Time
+	// MaxRejected caps retained rejected rows per organization (default 500).
+	MaxRejected int
 }
 
 // NewMemoryReceiptStore builds an empty store.
@@ -148,10 +165,48 @@ func (m *MemoryReceiptStore) Record(_ context.Context, r Receipt) error {
 	}
 	r.Claim, r.CreatedAt, r.UpdatedAt, r.Attempts = nil, now, now, 1
 	m.rows[r.ID] = &r
+	if r.Status == StatusRejected {
+		m.pruneRejected(r.OrgID)
+	}
 	return nil
 }
 
+func (m *MemoryReceiptStore) pruneRejected(org uuid.UUID) {
+	max := m.MaxRejected
+	if max <= 0 {
+		max = DefaultMaxRejected
+	}
+	var rows []*Receipt
+	for _, x := range m.rows {
+		if x.OrgID == org && x.Status == StatusRejected {
+			rows = append(rows, x)
+		}
+	}
+	if len(rows) <= max {
+		return
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].CreatedAt.Before(rows[j].CreatedAt) })
+	for _, x := range rows[:len(rows)-max] {
+		delete(m.rows, x.ID)
+	}
+}
+
+// FinishAttempt is Finish fenced by the owning attempt number.
+func (m *MemoryReceiptStore) FinishAttempt(_ context.Context, id uuid.UUID, attempt int, status, recordID, errCode string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.rows[id]
+	if !ok || r.Attempts != attempt || r.Status != StatusProcessing {
+		return false, nil
+	}
+	r.Status, r.RecordID, r.ErrorCode, r.UpdatedAt = status, recordID, errCode, m.now()
+	return true, nil
+}
+
 func (m *MemoryReceiptStore) List(_ context.Context, org uuid.UUID, f ReceiptFilter) ([]Receipt, error) {
+	if f.EventKey != "" && f.Contract == "" {
+		return nil, ErrEventKeyNeedsContract
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []Receipt
@@ -183,7 +238,11 @@ func limitReceipts(rs []Receipt, n int) []Receipt {
 // GormReceiptStore persists receipts in metacore_inbound_receipts (Postgres;
 // SQLite in tests). The unique claim index makes the reservation atomic across
 // replicas.
-type GormReceiptStore struct{ db *gorm.DB }
+type GormReceiptStore struct {
+	db *gorm.DB
+	// MaxRejected caps retained rejected rows per organization (default 500).
+	MaxRejected int
+}
 
 // NewGormReceiptStore auto-migrates the table and returns the store.
 func NewGormReceiptStore(db *gorm.DB) (*GormReceiptStore, error) {
@@ -236,10 +295,49 @@ func (g *GormReceiptStore) Finish(ctx context.Context, id uuid.UUID, status, rec
 func (g *GormReceiptStore) Record(ctx context.Context, r Receipt) error {
 	now := time.Now()
 	r.ID, r.Claim, r.Attempts, r.CreatedAt, r.UpdatedAt = uuid.New(), nil, 1, now, now
-	return g.db.WithContext(ctx).Create(&r).Error
+	if err := g.db.WithContext(ctx).Create(&r).Error; err != nil {
+		return err
+	}
+	if r.Status == StatusRejected {
+		return g.pruneRejected(ctx, r.OrgID)
+	}
+	return nil
+}
+
+func (g *GormReceiptStore) pruneRejected(ctx context.Context, org uuid.UUID) error {
+	max := g.MaxRejected
+	if max <= 0 {
+		max = DefaultMaxRejected
+	}
+	var n int64
+	q := g.db.WithContext(ctx).Model(&Receipt{}).Where("org_id = ? AND status = ?", org, StatusRejected)
+	if err := q.Count(&n).Error; err != nil || n <= int64(max) {
+		return err
+	}
+	var ids []uuid.UUID
+	if err := g.db.WithContext(ctx).Model(&Receipt{}).Where("org_id = ? AND status = ?", org, StatusRejected).
+		Order("created_at ASC").Limit(int(n)-max).Pluck("id", &ids).Error; err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return g.db.WithContext(ctx).Where("id IN ?", ids).Delete(&Receipt{}).Error
+}
+
+// FinishAttempt is Finish fenced by the owning attempt number: a slow worker
+// whose lease expired cannot overwrite the worker that re-claimed the event.
+func (g *GormReceiptStore) FinishAttempt(ctx context.Context, id uuid.UUID, attempt int, status, recordID, errCode string) (bool, error) {
+	res := g.db.WithContext(ctx).Model(&Receipt{}).
+		Where("id = ? AND attempts = ? AND status = ?", id, attempt, StatusProcessing).
+		Updates(map[string]any{"status": status, "record_id": recordID, "error_code": errCode, "updated_at": time.Now()})
+	return res.RowsAffected == 1, res.Error
 }
 
 func (g *GormReceiptStore) List(ctx context.Context, org uuid.UUID, f ReceiptFilter) ([]Receipt, error) {
+	if f.EventKey != "" && f.Contract == "" {
+		return nil, ErrEventKeyNeedsContract
+	}
 	q := g.db.WithContext(ctx).Where("org_id = ?", org)
 	if f.Contract != "" {
 		q = q.Where("contract = ?", f.Contract)

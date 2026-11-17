@@ -10,9 +10,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"mime"
-	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -51,6 +52,14 @@ type Config struct {
 	// ClientIP extracts the caller address for PreAuthLimiter. Default is the
 	// host part of RemoteAddr (set it when behind a trusted proxy).
 	ClientIP func(*http.Request) string
+	// TrustedProxies are the reverse-proxy networks whose X-Forwarded-For is
+	// honored by the default ClientIP (see ClientIPFrom). Empty = XFF ignored.
+	TrustedProxies []netip.Prefix
+	// DefaultAuth is the profile used to authenticate requests for contracts
+	// that do not exist, so an unknown contract answers 401 to anyone who
+	// cannot sign and 404 only to an authenticated caller. Empty = unknown
+	// contracts always answer 401.
+	DefaultAuth string
 	// Prefix is the mount prefix, default "/api/inbound/".
 	Prefix string
 	Logger *slog.Logger
@@ -96,15 +105,8 @@ func New(cfg Config) (*Handler, error) {
 func (h *Handler) Check() error {
 	var errs []error
 	for _, c := range h.cfg.Contracts.all() {
-		if _, ok := h.cfg.Verifiers[c.Auth]; !ok {
-			errs = append(errs, fmt.Errorf("contract %s v%d: unknown auth profile %q", c.Key, c.Version, c.Auth))
-		}
-		if c.Route.Command != "" {
-			if _, ok := h.cfg.Commands.get(c.Route.Command); !ok {
-				errs = append(errs, fmt.Errorf("contract %s v%d: command %q not registered", c.Key, c.Version, c.Route.Command))
-			}
-		} else if h.cfg.Executor == nil {
-			errs = append(errs, fmt.Errorf("contract %s v%d: no Executor for model routes", c.Key, c.Version))
+		if err := h.checkOne(context.Background(), c); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
@@ -133,6 +135,7 @@ const (
 	CodeInProgress        = "in_progress"
 	CodeInternal          = "internal_error"
 	CodeContractMisconfig = "contract_misconfigured"
+	CodeScopeRequired     = "scope_required"
 )
 
 // ErrorBody is the uniform error envelope: {"error": {...}}.
@@ -183,7 +186,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, CodeMethodNotAllowed, "use POST")
 		return
 	}
-	if l := h.cfg.PreAuthLimiter; l != nil && !l.Allow(h.clientIP(r)) {
+	if l := h.cfg.PreAuthLimiter; l != nil && !l.Allow(LimiterKeyForIP(h.clientIP(r))) {
 		w.Header().Set("Retry-After", "1")
 		writeErr(w, http.StatusTooManyRequests, CodeRateLimited, "too many requests")
 		return
@@ -194,24 +197,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	version := 0
+	badVersion := false
 	if v := r.Header.Get("X-Contract-Version"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 {
-			writeErr(w, http.StatusNotFound, CodeUnknownContract, "unknown contract")
-			return
+			badVersion = true
 		}
 		version = n
-	}
-	c, found := h.cfg.Contracts.get(key, version)
-	if !found {
-		writeErr(w, http.StatusNotFound, CodeUnknownContract, "unknown contract")
-		return
-	}
-	ver, okv := h.cfg.Verifiers[c.Auth]
-	if !okv {
-		h.cfg.Logger.Error("inbound: contract references missing auth profile", "contract", c.Key, "profile", c.Auth)
-		writeErr(w, http.StatusInternalServerError, CodeContractMisconfig, "contract is not available")
-		return
 	}
 
 	if r.ContentLength > h.cfg.MaxBodyBytes {
@@ -229,12 +221,45 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Authentication. The reason is logged without secrets, never returned.
-	if err := ver.Verify(r.Context(), VerifyRequest{Org: org, Method: r.Method, Path: r.URL.Path, Header: r.Header, Body: body}); err != nil {
-		h.cfg.Logger.Warn("inbound: auth rejected", "org", org, "contract", c.Key, "profile", c.Auth, "reason", err.Error())
+	// Authenticate BEFORE revealing whether the contract exists: a caller that
+	// cannot sign gets 401 for known and unknown contracts alike.
+	var c *compiled
+	if !badVersion {
+		c, _ = h.cfg.Contracts.get(key, version)
+	}
+	profile := h.cfg.DefaultAuth
+	if c != nil {
+		profile = c.Auth
+	}
+	ver, okv := h.cfg.Verifiers[profile]
+	if !okv {
+		if c != nil {
+			h.cfg.Logger.Error("inbound: contract references missing auth profile", "contract", c.Key, "profile", c.Auth)
+			writeErr(w, http.StatusInternalServerError, CodeContractMisconfig, "contract is not available")
+			return
+		}
 		writeErr(w, http.StatusUnauthorized, CodeUnauthorized, "authentication failed")
 		return
 	}
+	vreq := VerifyRequest{Org: org, Method: r.Method, Path: r.URL.Path, Header: r.Header, Body: body}
+	var commit func() error
+	if pv, isPrepared := ver.(PreparedVerifier); isPrepared {
+		commit, err = pv.Prepare(r.Context(), vreq)
+	} else {
+		err = ver.Verify(r.Context(), vreq)
+	}
+	if err != nil {
+		h.cfg.Logger.Warn("inbound: auth rejected", "org", org, "profile", profile, "reason", err.Error())
+		writeErr(w, http.StatusUnauthorized, CodeUnauthorized, "authentication failed")
+		return
+	}
+	if c == nil {
+		writeErr(w, http.StatusNotFound, CodeUnknownContract, "unknown contract")
+		return
+	}
+
+	// Cheap checks and the per-org limiter run BEFORE the nonce is consumed, so
+	// a 415/422/429 never burns a nonce.
 	if l := h.cfg.Limiter; l != nil && !l.Allow(org.String()) {
 		w.Header().Set("Retry-After", "1")
 		writeErr(w, http.StatusTooManyRequests, CodeRateLimited, "too many requests")
@@ -247,6 +272,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	payload, err := decodeJSON(body)
 	if err != nil {
+		if errors.Is(err, errNumberRange) {
+			writeErr(w, http.StatusUnprocessableEntity, CodeInvalidSchema, "payload does not satisfy the contract schema",
+				FieldIssue{Path: "/", Rule: "number_range"})
+			return
+		}
 		writeErr(w, http.StatusBadRequest, CodeMalformedJSON, "body is not valid JSON")
 		return
 	}
@@ -254,28 +284,42 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	base := Receipt{OrgID: org, Contract: c.Key, Version: c.Version, BodyHash: hex.EncodeToString(sum[:])}
 
 	if verr := c.schema.Validate(payload); verr != nil {
-		issues := schemaIssues(verr)
-		rec := base
-		rec.Status, rec.ErrorCode = StatusRejected, CodeInvalidSchema
-		if e := h.cfg.Receipts.Record(r.Context(), rec); e != nil {
-			h.cfg.Logger.Error("inbound: record rejected receipt", "err_type", fmt.Sprintf("%T", e))
-		}
-		writeErr(w, http.StatusUnprocessableEntity, CodeInvalidSchema, "payload does not satisfy the contract schema", issues...)
+		h.reject(r.Context(), base, CodeInvalidSchema)
+		writeErr(w, http.StatusUnprocessableEntity, CodeInvalidSchema, "payload does not satisfy the contract schema", schemaIssues(verr)...)
 		return
 	}
 	evKey, err := eventKey(c.tmpl, payload, r.Header)
 	if err != nil {
-		rec := base
-		rec.Status, rec.ErrorCode = StatusRejected, CodeMissingEventKey
-		_ = h.cfg.Receipts.Record(r.Context(), rec)
+		h.reject(r.Context(), base, CodeMissingEventKey)
 		writeErr(w, http.StatusUnprocessableEntity, CodeMissingEventKey, "event key could not be derived")
 		return
 	}
+	op := Operation{Org: org, Contract: c.Key, EventKey: evKey, Route: c.Route, Values: applyMapping(c.Route, payload)}
+	if sc := c.Route.Scope; sc != nil {
+		op.Branch = scopeValue(payload, sc.Branch)
+		op.Entity = scopeValue(payload, sc.Entity)
+		op.RequireBranch = sc.Branch != ""
+		op.RequireEntity = sc.Entity != ""
+		if (op.RequireBranch && op.Branch == "") || (op.RequireEntity && op.Entity == "") {
+			h.reject(r.Context(), base, CodeScopeRequired)
+			writeErr(w, http.StatusUnprocessableEntity, CodeScopeRequired, "the event must name its branch and entity")
+			return
+		}
+	}
+
+	// Last gate before side effects: consume the nonce.
+	if commit != nil {
+		if err := commit(); err != nil {
+			h.cfg.Logger.Warn("inbound: auth rejected", "org", org, "profile", profile, "reason", err.Error())
+			writeErr(w, http.StatusUnauthorized, CodeUnauthorized, "authentication failed")
+			return
+		}
+	}
+
 	base.KeyHash = HashKey(org, c.Key, evKey)
 	if c.Log.KeyInClear {
 		base.EventKey = evKey
 	}
-
 	cur, claimed, err := h.cfg.Receipts.Begin(r.Context(), base, h.cfg.Lease)
 	if err != nil {
 		h.cfg.Logger.Error("inbound: receipt begin", "err_type", fmt.Sprintf("%T", err))
@@ -287,22 +331,41 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	op := Operation{Org: org, Contract: c.Key, EventKey: evKey, Route: c.Route, Values: applyMapping(c.Route, payload)}
-	if sc := c.Route.Scope; sc != nil {
-		op.Branch = scopeValue(payload, sc.Branch)
-		op.Entity = scopeValue(payload, sc.Entity)
-	}
 	out, xerr := h.execute(r.Context(), c, op)
 	if xerr != nil {
-		h.fail(w, r.Context(), cur.ID, xerr)
+		h.fail(w, r.Context(), cur, xerr)
 		return
 	}
-	if e := h.cfg.Receipts.Finish(context.WithoutCancel(r.Context()), cur.ID, StatusApplied, out.RecordID, ""); e != nil {
-		// The effect happened; the log lagged. Report success: a retry is
-		// stopped by the reservation (it stays processing until the lease).
+	h.finish(r.Context(), cur, StatusApplied, out.RecordID, "")
+	writeJSON(w, http.StatusOK, SuccessBody{Status: "applied", ReceiptID: cur.ID.String(), RecordID: out.RecordID, Created: out.Created})
+}
+
+// reject logs a rejected event. The store caps retained rejected rows per
+// organization, so a client cannot grow the log without bound.
+func (h *Handler) reject(ctx context.Context, base Receipt, code string) {
+	base.Status, base.ErrorCode = StatusRejected, code
+	if e := h.cfg.Receipts.Record(ctx, base); e != nil {
+		h.cfg.Logger.Error("inbound: record rejected receipt", "err_type", fmt.Sprintf("%T", e))
+	}
+}
+
+// finish closes a claimed receipt, fenced by the owning attempt when the store
+// supports it: a slow worker whose lease expired cannot overwrite the one that
+// re-claimed the event.
+func (h *Handler) finish(ctx context.Context, cur Receipt, status, recordID, code string) {
+	ctx = context.WithoutCancel(ctx)
+	if af, ok := h.cfg.Receipts.(AttemptFinisher); ok {
+		won, e := af.FinishAttempt(ctx, cur.ID, cur.Attempts, status, recordID, code)
+		if e != nil {
+			h.cfg.Logger.Error("inbound: receipt finish", "err_type", fmt.Sprintf("%T", e))
+		} else if !won {
+			h.cfg.Logger.Warn("inbound: receipt no longer owned by this attempt", "receipt", cur.ID, "attempt", cur.Attempts)
+		}
+		return
+	}
+	if e := h.cfg.Receipts.Finish(ctx, cur.ID, status, recordID, code); e != nil {
 		h.cfg.Logger.Error("inbound: receipt finish", "err_type", fmt.Sprintf("%T", e))
 	}
-	writeJSON(w, http.StatusOK, SuccessBody{Status: "applied", ReceiptID: cur.ID.String(), RecordID: out.RecordID, Created: out.Created})
 }
 
 func scopeValue(payload any, path string) string {
@@ -353,7 +416,8 @@ func (h *Handler) execute(ctx context.Context, c *compiled, op Operation) (out O
 	return h.cfg.Executor.Execute(ctx, op)
 }
 
-func (h *Handler) fail(w http.ResponseWriter, ctx context.Context, id uuid.UUID, err error) {
+func (h *Handler) fail(w http.ResponseWriter, ctx context.Context, cur Receipt, err error) {
+	id := cur.ID
 	var ee *ExecError
 	if !errors.As(err, &ee) {
 		ee = &ExecError{Kind: KindInternal, Code: "internal", Err: err}
@@ -364,9 +428,7 @@ func (h *Handler) fail(w http.ResponseWriter, ctx context.Context, id uuid.UUID,
 		// Types and codes only: error text may contain personal data.
 		h.cfg.Logger.Error("inbound: execution failed", "receipt", id, "exec_code", ee.Code, "err_type", fmt.Sprintf("%T", ee.Err))
 	}
-	if e := h.cfg.Receipts.Finish(context.WithoutCancel(ctx), id, StatusFailed, "", code); e != nil {
-		h.cfg.Logger.Error("inbound: receipt finish", "err_type", fmt.Sprintf("%T", e))
-	}
+	h.finish(ctx, cur, StatusFailed, "", code)
 	switch ee.Kind {
 	case KindInvalid:
 		writeErr(w, http.StatusUnprocessableEntity, ee.Code, "the event was rejected by the target model")
@@ -385,11 +447,7 @@ func (h *Handler) clientIP(r *http.Request) string {
 	if h.cfg.ClientIP != nil {
 		return h.cfg.ClientIP(r)
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	return ClientIPFrom(r, h.cfg.TrustedProxies)
 }
 
 func (h *Handler) parsePath(p string) (uuid.UUID, string, bool) {
@@ -418,5 +476,73 @@ func decodeJSON(body []byte) (any, error) {
 	if _, err := dec.Token(); err != io.EOF {
 		return nil, errors.New("trailing data")
 	}
+	if err := checkNumbers(v); err != nil {
+		return nil, err
+	}
 	return v, nil
+}
+
+var errNumberRange = errors.New("number out of range")
+
+// checkNumbers rejects numbers that do not fit a float64 (1e999, which decodes
+// to +Inf) so they never reach the mapping or the model as garbage.
+func checkNumbers(v any) error {
+	switch t := v.(type) {
+	case json.Number:
+		if _, err := t.Int64(); err == nil {
+			return nil
+		}
+		f, err := t.Float64()
+		if err != nil || math.IsInf(f, 0) || math.IsNaN(f) {
+			return errNumberRange
+		}
+	case map[string]any:
+		for _, x := range t {
+			if err := checkNumbers(x); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, x := range t {
+			if err := checkNumbers(x); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// RegisterContract validates a contract against the wiring (auth profile,
+// executor/command, and the target model via ContractChecker) and registers it
+// only if everything passes. Use it for runtime loads instead of
+// Registry.Register + Check.
+func (h *Handler) RegisterContract(ctx context.Context, c Contract) error {
+	cc, err := compile(c)
+	if err != nil {
+		return err
+	}
+	if err := h.checkOne(ctx, cc); err != nil {
+		return err
+	}
+	h.cfg.Contracts.put(cc)
+	return nil
+}
+
+func (h *Handler) checkOne(ctx context.Context, c *compiled) error {
+	var errs []error
+	if _, ok := h.cfg.Verifiers[c.Auth]; !ok {
+		errs = append(errs, fmt.Errorf("contract %s v%d: unknown auth profile %q", c.Key, c.Version, c.Auth))
+	}
+	if c.Route.Command != "" {
+		if _, ok := h.cfg.Commands.get(c.Route.Command); !ok {
+			errs = append(errs, fmt.Errorf("contract %s v%d: command %q not registered", c.Key, c.Version, c.Route.Command))
+		}
+	} else if h.cfg.Executor == nil {
+		errs = append(errs, fmt.Errorf("contract %s v%d: no Executor for model routes", c.Key, c.Version))
+	} else if cc, ok := h.cfg.Executor.(ContractChecker); ok {
+		if err := cc.CheckContract(ctx, c.Contract); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }

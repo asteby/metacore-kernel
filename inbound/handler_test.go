@@ -41,7 +41,6 @@ func stockContract() Contract {
 			Mapping:  map[string]string{"sku": "sku", "warehouse": "warehouse", "quantity": "quantity"},
 			Defaults: map[string]any{"source": "inbound"},
 			Match:    []string{"sku", "warehouse"},
-			Scope:    &ScopeMapping{Branch: "branch"},
 		},
 		Idempotency: "{event_id}",
 		Auth:        ProfileHMACCanonicalV1,
@@ -96,6 +95,7 @@ func (f *fakeExec) Execute(ctx context.Context, op Operation) (Outcome, error) {
 }
 
 type env struct {
+	ver     *HMACCanonicalV1
 	h       *Handler
 	srv     *httptest.Server
 	exec    *fakeExec
@@ -125,8 +125,9 @@ func newEnv(t *testing.T, mut func(*Config)) *env {
 		},
 		Now: func() time.Time { return e.now },
 	}
+	e.ver = v
 	cfg := Config{Contracts: reg, Verifiers: map[string]Verifier{ProfileHMACCanonicalV1: v},
-		Receipts: e.store, Executor: e.exec, Logger: quietLogger()}
+		Receipts: e.store, Executor: e.exec, Logger: quietLogger(), DefaultAuth: ProfileHMACCanonicalV1}
 	if mut != nil {
 		mut(&cfg)
 	}
@@ -607,10 +608,14 @@ func TestKeyInClearOptIn(t *testing.T) {
 }
 
 func TestScopeIsPassedToExecutor(t *testing.T) {
-	e := newEnv(t, nil)
+	reg := NewRegistry()
+	c := stockContract()
+	c.Route.Scope = &ScopeMapping{Branch: "branch"}
+	_ = reg.Register(c)
+	e := newEnv(t, func(cfg *Config) { cfg.Contracts = reg })
 	b := `{"event_id":"s1","sku":"S","warehouse":"w","quantity":1,"branch":"br-7"}`
 	e.send(t, e.orgA, "stock.changed", b, nil)
-	if e.exec.last.Branch != "br-7" || e.exec.last.Org != e.orgA {
+	if e.exec.last.Branch != "br-7" || e.exec.last.Org != e.orgA || !e.exec.last.RequireBranch {
 		t.Fatalf("%+v", e.exec.last)
 	}
 }
@@ -718,7 +723,7 @@ func TestPreAuthRateLimitProtectsBeforeAuth(t *testing.T) {
 	}
 }
 
-func TestTokenBucketRefillsAndBoundsKeys(t *testing.T) {
+func TestTokenBucketRefillsAndEvictsLRU(t *testing.T) {
 	now := time.Unix(0, 0)
 	tb := &TokenBucket{Rate: 1, Burst: 1, MaxKeys: 2, Now: func() time.Time { return now }}
 	if !tb.Allow("a") || tb.Allow("a") {
@@ -729,12 +734,17 @@ func TestTokenBucketRefillsAndBoundsKeys(t *testing.T) {
 		t.Fatal("refill")
 	}
 	tb.Allow("b")
-	if tb.Allow("c") {
-		t.Fatal("must fail closed when the key table is full of live keys")
-	}
-	now = now.Add(2 * time.Minute)
+	// Table full of live keys: a NEW key is still served (LRU "a" is evicted)
+	// instead of locking everybody else out.
 	if !tb.Allow("c") {
-		t.Fatal("idle keys must be evicted")
+		t.Fatal("new key refused when the table is full")
+	}
+	if len(tb.b) != 2 {
+		t.Fatalf("table grew past MaxKeys: %d", len(tb.b))
+	}
+	// "a" was the least recently used: it starts again with a full bucket.
+	if !tb.Allow("a") {
+		t.Fatal("evicted key must restart with a fresh bucket")
 	}
 }
 
