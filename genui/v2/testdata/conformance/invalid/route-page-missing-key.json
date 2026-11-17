@@ -1,0 +1,24 @@
+{
+  "description": "route page sin key.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "navigate",
+            "route": {
+              "name": "page"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_action"
+  }
+}

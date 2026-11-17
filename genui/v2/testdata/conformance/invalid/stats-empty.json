@@ -1,0 +1,15 @@
+{
+  "description": "stats sin items ni source.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "stats"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.required"
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "description": "Una acción con verbo no soportado se descarta.",
+  "input": {
+    "spec": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "card",
+          "title": "x",
+          "actions": [
+            {
+              "do": "close"
+            },
+            {
+              "do": "refresh",
+              "source": "d"
+            }
+          ]
+        }
+      ],
+      "data": {
+        "d": {
+          "inline": []
+        }
+      }
+    },
+    "caps": {
+      "versions": [
+        "genui/v2"
+      ],
+      "verbs": [
+        "close",
+        "navigate"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "card",
+          "title": "x",
+          "actions": [
+            {
+              "do": "close"
+            }
+          ]
+        }
+      ],
+      "data": {
+        "d": {
+          "inline": []
+        }
+      }
+    }
+  }
+}

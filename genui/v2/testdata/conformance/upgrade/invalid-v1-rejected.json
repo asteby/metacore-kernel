@@ -1,0 +1,15 @@
+{
+  "description": "Un v1 inválido (bloque desconocido) no se actualiza.",
+  "input": {
+    "version": "genui/v1",
+    "blocks": [
+      {
+        "type": "script"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_block"
+  }
+}

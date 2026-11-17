@@ -1,0 +1,23 @@
+{
+  "description": "$ref a una fuente declarada y luego __proto__.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "src": {
+        "inline": []
+      }
+    },
+    "blocks": [
+      {
+        "type": "text",
+        "text": {
+          "$ref": "data.src.__proto__"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

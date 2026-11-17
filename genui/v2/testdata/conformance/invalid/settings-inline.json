@@ -1,0 +1,18 @@
+{
+  "description": "settings es solo por referencia (sin campos en línea).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "settings",
+        "addon": "inventory",
+        "scope": "org",
+        "fields": []
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.field_not_allowed"
+  }
+}

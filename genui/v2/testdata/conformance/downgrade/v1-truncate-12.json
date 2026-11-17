@@ -1,0 +1,118 @@
+{
+  "description": "v1 admite 12 bloques: el resto se descarta.",
+  "input": {
+    "spec": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "t0"
+        },
+        {
+          "type": "text",
+          "text": "t1"
+        },
+        {
+          "type": "text",
+          "text": "t2"
+        },
+        {
+          "type": "text",
+          "text": "t3"
+        },
+        {
+          "type": "text",
+          "text": "t4"
+        },
+        {
+          "type": "text",
+          "text": "t5"
+        },
+        {
+          "type": "text",
+          "text": "t6"
+        },
+        {
+          "type": "text",
+          "text": "t7"
+        },
+        {
+          "type": "text",
+          "text": "t8"
+        },
+        {
+          "type": "text",
+          "text": "t9"
+        },
+        {
+          "type": "text",
+          "text": "t10"
+        },
+        {
+          "type": "text",
+          "text": "t11"
+        },
+        {
+          "type": "text",
+          "text": "t12"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v1",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "t0"
+        },
+        {
+          "type": "text",
+          "text": "t1"
+        },
+        {
+          "type": "text",
+          "text": "t2"
+        },
+        {
+          "type": "text",
+          "text": "t3"
+        },
+        {
+          "type": "text",
+          "text": "t4"
+        },
+        {
+          "type": "text",
+          "text": "t5"
+        },
+        {
+          "type": "text",
+          "text": "t6"
+        },
+        {
+          "type": "text",
+          "text": "t7"
+        },
+        {
+          "type": "text",
+          "text": "t8"
+        },
+        {
+          "type": "text",
+          "text": "t9"
+        },
+        {
+          "type": "text",
+          "text": "t10"
+        },
+        {
+          "type": "text",
+          "text": "t11"
+        }
+      ]
+    }
+  }
+}

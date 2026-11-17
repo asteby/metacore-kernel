@@ -1,0 +1,1425 @@
+{
+  "description": "Más de 200 vinculaciones.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "d": {
+        "inline": [
+          {
+            "a": 1
+          }
+        ]
+      }
+    },
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "fields": [
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          },
+          {
+            "label": "l",
+            "value": {
+              "$ref": "data.d.0.a"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.bindings"
+  }
+}

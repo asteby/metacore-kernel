@@ -1,0 +1,23 @@
+{
+  "description": "$ref a data.__proto__ (segmento prohibido en la ruta).",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "a": {
+        "inline": []
+      }
+    },
+    "blocks": [
+      {
+        "type": "text",
+        "text": {
+          "$ref": "data.__proto__"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

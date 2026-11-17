@@ -1,0 +1,19 @@
+{
+  "description": "media solo por asset: o ruta relativa.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "media",
+        "src": "https://evil.example/x.png",
+        "alt": "x",
+        "width": 10,
+        "height": 10
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.pattern"
+  }
+}

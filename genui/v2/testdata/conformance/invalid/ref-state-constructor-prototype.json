@@ -1,0 +1,21 @@
+{
+  "description": "$ref a state.constructor.prototype.",
+  "input": {
+    "version": "genui/v2",
+    "state": {
+      "a": 1
+    },
+    "blocks": [
+      {
+        "type": "text",
+        "text": {
+          "$ref": "state.constructor.prototype"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

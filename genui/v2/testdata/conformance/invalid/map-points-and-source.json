@@ -1,0 +1,39 @@
+{
+  "description": "map usa points o source.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "p": {
+        "q": "t:a.B"
+      }
+    },
+    "blocks": [
+      {
+        "type": "map",
+        "summary": "Mapa de puntos",
+        "points": [
+          {
+            "key": "a",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto a",
+            "status": "ok"
+          },
+          {
+            "key": "b",
+            "lat": 19.5,
+            "lng": -99.2,
+            "label": "Punto b",
+            "status": "late",
+            "group": "mx"
+          }
+        ],
+        "source": "data.p"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_block"
+  }
+}

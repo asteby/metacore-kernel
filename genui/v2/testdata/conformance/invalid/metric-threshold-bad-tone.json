@@ -1,0 +1,23 @@
+{
+  "description": "umbral con tono inválido.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "metric",
+        "label": "X",
+        "value": 1,
+        "thresholds": [
+          {
+            "at": 1,
+            "tone": "rojo"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.enum"
+  }
+}

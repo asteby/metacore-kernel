@@ -1,0 +1,21 @@
+{
+  "description": "Una fuente llamada constructor se rechaza como clave prohibida.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "constructor": {
+        "inline": []
+      }
+    },
+    "blocks": [
+      {
+        "type": "text",
+        "text": "Hola"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

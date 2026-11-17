@@ -1,0 +1,19 @@
+{
+  "description": "width mínimo 1.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "media",
+        "src": "asset:a",
+        "alt": "x",
+        "width": 0,
+        "height": 1
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.type"
+  }
+}

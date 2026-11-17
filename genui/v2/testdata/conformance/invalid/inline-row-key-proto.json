@@ -1,0 +1,25 @@
+{
+  "description": "Clave de fila de data.*.inline con segmento prohibido.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "d": {
+        "inline": [
+          {
+            "a.__proto__": 1
+          }
+        ]
+      }
+    },
+    "blocks": [
+      {
+        "type": "text",
+        "text": "x"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

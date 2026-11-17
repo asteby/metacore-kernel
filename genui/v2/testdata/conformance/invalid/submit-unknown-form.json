@@ -1,0 +1,28 @@
+{
+  "description": "submit apunta a un form inexistente.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "form",
+        "id": "f",
+        "fields": [
+          {
+            "key": "a",
+            "label": "A",
+            "kind": "text"
+          }
+        ],
+        "submit": {
+          "do": "submit",
+          "form": "otro",
+          "to": "settings.write"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_target"
+  }
+}

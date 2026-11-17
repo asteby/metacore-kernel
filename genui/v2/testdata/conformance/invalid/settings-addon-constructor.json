@@ -1,0 +1,17 @@
+{
+  "description": "block_settings.addon constructor.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "settings",
+        "addon": "constructor",
+        "scope": "org"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

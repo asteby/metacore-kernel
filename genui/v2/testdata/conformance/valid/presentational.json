@@ -1,0 +1,60 @@
+{
+  "description": "Bloques presentacionales: alert, empty, list, media.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "alert",
+        "tone": "warning",
+        "title": "Atención",
+        "text": "Revisa el stock"
+      },
+      {
+        "type": "empty",
+        "title": "Sin pedidos",
+        "icon": "inbox",
+        "actions": [
+          {
+            "do": "navigate",
+            "label": "Crear",
+            "route": {
+              "name": "list",
+              "model": "orders"
+            }
+          }
+        ]
+      },
+      {
+        "type": "list",
+        "items": [
+          {
+            "title": "Pedido 1",
+            "description": "Pendiente",
+            "badge": {
+              "label": "Nuevo",
+              "tone": "info"
+            },
+            "action": {
+              "do": "navigate",
+              "route": {
+                "name": "record",
+                "model": "orders",
+                "id": 1
+              }
+            }
+          }
+        ]
+      },
+      {
+        "type": "media",
+        "src": "asset:logo_01",
+        "alt": "Logotipo",
+        "width": 120,
+        "height": 40
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

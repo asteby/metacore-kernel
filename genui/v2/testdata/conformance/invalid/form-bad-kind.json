@@ -1,0 +1,22 @@
+{
+  "description": "Tipo de campo fuera del vocabulario.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "form",
+        "fields": [
+          {
+            "key": "a",
+            "label": "A",
+            "kind": "password"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.enum"
+  }
+}

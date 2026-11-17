@@ -1,0 +1,118 @@
+{
+  "description": "Con source, 24 columnas son válidas.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "d": {
+        "inline": []
+      }
+    },
+    "blocks": [
+      {
+        "type": "table",
+        "source": "data.d",
+        "columns": [
+          {
+            "key": "c0",
+            "label": "C"
+          },
+          {
+            "key": "c1",
+            "label": "C"
+          },
+          {
+            "key": "c2",
+            "label": "C"
+          },
+          {
+            "key": "c3",
+            "label": "C"
+          },
+          {
+            "key": "c4",
+            "label": "C"
+          },
+          {
+            "key": "c5",
+            "label": "C"
+          },
+          {
+            "key": "c6",
+            "label": "C"
+          },
+          {
+            "key": "c7",
+            "label": "C"
+          },
+          {
+            "key": "c8",
+            "label": "C"
+          },
+          {
+            "key": "c9",
+            "label": "C"
+          },
+          {
+            "key": "c10",
+            "label": "C"
+          },
+          {
+            "key": "c11",
+            "label": "C"
+          },
+          {
+            "key": "c12",
+            "label": "C"
+          },
+          {
+            "key": "c13",
+            "label": "C"
+          },
+          {
+            "key": "c14",
+            "label": "C"
+          },
+          {
+            "key": "c15",
+            "label": "C"
+          },
+          {
+            "key": "c16",
+            "label": "C"
+          },
+          {
+            "key": "c17",
+            "label": "C"
+          },
+          {
+            "key": "c18",
+            "label": "C"
+          },
+          {
+            "key": "c19",
+            "label": "C"
+          },
+          {
+            "key": "c20",
+            "label": "C"
+          },
+          {
+            "key": "c21",
+            "label": "C"
+          },
+          {
+            "key": "c22",
+            "label": "C"
+          },
+          {
+            "key": "c23",
+            "label": "C"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

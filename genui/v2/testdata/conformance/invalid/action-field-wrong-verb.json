@@ -1,0 +1,22 @@
+{
+  "description": "Campo que no corresponde al verbo.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "close",
+            "url": "https://evil.example"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.field_not_allowed"
+  }
+}

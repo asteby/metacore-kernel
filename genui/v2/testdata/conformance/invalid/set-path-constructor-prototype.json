@@ -1,0 +1,26 @@
+{
+  "description": "set con path state.constructor.prototype.x.",
+  "input": {
+    "version": "genui/v2",
+    "state": {
+      "a": 1
+    },
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "set",
+            "path": "state.constructor.prototype.isAdmin",
+            "value": true
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

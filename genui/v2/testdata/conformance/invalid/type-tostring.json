@@ -1,0 +1,15 @@
+{
+  "description": "type: \"toString\" no es un bloque.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "toString"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_block"
+  }
+}

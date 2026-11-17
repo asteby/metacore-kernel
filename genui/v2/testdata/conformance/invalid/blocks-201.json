@@ -1,0 +1,921 @@
+{
+  "description": "Más de 200 bloques en total.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "stack",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      },
+      {
+        "type": "stack",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      },
+      {
+        "type": "stack",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      },
+      {
+        "type": "stack",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      },
+      {
+        "type": "stack",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      },
+      {
+        "type": "stack",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      },
+      {
+        "type": "stack",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      },
+      {
+        "type": "stack",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      },
+      {
+        "type": "stack",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.blocks"
+  }
+}

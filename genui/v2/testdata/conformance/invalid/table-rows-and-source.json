@@ -1,0 +1,28 @@
+{
+  "description": "table con rows y source a la vez.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "d": {
+        "inline": []
+      }
+    },
+    "blocks": [
+      {
+        "type": "table",
+        "source": "data.d",
+        "columns": [
+          {
+            "key": "a",
+            "label": "A"
+          }
+        ],
+        "rows": []
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_block"
+  }
+}

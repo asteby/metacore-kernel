@@ -1,0 +1,17 @@
+{
+  "description": "Id de bloque constructor.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "text",
+        "id": "constructor",
+        "text": "x"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

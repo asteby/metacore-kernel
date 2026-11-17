@@ -1,0 +1,31 @@
+{
+  "description": "chart con rows y source a la vez.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "d": {
+        "inline": []
+      }
+    },
+    "blocks": [
+      {
+        "type": "chart",
+        "kind": "bar",
+        "x": "a",
+        "series": [
+          {
+            "key": "b",
+            "label": "B"
+          }
+        ],
+        "rows": [],
+        "source": "data.d",
+        "summary": "s"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_block"
+  }
+}

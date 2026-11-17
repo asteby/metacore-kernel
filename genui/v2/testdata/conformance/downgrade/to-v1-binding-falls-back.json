@@ -1,0 +1,43 @@
+{
+  "description": "Un bloque con vinculaciones no es v1 válido: usa su fallback.",
+  "input": {
+    "spec": {
+      "version": "genui/v2",
+      "data": {
+        "d": {
+          "inline": [
+            {
+              "a": 1
+            }
+          ]
+        }
+      },
+      "blocks": [
+        {
+          "type": "text",
+          "text": {
+            "$ref": "data.d.0.a"
+          },
+          "fallback": "Valor no disponible"
+        }
+      ]
+    },
+    "caps": {
+      "versions": [
+        "genui/v1"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v1",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "Valor no disponible"
+        }
+      ]
+    }
+  }
+}

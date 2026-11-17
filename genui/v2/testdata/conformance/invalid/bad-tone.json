@@ -1,0 +1,17 @@
+{
+  "description": "Tono fuera del vocabulario.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "text",
+        "text": "x",
+        "tone": "rojo"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.enum"
+  }
+}

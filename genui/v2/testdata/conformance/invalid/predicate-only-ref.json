@@ -1,0 +1,22 @@
+{
+  "description": "when sin operador.",
+  "input": {
+    "version": "genui/v2",
+    "state": {
+      "a": 1
+    },
+    "blocks": [
+      {
+        "type": "text",
+        "text": "Hola",
+        "when": {
+          "ref": "state.a"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.required"
+  }
+}

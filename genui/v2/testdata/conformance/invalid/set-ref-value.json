@@ -1,0 +1,28 @@
+{
+  "description": "set no acepta $ref como valor.",
+  "input": {
+    "version": "genui/v2",
+    "state": {
+      "a": 1
+    },
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "set",
+            "path": "state.a",
+            "value": {
+              "$ref": "state.a"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.ref_not_allowed"
+  }
+}

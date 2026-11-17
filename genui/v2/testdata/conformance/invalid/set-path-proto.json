@@ -1,0 +1,26 @@
+{
+  "description": "set con path que pasa por state.__proto__.",
+  "input": {
+    "version": "genui/v2",
+    "state": {
+      "a": 1
+    },
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "set",
+            "path": "state.__proto__.polluted",
+            "value": "yes"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

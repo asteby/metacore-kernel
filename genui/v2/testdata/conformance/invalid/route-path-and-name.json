@@ -1,0 +1,26 @@
+{
+  "description": "route con path y name a la vez.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "navigate",
+            "route": {
+              "path": "/m/x",
+              "name": "list",
+              "model": "orders"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_action"
+  }
+}

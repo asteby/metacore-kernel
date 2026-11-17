@@ -1,0 +1,30 @@
+{
+  "description": "Un paso refiere un campo que no existe.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "wizard",
+        "fields": [
+          {
+            "key": "a",
+            "label": "A",
+            "kind": "text"
+          }
+        ],
+        "steps": [
+          {
+            "title": "Uno",
+            "fields": [
+              "zzz"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_target"
+  }
+}

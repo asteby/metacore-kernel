@@ -1,0 +1,78 @@
+{
+  "description": "Composición instances/fleet: stats + map + table (fixture de data.points del hub).",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "fleet": {
+        "q": "mi:hub.fleet"
+      },
+      "points": {
+        "q": "t:hub.Instance?limit=200"
+      }
+    },
+    "blocks": [
+      {
+        "type": "grid",
+        "columns": 2,
+        "blocks": [
+          {
+            "type": "metric",
+            "label": "Instancias",
+            "source": "data.fleet",
+            "field": "total"
+          },
+          {
+            "type": "metric",
+            "label": "Por vencer",
+            "source": "data.fleet",
+            "field": "expiring",
+            "thresholds": [
+              {
+                "at": 1,
+                "tone": "warning"
+              }
+            ]
+          },
+          {
+            "type": "map",
+            "summary": "Instancias por vertical",
+            "source": "data.points",
+            "fields": {
+              "key": "id",
+              "lat": "lat",
+              "lng": "lng",
+              "label": "name",
+              "status": "status",
+              "group": "vertical"
+            },
+            "group_by": "group",
+            "legend": true,
+            "cluster": true,
+            "detail_panel": true
+          },
+          {
+            "type": "table",
+            "columns": [
+              {
+                "key": "name",
+                "label": "Nombre"
+              },
+              {
+                "key": "version",
+                "label": "Versión"
+              },
+              {
+                "key": "days_remaining",
+                "label": "Días"
+              }
+            ],
+            "source": "data.points"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

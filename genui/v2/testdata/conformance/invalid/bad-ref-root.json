@@ -1,0 +1,18 @@
+{
+  "description": "Raíz de vinculación fuera de data|state|record|ctx.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "text",
+        "text": {
+          "$ref": "window.name"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.pattern"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "description": "1e400 no es un número finito (en Go es un error de decodificación).",
+  "input": "{\"version\":\"genui/v2\",\"blocks\":[{\"type\":\"text\",\"text\":\"x\"}],\"state\":{\"n\":1e400}}",
+  "expect": {"ok":false,"code":"genui.invalid_json"}
+}

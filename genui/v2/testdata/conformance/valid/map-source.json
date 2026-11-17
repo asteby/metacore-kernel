@@ -1,0 +1,29 @@
+{
+  "description": "map alimentado por una fuente declarada y mapeo de columnas.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "points": {
+        "q": "t:hub.Instance?limit=200"
+      }
+    },
+    "blocks": [
+      {
+        "type": "map",
+        "summary": "Instancias",
+        "source": "data.points",
+        "fields": {
+          "key": "id",
+          "lat": "lat",
+          "lng": "lng",
+          "label": "name",
+          "status": "status",
+          "group": "vertical"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

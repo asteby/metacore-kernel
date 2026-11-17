@@ -1,0 +1,16 @@
+{
+  "description": "slot.name con segmento constructor.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "slot",
+        "name": "a.constructor"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

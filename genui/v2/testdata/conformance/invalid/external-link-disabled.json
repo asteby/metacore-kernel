@@ -1,0 +1,21 @@
+{
+  "description": "Enlace http(s) con allowExternalLinks apagado (por defecto).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "links",
+        "items": [
+          {
+            "title": "Nota",
+            "url": "https://ejemplo.mx/a"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.external_link_disabled"
+  }
+}

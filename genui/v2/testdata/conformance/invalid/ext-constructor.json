@@ -1,0 +1,16 @@
+{
+  "description": "ext con segmento constructor antes de @.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "ext",
+        "ext": "a.constructor@1"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

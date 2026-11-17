@@ -1,0 +1,18 @@
+{
+  "description": "ctx solo expone locale, currency, time_zone, branch_id.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "text",
+        "text": {
+          "$ref": "ctx.token"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.bad_ref"
+  }
+}

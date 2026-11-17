@@ -1,0 +1,24 @@
+{
+  "description": "latitud fuera de rango.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "map",
+        "summary": "Mapa de puntos",
+        "points": [
+          {
+            "key": "a",
+            "lat": 91,
+            "lng": -99.1,
+            "label": "Punto a"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.type"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "description": "submit apunta a un id que no es form/wizard.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "text",
+        "text": "Hola",
+        "id": "f"
+      },
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "submit",
+            "form": "f",
+            "to": "settings.write"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_target"
+  }
+}

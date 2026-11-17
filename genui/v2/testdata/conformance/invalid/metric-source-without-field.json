@@ -1,0 +1,22 @@
+{
+  "description": "source sin field.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "k": {
+        "widget": "a.dashboard.b"
+      }
+    },
+    "blocks": [
+      {
+        "type": "metric",
+        "label": "X",
+        "source": "data.k"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_block"
+  }
+}

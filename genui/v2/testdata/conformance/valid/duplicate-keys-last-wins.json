@@ -1,0 +1,5 @@
+{
+  "description": "Claves duplicadas: gana la última (JSON.parse y encoding/json coinciden).",
+  "input": "{\"version\":\"genui/v2\",\"blocks\":[{\"type\":\"nada\"}],\"blocks\":[{\"type\":\"text\",\"text\":\"x\"}]}",
+  "expect": {"ok":true}
+}

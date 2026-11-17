@@ -1,0 +1,22 @@
+{
+  "description": "column.key constructor.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "table",
+        "columns": [
+          {
+            "key": "constructor",
+            "label": "x"
+          }
+        ],
+        "rows": []
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

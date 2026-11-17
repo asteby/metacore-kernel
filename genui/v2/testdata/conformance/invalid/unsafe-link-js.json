@@ -1,0 +1,17 @@
+{
+  "description": "Enlace javascript:.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "link": "javascript:alert(1)"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unsafe_link"
+  }
+}

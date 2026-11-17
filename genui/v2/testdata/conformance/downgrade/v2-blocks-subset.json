@@ -1,0 +1,63 @@
+{
+  "description": "Cliente v2 sin markdown/ext/media: fallback donde existe, descarta donde no.",
+  "input": {
+    "spec": {
+      "version": "genui/v2",
+      "title": "Panel",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "Hola"
+        },
+        {
+          "type": "markdown",
+          "markdown": "**Hola**",
+          "fallback": "Hola (sin formato)"
+        },
+        {
+          "type": "ext",
+          "ext": "shipments.route_map@1",
+          "fallback": "Mapa de ruta no disponible"
+        },
+        {
+          "type": "media",
+          "src": "asset:a",
+          "alt": "x",
+          "width": 1,
+          "height": 1
+        }
+      ]
+    },
+    "caps": {
+      "versions": [
+        "genui/v1",
+        "genui/v2"
+      ],
+      "blocks": [
+        "text",
+        "card"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v2",
+      "title": "Panel",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "Hola"
+        },
+        {
+          "type": "text",
+          "text": "Hola (sin formato)"
+        },
+        {
+          "type": "text",
+          "text": "Mapa de ruta no disponible"
+        }
+      ]
+    }
+  }
+}

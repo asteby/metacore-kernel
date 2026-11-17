@@ -1,0 +1,67 @@
+{
+  "description": "Si el formulario se descarta, el submit que lo apuntaba se poda.",
+  "input": {
+    "spec": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "form",
+          "id": "f",
+          "fields": [
+            {
+              "key": "a",
+              "label": "A",
+              "kind": "text"
+            }
+          ],
+          "fallback": "Edita en la web"
+        },
+        {
+          "type": "card",
+          "title": "x",
+          "actions": [
+            {
+              "do": "submit",
+              "form": "f",
+              "to": "settings.write"
+            },
+            {
+              "do": "close"
+            }
+          ]
+        }
+      ]
+    },
+    "caps": {
+      "versions": [
+        "genui/v2"
+      ],
+      "blocks": [
+        "card",
+        "text"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "text",
+          "id": "f",
+          "text": "Edita en la web"
+        },
+        {
+          "type": "card",
+          "title": "x",
+          "actions": [
+            {
+              "do": "close"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

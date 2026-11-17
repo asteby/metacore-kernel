@@ -1,0 +1,28 @@
+{
+  "description": "formField.depends_on apunta a otro campo del mismo formulario.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "form",
+        "id": "f",
+        "fields": [
+          {
+            "key": "a",
+            "label": "A",
+            "kind": "text",
+            "depends_on": "b"
+          },
+          {
+            "key": "b",
+            "label": "B",
+            "kind": "text"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

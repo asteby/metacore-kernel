@@ -1,0 +1,18 @@
+{
+  "description": "$ref con un segmento __proto__ en medio de la ruta.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "text",
+        "text": {
+          "$ref": "record.__proto__.x"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

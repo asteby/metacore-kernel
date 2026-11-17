@@ -1,0 +1,117 @@
+{
+  "description": "Más de 24 hijos en un contenedor.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "stack",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.children"
+  }
+}

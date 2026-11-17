@@ -1,0 +1,25 @@
+{
+  "description": "route record sin id.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "navigate",
+            "route": {
+              "name": "record",
+              "model": "orders"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_action"
+  }
+}

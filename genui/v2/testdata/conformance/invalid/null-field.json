@@ -1,0 +1,17 @@
+{
+  "description": "null no equivale a ausente: title null es inválido.",
+  "input": {
+    "version": "genui/v2",
+    "title": null,
+    "blocks": [
+      {
+        "type": "text",
+        "text": "Hola"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.type"
+  }
+}

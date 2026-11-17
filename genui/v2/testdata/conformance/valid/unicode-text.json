@@ -1,0 +1,16 @@
+{
+  "description": "Acentos, eñes y emoji.",
+  "input": {
+    "version": "genui/v2",
+    "title": "Pedidos por surtir ñ",
+    "blocks": [
+      {
+        "type": "text",
+        "text": "Hola 🚚 mundo — ¿qué tal?"
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

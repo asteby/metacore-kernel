@@ -1,0 +1,8 @@
+{
+  "description": "Cadena que no es JSON.",
+  "input": "{no",
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_json"
+  }
+}

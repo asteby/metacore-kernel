@@ -1,0 +1,35 @@
+{
+  "description": "arista a un nodo inexistente.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "diagram",
+        "summary": "Flujo de servicios",
+        "nodes": [
+          {
+            "id": "api",
+            "label": "API",
+            "kind": "service"
+          },
+          {
+            "id": "db",
+            "label": "DB",
+            "kind": "database",
+            "tone": "success"
+          }
+        ],
+        "edges": [
+          {
+            "from": "api",
+            "to": "zzz"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_target"
+  }
+}

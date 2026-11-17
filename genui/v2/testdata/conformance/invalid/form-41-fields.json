@@ -1,0 +1,222 @@
+{
+  "description": "Formulario con más de 40 campos.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "form",
+        "fields": [
+          {
+            "key": "f0",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f1",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f2",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f3",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f4",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f5",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f6",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f7",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f8",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f9",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f10",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f11",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f12",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f13",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f14",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f15",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f16",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f17",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f18",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f19",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f20",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f21",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f22",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f23",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f24",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f25",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f26",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f27",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f28",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f29",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f30",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f31",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f32",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f33",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f34",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f35",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f36",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f37",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f38",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f39",
+            "label": "F",
+            "kind": "text"
+          },
+          {
+            "key": "f40",
+            "label": "F",
+            "kind": "text"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.fields"
+  }
+}

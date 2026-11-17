@@ -1,0 +1,37 @@
+{
+  "description": "Si se descartan todas las acciones no queda actions: [].",
+  "input": {
+    "spec": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "card",
+          "title": "x",
+          "actions": [
+            {
+              "do": "close"
+            }
+          ]
+        }
+      ]
+    },
+    "caps": {
+      "versions": [
+        "genui/v2"
+      ],
+      "verbs": []
+    }
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "card",
+          "title": "x"
+        }
+      ]
+    }
+  }
+}

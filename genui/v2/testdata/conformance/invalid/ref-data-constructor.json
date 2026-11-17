@@ -1,0 +1,23 @@
+{
+  "description": "$ref a data.constructor.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "a": {
+        "inline": []
+      }
+    },
+    "blocks": [
+      {
+        "type": "text",
+        "text": {
+          "$ref": "data.constructor"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

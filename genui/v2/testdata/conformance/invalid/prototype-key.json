@@ -1,0 +1,5 @@
+{
+  "description": "prototype como clave en state.",
+  "input": {"version":"genui/v2","state":{"prototype":1},"blocks":[{"type":"text","text":"x"}]},
+  "expect": {"ok":false,"code":"genui.forbidden_key"}
+}

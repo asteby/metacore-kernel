@@ -1,0 +1,11 @@
+{
+  "description": "blocks vacío.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": []
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.required"
+  }
+}

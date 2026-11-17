@@ -1,0 +1,27 @@
+{
+  "description": "stats con items y source.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "d": {
+        "inline": []
+      }
+    },
+    "blocks": [
+      {
+        "type": "stats",
+        "source": "data.d",
+        "items": [
+          {
+            "label": "A",
+            "value": "1"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_block"
+  }
+}

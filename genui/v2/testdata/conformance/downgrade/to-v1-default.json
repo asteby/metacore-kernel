@@ -1,0 +1,69 @@
+{
+  "description": "Sin caps se asume genui/v1: bloques de v1 sin id/when/fallback; el resto, fallback.",
+  "input": {
+    "spec": {
+      "version": "genui/v2",
+      "title": "Panel",
+      "state": {
+        "a": 1
+      },
+      "blocks": [
+        {
+          "type": "text",
+          "id": "t1",
+          "text": "Hola",
+          "fallback": "x"
+        },
+        {
+          "type": "markdown",
+          "markdown": "**a**",
+          "fallback": "a"
+        },
+        {
+          "type": "stack",
+          "blocks": [
+            {
+              "type": "text",
+              "text": "Hola"
+            }
+          ]
+        },
+        {
+          "type": "kpi",
+          "items": [
+            {
+              "label": "A",
+              "value": "1"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v1",
+      "title": "Panel",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "Hola"
+        },
+        {
+          "type": "text",
+          "text": "a"
+        },
+        {
+          "type": "kpi",
+          "items": [
+            {
+              "label": "A",
+              "value": "1"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

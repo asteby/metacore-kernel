@@ -1,0 +1,23 @@
+{
+  "description": "formField.key prototype.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "form",
+        "id": "f",
+        "fields": [
+          {
+            "key": "prototype",
+            "label": "x",
+            "kind": "text"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

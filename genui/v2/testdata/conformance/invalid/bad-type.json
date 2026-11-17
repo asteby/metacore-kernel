@@ -1,0 +1,16 @@
+{
+  "description": "text debe ser texto.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "text",
+        "text": 5
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.type"
+  }
+}

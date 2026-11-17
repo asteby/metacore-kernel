@@ -1,0 +1,37 @@
+{
+  "description": "on_select abre un overlay inexistente.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "map",
+        "summary": "Mapa de puntos",
+        "points": [
+          {
+            "key": "a",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto a",
+            "status": "ok"
+          },
+          {
+            "key": "b",
+            "lat": 19.5,
+            "lng": -99.2,
+            "label": "Punto b",
+            "status": "late",
+            "group": "mx"
+          }
+        ],
+        "on_select": {
+          "do": "open",
+          "overlay": "nada"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_overlay"
+  }
+}

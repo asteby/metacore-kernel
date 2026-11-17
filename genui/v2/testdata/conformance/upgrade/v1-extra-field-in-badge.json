@@ -1,0 +1,22 @@
+{
+  "description": "v1 toleraba claves extra en objetos anidados; el v2 estricto las rechaza.",
+  "input": {
+    "version": "genui/v1",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "badges": [
+          {
+            "label": "a",
+            "onclick": "alert(1)"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.field_not_allowed"
+  }
+}

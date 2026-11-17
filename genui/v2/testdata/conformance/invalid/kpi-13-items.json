@@ -1,0 +1,69 @@
+{
+  "description": "Más de 12 ítems en kpi.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "kpi",
+        "items": [
+          {
+            "label": "A",
+            "value": "1"
+          },
+          {
+            "label": "A",
+            "value": "1"
+          },
+          {
+            "label": "A",
+            "value": "1"
+          },
+          {
+            "label": "A",
+            "value": "1"
+          },
+          {
+            "label": "A",
+            "value": "1"
+          },
+          {
+            "label": "A",
+            "value": "1"
+          },
+          {
+            "label": "A",
+            "value": "1"
+          },
+          {
+            "label": "A",
+            "value": "1"
+          },
+          {
+            "label": "A",
+            "value": "1"
+          },
+          {
+            "label": "A",
+            "value": "1"
+          },
+          {
+            "label": "A",
+            "value": "1"
+          },
+          {
+            "label": "A",
+            "value": "1"
+          },
+          {
+            "label": "A",
+            "value": "1"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.items"
+  }
+}

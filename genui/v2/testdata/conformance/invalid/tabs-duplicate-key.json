@@ -1,0 +1,37 @@
+{
+  "description": "Dos pestañas con la misma key.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "tabs",
+        "tabs": [
+          {
+            "key": "a",
+            "label": "A",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ]
+          },
+          {
+            "key": "a",
+            "label": "B",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.duplicate_id"
+  }
+}

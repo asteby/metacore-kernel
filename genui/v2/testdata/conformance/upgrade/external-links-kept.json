@@ -1,0 +1,37 @@
+{
+  "description": "Los enlaces http(s) de v1 se conservan cuando el host habilita allowExternalLinks.",
+  "options": {
+    "allowExternalLinks": true
+  },
+  "input": {
+    "version": "genui/v1",
+    "blocks": [
+      {
+        "type": "links",
+        "items": [
+          {
+            "title": "Nota",
+            "url": "https://ejemplo.mx/a"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "links",
+          "items": [
+            {
+              "title": "Nota",
+              "url": "https://ejemplo.mx/a"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

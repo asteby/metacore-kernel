@@ -1,0 +1,24 @@
+{
+  "description": "$ref no permitido en media.src.",
+  "input": {
+    "version": "genui/v2",
+    "state": {
+      "a": "/x"
+    },
+    "blocks": [
+      {
+        "type": "media",
+        "src": {
+          "$ref": "state.a"
+        },
+        "alt": "x",
+        "width": 1,
+        "height": 1
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.ref_not_allowed"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "description": "submit→invoke sin action.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "form",
+        "id": "f",
+        "fields": [
+          {
+            "key": "a",
+            "label": "A",
+            "kind": "text"
+          }
+        ],
+        "submit": {
+          "do": "submit",
+          "form": "f",
+          "to": "invoke"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.required"
+  }
+}

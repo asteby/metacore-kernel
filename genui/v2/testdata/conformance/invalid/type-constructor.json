@@ -1,0 +1,16 @@
+{
+  "description": "type: \"constructor\" no es un bloque (la lista cerrada no hereda del prototipo).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "constructor",
+        "text": "x"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_block"
+  }
+}

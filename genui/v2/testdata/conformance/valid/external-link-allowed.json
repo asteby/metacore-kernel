@@ -1,0 +1,23 @@
+{
+  "description": "Enlace http(s) literal permitido cuando el host lo habilita (chat).",
+  "options": {
+    "allowExternalLinks": true
+  },
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "links",
+        "items": [
+          {
+            "title": "Nota",
+            "url": "https://ejemplo.mx/a"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

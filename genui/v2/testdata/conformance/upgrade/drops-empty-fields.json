@@ -1,0 +1,83 @@
+{
+  "description": "Campos vacíos que v1 toleraba se omiten; null en celdas y params se conserva.",
+  "input": {
+    "version": "genui/v1",
+    "title": "",
+    "blocks": [
+      {
+        "type": "text",
+        "text": "x",
+        "tone": ""
+      },
+      {
+        "type": "table",
+        "title": "",
+        "columns": [
+          {
+            "key": "a",
+            "label": "A"
+          }
+        ],
+        "rows": [
+          {
+            "a": null
+          }
+        ],
+        "caption": ""
+      },
+      {
+        "type": "confirm",
+        "title": "T",
+        "badges": [],
+        "actions": [
+          {
+            "id": "a.b",
+            "label": "Ok",
+            "params": {
+              "x": null
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "x"
+        },
+        {
+          "type": "table",
+          "columns": [
+            {
+              "key": "a",
+              "label": "A"
+            }
+          ],
+          "rows": [
+            {
+              "a": null
+            }
+          ]
+        },
+        {
+          "type": "confirm",
+          "title": "T",
+          "actions": [
+            {
+              "id": "a.b",
+              "label": "Ok",
+              "params": {
+                "x": null
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

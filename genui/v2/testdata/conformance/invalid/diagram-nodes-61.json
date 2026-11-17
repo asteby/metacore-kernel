@@ -1,0 +1,263 @@
+{
+  "description": "más de 60 nodos.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "diagram",
+        "summary": "Flujo de servicios",
+        "nodes": [
+          {
+            "id": "n0",
+            "label": "N"
+          },
+          {
+            "id": "n1",
+            "label": "N"
+          },
+          {
+            "id": "n2",
+            "label": "N"
+          },
+          {
+            "id": "n3",
+            "label": "N"
+          },
+          {
+            "id": "n4",
+            "label": "N"
+          },
+          {
+            "id": "n5",
+            "label": "N"
+          },
+          {
+            "id": "n6",
+            "label": "N"
+          },
+          {
+            "id": "n7",
+            "label": "N"
+          },
+          {
+            "id": "n8",
+            "label": "N"
+          },
+          {
+            "id": "n9",
+            "label": "N"
+          },
+          {
+            "id": "n10",
+            "label": "N"
+          },
+          {
+            "id": "n11",
+            "label": "N"
+          },
+          {
+            "id": "n12",
+            "label": "N"
+          },
+          {
+            "id": "n13",
+            "label": "N"
+          },
+          {
+            "id": "n14",
+            "label": "N"
+          },
+          {
+            "id": "n15",
+            "label": "N"
+          },
+          {
+            "id": "n16",
+            "label": "N"
+          },
+          {
+            "id": "n17",
+            "label": "N"
+          },
+          {
+            "id": "n18",
+            "label": "N"
+          },
+          {
+            "id": "n19",
+            "label": "N"
+          },
+          {
+            "id": "n20",
+            "label": "N"
+          },
+          {
+            "id": "n21",
+            "label": "N"
+          },
+          {
+            "id": "n22",
+            "label": "N"
+          },
+          {
+            "id": "n23",
+            "label": "N"
+          },
+          {
+            "id": "n24",
+            "label": "N"
+          },
+          {
+            "id": "n25",
+            "label": "N"
+          },
+          {
+            "id": "n26",
+            "label": "N"
+          },
+          {
+            "id": "n27",
+            "label": "N"
+          },
+          {
+            "id": "n28",
+            "label": "N"
+          },
+          {
+            "id": "n29",
+            "label": "N"
+          },
+          {
+            "id": "n30",
+            "label": "N"
+          },
+          {
+            "id": "n31",
+            "label": "N"
+          },
+          {
+            "id": "n32",
+            "label": "N"
+          },
+          {
+            "id": "n33",
+            "label": "N"
+          },
+          {
+            "id": "n34",
+            "label": "N"
+          },
+          {
+            "id": "n35",
+            "label": "N"
+          },
+          {
+            "id": "n36",
+            "label": "N"
+          },
+          {
+            "id": "n37",
+            "label": "N"
+          },
+          {
+            "id": "n38",
+            "label": "N"
+          },
+          {
+            "id": "n39",
+            "label": "N"
+          },
+          {
+            "id": "n40",
+            "label": "N"
+          },
+          {
+            "id": "n41",
+            "label": "N"
+          },
+          {
+            "id": "n42",
+            "label": "N"
+          },
+          {
+            "id": "n43",
+            "label": "N"
+          },
+          {
+            "id": "n44",
+            "label": "N"
+          },
+          {
+            "id": "n45",
+            "label": "N"
+          },
+          {
+            "id": "n46",
+            "label": "N"
+          },
+          {
+            "id": "n47",
+            "label": "N"
+          },
+          {
+            "id": "n48",
+            "label": "N"
+          },
+          {
+            "id": "n49",
+            "label": "N"
+          },
+          {
+            "id": "n50",
+            "label": "N"
+          },
+          {
+            "id": "n51",
+            "label": "N"
+          },
+          {
+            "id": "n52",
+            "label": "N"
+          },
+          {
+            "id": "n53",
+            "label": "N"
+          },
+          {
+            "id": "n54",
+            "label": "N"
+          },
+          {
+            "id": "n55",
+            "label": "N"
+          },
+          {
+            "id": "n56",
+            "label": "N"
+          },
+          {
+            "id": "n57",
+            "label": "N"
+          },
+          {
+            "id": "n58",
+            "label": "N"
+          },
+          {
+            "id": "n59",
+            "label": "N"
+          },
+          {
+            "id": "n60",
+            "label": "N"
+          }
+        ],
+        "edges": []
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.items"
+  }
+}

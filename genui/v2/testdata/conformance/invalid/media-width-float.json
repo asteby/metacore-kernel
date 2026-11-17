@@ -1,0 +1,19 @@
+{
+  "description": "width debe ser entero.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "media",
+        "src": "asset:a",
+        "alt": "x",
+        "width": 1.5,
+        "height": 1
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.type"
+  }
+}

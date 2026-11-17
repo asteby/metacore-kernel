@@ -1,0 +1,55 @@
+{
+  "description": "Un bloque con when no es representable en v1: se usa su fallback en lugar de mostrarlo sin condición.",
+  "input": {
+    "spec": {
+      "version": "genui/v2",
+      "state": {
+        "a": 1
+      },
+      "blocks": [
+        {
+          "type": "text",
+          "text": "Secreto",
+          "when": {
+            "ref": "state.a",
+            "equals": 2
+          },
+          "fallback": "Oculto"
+        },
+        {
+          "type": "text",
+          "text": "Otro",
+          "when": {
+            "ref": "state.a",
+            "equals": 1
+          }
+        },
+        {
+          "type": "text",
+          "text": "Libre"
+        }
+      ]
+    },
+    "caps": {
+      "versions": [
+        "genui/v1"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "output": {
+      "version": "genui/v1",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "Oculto"
+        },
+        {
+          "type": "text",
+          "text": "Libre"
+        }
+      ]
+    }
+  }
+}

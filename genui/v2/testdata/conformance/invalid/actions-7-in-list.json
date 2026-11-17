@@ -1,0 +1,59 @@
+{
+  "description": "Siete acciones repartidas en los ítems de un list cuentan como del mismo bloque.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "list",
+        "items": [
+          {
+            "title": "i0",
+            "action": {
+              "do": "close"
+            }
+          },
+          {
+            "title": "i1",
+            "action": {
+              "do": "close"
+            }
+          },
+          {
+            "title": "i2",
+            "action": {
+              "do": "close"
+            }
+          },
+          {
+            "title": "i3",
+            "action": {
+              "do": "close"
+            }
+          },
+          {
+            "title": "i4",
+            "action": {
+              "do": "close"
+            }
+          },
+          {
+            "title": "i5",
+            "action": {
+              "do": "close"
+            }
+          },
+          {
+            "title": "i6",
+            "action": {
+              "do": "close"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.actions"
+  }
+}

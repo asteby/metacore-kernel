@@ -1,0 +1,22 @@
+{
+  "description": "refresh de una fuente no declarada.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "card",
+        "title": "x",
+        "actions": [
+          {
+            "do": "refresh",
+            "source": "nada"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_target"
+  }
+}

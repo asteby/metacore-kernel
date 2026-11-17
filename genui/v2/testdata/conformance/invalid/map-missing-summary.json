@@ -1,0 +1,32 @@
+{
+  "description": "summary es obligatorio (accesible).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "map",
+        "points": [
+          {
+            "key": "a",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto a",
+            "status": "ok"
+          },
+          {
+            "key": "b",
+            "lat": 19.5,
+            "lng": -99.2,
+            "label": "Punto b",
+            "status": "late",
+            "group": "mx"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.required"
+  }
+}

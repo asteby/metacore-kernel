@@ -1,0 +1,23 @@
+{
+  "description": "El cliente no habla ninguna versión conocida.",
+  "input": {
+    "spec": {
+      "version": "genui/v2",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "Hola"
+        }
+      ]
+    },
+    "caps": {
+      "versions": [
+        "genui/v9"
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unsupported_version"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "description": "__proto__ dentro de una fila de datos.",
+  "input": {"version":"genui/v2","blocks":[{"type":"table","columns":[{"key":"a","label":"A"}],"rows":[{"__proto__":"x"}]}]},
+  "expect": {"ok":false,"code":"genui.forbidden_key"}
+}

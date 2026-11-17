@@ -1,0 +1,63 @@
+{
+  "description": "Más de 4 overlays.",
+  "input": {
+    "version": "genui/v2",
+    "overlays": {
+      "o0": {
+        "kind": "modal",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      },
+      "o1": {
+        "kind": "modal",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      },
+      "o2": {
+        "kind": "modal",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      },
+      "o3": {
+        "kind": "modal",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      },
+      "o4": {
+        "kind": "modal",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      }
+    },
+    "blocks": [
+      {
+        "type": "text",
+        "text": "Hola"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.overlays"
+  }
+}
