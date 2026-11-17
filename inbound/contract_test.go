@@ -121,8 +121,11 @@ func TestLookupAndMapping(t *testing.T) {
 	}
 	r := Route{Mapping: map[string]string{"x": "s", "y": "a.b.0.c", "z": "missing"}, Defaults: map[string]any{"x": "default", "k": 1}}
 	got := applyMapping(r, p)
-	if got["x"] != "x" || got["y"] != float64(5) || got["k"] != 1 {
+	if got["x"] != "x" || got["y"] != float64(5) {
 		t.Fatalf("%v", got)
+	}
+	if _, ok := got["k"]; ok {
+		t.Fatal("defaults must not be merged into mapped values (they apply on create only)")
 	}
 	if _, ok := got["z"]; ok {
 		t.Fatal("absent source must be omitted, not nil")

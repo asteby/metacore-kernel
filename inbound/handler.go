@@ -26,6 +26,7 @@ const (
 	DefaultMaxBody     = 1 << 20 // 1 MiB
 	DefaultLease       = 60 * time.Second
 	DefaultExecTimeout = 15 * time.Second
+	DefaultMaxHops     = 3
 	DefaultPrefix      = "/api/inbound/"
 	maxSchemaDetails   = 10
 )
@@ -40,6 +41,11 @@ type Config struct {
 	// command routes. At least the one the contracts need must be set.
 	Executor Executor
 	Commands *CommandRegistry
+	// Ports for the actions of RFC 0003 §2.4 (each needed only by contracts
+	// that use that action): event.emit, notify, automation.enqueue.
+	Emitter    EventEmitter
+	Notifier   Notifier
+	Automation AutomationIngester
 
 	MaxBodyBytes int64         // default 1 MiB
 	Lease        time.Duration // processing reservation lease, default 60 s
@@ -61,6 +67,9 @@ type Config struct {
 	// contracts always answer 401.
 	DefaultAuth string
 	// Prefix is the mount prefix, default "/api/inbound/".
+	// MaxHops bounds chains of inbound->emit->inbound events (default 3): an
+	// event whose body carries _hop >= MaxHops is ignored.
+	MaxHops int
 	Prefix string
 	Logger *slog.Logger
 	Now    func() time.Time
@@ -86,6 +95,9 @@ func New(cfg Config) (*Handler, error) {
 	}
 	if cfg.ExecTimeout <= 0 {
 		cfg.ExecTimeout = DefaultExecTimeout
+	}
+	if cfg.MaxHops <= 0 {
+		cfg.MaxHops = DefaultMaxHops
 	}
 	if cfg.Prefix == "" {
 		cfg.Prefix = DefaultPrefix
@@ -136,6 +148,9 @@ const (
 	CodeInternal          = "internal_error"
 	CodeContractMisconfig = "contract_misconfigured"
 	CodeScopeRequired     = "scope_required"
+	CodeOriginLoop        = "origin_loop"
+	CodeInvalidOrigin     = "invalid_origin"
+	CodeLeaseLost         = "lease_lost"
 )
 
 // ErrorBody is the uniform error envelope: {"error": {...}}.
@@ -149,6 +164,8 @@ type ErrorDetail struct {
 	Code    string       `json:"code"`
 	Message string       `json:"message"`
 	Details []FieldIssue `json:"details,omitempty"`
+	// FailedAction is the index of the chain action that stopped (no values).
+	FailedAction *int `json:"failed_action,omitempty"`
 }
 
 // FieldIssue points at the offending field and the failed schema keyword.
@@ -162,6 +179,7 @@ type SuccessBody struct {
 	Status    string `json:"status"` // applied | replayed
 	ReceiptID string `json:"receipt_id"`
 	RecordID  string `json:"record_id,omitempty"`
+	Actions   []ActionStep `json:"actions,omitempty"`
 	Created   bool   `json:"created,omitempty"`
 }
 
@@ -283,6 +301,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sum := sha256.Sum256(body)
 	base := Receipt{OrgID: org, Contract: c.Key, Version: c.Version, BodyHash: hex.EncodeToString(sum[:])}
 
+	// Origin mark and hop counter travel INSIDE the signed body (reserved
+	// keys, removed before schema validation); a header would be unsigned.
+	origin, hop, oerr := takeOrigin(payload)
+	if oerr != nil {
+		rec := base
+		rec.Status, rec.ErrorCode = StatusRejected, CodeInvalidOrigin
+		_ = h.cfg.Receipts.Record(r.Context(), rec)
+		writeErr(w, http.StatusUnprocessableEntity, CodeInvalidOrigin, "reserved origin fields are malformed")
+		return
+	}
+	if (origin != "" && (origin == OriginPrefix+c.Key || OriginExcluded(origin, c.IgnoreOrigins))) || hop >= h.cfg.MaxHops {
+		// Caused by this contract, an excluded origin, or too many hops: a loop.
+		rec := base
+		rec.Status, rec.ErrorCode = StatusRejected, CodeOriginLoop
+		_ = h.cfg.Receipts.Record(r.Context(), rec)
+		writeJSON(w, http.StatusOK, SuccessBody{Status: "ignored"})
+		return
+	}
 	if verr := c.schema.Validate(payload); verr != nil {
 		h.reject(r.Context(), base, CodeInvalidSchema)
 		writeErr(w, http.StatusUnprocessableEntity, CodeInvalidSchema, "payload does not satisfy the contract schema", schemaIssues(verr)...)
@@ -294,7 +330,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnprocessableEntity, CodeMissingEventKey, "event key could not be derived")
 		return
 	}
-	op := Operation{Org: org, Contract: c.Key, EventKey: evKey, Route: c.Route, Values: applyMapping(c.Route, payload)}
+	op := Operation{Org: org, Contract: c.Key, EventKey: evKey, Route: c.Route, Values: applyMapping(c.Route, payload),
+		CreateDefaults: c.Route.Defaults, Origin: OriginPrefix + c.Key, Hop: hop}
 	if sc := c.Route.Scope; sc != nil {
 		op.Branch = scopeValue(payload, sc.Branch)
 		op.Entity = scopeValue(payload, sc.Entity)
@@ -307,6 +344,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if len(c.chain) > 0 && !chainScopeOK(c, payload) {
+		h.reject(r.Context(), base, CodeScopeRequired)
+		writeErr(w, http.StatusUnprocessableEntity, CodeScopeRequired, "the event must name its branch and entity")
+		return
+	}
 	// Last gate before side effects: consume the nonce.
 	if commit != nil {
 		if err := commit(); err != nil {
@@ -331,6 +373,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(c.chain) > 0 {
+		h.serveChain(w, r.Context(), c, org, evKey, payload, hop, cur)
+		return
+	}
 	out, xerr := h.execute(r.Context(), c, op)
 	if xerr != nil {
 		h.fail(w, r.Context(), cur, xerr)
@@ -387,7 +433,10 @@ func (h *Handler) answerExisting(w http.ResponseWriter, cur Receipt, bodyHash st
 			writeErr(w, http.StatusConflict, CodeIdempotencyClash, "event key already used with a different payload")
 			return
 		}
-		writeJSON(w, http.StatusOK, SuccessBody{Status: "replayed", ReceiptID: cur.ID.String(), RecordID: cur.RecordID})
+		writeJSON(w, http.StatusOK, SuccessBody{Status: "replayed", ReceiptID: cur.ID.String(), RecordID: cur.RecordID, Actions: cur.Progress})
+	case StatusFailed:
+		// Only reached when a partially applied chain is retried with another body.
+		writeErr(w, http.StatusConflict, CodeIdempotencyClash, "event key already used with a different payload")
 	default: // processing within lease
 		w.Header().Set("Retry-After", "5")
 		writeErr(w, http.StatusConflict, CodeInProgress, "event is being processed")
@@ -533,7 +582,14 @@ func (h *Handler) checkOne(ctx context.Context, c *compiled) error {
 	if _, ok := h.cfg.Verifiers[c.Auth]; !ok {
 		errs = append(errs, fmt.Errorf("contract %s v%d: unknown auth profile %q", c.Key, c.Version, c.Auth))
 	}
-	if c.Route.Command != "" {
+	if len(c.chain) > 0 {
+		errs = append(errs, h.checkChain(c)...)
+		if cc, ok := h.cfg.Executor.(ContractChecker); ok && h.cfg.Executor != nil {
+			if err := cc.CheckContract(ctx, c.Contract); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	} else if c.Route.Command != "" {
 		if _, ok := h.cfg.Commands.get(c.Route.Command); !ok {
 			errs = append(errs, fmt.Errorf("contract %s v%d: command %q not registered", c.Key, c.Version, c.Route.Command))
 		}
