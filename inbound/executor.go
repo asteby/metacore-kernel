@@ -23,6 +23,15 @@ type Operation struct {
 	Route    Route
 	Values   map[string]any
 	// Branch / Entity are the optional scope extracted from the payload.
+	Origin string // "inbound:<contract>"
+	// Hop is the hop counter of the incoming event (0 = external).
+	Hop int
+	// IdempotencyKey is "<receipt>:<action>" for chain actions; stable across
+	// retries of the same event.
+	IdempotencyKey string
+	// CreateDefaults are constants applied ONLY when a row is created (never
+	// on update, so a default like status=new cannot revert later changes).
+	CreateDefaults map[string]any
 	Branch string
 	Entity string
 	// RequireBranch / RequireEntity: the contract declares that scope, so the
@@ -145,25 +154,43 @@ func (d *DynamicExecutor) st() (dynStore, error) {
 // must be a declared column of the model, otherwise the query layer would
 // silently drop the filter. The failure is a startup error, not a runtime one.
 func (d *DynamicExecutor) CheckContract(ctx context.Context, c Contract) error {
-	r := c.Route
-	if r.Model == "" {
-		return nil
+	if c.Route.Model != "" {
+		if err := d.checkModel(ctx, c.Key, c.Route.Model, c.Route.Match); err != nil {
+			return err
+		}
 	}
+	for i, a := range c.Actions {
+		if a.Model == "" {
+			continue
+		}
+		fields := append([]string(nil), a.Match...)
+		if a.IdempotencyField != "" {
+			fields = append(fields, a.IdempotencyField)
+		}
+		if err := d.checkModel(ctx, fmt.Sprintf("%s actions[%d]", c.Key, i), a.Model, fields); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkModel requires every field to be a declared column of the model.
+func (d *DynamicExecutor) checkModel(ctx context.Context, who, model string, fields []string) error {
 	st, err := d.st()
 	if err != nil {
 		return err
 	}
-	meta, err := st.TableMetadata(ctx, r.Model)
+	meta, err := st.TableMetadata(ctx, model)
 	if err != nil || meta == nil {
-		return fmt.Errorf("%w: %s: model %q has no metadata", ErrInvalidContract, c.Key, r.Model)
+		return fmt.Errorf("%w: %s: model %q has no metadata", ErrInvalidContract, who, model)
 	}
 	cols := map[string]bool{}
 	for _, col := range meta.Columns {
 		cols[col.Key] = true
 	}
-	for _, m := range r.Match {
+	for _, m := range fields {
 		if !cols[m] {
-			return fmt.Errorf("%w: %s: match field %q is not a filterable column of model %q", ErrInvalidContract, c.Key, m, r.Model)
+			return fmt.Errorf("%w: %s: field %q is not a filterable column of model %q", ErrInvalidContract, who, m, model)
 		}
 	}
 	return nil
@@ -209,7 +236,7 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 	model := op.Route.Model
 	switch op.Route.Op {
 	case OpCreate:
-		return create(ctx, st, model, user, op.Values)
+		return create(ctx, st, model, user, withDefaults(op.CreateDefaults, op.Values))
 	case OpUpdate, OpUpsert:
 		unlock := d.lock(op)
 		defer unlock()
@@ -221,7 +248,7 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 			if op.Route.Op == OpUpdate {
 				return Outcome{}, &ExecError{Kind: KindNotFound, Code: "record_not_found"}
 			}
-			out, cerr := create(ctx, st, model, user, op.Values)
+			out, cerr := create(ctx, st, model, user, withDefaults(op.CreateDefaults, op.Values))
 			if cerr == nil {
 				return out, nil
 			}
@@ -396,4 +423,19 @@ func mapDynamicErr(err error) error {
 		return &ExecError{Kind: KindForbidden, Code: "forbidden", Err: err}
 	}
 	return &ExecError{Kind: KindInternal, Code: "internal", Err: err}
+}
+
+// withDefaults returns vals over defaults (mapped data wins) as a new map.
+func withDefaults(defaults, vals map[string]any) map[string]any {
+	if len(defaults) == 0 {
+		return vals
+	}
+	out := make(map[string]any, len(defaults)+len(vals))
+	for k, v := range defaults {
+		out[k] = v
+	}
+	for k, v := range vals {
+		out[k] = v
+	}
+	return out
 }
