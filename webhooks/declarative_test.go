@@ -3,6 +3,7 @@ package webhooks
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
@@ -66,6 +67,7 @@ type target struct {
 	spec   *signing.Spec
 	clk    *fakeClock
 	nonces *security.NonceCache
+	resp   string // si no es vacio, cuerpo de respuesta crudo
 }
 
 func newTarget(t *testing.T, clk *fakeClock, spec *signing.Spec, script ...int) *target {
@@ -87,6 +89,10 @@ func newTarget(t *testing.T, clk *fakeClock, spec *signing.Spec, script ...int) 
 		tg.hits = append(tg.hits, h)
 		tg.mu.Unlock()
 		w.WriteHeader(status)
+		if tg.resp != "" {
+			_, _ = w.Write([]byte(tg.resp))
+			return
+		}
 		_, _ = w.Write([]byte(`{"success":true}`))
 	}))
 	t.Cleanup(tg.Close)
@@ -100,12 +106,14 @@ func (tg *target) Hits() []hit {
 }
 
 type testEnv struct {
-	db  *gorm.DB
-	svc *Service
-	clk *fakeClock
-	org uuid.UUID
-	tg  *target
-	bus *events.Bus
+	db    *gorm.DB
+	svc   *Service
+	clk   *fakeClock
+	org   uuid.UUID
+	tg    *target
+	bus   *events.Bus
+	other uuid.UUID
+	sec   *testSecrets
 }
 
 func testSchemas() *Schemas {
@@ -114,19 +122,55 @@ func testSchemas() *Schemas {
 		Register("customers.customer.updated", "id", "name", "email", "branch_id", "channel")
 }
 
-func testResolver() SecretResolver {
-	return SecretResolverFunc(func(_ context.Context, ref string) (string, error) {
-		switch ref {
-		case "v2.signing_secret":
-			return testHMACSecret, nil
-		case "v2.api_key":
-			return testBearer, nil
-		}
-		return "", errors.New("unknown ref")
-	})
+const otherOrgToken = "OTHER-ORG-TOKEN-must-never-leak"
+
+// testSecrets resuelve por propietario: cada referencia pertenece a UNA org.
+type testSecrets struct {
+	mu    sync.Mutex
+	owner map[string]uuid.UUID
+	val   map[string]string
+	down  bool
 }
 
-// newEnv arma servicio + destino + bus con el puente conectado.
+func (s *testSecrets) ResolveSecret(_ context.Context, ownerType string, ownerID uuid.UUID, ref string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.down {
+		return "", errors.New("secret store down")
+	}
+	if ownerType != "organization" || s.owner[ref] != ownerID {
+		return "", errors.New("unknown ref")
+	}
+	return s.val[ref], nil
+}
+
+func (s *testSecrets) setDown(v bool) {
+	s.mu.Lock()
+	s.down = v
+	s.mu.Unlock()
+}
+
+func newTestSecrets(org, other uuid.UUID) *testSecrets {
+	return &testSecrets{
+		owner: map[string]uuid.UUID{"v2.signing_secret": org, "v2.api_key": org, "other.api_key": other},
+		val:   map[string]string{"v2.signing_secret": testHMACSecret, "v2.api_key": testBearer, "other.api_key": otherOrgToken},
+	}
+}
+
+// evDecl es una configuracion minima valida (solo rutas del sobre).
+func evDecl() *Declarative {
+	return &Declarative{Transform: &Transform{Body: map[string]any{"x": "{{event.id}}"}}}
+}
+
+func evDeclSigned(sp *signing.Spec) *Declarative {
+	d := evDecl()
+	d.Signing = sp
+	return d
+}
+
+// newEnv arma servicio + destino + bus con el puente conectado. El servicio usa
+// el cliente de salida PROTEGIDO real (webhookout): el destino de prueba es un
+// host interno autorizado explicitamente (AllowInternalHosts) con su CA.
 func newEnv(t *testing.T, spec *signing.Spec, script ...int) *testEnv {
 	t.Helper()
 	db := setupTestDB(t)
@@ -134,15 +178,21 @@ func newEnv(t *testing.T, spec *signing.Spec, script ...int) *testEnv {
 	sqlDB.SetMaxOpenConns(1) // ":memory:" es por conexion
 	clk := newClock()
 	tg := newTarget(t, clk, spec, script...)
+	org, other := uuid.New(), uuid.New()
+	pool := x509.NewCertPool()
+	pool.AddCert(tg.Certificate())
+	sec := newTestSecrets(org, other)
 	svc := New(Config{
-		DB: db, Clock: clk.Now, HTTPClient: tg.Client(),
-		Schemas: testSchemas(), Secrets: testResolver(), UnsafeAllowPrivateTargets: true,
+		DB: db, Clock: clk.Now, HTTPClient: tg.Client(), BatchSize: 1,
+		Schemas: testSchemas(), Secrets: sec,
+		AllowInternalHosts: []string{strings.TrimPrefix(tg.URL, "https://")},
+		EgressTLS:          &tls.Config{RootCAs: pool},
 	})
 	bus := events.NewBus(nil)
 	if err := NewBridge(svc, BridgeOptions{}).Attach(bus); err != nil {
 		t.Fatal(err)
 	}
-	return &testEnv{db: db, svc: svc, clk: clk, org: uuid.New(), tg: tg, bus: bus}
+	return &testEnv{db: db, svc: svc, clk: clk, org: org, other: other, sec: sec, tg: tg, bus: bus}
 }
 
 func (e *testEnv) sub(decl *Declarative, evs ...string) *Webhook {
@@ -317,7 +367,7 @@ func TestEndToEndFilterExcludesEvent(t *testing.T) {
 
 func TestEventPatternMatching(t *testing.T) {
 	e := newEnv(t, nil)
-	d := &Declarative{Enabled: true}
+	d := &Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}
 	w := e.create(t, e.sub(d, "customers.customer.created"))
 	e.publish(t, "customers.customer.updated", customerPayload("evt-u", "cus-1", nil))
 	e.publish(t, "orders.order.created", map[string]any{"id": "o1"})
@@ -332,7 +382,7 @@ func TestEventPatternMatching(t *testing.T) {
 
 func TestDefaultBodyHasEnvelopeAndPayload(t *testing.T) {
 	e := newEnv(t, nil)
-	w := e.create(t, e.sub(&Declarative{Enabled: true}))
+	w := e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}))
 	e.publish(t, "customers.customer.created", customerPayload("evt-d", "cus-1", nil))
 	e.drain(1)
 	hits := e.tg.Hits()
@@ -400,7 +450,7 @@ func TestDisabledRetainsAndEnableReleases(t *testing.T) {
 
 func TestUpdateEnablingAlsoReleases(t *testing.T) {
 	e := newEnv(t, nil)
-	w := e.create(t, e.sub(&Declarative{Enabled: false}))
+	w := e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: false}))
 	e.publish(t, "customers.customer.created", customerPayload("evt-1", "cus-1", nil))
 	w.Declarative.Enabled = true
 	if err := e.svc.Update(context.Background(), w); err != nil {
@@ -414,7 +464,7 @@ func TestUpdateEnablingAlsoReleases(t *testing.T) {
 
 func TestDisablingWhileQueuedRetainsInsteadOfSending(t *testing.T) {
 	e := newEnv(t, nil)
-	w := e.create(t, e.sub(&Declarative{Enabled: true}))
+	w := e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}))
 	e.publish(t, "customers.customer.created", customerPayload("evt-1", "cus-1", nil))
 	if _, err := e.svc.SetEnabled(context.Background(), w.ID, false); err != nil {
 		t.Fatal(err)
@@ -447,7 +497,7 @@ func TestSetEnabledOnClassicWebhook(t *testing.T) {
 
 func TestBusRepublicationIsDeduplicated(t *testing.T) {
 	e := newEnv(t, nil)
-	w := e.create(t, e.sub(&Declarative{Enabled: true}))
+	w := e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}))
 	p := customerPayload("evt-same", "cus-1", nil)
 	e.publish(t, "customers.customer.created", p)
 	e.publish(t, "customers.customer.created", p) // relay del outbox: at-least-once
@@ -465,14 +515,14 @@ func TestBusRepublicationIsDeduplicated(t *testing.T) {
 
 func TestIdempotencyTemplateAndFallback(t *testing.T) {
 	e := newEnv(t, nil)
-	d := &Declarative{Enabled: true, Idempotency: "cust-{{event.aggregate_id}}-v{{event.sequence}}"}
+	d := &Declarative{PayloadFields: []string{"id", "name"}, Enabled: true, Idempotency: "cust-{{event.aggregate_id}}-v{{event.sequence}}"}
 	w := e.create(t, e.sub(d))
 	e.publish(t, "customers.customer.created", customerPayload("evt-1", "cus-7", nil))
 	if got := e.deliveries(t, w)[0].IdempotencyKey; got != "cust-cus-7-v1" {
 		t.Fatalf("key = %q", got)
 	}
 	// plantilla que renderiza vacio => cae al id del evento
-	d2 := &Declarative{Enabled: true, Idempotency: "{{event.actor_id}}"}
+	d2 := &Declarative{PayloadFields: []string{"id", "name"}, Enabled: true, Idempotency: "{{event.actor_id}}"}
 	w2 := e.create(t, e.sub(d2))
 	e.publish(t, "customers.customer.updated", customerPayload("evt-2", "cus-7", nil))
 	if got := e.deliveries(t, w2)[0].IdempotencyKey; got != "evt-2" {
@@ -487,7 +537,7 @@ func TestIdempotencyTemplateAndFallback(t *testing.T) {
 
 func TestCustomIdempotencyHeader(t *testing.T) {
 	e := newEnv(t, nil)
-	e.create(t, e.sub(&Declarative{Enabled: true, IdempotencyHeader: "Idempotency-Key"}))
+	e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true, IdempotencyHeader: "Idempotency-Key"}))
 	e.publish(t, "customers.customer.created", customerPayload("evt-1", "cus-1", nil))
 	e.drain(1)
 	if e.tg.Hits()[0].Header.Get("Idempotency-Key") != "evt-1" {
@@ -497,7 +547,7 @@ func TestCustomIdempotencyHeader(t *testing.T) {
 
 func TestReplayKeepsIdempotencyKey(t *testing.T) {
 	e := newEnv(t, nil, 422) // primera entrega: 422 => muerta (no se reintenta)
-	w := e.create(t, e.sub(&Declarative{Enabled: true}))
+	w := e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}))
 	e.publish(t, "customers.customer.created", customerPayload("evt-r", "cus-1", nil))
 	e.drain(1)
 	rows := e.deliveries(t, w)
@@ -530,7 +580,7 @@ func TestRetryPolicyByStatus(t *testing.T) {
 	}
 	for status, retry := range cases {
 		e := newEnv(t, nil, status)
-		w := e.create(t, e.sub(&Declarative{Enabled: true}))
+		w := e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}))
 		e.publish(t, "customers.customer.created", customerPayload("evt-p", "cus-1", nil))
 		e.drain(1)
 		rows := e.deliveries(t, w)
@@ -542,7 +592,7 @@ func TestRetryPolicyByStatus(t *testing.T) {
 
 func TestRetriesStopAtRetryMax(t *testing.T) {
 	e := newEnv(t, nil, 500, 500, 500)
-	w := e.sub(&Declarative{Enabled: true})
+	w := e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true})
 	w.RetryMax = 2
 	e.create(t, w)
 	e.publish(t, "customers.customer.created", customerPayload("evt-m", "cus-1", nil))
@@ -559,7 +609,7 @@ func TestRetriesStopAtRetryMax(t *testing.T) {
 
 func TestPerAggregateOrdering(t *testing.T) {
 	e := newEnv(t, nil, 500) // el 1er evento de cus-1 falla una vez
-	d := &Declarative{Enabled: true, Ordering: OrderingPerAggregate}
+	d := &Declarative{PayloadFields: []string{"id", "name"}, Enabled: true, Ordering: OrderingPerAggregate}
 	e.create(t, e.sub(d))
 	e.publish(t, "customers.customer.created", customerPayload("a1", "cus-1", nil))
 	e.publish(t, "customers.customer.updated", customerPayload("a2", "cus-1", nil))
@@ -590,7 +640,7 @@ func TestPerAggregateOrdering(t *testing.T) {
 
 func TestOrderingNoneDoesNotBlock(t *testing.T) {
 	e := newEnv(t, nil, 500)
-	e.create(t, e.sub(&Declarative{Enabled: true}))
+	e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}))
 	e.publish(t, "customers.customer.created", customerPayload("a1", "cus-1", nil))
 	e.publish(t, "customers.customer.updated", customerPayload("a2", "cus-1", nil))
 	e.drain(2)
@@ -601,7 +651,7 @@ func TestOrderingNoneDoesNotBlock(t *testing.T) {
 
 func TestExhaustedPredecessorNoLongerBlocks(t *testing.T) {
 	e := newEnv(t, nil, 500, 500)
-	w := e.sub(&Declarative{Enabled: true, Ordering: OrderingPerAggregate})
+	w := e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true, Ordering: OrderingPerAggregate})
 	w.RetryMax = 1
 	e.create(t, w)
 	e.publish(t, "customers.customer.created", customerPayload("a1", "cus-1", nil))
@@ -617,7 +667,7 @@ func TestExhaustedPredecessorNoLongerBlocks(t *testing.T) {
 
 func TestRenderFailureIsRecordedNotLost(t *testing.T) {
 	e := newEnv(t, nil)
-	d := &Declarative{Enabled: true, Transform: &Transform{
+	d := &Declarative{PayloadFields: []string{"id", "name"}, Enabled: true, Transform: &Transform{
 		Body:   map[string]any{"c": "{{payload.channel | map:ch}}"},
 		Tables: map[string]map[string]string{"ch": {"pos": "retail"}}, // 'web' no esta
 	}}
@@ -638,7 +688,7 @@ func TestRenderFailureIsRecordedNotLost(t *testing.T) {
 func TestSaveRejectsUnknownPathsAndBadConfig(t *testing.T) {
 	e := newEnv(t, nil)
 	mk := func(mut func(d *Declarative, w *Webhook)) error {
-		d := &Declarative{Enabled: true}
+		d := &Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}
 		w := e.sub(d)
 		mut(d, w)
 		return e.svc.Create(context.Background(), w)
@@ -654,9 +704,9 @@ func TestSaveRejectsUnknownPathsAndBadConfig(t *testing.T) {
 		{"payload path not in schema (filter)", func(d *Declarative, w *Webhook) {
 			d.Filter = &Filter{All: []Condition{{Path: "payload.nope", Eq: json.RawMessage(`1`)}}}
 		}, ErrUnknownPath},
-		{"payload path not in schema (idempotency)", func(d *Declarative, w *Webhook) {
+		{"idempotency may not read the payload (PII)", func(d *Declarative, w *Webhook) {
 			d.Idempotency = "{{payload.nope}}"
-		}, ErrUnknownPath},
+		}, ErrInvalidDeclarative},
 		{"path valid in created but not in updated", func(d *Declarative, w *Webhook) {
 			d.Transform = &Transform{Body: map[string]any{"x": "{{payload.address.city}}"}}
 		}, ErrUnknownPath},
@@ -703,7 +753,7 @@ func TestSaveRejectsUnknownPathsAndBadConfig(t *testing.T) {
 
 func TestSaveRejectsOnUpdateToo(t *testing.T) {
 	e := newEnv(t, nil)
-	w := e.create(t, e.sub(&Declarative{Enabled: true}))
+	w := e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}))
 	w.Declarative.Transform = &Transform{Body: map[string]any{"x": "{{payload.nope}}"}}
 	if err := e.svc.Update(context.Background(), w); !errors.Is(err, ErrUnknownPath) {
 		t.Fatalf("Update must validate: %v", err)
@@ -731,7 +781,7 @@ func TestSigningRequiresSecretResolver(t *testing.T) {
 	svc := New(Config{DB: db, UnsafeAllowPrivateTargets: true})
 	err := svc.Create(context.Background(), &Webhook{URL: "https://x.example.com/h", Events: StringSlice{"a.b"},
 		Active: true, OwnerType: "o", OwnerID: uuid.New(),
-		Declarative: &Declarative{Signing: &signing.Spec{Profile: signing.Bearer, KeyRef: "v2.api_key"}}})
+		Declarative: evDeclSigned(&signing.Spec{Profile: signing.Bearer, KeyRef: "v2.api_key"})})
 	if !errors.Is(err, ErrNoSecretResolver) {
 		t.Fatalf("got %v", err)
 	}
@@ -742,7 +792,7 @@ func TestSaveBlocksInternalTargets(t *testing.T) {
 	svc := New(Config{DB: db}) // politica real
 	for _, u := range []string{"http://x.example.com/h", "https://127.0.0.1/h", "https://10.1.2.3/h", "https://metadata.internal/h", "https://localhost/h"} {
 		err := svc.Create(context.Background(), &Webhook{URL: u, Events: StringSlice{"a.b"}, Active: true,
-			OwnerType: "o", OwnerID: uuid.New(), Declarative: &Declarative{}})
+			OwnerType: "o", OwnerID: uuid.New(), Declarative: evDecl()})
 		if !errors.Is(err, ErrBlockedTarget) {
 			t.Errorf("%s: got %v", u, err)
 		}
@@ -753,7 +803,7 @@ func TestSaveBlocksInternalTargets(t *testing.T) {
 		t.Fatalf("classic webhook must keep working: %v", err)
 	}
 	if err := svc.Create(context.Background(), &Webhook{URL: "https://api.example.com/h", Events: StringSlice{"a.b"},
-		Active: true, OwnerType: "o", OwnerID: uuid.New(), Declarative: &Declarative{}}); err != nil {
+		Active: true, OwnerType: "o", OwnerID: uuid.New(), Declarative: evDecl()}); err != nil {
 		t.Fatalf("public https target rejected: %v", err)
 	}
 }
@@ -772,7 +822,7 @@ func TestDefaultEgressClientBlocksLoopbackAtDialTime(t *testing.T) {
 	svc := New(Config{DB: db, Clock: clk.Now, UnsafeAllowPrivateTargets: true}) // egress = netguard por omision
 	org := uuid.New()
 	w := &Webhook{URL: srv.URL, Events: StringSlice{"a.b"}, Active: true, OwnerType: "organization", OwnerID: org,
-		Declarative: &Declarative{Enabled: true}, RetryMax: 1}
+		Declarative: &Declarative{Transform: &Transform{Body: map[string]any{"x": "{{event.id}}"}}, Enabled: true}, RetryMax: 1}
 	if err := svc.Create(context.Background(), w); err != nil {
 		t.Fatal(err)
 	}
@@ -845,17 +895,19 @@ func TestSecretsNeverPersistedNorLogged(t *testing.T) {
 
 func TestUnresolvableSecretFailsDeliveryWithoutLeakingAndRetries(t *testing.T) {
 	e := newEnv(t, nil)
-	d := v2Decl()
-	d.Signing = &signing.Spec{Profile: signing.Bearer, KeyRef: "missing.ref"}
-	w := e.create(t, e.sub(d))
+	w := e.create(t, e.sub(v2Decl()))
+	e.sec.setDown(true) // the secret store goes away after the subscription was saved
 	e.publish(t, "customers.customer.created", customerPayload("evt-q", "cus-1", nil))
 	e.drain(1)
 	rows := e.deliveries(t, w)
-	if rows[0].Succeeded || rows[0].NextAttemptAt == nil || !strings.Contains(rows[0].ErrorMessage, "missing.ref") {
+	if rows[0].Succeeded || rows[0].NextAttemptAt == nil || !strings.Contains(rows[0].ErrorMessage, "could not be resolved") {
 		t.Fatalf("%+v", rows[0])
 	}
 	if len(e.tg.Hits()) != 0 {
 		t.Fatal("must not send unsigned")
+	}
+	if got := reload(t, e, w); got.ConsecutiveFailures != 0 {
+		t.Fatalf("a secret-store outage is not the destination fault: %d", got.ConsecutiveFailures)
 	}
 }
 
@@ -863,7 +915,7 @@ func TestUnresolvableSecretFailsDeliveryWithoutLeakingAndRetries(t *testing.T) {
 
 func TestPurgeDeadPayloads(t *testing.T) {
 	e := newEnv(t, nil, 422)
-	w := e.create(t, e.sub(&Declarative{Enabled: true}))
+	w := e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}))
 	e.publish(t, "customers.customer.created", customerPayload("evt-z", "cus-1", nil))
 	e.drain(1)
 	if n, _ := e.svc.PurgeDeadPayloads(context.Background(), w.ID, e.clk.Now().Add(-time.Hour)); n != 0 {
@@ -925,7 +977,7 @@ func TestClassicWebhookUnchangedAndNotFedByBridge(t *testing.T) {
 
 func TestTriggerAlsoServesDeclarativeSubscriptions(t *testing.T) {
 	e := newEnv(t, nil)
-	w := e.create(t, e.sub(&Declarative{Enabled: true, Transform: &Transform{Body: map[string]any{"n": "{{payload.name}}"}}}))
+	w := e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true, Transform: &Transform{Body: map[string]any{"n": "{{payload.name}}"}}}))
 	if err := e.svc.Trigger(context.Background(), "customers.customer.created", "organization", e.org, JSONMap{"name": "Ana"}); err != nil {
 		t.Fatal(err)
 	}
@@ -979,7 +1031,7 @@ func TestClassicRetryAndBackoffUnchanged(t *testing.T) {
 
 func TestBridgeSurfacesDurableFailure(t *testing.T) {
 	e := newEnv(t, nil)
-	e.create(t, e.sub(&Declarative{Enabled: true}))
+	e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}))
 	if err := e.db.Exec("DROP TABLE webhooks").Error; err != nil {
 		t.Fatal(err)
 	}
@@ -991,7 +1043,7 @@ func TestBridgeSurfacesDurableFailure(t *testing.T) {
 
 func TestBridgeIsolatesOrganizations(t *testing.T) {
 	e := newEnv(t, nil)
-	w := e.create(t, e.sub(&Declarative{Enabled: true}))
+	w := e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}))
 	other := uuid.New()
 	if err := e.bus.Publish(context.Background(), "kernel", "customers.customer.created", other, customerPayload("evt-1", "cus-1", nil)); err != nil {
 		t.Fatal(err)
@@ -1009,8 +1061,8 @@ func TestBridgeIsolatesOrganizations(t *testing.T) {
 
 func TestMultipleSubscriptionsGetIndependentDeliveries(t *testing.T) {
 	e := newEnv(t, nil)
-	a := e.create(t, e.sub(&Declarative{Enabled: true, Transform: &Transform{Body: map[string]any{"n": "{{payload.name | trim}}"}}}))
-	b := e.create(t, e.sub(&Declarative{Enabled: true, Filter: &Filter{All: []Condition{{Path: "payload.channel", Eq: json.RawMessage(`"pos"`)}}}}))
+	a := e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true, Transform: &Transform{Body: map[string]any{"n": "{{payload.name | trim}}"}}}))
+	b := e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true, Filter: &Filter{All: []Condition{{Path: "payload.channel", Eq: json.RawMessage(`"pos"`)}}}}))
 	e.publish(t, "customers.customer.created", customerPayload("evt-m", "cus-1", nil))
 	if len(e.deliveries(t, a)) != 1 || len(e.deliveries(t, b)) != 0 {
 		t.Fatal("each subscription filters on its own")
@@ -1021,7 +1073,7 @@ func TestMultipleSubscriptionsGetIndependentDeliveries(t *testing.T) {
 
 func TestWorkersDoNotDoubleSend(t *testing.T) {
 	e := newEnv(t, nil)
-	e.create(t, e.sub(&Declarative{Enabled: true}))
+	e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}))
 	for i := 0; i < 5; i++ {
 		e.publish(t, "customers.customer.created", customerPayload("evt-"+string(rune('a'+i)), "cus-"+string(rune('a'+i)), nil))
 	}
@@ -1045,7 +1097,7 @@ func TestWorkersDoNotDoubleSend(t *testing.T) {
 
 func TestOrphanedInFlightIsRequeued(t *testing.T) {
 	e := newEnv(t, nil)
-	w := e.create(t, e.sub(&Declarative{Enabled: true}))
+	w := e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}))
 	e.publish(t, "customers.customer.created", customerPayload("evt-o", "cus-1", nil))
 	// un worker reclamo la entrega y murio: next_attempt_at NULL + in_flight
 	e.db.Exec("UPDATE webhook_deliveries SET next_attempt_at = NULL, in_flight = 1")

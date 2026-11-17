@@ -29,7 +29,7 @@ func TestAutoDisableAfterConsecutiveFailuresAndManualResume(t *testing.T) {
 	e := newEnv(t, nil, 500, 500, 500, 500, 500, 500)
 	var alerts []Webhook
 	e.svc.onAutoOff = func(_ context.Context, w Webhook) { alerts = append(alerts, w) }
-	sub := e.sub(&Declarative{Enabled: true, AutoDisableThreshold: 3})
+	sub := e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true, AutoDisableThreshold: 3})
 	sub.RetryMax = 20
 	w := e.create(t, sub)
 	e.publish(t, "customers.customer.created", customerPayload("evt-1", "cus-1", nil))
@@ -39,7 +39,7 @@ func TestAutoDisableAfterConsecutiveFailuresAndManualResume(t *testing.T) {
 		e.clk.Advance(2 * time.Hour)
 	}
 	got := reload(t, e, w)
-	if got.ConsecutiveFailures != 3 || got.Declarative.Enabled || got.AutoDisabledAt == nil || got.FailureCount != 3 ||
+	if got.ConsecutiveFailures != 3 || got.IsEnabled() || !got.Declarative.Enabled || got.AutoDisabledAt == nil || got.FailureCount != 3 ||
 		got.LastHTTPStatus != 500 || got.LastFailedAt == nil {
 		t.Fatalf("health after 3 failures: %+v", got)
 	}
@@ -73,7 +73,7 @@ func TestAutoDisableAfterConsecutiveFailuresAndManualResume(t *testing.T) {
 
 func TestSuccessResetsConsecutiveFailures(t *testing.T) {
 	e := newEnv(t, nil, 500, 500, 201)
-	sub := e.sub(&Declarative{Enabled: true, AutoDisableThreshold: 3})
+	sub := e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true, AutoDisableThreshold: 3})
 	sub.RetryMax = 20
 	w := e.create(t, sub)
 	e.publish(t, "customers.customer.created", customerPayload("evt-1", "cus-1", nil))
@@ -82,7 +82,7 @@ func TestSuccessResetsConsecutiveFailures(t *testing.T) {
 		e.clk.Advance(2 * time.Hour)
 	}
 	got := reload(t, e, w)
-	if got.ConsecutiveFailures != 0 || got.SuccessCount != 1 || got.FailureCount != 2 || !got.Declarative.Enabled || got.LastHTTPStatus != 201 {
+	if got.ConsecutiveFailures != 0 || got.SuccessCount != 1 || got.FailureCount != 2 || !got.IsEnabled() || got.LastHTTPStatus != 201 {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -93,7 +93,7 @@ func TestNegativeThresholdNeverAutoDisables(t *testing.T) {
 		script[i] = 500
 	}
 	e := newEnv(t, nil, script...)
-	sub := e.sub(&Declarative{Enabled: true, AutoDisableThreshold: -1})
+	sub := e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true, AutoDisableThreshold: -1})
 	sub.RetryMax = 50
 	w := e.create(t, sub)
 	e.publish(t, "customers.customer.created", customerPayload("evt-1", "cus-1", nil))
@@ -101,7 +101,7 @@ func TestNegativeThresholdNeverAutoDisables(t *testing.T) {
 		e.drain(1)
 		e.clk.Advance(2 * time.Hour)
 	}
-	if got := reload(t, e, w); !got.Declarative.Enabled || got.ConsecutiveFailures != 15 {
+	if got := reload(t, e, w); !got.IsEnabled() || got.ConsecutiveFailures != 15 {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -112,7 +112,7 @@ func TestDefaultThresholdIsTen(t *testing.T) {
 		script[i] = 503
 	}
 	e := newEnv(t, nil, script...)
-	sub := e.sub(&Declarative{Enabled: true})
+	sub := e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true})
 	sub.RetryMax = 50
 	w := e.create(t, sub)
 	e.publish(t, "customers.customer.created", customerPayload("evt-1", "cus-1", nil))
@@ -120,7 +120,7 @@ func TestDefaultThresholdIsTen(t *testing.T) {
 		e.drain(1)
 		e.clk.Advance(2 * time.Hour)
 	}
-	if got := reload(t, e, w); got.Declarative.Enabled || got.ConsecutiveFailures != 10 {
+	if got := reload(t, e, w); got.IsEnabled() || got.ConsecutiveFailures != 10 {
 		t.Fatalf("default threshold: %+v", got)
 	}
 }
@@ -147,7 +147,7 @@ func TestClassicWebhooksNeverAutoDisable(t *testing.T) {
 
 func TestRequeueFromDeadLetter(t *testing.T) {
 	e := newEnv(t, nil, 422)
-	w := e.create(t, e.sub(&Declarative{Enabled: true}))
+	w := e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}))
 	e.publish(t, "customers.customer.created", customerPayload("evt-dl", "cus-1", nil))
 	e.drain(1)
 	row := e.deliveries(t, w)[0]
@@ -189,7 +189,7 @@ func TestBackoffHasJitterWithinBounds(t *testing.T) {
 		e := newEnv(t, nil, 500)
 		r := tc.r
 		e.svc.rnd = func() float64 { return r }
-		w := e.create(t, e.sub(&Declarative{Enabled: true}))
+		w := e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}))
 		e.publish(t, "customers.customer.created", customerPayload("evt-j", "cus-1", nil))
 		e.drain(1)
 		d := e.deliveries(t, w)[0].NextAttemptAt.Sub(e.clk.Now())
@@ -201,7 +201,7 @@ func TestBackoffHasJitterWithinBounds(t *testing.T) {
 
 func TestFingerprintHeaderStableAcrossRetries(t *testing.T) {
 	e := newEnv(t, nil, 503, 201)
-	e.create(t, e.sub(&Declarative{Enabled: true}))
+	e.create(t, e.sub(&Declarative{PayloadFields: []string{"id", "name"}, Enabled: true}))
 	e.publish(t, "customers.customer.created", customerPayload("evt-fp", "cus-1", nil))
 	e.drain(1)
 	e.clk.Advance(time.Minute)

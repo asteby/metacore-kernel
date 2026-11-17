@@ -1,5 +1,7 @@
 -- +goose Down
 -- +goose StatementBegin
+DROP INDEX IF EXISTS idx_webhook_deliveries_due;
+DROP INDEX IF EXISTS uq_webhook_deliveries_event;
 DROP INDEX IF EXISTS idx_webhook_deliveries_held;
 DROP INDEX IF EXISTS idx_webhook_deliveries_ordering;
 DROP INDEX IF EXISTS idx_webhook_deliveries_event_id;

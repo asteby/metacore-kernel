@@ -247,12 +247,10 @@ func TestSchemaPathValidation(t *testing.T) {
 		path   string
 	}{
 		{[]string{"customers.customer.created"}, "payload.id"},
-		{[]string{"customers.customer.created"}, "payload.address"},      // prefijo: objeto entero
 		{[]string{"customers.customer.created"}, "payload.address.city"}, //
 		{[]string{"customers.customer.created"}, "payload.items.0.sku"},  // indice casa con *
 		{[]string{"customers.customer.created"}, "event.id"},             // sobre: siempre
 		{[]string{"customers.*"}, "payload.name"},                        // existe en ambos
-		{[]string{"customers.customer.created"}, "payload"},              // el payload entero
 	}
 	for _, c := range ok {
 		if err := checkRefs(src, c.events, body(c.path)); err != nil {
@@ -265,6 +263,8 @@ func TestSchemaPathValidation(t *testing.T) {
 		is     error
 	}{
 		{[]string{"customers.customer.created"}, "payload.nombre", ErrUnknownPath},
+		{[]string{"customers.customer.created"}, "payload.address", ErrUnknownPath}, // subarbol: no es un escalar declarado
+		{[]string{"customers.customer.created"}, "payload.items", ErrUnknownPath},
 		{[]string{"customers.customer.created"}, "payload.address.zip", ErrUnknownPath},
 		{[]string{"customers.customer.created"}, "payload.items.x.sku", ErrUnknownPath},
 		{[]string{"customers.*"}, "payload.address.city", ErrUnknownPath}, // falta en updated
@@ -290,7 +290,7 @@ func TestSchemaPathValidation(t *testing.T) {
 
 func TestValidateTarget(t *testing.T) {
 	s := &Service{}
-	good := []string{"https://api.example.com/hook", "https://sandbox.7leguas.com.mx/api/channels/v1/customers", "https://a.b.example.org/x?y=1"}
+	good := []string{"https://api.example.com/hook", "https://sandbox.7leguas.com.mx/api/channels/v1/customers"}
 	for _, u := range good {
 		if err := s.validateTarget(u); err != nil {
 			t.Errorf("%s: %v", u, err)
@@ -308,7 +308,7 @@ func TestValidateTarget(t *testing.T) {
 		"https://svc.cluster.local/x",
 		"https://printer.local/x",
 		"https://user:pw@api.example.com/x", // credenciales
-		"ftp://api.example.com/x",
+		"ftp://api.example.com/x", "https://api.example.com/x?token=abc", "https://api.example.com/x#frag",
 		"https:///nohost",
 		"not a url",
 		"https://exa mple.com/x",
@@ -369,11 +369,13 @@ func TestEventFromBusEnvelope(t *testing.T) {
 
 func TestEventFromBusDerivedIDIsStable(t *testing.T) {
 	org := uuid.New()
-	a, _ := EventFromBus(org, "x.y", json.RawMessage(`{"a":1}`), time.Now())
-	b, _ := EventFromBus(org, "x.y", map[string]any{"a": 1}, time.Now().Add(time.Hour))
+	t1 := time.Unix(1_800_000_000, 0)
+	a, _ := EventFromBus(org, "x.y", json.RawMessage(`{"a":1}`), t1)
+	b, _ := EventFromBus(org, "x.y", map[string]any{"a": 1}, t1)
+	f, _ := EventFromBus(org, "x.y", map[string]any{"a": 1}, t1.Add(time.Hour))
 	c, _ := EventFromBus(org, "x.y", map[string]any{"a": 2}, time.Now())
 	d, _ := EventFromBus(uuid.New(), "x.y", map[string]any{"a": 1}, time.Now())
-	if a.ID != b.ID || a.ID == c.ID || a.ID == d.ID || !strings.HasPrefix(a.ID, "h-") {
+	if a.ID != b.ID || a.ID == f.ID || a.ID == c.ID || a.ID == d.ID || !strings.HasPrefix(a.ID, "h-") {
 		t.Fatalf("ids: %s %s %s %s", a.ID, b.ID, c.ID, d.ID)
 	}
 	// payload que no es objeto

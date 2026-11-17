@@ -2,11 +2,14 @@ package webhooks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/asteby/metacore-kernel/runtime/webhookout"
 	"github.com/asteby/metacore-kernel/webhooks/signing"
@@ -35,9 +38,12 @@ type Declarative struct {
 	Method string `json:"method,omitempty"`
 	// Filter acota que eventos (de los que casan con Events) se entregan.
 	Filter *Filter `json:"filter,omitempty"`
-	// Transform arma el cuerpo. Sin Transform el cuerpo es
-	// {"event": {...sobre...}, "payload": {...}}.
+	// Transform arma el cuerpo. Exige Transform o PayloadFields: nunca se
+	// vuelca el payload completo (puede traer datos personales de mas).
 	Transform *Transform `json:"transform,omitempty"`
+	// PayloadFields (alternativa a Transform): rutas ESCALARES del payload que se
+	// copian tal cual; el cuerpo es {"event": {...sobre...}, "payload": {...solo esos campos...}}.
+	PayloadFields []string `json:"payload_fields,omitempty"`
 	// Signing es el perfil de firma. Sin Signing se usa la firma historica
 	// X-Metacore-* con Webhook.Secret.
 	Signing *signing.Spec `json:"signing,omitempty"`
@@ -81,18 +87,26 @@ func (d *Declarative) idemHeader() string {
 	return d.IdempotencyHeader
 }
 
-// SecretResolver resuelve una referencia (`secret_ref` / `key_ref`) al valor.
-// Lo implementa el host (conector, secreto cifrado). El valor no se guarda ni
-// se registra.
+// SecretResolver resuelve una referencia (`secret_ref` / `key_ref`) al valor
+// PARA UN PROPIETARIO. El resolvedor es la autoridad de alcance: debe devolver
+// error si la referencia no pertenece a (ownerType, ownerID), de modo que una
+// organizacion no pueda declarar la referencia de otra. El valor no se guarda
+// ni se registra.
 type SecretResolver interface {
-	ResolveSecret(ctx context.Context, ref string) (string, error)
+	ResolveSecret(ctx context.Context, ownerType string, ownerID uuid.UUID, ref string) (string, error)
+}
+
+// SecretRefChecker es opcional: si el resolvedor lo implementa, el guardado
+// valida la referencia sin leer el valor.
+type SecretRefChecker interface {
+	CheckSecretRef(ctx context.Context, ownerType string, ownerID uuid.UUID, ref string) error
 }
 
 // SecretResolverFunc adapta una funcion.
-type SecretResolverFunc func(ctx context.Context, ref string) (string, error)
+type SecretResolverFunc func(ctx context.Context, ownerType string, ownerID uuid.UUID, ref string) (string, error)
 
-func (f SecretResolverFunc) ResolveSecret(ctx context.Context, ref string) (string, error) {
-	return f(ctx, ref)
+func (f SecretResolverFunc) ResolveSecret(ctx context.Context, ownerType string, ownerID uuid.UUID, ref string) (string, error) {
+	return f(ctx, ownerType, ownerID, ref)
 }
 
 var (
@@ -108,6 +122,7 @@ type compiled struct {
 	filter    *compiledFilter
 	transform *compiledTransform
 	idem      []tmplPart
+	fields    []pathRef
 }
 
 func (d *Declarative) compile() (*compiled, error) {
@@ -123,12 +138,33 @@ func (d *Declarative) compile() (*compiled, error) {
 		return nil, err
 	}
 	for _, p := range c.idem {
-		if p.expr != nil && len(p.expr.fns) > 0 {
-			for _, f := range p.expr.fns {
-				if f.name == "map" {
-					return nil, fmt.Errorf("%w: idempotency cannot use map tables", ErrInvalidDeclarative)
-				}
+		if p.expr == nil {
+			continue
+		}
+		// La llave viaja al destino y se muestra en /logs: nada de datos del
+		// payload (personales) en ella, solo identificadores del sobre.
+		if p.expr.path.root != "event" {
+			return nil, fmt.Errorf("%w: idempotency may only use event.* paths", ErrInvalidDeclarative)
+		}
+		for _, f := range p.expr.fns {
+			if f.name == "map" {
+				return nil, fmt.Errorf("%w: idempotency cannot use map tables", ErrInvalidDeclarative)
 			}
+		}
+	}
+	if c.transform == nil {
+		if len(d.PayloadFields) == 0 {
+			return nil, fmt.Errorf("%w: transform or payload_fields is required (the whole payload is never sent)", ErrInvalidDeclarative)
+		}
+		if len(d.PayloadFields) > 100 {
+			return nil, fmt.Errorf("%w: too many payload_fields", ErrInvalidDeclarative)
+		}
+		for _, f := range d.PayloadFields {
+			p, err := parsePath("payload." + f)
+			if err != nil || len(p.segs) == 0 {
+				return nil, fmt.Errorf("%w: bad payload field %q", ErrInvalidDeclarative, f)
+			}
+			c.fields = append(c.fields, p)
 		}
 	}
 	return c, nil
@@ -145,6 +181,7 @@ func (c *compiled) refs(d *Declarative) []pathRef {
 			r = append(r, p.expr.path)
 		}
 	}
+	r = append(r, c.fields...)
 	return r
 }
 
@@ -193,8 +230,34 @@ func (s *Service) validateDeclarative(w *Webhook) error {
 		if s.secrets == nil {
 			return ErrNoSecretResolver
 		}
+		// Fail closed: every reference must be resolvable FOR THIS OWNER. A
+		// reference that belongs to another organization is rejected here and
+		// again at send time (the resolver is the scoping authority).
+		for _, ref := range []string{d.Signing.SecretRef, d.Signing.KeyRef} {
+			if ref == "" {
+				continue
+			}
+			if err := s.checkSecretRef(context.Background(), w.OwnerType, w.OwnerID, ref); err != nil {
+				return fmt.Errorf("%w: %q", ErrSecretRef, ref)
+			}
+		}
 	}
 	return d.validateHeaders()
+}
+
+// checkSecretRef asks the resolver whether ref is usable by the owner.
+func (s *Service) checkSecretRef(ctx context.Context, ownerType string, ownerID uuid.UUID, ref string) error {
+	if ck, ok := s.secrets.(SecretRefChecker); ok {
+		return ck.CheckSecretRef(ctx, ownerType, ownerID, ref)
+	}
+	v, err := s.secrets.ResolveSecret(ctx, ownerType, ownerID, ref)
+	if err != nil {
+		return err
+	}
+	if v == "" {
+		return errors.New("empty secret")
+	}
+	return nil
 }
 
 func (d *Declarative) validateHeaders() error {
@@ -236,19 +299,27 @@ func (d *Declarative) validateHeaders() error {
 // La defensa definitiva (IP resuelta, DNS rebinding, redirecciones) vive en el
 // cliente de salida (netguard.NewClient) al conectar.
 func (s *Service) validateTarget(raw string) error {
-	if s.allowPrivate {
-		u, err := url.Parse(raw)
-		if err != nil || u.Host == "" {
-			return fmt.Errorf("%w: unparsable URL", ErrBlockedTarget)
-		}
-		return nil
-	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
 		return fmt.Errorf("%w: unparsable URL", ErrBlockedTarget)
 	}
+	if s.allowPrivate {
+		return nil
+	}
 	if u.User != nil {
 		return fmt.Errorf("%w: credentials in URL", ErrBlockedTarget)
+	}
+	// Errors of the HTTP client quote the URL; keep secrets-in-URL impossible.
+	if u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("%w: no query or fragment in the target URL", ErrBlockedTarget)
+	}
+	// Destinations the host explicitly authorized as internal (AllowInternalHosts)
+	// skip the public-domain rules but still go through the shared policy.
+	if s.egressPolicy().CheckHost(u) {
+		if err := s.egressPolicy().CheckURL(u); err != nil {
+			return fmt.Errorf("%w: %v", ErrBlockedTarget, err)
+		}
+		return nil
 	}
 	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
 	if host == "" || net.ParseIP(host) != nil || strings.ContainsAny(host, ":[]%") {
@@ -279,7 +350,7 @@ func (s *Service) validateTarget(raw string) error {
 // the default delivery client. Any path is fine (the subscription names its own
 // URL); everything else is the safe zero value.
 func (s *Service) egressPolicy() webhookout.Policy {
-	return webhookout.Policy{AllowHosts: s.allowHosts, AllowPathPrefixes: []string{"/"}}
+	return webhookout.Policy{AllowHosts: s.allowHosts, AllowInternal: s.allowInternal, AllowPathPrefixes: []string{"/"}}
 }
 
 func allDigitsOrHex(s string) bool {

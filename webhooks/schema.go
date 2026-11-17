@@ -60,15 +60,15 @@ func (s *Schemas) EventNames() []string {
 	return out
 }
 
-// pathDeclared: p (segmentos tras "payload.") existe si es una ruta declarada o
-// un prefijo de una (un objeto entero); un indice numerico casa con "*".
+// pathDeclared: p (segmentos tras "payload.") existe si es EXACTAMENTE una ruta
+// declarada (un campo escalar, no un subarbol); un indice numerico casa con "*".
 func pathDeclared(declared []string, segs []string) bool {
 	if len(segs) == 0 {
 		return true
 	}
 	for _, d := range declared {
 		ds := strings.Split(d, ".")
-		if len(segs) > len(ds) {
+		if len(segs) != len(ds) { // exact scalar field: never an object/array subtree
 			continue
 		}
 		ok := true

@@ -107,6 +107,15 @@ func (v *Verifier) recordNonce(req VerifyRequest) error {
 	if ttl <= 0 {
 		ttl = 10 * time.Minute
 	}
+	// A nonce must outlive the clock window on both sides (2 x skew), or a
+	// replay near the edge of the window would slip through.
+	skew := v.MaxSkew
+	if skew <= 0 {
+		skew = DefaultMaxSkew
+	}
+	if ttl < 2*skew {
+		ttl = 2 * skew
+	}
 	max := v.MaxNonces
 	if max <= 0 {
 		max = 100000

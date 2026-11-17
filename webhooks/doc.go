@@ -32,10 +32,11 @@
 //   - Declarative.Transform: path substitution "{{payload.x}}", constants and
 //     translation tables ("{{payload.channel | map:channels}}"); closed function
 //     list lower, upper, trim, default, map. Validated AT SAVE against
-//     Config.Schemas: a path that does not exist fails Create/Update.
+//     Config.Schemas: a path that does not exist fails Create/Update. A transform
+//     or payload_fields is required (the whole payload is never sent).
 //   - Declarative.Signing: closed profile list of package webhooks/signing
 //     (hmac_simple, hmac_canonical_v1, bearer, bearer+hmac_canonical_v1).
-//     Secrets are references resolved by Config.Secrets at send time; they are
+//     Secrets are references resolved by Config.Secrets FOR THE OWNER at send time; they are
 //     never stored or logged.
 //   - Idempotency key (template, default "{{event.id}}") is stored on the
 //     delivery and is identical on every retry; the body is byte-identical and

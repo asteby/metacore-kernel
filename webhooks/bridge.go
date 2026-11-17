@@ -92,7 +92,7 @@ func (s *Service) countMatching(ctx context.Context, ownerType string, ownerID u
 // EventFromBus converts what the bus delivers (a payload and, when the host
 // stamped it, the `envelope` block of docs/events-bus.md) into an Event. When
 // the payload carries no envelope id, a deterministic id is derived from
-// (org, event, payload bytes): a republication of the same bytes dedupes.
+// (org, event, payload bytes, 10-minute bucket): a prompt republication dedupes.
 func EventFromBus(orgID uuid.UUID, name string, payload any, now time.Time) (Event, error) {
 	var raw []byte
 	switch p := payload.(type) {
@@ -152,6 +152,11 @@ func EventFromBus(orgID uuid.UUID, name string, payload any, now time.Time) (Eve
 		h.Write([]byte(name))
 		h.Write([]byte{0})
 		h.Write(raw)
+		// 10-minute bucket: a relay retry of the same event lands in the same bucket
+		// and dedupes, while a legitimate identical event later is a new occurrence.
+		// Hosts that stamp envelope.id get exact dedupe.
+		h.Write([]byte{0})
+		h.Write([]byte(fmt.Sprint(now.Unix() / 600)))
 		ev.ID = "h-" + hex.EncodeToString(h.Sum(nil))[:40]
 	}
 	ev.Payload = body

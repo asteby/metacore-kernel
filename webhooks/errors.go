@@ -18,4 +18,7 @@ var (
 	ErrPayloadPurged      = errors.New("webhooks: delivery payload was purged after delivery")
 	ErrNotDeclarative     = errors.New("webhooks: webhook is not a declarative subscription")
 	ErrNotDead            = errors.New("webhooks: delivery is not dead-lettered (delivered, queued, retained or in flight)")
+	ErrSecretRef          = errors.New("webhooks: secret reference is not usable by this owner")
+	ErrTooManySubs        = errors.New("webhooks: too many declarative subscriptions for this owner")
+	ErrPayloadTooLarge    = errors.New("webhooks: payload exceeds the size limit")
 )

@@ -1,6 +1,7 @@
 package webhookout
 
 import (
+	"crypto/tls"
 	"net/http"
 	"net/url"
 )
@@ -23,3 +24,17 @@ func RedactJSON(body []byte, extraKeys ...string) []byte {
 	_, out := redactJSON(body, secretSet(extraKeys))
 	return out
 }
+
+// NewClientTLS is NewClient with an explicit TLS configuration (private CA of an
+// internal receiver, or tests). A nil cfg is NewClient.
+func (p Policy) NewClientTLS(cfg *tls.Config) *http.Client {
+	c := p.newHTTPClient()
+	if tr, ok := c.Transport.(*http.Transport); ok && cfg != nil {
+		tr.TLSClientConfig = cfg
+	}
+	return c
+}
+
+// CheckHost reports whether host (name or ip, optionally ":port") is one of the
+// policy's explicitly authorized internal destinations.
+func (p Policy) CheckHost(u *url.URL) bool { return matchInternal(p.AllowInternal, u) }

@@ -81,6 +81,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		in_flight INTEGER DEFAULT 0,
 		payload_purged INTEGER DEFAULT 0
 	)`)
+	db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_webhook_deliveries_event ON webhook_deliveries(webhook_id, event_id) WHERE event_id <> ''`)
 	return db
 }
 

@@ -17,7 +17,7 @@ evento del bus ──Bridge──▶ filtro ──▶ transformación ──▶ 
 svc := webhooks.New(webhooks.Config{
     DB:      db,
     Schemas: schemas,   // rutas de payload por evento (validación al guardar)
-    Secrets: resolver,  // secret_ref / key_ref -> valor, en el momento de enviar
+    Secrets: resolver,  // ResolveSecret(ctx, ownerType, ownerID, ref): por propietario
     OnAutoDisable: func(ctx context.Context, w webhooks.Webhook) { /* alerta */ },
 })
 svc.Start(ctx)
@@ -176,3 +176,18 @@ Límite de tasa por destino/organización, rotación con solape del lado emisor 
 referencia en cada intento; el solape lo ofrece el verificador), cola por agregado separada del
 `webhook_deliveries` (la llave `ordering_key` + `seq` hace de partición) y extracción a servicio de
 entrega (RFC §2.7).
+
+## Endurecimiento (revisión adversarial de #606)
+
+- **Aislamiento por propietario.** Cada ruta de `Handler` resuelve el propietario y carga el webhook con `Service.GetOwned` (las entregas con `DeliveryOwned`, uniendo con `webhooks`): lo ajeno es **404**. El cuerpo de `POST`/`PUT` se lee a una lista blanca (`name, url, events, active, retry_max, timeout_sec, declarative`); `id`, `owner_*`, `organization_id`, `secret`, contadores, salud y `auto_disabled_at` se ignoran. `declarative` se fusiona campo a campo en `PUT` y no se puede poner a `null` (no se degrada a clásico).
+- **Secretos por propietario.** `SecretResolver.ResolveSecret(ctx, ownerType, ownerID, ref)`: el resolvedor es la autoridad de alcance y debe fallar si la referencia no es del propietario. Se valida **al guardar** (error `ErrSecretRef`; `SecretRefChecker` opcional para no leer el valor) y se vuelve a exigir al enviar (falla cerrado, sin enviar). Un fallo del almacén de secretos reintenta pero no cuenta como fallo de salud.
+- **Cuerpo mínimo.** Se exige `transform` o `payload_fields` (rutas escalares); nunca se vuelca el payload entero. Las rutas deben ser un campo escalar declarado (no `{{payload}}` ni un subárbol). Límite de 256 KB al payload entrante y al cuerpo renderizado; lo que lo excede queda como fila muerta visible. La llave de idempotencia solo admite rutas `event.*` (nada de datos personales en ella) y se valida (ASCII imprimible, ≤255 B).
+- **Equidad.** El worker reclama hasta `BatchSize` (10) entregas por ciclo y las envía concurrentemente, con tope por suscripción (`PerWebhookConcurrency`, 2) y por propietario (`PerOwnerConcurrency`, 4). Las bloqueadas por el orden se excluyen en SQL, así que no ocupan la ventana. Tope de `MaxSubscriptionsPerOwner` (100) suscripciones declarativas.
+- **Borrado y huérfanas.** `Delete` cancela las entregas pendientes y borra su payload. Si el webhook ya no existe, `drainOnce` marca la entrega muerta y purgada (no se reencola).
+- **SSRF.** Las entregas declarativas usan SIEMPRE el cliente protegido de `webhookout` (no `Config.HTTPClient`); el destino se revalida antes de cada envío (`AllowHosts`, política vigente); sin query ni fragmento en la URL; los errores de red no incluyen la URL. Los destinos internos legítimos se autorizan por `Config.AllowInternalHosts`. Los webhooks clásicos usan por omisión ese mismo cliente protegido (sin redirecciones; un `HTTPClient` propio sigue siendo responsabilidad del host).
+- **Deduplicación.** Índice único parcial `(webhook_id, event_id) WHERE event_id <> ''` + `ON CONFLICT DO NOTHING`. Sin `envelope.id` el id se deriva de (org, evento, bytes, cubeta de 10 min): un reintento rápido del relay deduplica y un evento idéntico posterior es otra ocurrencia.
+- **Texto seguro.** Cuerpos de respuesta y errores se guardan como UTF-8 válido, sin NUL y truncados por runas; si la BD aun así rechaza el guardado se reintenta sin el texto (la entrega nunca queda en vuelo sin registrar el intento).
+- **Salud.** Solo cuentan como fallo consecutivo los errores de transporte, 5xx, 408 y 429. 4xx permanentes, 409/423/425, secretos no resolubles, destino bloqueado y filas no renderizables **no** cuentan; `Test` tampoco. Los contadores son `UPDATE` atómicos y la autodesactivación solo fija `auto_disabled_at` (no reescribe la configuración): `Update` y `PUT enabled:true` limpian la salud. `Update` escribe solo las columnas de configuración.
+- **Retención.** `HeldRetention` (14 d) y `DeadRetention` (30 d) borran el payload retenido/muerto (`PurgeExpired`, periódico en el pool de workers). Las filas no renderizables quedan `payload_purged` y no se pueden repetir ni reencolar; `Replay` con la suscripción apagada se retiene.
+
+Supuestos conocidos: `hmac_canonical_v1` firma método, ruta (sin query), cuerpo, `ts` y `nonce`, **no** el host, la query ni las cabeceras (incluida la de idempotencia): el destino debe fijar su host y el cuerpo ya viene huellado; la secuencia `per_aggregate` es por proceso; el puente consulta las suscripciones del propietario en cada evento (sin caché).

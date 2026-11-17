@@ -115,3 +115,20 @@ func TestFingerprintStable(t *testing.T) {
 		t.Fatal("empty body hash")
 	}
 }
+
+func TestNonceTTLIsAtLeastTwiceTheSkew(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	clock := now
+	spec := Spec{Profile: HMACCanonicalV1, SecretRef: "a.b"}
+	v := &Verifier{Spec: spec, NonceTTL: time.Second, Now: func() time.Time { return clock },
+		Secrets: func(context.Context, uuid.UUID) ([]Secrets, error) { return []Secrets{{HMACKey: "k"}}, nil }}
+	h, _ := Sign(spec, Secrets{HMACKey: "k"}, Request{Method: "POST", Path: "/"}, now, "")
+	vr := VerifyRequest{Method: "POST", Path: "/", Header: hdr(h)}
+	if err := v.Verify(context.Background(), vr); err != nil {
+		t.Fatal(err)
+	}
+	clock = now.Add(290 * time.Second) // still inside the window: the same request must still be a replay
+	if CodeOf(v.Verify(context.Background(), vr)) != "nonce_reused" {
+		t.Fatal("a nonce forgotten before its timestamp expires allows replay")
+	}
+}

@@ -3,18 +3,23 @@ package webhooks
 import (
 	"context"
 	crand "crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/asteby/metacore-kernel/runtime/webhookout"
 )
@@ -23,7 +28,11 @@ import (
 type Config struct {
 	DB          *gorm.DB
 	WorkerCount int
-	HTTPClient  *http.Client
+	// HTTPClient is used ONLY by classic webhooks (Declarative == nil). Default:
+	// the webhookout egress client (dial-time IP guard, no redirects, 15 s). A
+	// client you supply replaces that protection for classic webhooks: it is the
+	// host's responsibility. Declarative subscriptions NEVER use it.
+	HTTPClient *http.Client
 	// Clock is overridable for tests; defaults to time.Now.
 	Clock func() time.Time
 
@@ -34,16 +43,19 @@ type Config struct {
 	// naming a path that does not exist fails AT SAVE. Without it, a
 	// declarative subscription may only reference `event.*` paths.
 	Schemas SchemaSource
-	// Secrets resolves `secret_ref` / `key_ref` of signing profiles. Required
-	// to save a subscription that declares Signing.
+	// Secrets resolves `secret_ref` / `key_ref` of signing profiles FOR AN OWNER.
+	// Required to save a subscription that declares Signing.
 	Secrets SecretResolver
-	// AllowHosts, when non-empty, restricts targets to these patterns
-	// ("api.example.com", "*.example.com") on top of the netguard rules.
+	// AllowHosts, when non-empty, restricts public targets to these patterns
+	// ("api.example.com", "*.example.com") on top of the netguard rules. Checked
+	// at save AND before every send.
 	AllowHosts []string
-	// EgressClient is the client used for declarative deliveries. Default: the
-	// HTTPClient if given, else the webhookout egress client (https/public hosts only,
-	// checked on every connection; redirects are not followed).
-	EgressClient *http.Client
+	// AllowInternalHosts are internal destinations ("host" or "host:port") the
+	// host explicitly authorizes (e.g. a receiver on the private network). They
+	// skip the public-domain rules; everything else stays denied.
+	AllowInternalHosts []string
+	// EgressTLS customizes TLS of the delivery client (private CA). Optional.
+	EgressTLS *tls.Config
 	// UnsafeAllowPrivateTargets disables target validation. TESTS ONLY.
 	UnsafeAllowPrivateTargets bool
 	// OnAutoDisable is called (once, after the row is saved) when a declarative
@@ -52,11 +64,29 @@ type Config struct {
 	OnAutoDisable func(ctx context.Context, w Webhook)
 	// Rand returns a value in [0,1) for retry jitter; default math/rand/v2.
 	Rand func() float64
+
+	// BatchSize is how many due deliveries a worker claims per tick (default 10).
+	BatchSize int
+	// PerWebhookConcurrency / PerOwnerConcurrency cap how many deliveries of one
+	// subscription / one owner go out in the same tick, so a failing tenant
+	// cannot monopolize the workers (defaults 2 / 4).
+	PerWebhookConcurrency int
+	PerOwnerConcurrency   int
+	// MaxSubscriptionsPerOwner caps declarative subscriptions per owner (default 100).
+	MaxSubscriptionsPerOwner int
+	// HeldRetention / DeadRetention: how long the payload of a retained or
+	// dead-lettered delivery is kept before it is erased (defaults 14 d / 30 d;
+	// negative = keep forever).
+	HeldRetention time.Duration
+	DeadRetention time.Duration
 }
 
 // inFlightLease is how long a claimed delivery counts as in progress before it
 // is considered orphaned (worker crash) and re-queued.
 const inFlightLease = 5 * time.Minute
+
+// maxPayloadBytes bounds the incoming payload and the rendered body.
+const maxPayloadBytes = 256 << 10
 
 // Service is the public API. It is transport-agnostic.
 type Service struct {
@@ -66,12 +96,16 @@ type Service struct {
 	egress  *http.Client
 	clock   func() time.Time
 
-	schemas      SchemaSource
-	secrets      SecretResolver
-	allowHosts   []string
-	allowPrivate bool
-	onAutoOff    func(ctx context.Context, w Webhook)
-	rnd          func() float64
+	schemas       SchemaSource
+	secrets       SecretResolver
+	allowHosts    []string
+	allowInternal []string
+	allowPrivate  bool
+	onAutoOff     func(ctx context.Context, w Webhook)
+	rnd           func() float64
+
+	batch, perWebhook, perOwner, maxSubs int
+	heldTTL, deadTTL                     time.Duration
 
 	seqMu   sync.Mutex
 	lastSeq int64
@@ -90,15 +124,11 @@ func New(cfg Config) *Service {
 	if cfg.WorkerCount <= 0 {
 		cfg.WorkerCount = 5
 	}
-	egress := cfg.EgressClient
-	if egress == nil {
-		egress = cfg.HTTPClient
-	}
-	if egress == nil {
-		egress = webhookout.Policy{AllowHosts: cfg.AllowHosts, AllowPathPrefixes: []string{"/"}}.NewClient()
-	}
+	pol := webhookout.Policy{AllowHosts: cfg.AllowHosts, AllowInternal: cfg.AllowInternalHosts, AllowPathPrefixes: []string{"/"}}
+	egress := pol.NewClientTLS(cfg.EgressTLS)
 	if cfg.HTTPClient == nil {
-		cfg.HTTPClient = &http.Client{Timeout: 15 * time.Second}
+		cfg.HTTPClient = pol.NewClientTLS(cfg.EgressTLS)
+		cfg.HTTPClient.Timeout = 15 * time.Second
 	}
 	if cfg.Clock == nil {
 		cfg.Clock = time.Now
@@ -106,18 +136,37 @@ func New(cfg Config) *Service {
 	if cfg.Rand == nil {
 		cfg.Rand = rand.Float64
 	}
+	def := func(v *int, d int) {
+		if *v <= 0 {
+			*v = d
+		}
+	}
+	def(&cfg.BatchSize, 10)
+	def(&cfg.PerWebhookConcurrency, 2)
+	def(&cfg.PerOwnerConcurrency, 4)
+	def(&cfg.MaxSubscriptionsPerOwner, 100)
+	if cfg.HeldRetention == 0 {
+		cfg.HeldRetention = 14 * 24 * time.Hour
+	}
+	if cfg.DeadRetention == 0 {
+		cfg.DeadRetention = 30 * 24 * time.Hour
+	}
 	return &Service{
-		onAutoOff:    cfg.OnAutoDisable,
-		rnd:          cfg.Rand,
-		db:           cfg.DB,
-		workers:      cfg.WorkerCount,
-		client:       cfg.HTTPClient,
-		egress:       egress,
-		clock:        cfg.Clock,
-		schemas:      cfg.Schemas,
-		secrets:      cfg.Secrets,
-		allowHosts:   cfg.AllowHosts,
-		allowPrivate: cfg.UnsafeAllowPrivateTargets,
+		onAutoOff:     cfg.OnAutoDisable,
+		rnd:           cfg.Rand,
+		db:            cfg.DB,
+		workers:       cfg.WorkerCount,
+		client:        cfg.HTTPClient,
+		egress:        egress,
+		clock:         cfg.Clock,
+		schemas:       cfg.Schemas,
+		secrets:       cfg.Secrets,
+		allowHosts:    cfg.AllowHosts,
+		allowInternal: cfg.AllowInternalHosts,
+		allowPrivate:  cfg.UnsafeAllowPrivateTargets,
+		batch:         cfg.BatchSize, perWebhook: cfg.PerWebhookConcurrency, perOwner: cfg.PerOwnerConcurrency,
+		maxSubs: cfg.MaxSubscriptionsPerOwner,
+		heldTTL: cfg.HeldRetention, deadTTL: cfg.DeadRetention,
 	}
 }
 
@@ -129,6 +178,13 @@ type LogsParams struct {
 	Success *bool
 }
 
+// IsEnabled reports whether a declarative subscription is sending: switched on
+// AND not tripped by the health check. Classic webhooks are never "enabled" in
+// this sense (they use Active).
+func (w *Webhook) IsEnabled() bool {
+	return w.Declarative != nil && w.Declarative.Enabled && w.AutoDisabledAt == nil
+}
+
 // --- CRUD ---------------------------------------------------------------
 
 func (s *Service) Create(ctx context.Context, w *Webhook) error {
@@ -137,6 +193,17 @@ func (s *Service) Create(ctx context.Context, w *Webhook) error {
 	}
 	if err := s.validateDeclarative(w); err != nil {
 		return err
+	}
+	if w.Declarative != nil {
+		var n int64
+		if err := s.db.WithContext(ctx).Model(&Webhook{}).
+			Where("owner_type = ? AND owner_id = ? AND declarative IS NOT NULL", w.OwnerType, w.OwnerID).
+			Count(&n).Error; err != nil {
+			return err
+		}
+		if int(n) >= s.maxSubs {
+			return ErrTooManySubs
+		}
 	}
 	// A declarative subscription that signs by profile never stores a secret.
 	if w.Secret == "" && (w.Declarative == nil || w.Declarative.Signing == nil) {
@@ -165,37 +232,94 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*Webhook, error) {
 	return &w, nil
 }
 
-// Update saves w. Turning a declarative subscription on (Enabled false -> true)
-// releases the events retained while it was off.
+// GetOwned is Get restricted to one owner: a webhook of another owner is
+// ErrWebhookNotFound (indistinguishable from a missing one). Every operation
+// reachable by an end user must start here.
+func (s *Service) GetOwned(ctx context.Context, ownerType string, ownerID uuid.UUID, id uuid.UUID) (*Webhook, error) {
+	var w Webhook
+	if err := s.db.WithContext(ctx).First(&w, "id = ? AND owner_type = ? AND owner_id = ?", id, ownerType, ownerID).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, ErrWebhookNotFound
+		}
+		return nil, err
+	}
+	return &w, nil
+}
+
+// DeliveryOwned loads a delivery only if its webhook belongs to the owner.
+func (s *Service) DeliveryOwned(ctx context.Context, ownerType string, ownerID uuid.UUID, id uuid.UUID) (*WebhookDelivery, error) {
+	var d WebhookDelivery
+	err := s.db.WithContext(ctx).
+		Joins("JOIN webhooks ON webhooks.id = webhook_deliveries.webhook_id AND webhooks.deleted_at IS NULL").
+		Where("webhook_deliveries.id = ? AND webhooks.owner_type = ? AND webhooks.owner_id = ?", id, ownerType, ownerID).
+		First(&d).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, ErrDeliveryNotFound
+		}
+		return nil, err
+	}
+	return &d, nil
+}
+
+// Update saves the configuration columns of w (name, url, events, active,
+// retry_max, timeout_sec, declarative) and NOTHING else: owner, id, counters and
+// health are never overwritten. Turning a declarative subscription on (or
+// resuming an auto-disabled one) clears its health and releases the retained
+// events. A declarative subscription cannot be turned back into a classic one.
 func (s *Service) Update(ctx context.Context, w *Webhook) error {
 	if err := validateWebhook(w); err != nil {
 		return err
 	}
+	var prev Webhook
+	if err := s.db.WithContext(ctx).First(&prev, "id = ?", w.ID).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return ErrWebhookNotFound
+		}
+		return err
+	}
+	// owner is immutable: validate secrets/targets against the stored owner
+	w.OwnerType, w.OwnerID = prev.OwnerType, prev.OwnerID
 	if err := s.validateDeclarative(w); err != nil {
 		return err
 	}
-	var prev Webhook
-	hadHeld := false
-	if err := s.db.WithContext(ctx).First(&prev, "id = ?", w.ID).Error; err == nil {
-		hadHeld = prev.Declarative != nil && !prev.Declarative.Enabled
+	if prev.Declarative != nil && w.Declarative == nil {
+		return fmt.Errorf("%w: a declarative subscription cannot become a classic webhook", ErrInvalidDeclarative)
 	}
-	if err := s.db.WithContext(ctx).Save(w).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(&Webhook{}).Where("id = ?", w.ID).
+		Select("Name", "URL", "Events", "Active", "RetryMax", "TimeoutSec", "Declarative").
+		Updates(w).Error; err != nil {
 		return err
 	}
-	if hadHeld && (w.Declarative == nil || w.Declarative.Enabled) {
-		_, err := s.releaseHeld(ctx, w.ID)
-		return err
+	if prev.Declarative != nil && !prev.IsEnabled() && w.Declarative.Enabled {
+		return s.resume(ctx, w.ID)
 	}
 	return nil
 }
 
+// Delete removes the webhook AND cancels its pending deliveries, erasing their
+// (personal) payloads: nothing is left queued for a subscription that is gone.
 func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
-	return s.db.WithContext(ctx).Delete(&Webhook{}, "id = ?", id).Error
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&WebhookDelivery{}).Where("webhook_id = ? AND succeeded = ?", id, false).
+			Updates(purgeFields("webhook deleted")).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&Webhook{}, "id = ?", id).Error
+	})
 }
 
-// SetEnabled turns a declarative subscription on or off. Turning it on releases
-// every event retained while it was off (returns how many); turning it off makes
-// new events (and queued ones) be retained instead of sent.
+// purgeFields cancels a delivery and erases its payload.
+func purgeFields(reason string) map[string]any {
+	return map[string]any{
+		"payload": JSONMap{}, "payload_purged": true, "held": false, "in_flight": false,
+		"next_attempt_at": nil, "error_message": reason,
+	}
+}
+
+// SetEnabled turns a declarative subscription on or off. Turning it on clears
+// the health trip and releases every event retained while it was off (returns
+// how many); turning it off makes new events (and queued ones) be retained.
 func (s *Service) SetEnabled(ctx context.Context, id uuid.UUID, enabled bool) (int64, error) {
 	w, err := s.Get(ctx, id)
 	if err != nil {
@@ -205,22 +329,33 @@ func (s *Service) SetEnabled(ctx context.Context, id uuid.UUID, enabled bool) (i
 		return 0, ErrNotDeclarative
 	}
 	w.Declarative.Enabled = enabled
-	if enabled { // manual resume clears the health trip
-		w.ConsecutiveFailures, w.AutoDisabledAt, w.LastError = 0, nil, ""
+	b, err := json.Marshal(w.Declarative)
+	if err != nil {
+		return 0, err
 	}
-	if err := s.db.WithContext(ctx).Save(w).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(&Webhook{}).Where("id = ?", id).Update("declarative", string(b)).Error; err != nil {
 		return 0, err
 	}
 	if !enabled {
 		return 0, nil
 	}
-	return s.releaseHeld(ctx, id)
+	return s.releaseResume(ctx, id)
 }
 
-func (s *Service) releaseHeld(ctx context.Context, id uuid.UUID) (int64, error) {
+func (s *Service) resume(ctx context.Context, id uuid.UUID) error {
+	_, err := s.releaseResume(ctx, id)
+	return err
+}
+
+// releaseResume clears the health trip and releases the retained deliveries.
+func (s *Service) releaseResume(ctx context.Context, id uuid.UUID) (int64, error) {
+	if err := s.db.WithContext(ctx).Model(&Webhook{}).Where("id = ?", id).
+		Updates(map[string]any{"consecutive_failures": 0, "auto_disabled_at": nil, "last_error": ""}).Error; err != nil {
+		return 0, err
+	}
 	now := s.clock()
 	res := s.db.WithContext(ctx).Model(&WebhookDelivery{}).
-		Where("webhook_id = ? AND held = ? AND succeeded = ?", id, true, false).
+		Where("webhook_id = ? AND held = ? AND succeeded = ? AND payload_purged = ?", id, true, false, false).
 		Updates(map[string]any{"held": false, "next_attempt_at": now})
 	return res.RowsAffected, res.Error
 }
@@ -235,10 +370,40 @@ func (s *Service) PurgeDeadPayloads(ctx context.Context, webhookID uuid.UUID, ol
 	return res.RowsAffected, res.Error
 }
 
+// PurgeExpired applies the retention policy: the payload of deliveries retained
+// longer than HeldRetention is erased (and they stop waiting), and the payload
+// of dead-lettered ones older than DeadRetention is erased. The worker pool runs
+// it periodically; hosts without workers can schedule it.
+func (s *Service) PurgeExpired(ctx context.Context) (int64, error) {
+	now := s.clock()
+	var total int64
+	if s.heldTTL > 0 {
+		res := s.db.WithContext(ctx).Model(&WebhookDelivery{}).
+			Where("held = ? AND succeeded = ? AND created_at < ?", true, false, now.Add(-s.heldTTL)).
+			Updates(purgeFields("retention expired while the subscription was off"))
+		if res.Error != nil {
+			return total, res.Error
+		}
+		total += res.RowsAffected
+	}
+	if s.deadTTL > 0 {
+		res := s.db.WithContext(ctx).Model(&WebhookDelivery{}).
+			Where("succeeded = ? AND held = ? AND in_flight = ? AND next_attempt_at IS NULL AND payload_purged = ? AND created_at < ?",
+				false, false, false, false, now.Add(-s.deadTTL)).
+			Updates(map[string]any{"payload": JSONMap{}, "payload_purged": true})
+		if res.Error != nil {
+			return total, res.Error
+		}
+		total += res.RowsAffected
+	}
+	return total, nil
+}
+
 // --- Operations ---------------------------------------------------------
 
 // Test sends a test delivery synchronously. Returns the delivery record.
-// (Also works on a disabled declarative subscription: it is an explicit action.)
+// (Also works on a disabled declarative subscription: it is an explicit action.
+// A test never counts for the health check.)
 func (s *Service) Test(ctx context.Context, webhookID uuid.UUID) (*WebhookDelivery, error) {
 	w, err := s.Get(ctx, webhookID)
 	if err != nil {
@@ -258,8 +423,9 @@ func (s *Service) Test(ctx context.Context, webhookID uuid.UUID) (*WebhookDelive
 
 // Replay re-runs a prior delivery. For a declarative subscription it reuses the
 // original idempotency key, so a target that already processed it replies
-// "replayed" instead of duplicating. A delivery whose payload was purged after
-// being delivered cannot be replayed (ErrPayloadPurged).
+// "replayed" instead of duplicating; if the subscription is off, the replay is
+// retained like any other event. A delivery whose payload was purged (delivered,
+// expired, deleted, or never rendered) cannot be replayed (ErrPayloadPurged).
 func (s *Service) Replay(ctx context.Context, deliveryID uuid.UUID) (*WebhookDelivery, error) {
 	var orig WebhookDelivery
 	if err := s.db.WithContext(ctx).First(&orig, "id = ?", deliveryID).Error; err != nil {
@@ -275,8 +441,12 @@ func (s *Service) Replay(ctx context.Context, deliveryID uuid.UUID) (*WebhookDel
 	if err != nil {
 		return nil, err
 	}
-	d := &WebhookDelivery{WebhookID: w.ID, Event: orig.Event, Payload: orig.Payload,
-		EventID: orig.EventID, IdempotencyKey: orig.IdempotencyKey}
+	// EventID is not copied: (webhook, event_id) is unique per occurrence.
+	d := &WebhookDelivery{WebhookID: w.ID, Event: orig.Event, Payload: orig.Payload, IdempotencyKey: orig.IdempotencyKey}
+	if w.Declarative != nil && !w.IsEnabled() {
+		d.Held = true
+		return d, s.db.WithContext(ctx).Create(d).Error
+	}
 	if err := s.db.WithContext(ctx).Create(d).Error; err != nil {
 		return nil, err
 	}
@@ -339,15 +509,18 @@ func (s *Service) TriggerEvent(ctx context.Context, ownerType string, ownerID uu
 
 func (s *Service) dispatchEvent(ctx context.Context, ownerType string, ownerID uuid.UUID, ev *Event, declarativeOnly bool, raw JSONMap) (int, error) {
 	var subs []Webhook
-	if err := s.db.WithContext(ctx).
-		Where("owner_type = ? AND owner_id = ? AND active = ?", ownerType, ownerID, true).
-		Find(&subs).Error; err != nil {
+	q := s.db.WithContext(ctx).Where("owner_type = ? AND owner_id = ? AND active = ?", ownerType, ownerID, true)
+	if declarativeOnly {
+		q = q.Where("declarative IS NOT NULL")
+	}
+	if err := q.Find(&subs).Error; err != nil {
 		return 0, err
 	}
 	var (
-		root    map[string]any
-		dedupe  = ev.ID != ""
-		created int
+		root       map[string]any
+		payloadErr error
+		dedupe     = ev.ID != ""
+		created    int
 	)
 	now := s.clock()
 	for i := range subs {
@@ -366,22 +539,13 @@ func (s *Service) dispatchEvent(ctx context.Context, ownerType string, ownerID u
 			created++
 			continue
 		}
-		if root == nil {
+		if root == nil && payloadErr == nil {
 			if ev.ID == "" {
 				ev.ID = uuid.NewString()
 			}
-			norm, err := normalizeJSON(ev.Payload)
-			if err != nil {
-				return created, fmt.Errorf("webhooks: event payload is not JSON: %w", err)
-			}
-			m, _ := norm.(map[string]any)
-			if m == nil {
-				m = map[string]any{}
-			}
-			ev.Payload = m
-			root = ev.view()
+			root, payloadErr = s.normalizeEvent(ev)
 		}
-		ok, err := s.enqueueDeclarative(ctx, w, ev, root, dedupe, now)
+		ok, err := s.enqueueDeclarative(ctx, w, ev, root, payloadErr, dedupe, now)
 		if err != nil {
 			return created, err
 		}
@@ -392,12 +556,49 @@ func (s *Service) dispatchEvent(ctx context.Context, ownerType string, ownerID u
 	return created, nil
 }
 
+// normalizeEvent turns the payload into its JSON shape and bounds its size.
+func (s *Service) normalizeEvent(ev *Event) (map[string]any, error) {
+	b, err := json.Marshal(ev.Payload)
+	if err != nil {
+		return nil, fmt.Errorf("event payload is not JSON: %w", err)
+	}
+	if len(b) > maxPayloadBytes {
+		return nil, fmt.Errorf("%w (%d bytes, max %d)", ErrPayloadTooLarge, len(b), maxPayloadBytes)
+	}
+	var m map[string]any
+	if string(b) != "null" {
+		if err := json.Unmarshal(b, &m); err != nil {
+			return nil, fmt.Errorf("event payload is not a JSON object: %w", err)
+		}
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+	ev.Payload = m
+	return ev.view(), nil
+}
+
+// validIdempotencyKey: printable ASCII, no spaces, at most 255 bytes. The key
+// goes into an HTTP header and a log column; anything else is refused up front
+// instead of failing at every attempt.
+func validIdempotencyKey(k string) bool {
+	if k == "" || len(k) > 255 {
+		return false
+	}
+	for i := 0; i < len(k); i++ {
+		if k[i] < 0x21 || k[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 // enqueueDeclarative filters, transforms and stores one delivery. Returns true
-// when a row was created (sent or retained).
-func (s *Service) enqueueDeclarative(ctx context.Context, w *Webhook, ev *Event, root map[string]any, dedupe bool, now time.Time) (bool, error) {
+// when a row was created (sent, retained, or recorded as not renderable).
+func (s *Service) enqueueDeclarative(ctx context.Context, w *Webhook, ev *Event, root map[string]any, payloadErr error, dedupe bool, now time.Time) (bool, error) {
 	d := w.Declarative
 	c, cerr := d.compile()
-	if cerr == nil && !c.filter.match(root) {
+	if cerr == nil && payloadErr == nil && !c.filter.match(root) {
 		return false, nil
 	}
 	if dedupe {
@@ -410,41 +611,96 @@ func (s *Service) enqueueDeclarative(ctx context.Context, w *Webhook, ev *Event,
 			return false, nil
 		}
 	}
-	row := &WebhookDelivery{
-		WebhookID: w.ID, Event: ev.Name, EventID: ev.ID, Seq: s.nextSeq(),
-	}
-	var body map[string]any
-	var err error
-	if cerr != nil {
+	row := &WebhookDelivery{WebhookID: w.ID, Event: ev.Name, EventID: ev.ID, Seq: s.nextSeq()}
+	var (
+		body map[string]any
+		err  error
+	)
+	switch {
+	case payloadErr != nil:
+		err = payloadErr
+	case cerr != nil:
 		err = cerr
-	} else if c.transform != nil {
+	case c.transform != nil:
 		body, err = c.transform.render(root)
-	} else {
-		body = map[string]any{"event": root["event"], "payload": root["payload"]}
+	default:
+		body = c.fieldsBody(root)
+	}
+	if err == nil {
+		if b, merr := json.Marshal(body); merr != nil {
+			err = merr
+		} else if len(b) > maxPayloadBytes {
+			err = fmt.Errorf("%w: rendered body is %d bytes", ErrPayloadTooLarge, len(b))
+		}
 	}
 	if err == nil {
 		row.IdempotencyKey, err = renderString(c.idem, root)
 		if err == nil && row.IdempotencyKey == "" {
 			row.IdempotencyKey = ev.ID
 		}
+		if err == nil && !validIdempotencyKey(row.IdempotencyKey) {
+			err = errors.New("idempotency key is not printable ASCII (1-255 bytes)")
+		}
 	}
 	if err != nil {
-		// Not retryable: record it so the operator sees it, never lose it silently.
+		// Not renderable: record it (visible, never silently lost) as a dead,
+		// payload-less row that cannot be replayed or requeued, and that does
+		// not count against the subscription's health.
 		row.Payload = JSONMap{}
-		row.ErrorMessage = truncate("render: "+err.Error(), 500)
-		row.IdempotencyKey = ev.ID
-		return true, s.db.WithContext(ctx).Create(row).Error
+		row.PayloadPurged = true
+		row.ErrorMessage = "render: " + cleanText(err.Error(), 480)
+		if !validIdempotencyKey(row.IdempotencyKey) {
+			row.IdempotencyKey = ""
+		}
+		return s.createDelivery(ctx, row)
 	}
 	row.Payload = JSONMap(body)
 	if d.Ordering == OrderingPerAggregate && ev.AggregateID != "" {
-		row.OrderingKey = ev.AggregateType + ":" + ev.AggregateID
+		row.OrderingKey = cleanText(ev.AggregateType+":"+ev.AggregateID, 250)
 	}
-	if d.Enabled {
+	if w.IsEnabled() {
 		row.NextAttemptAt = &now
 	} else {
 		row.Held = true // retained: leaves when the subscription is enabled
 	}
-	return true, s.db.WithContext(ctx).Create(row).Error
+	return s.createDelivery(ctx, row)
+}
+
+// createDelivery inserts the row. With the unique index of migration 0012
+// ((webhook_id, event_id) where event_id <> ”) a concurrent duplicate is
+// absorbed by ON CONFLICT DO NOTHING and reported as "not created".
+func (s *Service) createDelivery(ctx context.Context, row *WebhookDelivery) (bool, error) {
+	res := s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(row)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
+// fieldsBody builds the payload_fields body: the envelope plus ONLY the listed
+// scalar fields, rebuilt under their original nesting.
+func (c *compiled) fieldsBody(root map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, f := range c.fields {
+		v, ok := f.lookup(root)
+		if !ok {
+			continue
+		}
+		cur := out
+		for i, seg := range f.segs {
+			if i == len(f.segs)-1 {
+				cur[seg] = v
+				break
+			}
+			nxt, _ := cur[seg].(map[string]any)
+			if nxt == nil {
+				nxt = map[string]any{}
+				cur[seg] = nxt
+			}
+			cur = nxt
+		}
+	}
+	return map[string]any{"event": root["event"], "payload": out}
 }
 
 // nextSeq is a process-monotonic sequence (unix nanos, bumped on collision).
@@ -474,7 +730,7 @@ func (s *Service) Start(ctx context.Context) error {
 	s.running = true
 	for i := 0; i < s.workers; i++ {
 		s.wg.Add(1)
-		go s.loop(runCtx)
+		go s.loop(runCtx, i == 0)
 	}
 	return nil
 }
@@ -496,75 +752,126 @@ func (s *Service) Stop() error {
 	return nil
 }
 
-func (s *Service) loop(ctx context.Context) {
+func (s *Service) loop(ctx context.Context, janitor bool) {
 	defer s.wg.Done()
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	ticks := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			s.drainOnce(ctx)
+			ticks++
+			if janitor && ticks%150 == 0 { // ~ every 5 minutes
+				if _, err := s.PurgeExpired(ctx); err != nil {
+					slog.Warn("webhooks: retention purge failed", "err", err)
+				}
+			}
 		}
 	}
 }
 
-// drainOnce claims and attempts at most one due delivery.
+// notBlockedSQL excludes, IN SQL, the deliveries that must wait for an earlier
+// one of the same aggregate that is still queued, retained or in flight: they
+// never occupy the candidate window, so a failing tenant with ordering cannot
+// starve the others. (A predecessor that gave up no longer blocks.)
+const notBlockedSQL = `(ordering_key IS NULL OR ordering_key = '' OR NOT EXISTS (
+	SELECT 1 FROM webhook_deliveries p
+	WHERE p.webhook_id = webhook_deliveries.webhook_id AND p.ordering_key = webhook_deliveries.ordering_key
+	  AND p.seq < webhook_deliveries.seq AND p.succeeded = ? AND p.deleted_at IS NULL
+	  AND (p.held = ? OR p.next_attempt_at IS NOT NULL OR (p.in_flight = ? AND p.updated_at > ?))))`
+
+type claimed struct {
+	d WebhookDelivery
+	w Webhook
+}
+
+// drainOnce claims up to BatchSize due deliveries (at most PerWebhookConcurrency
+// per subscription and PerOwnerConcurrency per owner) and attempts them
+// concurrently.
 func (s *Service) drainOnce(ctx context.Context) {
 	now := s.clock()
 	s.reapOrphans(ctx, now)
 
+	window := s.batch * 8
+	if window < 50 {
+		window = 50
+	}
 	var cands []WebhookDelivery
 	err := s.db.WithContext(ctx).
 		Where("succeeded = ? AND (held = ? OR held IS NULL) AND next_attempt_at IS NOT NULL AND next_attempt_at <= ?", false, false, now).
+		Where(notBlockedSQL, false, true, true, now.Add(-inFlightLease)).
 		Order("next_attempt_at ASC, seq ASC").
-		Limit(25).
+		Limit(window).
 		Find(&cands).Error
-	if err != nil {
+	if err != nil || len(cands) == 0 {
 		return
 	}
+	ids := make([]uuid.UUID, 0, len(cands))
+	seen := map[uuid.UUID]bool{}
+	for _, c := range cands {
+		if !seen[c.WebhookID] {
+			seen[c.WebhookID] = true
+			ids = append(ids, c.WebhookID)
+		}
+	}
+	var ws []Webhook
+	if err := s.db.WithContext(ctx).Where("id IN ?", ids).Find(&ws).Error; err != nil {
+		return // transient: nothing claimed yet, nothing to release
+	}
+	byID := make(map[uuid.UUID]*Webhook, len(ws))
+	for i := range ws {
+		byID[ws[i].ID] = &ws[i]
+	}
+
+	perWH, perOwner := map[uuid.UUID]int{}, map[string]int{}
+	var batch []claimed
 	for i := range cands {
+		if len(batch) >= s.batch {
+			break
+		}
 		d := cands[i]
-		if d.OrderingKey != "" && s.hasLivePredecessor(ctx, &d, now) {
+		w := byID[d.WebhookID]
+		if w == nil {
+			// The webhook is gone: nothing may stay queued (or hold its payload).
+			s.db.WithContext(ctx).Model(&WebhookDelivery{}).Where("id = ? AND succeeded = ?", d.ID, false).
+				Updates(purgeFields("webhook no longer exists"))
 			continue
 		}
-		// lock: atomic claim so sibling workers skip it
+		if w.Declarative != nil && !w.IsEnabled() {
+			// switched off while queued: retain instead of sending
+			s.db.WithContext(ctx).Model(&WebhookDelivery{}).Where("id = ? AND next_attempt_at IS NOT NULL", d.ID).
+				Updates(map[string]any{"held": true, "next_attempt_at": nil})
+			continue
+		}
+		ok := w.OwnerType + "|" + w.OwnerID.String()
+		if perWH[w.ID] >= s.perWebhook || perOwner[ok] >= s.perOwner {
+			continue
+		}
+		// atomic claim so sibling workers skip it
 		res := s.db.WithContext(ctx).Model(&WebhookDelivery{}).
 			Where("id = ? AND next_attempt_at IS NOT NULL AND (held = ? OR held IS NULL)", d.ID, false).
 			Updates(map[string]any{"next_attempt_at": nil, "in_flight": true})
 		if res.Error != nil || res.RowsAffected != 1 {
 			continue
 		}
-		var w Webhook
-		if err := s.db.WithContext(ctx).First(&w, "id = ?", d.WebhookID).Error; err != nil {
-			return
-		}
-		if w.Declarative != nil && !w.Declarative.Enabled {
-			// switched off while queued: retain instead of sending
-			s.db.WithContext(ctx).Model(&WebhookDelivery{}).Where("id = ?", d.ID).
-				Updates(map[string]any{"held": true, "in_flight": false})
-			continue
-		}
+		perWH[w.ID]++
+		perOwner[ok]++
 		d.InFlight = false
 		d.NextAttemptAt = nil
-		s.attemptDelivery(ctx, &w, &d)
-		return
+		batch = append(batch, claimed{d: d, w: *w})
 	}
-}
-
-// hasLivePredecessor: an earlier delivery of the same aggregate on the same
-// subscription that is still queued, retained or in flight blocks this one.
-// A delivery that gave up (retries exhausted) no longer blocks.
-func (s *Service) hasLivePredecessor(ctx context.Context, d *WebhookDelivery, now time.Time) bool {
-	var n int64
-	s.db.WithContext(ctx).Model(&WebhookDelivery{}).
-		Where("webhook_id = ? AND ordering_key = ? AND seq < ? AND id <> ? AND succeeded = ?",
-			d.WebhookID, d.OrderingKey, d.Seq, d.ID, false).
-		Where("(held = ? OR next_attempt_at IS NOT NULL OR (in_flight = ? AND updated_at > ?))",
-			true, true, now.Add(-inFlightLease)).
-		Count(&n)
-	return n > 0
+	var wg sync.WaitGroup
+	for i := range batch {
+		wg.Add(1)
+		go func(c *claimed) {
+			defer wg.Done()
+			s.attemptDelivery(ctx, &c.w, &c.d)
+		}(&batch[i])
+	}
+	wg.Wait()
 }
 
 // reapOrphans re-queues deliveries claimed by a worker that never reported back.
@@ -586,7 +893,7 @@ func (s *Service) attemptDelivery(ctx context.Context, w *Webhook, d *WebhookDel
 	payloadBytes, _ := jsonMarshal(d.Payload)
 	req, err := newRequest(ctx, w, d.Event, payloadBytes, s.clock())
 	if err != nil {
-		s.persistFailure(ctx, w, d, 0, err.Error(), false)
+		s.persistFailure(ctx, w, d, 0, err.Error(), failOpts{})
 		return
 	}
 	// Stable across retries of the same delivery so receivers can dedupe.
@@ -594,7 +901,7 @@ func (s *Service) attemptDelivery(ctx context.Context, w *Webhook, d *WebhookDel
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		s.persistFailure(ctx, w, d, 0, err.Error(), false)
+		s.persistFailure(ctx, w, d, 0, err.Error(), failOpts{})
 		return
 	}
 	defer resp.Body.Close()
@@ -607,13 +914,44 @@ func (s *Service) attemptDelivery(ctx context.Context, w *Webhook, d *WebhookDel
 		return
 	}
 
-	s.persistFailure(ctx, w, d, status, body, false)
+	s.persistFailure(ctx, w, d, status, body, failOpts{})
+}
+
+// saveDelivery stores d. A response body the database refuses (invalid UTF-8,
+// NUL) must never leave the delivery in flight with its attempt unrecorded and
+// resend forever: retry without the offending text, then with the bare minimum.
+func (s *Service) saveDelivery(ctx context.Context, d *WebhookDelivery) {
+	db := s.db.WithContext(ctx)
+	if err := db.Save(d).Error; err == nil {
+		return
+	} else {
+		slog.Warn("webhooks: saving delivery failed, retrying without response text", "delivery", d.ID, "err", err)
+	}
+	d.ResponseBody, d.ErrorMessage = "", "response text could not be stored"
+	if err := db.Save(d).Error; err == nil {
+		return
+	}
+	next := s.clock().Add(time.Minute)
+	if err := db.Model(&WebhookDelivery{}).Where("id = ?", d.ID).
+		Updates(map[string]any{"in_flight": false, "attempt_count": d.AttemptCount, "succeeded": d.Succeeded, "next_attempt_at": nextOrNil(d, next)}).Error; err != nil {
+		slog.Error("webhooks: could not persist delivery state", "delivery", d.ID, "err", err)
+	}
+}
+
+func nextOrNil(d *WebhookDelivery, fallback time.Time) any {
+	if d.Succeeded {
+		return nil
+	}
+	if d.NextAttemptAt != nil {
+		return *d.NextAttemptAt
+	}
+	return fallback
 }
 
 func (s *Service) persistSuccess(ctx context.Context, w *Webhook, d *WebhookDelivery, status int, body string, purge bool) {
 	now := s.clock()
 	d.ResponseStatus = status
-	d.ResponseBody = body
+	d.ResponseBody = cleanText(body, 8*1024)
 	d.Succeeded = true
 	d.DeliveredAt = &now
 	d.NextAttemptAt = nil
@@ -624,24 +962,33 @@ func (s *Service) persistSuccess(ctx context.Context, w *Webhook, d *WebhookDeli
 		d.Payload = JSONMap{}
 		d.PayloadPurged = true
 	}
-	_ = s.db.WithContext(ctx).Save(d).Error
+	s.saveDelivery(ctx, d)
 	upd := map[string]any{
 		"success_count":     gorm.Expr("success_count + 1"),
 		"last_triggered_at": now,
 	}
-	if w.Declarative != nil {
+	if w.Declarative != nil && d.Event != "webhook.test" {
 		upd["consecutive_failures"] = 0
 		upd["last_http_status"] = status
 		upd["last_error"] = ""
 	}
-	_ = s.db.WithContext(ctx).Model(w).Updates(upd).Error
+	_ = s.db.WithContext(ctx).Model(&Webhook{}).Where("id = ?", w.ID).Updates(upd).Error
 }
 
-func (s *Service) persistFailure(ctx context.Context, w *Webhook, d *WebhookDelivery, status int, msg string, permanent bool) {
+// failOpts classifies a failed attempt.
+type failOpts struct {
+	// permanent: do not retry (dead-letter).
+	permanent bool
+	// noHealth: does not count as a consecutive failure (the destination is not
+	// at fault: bad request data, unresolvable secret, a blocked target...).
+	noHealth bool
+}
+
+func (s *Service) persistFailure(ctx context.Context, w *Webhook, d *WebhookDelivery, status int, msg string, o failOpts) {
 	d.ResponseStatus = status
-	d.ErrorMessage = truncate(msg, 500)
+	d.ErrorMessage = cleanText(msg, 500)
 	d.InFlight = false
-	if !permanent && d.AttemptCount < w.RetryMax {
+	if !o.permanent && d.AttemptCount < w.RetryMax {
 		// exponential backoff: 1s, 4s, 16s, ...
 		shift := uint(2 * d.AttemptCount)
 		backoff := time.Duration(1<<shift) * time.Second
@@ -658,61 +1005,62 @@ func (s *Service) persistFailure(ctx context.Context, w *Webhook, d *WebhookDeli
 	} else {
 		d.NextAttemptAt = nil
 	}
-	_ = s.db.WithContext(ctx).Save(d).Error
+	s.saveDelivery(ctx, d)
 	if w.Declarative == nil {
-		_ = s.db.WithContext(ctx).Model(w).UpdateColumn("failure_count", gorm.Expr("failure_count + 1")).Error
+		_ = s.db.WithContext(ctx).Model(&Webhook{}).Where("id = ?", w.ID).UpdateColumn("failure_count", gorm.Expr("failure_count + 1")).Error
 		return
 	}
-	s.recordFailureHealth(ctx, w, status, d.ErrorMessage)
+	s.recordFailureHealth(ctx, w, d, status, o)
 }
 
 // defaultAutoDisableThreshold is the consecutive-failure limit when a
 // subscription does not set its own.
 const defaultAutoDisableThreshold = 10
 
-// recordFailureHealth updates the counters of a declarative subscription and
-// switches it off (events are then retained, not lost) once consecutive
-// failures reach its threshold. Resuming is manual: SetEnabled(true).
-func (s *Service) recordFailureHealth(ctx context.Context, w *Webhook, status int, msg string) {
+// recordFailureHealth updates the counters of a declarative subscription with
+// ATOMIC statements (no read-modify-write of the row, so a concurrent edit is
+// never reverted) and trips the subscription off once consecutive failures reach
+// its threshold. Tripping only sets auto_disabled_at: events are then retained,
+// not lost; resuming is manual (SetEnabled(true) / Update enabled=true).
+func (s *Service) recordFailureHealth(ctx context.Context, w *Webhook, d *WebhookDelivery, status int, o failOpts) {
 	now := s.clock()
-	cons := w.ConsecutiveFailures + 1
-	// re-read: another delivery may have moved the counter meanwhile
-	var cur Webhook
-	if err := s.db.WithContext(ctx).Select("consecutive_failures").First(&cur, "id = ?", w.ID).Error; err == nil {
-		cons = cur.ConsecutiveFailures + 1
-	}
-	w.ConsecutiveFailures = cons
+	db := s.db.WithContext(ctx)
 	upd := map[string]any{
-		"failure_count":        gorm.Expr("failure_count + 1"),
-		"consecutive_failures": cons,
-		"last_failed_at":       now,
-		"last_http_status":     status,
-		"last_error":           truncate(msg, 500),
+		"failure_count":    gorm.Expr("failure_count + 1"),
+		"last_failed_at":   now,
+		"last_http_status": status,
+		"last_error":       cleanText(d.ErrorMessage, 500),
+	}
+	counts := !o.noHealth && d.Event != "webhook.test"
+	if counts {
+		upd["consecutive_failures"] = gorm.Expr("consecutive_failures + 1")
+	}
+	if err := db.Model(&Webhook{}).Where("id = ?", w.ID).Updates(upd).Error; err != nil || !counts {
+		return
 	}
 	thr := w.Declarative.AutoDisableThreshold
 	if thr == 0 {
 		thr = defaultAutoDisableThreshold
 	}
-	tripped := thr > 0 && cons >= thr && w.Declarative.Enabled
-	if tripped {
-		w.Declarative.Enabled = false
-		if b, err := json.Marshal(w.Declarative); err == nil {
-			upd["declarative"] = string(b)
-		}
-		upd["auto_disabled_at"] = now
-	}
-	if err := s.db.WithContext(ctx).Model(&Webhook{}).Where("id = ?", w.ID).Updates(upd).Error; err != nil {
+	if thr < 0 {
 		return
 	}
-	if tripped && s.onAutoOff != nil {
-		cp := *w
-		s.onAutoOff(ctx, cp)
+	res := db.Model(&Webhook{}).
+		Where("id = ? AND auto_disabled_at IS NULL AND consecutive_failures >= ?", w.ID, thr).
+		Update("auto_disabled_at", now)
+	if res.Error != nil || res.RowsAffected != 1 || s.onAutoOff == nil {
+		return
+	}
+	var cur Webhook
+	if err := db.First(&cur, "id = ?", w.ID).Error; err == nil {
+		s.onAutoOff(ctx, cur)
 	}
 }
 
 // Requeue puts a dead-lettered delivery (retries exhausted or rejected with a
 // 4xx) back in the queue, keeping its id, idempotency key and ordering, with a
-// fresh attempt budget. It is the manual "repeat from dead-letter".
+// fresh attempt budget. It is the manual "repeat from dead-letter". A delivery
+// that was never rendered or whose payload was purged cannot be requeued.
 func (s *Service) Requeue(ctx context.Context, deliveryID uuid.UUID) error {
 	var d WebhookDelivery
 	if err := s.db.WithContext(ctx).First(&d, "id = ?", deliveryID).Error; err != nil {
@@ -763,12 +1111,24 @@ func generateSecret() string {
 	return hex.EncodeToString(b)
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
+// cleanText makes s safe to store: valid UTF-8, no NUL bytes, at most max BYTES
+// (cut on a rune boundary).
+func cleanText(s string, max int) string {
+	s = strings.ToValidUTF8(s, "")
+	if strings.IndexByte(s, 0) >= 0 {
+		s = strings.ReplaceAll(s, "\x00", "")
+	}
+	if len(s) <= max {
 		return s
 	}
-	return s[:n]
+	s = s[:max]
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
 }
+
+func truncate(s string, n int) string { return cleanText(s, n) }
 
 func containsEvent(events StringSlice, e string) bool {
 	for _, ev := range events {

@@ -110,6 +110,9 @@ func parsePath(p string) (pathRef, error) {
 			return pathRef{}, fmt.Errorf("%w: %q (event fields: %s)", ErrUnknownPath, p, strings.Join(EventFields, ", "))
 		}
 	case "payload":
+		if len(parts) < 2 {
+			return pathRef{}, fmt.Errorf("%w: %q: the whole payload cannot be referenced, name a field", ErrInvalidDeclarative, p)
+		}
 		if len(parts) > 12 {
 			return pathRef{}, fmt.Errorf("%w: %q is too deep", ErrInvalidDeclarative, p)
 		}
