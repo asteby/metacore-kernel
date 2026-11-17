@@ -22,6 +22,7 @@ type Operation struct {
 	Route    Route
 	Values   map[string]any
 	// Branch / Entity are the optional scope extracted from the payload.
+	Origin string // "inbound:<contract>"
 	Branch string
 	Entity string
 }

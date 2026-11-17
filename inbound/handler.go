@@ -39,6 +39,11 @@ type Config struct {
 	// command routes. At least the one the contracts need must be set.
 	Executor Executor
 	Commands *CommandRegistry
+	// Ports for the actions of RFC 0003 §2.4 (each needed only by contracts
+	// that use that action): event.emit, notify, automation.enqueue.
+	Emitter    EventEmitter
+	Notifier   Notifier
+	Automation AutomationIngester
 
 	MaxBodyBytes int64         // default 1 MiB
 	Lease        time.Duration // processing reservation lease, default 60 s
@@ -99,7 +104,9 @@ func (h *Handler) Check() error {
 		if _, ok := h.cfg.Verifiers[c.Auth]; !ok {
 			errs = append(errs, fmt.Errorf("contract %s v%d: unknown auth profile %q", c.Key, c.Version, c.Auth))
 		}
-		if c.Route.Command != "" {
+		if len(c.chain) > 0 {
+			errs = append(errs, h.checkChain(c)...)
+		} else if c.Route.Command != "" {
 			if _, ok := h.cfg.Commands.get(c.Route.Command); !ok {
 				errs = append(errs, fmt.Errorf("contract %s v%d: command %q not registered", c.Key, c.Version, c.Route.Command))
 			}
@@ -133,6 +140,7 @@ const (
 	CodeInProgress        = "in_progress"
 	CodeInternal          = "internal_error"
 	CodeContractMisconfig = "contract_misconfigured"
+	CodeOriginLoop        = "origin_loop"
 )
 
 // ErrorBody is the uniform error envelope: {"error": {...}}.
@@ -146,6 +154,8 @@ type ErrorDetail struct {
 	Code    string       `json:"code"`
 	Message string       `json:"message"`
 	Details []FieldIssue `json:"details,omitempty"`
+	// FailedAction is the index of the chain action that stopped (no values).
+	FailedAction *int `json:"failed_action,omitempty"`
 }
 
 // FieldIssue points at the offending field and the failed schema keyword.
@@ -159,6 +169,7 @@ type SuccessBody struct {
 	Status    string `json:"status"` // applied | replayed
 	ReceiptID string `json:"receipt_id"`
 	RecordID  string `json:"record_id,omitempty"`
+	Actions   []ActionStep `json:"actions,omitempty"`
 	Created   bool   `json:"created,omitempty"`
 }
 
@@ -253,6 +264,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sum := sha256.Sum256(body)
 	base := Receipt{OrgID: org, Contract: c.Key, Version: c.Version, BodyHash: hex.EncodeToString(sum[:])}
 
+	if o := r.Header.Get(OriginHeader); o != "" && (o == OriginPrefix+c.Key || OriginExcluded(o, c.IgnoreOrigins)) {
+		// The event was caused by this contract (or an excluded origin): a loop.
+		rec := base
+		rec.Status, rec.ErrorCode = StatusRejected, CodeOriginLoop
+		_ = h.cfg.Receipts.Record(r.Context(), rec)
+		writeJSON(w, http.StatusOK, SuccessBody{Status: "ignored"})
+		return
+	}
 	if verr := c.schema.Validate(payload); verr != nil {
 		issues := schemaIssues(verr)
 		rec := base
@@ -287,7 +306,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	op := Operation{Org: org, Contract: c.Key, EventKey: evKey, Route: c.Route, Values: applyMapping(c.Route, payload)}
+	if len(c.chain) > 0 {
+		h.serveChain(w, r.Context(), c, org, evKey, payload, cur)
+		return
+	}
+	op := Operation{Org: org, Contract: c.Key, EventKey: evKey, Route: c.Route, Values: applyMapping(c.Route, payload), Origin: OriginPrefix + c.Key}
 	if sc := c.Route.Scope; sc != nil {
 		op.Branch = scopeValue(payload, sc.Branch)
 		op.Entity = scopeValue(payload, sc.Entity)
@@ -324,7 +347,10 @@ func (h *Handler) answerExisting(w http.ResponseWriter, cur Receipt, bodyHash st
 			writeErr(w, http.StatusConflict, CodeIdempotencyClash, "event key already used with a different payload")
 			return
 		}
-		writeJSON(w, http.StatusOK, SuccessBody{Status: "replayed", ReceiptID: cur.ID.String(), RecordID: cur.RecordID})
+		writeJSON(w, http.StatusOK, SuccessBody{Status: "replayed", ReceiptID: cur.ID.String(), RecordID: cur.RecordID, Actions: cur.Progress})
+	case StatusFailed:
+		// Only reached when a partially applied chain is retried with another body.
+		writeErr(w, http.StatusConflict, CodeIdempotencyClash, "event key already used with a different payload")
 	default: // processing within lease
 		w.Header().Set("Retry-After", "5")
 		writeErr(w, http.StatusConflict, CodeInProgress, "event is being processed")

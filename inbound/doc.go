@@ -18,6 +18,8 @@
 //  7. event key from the idempotency template; reservation in the receipt log
 //     (duplicate -> 200 "replayed"; same key, other body -> 409)
 //  8. declarative mapping, then Executor (model routes) or CommandRegistry
+//     or, when the contract declares Actions (RFC 0003 §2.4), the chain in
+//     chain.go: per-action progress in the receipt, resumable, origin-marked
 //  9. receipt finished as applied / failed; the caller gets applied|error
 //
 // The organization always comes from the authenticated route, never from the

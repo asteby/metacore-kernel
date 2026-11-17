@@ -145,3 +145,69 @@ Las peticiones sin autenticar no escriben en la bitácora.
 
 - `upsert` es buscar-y-luego-escribir; dos eventos distintos concurrentes sobre la misma fila nueva pueden chocar. Definir un índice único sobre los campos `match` (el segundo falla y se reintenta como actualización).
 - El recibo `processing` si el proceso muere se recupera tras el arriendo, no antes.
+
+## Cadena de acciones (RFC 0003 §2.4)
+
+Un contrato puede declarar `actions` en lugar de `route` (son excluyentes; sin
+`actions` todo se comporta como antes). La lista de acciones es **cerrada**:
+
+| `do` | Campos | Efecto |
+|---|---|---|
+| `record.create` / `record.update` / `record.upsert` | `model`, `mapping`, `match`, `defaults`, `scope` | reusa el `Executor` (mismo muro de organización y de modelo) |
+| `event.emit` | `name`, `payload` | `EventEmitter.Emit` (puerto mínimo; este paquete no importa `webhooks`) |
+| `automation.enqueue` | `name`, `payload` | `AutomationIngester.IngestEvent`, que el host adapta a `automation.Scheduler.Ingest` |
+| `notify` | `template`, `payload` (parámetros) | `Notifier.Notify`; el host renderiza con `notifications.Render` |
+| `command.run` | `command`, `mapping`, `op` | `CommandRegistry` existente |
+
+No hay acción HTTP saliente: eso son suscripciones de salida.
+
+```json
+{ "key": "crm-cliente-nuevo", "version": 1, "auth": "hmac_canonical_v1",
+  "idempotency": "{id}", "json_schema": { "...": "..." }, "on_error": "stop",
+  "actions": [
+    { "do": "record.upsert", "model": "customers", "match": ["external_ref"],
+      "mapping": { "external_ref": "{{payload.id}}", "name": "{{payload.nombre}}" } },
+    { "do": "event.emit", "name": "customers.customer.imported", "payload": { "id": "{{result.id}}" } },
+    { "do": "notify", "template": "cliente_importado", "when": { "path": "result.created", "eq": true } }
+  ] }
+```
+
+**Plantillas `{{ref}}`.** `payload.<ruta>` (cuerpo), `event.key|contract|version|org`,
+`result.id|created` (resultado de la última acción de registro/comando; `event.emit`,
+`notify` y `automation.enqueue` no lo cambian). Un valor `"{{x}}"` completo conserva su
+tipo JSON; mezclado con texto produce cadena. Se validan **al registrar**: una ruta
+`payload.*` debe estar declarada en `properties` del esquema (un escalar no tiene hijos;
+si el esquema es opaco por `$ref/allOf/anyOf/oneOf` se acepta), `result.*` no existe en la
+primera acción, un campo ajeno a la acción, un `match` fuera del `mapping`, más de 10
+acciones o un `do` desconocido fallan con `ErrInvalidContract`. En ejecución un valor
+ausente omite el campo (valor completo) o falla con `template_value_missing` (mezclado).
+
+**`when`.** `{"path": "...", "eq": <escalar>}` o `{"path": "...", "exists": true|false}`;
+falso = paso `skipped`.
+
+**`on_error`.** `stop` (por omisión) o `continue`, por contrato o por acción. Con `continue`
+el paso queda `error` en el recibo y el evento termina `applied`.
+
+**Recibo e idempotencia.** Las acciones corren dentro del mismo recibo: duplicado ->
+`replayed` sin repetir nada (misma llave con otro cuerpo -> `409 idempotency_conflict`).
+Tras cada acción se guarda su progreso (`Receipt.Progress`: índice, `do`, estado, `record_id`,
+`created`, código de error; nunca valores del cuerpo). Si una falla, el recibo queda
+`failed`, la respuesta trae `error.failed_action` y **el mismo evento reintentado reanuda**
+en esa acción, sin repetir las ya aplicadas (y con su `result`). Un reintento con otro
+cuerpo tras un efecto parcial es `409`. Si el contrato cambia de `do` entre intentos:
+`409 contract_changed`. Garantía: *al menos una vez* para la acción que murió entre su
+efecto y el guardado del progreso; `event.emit`, `notify` y `automation.enqueue` reciben
+una `IdempotencyKey` estable (`<recibo>:<índice>`) para que el destino deduplique.
+Si el proceso se cae con el recibo `processing`, se reanuda al vencer el arriendo.
+
+**Origen y bucles.** Todo lo que causa la cadena lleva `Origin = "inbound:<contrato>"`
+(en `Operation.Origin`, `EmitRequest.Origin`, `NotifyRequest.Origin`, `AutomationEvent.Origin`
+y `inbound.OriginFrom(ctx)`). El emisor debe propagarlo (cabecera `X-Metacore-Origin`).
+Una suscripción de salida lo excluye con `inbound.OriginExcluded(origin, []string{"inbound:*"})`.
+Si ese evento vuelve a un endpoint de entrada con la cabecera, el contrato propio (o los
+`ignore_origins` que declare, exactos o `prefijo*`) lo responde `200 {"status":"ignored"}`
+sin efecto (recibo `rejected`/`origin_loop`). La cabecera no está firmada: solo permite a
+quien ya está autenticado omitir su propio evento.
+
+**Cableado.** `Config.Emitter`, `Config.Notifier`, `Config.Automation`; `New`/`Check` fallan
+al arrancar si una cadena usa una acción sin su puerto o un comando no registrado.

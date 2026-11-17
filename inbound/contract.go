@@ -72,6 +72,13 @@ type Contract struct {
 	// Auth is the name of the Verifier profile (hmac_canonical_v1, bearer, ...).
 	Auth string    `json:"auth"`
 	Log  LogPolicy `json:"log,omitempty"`
+	// Actions is the RFC 0003 §2.4 chain; when set, Route must be empty.
+	Actions []Action `json:"actions,omitempty"`
+	// OnError is the default policy of the chain: stop (default) | continue.
+	OnError string `json:"on_error,omitempty"`
+	// IgnoreOrigins lists origin marks (exact or "prefix*") whose events are
+	// ignored with 200 "ignored"; the contract own origin is always ignored.
+	IgnoreOrigins []string `json:"ignore_origins,omitempty"`
 }
 
 var (
@@ -89,6 +96,7 @@ type compiled struct {
 	Contract
 	schema *jsonschema.Schema
 	tmpl   []tmplPart
+	chain  []*cAction
 }
 
 type tmplPart struct {
@@ -126,46 +134,17 @@ func compile(c Contract) (*compiled, error) {
 		return nil, invalidf("%s: idempotency template required", c.Key)
 	}
 	r := c.Route
-	if (r.Model == "") == (r.Command == "") {
-		return nil, invalidf("%s: route needs exactly one of model|command", c.Key)
-	}
-	switch r.Op {
-	case OpCreate, OpUpdate, OpUpsert:
-	default:
-		return nil, invalidf("%s: op must be create|update|upsert", c.Key)
-	}
-	if len(r.Mapping) == 0 {
-		return nil, invalidf("%s: mapping is empty", c.Key)
-	}
-	for to, from := range r.Mapping {
-		if !fieldRe.MatchString(to) || forbidden[to] {
-			return nil, invalidf("%s: target field %q not allowed", c.Key, to)
+	hasChain := len(c.Actions) > 0
+	if hasChain {
+		if r.Model != "" || r.Command != "" || r.Op != "" || len(r.Mapping) > 0 || len(r.Defaults) > 0 || len(r.Match) > 0 || r.Scope != nil {
+			return nil, invalidf("%s: route and actions are mutually exclusive", c.Key)
 		}
-		if _, err := parsePath(from); err != nil {
-			return nil, invalidf("%s: mapping %q: %v", c.Key, to, err)
-		}
+	} else if c.OnError != "" {
+		return nil, invalidf("%s: on_error only applies to actions", c.Key)
 	}
-	for to := range r.Defaults {
-		if !fieldRe.MatchString(to) || forbidden[to] {
-			return nil, invalidf("%s: default field %q not allowed", c.Key, to)
-		}
-	}
-	if r.Model != "" && (r.Op == OpUpdate || r.Op == OpUpsert) && len(r.Match) == 0 {
-		return nil, invalidf("%s: %s needs match fields", c.Key, r.Op)
-	}
-	for _, m := range r.Match {
-		if _, ok := r.Mapping[m]; !ok {
-			return nil, invalidf("%s: match field %q is not in mapping", c.Key, m)
-		}
-	}
-	if r.Scope != nil {
-		for _, p := range []string{r.Scope.Branch, r.Scope.Entity} {
-			if p == "" {
-				continue
-			}
-			if _, err := parsePath(p); err != nil {
-				return nil, invalidf("%s: scope path: %v", c.Key, err)
-			}
+	if !hasChain {
+		if err := compileRoute(c.Key, r); err != nil {
+			return nil, err
 		}
 	}
 	tmpl, err := parseTemplate(c.Idempotency)
@@ -188,7 +167,13 @@ func compile(c Contract) (*compiled, error) {
 	if err != nil {
 		return nil, invalidf("%s: json_schema: %v", c.Key, err)
 	}
-	return &compiled{Contract: c, schema: sch, tmpl: tmpl}, nil
+	var chain []*cAction
+	if hasChain {
+		if chain, err = compileActions(c, c.JSONSchema); err != nil {
+			return nil, err
+		}
+	}
+	return &compiled{Contract: c, schema: sch, tmpl: tmpl, chain: chain}, nil
 }
 
 func parseTemplate(t string) ([]tmplPart, error) {
@@ -323,4 +308,50 @@ func (r *Registry) all() []*compiled {
 		}
 	}
 	return out
+}
+
+func compileRoute(key string, r Route) error {
+	if (r.Model == "") == (r.Command == "") {
+		return invalidf("%s: route needs exactly one of model|command", key)
+	}
+	switch r.Op {
+	case OpCreate, OpUpdate, OpUpsert:
+	default:
+		return invalidf("%s: op must be create|update|upsert", key)
+	}
+	if len(r.Mapping) == 0 {
+		return invalidf("%s: mapping is empty", key)
+	}
+	for to, from := range r.Mapping {
+		if !fieldRe.MatchString(to) || forbidden[to] {
+			return invalidf("%s: target field %q not allowed", key, to)
+		}
+		if _, err := parsePath(from); err != nil {
+			return invalidf("%s: mapping %q: %v", key, to, err)
+		}
+	}
+	for to := range r.Defaults {
+		if !fieldRe.MatchString(to) || forbidden[to] {
+			return invalidf("%s: default field %q not allowed", key, to)
+		}
+	}
+	if r.Model != "" && (r.Op == OpUpdate || r.Op == OpUpsert) && len(r.Match) == 0 {
+		return invalidf("%s: %s needs match fields", key, r.Op)
+	}
+	for _, m := range r.Match {
+		if _, ok := r.Mapping[m]; !ok {
+			return invalidf("%s: match field %q is not in mapping", key, m)
+		}
+	}
+	if r.Scope != nil {
+		for _, p := range []string{r.Scope.Branch, r.Scope.Entity} {
+			if p == "" {
+				continue
+			}
+			if _, err := parsePath(p); err != nil {
+				return invalidf("%s: scope path: %v", key, err)
+			}
+		}
+	}
+	return nil
 }
