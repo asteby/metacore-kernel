@@ -74,6 +74,7 @@ var legacyTolerated = []string{
 	RuleSlotKindUnknown,
 	RulePrivateFrontendIntegrity,
 	RulePrivateExplicitCapabilities,
+	RuleEventEmitCapability,
 }
 
 // warnOnlyWindow marks the legacyTolerated rules that are reported as warnings
@@ -84,8 +85,16 @@ var warnOnlyWindow = map[string]struct{}{
 	RuleSlotKindUnknown:             {},
 	RulePrivateFrontendIntegrity:    {},
 	RulePrivateExplicitCapabilities: {},
+	RuleEventEmitCapability:         {},
 }
 
 // LegacyTolerated returns the rule ids currently inside their compatibility
 // window.
 func LegacyTolerated() []string { return append([]string(nil), legacyTolerated...) }
+
+// RuleEventEmitCapability: events.emits[].name is not covered by any of the
+// addon's own `event:emit` capabilities (exact name, "prefix.*" or "*"), so a
+// guest of this addon could not publish it. Warning-only in both modes for
+// its first minor. Canonical CRUD names (addon.Model.action) are published by
+// the host on the owner's behalf and are exempt.
+const RuleEventEmitCapability = "event_emit_capability"

@@ -216,7 +216,10 @@ Un addon declara en su manifest v3, de forma **opcional y retrocompatible**, qu�
 
 Reglas (se validan al cargar, `manifest/v3/event_catalog.go`):
 
-- `name`: `dominio.entidad.accion`, tres segmentos en minúsculas/dígitos/`_`; único dentro del addon.
+- `name`: **exactamente el nombre que publica el bus, sin mapeo**; único dentro del addon. Forma canónica `^[a-z][a-z0-9_]*(\.([A-Za-z][A-Za-z0-9_]*\.)?[a-z][a-z0-9_]*)?$`: de 1 a 3 segmentos, primero y último en minúsculas/dígitos/`_`, y el del medio (solo con 3) PascalCase o snake. Dos casos reales:
+  - Eventos de guest/dominio (1 o 2 segmentos, snake): `stock.moved`, `inventory.low_stock_detected`, `customers.invoice_paid`, `channel_orders.order_ready`, `storefront_cart.order_placed`, `checkout_paid`, `order_imported`, `payment_updated`.
+  - CRUD canónico que el host publica por el addon dueño, `<addon>.<Modelo>.<acción>`: `customers.Customer.created`, `customers.SalesOrder.created`, `inventory.Transfer.created`. Solo lo puede declarar el addon cuyo `metadata.key` es el primer segmento; declarar el de otro addon es error.
+- Quién puede emitir: el bus no acota por prefijo de nombre sino por capability (`event:emit`, nombre exacto o `prefijo.*`). Por eso un nombre que no sea CRUD canónico debe estar cubierto por una `event:emit` del propio addon; si no, regla `event_emit_capability`, **solo aviso** en ambos modos durante esta minor (su guest no podría publicarlo).
 - `description`: **clave i18n** (no prosa). `aggregate`: snake_case. `since`: semver.
 - `sensitivity`: `public | internal | personal`; omitida = `internal`.
 - `payload_schema`: objeto JSON Schema acotado a 16 KiB, profundidad 8 y 500 nodos; solo `$ref` locales (`#/...`); `$id`, `$anchor`, `$dynamicRef` y `$recursiveRef` se rechazan. Máximo 200 eventos por addon.

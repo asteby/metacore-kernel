@@ -66,14 +66,16 @@ type ConsumedEvent struct {
 }
 
 var (
-	eventNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`)
+	// Names exactly as the bus publishes them (no mapping): 1 to 3 dot segments,
+	// first/last lowercase snake, the middle one (only with 3) PascalCase or snake.
+	eventNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]*(.([A-Za-z][A-Za-z0-9_]*.)?[a-z][a-z0-9_]*)?$`)
 	eventIDRe   = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 	eventI18nRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,199}$`)
 	eventVerRe  = regexp.MustCompile(`^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
 )
 
 // validateEvents enforces what the JSON schema cannot express.
-func validateEvents(m *Manifest) []string {
+func validateEvents(m *Manifest, warnOnly func(rule, msg string)) []string {
 	if m.Events == nil {
 		return nil
 	}
@@ -89,11 +91,18 @@ func validateEvents(m *Manifest) []string {
 			where = fmt.Sprintf("events.emits[%s]", ev.Name)
 		}
 		if !eventNameRe.MatchString(ev.Name) {
-			errs = append(errs, fmt.Sprintf("%s.name %q must be <domain>.<entity>.<action> (lowercase, digits, underscores)", where, ev.Name))
+			errs = append(errs, fmt.Sprintf("%s.name %q is not a published event name (forms: event, domain.event, addon.Model.action; first and last segment lowercase snake_case)", where, ev.Name))
 		} else if _, dup := seen[ev.Name]; dup {
 			errs = append(errs, fmt.Sprintf("%s.name is duplicated within the addon", where))
 		} else {
 			seen[ev.Name] = struct{}{}
+			if owner, crud := isCRUDEventName(ev.Name); crud {
+				if owner != m.Metadata.Key {
+					errs = append(errs, fmt.Sprintf("%s.name %q is a canonical CRUD event of addon %q; an addon can only declare its own (%q)", where, ev.Name, owner, m.Metadata.Key))
+				}
+			} else if !eventCovered(m.Capabilities, ev.Name) {
+				warnOnly(RuleEventEmitCapability, fmt.Sprintf("%s.name %q is not covered by an event:emit capability of this addon; its guest could not publish it", where, ev.Name))
+			}
 		}
 		if ev.Description != "" && !eventI18nRe.MatchString(ev.Description) {
 			errs = append(errs, fmt.Sprintf("%s.description %q must be an i18n key, not prose", where, ev.Description))
@@ -117,7 +126,7 @@ func validateEvents(m *Manifest) []string {
 	for i, ev := range e.Consumes {
 		where := fmt.Sprintf("events.consumes[%d]", i)
 		if !eventNameRe.MatchString(ev.Name) {
-			errs = append(errs, fmt.Sprintf("%s.name %q must be <domain>.<entity>.<action>", where, ev.Name))
+			errs = append(errs, fmt.Sprintf("%s.name %q is not a published event name", where, ev.Name))
 		} else if _, dup := seenC[ev.Name]; dup {
 			errs = append(errs, fmt.Sprintf("%s.name %q is duplicated", where, ev.Name))
 		} else {
@@ -258,4 +267,37 @@ func Catalog(manifests []*Manifest, f CatalogFilter) []CatalogEntry {
 		return out[i].Name < out[j].Name
 	})
 	return out
+}
+
+// isCRUDEventName reports the host's canonical CRUD shape
+// "<addon_key>.<Model>.<action>": three segments whose middle one starts with
+// an uppercase letter (the host builds it from the owner addon key and the
+// model key, dynamic/canonical_events.go).
+func isCRUDEventName(name string) (addonKey string, ok bool) {
+	parts := strings.Split(name, ".")
+	if len(parts) != 3 || parts[1] == "" || parts[1][0] < 'A' || parts[1][0] > 'Z' {
+		return "", false
+	}
+	return parts[0], true
+}
+
+// eventCovered mirrors the bus rule (events.eventMatches, capability glob):
+// exact name, "*", or a trailing ".*" prefix.
+func eventCovered(caps []Capability, name string) bool {
+	for _, c := range caps {
+		if c.Kind != "event:emit" {
+			continue
+		}
+		p := c.Target
+		if p == "*" || p == name {
+			return true
+		}
+		if strings.HasSuffix(p, ".*") {
+			prefix := strings.TrimSuffix(p, ".*")
+			if name == prefix || strings.HasPrefix(name, prefix+".") {
+				return true
+			}
+		}
+	}
+	return false
 }
