@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/google/uuid"
 	"testing"
 )
 
@@ -270,8 +272,13 @@ func TestChainOnErrorContinue(t *testing.T) {
 	}
 }
 
-// E: an event emitted by the chain that comes back to the same contract
-// carries the origin mark and is ignored; an unmarked one is applied.
+func marked(id string, origin any, hop any) string {
+	b, _ := json.Marshal(map[string]any{"id": id, "nombre": "Ana", "correo": "ana@example.com", "_origin": origin, "_hop": hop})
+	return string(b)
+}
+
+// E: the emitted event carries origin and hop INSIDE its (signed) body; when
+// it comes back to the same contract it is ignored. A header alone is not trusted.
 func TestChainLoopIsCut(t *testing.T) {
 	c := crmContract()
 	c.Actions[2].When = nil
@@ -279,10 +286,11 @@ func TestChainLoopIsCut(t *testing.T) {
 	var inner map[string]any
 	var innerCode int
 	ce.em.onEmit = func(r EmitRequest) {
-		// a subscription (not excluding the origin) delivers it back
-		innerCode, inner = ce.send(t, ce.orgA, c.Key, crmBody("c-loop-2"), func(req *http.Request) {
-			req.Header.Set(OriginHeader, r.Origin)
-		})
+		if r.Payload[OriginField] != "inbound:crm-cliente-nuevo" || r.Payload[HopField] != int64(1) || r.Hop != 1 {
+			t.Errorf("emitted body lacks origin/hop: %v", r.Payload)
+		}
+		// a subscription delivers it back, signed as a whole
+		innerCode, inner = ce.send(t, ce.orgA, c.Key, marked("c-loop-2", r.Payload[OriginField], r.Payload[HopField]), nil)
 	}
 	code, out := ce.send(t, ce.orgA, c.Key, crmBody("c-loop"), nil)
 	if code != 200 || out["status"] != "applied" {
@@ -294,17 +302,58 @@ func TestChainLoopIsCut(t *testing.T) {
 	if len(ce.exec.rows[ce.orgA]) != 1 || len(ce.em.reqs) != 1 {
 		t.Fatalf("rows %d emits %d", len(ce.exec.rows[ce.orgA]), len(ce.em.reqs))
 	}
-	// control: without the mark the same body is processed
+	// control: an unsigned/forged header does not cut anything
 	ce.em.onEmit = nil
-	code, out = ce.send(t, ce.orgA, c.Key, crmBody("c-loop-2"), nil)
+	code, out = ce.send(t, ce.orgA, c.Key, crmBody("c-loop-3"), func(req *http.Request) {
+		req.Header.Set("X-Metacore-Origin", "inbound:crm-cliente-nuevo")
+	})
+	if code != 200 || out["status"] != "applied" {
+		t.Fatalf("header must not be trusted: %d %v", code, out)
+	}
+	// ignore_origins: another contract's origin, from the body
+	c.Key, c.IgnoreOrigins = "crm-ign", []string{"inbound:*"}
+	ce = newChainEnv(t, c)
+	code, out = ce.send(t, ce.orgA, c.Key, marked("z", "inbound:otro", 1), nil)
+	if code != 200 || out["status"] != "ignored" || ce.exec.calls != 0 {
+		t.Fatalf("%d %v", code, out)
+	}
+	// malformed reserved fields are rejected, not silently ignored
+	code, out = ce.send(t, ce.orgA, c.Key, marked("z2", 5, "x"), nil)
+	if code != 422 || errCode(out) != CodeInvalidOrigin {
+		t.Fatalf("%d %v", code, out)
+	}
+}
+
+// M6: a round trip between two contracts (A -> B -> A ...) is bounded by the hop counter.
+func TestChainHopLimitBoundsRoundTrips(t *testing.T) {
+	mk := func(key, target string) Contract {
+		c := crmContract()
+		c.Key = key
+		c.Actions = []Action{{Do: ActionEventEmit, Name: target, Payload: map[string]any{"x": "{{payload.id}}"}}}
+		return c
+	}
+	a, b := mk("ping", "pong.event"), mk("pong", "ping.event")
+	ce := newChainEnv(t, a, b)
+	n := 0
+	ce.em.onEmit = func(r EmitRequest) {
+		n++
+		target := "pong"
+		if r.Name == "ping.event" {
+			target = "ping"
+		}
+		ce.send(t, ce.orgA, target, marked("h"+strings.Repeat("x", n), r.Payload[OriginField], r.Payload[HopField]), nil)
+	}
+	code, out := ce.send(t, ce.orgA, "ping", crmBody("start"), nil)
 	if code != 200 || out["status"] != "applied" {
 		t.Fatalf("%d %v", code, out)
 	}
-	// ignore_origins: another contract's origin
-	c.Key, c.IgnoreOrigins = "crm-ign", []string{"inbound:*"}
-	ce = newChainEnv(t, c)
-	code, out = ce.send(t, ce.orgA, c.Key, crmBody("z"), func(req *http.Request) { req.Header.Set(OriginHeader, "inbound:otro") })
-	if code != 200 || out["status"] != "ignored" || ce.exec.calls != 0 {
+	// hop 0 (external) -> emit hop1 -> emit hop2 -> emit hop3 -> ignored (MaxHops 3)
+	if len(ce.em.reqs) != 3 {
+		t.Fatalf("emits = %d, want 3", len(ce.em.reqs))
+	}
+	// a forged huge hop is ignored too
+	code, out = ce.send(t, ce.orgA, "ping", marked("big", "inbound:zz", 50), nil)
+	if code != 200 || out["status"] != "ignored" {
 		t.Fatalf("%d %v", code, out)
 	}
 }
@@ -450,5 +499,113 @@ func TestRouteContractUnchangedWithChainsRegistered(t *testing.T) {
 	code, out := ce.send(t, ce.orgA, "stock.changed", stockBody("ev-x", "S1", 2), nil)
 	if code != 200 || out["status"] != "applied" || out["actions"] != nil {
 		t.Fatalf("%d %v", code, out)
+	}
+}
+
+// M5: defaults apply on create only; an upsert/update must not revert them.
+func TestDefaultsOnlyOnCreate(t *testing.T) {
+	// route contract
+	e := newEnv(t, nil)
+	e.send(t, e.orgA, "stock.changed", stockBody("d1", "SKU-D", 1), nil)
+	e.exec.rows[e.orgA][0]["source"] = "manual"
+	e.send(t, e.orgA, "stock.changed", stockBody("d2", "SKU-D", 2), nil)
+	if got := e.exec.rows[e.orgA][0]["source"]; got != "manual" {
+		t.Fatalf("route: default reverted a field on update: %v", got)
+	}
+	// chain action
+	c := crmContract()
+	c.Key, c.Idempotency = "crm-def", "{id}:{nombre}"
+	c.Actions = []Action{{Do: ActionRecordUpsert, Model: "customers", Match: []string{"external_ref"},
+		Mapping:  map[string]string{"external_ref": "{{payload.id}}", "name": "{{payload.nombre}}"},
+		Defaults: map[string]any{"status": "new"}}}
+	ce := newChainEnv(t, c)
+	ce.send(t, ce.orgA, c.Key, `{"id":"k","nombre":"A","correo":"a@x.mx"}`, nil)
+	if ce.exec.rows[ce.orgA][0]["status"] != "new" {
+		t.Fatal("default not applied on create")
+	}
+	ce.exec.rows[ce.orgA][0]["status"] = "won"
+	ce.send(t, ce.orgA, c.Key, `{"id":"k","nombre":"B","correo":"a@x.mx"}`, nil)
+	if got := ce.exec.rows[ce.orgA][0]["status"]; got != "won" || ce.exec.rows[ce.orgA][0]["name"] != "B" {
+		t.Fatalf("chain: default reverted state: %v", ce.exec.rows[ce.orgA][0])
+	}
+}
+
+// flakyStore loses the first progress write AFTER the effect committed.
+type flakyStore struct {
+	*MemoryReceiptStore
+	mu    sync.Mutex
+	fails int
+}
+
+func (f *flakyStore) SaveProgress(ctx context.Context, id uuid.UUID, s []ActionStep) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fails > 0 {
+		f.fails--
+		return errors.New("db gone")
+	}
+	return f.MemoryReceiptStore.SaveProgress(ctx, id, s)
+}
+
+// M3: record.create committed but the progress write failed: the retry must
+// not create a second row.
+func TestRecordCreateNotDuplicatedAfterAmbiguousFailure(t *testing.T) {
+	c := crmContract()
+	c.Key = "crm-create"
+	c.Actions = []Action{
+		{Do: ActionRecordCreate, Model: "customers", IdempotencyField: "inbound_key",
+			Mapping: map[string]string{"external_ref": "{{payload.id}}", "name": "{{payload.nombre}}"}},
+		{Do: ActionEventEmit, Name: "customers.created", Payload: map[string]any{"id": "{{result.id}}"}},
+	}
+	reg := NewRegistry()
+	if err := reg.Register(c); err != nil {
+		t.Fatal(err)
+	}
+	st := &flakyStore{MemoryReceiptStore: NewMemoryReceiptStore(), fails: 1}
+	em := &fakeEmitter{}
+	e := newEnv(t, func(cfg *Config) { cfg.Contracts, cfg.Receipts, cfg.Emitter = reg, st, em })
+
+	code, _ := e.send(t, e.orgA, c.Key, crmBody("m3"), nil)
+	if code != 500 || len(e.exec.rows[e.orgA]) != 1 {
+		t.Fatalf("first: %d rows %d", code, len(e.exec.rows[e.orgA]))
+	}
+	code, out := e.send(t, e.orgA, c.Key, crmBody("m3"), nil)
+	if code != 200 || out["status"] != "applied" {
+		t.Fatalf("retry: %d %v", code, out)
+	}
+	rows := e.exec.rows[e.orgA]
+	if len(rows) != 1 {
+		t.Fatalf("duplicated record: %d rows", len(rows))
+	}
+	key, _ := rows[0]["inbound_key"].(string)
+	if !strings.HasSuffix(key, ":0") || len(em.reqs) != 1 || em.reqs[0].Payload["id"] != rows[0]["id"] {
+		t.Fatalf("key %q emits %+v", key, em.reqs)
+	}
+	if e.exec.last.IdempotencyKey != key {
+		t.Fatalf("operation key %q vs %q", e.exec.last.IdempotencyKey, key)
+	}
+}
+
+func TestRecordCreateRequiresIdempotencyField(t *testing.T) {
+	c := crmContract()
+	c.Actions = []Action{{Do: ActionRecordCreate, Model: "m", Mapping: map[string]string{"name": "{{payload.nombre}}"}}}
+	if err := NewRegistry().Register(c); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("%v", err)
+	}
+	c.Actions[0].IdempotencyField = "name"
+	if err := NewRegistry().Register(c); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("field must not be mapped: %v", err)
+	}
+	c.Actions[0].IdempotencyField = "inbound_key"
+	if err := NewRegistry().Register(c); err != nil {
+		t.Fatal(err)
+	}
+	c.Actions[0] = Action{Do: ActionRecordUpsert, Model: "m", Match: []string{"name"}, IdempotencyField: "k", Mapping: map[string]string{"name": "{{payload.nombre}}"}}
+	if err := NewRegistry().Register(c); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("idempotency_field only for create: %v", err)
+	}
+	c.Actions = []Action{{Do: ActionEventEmit, Name: "x.y", Payload: map[string]any{"_hop": 1}}}
+	if err := NewRegistry().Register(c); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("reserved key: %v", err)
 	}
 }

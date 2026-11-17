@@ -44,9 +44,9 @@ func (h *Handler) checkChain(c *compiled) []error {
 
 // serveChain runs the actions of a claimed receipt, resuming after the last
 // finished one, and answers the request.
-func (h *Handler) serveChain(w http.ResponseWriter, ctx context.Context, c *compiled, org uuid.UUID, evKey string, payload any, cur Receipt) {
+func (h *Handler) serveChain(w http.ResponseWriter, ctx context.Context, c *compiled, org uuid.UUID, evKey string, payload any, hop int, cur Receipt) {
 	steps := append([]ActionStep(nil), cur.Progress...)
-	recID, failedAt, err := h.runChain(ctx, c, org, evKey, payload, cur.ID, &steps)
+	recID, failedAt, err := h.runChain(ctx, c, org, evKey, payload, hop, cur.ID, &steps)
 	if err != nil {
 		h.failChain(w, ctx, cur.ID, err, failedAt)
 		return
@@ -71,7 +71,7 @@ func resultOf(s ActionStep) map[string]any {
 // runChain executes the chain. steps holds the progress found in the receipt
 // and is updated (and persisted) after every action. On failure it returns the
 // index of the action that stopped the chain.
-func (h *Handler) runChain(ctx context.Context, c *compiled, org uuid.UUID, evKey string, payload any, rid uuid.UUID, steps *[]ActionStep) (recID string, failedAt int, err error) {
+func (h *Handler) runChain(ctx context.Context, c *compiled, org uuid.UUID, evKey string, payload any, hop int, rid uuid.UUID, steps *[]ActionStep) (recID string, failedAt int, err error) {
 	origin := OriginPrefix + c.Key
 	ctx = WithOrigin(ctx, origin)
 	env := &evalEnv{payload: payload, event: map[string]any{
@@ -116,7 +116,7 @@ func (h *Handler) runChain(ctx context.Context, c *compiled, org uuid.UUID, evKe
 			}
 			continue
 		}
-		out, aerr := h.runAction(ctx, c, a, env, org, evKey, rid, i, origin)
+		out, aerr := h.runAction(ctx, c, a, env, org, evKey, rid, i, origin, hop)
 		if aerr != nil {
 			step.ErrorCode = errCodeOf(aerr)
 			if a.onErr == OnErrorContinue {
@@ -166,7 +166,7 @@ func errCodeOf(err error) string {
 	return "internal"
 }
 
-func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *evalEnv, org uuid.UUID, evKey string, rid uuid.UUID, idx int, origin string) (out Outcome, err error) {
+func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *evalEnv, org uuid.UUID, evKey string, rid uuid.UUID, idx int, origin string, hop int) (out Outcome, err error) {
 	ctx, cancel := context.WithTimeout(ctx, h.cfg.ExecTimeout)
 	defer cancel()
 	defer func() {
@@ -178,18 +178,11 @@ func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *e
 	idem := fmt.Sprintf("%s:%d", rid, idx)
 	switch a.Do {
 	case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert, ActionCommandRun:
-		vals := make(map[string]any, len(a.Defaults)+len(a.mapping))
-		for k, v := range a.Defaults {
-			vals[k] = v
-		}
-		mapped, merr := evalMap(a.mapping, env)
+		vals, merr := evalMap(a.mapping, env)
 		if merr != nil {
 			return Outcome{}, merr
 		}
-		for k, v := range mapped {
-			vals[k] = v
-		}
-		op := Operation{Org: org, Contract: c.Key, EventKey: evKey, Values: vals, Origin: origin}
+		op := Operation{Org: org, Contract: c.Key, EventKey: evKey, Values: vals, Origin: origin, Hop: hop, IdempotencyKey: idem}
 		if a.Do == ActionCommandRun {
 			fn, ok := h.cfg.Commands.get(a.Command)
 			if !ok {
@@ -204,7 +197,16 @@ func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *e
 		if h.cfg.Executor == nil {
 			return Outcome{}, &ExecError{Kind: KindInternal, Code: "executor_unavailable"}
 		}
+		// Defaults apply only when a row is created, never on update.
+		op.CreateDefaults = a.Defaults
 		op.Route = Route{Model: a.Model, Match: a.Match, Op: Op(a.Do[len("record."):])}
+		if a.Do == ActionRecordCreate {
+			// A create whose outcome is unknown (commit then a failed progress
+			// write, a timeout after commit) must not duplicate on retry: it
+			// runs as an upsert on a column that stores "<receipt>:<action>".
+			op.Values[a.IdempotencyField] = idem
+			op.Route.Op, op.Route.Match = OpUpsert, []string{a.IdempotencyField}
+		}
 		if a.Scope != nil {
 			op.Branch = scopeValue(env.payload, a.Scope.Branch)
 			op.Entity = scopeValue(env.payload, a.Scope.Entity)
@@ -221,12 +223,13 @@ func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *e
 			if h.cfg.Emitter == nil {
 				return Outcome{}, &ExecError{Kind: KindInternal, Code: "emitter_unavailable"}
 			}
-			e = h.cfg.Emitter.Emit(ctx, EmitRequest{Org: org, Name: a.Name, Payload: body, Origin: origin, IdempotencyKey: idem})
+			body[OriginField], body[HopField] = origin, int64(hop+1)
+			e = h.cfg.Emitter.Emit(ctx, EmitRequest{Org: org, Name: a.Name, Payload: body, Origin: origin, Hop: hop + 1, IdempotencyKey: idem})
 		case ActionAutomationEnqueue:
 			if h.cfg.Automation == nil {
 				return Outcome{}, &ExecError{Kind: KindInternal, Code: "automation_unavailable"}
 			}
-			e = h.cfg.Automation.IngestEvent(ctx, AutomationEvent{ID: idem, Org: org, Name: a.Name, Payload: body, Origin: origin})
+			e = h.cfg.Automation.IngestEvent(ctx, AutomationEvent{ID: idem, Org: org, Name: a.Name, Payload: body, Origin: origin, Hop: hop + 1})
 		default:
 			if h.cfg.Notifier == nil {
 				return Outcome{}, &ExecError{Kind: KindInternal, Code: "notifier_unavailable"}

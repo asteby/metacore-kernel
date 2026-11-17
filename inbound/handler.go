@@ -25,6 +25,7 @@ const (
 	DefaultMaxBody     = 1 << 20 // 1 MiB
 	DefaultLease       = 60 * time.Second
 	DefaultExecTimeout = 15 * time.Second
+	DefaultMaxHops     = 3
 	DefaultPrefix      = "/api/inbound/"
 	maxSchemaDetails   = 10
 )
@@ -57,6 +58,9 @@ type Config struct {
 	// host part of RemoteAddr (set it when behind a trusted proxy).
 	ClientIP func(*http.Request) string
 	// Prefix is the mount prefix, default "/api/inbound/".
+	// MaxHops bounds chains of inbound->emit->inbound events (default 3): an
+	// event whose body carries _hop >= MaxHops is ignored.
+	MaxHops int
 	Prefix string
 	Logger *slog.Logger
 	Now    func() time.Time
@@ -82,6 +86,9 @@ func New(cfg Config) (*Handler, error) {
 	}
 	if cfg.ExecTimeout <= 0 {
 		cfg.ExecTimeout = DefaultExecTimeout
+	}
+	if cfg.MaxHops <= 0 {
+		cfg.MaxHops = DefaultMaxHops
 	}
 	if cfg.Prefix == "" {
 		cfg.Prefix = DefaultPrefix
@@ -141,6 +148,7 @@ const (
 	CodeInternal          = "internal_error"
 	CodeContractMisconfig = "contract_misconfigured"
 	CodeOriginLoop        = "origin_loop"
+	CodeInvalidOrigin     = "invalid_origin"
 )
 
 // ErrorBody is the uniform error envelope: {"error": {...}}.
@@ -264,8 +272,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sum := sha256.Sum256(body)
 	base := Receipt{OrgID: org, Contract: c.Key, Version: c.Version, BodyHash: hex.EncodeToString(sum[:])}
 
-	if o := r.Header.Get(OriginHeader); o != "" && (o == OriginPrefix+c.Key || OriginExcluded(o, c.IgnoreOrigins)) {
-		// The event was caused by this contract (or an excluded origin): a loop.
+	// Origin mark and hop counter travel INSIDE the signed body (reserved
+	// keys, removed before schema validation); a header would be unsigned.
+	origin, hop, oerr := takeOrigin(payload)
+	if oerr != nil {
+		rec := base
+		rec.Status, rec.ErrorCode = StatusRejected, CodeInvalidOrigin
+		_ = h.cfg.Receipts.Record(r.Context(), rec)
+		writeErr(w, http.StatusUnprocessableEntity, CodeInvalidOrigin, "reserved origin fields are malformed")
+		return
+	}
+	if (origin != "" && (origin == OriginPrefix+c.Key || OriginExcluded(origin, c.IgnoreOrigins))) || hop >= h.cfg.MaxHops {
+		// Caused by this contract, an excluded origin, or too many hops: a loop.
 		rec := base
 		rec.Status, rec.ErrorCode = StatusRejected, CodeOriginLoop
 		_ = h.cfg.Receipts.Record(r.Context(), rec)
@@ -307,10 +325,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(c.chain) > 0 {
-		h.serveChain(w, r.Context(), c, org, evKey, payload, cur)
+		h.serveChain(w, r.Context(), c, org, evKey, payload, hop, cur)
 		return
 	}
-	op := Operation{Org: org, Contract: c.Key, EventKey: evKey, Route: c.Route, Values: applyMapping(c.Route, payload), Origin: OriginPrefix + c.Key}
+	op := Operation{Org: org, Contract: c.Key, EventKey: evKey, Route: c.Route, Values: applyMapping(c.Route, payload), CreateDefaults: c.Route.Defaults, Origin: OriginPrefix + c.Key, Hop: hop}
 	if sc := c.Route.Scope; sc != nil {
 		op.Branch = scopeValue(payload, sc.Branch)
 		op.Entity = scopeValue(payload, sc.Entity)

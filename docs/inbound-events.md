@@ -201,13 +201,28 @@ una `IdempotencyKey` estable (`<recibo>:<índice>`) para que el destino dedupliq
 Si el proceso se cae con el recibo `processing`, se reanuda al vencer el arriendo.
 
 **Origen y bucles.** Todo lo que causa la cadena lleva `Origin = "inbound:<contrato>"`
-(en `Operation.Origin`, `EmitRequest.Origin`, `NotifyRequest.Origin`, `AutomationEvent.Origin`
-y `inbound.OriginFrom(ctx)`). El emisor debe propagarlo (cabecera `X-Metacore-Origin`).
-Una suscripción de salida lo excluye con `inbound.OriginExcluded(origin, []string{"inbound:*"})`.
-Si ese evento vuelve a un endpoint de entrada con la cabecera, el contrato propio (o los
-`ignore_origins` que declare, exactos o `prefijo*`) lo responde `200 {"status":"ignored"}`
-sin efecto (recibo `rejected`/`origin_loop`). La cabecera no está firmada: solo permite a
-quien ya está autenticado omitir su propio evento.
+(`Operation.Origin`, `EmitRequest.Origin`, `NotifyRequest.Origin`, `AutomationEvent.Origin`,
+`inbound.OriginFrom(ctx)`). `event.emit` además escribe dentro del **cuerpo** del evento
+saliente (y por tanto firmado con él) `_origin` y `_hop` (saltos acumulados, +1 por emisión);
+los nombres `_origin`/`_hop` están reservados. Un endpoint de entrada los lee y los quita
+antes de validar el esquema (valores mal formados: `422 invalid_origin`) y responde
+`200 {"status":"ignored"}` sin efecto (recibo `rejected`/`origin_loop`) si el origen es su
+propio contrato, coincide con `ignore_origins` (exacto o `prefijo*`) o `_hop >= Config.MaxHops`
+(3 por omisión). Ya **no** se confía en ninguna cabecera (iría sin firmar). El emisor/entrega
+debe enviar el cuerpo tal cual; las suscripciones de salida pueden excluir el origen con
+`inbound.OriginExcluded(origin, []string{"inbound:*"})`. Contratos de ida y vuelta (A emite
+hacia B y B hacia A) deben listarse mutuamente en `ignore_origins`; el límite de saltos es la
+red de seguridad si no lo hacen.
+
+**`record.create` y reintentos.** `record.create` exige `idempotency_field`: columna del
+modelo (no mapeada) donde se guarda `<recibo>:<índice>`. La creación corre como *upsert* sobre esa
+columna, de modo que si la escritura confirmó pero falló el guardado del progreso (o hubo un
+timeout tras el commit) el reintento encuentra la fila y no la duplica. En ese reintento
+`result.created` es `false`. `Operation.IdempotencyKey` lleva la misma llave a los comandos.
+
+**Defaults solo al crear.** `defaults` (en `route` y en las acciones `record.*`) viajan como
+`Operation.CreateDefaults` y el ejecutor los aplica únicamente al crear la fila, nunca al
+actualizar (un `status: new` no revierte el estado en cada upsert).
 
 **Cableado.** `Config.Emitter`, `Config.Notifier`, `Config.Automation`; `New`/`Check` fallan
 al arrancar si una cadena usa una acción sin su puerto o un comando no registrado.

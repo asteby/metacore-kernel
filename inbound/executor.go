@@ -23,6 +23,14 @@ type Operation struct {
 	Values   map[string]any
 	// Branch / Entity are the optional scope extracted from the payload.
 	Origin string // "inbound:<contract>"
+	// Hop is the hop counter of the incoming event (0 = external).
+	Hop int
+	// IdempotencyKey is "<receipt>:<action>" for chain actions; stable across
+	// retries of the same event.
+	IdempotencyKey string
+	// CreateDefaults are constants applied ONLY when a row is created (never
+	// on update, so a default like status=new cannot revert later changes).
+	CreateDefaults map[string]any
 	Branch string
 	Entity string
 }
@@ -135,7 +143,7 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 	model := op.Route.Model
 	switch op.Route.Op {
 	case OpCreate:
-		return d.create(ctx, model, user, op.Values)
+		return d.create(ctx, model, user, withDefaults(op.CreateDefaults, op.Values))
 	case OpUpdate, OpUpsert:
 		id, err := d.find(ctx, model, user, op.Route.Match, op.Values)
 		if err != nil {
@@ -145,7 +153,7 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 			if op.Route.Op == OpUpdate {
 				return Outcome{}, &ExecError{Kind: KindNotFound, Code: "record_not_found"}
 			}
-			return d.create(ctx, model, user, op.Values)
+			return d.create(ctx, model, user, withDefaults(op.CreateDefaults, op.Values))
 		}
 		row, err := d.Service.Update(ctx, model, user, id, op.Values)
 		if err != nil {
@@ -239,4 +247,19 @@ func mapDynamicErr(err error) error {
 		return &ExecError{Kind: KindForbidden, Code: "forbidden", Err: err}
 	}
 	return &ExecError{Kind: KindInternal, Code: "internal", Err: err}
+}
+
+// withDefaults returns vals over defaults (mapped data wins) as a new map.
+func withDefaults(defaults, vals map[string]any) map[string]any {
+	if len(defaults) == 0 {
+		return vals
+	}
+	out := make(map[string]any, len(defaults)+len(vals))
+	for k, v := range defaults {
+		out[k] = v
+	}
+	for k, v := range vals {
+		out[k] = v
+	}
+	return out
 }

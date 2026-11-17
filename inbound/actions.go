@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -53,6 +54,10 @@ type Action struct {
 	Mapping  map[string]string `json:"mapping,omitempty"`  // target field -> template
 	Defaults map[string]any    `json:"defaults,omitempty"` // constants
 	Scope    *ScopeMapping     `json:"scope,omitempty"`    // payload paths (not templates)
+	// IdempotencyField (required by record.create) is the model column that
+	// stores "<receipt>:<action>"; the create runs as an upsert on it, so a
+	// retry after an ambiguous failure finds the row instead of duplicating it.
+	IdempotencyField string `json:"idempotency_field,omitempty"`
 
 	// event.emit | automation.enqueue (event name)
 	Name string `json:"name,omitempty"`
@@ -109,6 +114,7 @@ type EmitRequest struct {
 	Name           string
 	Payload        map[string]any
 	Origin         string
+	Hop            int // hop of this event (incoming hop + 1)
 	IdempotencyKey string
 }
 
@@ -124,6 +130,7 @@ type NotifyRequest struct {
 	Template       string
 	Params         map[string]any
 	Origin         string
+	Hop            int // hop of this event (incoming hop + 1)
 	IdempotencyKey string
 }
 
@@ -141,6 +148,7 @@ type AutomationEvent struct {
 	Name    string
 	Payload map[string]any
 	Origin  string
+	Hop     int
 }
 
 // AutomationIngester is satisfied by a thin host adapter over
@@ -155,9 +163,39 @@ type AutomationIngester interface {
 // causes: "inbound:<contract>".
 const OriginPrefix = "inbound:"
 
-// OriginHeader is the HTTP header an outbound delivery uses to carry the
-// origin mark; when it comes back to an inbound endpoint the loop is cut.
-const OriginHeader = "X-Metacore-Origin"
+// Reserved body keys. event.emit adds them to the outgoing payload, so they
+// are signed together with the event; an inbound endpoint reads and removes
+// them BEFORE schema validation. They are never read from a header (unsigned).
+const (
+	OriginField = "_origin" // "inbound:<contract>"
+	HopField    = "_hop"    // number of inbound->emit->inbound hops so far
+)
+
+// takeOrigin extracts and removes the reserved fields from a decoded body.
+func takeOrigin(payload any) (origin string, hop int, err error) {
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return "", 0, nil
+	}
+	if v, has := m[OriginField]; has {
+		s, isStr := v.(string)
+		if !isStr || len(s) > 200 {
+			return "", 0, errors.New("bad origin")
+		}
+		origin = s
+		delete(m, OriginField)
+	}
+	if v, has := m[HopField]; has {
+		n, isNum := v.(json.Number)
+		i, perr := n.Int64()
+		if !isNum || perr != nil || i < 0 || i > 1000 {
+			return "", 0, errors.New("bad hop")
+		}
+		hop = int(i)
+		delete(m, HopField)
+	}
+	return origin, hop, nil
+}
 
 type originKey struct{}
 
@@ -279,7 +317,7 @@ func compileAction(a Action, v *validator) (*cAction, error) {
 		n       string
 		set, ok bool
 	}{
-		{"model", a.Model != "", isRecord}, {"match", len(a.Match) > 0, isRecord},
+		{"idempotency_field", a.IdempotencyField != "", a.Do == ActionRecordCreate}, {"model", a.Model != "", isRecord}, {"match", len(a.Match) > 0, isRecord},
 		{"defaults", len(a.Defaults) > 0, isRecord}, {"scope", a.Scope != nil, isRecord},
 		{"mapping", len(a.Mapping) > 0, isRecord || isCmd},
 		{"name", a.Name != "", isEmit}, {"payload", len(a.Payload) > 0, isEmit || isNotify},
@@ -296,6 +334,18 @@ func compileAction(a Action, v *validator) (*cAction, error) {
 		}
 		if len(a.Mapping) == 0 {
 			return nil, fmt.Errorf("mapping is empty")
+		}
+		if a.Do == ActionRecordCreate {
+			f := a.IdempotencyField
+			if !fieldRe.MatchString(f) || forbidden[f] {
+				return nil, fmt.Errorf("record.create needs idempotency_field (a model column that stores the retry key)")
+			}
+			if _, dup := a.Mapping[f]; dup {
+				return nil, fmt.Errorf("idempotency_field %q must not be mapped", f)
+			}
+			if _, dup := a.Defaults[f]; dup {
+				return nil, fmt.Errorf("idempotency_field %q must not be a default", f)
+			}
 		}
 		if a.Do != ActionRecordCreate && len(a.Match) == 0 {
 			return nil, fmt.Errorf("%s needs match fields", a.Do)
@@ -326,6 +376,12 @@ func compileAction(a Action, v *validator) (*cAction, error) {
 	case isEmit:
 		if !keyRe.MatchString(a.Name) {
 			return nil, fmt.Errorf("name %q must match %s", a.Name, keyRe)
+		}
+		if _, has := a.Payload[OriginField]; has {
+			return nil, fmt.Errorf("payload key %q is reserved", OriginField)
+		}
+		if _, has := a.Payload[HopField]; has {
+			return nil, fmt.Errorf("payload key %q is reserved", HopField)
 		}
 	case isNotify:
 		if !keyRe.MatchString(a.Template) {
