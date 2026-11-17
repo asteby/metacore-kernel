@@ -1,6 +1,8 @@
 package installer
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/asteby/metacore-kernel/lifecycle"
@@ -70,5 +72,30 @@ func TestRefreshDeclarativeLifecycle_PreservesCompiledLifecycle(t *testing.T) {
 	}
 	if lc != lifecycle.Addon(custom) {
 		t.Fatal("compiled lifecycle instance was swapped out")
+	}
+}
+
+// Upgrade con la MISMA versión que ya tiene la fila (otra réplica / Install
+// previo / arreglo manual) devuelve ErrSameVersionUpgrade pero debe dejar el
+// registro en memoria alineado con la tabla: antes salía antes del refresh y el
+// aviso "Actualizar" no se quitaba hasta reiniciar el servicio.
+func TestUpgrade_SameVersion_RefreshesStaleLifecycle(t *testing.T) {
+	db := upgradeTestDB(t)
+	orgID := uuid.New()
+	seedInstallation(t, db, orgID, "demo", "1.0.0", nil)
+
+	reg := lifecycle.NewRegistry()
+	reg.Register("demo", &lifecycle.ManifestOnly{Data: manifest.Manifest{Key: "demo", Version: "0.9.0"}})
+	inst := &Installer{
+		DB: db, KernelVersion: "2.0.0", Lifecycles: reg, AllowUnsigned: true,
+		schemaApplier: &recordingApplier{}, Broadcaster: NoopBroadcaster{},
+	}
+	_, err := inst.Upgrade(context.Background(), orgID, makeBundle("demo", "1.0.0", nil))
+	if !errors.Is(err, ErrSameVersionUpgrade) {
+		t.Fatalf("want ErrSameVersionUpgrade, got %v", err)
+	}
+	lc, _ := reg.Get("demo")
+	if v := lc.Manifest().Version; v != "1.0.0" {
+		t.Fatalf("lifecycle version = %q, want 1.0.0", v)
 	}
 }

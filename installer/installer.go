@@ -1364,9 +1364,11 @@ func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool)
 // signed-webhook endpoints that need a fresh key.
 func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bundle.Bundle) (inst *Installation, err error) {
 	// Migrations run before the version row is committed, so even a failed
-	// upgrade may have changed the schema: always flush.
+	// upgrade may have changed the schema: always flush. The exception is
+	// ErrSameVersionUpgrade: it is rejected before any DB or schema work, so it
+	// is a no-op, not a failure, and must not be logged as addon.upgrade.failed.
 	defer func() {
-		if newBundle != nil && err != nil {
+		if newBundle != nil && err != nil && !errors.Is(err, ErrSameVersionUpgrade) {
 			i.coherenceBump("addon.upgrade.failed", orgID, newBundle.Manifest.Key)
 		}
 	}()
@@ -1429,6 +1431,15 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	fromVersion := existing.Version
 	toVersion := newBundle.Manifest.Version
 	if err := guardUpgradeVersion(fromVersion, toVersion); err != nil {
+		if errors.Is(err, ErrSameVersionUpgrade) {
+			// The table already holds this version (another replica, a
+			// previous Install, a manual fix) but THIS process may still hold
+			// an older manifest in memory; we return before the refresh below,
+			// which left the "Actualizar" badge stuck until a restart. Align
+			// the registry with the bundle (same version == same release);
+			// compiled lifecycles are preserved by the helper.
+			refreshDeclarativeLifecycle(i.Lifecycles, newBundle.Manifest)
+		}
 		return nil, err
 	}
 
