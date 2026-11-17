@@ -84,6 +84,10 @@ func (m JSONMap) Value() (driver.Value, error) {
 }
 
 // Webhook is an outbound webhook subscription.
+//
+// With Declarative == nil it is the classic webhook (unchanged behaviour). With
+// Declarative set it is a declarative emission subscription (RFC 0003): see
+// docs/webhooks-declarative.md.
 type Webhook struct {
 	modelbase.BaseUUIDModel
 	Name       string      `gorm:"size:255" json:"name"`
@@ -94,14 +98,27 @@ type Webhook struct {
 	RetryMax   int         `gorm:"default:3" json:"retry_max"`
 	TimeoutSec int         `gorm:"default:15" json:"timeout_sec"`
 
+	// Declarative is the optional declarative configuration (nullable column
+	// `declarative`, JSON). It never holds secret values, only references.
+	Declarative *Declarative `gorm:"column:declarative;type:text;serializer:json" json:"declarative,omitempty"`
+
 	// Owner polymorphism — the escape hatch that lets apps scope webhooks
 	// to organizations, devices, users, or anything else without forking.
 	OwnerType string    `gorm:"size:50;index" json:"owner_type"`
 	OwnerID   uuid.UUID `gorm:"type:uuid;index" json:"owner_id"`
 
 	LastTriggeredAt *time.Time `json:"last_triggered_at,omitempty"`
-	FailureCount    int        `json:"failure_count"`
-	SuccessCount    int        `json:"success_count"`
+
+	// Health (declarative subscriptions): consecutive failed attempts, last
+	// outcome, and when the subscription switched itself off (see
+	// Declarative.AutoDisableThreshold). Cleared by SetEnabled(true).
+	ConsecutiveFailures int        `json:"consecutive_failures"`
+	LastFailedAt        *time.Time `json:"last_failed_at,omitempty"`
+	LastHTTPStatus      int        `json:"last_http_status,omitempty"`
+	LastError           string     `gorm:"size:500" json:"last_error,omitempty"`
+	AutoDisabledAt      *time.Time `json:"auto_disabled_at,omitempty"`
+	FailureCount        int        `json:"failure_count"`
+	SuccessCount        int        `json:"success_count"`
 }
 
 func (Webhook) TableName() string { return "webhooks" }
@@ -121,6 +138,22 @@ type WebhookDelivery struct {
 	ErrorMessage    string     `gorm:"size:500" json:"error_message,omitempty"`
 	DeliveredAt     *time.Time `json:"delivered_at,omitempty"`
 	NextAttemptAt   *time.Time `gorm:"index" json:"next_attempt_at,omitempty"`
+
+	// Declarative-subscription columns (all zero/empty for classic webhooks).
+	//
+	// EventID is the bus event id; (webhook, EventID) deduplicates a republished
+	// event. IdempotencyKey is what travels to the target and is identical on
+	// every retry. OrderingKey/Seq order deliveries of one aggregate. Held
+	// marks an event retained while the subscription is disabled. InFlight marks
+	// a delivery claimed by a worker (lease: see inFlightLease).
+	EventID        string `gorm:"size:128;index" json:"event_id,omitempty"`
+	IdempotencyKey string `gorm:"size:255" json:"idempotency_key,omitempty"`
+	OrderingKey    string `gorm:"size:255;index" json:"ordering_key,omitempty"`
+	Seq            int64  `json:"seq,omitempty"`
+	Held           bool   `gorm:"index" json:"held,omitempty"`
+	InFlight       bool   `json:"in_flight,omitempty"`
+	// PayloadPurged is true once the (personal) payload was erased after delivery.
+	PayloadPurged bool `json:"payload_purged,omitempty"`
 }
 
 func (WebhookDelivery) TableName() string { return "webhook_deliveries" }

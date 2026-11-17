@@ -30,8 +30,11 @@ func NewHandler(service *Service, resolver OwnerResolver) *Handler {
 //	PUT    /:id            Update
 //	DELETE /:id            Delete
 //	POST   /:id/test       Test (synchronous single delivery)
+//	POST   /:id/enable     Enable a declarative subscription (releases retained events)
+//	POST   /:id/disable    Disable it (new events are retained)
 //	GET    /:id/logs       Logs (paginated)
 //	POST   /logs/:id/replay Replay a prior delivery
+//	POST   /logs/:id/requeue Put a dead-lettered delivery back in the queue
 func (h *Handler) Mount(r fiber.Router) {
 	r.Get("/", h.list)
 	r.Post("/", h.create)
@@ -39,8 +42,11 @@ func (h *Handler) Mount(r fiber.Router) {
 	r.Put("/:id", h.update)
 	r.Delete("/:id", h.delete)
 	r.Post("/:id/test", h.test)
+	r.Post("/:id/enable", h.setEnabled(true))
+	r.Post("/:id/disable", h.setEnabled(false))
 	r.Get("/:id/logs", h.logs)
 	r.Post("/logs/:id/replay", h.replay)
+	r.Post("/logs/:id/requeue", h.requeue)
 }
 
 func (h *Handler) list(c fiber.Ctx) error {
@@ -175,4 +181,43 @@ func ok(c fiber.Ctx, data any) error {
 
 func fail(c fiber.Ctx, status int, msg string) error {
 	return c.Status(status).JSON(fiber.Map{"success": false, "message": msg})
+}
+
+// enable / disable toggle a declarative subscription. Enabling releases the
+// events that were retained while it was off.
+func (h *Handler) setEnabled(enabled bool) fiber.Handler {
+	return func(c fiber.Ctx) error {
+		id, err := uuid.Parse(c.Params("id"))
+		if err != nil {
+			return fail(c, fiber.StatusBadRequest, "invalid id")
+		}
+		released, err := h.service.SetEnabled(c, id, enabled)
+		switch err {
+		case nil:
+			return ok(c, fiber.Map{"enabled": enabled, "released": released})
+		case ErrWebhookNotFound:
+			return fail(c, fiber.StatusNotFound, err.Error())
+		case ErrNotDeclarative:
+			return fail(c, fiber.StatusBadRequest, err.Error())
+		}
+		return fail(c, fiber.StatusInternalServerError, err.Error())
+	}
+}
+
+// requeue puts a dead-lettered delivery back in the queue (manual repeat).
+func (h *Handler) requeue(c fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return fail(c, fiber.StatusBadRequest, "invalid id")
+	}
+	switch err := h.service.Requeue(c, id); err {
+	case nil:
+		return ok(c, nil)
+	case ErrDeliveryNotFound:
+		return fail(c, fiber.StatusNotFound, err.Error())
+	case ErrNotDead, ErrPayloadPurged:
+		return fail(c, fiber.StatusConflict, err.Error())
+	default:
+		return fail(c, fiber.StatusInternalServerError, err.Error())
+	}
 }

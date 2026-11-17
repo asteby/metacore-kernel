@@ -46,7 +46,13 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		owner_id TEXT,
 		last_triggered_at DATETIME,
 		failure_count INTEGER DEFAULT 0,
-		success_count INTEGER DEFAULT 0
+		success_count INTEGER DEFAULT 0,
+		declarative TEXT,
+		consecutive_failures INTEGER DEFAULT 0,
+		last_failed_at DATETIME,
+		last_http_status INTEGER DEFAULT 0,
+		last_error TEXT,
+		auto_disabled_at DATETIME
 	)`)
 	db.Exec(`CREATE TABLE IF NOT EXISTS webhook_deliveries (
 		id TEXT PRIMARY KEY,
@@ -66,7 +72,14 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		succeeded INTEGER DEFAULT 0,
 		error_message TEXT,
 		delivered_at DATETIME,
-		next_attempt_at DATETIME
+		next_attempt_at DATETIME,
+		event_id TEXT,
+		idempotency_key TEXT,
+		ordering_key TEXT,
+		seq INTEGER DEFAULT 0,
+		held INTEGER DEFAULT 0,
+		in_flight INTEGER DEFAULT 0,
+		payload_purged INTEGER DEFAULT 0
 	)`)
 	return db
 }
