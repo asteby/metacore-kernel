@@ -1940,7 +1940,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	errs = append(errs, validateHubActions(&m, warnOnly)...)
 	errs = append(errs, validateIngest(&m, rls)...)
 	errs = append(errs, validateDashboardHub(&m)...)
-	errs = append(errs, validateEvents(&m)...)
+	errs = append(errs, validateEvents(&m, warnOnly)...)
 	validateRBACPermissionResolves(&m, warnOnly)
 	validateSlotsAndPrivate(&m, warnOnly)
 

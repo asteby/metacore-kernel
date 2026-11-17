@@ -4349,8 +4349,8 @@
       "properties": {
         "name": {
           "type": "string",
-          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
-          "description": "<domain>.<entity>.<action>, e.g. sales.order.created."
+          "pattern": "^[a-z][a-z0-9_]*(\\.([A-Za-z][A-Za-z0-9_]*\\.)?[a-z][a-z0-9_]*)?$",
+          "description": "Name exactly as published on the bus: event, domain.event or addon.Model.action (e.g. stock.moved, customers.Customer.created)."
         },
         "description": {
           "type": "string",
@@ -4390,7 +4390,7 @@
       "properties": {
         "name": {
           "type": "string",
-          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+          "pattern": "^[a-z][a-z0-9_]*(\\.([A-Za-z][A-Za-z0-9_]*\\.)?[a-z][a-z0-9_]*)?$"
         },
         "description": {
           "type": "string",

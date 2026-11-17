@@ -63,19 +63,26 @@ func TestEvents_Rejects(t *testing.T) {
 		emits []interface{}
 		want  string
 	}{
-		"dos segmentos":    {[]interface{}{emit("sales.created", nil)}, "name"},
-		"mayusculas":       {[]interface{}{emit("Sales.Order.Created", nil)}, ""},
-		"duplicado":        {[]interface{}{emit("a.b.c", nil), emit("a.b.c", nil)}, "duplicated"},
-		"descripcion":      {[]interface{}{emit("a.b.c", map[string]interface{}{"description": "Pedido creado hoy"})}, "i18n key"},
-		"sensibilidad":     {[]interface{}{emit("a.b.c", map[string]interface{}{"sensitivity": "secret"})}, ""},
-		"since":            {[]interface{}{emit("a.b.c", map[string]interface{}{"since": "v1"})}, "semver"},
-		"aggregate":        {[]interface{}{emit("a.b.c", map[string]interface{}{"aggregate": "Order Line"})}, ""},
-		"ref remoto":       {[]interface{}{emit("a.b.c", map[string]interface{}{"payload_schema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"x": map[string]interface{}{"$ref": "https://evil.example/s.json"}}}})}, "no remote references"},
-		"ref archivo":      {[]interface{}{emit("a.b.c", map[string]interface{}{"payload_schema": map[string]interface{}{"properties": map[string]interface{}{"x": map[string]interface{}{"$ref": "other.json"}}}})}, "no remote references"},
-		"$id":              {[]interface{}{emit("a.b.c", map[string]interface{}{"payload_schema": map[string]interface{}{"$id": "https://x/y"}})}, "not allowed"},
-		"raiz no objeto":   {[]interface{}{emit("a.b.c", map[string]interface{}{"payload_schema": map[string]interface{}{"type": "string"}})}, "root type"},
-		"demasiado hondo":  {[]interface{}{emit("a.b.c", map[string]interface{}{"payload_schema": deep})}, "deeper"},
-		"demasiado grande": {[]interface{}{emit("a.b.c", map[string]interface{}{"payload_schema": big})}, "maximum"},
+		"un punto de mas":   {[]interface{}{emit("a.b.c.d", nil)}, "name"},
+		"punto doble":       {[]interface{}{emit("a..c", nil)}, "name"},
+		"vacio":             {[]interface{}{emit("", nil)}, "name"},
+		"punto final":       {[]interface{}{emit("a.b.", nil)}, "name"},
+		"ultimo mayuscula":  {[]interface{}{emit("a.b.Created", nil)}, "name"},
+		"dos con mayuscula": {[]interface{}{emit("a.Order", nil)}, "name"},
+		"primero mayuscula": {[]interface{}{emit("Sales.order", nil)}, "name"},
+		"ajeno CRUD":        {[]interface{}{emit("customers.Customer.created", nil)}, "canonical CRUD event of addon"},
+		"mayusculas":        {[]interface{}{emit("Sales.Order.Created", nil)}, ""},
+		"duplicado":         {[]interface{}{emit("a.b.c", nil), emit("a.b.c", nil)}, "duplicated"},
+		"descripcion":       {[]interface{}{emit("a.b.c", map[string]interface{}{"description": "Pedido creado hoy"})}, "i18n key"},
+		"sensibilidad":      {[]interface{}{emit("a.b.c", map[string]interface{}{"sensitivity": "secret"})}, ""},
+		"since":             {[]interface{}{emit("a.b.c", map[string]interface{}{"since": "v1"})}, "semver"},
+		"aggregate":         {[]interface{}{emit("a.b.c", map[string]interface{}{"aggregate": "Order Line"})}, ""},
+		"ref remoto":        {[]interface{}{emit("a.b.c", map[string]interface{}{"payload_schema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"x": map[string]interface{}{"$ref": "https://evil.example/s.json"}}}})}, "no remote references"},
+		"ref archivo":       {[]interface{}{emit("a.b.c", map[string]interface{}{"payload_schema": map[string]interface{}{"properties": map[string]interface{}{"x": map[string]interface{}{"$ref": "other.json"}}}})}, "no remote references"},
+		"$id":               {[]interface{}{emit("a.b.c", map[string]interface{}{"payload_schema": map[string]interface{}{"$id": "https://x/y"}})}, "not allowed"},
+		"raiz no objeto":    {[]interface{}{emit("a.b.c", map[string]interface{}{"payload_schema": map[string]interface{}{"type": "string"}})}, "root type"},
+		"demasiado hondo":   {[]interface{}{emit("a.b.c", map[string]interface{}{"payload_schema": deep})}, "deeper"},
+		"demasiado grande":  {[]interface{}{emit("a.b.c", map[string]interface{}{"payload_schema": big})}, "maximum"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -92,7 +99,7 @@ func TestEvents_Rejects(t *testing.T) {
 
 func TestEvents_ConsumesRejectsBadName(t *testing.T) {
 	err := Validate(mustJSON(t, withEvents(map[string]interface{}{
-		"consumes": []interface{}{map[string]interface{}{"name": "payments"}},
+		"consumes": []interface{}{map[string]interface{}{"name": "Payments.x.y"}},
 	})))
 	if err == nil {
 		t.Fatal("expected rejection")
@@ -139,5 +146,57 @@ func TestCatalog_AggregatesFiltersAndSorts(t *testing.T) {
 	b, _ := json.Marshal(Catalog(nil, CatalogFilter{}))
 	if string(b) != "[]" {
 		t.Fatal(string(b))
+	}
+}
+
+// Names exactly as the bus publishes them today.
+var realEventNames = []string{
+	"channel_orders.order_ready", "order_imported", "payment_updated",
+	"customers.invoice_paid", "storefront_cart.order_placed", "checkout_paid",
+	"inventory.low_stock_detected", "stock.moved",
+	"inventory.Transfer.created", "inventory.SalesOrder.updated",
+}
+
+func TestEvents_RealPublishedNamesValidate(t *testing.T) {
+	for _, n := range realEventNames {
+		m := withEvents(map[string]interface{}{"emits": []interface{}{emit(n, nil)}})
+		m["capabilities"] = append(m["capabilities"].([]interface{}),
+			map[string]interface{}{"kind": "event:emit", "target": n})
+		if err := Validate(mustJSON(t, m)); err != nil {
+			t.Errorf("%s: %v", n, err)
+		}
+	}
+	// consumes accepts other addons' names, CRUD included.
+	m := withEvents(map[string]interface{}{"consumes": []interface{}{
+		map[string]interface{}{"name": "customers.Customer.created"},
+		map[string]interface{}{"name": "checkout_paid"},
+	}})
+	if err := Validate(mustJSON(t, m)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEvents_CRUDMustBeOwnAddon(t *testing.T) {
+	m := withEvents(map[string]interface{}{"emits": []interface{}{emit("inventory.Transfer.created", nil)}})
+	if err := Validate(mustJSON(t, m)); err != nil { // addon key is "inventory"
+		t.Fatalf("own CRUD event rejected: %v", err)
+	}
+}
+
+func TestEvents_EmitCapabilityCoverageWarns(t *testing.T) {
+	m := withEvents(map[string]interface{}{"emits": []interface{}{emit("stock.moved", nil), emit("stock.counted", nil)}})
+	m["capabilities"] = append(m["capabilities"].([]interface{}),
+		map[string]interface{}{"kind": "event:emit", "target": "stock.moved"})
+	warns, err := ValidateWithOptions(mustJSON(t, m), Options{Strict: true})
+	if err != nil {
+		t.Fatalf("a missing capability must only warn: %v", err)
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], "[event_emit_capability]") || !strings.Contains(warns[0], "stock.counted") {
+		t.Fatalf("warnings: %v", warns)
+	}
+	m["capabilities"] = append(m["capabilities"].([]interface{}),
+		map[string]interface{}{"kind": "event:emit", "target": "stock.*"})
+	if warns, _ := ValidateWithOptions(mustJSON(t, m), Options{Strict: true}); len(warns) != 0 {
+		t.Fatalf("prefix capability must cover: %v", warns)
 	}
 }
