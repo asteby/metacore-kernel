@@ -33,6 +33,16 @@ type ProgressLabeler interface {
 	ProgressLabel(params map[string]interface{}) string
 }
 
+// PromptHinter lets a tool teach the model how to use it. The orchestrator
+// appends each registered tool's hint to the turn's system prompt, so the
+// guidance travels with the tool: register the tool and the rule follows, in
+// any host or preset, and a tool that is not registered adds nothing. Keep it
+// to a few lines; empty means "no hint". A host wrapper around a tool must
+// forward PromptHint (an embedded BaseTool hides optional interfaces).
+type PromptHinter interface {
+	PromptHint() string
+}
+
 // ErrTransient marks an error worth retrying (timeouts of an upstream, 429,
 // 5xx, connection resets). Wrap it with Transient; plain errors are final.
 var ErrTransient = errors.New("error transitorio")

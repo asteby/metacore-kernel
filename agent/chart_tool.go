@@ -50,6 +50,15 @@ func (t *ShowChartTool) Description() string {
 	return "Render an interactive chart embed in chat (downloadable PNG/CSV). Use after you have real numbers from query_data/aggregate_data. Pick the kind that fits: line/area for time, bar/stacked_bar/horizontal_bar for categories, pie/donut only for a few parts of a whole, scatter for two numerics, radar for 3+ axes, composed for bar+line. Do not use pie for everything. Call this when the user asks for a graph OR when a visual helps (comparisons, trends, mix). Never invent figures."
 }
 
+// PromptHint is the rule that travels with the tool (tools.PromptHinter): the
+// numbers come from a data tool, and a chart is only "shown" if this tool ran.
+func (t *ShowChartTool) PromptHint() string {
+	return "úsala cuando el usuario pida una gráfica o cuando 3+ cifras comparables se entiendan mejor así; " +
+		"primero obtén los números con una herramienta de datos y pásalos exactos en rows (nunca inventes valores). " +
+		"Si dices que muestras un gráfico, debes llamar show_chart en ese mismo turno; si no puedes, dilo y entrega una tabla Markdown. " +
+		"No pegues el JSON del gráfico."
+}
+
 func (t *ShowChartTool) Parameters() map[string]any {
 	return map[string]any{
 		"title": map[string]any{

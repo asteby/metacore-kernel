@@ -329,10 +329,35 @@ func (o *AgentOrchestrator) turnRegistry(ctx context.Context, turn Turn) *tools.
 // list is rendered as text only when ToolsInPrompt asks for it: the tools are
 // always sent natively, so the text copy would pay for them twice.
 func (o *AgentOrchestrator) turnSystemPrompt(prompt string, registry *tools.ToolRegistry) string {
+	prompt += toolHintsSection(registry)
 	if o.toolsInPrompt {
 		return AppendToolsSection(prompt, registry)
 	}
 	return prompt + "\n\n" + closingRules
+}
+
+// toolHintsSection renders the PromptHint of every registered tool that has
+// one, in tool-name order (stable prefix for provider prompt caching). Tools
+// are dynamic per turn and per preset, so the guidance is too: nothing here is
+// hardcoded in a host prompt.
+func toolHintsSection(registry *tools.ToolRegistry) string {
+	if registry == nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, t := range registry.List() {
+		h, ok := t.(tools.PromptHinter)
+		if !ok {
+			continue
+		}
+		if hint := strings.TrimSpace(h.PromptHint()); hint != "" {
+			sb.WriteString("\n- " + t.Name() + ": " + hint)
+		}
+	}
+	if sb.Len() == 0 {
+		return ""
+	}
+	return "\n\nUSO DE HERRAMIENTAS ESPECÍFICAS:" + sb.String()
 }
 
 // closingRules is the fixed paragraph that ends every system prompt.
