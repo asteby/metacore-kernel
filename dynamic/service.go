@@ -1158,6 +1158,13 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 
 // Update modifies a record by ID.
 func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID, input map[string]any) (map[string]any, error) {
+	return s.update(ctx, model, user, id, input, nil)
+}
+
+// update is Update's body. o (nil for a plain Update) adds the guarded-write
+// options of guarded.go: a row-lock claim plus stale check at the start of the
+// transaction, and a step that runs in the same transaction after the save.
+func (s *Service) update(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID, input map[string]any, o *updateOpts) (map[string]any, error) {
 	instance, tableMeta, err := s.resolveModel(ctx, model)
 	if err != nil {
 		return nil, err
@@ -1179,6 +1186,13 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	// Mass assignment: la identidad de la fila y su tenant no se mueven por
 	// el body, y el host puede vedar mas campos (UpdateDenyFields).
 	s.stripUpdateDeny(model, input)
+
+	if o.needsTx() {
+		// Warm the table-shape cache BEFORE the transaction: the lookup uses the
+		// service handle, which on a single-connection pool would wait for the
+		// connection the transaction holds.
+		_ = s.hasLiveColumn(ctx, tableName, ColDeletedAt)
+	}
 
 	// Declarative guards: when the model declares column Constraints AND
 	// Locking=="row", the load → evaluate → save must share ONE transaction so
@@ -1221,6 +1235,14 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	// transition hooks then run directly on execDB rather than opening a nested
 	// transaction, and the FOR UPDATE lock is applied on load.
 	core := func(execDB *gorm.DB, inTx bool) error {
+		if g := o.writeGuard(); g != nil {
+			// Row lock first: from here to the commit nobody else writes the
+			// row, so the stale check below judges the value that will be
+			// overwritten (see guarded.go).
+			if err := s.claimRow(ctx, execDB, tableName, instance, user, id, g.Field); err != nil {
+				return err
+			}
+		}
 		load := s.scope.ScopeQuery(s.tableDB(ctx, execDB.WithContext(ctx), tableName, instance), user)
 		if inTx && lockRows {
 			load = load.Clauses(clause.Locking{Strength: "UPDATE"})
@@ -1236,6 +1258,16 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 		// can mutate `instance` — the canonical event needs the pre-mutation row
 		// as `before`.
 		before = toMap(instance)
+
+		if g := o.writeGuard(); g != nil {
+			stale, gerr := g.Stale(before[g.Field])
+			if gerr != nil {
+				return gerr
+			}
+			if stale {
+				return ErrStaleWrite
+			}
+		}
 
 		// A row in a `locked` stage (a posted journal entry) only accepts the
 		// stage move itself; everything else is refused 422 record_locked.
@@ -1431,9 +1463,15 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 	}
 
 	var coreErr error
-	if lockRows || hasRules {
+	if lockRows || hasRules || o.needsTx() {
 		coreErr = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			return core(tx, true)
+			if err := core(tx, true); err != nil {
+				return err
+			}
+			if o != nil && o.then != nil {
+				return o.then(tx)
+			}
+			return nil
 		})
 	} else {
 		coreErr = core(s.db, false)
@@ -1450,6 +1488,9 @@ func (s *Service) Update(ctx context.Context, model string, user modelbase.AuthU
 			coreErr = uniqueIndexViolation(coreErr, tableName, mc.Rules)
 		}
 		return nil, coreErr
+	}
+	if o != nil && o.after != nil {
+		*o.after = after
 	}
 
 	// Orphaned-file cleanup: any file/image column whose value changed leaves
@@ -1528,6 +1569,34 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 		return err
 	}
 
+	if err := s.checkDeletable(ctx, model, tableName, instance, user, id); err != nil {
+		return err
+	}
+
+	// Snapshot the row before the delete so the canonical event can carry
+	// `before` AND so we can route the deleted row's file/image assets to the
+	// FileDeleter. A miss here is tolerated: the delete itself drives the error
+	// semantics and subscribers see `before == nil` to mean the row was
+	// already gone (or out of tenant scope) at publish time. We load whenever a
+	// bus OR a file deleter is wired — either consumer needs the pre-delete row.
+	var before map[string]any
+	if s.bus != nil || s.fileDeleter != nil {
+		loadDB := s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance)
+		loadDB = s.scope.ScopeQuery(loadDB, user)
+		if err := loadDB.First(instance, "id = ?", id).Error; err == nil {
+			before = toMap(instance)
+		}
+	}
+
+	if err := s.softDelete(ctx, tableName, instance, user, id); err != nil {
+		return fmt.Errorf("dynamic: delete: %w", err)
+	}
+	return s.afterDelete(ctx, model, tableMeta, user, id, before, hc)
+}
+
+// checkDeletable runs the model-level refusals of a delete that need the row:
+// a locked stage and the cross-record rules that guard deletes.
+func (s *Service) checkDeletable(ctx context.Context, model, tableName string, instance any, user modelbase.AuthUser, id uuid.UUID) error {
 	// A row in a `locked` stage cannot be deleted (a posted journal entry).
 	if sm := s.resolveStageMachine(ctx, model); sm.active() {
 		row := map[string]any{}
@@ -1551,26 +1620,12 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 			}
 		}
 	}
+	return nil
+}
 
-	// Snapshot the row before the delete so the canonical event can carry
-	// `before` AND so we can route the deleted row's file/image assets to the
-	// FileDeleter. A miss here is tolerated: the delete itself drives the error
-	// semantics and subscribers see `before == nil` to mean the row was
-	// already gone (or out of tenant scope) at publish time. We load whenever a
-	// bus OR a file deleter is wired — either consumer needs the pre-delete row.
-	var before map[string]any
-	if s.bus != nil || s.fileDeleter != nil {
-		loadDB := s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance)
-		loadDB = s.scope.ScopeQuery(loadDB, user)
-		if err := loadDB.First(instance, "id = ?", id).Error; err == nil {
-			before = toMap(instance)
-		}
-	}
-
-	if err := s.softDelete(ctx, tableName, instance, user, id); err != nil {
-		return fmt.Errorf("dynamic: delete: %w", err)
-	}
-
+// afterDelete is everything a delete does once the row is tombstoned: file
+// cleanup, pivot cleanup, the canonical "deleted" event and the after hooks.
+func (s *Service) afterDelete(ctx context.Context, model string, tableMeta *modelbase.TableMetadata, user modelbase.AuthUser, id uuid.UUID, before map[string]any, hc HookContext) error {
 	// Orphaned-file cleanup: the row is gone, so every file/image asset it
 	// referenced is now unreachable. Storage-agnostic — hand the values to the
 	// host's FileDeleter (best-effort, post-commit). nil deleter = no-op.
@@ -1601,22 +1656,33 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 // the model carries deleted_by_id the acting user is stamped in the same
 // transaction. The caller's tenant scope applies to both statements.
 func (s *Service) softDelete(ctx context.Context, tableName string, instance any, user modelbase.AuthUser, id uuid.UUID) error {
-	cols := structColumnSet(instance)
-	_, hasBy := cols[ColDeletedByID]
-	// Only stamp deleted_by_id when the table really has it.
-	hasBy = hasBy && s.hasLiveColumn(ctx, tableName, ColDeletedByID)
+	hasBy := s.stampsDeletedBy(ctx, tableName, instance)
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if hasBy {
-			// GORM adds `deleted_at IS NULL` for a gorm.DeletedAt model, so an
-			// already-deleted row keeps its original deleter.
-			q := s.scope.ScopeQuery(s.tableDB(ctx, tx, tableName, instance), user)
-			if err := q.Model(instance).Where("id = ?", id).UpdateColumn(ColDeletedByID, user.GetID()).Error; err != nil {
-				return err
-			}
-		}
-		q := s.scope.ScopeQuery(s.tableDB(ctx, tx, tableName, instance), user)
-		return q.Delete(instance, "id = ?", id).Error
+		return s.softDeleteIn(ctx, tx, tableName, instance, user, id, hasBy)
 	})
+}
+
+// stampsDeletedBy reports whether a soft delete also stamps deleted_by_id: the
+// model carries it and the table really has it. It may query the schema, so a
+// caller about to open a transaction asks BEFORE it (a single-connection pool
+// would otherwise wait for the connection the transaction holds).
+func (s *Service) stampsDeletedBy(ctx context.Context, tableName string, instance any) bool {
+	_, hasBy := structColumnSet(instance)[ColDeletedByID]
+	return hasBy && s.hasLiveColumn(ctx, tableName, ColDeletedByID)
+}
+
+// softDeleteIn is softDelete's two statements on a caller-owned transaction.
+func (s *Service) softDeleteIn(ctx context.Context, tx *gorm.DB, tableName string, instance any, user modelbase.AuthUser, id uuid.UUID, hasBy bool) error {
+	if hasBy {
+		// GORM adds `deleted_at IS NULL` for a gorm.DeletedAt model, so an
+		// already-deleted row keeps its original deleter.
+		q := s.scope.ScopeQuery(s.tableDB(ctx, tx, tableName, instance), user)
+		if err := q.Model(instance).Where("id = ?", id).UpdateColumn(ColDeletedByID, user.GetID()).Error; err != nil {
+			return err
+		}
+	}
+	q := s.scope.ScopeQuery(s.tableDB(ctx, tx, tableName, instance), user)
+	return q.Delete(instance, "id = ?", id).Error
 }
 
 // Restore undoes a soft delete: it clears deleted_at / deleted_by_id and stamps
