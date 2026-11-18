@@ -20,6 +20,9 @@ const (
 	OpCreate Op = "create"
 	OpUpdate Op = "update"
 	OpUpsert Op = "upsert"
+	// OpDelete only exists inside a chain (record.delete); a route or a
+	// command.run cannot declare it.
+	OpDelete Op = "delete"
 )
 
 // Route says where a validated event lands. Exactly one of Model or Command.

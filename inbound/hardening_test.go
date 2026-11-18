@@ -212,12 +212,18 @@ type fakeDyn struct {
 	raceRow map[string]any
 	creates int32
 	updates int32
+	deletes int32
+	// noSoftDelete makes the model report no deleted_at column.
+	noSoftDelete bool
 }
 
 func (f *fakeDyn) TableMetadata(context.Context, string) (*modelbase.TableMetadata, error) {
 	m := &modelbase.TableMetadata{}
 	for _, c := range f.cols {
 		m.Columns = append(m.Columns, modelbase.ColumnDef{Key: c})
+	}
+	if !f.noSoftDelete {
+		m.Audit = &modelbase.AuditMeta{DeletedAt: "deleted_at"}
 	}
 	return m, nil
 }
@@ -231,7 +237,7 @@ func (f *fakeDyn) List(_ context.Context, _ string, u modelbase.AuthUser, p quer
 	}
 	var out []map[string]any
 	for _, r := range f.rows {
-		if r["organization_id"] != u.GetOrganizationID().String() {
+		if r["organization_id"] != u.GetOrganizationID().String() || r["deleted_at"] != nil {
 			continue
 		}
 		ok := true
@@ -287,6 +293,21 @@ func (f *fakeDyn) Update(_ context.Context, _ string, u modelbase.AuthUser, id u
 		}
 	}
 	return nil, dynamic.ErrRecordNotFound
+}
+
+// Delete soft-deletes like dynamic.Service: tenant scoped, a tombstone hides
+// the row from List.
+func (f *fakeDyn) Delete(_ context.Context, _ string, u modelbase.AuthUser, id uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	atomic.AddInt32(&f.deletes, 1)
+	for _, r := range f.rows {
+		if r["id"] == id.String() && r["organization_id"] == u.GetOrganizationID().String() && r["deleted_at"] == nil {
+			r["deleted_at"] = "now"
+			return nil
+		}
+	}
+	return dynamic.ErrRecordNotFound
 }
 
 func newFakeDyn() *fakeDyn {

@@ -32,17 +32,26 @@ type Operation struct {
 	// CreateDefaults are constants applied ONLY when a row is created (never
 	// on update, so a default like status=new cannot revert later changes).
 	CreateDefaults map[string]any
-	Branch string
-	Entity string
+	Branch         string
+	Entity         string
 	// RequireBranch / RequireEntity: the contract declares that scope, so the
 	// event must carry it (the handler enforces it; executors re-check).
 	RequireBranch, RequireEntity bool
+	// DeleteMode (soft|hard; empty = soft) and MaxRows (rows one event may
+	// retire; <= 0 = 1) apply to OpDelete only. Route.Match selects the rows.
+	DeleteMode string
+	MaxRows    int
 }
 
 // Outcome is what an executor reports back.
 type Outcome struct {
 	RecordID string
 	Created  bool
+	// Affected / NotFound are reported by OpDelete: how many rows were
+	// retired (RecordID is the first one), or NotFound when nothing matched
+	// (already deleted), which is a successful no-op.
+	Affected int
+	NotFound bool
 }
 
 // Executor applies model routes (create/update/upsert on a dynamic model).
@@ -113,8 +122,20 @@ type dynStore interface {
 	List(ctx context.Context, model string, user modelbase.AuthUser, params query.Params) ([]map[string]any, query.PageMeta, error)
 	Create(ctx context.Context, model string, user modelbase.AuthUser, input map[string]any) (map[string]any, error)
 	Update(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID, input map[string]any) (map[string]any, error)
+	Delete(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID) error
 	TableMetadata(ctx context.Context, model string) (*modelbase.TableMetadata, error)
 }
+
+// HardDeleter physically removes a row. dynamic.Service only soft-deletes, so
+// a host that wants record.delete mode "hard" supplies this port (and lists
+// the models in DynamicExecutor.HardDeleteModels). It must apply the same
+// tenant scoping as the user it receives.
+type HardDeleter interface {
+	HardDelete(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID) error
+}
+
+// defaultMaxDeleteRows is the DynamicExecutor cap on rows per record.delete.
+const defaultMaxDeleteRows = 100
 
 // DynamicExecutor runs model routes through dynamic.Service as a system
 // principal scoped to the route's organization: tenant scoping, validation,
@@ -135,6 +156,19 @@ type DynamicExecutor struct {
 	// Rows and branches outside the resolved scope are invisible to the match
 	// and are never written.
 	EntityScope func(ctx context.Context, org uuid.UUID, entityID string) (dynamic.EntityScope, bool)
+	// Authorize is the optional write gate of the host: the allow-list of
+	// models an enabled addon declared writable and the permission of whoever
+	// holds the inbound entry ("<model>.<action>"). It runs before any
+	// create|update|delete reaches the model (upsert asks "update", and
+	// "create" when it has to insert); false answers 403 forbidden. nil keeps
+	// the historical rule: the signed route is the authorization.
+	Authorize func(ctx context.Context, org uuid.UUID, model, action string) bool
+	// HardDeleter and HardDeleteModels enable record.delete mode "hard": it is
+	// refused unless the host supplies the deleter AND lists the model here.
+	HardDeleter      HardDeleter
+	HardDeleteModels map[string]bool
+	// MaxDeleteRows caps rows per record.delete (default 100).
+	MaxDeleteRows int
 
 	store dynStore // test seam; nil means Service
 	locks [64]sync.Mutex
@@ -167,8 +201,14 @@ func (d *DynamicExecutor) CheckContract(ctx context.Context, c Contract) error {
 		if a.IdempotencyField != "" {
 			fields = append(fields, a.IdempotencyField)
 		}
-		if err := d.checkModel(ctx, fmt.Sprintf("%s actions[%d]", c.Key, i), a.Model, fields); err != nil {
+		who := fmt.Sprintf("%s actions[%d]", c.Key, i)
+		if err := d.checkModel(ctx, who, a.Model, fields); err != nil {
 			return err
+		}
+		if a.Do == ActionRecordDelete {
+			if err := d.checkDeleteModel(ctx, who, a); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -192,6 +232,48 @@ func (d *DynamicExecutor) checkModel(ctx context.Context, who, model string, fie
 		if !cols[m] {
 			return fmt.Errorf("%w: %s: field %q is not a filterable column of model %q", ErrInvalidContract, who, m, model)
 		}
+	}
+	return nil
+}
+
+// checkDeleteModel fails registration when a record.delete cannot work: soft
+// needs a model with deleted_at; hard needs the deleter and the explicit
+// opt-in of the model.
+func (d *DynamicExecutor) checkDeleteModel(ctx context.Context, who string, a Action) error {
+	if a.MaxRows > d.maxDeleteRows() {
+		return fmt.Errorf("%w: %s: max_rows %d exceeds the executor cap %d", ErrInvalidContract, who, a.MaxRows, d.maxDeleteRows())
+	}
+	if a.Mode == DeleteHard {
+		if d.HardDeleter == nil || !d.HardDeleteModels[a.Model] {
+			return fmt.Errorf("%w: %s: hard delete is not enabled for model %q", ErrInvalidContract, who, a.Model)
+		}
+		return nil
+	}
+	st, err := d.st()
+	if err != nil {
+		return err
+	}
+	meta, err := st.TableMetadata(ctx, a.Model)
+	if err != nil || !supportsSoftDelete(meta) {
+		return fmt.Errorf("%w: %s: model %q does not support soft delete (deleted_at)", ErrInvalidContract, who, a.Model)
+	}
+	return nil
+}
+
+func supportsSoftDelete(meta *modelbase.TableMetadata) bool {
+	return meta != nil && meta.Audit != nil && meta.Audit.DeletedAt != ""
+}
+
+func (d *DynamicExecutor) maxDeleteRows() int {
+	if d.MaxDeleteRows > 0 {
+		return d.MaxDeleteRows
+	}
+	return defaultMaxDeleteRows
+}
+
+func (d *DynamicExecutor) allow(ctx context.Context, op Operation, action string) error {
+	if d.Authorize != nil && !d.Authorize(ctx, op.Org, op.Route.Model, action) {
+		return &ExecError{Kind: KindForbidden, Code: "forbidden"}
 	}
 	return nil
 }
@@ -236,8 +318,16 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 	model := op.Route.Model
 	switch op.Route.Op {
 	case OpCreate:
+		if err := d.allow(ctx, op, "create"); err != nil {
+			return Outcome{}, err
+		}
 		return create(ctx, st, model, user, withDefaults(op.CreateDefaults, op.Values))
+	case OpDelete:
+		return d.deleteRows(ctx, st, user, op, sc)
 	case OpUpdate, OpUpsert:
+		if err := d.allow(ctx, op, "update"); err != nil {
+			return Outcome{}, err
+		}
 		unlock := d.lock(op)
 		defer unlock()
 		id, err := find(ctx, st, model, user, op.Route.Match, op.Values, sc)
@@ -247,6 +337,9 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 		if id == uuid.Nil {
 			if op.Route.Op == OpUpdate {
 				return Outcome{}, &ExecError{Kind: KindNotFound, Code: "record_not_found"}
+			}
+			if err := d.allow(ctx, op, "create"); err != nil {
+				return Outcome{}, err
 			}
 			out, cerr := create(ctx, st, model, user, withDefaults(op.CreateDefaults, op.Values))
 			if cerr == nil {
@@ -262,6 +355,87 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 		return update(ctx, st, model, user, id, op.Values)
 	}
 	return Outcome{}, &ExecError{Kind: KindInternal, Code: "bad_op"}
+}
+
+// deleteRows runs OpDelete. Rows are selected only by Route.Match (typed
+// re-check, organization and entity scope applied by the store), never by id.
+// Nothing is deleted when more rows match than MaxRows. Zero matches is a
+// successful no-op (NotFound), so a replayed or already-applied delete
+// converges.
+func (d *DynamicExecutor) deleteRows(ctx context.Context, st dynStore, user modelbase.AuthUser, op Operation, sc *dynamic.EntityScope) (Outcome, error) {
+	model := op.Route.Model
+	mode := op.DeleteMode
+	if mode == "" {
+		mode = DeleteSoft
+	}
+	if mode != DeleteSoft && mode != DeleteHard {
+		return Outcome{}, &ExecError{Kind: KindInvalid, Code: "bad_delete_mode"}
+	}
+	limit := op.MaxRows
+	if limit <= 0 {
+		limit = 1
+	}
+	if limit > d.maxDeleteRows() {
+		return Outcome{}, &ExecError{Kind: KindInvalid, Code: "max_rows_exceeds_limit"}
+	}
+	if len(op.Route.Match) == 0 {
+		return Outcome{}, &ExecError{Kind: KindInvalid, Code: "match_required"}
+	}
+	if err := d.allow(ctx, op, "delete"); err != nil {
+		return Outcome{}, err
+	}
+	if mode == DeleteHard {
+		if d.HardDeleter == nil || !d.HardDeleteModels[model] {
+			return Outcome{}, &ExecError{Kind: KindForbidden, Code: "hard_delete_disabled"}
+		}
+	} else {
+		meta, err := st.TableMetadata(ctx, model)
+		if err != nil {
+			return Outcome{}, mapDynamicErr(err)
+		}
+		if !supportsSoftDelete(meta) {
+			return Outcome{}, &ExecError{Kind: KindInvalid, Code: "soft_delete_unsupported"}
+		}
+	}
+	unlock := d.lock(op)
+	defer unlock()
+	hits, err := matchRows(ctx, st, model, user, op.Route.Match, op.Values, sc, limit+1)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if len(hits) == 0 {
+		return Outcome{NotFound: true}, nil
+	}
+	if len(hits) > limit {
+		return Outcome{}, &ExecError{Kind: KindConflict, Code: "too_many_matches"}
+	}
+	ids := make([]uuid.UUID, 0, len(hits))
+	for _, h := range hits {
+		id, perr := uuid.Parse(fmt.Sprint(h["id"]))
+		if perr != nil {
+			return Outcome{}, &ExecError{Kind: KindInternal, Code: "bad_record_id", Err: perr}
+		}
+		ids = append(ids, id)
+	}
+	n := 0
+	for _, id := range ids {
+		var derr error
+		if mode == DeleteHard {
+			derr = d.HardDeleter.HardDelete(ctx, model, user, id)
+		} else {
+			derr = st.Delete(ctx, model, user, id)
+		}
+		if derr != nil && !errors.Is(derr, dynamic.ErrRecordNotFound) {
+			return Outcome{}, mapDynamicErr(derr)
+		}
+		if derr == nil {
+			n++
+		}
+	}
+	if n == 0 {
+		return Outcome{NotFound: true}, nil
+	}
+	return Outcome{RecordID: ids[0].String(), Affected: n}, nil
 }
 
 func (d *DynamicExecutor) lock(op Operation) func() {
@@ -296,20 +470,40 @@ func update(ctx context.Context, st dynStore, model string, user modelbase.AuthU
 // row is re-checked against the wanted values (typed comparison); rows outside
 // the entity scope are invisible, so an upsert never touches another entity.
 func find(ctx context.Context, st dynStore, model string, user modelbase.AuthUser, match []string, vals map[string]any, sc *dynamic.EntityScope) (uuid.UUID, error) {
+	hits, err := matchRows(ctx, st, model, user, match, vals, sc, 3)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if len(hits) > 1 {
+		return uuid.Nil, &ExecError{Kind: KindConflict, Code: "ambiguous_match"}
+	}
+	if len(hits) == 0 {
+		return uuid.Nil, nil
+	}
+	id, err := uuid.Parse(fmt.Sprint(hits[0]["id"]))
+	if err != nil {
+		return uuid.Nil, &ExecError{Kind: KindInternal, Code: "bad_record_id", Err: err}
+	}
+	return id, nil
+}
+
+// matchRows lists up to perPage rows whose match columns equal vals and that
+// the entity scope allows.
+func matchRows(ctx context.Context, st dynStore, model string, user modelbase.AuthUser, match []string, vals map[string]any, sc *dynamic.EntityScope, perPage int) ([]map[string]any, error) {
 	filters := make(map[string]query.Filter, len(match))
 	for _, f := range match {
 		v, ok := vals[f]
 		if !ok {
-			return uuid.Nil, &ExecError{Kind: KindInvalid, Code: "match_value_missing"}
+			return nil, &ExecError{Kind: KindInvalid, Code: "match_value_missing"}
 		}
 		filters[f] = query.Filter{Op: query.OpEq, Value: fmt.Sprint(v)}
 	}
-	rows, _, err := st.List(ctx, model, user, query.Params{Page: 1, PerPage: 3, Filters: filters, SkipCount: true})
+	rows, _, err := st.List(ctx, model, user, query.Params{Page: 1, PerPage: perPage, Filters: filters, SkipCount: true})
 	if err != nil {
-		return uuid.Nil, mapDynamicErr(err)
+		return nil, mapDynamicErr(err)
 	}
-	var hit map[string]any
-	n, matched := 0, 0
+	var hits []map[string]any
+	matched := 0
 	for _, r := range rows {
 		ok := true
 		for _, f := range match {
@@ -331,25 +525,14 @@ func find(ctx context.Context, st dynStore, model string, user modelbase.AuthUse
 				continue
 			}
 		}
-		hit = r
-		n++
+		hits = append(hits, r)
 	}
 	if matched == 0 && len(rows) > 0 {
 		// Rows came back but none matches: the filter was ignored.
-		return uuid.Nil, &ExecError{Kind: KindInternal, Code: "match_field_unusable",
+		return nil, &ExecError{Kind: KindInternal, Code: "match_field_unusable",
 			Err: errors.New("match field is not a filterable column of " + model)}
 	}
-	if n > 1 {
-		return uuid.Nil, &ExecError{Kind: KindConflict, Code: "ambiguous_match"}
-	}
-	if n == 0 {
-		return uuid.Nil, nil
-	}
-	id, err := uuid.Parse(fmt.Sprint(hit["id"]))
-	if err != nil {
-		return uuid.Nil, &ExecError{Kind: KindInternal, Code: "bad_record_id", Err: err}
-	}
-	return id, nil
+	return hits, nil
 }
 
 // valuesEqual compares by type: numbers numerically, strings and bools
@@ -411,7 +594,7 @@ func mapDynamicErr(err error) error {
 		return err
 	}
 	switch {
-	case errors.Is(err, dynamic.ErrValidation), errors.Is(err, dynamic.ErrInvalidInput),
+	case errors.Is(err, dynamic.ErrValidation), errors.Is(err, dynamic.ErrInvalidInput), errors.Is(err, dynamic.ErrAppendOnly),
 		errors.Is(err, dynamic.ErrConstraintViolation), errors.Is(err, dynamic.ErrInvalidTransition),
 		errors.Is(err, dynamic.ErrFieldRequired):
 		return &ExecError{Kind: KindInvalid, Code: "rejected_by_model", Err: err}

@@ -72,6 +72,9 @@ func (f *fakeExec) Execute(ctx context.Context, op Operation) (Outcome, error) {
 		f.fail = nil
 		return Outcome{}, e
 	}
+	if op.Route.Op == OpDelete {
+		return f.deleteLocked(op)
+	}
 	for _, r := range f.rows[op.Org] {
 		match := true
 		for _, m := range op.Route.Match {
@@ -95,6 +98,37 @@ func (f *fakeExec) Execute(ctx context.Context, op Operation) (Outcome, error) {
 	}
 	f.rows[op.Org] = append(f.rows[op.Org], row)
 	return Outcome{RecordID: row["id"].(string), Created: true}, nil
+}
+
+// deleteLocked mimics DynamicExecutor.deleteRows over the in-memory rows of
+// the operation's organization (hard delete: the row disappears).
+func (f *fakeExec) deleteLocked(op Operation) (Outcome, error) {
+	limit := op.MaxRows
+	if limit <= 0 {
+		limit = 1
+	}
+	var keep, gone []map[string]any
+	for _, r := range f.rows[op.Org] {
+		match := true
+		for _, m := range op.Route.Match {
+			if fmt.Sprint(r[m]) != fmt.Sprint(op.Values[m]) {
+				match = false
+			}
+		}
+		if match {
+			gone = append(gone, r)
+		} else {
+			keep = append(keep, r)
+		}
+	}
+	if len(gone) == 0 {
+		return Outcome{NotFound: true}, nil
+	}
+	if len(gone) > limit {
+		return Outcome{}, &ExecError{Kind: KindConflict, Code: "too_many_matches"}
+	}
+	f.rows[op.Org] = keep
+	return Outcome{RecordID: gone[0]["id"].(string), Affected: len(gone)}, nil
 }
 
 type env struct {
