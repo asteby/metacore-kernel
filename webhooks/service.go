@@ -62,6 +62,11 @@ type Config struct {
 	// subscription switched itself off after too many consecutive failures. Use
 	// it to raise the alert. It must not block.
 	OnAutoDisable func(ctx context.Context, w Webhook)
+	// HostID identifica a este host en las marcas anti-bucle del cuerpo saliente
+	// (`_origin` = "<HostID>:sub:<key>", ver Declarative.PropagateOrigin). Vacio:
+	// no se estampa nada (compatibilidad: el cuerpo saliente no cambia hasta que
+	// el host lo configure).
+	HostID string
 	// Rand returns a value in [0,1) for retry jitter; default math/rand/v2.
 	Rand func() float64
 
@@ -102,6 +107,7 @@ type Service struct {
 	allowInternal []string
 	allowPrivate  bool
 	onAutoOff     func(ctx context.Context, w Webhook)
+	hostID        string
 	rnd           func() float64
 
 	batch, perWebhook, perOwner, maxSubs int
@@ -153,6 +159,7 @@ func New(cfg Config) *Service {
 	}
 	return &Service{
 		onAutoOff:     cfg.OnAutoDisable,
+		hostID:        cfg.HostID,
 		rnd:           cfg.Rand,
 		db:            cfg.DB,
 		workers:       cfg.WorkerCount,
@@ -625,6 +632,25 @@ func (s *Service) enqueueDeclarative(ctx context.Context, w *Webhook, ev *Event,
 		body, err = c.transform.render(root)
 	default:
 		body = c.fieldsBody(root)
+	}
+	if err == nil && body != nil {
+		if d.propagateOrigin() && s.hostID != "" {
+			stampOrigin(body, s.hostID, subKey(w), incomingHop(root))
+		}
+		if corr := correlationOf(ev); corr != "" {
+			if e, ok := body["event"].(map[string]any); ok {
+				// Copy: root["event"] is shared by every subscription of the event.
+				cp := make(map[string]any, len(e)+1)
+				for k, v := range e {
+					cp[k] = v
+				}
+				if _, has := cp["correlation"]; !has {
+					cp["correlation"] = corr
+				}
+				body["event"] = cp
+			}
+			row.RequestHeaders = JSONMap{CorrelationHeader: corr}
+		}
 	}
 	if err == nil {
 		if b, merr := json.Marshal(body); merr != nil {

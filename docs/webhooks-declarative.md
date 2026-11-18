@@ -106,6 +106,22 @@ los resuelve con `Config.Secrets` en cada intento (rotación sin tocar la suscri
 ni se registran; los mensajes de error solo nombran la referencia. Una cabecera constante con nombre de
 secreto (`*token*`, `*key*`, `authorization`…) se rechaza al guardar.
 
+### Anti-bucle y correlación (`propagate_origin`)
+
+Con `Config.HostID` configurado, cada cuerpo saliente lleva en la **raíz** (también con
+`transform.body` propio o `payload_fields`) las marcas que lee `inbound`: `_origin =
+"<host_id>:sub:<key>"` (`key` de la suscripción; si no tiene, su id) y `_hop = salto entrante + 1`.
+El salto entrante es el `_hop` que traiga el payload del evento (lo pone `inbound` en `event.emit`,
+así que viaja por el bus dentro del payload) o 0 si el evento no nació de una entrada. Si el mapeo
+ya define `_origin`/`_hop` se respeta. `propagate_origin: false` lo apaga por suscripción; sin
+`HostID` no se estampa nada (el cuerpo no cambia). Resultado: en OPS → X → OPS el contador llega a
+`MaxHops` (3) o el receptor lista `<host>:sub:*` en `ignore_origins`, y `inbound` lo corta con
+`origin_loop` sin disciplina manual del operador.
+
+Cada entrega lleva `X-Correlation-Id` = `event.correlation_id` o, si falta, `event.id`; la misma
+cifra se copia al bloque `event` del cuerpo por omisión (`payload_fields`) como `event.correlation`
+(campo opcional nuevo). Una cabecera constante `X-Correlation-Id` en `headers` la sustituye.
+
 ### Idempotencia
 
 `idempotency` (plantilla, omisión `{{event.id}}`) se guarda en la entrega y viaja en

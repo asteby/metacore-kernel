@@ -61,6 +61,13 @@ type Declarative struct {
 	// por Config.OnAutoDisable. 0 = 10; negativo = nunca. Se reanuda a mano con
 	// SetEnabled(true).
 	AutoDisableThreshold int `json:"auto_disable_threshold,omitempty"`
+	// PropagateOrigin estampa en el cuerpo saliente (nivel raiz, tambien con
+	// Transform.Body propio y con payload_fields) las marcas anti-bucle que lee
+	// `inbound`: `_origin` = "<host_id>:sub:<key>" y `_hop` = salto entrante + 1
+	// (el `_hop` que traiga el payload del evento si nacio de una entrada de
+	// `inbound`, o 0). nil = true. No sobrescribe un `_origin`/`_hop` que el
+	// mapeo ya defina. Sin Config.HostID no se estampa nada.
+	PropagateOrigin *bool `json:"propagate_origin,omitempty"`
 	// Enabled: apagado por omision. Apagado, los eventos se RETIENEN y salen
 	// al encender (SetEnabled / Update).
 	Enabled bool `json:"enabled"`
@@ -71,6 +78,10 @@ func (d *Declarative) method() string {
 		return "POST"
 	}
 	return d.Method
+}
+
+func (d *Declarative) propagateOrigin() bool {
+	return d.PropagateOrigin == nil || *d.PropagateOrigin
 }
 
 func (d *Declarative) idemTemplate() string {
