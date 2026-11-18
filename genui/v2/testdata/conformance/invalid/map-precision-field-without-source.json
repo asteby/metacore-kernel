@@ -1,0 +1,26 @@
+{
+  "description": "precision_field solo aplica con source.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "map",
+        "summary": "Mapa de puntos",
+        "points": [
+          {
+            "key": "a",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Punto a",
+            "status": "ok"
+          }
+        ],
+        "precision_field": "precision"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_block"
+  }
+}

@@ -1,3 +1,3 @@
 sdk_commit 70e9da4330feb79cbde664c1b54a9e4bda7be62e+kernel-local
-content_sha256 9611242b76c525ada3eca3b8416e2e8ef4c4c8e2021635470491f367279a47aa
-note esquema y vectores ampliados en el kernel (feat/genui-v2-page-blocks) sobre ese commit del SDK; el SDK debe sincronizarse con este esquema tras el release del kernel
+content_sha256 ba31ee97b33be867d2fda1651e2418371426fff6da155c807c4090b8084f720a
+note esquema y vectores ampliados en el kernel (feat/genui-v2-page-blocks; feat/genui-map-block-precision: map popup/precision/precision_field/area_field) sobre ese commit del SDK; el SDK debe sincronizarse con este esquema tras el release del kernel

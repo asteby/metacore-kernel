@@ -519,6 +519,14 @@ func (c *ctx) blockRules(b obj, typ, path string) {
 		if present("fields") && !present("source") {
 			panic(fail(CodeInvalidBlock, path, "%s: fields solo aplica con source", path))
 		}
+		for _, k := range []string{"popup", "precision_field", "area_field"} {
+			if present(k) && !present("source") {
+				panic(fail(CodeInvalidBlock, path, "%s: %s solo aplica con source", path, k))
+			}
+		}
+		if present("precision") && present("precision_field") {
+			panic(fail(CodeInvalidBlock, path, "%s: map usa precision o precision_field, no ambos", path))
+		}
 		seen := map[string]bool{}
 		pts, _ := b["points"].([]any)
 		for _, p := range pts {
