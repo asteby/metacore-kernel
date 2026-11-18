@@ -223,7 +223,17 @@ func (d *DynamicExecutor) doAction(ctx context.Context, st dynStore, user modelb
 		}
 	}
 	if op.DryRun {
-		return dryRunAction(ctx, st, def, op, hits, ids), nil
+		out := dryRunAction(ctx, st, def, op, hits, ids)
+		out.Would = &WouldResult{Would: "action", Target: op.ActionKey, Rows: len(ids),
+			State: out.WouldDispatch.State, ParamKeys: sortedKeys(op.Params)}
+		if !out.WouldDispatch.Eligible {
+			// The same answer the real run gives for an ineligible row.
+			if policy == OnIneligibleFail {
+				return Outcome{}, &ExecError{Kind: KindConflict, Code: CodeStateNotEligible}
+			}
+			out.Noop, out.Reason = true, CodeStateNotEligible
+		}
+		return out, nil
 	}
 	affected, noops := 0, 0
 	for i, id := range ids {
@@ -334,6 +344,7 @@ func (d *DynamicExecutor) doTransition(ctx context.Context, st dynStore, user mo
 	// untouched.
 	type move struct {
 		id   uuid.UUID
+		from string
 		noop bool
 	}
 	plan := make([]move, len(hits))
@@ -350,7 +361,12 @@ func (d *DynamicExecutor) doTransition(ctx context.Context, st dynStore, user mo
 		if !sm.Allows(from, op.To) {
 			return Outcome{}, &ExecError{Kind: KindInvalid, Code: CodeInvalidTransition}
 		}
-		plan[i] = move{id: id}
+		plan[i] = move{id: id, from: from}
+	}
+	if op.DryRun {
+		return d.wouldTransition(ctx, st, op, sm.Field, len(plan), func(i int) (uuid.UUID, string, bool) {
+			return plan[i].id, plan[i].from, plan[i].noop
+		}), nil
 	}
 	affected := 0
 	for _, m := range plan {
@@ -401,9 +417,17 @@ func (d *DynamicExecutor) doRestore(ctx context.Context, st dynStore, user model
 		if len(live) > 0 {
 			// Already restored (a retry, or another source got there first).
 			id, _ := rowID(live[0])
-			return Outcome{RecordID: id.String(), Noop: true, Reason: CodeAlreadyLive}, nil
+			out := Outcome{RecordID: id.String(), Noop: true, Reason: CodeAlreadyLive}
+			if op.DryRun {
+				out.Would = &WouldResult{Would: "restore", Rows: len(live), Noop: true}
+			}
+			return out, nil
 		}
-		return Outcome{NotFound: true}, nil
+		out := Outcome{NotFound: true}
+		if op.DryRun {
+			out.Would = &WouldResult{Would: "restore", Noop: true}
+		}
+		return out, nil
 	}
 	ids := make([]uuid.UUID, 0, len(tombs))
 	for _, t := range tombs {
@@ -412,6 +436,10 @@ func (d *DynamicExecutor) doRestore(ctx context.Context, st dynStore, user model
 			return Outcome{}, &ExecError{Kind: KindInternal, Code: "bad_record_id", Err: rerr}
 		}
 		ids = append(ids, id)
+	}
+	if op.DryRun {
+		return Outcome{RecordID: ids[0].String(), Affected: len(ids),
+			Would: &WouldResult{Would: "restore", Rows: len(ids)}}, nil
 	}
 	n := 0
 	for _, id := range ids {

@@ -55,10 +55,12 @@ type Operation struct {
 	Params       map[string]any
 	OnIneligible string
 	To           string
-	// DryRun (record.action): resolve the rows, their state and the payload and
-	// report them in Outcome.WouldDispatch WITHOUT dispatching anything. The
-	// handler does not set it yet (no dry-run mode in inbound); the executor
-	// honours it so the contract is ready.
+	// DryRun: resolve everything (match, scope, guard, columns, state) and report
+	// what the operation WOULD do in Outcome.Would, WITHOUT writing, dispatching,
+	// taking write locks or publishing events. Set by the Handler on every
+	// operation of a dry-run contract (Contract.DryRun) or call (Handler.DryRun);
+	// an Executor that honours it implements DryRunSupporter. record.action also
+	// fills Outcome.WouldDispatch.
 	DryRun bool
 }
 
@@ -93,6 +95,9 @@ type Outcome struct {
 	Reason string
 	// WouldDispatch is set by a dry-run record.action (Operation.DryRun).
 	WouldDispatch *WouldDispatch
+	// Would is set by every dry-run operation (Operation.DryRun): the result the
+	// real run would have produced, with no write behind it.
+	Would *WouldResult
 }
 
 // Executor applies model routes (create/update/upsert on a dynamic model).
@@ -254,6 +259,12 @@ type DynamicExecutor struct {
 	// and every legitimate later event would be stale_event. Integer guards
 	// (versions) are not bounded here; use "maximum" in the JSON schema.
 	GuardMaxSkew time.Duration
+	// DryRunRedact lets the host hide the values of a column from the report of
+	// a dry run (true = redact), on top of the built-in floor: protected, hidden
+	// and read-gated columns, undeclared ones and the personal-looking names of
+	// personalHints are never shown. A dry run only ever reports column NAMES
+	// and, for the rest, the old and new value.
+	DryRunRedact func(model, column string) bool
 
 	store dynStore         // test seam; nil means Service
 	now   func() time.Time // test seam; nil means time.Now
@@ -496,6 +507,9 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 		if err := d.allow(ctx, op, "create"); err != nil {
 			return Outcome{}, err
 		}
+		if op.DryRun {
+			return d.wouldWrite(ctx, st, op, nil, "create")
+		}
 		return create(ctx, st, model, user, withDefaults(op.CreateDefaults, op.Values))
 	case OpDelete:
 		return d.deleteRows(ctx, st, user, op, sc)
@@ -549,6 +563,10 @@ func (d *DynamicExecutor) upsertOnce(ctx context.Context, st dynStore, user mode
 		if stale {
 			return Outcome{Stale: true}, false, nil
 		}
+		if op.DryRun {
+			out, werr := d.wouldWrite(ctx, st, op, row, wouldKind(op.Route.Op, false))
+			return out, false, werr
+		}
 		return d.writeRow(ctx, st, user, op, id)
 	}
 	if op.Route.Op == OpUpdate {
@@ -563,6 +581,10 @@ func (d *DynamicExecutor) upsertOnce(ctx context.Context, st dynStore, user mode
 	}
 	if stale {
 		return Outcome{Stale: true}, false, nil
+	}
+	if op.DryRun {
+		out, werr := d.wouldWrite(ctx, st, op, nil, wouldKind(op.Route.Op, true))
+		return out, false, werr
 	}
 	out, cerr := create(ctx, st, model, user, withDefaults(op.CreateDefaults, op.Values))
 	if cerr == nil {
@@ -671,7 +693,11 @@ func (d *DynamicExecutor) deleteRows(ctx context.Context, st dynStore, user mode
 		return Outcome{}, err
 	}
 	if len(hits) == 0 {
-		return Outcome{NotFound: true}, nil
+		out := Outcome{NotFound: true}
+		if op.DryRun {
+			out.Would = &WouldResult{Would: "delete", Noop: true}
+		}
+		return out, nil
 	}
 	if len(hits) > limit {
 		return Outcome{}, &ExecError{Kind: KindConflict, Code: "too_many_matches"}
@@ -697,6 +723,10 @@ func (d *DynamicExecutor) deleteRows(ctx context.Context, st dynStore, user mode
 	}
 	if len(ids) == 0 && stale > 0 {
 		return Outcome{Stale: true}, nil
+	}
+	if op.DryRun {
+		return Outcome{RecordID: ids[0].String(), Affected: len(ids),
+			Would: &WouldResult{Would: "delete", Rows: len(ids)}}, nil
 	}
 	n, lost := 0, 0
 	for _, id := range ids {
@@ -727,6 +757,9 @@ func (d *DynamicExecutor) deleteRows(ctx context.Context, st dynStore, user mode
 }
 
 func (d *DynamicExecutor) lock(op Operation) func() {
+	if op.DryRun {
+		return func() {} // a dry run takes no write lock
+	}
 	h := fnv.New32a()
 	h.Write([]byte(op.Org.String() + "|" + op.Route.Model))
 	for _, m := range op.Route.Match {

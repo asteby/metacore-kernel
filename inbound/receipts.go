@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -37,6 +38,11 @@ type Receipt struct {
 	RecordID  string    `gorm:"size:64" json:"record_id,omitempty"`
 	ErrorCode string    `gorm:"size:64" json:"error_code,omitempty"`
 	Attempts  int       `json:"attempts"`
+	// Shadow marks a dry-run receipt (contract with dry_run, or the panel test): it
+	// holds what the event WOULD have done in Progress and wrote nothing. Its
+	// claim lives in its own key space (shadowKeyHash), so it never blocks, and is
+	// never mistaken for, the real application of the same event.
+	Shadow bool `gorm:"not null;default:false" json:"shadow,omitempty"`
 	// Progress is the per-action state of a chain (ids and codes only, never
 	// the body); a retry resumes after the last finished action.
 	Progress []ActionStep `gorm:"serializer:json;type:text" json:"actions,omitempty"`
@@ -56,7 +62,9 @@ type ReceiptFilter struct {
 	Status   string
 	// EventKey is the clear key; it is hashed to look it up.
 	EventKey string
-	Limit    int
+	// Shadow narrows to dry-run receipts (true) or real ones (false); nil = both.
+	Shadow *bool
+	Limit  int
 }
 
 // ReceiptStore is the reception log and idempotency ledger.
@@ -97,6 +105,23 @@ type AttemptFinisher interface {
 func HashKey(org uuid.UUID, contract, key string) string {
 	sum := sha256.Sum256([]byte(org.String() + "|" + contract + "|" + key))
 	return hex.EncodeToString(sum[:])
+}
+
+// shadowKeyHash is the key hash of a dry-run event: another key space than
+// HashKey, so the shadow reservation never collides with the real one.
+func shadowKeyHash(org uuid.UUID, contract, key string) string {
+	return HashKey(org, contract+"|shadow", key)
+}
+
+// keyHashes are the hashes an EventKey filter matches, per the Shadow filter.
+func keyHashes(org uuid.UUID, contract, key string, shadow *bool) []string {
+	switch {
+	case shadow == nil:
+		return []string{HashKey(org, contract, key), shadowKeyHash(org, contract, key)}
+	case *shadow:
+		return []string{shadowKeyHash(org, contract, key)}
+	}
+	return []string{HashKey(org, contract, key)}
 }
 
 func claimOf(r Receipt) string { return r.OrgID.String() + "|" + r.Contract + "|" + r.KeyHash }
@@ -223,10 +248,10 @@ func (m *MemoryReceiptStore) List(_ context.Context, org uuid.UUID, f ReceiptFil
 	defer m.mu.Unlock()
 	var out []Receipt
 	for _, r := range m.rows {
-		if r.OrgID != org || (f.Contract != "" && r.Contract != f.Contract) || (f.Status != "" && r.Status != f.Status) {
+		if r.OrgID != org || (f.Contract != "" && r.Contract != f.Contract) || (f.Status != "" && r.Status != f.Status) || (f.Shadow != nil && r.Shadow != *f.Shadow) {
 			continue
 		}
-		if f.EventKey != "" && r.KeyHash != HashKey(org, r.Contract, f.EventKey) {
+		if f.EventKey != "" && !slices.Contains(keyHashes(org, r.Contract, f.EventKey, f.Shadow), r.KeyHash) {
 			continue
 		}
 		out = append(out, *r)
@@ -357,11 +382,14 @@ func (g *GormReceiptStore) List(ctx context.Context, org uuid.UUID, f ReceiptFil
 	if f.Contract != "" {
 		q = q.Where("contract = ?", f.Contract)
 		if f.EventKey != "" {
-			q = q.Where("key_hash = ?", HashKey(org, f.Contract, f.EventKey))
+			q = q.Where("key_hash IN ?", keyHashes(org, f.Contract, f.EventKey, f.Shadow))
 		}
 	}
 	if f.Status != "" {
 		q = q.Where("status = ?", f.Status)
+	}
+	if f.Shadow != nil {
+		q = q.Where("shadow = ?", *f.Shadow)
 	}
 	lim := f.Limit
 	if lim <= 0 || lim > 500 {
