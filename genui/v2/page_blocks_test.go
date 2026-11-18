@@ -1,6 +1,9 @@
 package genuiv2
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Pruebas de los bloques de pagina (tabs extendido, section, grid.areas,
 // kpi_card, map.select). Los vectores compartidos (testdata/conformance) fijan
@@ -60,7 +63,14 @@ func TestPageBlocks(t *testing.T) {
 		{"tabs opcion component", pgDoc(nil, pgBlock("tabs", "variant", "segmented", "tabs", []any{tab("icon", "map", "component", "a.b@2", "props", map[string]any{"n": 1.0})})), ""},
 		{"tabs opcion blocks y component", pgDoc(nil, pgBlock("tabs", "tabs", []any{tab("blocks", []any{pgText("")}, "component", "a.b@1")})), CodeInvalidBlock},
 		{"tabs opcion vacia", pgDoc(nil, pgBlock("tabs", "tabs", []any{tab()})), CodeRequired},
-		{"tabs icono fuera del conjunto", pgDoc(nil, pgBlock("tabs", "tabs", []any{tab("icon", "x", "blocks", []any{pgText("")})})), CodeEnum},
+		{"tabs icono fuera del conjunto", pgDoc(nil, pgBlock("tabs", "tabs", []any{tab("icon", "x-y", "blocks", []any{pgText("")})})), CodePattern},
+		{"tabs icono por nombre", pgDoc(nil, pgBlock("tabs", "tabs", []any{tab("icon", "MapPin", "blocks", []any{pgText("")})})), ""},
+		{"tabs icono nombre de 64", pgDoc(nil, pgBlock("tabs", "tabs", []any{tab("icon", "A"+strings.Repeat("b", 63), "blocks", []any{pgText("")})})), ""},
+		{"tabs icono nombre de 65", pgDoc(nil, pgBlock("tabs", "tabs", []any{tab("icon", "A"+strings.Repeat("b", 64), "blocks", []any{pgText("")})})), CodePattern},
+		{"tabs icono vacio", pgDoc(nil, pgBlock("tabs", "tabs", []any{tab("icon", "", "blocks", []any{pgText("")})})), CodePattern},
+		{"tabs icono con espacio", pgDoc(nil, pgBlock("tabs", "tabs", []any{tab("icon", "Map Pin", "blocks", []any{pgText("")})})), CodePattern},
+		{"tabs icono prototipo", pgDoc(nil, pgBlock("tabs", "tabs", []any{tab("icon", "constructor", "blocks", []any{pgText("")})})), CodeForbiddenKey},
+		{"tabs icono no cadena", pgDoc(nil, pgBlock("tabs", "tabs", []any{tab("icon", 5.0, "blocks", []any{pgText("")})})), CodeType},
 		{"tabs claves duplicadas con component", pgDoc(nil, pgBlock("tabs", "tabs", []any{tab("component", "a.b@1"), tab("component", "a.b@1")})), CodeDuplicateID},
 
 		{"grid clasico", pgDoc(nil, pgBlock("grid", "columns", 3.0, "blocks", []any{pgText("")})), ""},

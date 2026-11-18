@@ -1,0 +1,28 @@
+{
+  "description": "Icono con guion (kebab-case).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "tabs",
+        "tabs": [
+          {
+            "key": "a",
+            "label": "A",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ],
+            "icon": "map-pin"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.pattern"
+  }
+}

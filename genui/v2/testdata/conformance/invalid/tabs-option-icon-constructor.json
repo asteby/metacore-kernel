@@ -1,0 +1,28 @@
+{
+  "description": "Icono que es una clave de prototipo.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "tabs",
+        "tabs": [
+          {
+            "key": "a",
+            "label": "A",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ],
+            "icon": "constructor"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

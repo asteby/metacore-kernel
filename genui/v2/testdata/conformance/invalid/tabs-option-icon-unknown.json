@@ -1,5 +1,5 @@
 {
-  "description": "Icono fuera del conjunto cerrado.",
+  "description": "Icono fuera del conjunto base y que no es un nombre válido.",
   "input": {
     "version": "genui/v2",
     "blocks": [
@@ -15,7 +15,7 @@
                 "text": "Hola"
               }
             ],
-            "icon": "rocket"
+            "icon": "rocket-ship"
           }
         ]
       }
@@ -23,6 +23,6 @@
   },
   "expect": {
     "ok": false,
-    "code": "genui.enum"
+    "code": "genui.pattern"
   }
 }

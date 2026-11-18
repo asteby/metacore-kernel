@@ -1,0 +1,28 @@
+{
+  "description": "Icono vacío.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "tabs",
+        "tabs": [
+          {
+            "key": "a",
+            "label": "A",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ],
+            "icon": ""
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.pattern"
+  }
+}
