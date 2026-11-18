@@ -1213,6 +1213,7 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 			ModalWidth:       a.ModalWidth,
 			RequiresState:    a.RequiresState,
 			SupervisorPolicy: a.SupervisorPolicy,
+			Ingest:           a.Ingest,
 			Fields:           mapActionFields(a.Fields),
 			Steps:            mapActionSteps(a.Steps),
 			Condition:        mapCondition(a.Condition),
