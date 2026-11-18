@@ -5,10 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
-
-	"github.com/asteby/metacore-kernel/runtime/ingest"
 )
 
 // checkChain verifies at startup that every port a chain needs is wired.
@@ -243,7 +242,11 @@ func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *e
 		if a.Do == ActionRecordDelete {
 			op.DeleteMode, op.MaxRows = a.Mode, a.MaxRows
 		}
-		op.Guard = evalGuard(a, env.payload)
+		g, gerr := evalGuard(a, env.payload)
+		if gerr != nil {
+			return Outcome{}, gerr
+		}
+		op.Guard = g
 		if a.Scope != nil {
 			op.Branch = scopeValue(env.payload, a.Scope.Branch)
 			op.Entity = scopeValue(env.payload, a.Scope.Entity)
@@ -289,22 +292,32 @@ func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *e
 	return Outcome{}, &ExecError{Kind: KindInternal, Code: "bad_action"}
 }
 
-// evalGuard reads the event's guard value. It returns nil (the event applies)
-// when the action has no guard or the payload value is absent or is neither an
-// RFC 3339 instant nor an integer.
-func evalGuard(a *cAction, payload any) *OperationGuard {
+// evalGuard reads the event's guard value. The guard is opt-in by data: an
+// ABSENT or explicit null value applies the event (nil guard, nil error). A
+// PRESENT value that is not an RFC 3339 instant or a whole number (""
+// included, "N/A", "2024-01-01", "5", 1.5, a bool, an object) is a producer
+// bug and fails with 422 guard_value_invalid, before any effect: it must never
+// skip the guard silently.
+func evalGuard(a *cAction, payload any) (*OperationGuard, error) {
 	if a.Guard == nil {
-		return nil
+		return nil, nil
 	}
 	v, ok := lookup(payload, a.guardPath)
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	if _, err := ingest.CompareCursor(v, v); err != nil {
-		return nil
+	v = normalize(v)
+	cv, err := guardNormalize(v, false)
+	if err != nil || cv == nil {
+		return nil, &ExecError{Kind: KindInvalid, Code: CodeGuardValueInvalid, Err: err}
 	}
-	return &OperationGuard{Field: a.Guard.Field, Op: a.Guard.Op, Value: normalize(v),
-		Match: a.Match, Create: a.Do == ActionRecordCreate}
+	if s, isStr := v.(string); isStr {
+		v = strings.TrimSpace(s)
+	} else {
+		v = cv // a whole number: int64
+	}
+	return &OperationGuard{Field: a.Guard.Field, Op: a.Guard.Op, Value: v,
+		Match: a.Match, Create: a.Do == ActionRecordCreate}, nil
 }
 
 func (h *Handler) failChain(w http.ResponseWriter, ctx context.Context, cur Receipt, err error, at int) {

@@ -115,8 +115,9 @@ const CodeStaleEvent = "stale_event"
 
 // Guard is the declarative order guard of a record action. Path is a
 // payload.* reference holding an RFC 3339 instant or an integer (a version);
-// the event is applied only when "event Op row[Field]" holds. A missing or
-// unparseable payload value applies the event (the guard is opt-in by data).
+// the event is applied only when "event Op row[Field]" holds. A missing or null
+// payload value applies the event (the guard is opt-in by data); a present value
+// that is not an instant or an integer fails with 422 guard_value_invalid.
 //
 //	{"field":"source_updated_at","path":"payload.updated_at","op":"gte"}
 type Guard struct {

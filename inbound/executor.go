@@ -7,6 +7,7 @@ import (
 	"hash/fnv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -196,9 +197,27 @@ type DynamicExecutor struct {
 	// Tombstones lets an action guard see soft-deleted rows (see
 	// TombstoneFinder); when nil the store is used if it implements it.
 	Tombstones TombstoneFinder
+	// GuardMaxSkew bounds how far into the future an event's guard instant may
+	// be (default 24h; negative disables the bound). A later one is refused
+	// with guard_value_future: signed with year 9999 it would freeze the row
+	// and every legitimate later event would be stale_event. Integer guards
+	// (versions) are not bounded here; use "maximum" in the JSON schema.
+	GuardMaxSkew time.Duration
 
-	store dynStore // test seam; nil means Service
+	store dynStore         // test seam; nil means Service
+	now   func() time.Time // test seam; nil means time.Now
+	// TODO(parte B): locks only serialize inside one process; a multi-replica
+	// lock (advisory lock / conditional UPDATE) and a per-action key (the lock
+	// is derived from Route.Match, so a delete whose match differs from the
+	// upsert's takes another bucket) belong to part B.
 	locks [64]sync.Mutex
+}
+
+func (d *DynamicExecutor) clock() time.Time {
+	if d.now != nil {
+		return d.now()
+	}
+	return time.Now()
 }
 
 func (d *DynamicExecutor) st() (dynStore, error) {
@@ -380,6 +399,11 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 	if (op.RequireEntity && op.Entity == "") || (op.RequireBranch && op.Branch == "") {
 		return Outcome{}, scopeErr("scope_required")
 	}
+	if op.Guard != nil {
+		if err := op.Guard.checkFuture(d.clock(), d.GuardMaxSkew); err != nil {
+			return Outcome{}, err
+		}
+	}
 	var sc *dynamic.EntityScope
 	if op.Entity != "" {
 		if d.EntityScope == nil {
@@ -425,8 +449,14 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 		if err != nil {
 			return Outcome{}, err
 		}
-		if id != uuid.Nil && op.Guard != nil && !op.Guard.Create && op.Guard.blocks(row[op.Guard.Field]) {
-			return Outcome{Stale: true}, nil
+		if id != uuid.Nil {
+			stale, err := d.guardStale(ctx, st, op, sc, row)
+			if err != nil {
+				return Outcome{}, err
+			}
+			if stale {
+				return Outcome{Stale: true}, nil
+			}
 		}
 		if id == uuid.Nil {
 			if op.Route.Op == OpUpdate {
@@ -435,25 +465,35 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 			if err := d.allow(ctx, op, "create"); err != nil {
 				return Outcome{}, err
 			}
-			if op.Guard != nil {
-				stale, err := d.tombstoneStale(ctx, st, op, sc)
-				if err != nil {
-					return Outcome{}, err
-				}
-				if stale {
-					return Outcome{Stale: true}, nil
-				}
+			stale, err := d.guardStale(ctx, st, op, sc, nil)
+			if err != nil {
+				return Outcome{}, err
+			}
+			if stale {
+				return Outcome{Stale: true}, nil
 			}
 			out, cerr := create(ctx, st, model, user, withDefaults(op.CreateDefaults, op.Values))
 			if cerr == nil {
 				return out, nil
 			}
-			// Lost a cross-replica race (unique index) -> update the winner.
-			id, ferr := find(ctx, st, model, user, op.Route.Match, op.Values, sc)
-			if ferr != nil || id == uuid.Nil {
+			// Lost a cross-replica race (unique index) -> update the winner,
+			// but only after the guard and the tombstones have judged it too.
+			winner, ferr := findRow(ctx, st, model, user, op.Route.Match, op.Values, sc)
+			wid, ierr := rowID(winner)
+			if ferr != nil || ierr != nil || wid == uuid.Nil {
 				return Outcome{}, cerr
 			}
-			return update(ctx, st, model, user, id, op.Values)
+			stale, err = d.guardStale(ctx, st, op, sc, winner)
+			if err == nil && !stale {
+				stale, err = d.guardStale(ctx, st, op, sc, nil)
+			}
+			if err != nil {
+				return Outcome{}, err
+			}
+			if stale {
+				return Outcome{Stale: true}, nil
+			}
+			return update(ctx, st, model, user, wid, op.Values)
 		}
 		return update(ctx, st, model, user, id, op.Values)
 	}
@@ -487,6 +527,15 @@ func (d *DynamicExecutor) deleteRows(ctx context.Context, st dynStore, user mode
 	if err := d.allow(ctx, op, "delete"); err != nil {
 		return Outcome{}, err
 	}
+	if op.Guard != nil && mode == DeleteSoft {
+		// The seal is an UPDATE through dynamic.Service (hooks, "updated"
+		// events, audit stamps), so the host must allow "update" as well as
+		// "delete": a grant of delete alone must not write the row. Checked
+		// before any effect; a host that grants only delete gets 403 here.
+		if err := d.allow(ctx, op, "update"); err != nil {
+			return Outcome{}, err
+		}
+	}
 	if mode == DeleteHard {
 		if d.HardDeleter == nil || !d.HardDeleteModels[model] {
 			return Outcome{}, &ExecError{Kind: KindForbidden, Code: "hard_delete_disabled"}
@@ -515,11 +564,17 @@ func (d *DynamicExecutor) deleteRows(ctx context.Context, st dynStore, user mode
 	ids := make([]uuid.UUID, 0, len(hits))
 	stale := 0
 	for _, h := range hits {
-		if op.Guard != nil && op.Guard.blocks(h[op.Guard.Field]) {
-			stale++ // a newer row than this delete event: it stays
-			continue
+		if op.Guard != nil {
+			blocked, gerr := op.Guard.blocks(h[op.Guard.Field])
+			if gerr != nil {
+				return Outcome{}, gerr
+			}
+			if blocked {
+				stale++ // a newer row than this delete event: it stays
+				continue
+			}
 		}
-		id, perr := uuid.Parse(fmt.Sprint(h["id"]))
+		id, perr := uuid.Parse(fmt.Sprint(canonValue(h["id"])))
 		if perr != nil {
 			return Outcome{}, &ExecError{Kind: KindInternal, Code: "bad_record_id", Err: perr}
 		}
@@ -576,19 +631,10 @@ func update(ctx context.Context, st dynStore, model string, user modelbase.AuthU
 	return Outcome{RecordID: idOf(row, id.String())}, nil
 }
 
-// find returns the id of the single row matching every match field, or
-// uuid.Nil. Because query drops filters on unknown columns, every returned
-// row is re-checked against the wanted values (typed comparison); rows outside
-// the entity scope are invisible, so an upsert never touches another entity.
-func find(ctx context.Context, st dynStore, model string, user modelbase.AuthUser, match []string, vals map[string]any, sc *dynamic.EntityScope) (uuid.UUID, error) {
-	row, err := findRow(ctx, st, model, user, match, vals, sc)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	return rowID(row)
-}
-
-// findRow is find returning the whole row (nil when none matches).
+// findRow returns the single row matching every match field (nil when none
+// does). Because query drops filters on unknown columns, every returned row is
+// re-checked against the wanted values (typed comparison); rows outside the
+// entity scope are invisible, so an upsert never touches another entity.
 func findRow(ctx context.Context, st dynStore, model string, user modelbase.AuthUser, match []string, vals map[string]any, sc *dynamic.EntityScope) (map[string]any, error) {
 	hits, err := matchRows(ctx, st, model, user, match, vals, sc, 3)
 	if err != nil {
@@ -608,7 +654,7 @@ func rowID(row map[string]any) (uuid.UUID, error) {
 	if row == nil {
 		return uuid.Nil, nil
 	}
-	id, err := uuid.Parse(fmt.Sprint(row["id"]))
+	id, err := uuid.Parse(fmt.Sprint(canonValue(row["id"])))
 	if err != nil {
 		return uuid.Nil, &ExecError{Kind: KindInternal, Code: "bad_record_id", Err: err}
 	}
@@ -636,7 +682,7 @@ func scopeAllows(r map[string]any, sc *dynamic.EntityScope) bool {
 		return true
 	}
 	if b, has := r["branch_id"]; has && b != nil {
-		return sc.Allows(fmt.Sprint(b))
+		return sc.Allows(fmt.Sprint(canonValue(b)))
 	}
 	return sc.Allows("")
 }
@@ -683,9 +729,72 @@ func matchRows(ctx context.Context, st dynStore, model string, user modelbase.Au
 	return hits, nil
 }
 
+// canonValue normalizes what a database driver may return for the same value
+// so two readings compare equal: []byte becomes a string, a uuid ([16]byte as
+// pgx hands it, uuid.UUID, or its text in any case) its canonical lower-case
+// text. Anything else is returned as is.
+func canonValue(v any) any {
+	switch t := v.(type) {
+	case [16]byte:
+		return uuid.UUID(t).String()
+	case uuid.UUID:
+		return t.String()
+	case *uuid.UUID:
+		if t == nil {
+			return nil
+		}
+		return t.String()
+	case []byte:
+		return canonString(string(t))
+	case string:
+		return canonString(t)
+	case *string:
+		if t == nil {
+			return nil
+		}
+		return canonString(*t)
+	}
+	return v
+}
+
+func canonString(s string) string {
+	if len(s) == 36 {
+		if u, err := uuid.Parse(s); err == nil {
+			return u.String()
+		}
+	}
+	return s
+}
+
+// asInstant reads v as an instant (time.Time or an RFC 3339 / SQL timestamp
+// string).
+func asInstant(v any) (time.Time, bool) {
+	switch t := v.(type) {
+	case time.Time:
+		return t, true
+	case string:
+		if n, err := guardNormalizeString(t, true); err == nil {
+			if tm, ok := n.(time.Time); ok {
+				return tm, true
+			}
+		}
+	}
+	return time.Time{}, false
+}
+
 // valuesEqual compares by type: numbers numerically, strings and bools
-// exactly; anything else by its printed form.
+// exactly (after canonValue: bytes, uuid case and form); instants as instants
+// whatever their zone; anything else by its printed form.
 func valuesEqual(a, b any) bool {
+	a, b = canonValue(a), canonValue(b)
+	if ta, ok := a.(time.Time); ok {
+		tb, ok := asInstant(b)
+		return ok && ta.Round(time.Microsecond).Equal(tb.Round(time.Microsecond))
+	}
+	if tb, ok := b.(time.Time); ok {
+		ta, ok := asInstant(a)
+		return ok && ta.Round(time.Microsecond).Equal(tb.Round(time.Microsecond))
+	}
 	if fa, ok := asFloat(a); ok {
 		fb, ok := asFloat(b)
 		return ok && fa == fb
