@@ -150,10 +150,10 @@ type HardDeleter interface {
 // defaultMaxDeleteRows is the DynamicExecutor cap on rows per record.delete.
 const defaultMaxDeleteRows = 100
 
-// maxDeleteRowsCeiling is the highest MaxDeleteRows the executor accepts:
+// maxDeleteRowsExecutorLimit is the highest MaxDeleteRows the executor accepts:
 // matchRows lists limit+1 rows and query.MaxPerPage (200) clips the page, so a
 // limit of 200 could not detect an excess.
-const maxDeleteRowsCeiling = 199
+const maxDeleteRowsExecutorLimit = 199
 
 // DynamicExecutor runs model routes through dynamic.Service as a system
 // principal scoped to the route's organization: tenant scoping, validation,
@@ -258,8 +258,8 @@ func (d *DynamicExecutor) checkModel(ctx context.Context, who, model string, fie
 // needs a model with deleted_at; hard needs the deleter and the explicit
 // opt-in of the model.
 func (d *DynamicExecutor) checkDeleteModel(ctx context.Context, who string, a Action) error {
-	if d.maxDeleteRows() > maxDeleteRowsCeiling {
-		return fmt.Errorf("%w: %s: MaxDeleteRows %d exceeds %d (query page cap)", ErrInvalidContract, who, d.maxDeleteRows(), maxDeleteRowsCeiling)
+	if d.maxDeleteRows() > maxDeleteRowsExecutorLimit {
+		return fmt.Errorf("%w: %s: MaxDeleteRows %d exceeds %d (query page cap)", ErrInvalidContract, who, d.maxDeleteRows(), maxDeleteRowsExecutorLimit)
 	}
 	if err := d.checkAppendOnly(ctx, who, a); err != nil {
 		return err
