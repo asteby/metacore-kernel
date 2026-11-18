@@ -215,10 +215,12 @@ type fakeDyn struct {
 	deletes int32
 	// noSoftDelete makes the model report no deleted_at column.
 	noSoftDelete bool
+	// appendOnly makes the model report AppendOnly.
+	appendOnly bool
 }
 
 func (f *fakeDyn) TableMetadata(context.Context, string) (*modelbase.TableMetadata, error) {
-	m := &modelbase.TableMetadata{}
+	m := &modelbase.TableMetadata{AppendOnly: f.appendOnly}
 	for _, c := range f.cols {
 		m.Columns = append(m.Columns, modelbase.ColumnDef{Key: c})
 	}
@@ -242,6 +244,9 @@ func (f *fakeDyn) List(_ context.Context, _ string, u modelbase.AuthUser, p quer
 		}
 		ok := true
 		for k, flt := range p.Filters {
+			if fmt.Sprint(flt.Value) == "" { // like query.applyOneFilterMode: OpEq on "" adds no WHERE
+				continue
+			}
 			if !known[k] { // like the real builder: unknown columns are dropped
 				continue
 			}

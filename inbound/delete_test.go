@@ -538,3 +538,133 @@ func TestDeleteChainFeedsLaterStepsAndPassesModeToExecutor(t *testing.T) {
 		t.Fatalf("%d %v", code, out)
 	}
 }
+
+// ------------------------------------------- empty / null match values ---
+
+// A match value that is empty or null must be refused BEFORE List: the query
+// layer drops an OpEq filter on "" (no WHERE) and would hand back unfiltered rows.
+func TestMatchEmptyOrNullRejectedWithoutTouchingRows(t *testing.T) {
+	org := uuid.New()
+	cases := []struct {
+		name string
+		val  any
+		code string
+	}{
+		{"empty", "", "match_value_empty"},
+		{"spaces", "   \t", "match_value_empty"},
+		{"null", nil, "match_value_missing"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeDyn()
+			// a legitimate local row with an empty reference must NOT be retired
+			local := seedRow(f, org, "", "W1")
+			other := seedRow(f, org, "S1", "W1")
+			d := &DynamicExecutor{store: f}
+			ctx := context.Background()
+
+			// delete
+			op := delOp(org, "", 0, "")
+			op.Values = map[string]any{"sku": tc.val}
+			_, err := d.Execute(ctx, op)
+			if ee := execErr(t, err); ee.Kind != KindInvalid || ee.Code != tc.code {
+				t.Fatalf("delete: %+v", ee)
+			}
+			// update and upsert share matchRows through find
+			for _, o := range []Op{OpUpdate, OpUpsert} {
+				_, err := d.Execute(ctx, Operation{Org: org, Route: Route{Model: "inv", Op: o, Match: []string{"sku"}},
+					Values: map[string]any{"sku": tc.val, "warehouse": "W9"}})
+				if ee := execErr(t, err); ee.Kind != KindInvalid || ee.Code != tc.code {
+					t.Fatalf("%s: %+v", o, ee)
+				}
+			}
+			if deleted(f, local) || deleted(f, other) {
+				t.Fatalf("rows touched: %v", f.rows)
+			}
+			if n := atomic.LoadInt32(&f.deletes) + atomic.LoadInt32(&f.updates) + atomic.LoadInt32(&f.creates); n != 0 {
+				t.Fatalf("%d writes reached the model", n)
+			}
+		})
+	}
+}
+
+// Zero and false are legitimate match values: only empty/null are refused.
+func TestMatchZeroAndFalseStillAllowed(t *testing.T) {
+	org := uuid.New()
+	f := newFakeDyn()
+	f.cols = append(f.cols, "qty", "active")
+	zero := map[string]any{"id": uuid.NewString(), "organization_id": org.String(), "qty": 0, "active": false}
+	f.rows = append(f.rows, zero)
+	d := &DynamicExecutor{store: f}
+	for _, vals := range []map[string]any{{"qty": 0}, {"qty": float64(0)}, {"active": false}} {
+		var m []string
+		for k := range vals {
+			m = append(m, k)
+		}
+		op := Operation{Org: org, Route: Route{Model: "inv", Op: OpDelete, Match: m}, Values: vals}
+		zero["deleted_at"] = nil
+		out, err := d.Execute(context.Background(), op)
+		if err != nil || out.Affected != 1 {
+			t.Fatalf("%v: out=%+v err=%v", vals, out, err)
+		}
+	}
+}
+
+// ---------------------------------------------- executor / registration ---
+
+// legacyExec is a custom Executor that does not declare OpSupporter.
+type legacyExec struct{}
+
+func (legacyExec) Execute(context.Context, Operation) (Outcome, error) { return Outcome{}, nil }
+
+func TestRegisterDeleteRequiresExecutorSupportingOpDelete(t *testing.T) {
+	ctx := context.Background()
+	mount := func(ex Executor) *Handler {
+		cfg := Config{Contracts: NewRegistry(), Receipts: NewMemoryReceiptStore(), Executor: ex, Logger: quietLogger(),
+			Verifiers:   map[string]Verifier{ProfileHMACCanonicalV1: &HMACCanonicalV1{}},
+			DefaultAuth: ProfileHMACCanonicalV1}
+		h, err := New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	err := mount(legacyExec{}).RegisterContract(ctx, delContract(nil))
+	if err == nil || !strings.Contains(err.Error(), "OpSupporter") {
+		t.Fatalf("legacy executor must be refused at registration: %v", err)
+	}
+	// a contract with no delete still registers on a legacy executor.
+	if err := mount(legacyExec{}).RegisterContract(ctx, delContract(func(a *Action) { a.Do, a.Mode, a.MaxRows = ActionRecordUpdate, "", 0 })); err != nil {
+		t.Fatalf("non-delete contract: %v", err)
+	}
+	if err := mount(newFakeExec()).RegisterContract(ctx, delContract(nil)); err != nil {
+		t.Fatalf("executor declaring OpDelete: %v", err)
+	}
+	if !(&DynamicExecutor{}).SupportsOp(OpDelete) {
+		t.Fatal("DynamicExecutor supports every op")
+	}
+}
+
+func TestDeleteCheckContractCeilingAndAppendOnly(t *testing.T) {
+	ctx := context.Background()
+	c := Contract{Key: "stock.deleted", Version: 1, Actions: []Action{{Do: ActionRecordDelete, Model: "inv",
+		Match: []string{"sku"}, Mapping: map[string]string{"sku": "{{payload.sku}}"}}}}
+	// MaxDeleteRows 200 would clip at query.MaxPerPage and hide the excess.
+	if err := (&DynamicExecutor{store: newFakeDyn(), MaxDeleteRows: 200}).CheckContract(ctx, c); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("MaxDeleteRows 200: %v", err)
+	}
+	if err := (&DynamicExecutor{store: newFakeDyn(), MaxDeleteRows: 199}).CheckContract(ctx, c); err != nil {
+		t.Fatalf("MaxDeleteRows 199: %v", err)
+	}
+	// append-only models cannot be deleted, soft or hard.
+	ao := newFakeDyn()
+	ao.appendOnly = true
+	if err := (&DynamicExecutor{store: ao}).CheckContract(ctx, c); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("append-only soft: %v", err)
+	}
+	c.Actions[0].Mode = DeleteHard
+	dh := &DynamicExecutor{store: ao, HardDeleter: &fakeHard{}, HardDeleteModels: map[string]bool{"inv": true}}
+	if err := dh.CheckContract(ctx, c); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("append-only hard: %v", err)
+	}
+}
