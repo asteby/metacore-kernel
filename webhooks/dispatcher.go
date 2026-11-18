@@ -107,6 +107,14 @@ func (s *Service) attemptDeclarative(ctx context.Context, w *Webhook, d *Webhook
 	// (replayed) from "same key, different body" (idempotency_conflict).
 	fp := sha256.Sum256(body)
 	req.Header.Set("X-Metacore-Body-SHA256", hex.EncodeToString(fp[:]))
+	// Correlation: the event's, or the event id. A constant header may override.
+	corr, _ := d.RequestHeaders[CorrelationHeader].(string)
+	if corr == "" {
+		corr = d.EventID
+	}
+	if validIdempotencyKey(corr) {
+		req.Header.Set(CorrelationHeader, corr)
+	}
 	for k, v := range dec.Headers {
 		req.Header.Set(k, v)
 	}
