@@ -23,6 +23,8 @@ const (
 	ActionRecordCreate = "record.create"
 	ActionRecordUpdate = "record.update"
 	ActionRecordUpsert = "record.upsert"
+	// ActionRecordDelete retires rows selected ONLY by match (never by id).
+	ActionRecordDelete = "record.delete"
 	ActionEventEmit    = "event.emit"
 	ActionNotify       = "notify"
 	ActionCommandRun   = "command.run"
@@ -39,6 +41,15 @@ const (
 
 const maxActions = 10
 
+// record.delete modes and limits.
+const (
+	DeleteSoft = "soft"
+	DeleteHard = "hard"
+	// maxDeleteRowsCeiling is the highest max_rows a contract may declare;
+	// the executor applies its own (host-configurable) cap on top.
+	maxDeleteRowsCeiling = 100
+)
+
 // Action is one step of a contract chain. Which fields apply depends on Do;
 // a field that does not belong to the action is a registration error.
 type Action struct {
@@ -48,7 +59,7 @@ type Action struct {
 	// OnError overrides the contract's on_error for this step (stop|continue).
 	OnError string `json:"on_error,omitempty"`
 
-	// record.create|update|upsert
+	// record.create|update|upsert|delete
 	Model    string            `json:"model,omitempty"`
 	Match    []string          `json:"match,omitempty"`    // keys of Mapping
 	Mapping  map[string]string `json:"mapping,omitempty"`  // target field -> template
@@ -58,6 +69,12 @@ type Action struct {
 	// stores "<receipt>:<action>"; the create runs as an upsert on it, so a
 	// retry after an ambiguous failure finds the row instead of duplicating it.
 	IdempotencyField string `json:"idempotency_field,omitempty"`
+	// record.delete: Mode is soft (default) | hard. soft needs a model with a
+	// deleted_at column; hard is refused unless the host opted the model in.
+	// MaxRows caps the rows one event may delete (default 1, at most 100);
+	// more matches than that fail the step without deleting anything.
+	Mode    string `json:"mode,omitempty"`
+	MaxRows int    `json:"max_rows,omitempty"`
 
 	// event.emit | automation.enqueue (event name)
 	Name string `json:"name,omitempty"`
@@ -94,11 +111,15 @@ const (
 // ActionStep is the per-action progress kept in the receipt. It carries ids
 // and codes only, never payload values.
 type ActionStep struct {
-	Index     int    `json:"index"`
-	Do        string `json:"do"`
-	Status    string `json:"status"`
-	RecordID  string `json:"record_id,omitempty"`
-	Created   bool   `json:"created,omitempty"`
+	Index    int    `json:"index"`
+	Do       string `json:"do"`
+	Status   string `json:"status"`
+	RecordID string `json:"record_id,omitempty"`
+	Created  bool   `json:"created,omitempty"`
+	// Affected / NotFound are set by record.delete: rows retired, or nothing
+	// matched (already deleted: a successful no-op).
+	Affected  int    `json:"affected,omitempty"`
+	NotFound  bool   `json:"not_found,omitempty"`
 	ErrorCode string `json:"error_code,omitempty"`
 }
 
@@ -258,7 +279,7 @@ type validator struct {
 var (
 	tplRe   = regexp.MustCompile(`\{\{(.*?)\}\}`)
 	eventOK = map[string]bool{"key": true, "contract": true, "version": true, "org": true}
-	resOK   = map[string]bool{"id": true, "created": true}
+	resOK   = map[string]bool{"id": true, "created": true, "affected": true}
 )
 
 // compileActions validates the chain of a contract.
@@ -299,7 +320,7 @@ func compileAction(a Action, v *validator) (*cAction, error) {
 	ca := &cAction{Action: a}
 	isRecord := false
 	switch a.Do {
-	case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert:
+	case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert, ActionRecordDelete:
 		isRecord = true
 	case ActionEventEmit, ActionNotify, ActionCommandRun, ActionAutomationEnqueue:
 	default:
@@ -318,7 +339,8 @@ func compileAction(a Action, v *validator) (*cAction, error) {
 		set, ok bool
 	}{
 		{"idempotency_field", a.IdempotencyField != "", a.Do == ActionRecordCreate}, {"model", a.Model != "", isRecord}, {"match", len(a.Match) > 0, isRecord},
-		{"defaults", len(a.Defaults) > 0, isRecord}, {"scope", a.Scope != nil, isRecord},
+		{"defaults", len(a.Defaults) > 0, isRecord && a.Do != ActionRecordDelete},
+		{"mode", a.Mode != "", a.Do == ActionRecordDelete}, {"max_rows", a.MaxRows != 0, a.Do == ActionRecordDelete}, {"scope", a.Scope != nil, isRecord},
 		{"mapping", len(a.Mapping) > 0, isRecord || isCmd},
 		{"name", a.Name != "", isEmit}, {"payload", len(a.Payload) > 0, isEmit || isNotify},
 		{"template", a.Template != "", isNotify}, {"command", a.Command != "", isCmd}, {"op", a.Op != "", isCmd},
@@ -345,6 +367,11 @@ func compileAction(a Action, v *validator) (*cAction, error) {
 			}
 			if _, dup := a.Defaults[f]; dup {
 				return nil, fmt.Errorf("idempotency_field %q must not be a default", f)
+			}
+		}
+		if a.Do == ActionRecordDelete {
+			if err := checkDelete(a); err != nil {
+				return nil, err
 			}
 		}
 		if a.Do != ActionRecordCreate && len(a.Match) == 0 {
@@ -430,6 +457,33 @@ func compileAction(a Action, v *validator) (*cAction, error) {
 	return ca, nil
 }
 
+// checkDelete validates record.delete: rows are selected only by match, so the
+// mapping carries exactly the match fields (nothing is written), the mode is
+// known and max_rows stays within the ceiling.
+func checkDelete(a Action) error {
+	if len(a.Match) == 0 {
+		return fmt.Errorf("record.delete needs match fields (it never deletes without a filter)")
+	}
+	in := map[string]bool{}
+	for _, m := range a.Match {
+		in[m] = true
+	}
+	for to := range a.Mapping {
+		if !in[to] {
+			return fmt.Errorf("record.delete mapping may only hold match fields (%q is not one)", to)
+		}
+	}
+	switch a.Mode {
+	case "", DeleteSoft, DeleteHard:
+	default:
+		return fmt.Errorf("mode must be soft|hard")
+	}
+	if a.MaxRows < 0 || a.MaxRows > maxDeleteRowsCeiling {
+		return fmt.Errorf("max_rows must be between 1 and %d", maxDeleteRowsCeiling)
+	}
+	return nil
+}
+
 func compileCond(c Condition, v *validator) (*cCond, error) {
 	ns, path, err := v.ref(strings.TrimSpace(c.Path))
 	if err != nil {
@@ -461,7 +515,7 @@ func compileCond(c Condition, v *validator) (*cCond, error) {
 func (v *validator) ref(expr string) (ns, path string, err error) {
 	ns, path, ok := strings.Cut(expr, ".")
 	if !ok || path == "" {
-		return "", "", fmt.Errorf("reference %q must be payload.<path>, event.<key> or result.<id|created>", expr)
+		return "", "", fmt.Errorf("reference %q must be payload.<path>, event.<key> or result.<id|created|affected>", expr)
 	}
 	if _, perr := parsePath(path); perr != nil {
 		return "", "", perr
@@ -480,7 +534,7 @@ func (v *validator) ref(expr string) (ns, path string, err error) {
 			return "", "", fmt.Errorf("result.%s: the first action has no previous result", path)
 		}
 		if !resOK[path] {
-			return "", "", fmt.Errorf("result.%s unknown (id|created)", path)
+			return "", "", fmt.Errorf("result.%s unknown (id|created|affected)", path)
 		}
 	default:
 		return "", "", fmt.Errorf("reference %q: namespace must be payload|event|result", expr)

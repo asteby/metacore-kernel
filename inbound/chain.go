@@ -17,7 +17,7 @@ func (h *Handler) checkChain(c *compiled) []error {
 	}
 	for i, a := range c.chain {
 		switch a.Do {
-		case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert:
+		case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert, ActionRecordDelete:
 			if h.cfg.Executor == nil {
 				add("actions[%d] %s: no Executor", i, a.Do)
 			}
@@ -62,6 +62,9 @@ func resultOf(s ActionStep) map[string]any {
 	}
 	if s.Do != ActionEventEmit && s.Do != ActionNotify && s.Do != ActionAutomationEnqueue {
 		m["created"] = s.Created
+	}
+	if s.Do == ActionRecordDelete {
+		m["affected"] = int64(s.Affected)
 	}
 	return m
 }
@@ -147,6 +150,7 @@ func (h *Handler) runChain(ctx context.Context, c *compiled, org uuid.UUID, evKe
 			return "", i, aerr
 		}
 		step.Status, step.RecordID, step.Created = StepDone, out.RecordID, out.Created
+		step.Affected, step.NotFound = out.Affected, out.NotFound
 		*steps = append(*steps, step)
 		if a.isRecordLike() {
 			env.result = resultOf(step)
@@ -163,7 +167,7 @@ func (h *Handler) runChain(ctx context.Context, c *compiled, org uuid.UUID, evKe
 
 func (a *cAction) isRecordLike() bool {
 	switch a.Do {
-	case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert, ActionCommandRun:
+	case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert, ActionRecordDelete, ActionCommandRun:
 		return true
 	}
 	return false
@@ -188,7 +192,7 @@ func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *e
 	}()
 	idem := fmt.Sprintf("%s:%d", rid, idx)
 	switch a.Do {
-	case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert, ActionCommandRun:
+	case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert, ActionRecordDelete, ActionCommandRun:
 		vals, merr := evalMap(a.mapping, env)
 		if merr != nil {
 			return Outcome{}, merr
@@ -217,6 +221,9 @@ func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *e
 			// runs as an upsert on a column that stores "<receipt>:<action>".
 			op.Values[a.IdempotencyField] = idem
 			op.Route.Op, op.Route.Match = OpUpsert, []string{a.IdempotencyField}
+		}
+		if a.Do == ActionRecordDelete {
+			op.DeleteMode, op.MaxRows = a.Mode, a.MaxRows
 		}
 		if a.Scope != nil {
 			op.Branch = scopeValue(env.payload, a.Scope.Branch)

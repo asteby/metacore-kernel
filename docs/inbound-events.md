@@ -165,6 +165,7 @@ Un contrato puede declarar `actions` en lugar de `route` (son excluyentes; sin
 | `do` | Campos | Efecto |
 |---|---|---|
 | `record.create` / `record.update` / `record.upsert` | `model`, `mapping`, `match`, `defaults`, `scope` | reusa el `Executor` (mismo muro de organización y de modelo) |
+| `record.delete` | `model`, `mapping` (solo campos de `match`), `match`, `scope`, `mode`, `max_rows` | retira filas elegidas SOLO por `match`; borrado lógico por omisión (ver abajo) |
 | `event.emit` | `name`, `payload` | `EventEmitter.Emit` (puerto mínimo; este paquete no importa `webhooks`) |
 | `automation.enqueue` | `name`, `payload` | `AutomationIngester.IngestEvent`, que el host adapta a `automation.Scheduler.Ingest` |
 | `notify` | `template`, `payload` (parámetros) | `Notifier.Notify`; el host renderiza con `notifications.Render` |
@@ -230,6 +231,39 @@ modelo (no mapeada) donde se guarda `<recibo>:<índice>`. La creación corre com
 columna, de modo que si la escritura confirmó pero falló el guardado del progreso (o hubo un
 timeout tras el commit) el reintento encuentra la fila y no la duplica. En ese reintento
 `result.created` es `false`. `Operation.IdempotencyKey` lleva la misma llave a los comandos.
+
+**`record.delete` (un `<modelo>.deleted` del sistema origen).** Retira filas; no tiene id ni
+modo "borra todo":
+
+```json
+{"do": "record.delete", "model": "customers", "match": ["external_ref"],
+ "mapping": {"external_ref": "{{payload.id}}"},
+ "when": {"path": "payload.kind", "eq": "deleted"}, "mode": "soft", "max_rows": 1}
+```
+
+- **Selección solo por `match`.** `match` es obligatorio, cada campo debe estar en `mapping` y el `mapping`
+  no puede traer nada más (no se escribe nada); no existe selección por id ni sin filtro. Cada campo de `match`
+  debe ser columna declarada del modelo (`CheckContract`). `defaults` e `idempotency_field` no aplican.
+- **Mismo gate que `record.update`.** Corre por el mismo `Executor`: organización de la ruta firmada (otra
+  organización es invisible: `not_found`), alcance entidad/sucursal y modelo dinámico resuelto. El host puede
+  además cerrar la puerta con `DynamicExecutor.Authorize(ctx, org, modelo, accion)`: lista blanca de modelos de
+  addons habilitados con escritura declarada y permiso `<modelo>.delete` de quien guarda la entrada. Se
+  consulta ANTES de tocar el modelo (también para `create`/`update`/`upsert`); `false` responde `403
+  forbidden`. Sin `Authorize` rige la regla histórica (la ruta firmada es la autorización).
+- **`mode`.** `soft` (por omisión) llama a `dynamic.Service.Delete` (tombstone con `deleted_at`, hooks y
+  evento canónico `deleted`); el modelo debe tener `deleted_at` (`TableMetadata.Audit.DeletedAt`), si no
+  falla al registrar y en ejecución (`422 soft_delete_unsupported`): nunca cae a borrado físico. `hard` está
+  **deshabilitado** salvo que el host entregue `DynamicExecutor.HardDeleter` Y liste el modelo en
+  `HardDeleteModels`; si no, error al registrar y `403 hard_delete_disabled`.
+- **Límite de filas.** `max_rows` (1 por omisión, techo 100 en el contrato; `DynamicExecutor.MaxDeleteRows`
+  baja el techo del host, 100 por omisión). Si hay más coincidencias que el tope, NO se borra nada:
+  `409 too_many_matches`.
+- **Idempotente.** Sin coincidencias (ya borrado, otra organización) no es error: el paso queda `done` con
+  `not_found: true` y el recibo `applied`. Con borrado, el paso trae `affected` y `record_id` (el primero).
+  Pasos siguientes pueden usar `{{result.id}}` y `{{result.affected}}` (p. ej. `when result.affected eq 1`
+  antes de un `event.emit`).
+- **Contrato de `Executor` propio.** `Operation` trae `Route.Op = OpDelete`, `DeleteMode` y `MaxRows`; debe
+  devolver `Outcome{Affected, RecordID}` o `Outcome{NotFound: true}`. `dynStore` ganó `Delete`.
 
 **Defaults solo al crear.** `defaults` (en `route` y en las acciones `record.*`) viajan como
 `Operation.CreateDefaults` y el ejecutor los aplica únicamente al crear la fila, nunca al
