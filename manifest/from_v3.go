@@ -537,7 +537,15 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				continue
 			}
 			if len(idx.Columns) != 1 {
-				continue // composite indices have no ColumnDef equivalent.
+				// Composite indices have no ColumnDef equivalent. Unique ones ride
+				// Indices as informational entries (no Where: the DDL plane skips
+				// them) so the inbound target catalogue can offer them as match keys.
+				if idx.Unique && len(idx.Columns) > 1 {
+					def.Indices = append(def.Indices, IndexDef{
+						Name: idx.Name, Columns: append([]string(nil), idx.Columns...), Unique: true,
+					})
+				}
+				continue
 			}
 			if idx.Unique {
 				uniqueCols[idx.Columns[0]] = struct{}{}

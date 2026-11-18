@@ -111,6 +111,12 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			// ReadPermission rides through: the dynamic runtime strips the
 			// column from the reads of a caller lacking the permission.
 			ReadPermission: c.ReadPermission,
+			// Write facts (inbound target catalogue): see ColumnDef.Required.
+			Required:  c.Required,
+			Unique:    c.Unique,
+			Generated: c.Generated,
+			Protected: c.Protected,
+			Default:   c.Default,
 		}
 		// Stage machine: when this column is the model's stage_field and the
 		// model declares stages, derive a `status` display + the option list
@@ -133,6 +139,18 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			col.CellStyle = inferCellStyle(c.Name, c.Type)
 		}
 		out = append(out, col)
+	}
+	return out
+}
+
+// DeriveUniqueIndexes projects the unique indexes declared on a model
+// definition (ModelDefinition.Indices) onto TableMetadata.UniqueIndexes.
+func DeriveUniqueIndexes(def manifest.ModelDefinition) []modelbase.UniqueIndexMeta {
+	var out []modelbase.UniqueIndexMeta
+	for _, ix := range def.Indices {
+		if ix.Unique && len(ix.Columns) > 0 {
+			out = append(out, modelbase.UniqueIndexMeta{Columns: append([]string(nil), ix.Columns...), Partial: ix.Where != ""})
+		}
 	}
 	return out
 }

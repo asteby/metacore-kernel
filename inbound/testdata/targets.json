@@ -1,0 +1,24 @@
+[
+  {
+    "addon": "inventory",
+    "addon_name": "Inventario",
+    "model": "inventory.items",
+    "label": "Articulos",
+    "columns": [
+      {"name": "sku", "label": "SKU", "type": "text", "required": true, "unique": true},
+      {"name": "warehouse", "label": "Almacen", "type": "text", "ref": "inventory.warehouses"},
+      {"name": "quantity", "label": "Cantidad", "type": "number", "default": 0},
+      {
+        "name": "status", "label": "Estado", "type": "select",
+        "options": [{"value": "active", "label": "Activo"}, {"value": "archived", "label": "Archivado"}],
+        "default": "active"
+      }
+    ],
+    "match_candidates": [["sku"], ["warehouse", "external_id"]],
+    "soft_delete": true,
+    "actions": ["record.create", "record.update", "record.upsert", "record.delete"],
+    "permissions": {"create": true, "update": true, "delete": false},
+    "scope": {"branch": true, "entity": false},
+    "guard_candidates": ["status"]
+  }
+]
