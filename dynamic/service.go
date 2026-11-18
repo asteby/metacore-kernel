@@ -1235,6 +1235,15 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 	// transition hooks then run directly on execDB rather than opening a nested
 	// transaction, and the FOR UPDATE lock is applied on load.
 	core := func(execDB *gorm.DB, inTx bool) error {
+		// A guarded write holds ONE connection for the whole transaction: every
+		// query below that does not take execDB explicitly (validation lookups,
+		// extension reads, schema introspection) finds that handle in ctx
+		// (queryDB). The shadow is local to core: what runs after the commit
+		// keeps the plain ctx. Plain Update/Delete never take this branch.
+		ctx := ctx
+		if inTx && o.needsTx() {
+			ctx = withTxHandle(ctx, execDB)
+		}
 		if g := o.writeGuard(); g != nil {
 			// Row lock first: from here to the commit nobody else writes the
 			// row, so the stale check below judges the value that will be
@@ -1469,7 +1478,7 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 				return err
 			}
 			if o != nil && o.then != nil {
-				return o.then(tx)
+				return o.then(withTxHandle(ctx, tx), tx)
 			}
 			return nil
 		})
@@ -1500,6 +1509,15 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 		if orphaned := collectOrphanedFromUpdate(before, after, tableMeta); len(orphaned) > 0 {
 			s.fileDeleter(ctx, model, orphaned)
 		}
+	}
+
+	// DeleteSealed's seal: the commit already tombstoned the row. The steps
+	// below are best effort (a failure is logged, never returned: the row is
+	// deleted, and the caller must still publish "deleted" and clean up), and
+	// nothing is published as "updated" (see DeleteSealed).
+	if o.deleting() {
+		s.sealPostCommit(ctx, model, id, input, extIn, exts, docLines, user)
+		return nil, nil
 	}
 
 	// Many-to-many associations: REPLACE the owner's pivot rows for every
@@ -1541,6 +1559,29 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 	_ = s.hooks.runAfterUpdate(ctx, HookContext{Model: model, User: user, DB: s.db}, instance)
 	// The event keeps the full row; the caller gets what it may read.
 	return s.redactFor(ctx, model, user, after)
+}
+
+// sealPostCommit runs, for DeleteSealed's seal, the post-commit steps update
+// inherits (pivot sync, extension upsert, document lines), tolerating their
+// failures: the row is already deleted, so an error is logged and the caller
+// goes on to the deleted event and the cleanup. The return-value steps of
+// update (mergeExtensions, redactFor) are skipped: DeleteSealed returns nothing.
+func (s *Service) sealPostCommit(ctx context.Context, model string, id uuid.UUID, input map[string]any, extIn map[string]map[string]any, exts []ExtensionTable, docLines *documentLines, user modelbase.AuthUser) {
+	if rels := s.resolveRelations(ctx, model); len(rels) > 0 {
+		if err := s.syncPivotOnWrite(ctx, s.db, rels, id, input, false); err != nil {
+			log.Printf("dynamic: sealed delete %s/%s: pivot sync after commit: %v", model, id, err)
+		}
+	}
+	if len(extIn) > 0 {
+		if err := s.upsertExtensions(ctx, s.db, exts, extIn, id.String(), user.GetOrganizationID()); err != nil {
+			log.Printf("dynamic: sealed delete %s/%s: extension upsert after commit: %v", model, id, err)
+		}
+	}
+	if docLines != nil {
+		if err := s.replaceDocumentLines(ctx, user, docLines, id.String()); err != nil {
+			log.Printf("dynamic: sealed delete %s/%s: document lines after commit: %v", model, id, err)
+		}
+	}
 }
 
 // Delete soft-deletes a record by ID.

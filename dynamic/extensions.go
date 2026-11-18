@@ -356,7 +356,7 @@ func extensionBefore(ctx context.Context, s *Service, exts []ExtensionTable, id 
 	if len(exts) == 0 {
 		return nil, nil
 	}
-	rows, err := s.loadExtensionRows(ctx, s.db, exts, []string{id.String()})
+	rows, err := s.loadExtensionRows(ctx, s.queryDB(ctx), exts, []string{id.String()})
 	if err != nil {
 		return nil, err
 	}

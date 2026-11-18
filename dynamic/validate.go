@@ -403,9 +403,9 @@ func (s *Service) refExists(ctx context.Context, user modelbase.AuthUser, ref st
 		return true, nil
 	}
 	var count int64
-	q := s.scope.ScopeQuery(s.db.WithContext(ctx).Table(table), user).
+	q := s.scope.ScopeQuery(s.queryDB(ctx).WithContext(ctx).Table(table), user).
 		Where("id IN ?", ids)
-	if liveOnly && tableHasDeletedAt(s.db, table) {
+	if liveOnly && tableHasDeletedAt(s.queryDB(ctx), table) {
 		q = q.Where("deleted_at IS NULL")
 	}
 	if err := q.Count(&count).Error; err != nil {
@@ -456,7 +456,7 @@ func (s *Service) valueExists(ctx context.Context, user modelbase.AuthUser, tabl
 		return false, nil
 	}
 	var count int64
-	q := s.scope.ScopeQuery(s.db.WithContext(ctx).Table(table), user).
+	q := s.scope.ScopeQuery(s.queryDB(ctx).WithContext(ctx).Table(table), user).
 		Where(column+" = ?", raw)
 	if selfID != nil {
 		q = q.Where("id <> ?", selfID.String())

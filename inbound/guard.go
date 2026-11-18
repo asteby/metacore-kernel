@@ -472,6 +472,19 @@ func (d *DynamicExecutor) checkGuard(ctx context.Context, who string, a Action) 
 	if err := d.checkWritable(ctx, who, a.Model, map[string]string{a.Guard.Field: ""}); err != nil {
 		return fmt.Errorf("guard.field: %w", err)
 	}
+	// The guarded column is read from the row as JSON: a field tagged
+	// omitempty/omitzero vanishes at its zero value and would be read as NULL
+	// (never stale). dynamic.Service answers it; a store without the check
+	// (a test fake) has no struct to inspect.
+	if st, err := d.st(); err == nil {
+		if gc, ok := st.(interface {
+			CheckGuardField(ctx context.Context, model, field string) error
+		}); ok {
+			if err := gc.CheckGuardField(ctx, a.Model, a.Guard.Field); err != nil {
+				return fmt.Errorf("%w: %s: guard.field %q: %v", ErrInvalidContract, who, a.Guard.Field, err)
+			}
+		}
+	}
 	if _, ok := a.Mapping[a.Guard.Field]; !ok && a.Do != ActionRecordDelete {
 		return fmt.Errorf("%w: %s: guard_field_not_mapped: guard.field %q is not in mapping", ErrInvalidContract, who, a.Guard.Field)
 	}
