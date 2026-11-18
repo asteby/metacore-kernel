@@ -329,10 +329,35 @@ func (o *AgentOrchestrator) turnRegistry(ctx context.Context, turn Turn) *tools.
 // list is rendered as text only when ToolsInPrompt asks for it: the tools are
 // always sent natively, so the text copy would pay for them twice.
 func (o *AgentOrchestrator) turnSystemPrompt(prompt string, registry *tools.ToolRegistry) string {
+	prompt += toolHintsSection(registry)
 	if o.toolsInPrompt {
 		return AppendToolsSection(prompt, registry)
 	}
 	return prompt + "\n\n" + closingRules
+}
+
+// toolHintsSection renders the PromptHint of every registered tool that has
+// one, in tool-name order (stable prefix for provider prompt caching). Tools
+// are dynamic per turn and per preset, so the guidance is too: nothing here is
+// hardcoded in a host prompt.
+func toolHintsSection(registry *tools.ToolRegistry) string {
+	if registry == nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, t := range registry.List() {
+		h, ok := tools.As[tools.PromptHinter](t)
+		if !ok {
+			continue
+		}
+		if hint := strings.TrimSpace(h.PromptHint()); hint != "" {
+			sb.WriteString("\n- " + t.Name() + ": " + hint)
+		}
+	}
+	if sb.Len() == 0 {
+		return ""
+	}
+	return "\n\nUSO DE HERRAMIENTAS ESPECÍFICAS:" + sb.String()
 }
 
 // closingRules is the fixed paragraph that ends every system prompt.
@@ -467,6 +492,10 @@ func (o *AgentOrchestrator) agentLoopTurn(ctx context.Context, messages []map[st
 	// lastToolFailure names the most recent tool that failed, so a provider
 	// error right after it is reported with the tool instead of hiding it.
 	var lastToolFailure *tools.ToolResult
+	// Tools that ran successfully this turn, and how far the model has been taken for
+	// claiming a result no tool produced (OutcomeClaimer).
+	succeeded := map[string]bool{}
+	claimStage := 0 // 0 none, 1 sent back to call the tool, 2 asked to rewrite without the claim
 
 	turnStart := time.Now()
 	stats := TurnStats{}
@@ -512,11 +541,48 @@ func (o *AgentOrchestrator) agentLoopTurn(ctx context.Context, messages []map[st
 			return nil, fmt.Errorf("AI service failed: %w", err)
 		}
 		aiResp = unwrapSyntheticFinalAnswer(aiResp, messages)
+		aiResp = unwrapUnbackedFinalAnswer(aiResp, registry, succeeded)
 
 		// Si no hay tool calls, el agente terminó — salvo narración sin acción (Aby).
 		if len(aiResp.ToolCalls) == 0 {
 			// Limpiar respuesta: eliminar JSON envuelto, tags de pensamiento y markdown
 			response.Message = CleanAgentResponse(aiResp.Message)
+
+			// A reply that says "aquí está el gráfico" with no show_chart behind it
+			// is a promise the user cannot see kept. Each tool declares its own
+			// claims (tools.OutcomeClaimer), so this covers any tool of any host,
+			// including turns where OTHER tools did run (the case the org-data
+			// check below cannot see). Once back to the model, then the truth.
+			if claimed := unbackedClaim(registry, response.Message, succeeded); claimed != "" {
+				switch {
+				case toolDefs != nil && claimStage == 0 && iteration < maxIter-1:
+					log.Printf("⚠️ Agent: reply claims the outcome of %s but it did not run; sending the model back", claimed)
+					claimStage = 1
+					messages = append(messages,
+						map[string]interface{}{"role": "assistant", "content": response.Message},
+						map[string]interface{}{"role": "user", "content": claimNudge(claimed)},
+					)
+					response.Message = ""
+					continue
+				case claimStage < 2 && iteration < maxIter-1:
+					// It could not (or would not) run the tool. Let the MODEL say so, in
+					// the user's own language, instead of the kernel injecting a phrase
+					// in one language. Tools off: this pass only rewrites the reply.
+					log.Printf("⚠️ Agent: %s still claimed without running; asking for a rewrite", claimed)
+					claimStage = 2
+					messages = append(messages,
+						map[string]interface{}{"role": "assistant", "content": response.Message},
+						map[string]interface{}{"role": "user", "content": claimRewriteNudge(claimed)},
+					)
+					response.Message = ""
+					toolDefs = nil
+					maxIter++
+					continue
+				}
+				log.Printf("⚠️ Agent: reply still claims the outcome of %s without running it; disclosing", claimed)
+				response.Message = disclaimUnbackedClaim(response.Message, claimed)
+				break
+			}
 
 			// Haiku/sonnet a veces narran "voy a revisar…" sin llamar tools.
 			// OJO: el nudge inserta un user "[sistema]…"; lastRealUserContent lo
@@ -711,6 +777,7 @@ func (o *AgentOrchestrator) agentLoopTurn(ctx context.Context, messages []map[st
 			}
 
 			if result.Success {
+				succeeded[result.ToolName] = true
 				response.Embeds = append(response.Embeds, o.embedsFromToolResult(result.ToolName, result.Result, params)...)
 			}
 
@@ -1685,6 +1752,28 @@ func unwrapSyntheticFinalAnswer(aiResp *AIResponse, messages []map[string]interf
 	return aiResp
 }
 
+// unwrapUnbackedFinalAnswer turns a lone final_answer back into plain text when
+// its message claims the outcome of a tool that did not run (OutcomeClaimer),
+// so it goes through the same check as a free-text reply. Hosts that answer
+// through final_answer would otherwise publish the unkept promise.
+func unwrapUnbackedFinalAnswer(aiResp *AIResponse, registry *tools.ToolRegistry, succeeded map[string]bool) *AIResponse {
+	if aiResp == nil || len(aiResp.ToolCalls) != 1 || aiResp.ToolCalls[0].ToolName != "final_answer" {
+		return aiResp
+	}
+	tc := aiResp.ToolCalls[0]
+	msg, _ := tc.Parameters["message"].(string)
+	if msg == "" {
+		msg = aiResp.Message
+	}
+	if unbackedClaim(registry, msg, succeeded) == "" {
+		return aiResp
+	}
+	log.Printf("⚠️ Unwrapping final_answer (id=%s) — claims a tool outcome that did not run", tc.ID)
+	aiResp.Message = msg
+	aiResp.ToolCalls = nil
+	return aiResp
+}
+
 func orchestratorNudge(deferred, hasToolResults bool) string {
 	if !deferred {
 		return "[sistema] No afirmes cifras ni registros de la organización sin un resultado de herramienta. " +
@@ -1698,6 +1787,50 @@ func orchestratorNudge(deferred, hasToolResults bool) string {
 		nudge += "Empieza con list_models o describe_model."
 	}
 	return nudge
+}
+
+// unbackedClaim returns the name of a registered tool whose outcome the reply
+// claims (per its OutcomeClaimer patterns) although it did not run
+// successfully this turn, or "". Registry order is by name, so the answer is
+// deterministic when several tools match.
+func unbackedClaim(registry *tools.ToolRegistry, msg string, succeeded map[string]bool) string {
+	m := strings.TrimSpace(msg)
+	if registry == nil || m == "" {
+		return ""
+	}
+	for _, t := range registry.List() {
+		if succeeded[t.Name()] {
+			continue
+		}
+		for _, re := range claimPatterns(t) {
+			if re.MatchString(m) {
+				return t.Name()
+			}
+		}
+	}
+	return ""
+}
+
+// claimNudge sends the model back to run the tool it claimed to have used.
+func claimNudge(tool string) string {
+	return "[sistema] Dijiste que ya tienes el resultado de " + tool + ", pero no la llamaste en este turno, así que el usuario no lo ve. " +
+		"Llama " + tool + " ahora con los datos reales de las herramientas (nunca inventes valores). " +
+		"Si no puedes, corrige tu respuesta y dilo con claridad."
+}
+
+// claimRewriteNudge asks for a corrected reply once the tool could not run. The
+// model writes it, so it comes out in the user's language.
+func claimRewriteNudge(tool string) string {
+	return "[sistema] No se pudo ejecutar " + tool + ", así que ese resultado NO existe. " +
+		"Reescribe tu respuesta en el MISMO idioma del usuario: no afirmes que existe; di brevemente que no pudiste generarlo y por qué, " +
+		"y ofrece lo que sí puedes (por ejemplo los datos en una tabla). NO uses herramientas."
+}
+
+// disclaimUnbackedClaim is the last resort, when the model keeps claiming a
+// result that was not produced: keep its reply and mark the claim as unfounded
+// in plain, language-neutral terms.
+func disclaimUnbackedClaim(msg, tool string) string {
+	return strings.TrimSpace(msg) + "\n\n_⚠️ `" + tool + "`: no ejecutada / not executed._"
 }
 
 var (

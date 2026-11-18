@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"time"
 	"unicode/utf8"
 )
@@ -31,6 +32,58 @@ type ParallelSafe interface {
 // call runs ("globe|Leyendo afmedios.com…"). Empty means "use the default".
 type ProgressLabeler interface {
 	ProgressLabel(params map[string]interface{}) string
+}
+
+// PromptHinter lets a tool teach the model how to use it. The orchestrator
+// appends each registered tool's hint to the turn's system prompt, so the
+// guidance travels with the tool: register the tool and the rule follows, in
+// any host or preset, and a tool that is not registered adds nothing. Keep it
+// to a few lines; empty means "no hint". A host wrapper around a tool must
+// forward PromptHint (an embedded BaseTool hides optional interfaces).
+type PromptHinter interface {
+	PromptHint() string
+}
+
+// OutcomeClaimer lets a tool declare the phrases with which a reply claims to
+// have produced what only this tool produces ("aquí está el gráfico", "ya
+// creé el evento"). When the reply makes the claim and the tool did not run
+// successfully in the turn, the orchestrator sends the model back to call it
+// (once) or, failing that, tells the user the result was not produced. It is
+// the generic form of "never announce what you did not do": any tool in any
+// host opts in by implementing it, and an unregistered tool checks nothing.
+//
+// Patterns are keyed by language (primary BCP-47 subtag: "es", "en", "pt"...)
+// so the mechanism is not tied to one language: the orchestrator accepts a
+// claim in ANY declared language, and a host adds one without touching the
+// tool (agent.RegisterOutcomeClaims). Keep patterns narrow: they must match an
+// assertion that the outcome exists now, never an offer or a refusal.
+type OutcomeClaimer interface {
+	OutcomeClaims() map[string][]*regexp.Regexp
+}
+
+// Unwrapper is implemented by tool wrappers (harness, permission guards) so
+// the kernel can reach the wrapped tool's optional interfaces.
+type Unwrapper interface {
+	Unwrap() BaseTool
+}
+
+// As returns t, or any tool it wraps, as the optional interface T. A wrapper
+// that embeds BaseTool hides the optional interfaces of what it wraps; going
+// through Unwrap lets the kernel see them without every host forwarding each
+// one by hand. The outermost implementation wins.
+func As[T any](t BaseTool) (T, bool) {
+	for t != nil {
+		if v, ok := t.(T); ok {
+			return v, true
+		}
+		u, ok := t.(Unwrapper)
+		if !ok {
+			break
+		}
+		t = u.Unwrap()
+	}
+	var zero T
+	return zero, false
 }
 
 // ErrTransient marks an error worth retrying (timeouts of an upstream, 429,
