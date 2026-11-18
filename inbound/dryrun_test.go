@@ -322,8 +322,12 @@ func TestDryRunUpsertReportsAndWritesNothing(t *testing.T) {
 		if r.code != 200 || st["would"] != "upsert-update" || st["created"] == true || st["record_id"] != id.String() {
 			t.Fatalf("update event: %d %s", r.code, r.raw)
 		}
-		if c := changeOf(t, st, "total"); c["from"] != float64(50) || c["to"] != float64(100) {
+		// The current value of the row (from) never reaches the producer.
+		if c := changeOf(t, st, "total"); c["from"] != nil || c["to"] != float64(100) {
 			t.Fatalf("total change: %v", c)
+		}
+		if strings.Contains(r.raw, `"from"`) {
+			t.Fatalf("the answer to a signed event must never carry from: %s", r.raw)
 		}
 		if rows := e.rows("A"); len(rows) != 1 || rows[0].Total != 50 {
 			t.Fatalf("dry run changed the row: %+v", rows)
@@ -489,7 +493,7 @@ func TestDryRunTransition(t *testing.T) {
 		if r.code != 200 || st["would"] != "transition" || st["rows"] != float64(1) {
 			t.Fatalf("valid transition: %d %s", r.code, r.raw)
 		}
-		if c := changeOf(t, st, "status"); c["from"] != "new" || c["to"] != "paid" {
+		if c := changeOf(t, st, "status"); c["from"] != nil || c["to"] != "paid" {
 			t.Fatalf("status change: %v", c)
 		}
 		if got := e.rows("T1")[0].Status; got != "new" {

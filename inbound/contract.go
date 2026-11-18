@@ -91,9 +91,69 @@ type Contract struct {
 	// what the event WOULD have done (see docs/inbound-events.md, "Modo sombra").
 	// The executor must implement DryRunSupporter or registration fails.
 	DryRun bool `json:"dry_run,omitempty"`
+	// SchemaVersion is the version of the contract format. A contract that carries
+	// dry_run is written (MarshalJSON) as schema 2, together with a fail-closed gate
+	// that a kernel WITHOUT dry-run support rejects at load (see contractGate): it
+	// cannot silently run it for real. A kernel refuses a schema_version newer than
+	// ContractSchemaVersion. Authors normally leave it out.
+	SchemaVersion int `json:"schema_version,omitempty"`
 	// IgnoreOrigins lists origin marks (exact or "prefix*") whose events are
 	// ignored with 200 "ignored"; the contract own origin is always ignored.
 	IgnoreOrigins []string `json:"ignore_origins,omitempty"`
+}
+
+const ContractSchemaVersion = 2
+
+// contractGate is written by Contract.MarshalJSON into a field that every kernel
+// WITHOUT dry-run support validates and rejects (on_error of a route contract:
+// "on_error only applies to actions"; route.op of a chain contract: "route and
+// actions are mutually exclusive"), because they ignore the unknown dry_run and
+// schema_version fields and would otherwise execute a shadow contract FOR REAL
+// (double write). UnmarshalJSON removes it again. Hosts must persist contracts
+// with json.Marshal(Contract), not a hand-written JSON that
+// only adds "dry_run": true.
+const contractGate = "requires:inbound-contract-v2"
+
+// MarshalJSON writes the contract; one with dry_run gets schema_version 2 and the
+// gate of contractGate.
+func (c Contract) MarshalJSON() ([]byte, error) {
+	type plain Contract
+	p := plain(c)
+	if c.DryRun {
+		p.SchemaVersion = ContractSchemaVersion
+		if len(p.Actions) > 0 {
+			if p.Route.Op == "" {
+				p.Route.Op = Op(contractGate)
+			}
+		} else if p.OnError == "" {
+			p.OnError = contractGate
+		}
+	}
+	return json.Marshal(p)
+}
+
+// UnmarshalJSON reads a contract, removing the gate MarshalJSON added and
+// refusing a contract of a newer schema or that requires something this kernel
+// does not know.
+func (c *Contract) UnmarshalJSON(b []byte) error {
+	type plain Contract
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	if p.SchemaVersion > ContractSchemaVersion {
+		return invalidf("%s: schema_version %d is newer than this kernel supports (%d)", p.Key, p.SchemaVersion, ContractSchemaVersion)
+	}
+	if len(p.Actions) > 0 && string(p.Route.Op) == contractGate {
+		p.Route.Op = ""
+	} else if len(p.Actions) == 0 && p.OnError == contractGate {
+		p.OnError = ""
+	}
+	if strings.HasPrefix(string(p.Route.Op), "requires:") || strings.HasPrefix(p.OnError, "requires:") {
+		return invalidf("%s: the contract requires a newer kernel", p.Key)
+	}
+	*c = Contract(p)
+	return nil
 }
 
 var (
@@ -138,6 +198,12 @@ func compile(c Contract) (*compiled, error) {
 	}
 	if c.Version < 1 {
 		return nil, invalidf("%s: version must be >= 1", c.Key)
+	}
+	if c.SchemaVersion > ContractSchemaVersion {
+		return nil, invalidf("%s: schema_version %d is newer than this kernel supports (%d)", c.Key, c.SchemaVersion, ContractSchemaVersion)
+	}
+	if c.OnError == contractGate || string(c.Route.Op) == contractGate {
+		return nil, invalidf("%s: load the contract through json.Unmarshal or LoadJSON (it carries the dry-run gate)", c.Key)
 	}
 	if strings.TrimSpace(c.Auth) == "" {
 		return nil, invalidf("%s: auth profile required", c.Key)

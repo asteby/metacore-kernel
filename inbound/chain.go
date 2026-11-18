@@ -60,7 +60,7 @@ func (h *Handler) serveChain(w http.ResponseWriter, ctx context.Context, c *comp
 	}
 	h.finish(ctx, cur, StatusApplied, recID, "")
 	if c.DryRun {
-		writeJSON(w, http.StatusOK, SuccessBody{Status: StatusWouldApply, ReceiptID: cur.ID.String(), RecordID: recID, Actions: steps, Shadow: true})
+		writeJSON(w, http.StatusOK, SuccessBody{Status: StatusWouldApply, ReceiptID: cur.ID.String(), RecordID: recID, Actions: steps, Shadow: true, Fidelity: FidelityPartial})
 		return
 	}
 	writeJSON(w, http.StatusOK, SuccessBody{Status: "applied", ReceiptID: cur.ID.String(), RecordID: recID, Actions: steps})
@@ -97,7 +97,7 @@ func (h *Handler) runChain(ctx context.Context, c *compiled, org uuid.UUID, evKe
 	// (another worker re-claimed the event after the lease) aborts the chain
 	// before any further effect.
 	save := func() error {
-		if rid == uuid.Nil {
+		if dry && rid == uuid.Nil {
 			return nil // ephemeral run (Handler.DryRun): there is no receipt to keep
 		}
 		owned, e := h.cfg.Receipts.SaveProgress(context.WithoutCancel(ctx), rid, cur.Attempts, *steps)
@@ -178,13 +178,16 @@ func (h *Handler) runChain(ctx context.Context, c *compiled, org uuid.UUID, evKe
 			continue
 		}
 		step.applyOutcome(out)
+		if dry && rid != uuid.Nil {
+			step = step.withoutFrom() // progress is persisted and answered: ids and codes only
+		}
 		*steps = append(*steps, step)
 		if a.isRecordLike() {
 			env.result = resultOf(step)
 			if dry && step.Created && step.RecordID == "" {
 				// A row that would be created has no id yet: a later step that reads
 				// {{result.id}} must still resolve, as it does in the real run.
-				env.result["id"] = fmt.Sprintf("dry-run:%d", i)
+				env.result["id"] = dryPlaceholderID(i)
 			}
 		}
 		if out.RecordID != "" && a.isRecordLike() {
@@ -269,6 +272,7 @@ func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *e
 			return Outcome{}, &ExecError{Kind: KindInternal, Code: "dry_run_unsupported"}
 		}
 		op.DryRun = dry
+		op.DryRunReveal = dry && rid == uuid.Nil // only the ephemeral panel run (Handler.DryRun)
 		// Defaults apply only when a row is created, never on update.
 		op.CreateDefaults = a.Defaults
 		op.Route = Route{Model: a.Model, Match: a.Match, Op: Op(a.Do[len("record."):])}

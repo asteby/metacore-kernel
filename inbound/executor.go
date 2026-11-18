@@ -62,6 +62,11 @@ type Operation struct {
 	// an Executor that honours it implements DryRunSupporter. record.action also
 	// fills Outcome.WouldDispatch.
 	DryRun bool
+	// DryRunReveal lets a dry-run report carry the CURRENT value of the row
+	// (ColumnChange.From). Set by Handler.DryRun only (a panel session), never for a
+	// signed event; the executor still requires its Authorize gate to answer "read"
+	// (see DynamicExecutor.revealFrom).
+	DryRunReveal bool
 }
 
 // WouldDispatch is what a dry-run record.action resolved for one row.
@@ -259,15 +264,27 @@ type DynamicExecutor struct {
 	// and every legitimate later event would be stale_event. Integer guards
 	// (versions) are not bounded here; use "maximum" in the JSON schema.
 	GuardMaxSkew time.Duration
-	// DryRunRedact lets the host hide the values of a column from the report of
-	// a dry run (true = redact), on top of the built-in floor: protected, hidden
-	// and read-gated columns, undeclared ones and the personal-looking names of
-	// personalHints are never shown. A dry run only ever reports column NAMES
-	// and, for the rest, the old and new value.
+	// A dry run reveals a column value DENY BY DEFAULT (see dryrun.go, "What a
+	// dry run may show"): only a column of a type that cannot carry free text
+	// (number, boolean, date/datetime, uuid/reference, a value among the declared
+	// options) whose value has that shape, and that is not protected, hidden,
+	// read-gated, generated or personal-looking by NAME. Everything else is
+	// reported as {"redacted":true}. The column name is NOT the guarantee: the
+	// metadata has no per-column sensitivity.
+	//
+	// DryRunRedact (true = redact) is an additional host VETO and always wins.
+	// DryRunAllow (true = show) is the host's explicit allowlist for a column that
+	// the rules above would hide (a free-text column, a personal-looking name); it
+	// never overrides protected/hidden/read-gated/generated columns nor
+	// DryRunRedact. Both are called with the model key and the column key.
 	DryRunRedact func(model, column string) bool
+	DryRunAllow  func(model, column string) bool
 
 	store dynStore         // test seam; nil means Service
 	now   func() time.Time // test seam; nil means time.Now
+	// ignoreDryRun is a test seam that simulates code which forgets Operation.DryRun:
+	// the read-only store must still stop every write.
+	ignoreDryRun bool
 	// locks is an OPTIMIZATION, never a guarantee: it serializes the requests of
 	// this process that share a match key, so they do not queue on the database
 	// row lock. It does not cross replicas and an action whose match differs
@@ -462,6 +479,14 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 	if err != nil {
 		return Outcome{}, err
 	}
+	if op.DryRun {
+		// Defence in depth: a dry run only ever gets a read-only store, so a
+		// branch that forgets op.DryRun still cannot write.
+		st = roStore{st}
+		if d.ignoreDryRun {
+			op.DryRun = false // test seam: a branch that forgets op.DryRun
+		}
+	}
 	user := dynamic.NewSystemCaller(op.Org)
 	if d.Caller != nil {
 		user = d.Caller(op.Org)
@@ -500,6 +525,13 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 	// them (find, typed comparison, tombstones, write).
 	if err := normalizeMatch(ctx, st, &op); err != nil {
 		return Outcome{}, err
+	}
+	if op.DryRun && op.Route.Op != OpCreate && matchesPlaceholder(op) {
+		// The row is one an earlier step of the chain only would have created.
+		if err := d.allow(ctx, op, simulatedAction(op)); err != nil {
+			return Outcome{}, err
+		}
+		return d.wouldOnSimulated(ctx, st, op)
 	}
 	model := op.Route.Model
 	switch op.Route.Op {
@@ -732,6 +764,9 @@ func (d *DynamicExecutor) deleteRows(ctx context.Context, st dynStore, user mode
 	for _, id := range ids {
 		var derr error
 		if mode == DeleteHard {
+			if op.DryRun {
+				return Outcome{}, errDryWriteBlocked // never reached: the dry run returned above
+			}
 			derr = d.HardDeleter.HardDelete(ctx, model, user, id)
 		} else {
 			derr = sealAndDelete(ctx, st, user, op, mode, id)

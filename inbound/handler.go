@@ -70,9 +70,9 @@ type Config struct {
 	// MaxHops bounds chains of inbound->emit->inbound events (default 3): an
 	// event whose body carries _hop >= MaxHops is ignored.
 	MaxHops int
-	Prefix string
-	Logger *slog.Logger
-	Now    func() time.Time
+	Prefix  string
+	Logger  *slog.Logger
+	Now     func() time.Time
 }
 
 // Handler is the generic POST /api/inbound/{org}/{contract} endpoint.
@@ -126,7 +126,13 @@ func (h *Handler) Check() error {
 
 // Receipts exposes the log for a query endpoint on the host.
 func (h *Handler) Receipts(ctx context.Context, org uuid.UUID, f ReceiptFilter) ([]Receipt, error) {
-	return h.cfg.Receipts.List(ctx, org, f)
+	rs, err := h.cfg.Receipts.List(ctx, org, f)
+	for i := range rs {
+		if rs[i].Shadow {
+			rs[i].Progress = stepsWithoutFrom(rs[i].Progress) // never the current value of a row
+		}
+	}
+	return rs, err
 }
 
 // ---------------------------------------------------------------- errors ---
@@ -184,6 +190,8 @@ type SuccessBody struct {
 	// Shadow is true for a dry-run contract: nothing was written; Actions holds
 	// what each step WOULD have done.
 	Shadow bool `json:"shadow,omitempty"`
+	// Fidelity is FidelityPartial on a shadow answer: a forecast, not a full replay.
+	Fidelity string `json:"fidelity,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -448,7 +456,7 @@ func (h *Handler) answerExisting(w http.ResponseWriter, cur Receipt, bodyHash st
 			writeErr(w, http.StatusConflict, CodeIdempotencyClash, "event key already used with a different payload")
 			return
 		}
-		writeJSON(w, http.StatusOK, SuccessBody{Status: "replayed", ReceiptID: cur.ID.String(), RecordID: cur.RecordID, Actions: cur.Progress, Shadow: cur.Shadow})
+		writeJSON(w, http.StatusOK, SuccessBody{Status: "replayed", ReceiptID: cur.ID.String(), RecordID: cur.RecordID, Actions: replayActions(cur), Shadow: cur.Shadow, Fidelity: fidelityOf(cur.Shadow)})
 	case StatusFailed:
 		// Only reached when a partially applied chain is retried with another body.
 		writeErr(w, http.StatusConflict, CodeIdempotencyClash, "event key already used with a different payload")

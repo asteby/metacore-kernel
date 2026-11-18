@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -73,6 +74,7 @@ func (s *ActionStep) applyOutcome(out Outcome) {
 	if w := out.Would; w != nil {
 		s.Would, s.Target, s.Rows, s.State = w.Would, w.Target, w.Rows, w.State
 		s.ParamKeys, s.Changes = w.ParamKeys, w.Changes
+		s.OnSimulated = w.OnSimulated
 		if w.Noop {
 			s.Noop = true
 		}
@@ -102,13 +104,41 @@ func routeStep(c *compiled, out Outcome) ActionStep {
 // goes to the receipt (so a replay answers the same result) and the answer says
 // nothing was written.
 func (h *Handler) serveShadowRoute(w http.ResponseWriter, ctx context.Context, c *compiled, cur Receipt, out Outcome) {
-	steps := []ActionStep{routeStep(c, out)}
+	steps := []ActionStep{routeStep(c, out).withoutFrom()} // never "from": see ColumnChange
 	if _, e := h.cfg.Receipts.SaveProgress(context.WithoutCancel(ctx), cur.ID, cur.Attempts, steps); e != nil {
 		h.cfg.Logger.Error("inbound: save shadow result", "receipt", cur.ID, "err_type", fmt.Sprintf("%T", e))
 	}
 	h.finish(ctx, cur, StatusApplied, out.RecordID, "")
 	writeJSON(w, http.StatusOK, SuccessBody{Status: StatusWouldApply, ReceiptID: cur.ID.String(), RecordID: out.RecordID,
-		Actions: steps, Created: out.Created, Shadow: true})
+		Actions: steps, Created: out.Created, Shadow: true, Fidelity: FidelityPartial})
+}
+
+// withoutFrom returns the step with the current row value (ColumnChange.From) of
+// every column removed. Anything that leaves the Handler for a signed event
+// (HTTP answer, receipt, replay) goes through it: the current data of the
+// database never travels to the producer nor is persisted in Receipt.Progress.
+func (s ActionStep) withoutFrom() ActionStep {
+	if len(s.Changes) == 0 {
+		return s
+	}
+	ch := make(map[string]ColumnChange, len(s.Changes))
+	for k, c := range s.Changes {
+		c.From = nil
+		ch[k] = c
+	}
+	s.Changes = ch
+	return s
+}
+
+func stepsWithoutFrom(in []ActionStep) []ActionStep {
+	if in == nil {
+		return nil
+	}
+	out := make([]ActionStep, len(in))
+	for i, s := range in {
+		out[i] = s.withoutFrom()
+	}
+	return out
 }
 
 // ------------------------------------------------------- Handler.DryRun ---
@@ -130,7 +160,10 @@ type DryRunRequest struct {
 // DryRunResult is what the event would do. It is ephemeral: no receipt is kept
 // and nothing is reserved, so the same example can be tried again and again.
 type DryRunResult struct {
-	Shadow   bool   `json:"shadow"`
+	Shadow bool `json:"shadow"`
+	// Fidelity is always FidelityPartial: the report is a forecast, not a full
+	// replay of the real run (see FidelityPartial).
+	Fidelity string `json:"fidelity"`
 	Status   string `json:"status"` // would_apply | would_fail | ignored
 	Contract string `json:"contract"`
 	Version  int    `json:"version"`
@@ -205,7 +238,7 @@ func (h *Handler) DryRun(ctx context.Context, req DryRunRequest) (*DryRunResult,
 	if oerr != nil {
 		return nil, &DryRunError{Status: http.StatusUnprocessableEntity, Code: CodeInvalidOrigin}
 	}
-	res := &DryRunResult{Shadow: true, Contract: c.Key, Version: c.Version}
+	res := &DryRunResult{Shadow: true, Fidelity: FidelityPartial, Contract: c.Key, Version: c.Version}
 	if (origin != "" && (origin == OriginPrefix+c.Key || OriginExcluded(origin, c.IgnoreOrigins))) || hop >= h.cfg.MaxHops {
 		res.Status = StatusIgnored
 		return res, nil
@@ -218,7 +251,7 @@ func (h *Handler) DryRun(ctx context.Context, req DryRunRequest) (*DryRunResult,
 		return nil, &DryRunError{Status: http.StatusUnprocessableEntity, Code: CodeMissingEventKey}
 	}
 	op := Operation{Org: req.Org, Contract: c.Key, EventKey: evKey, Route: c.Route, Values: applyMapping(c.Route, payload),
-		CreateDefaults: c.Route.Defaults, Origin: OriginPrefix + c.Key, Hop: hop, DryRun: true}
+		CreateDefaults: c.Route.Defaults, Origin: OriginPrefix + c.Key, Hop: hop, DryRun: true, DryRunReveal: true}
 	if sc := c.Route.Scope; sc != nil {
 		op.Branch = scopeValue(payload, sc.Branch)
 		op.Entity = scopeValue(payload, sc.Entity)
@@ -252,4 +285,68 @@ func (h *Handler) DryRun(ctx context.Context, req DryRunRequest) (*DryRunResult,
 	step := routeStep(c, out)
 	res.Status, res.RecordID, res.Actions = StatusWouldApply, out.RecordID, []ActionStep{step}
 	return res, nil
+}
+
+// replayActions is the progress a `replayed` answer carries: a shadow receipt
+// is stripped of any `from` again, whatever wrote it (a receipt of the first
+// dry-run release stored it).
+func replayActions(cur Receipt) []ActionStep {
+	if cur.Shadow {
+		return stepsWithoutFrom(cur.Progress)
+	}
+	return cur.Progress
+}
+
+func fidelityOf(shadow bool) string {
+	if shadow {
+		return FidelityPartial
+	}
+	return ""
+}
+
+// ContractState is the EFFECTIVE mode of a registered contract version, as this
+// process serves it (for a status endpoint: after a rollout or a reload, check
+// that every replica reports the same).
+type ContractState struct {
+	Key     string `json:"key"`
+	Version int    `json:"version"`
+	DryRun  bool   `json:"dry_run"`
+}
+
+// ContractStates lists every registered contract version and whether this
+// process runs it in dry-run, sorted by key and version.
+func (h *Handler) ContractStates() []ContractState {
+	all := h.cfg.Contracts.all()
+	out := make([]ContractState, 0, len(all))
+	for _, c := range all {
+		out = append(out, ContractState{Key: c.Key, Version: c.Version, DryRun: c.DryRun})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Key != out[j].Key {
+			return out[i].Key < out[j].Key
+		}
+		return out[i].Version < out[j].Version
+	})
+	return out
+}
+
+// SetDryRun switches dry_run of a registered contract version: the contract is
+// recompiled and validated again (checkDryRun included) and replaces the
+// registered one atomically, so the next event already runs in the new mode.
+// Changing the flag in a stored row WITHOUT reloading the contract leaves the
+// compiled copy of this process with the old mode: after any change, call
+// SetDryRun or RegisterContract and verify it with ContractStates on every
+// replica. Updating a replica that predates dry-run support is NOT safe (see
+// docs/inbound-events.md, "Orden de despliegue").
+func (h *Handler) SetDryRun(ctx context.Context, key string, version int, dry bool) error {
+	if version < 1 {
+		return invalidf("%s: SetDryRun needs an explicit version", key)
+	}
+	c, ok := h.cfg.Contracts.get(key, version)
+	if !ok {
+		return &DryRunError{Status: http.StatusNotFound, Code: CodeUnknownContract}
+	}
+	next := c.Contract
+	next.DryRun = dry
+	return h.RegisterContract(ctx, next)
 }
