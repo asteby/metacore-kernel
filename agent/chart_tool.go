@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -49,6 +50,21 @@ func (t *ShowChartTool) Category() string { return "data" }
 func (t *ShowChartTool) Description() string {
 	return "Render an interactive chart embed in chat (downloadable PNG/CSV). Use after you have real numbers from query_data/aggregate_data. Pick the kind that fits: line/area for time, bar/stacked_bar/horizontal_bar for categories, pie/donut only for a few parts of a whole, scatter for two numerics, radar for 3+ axes, composed for bar+line. Do not use pie for everything. Call this when the user asks for a graph OR when a visual helps (comparisons, trends, mix). Never invent figures."
 }
+
+// chartClaims are the assertions that a chart exists NOW, by language
+// ("aquí está el gráfico", "here is the chart", "segue o gráfico"). Offers
+// ("puedo mostrarte…") and refusals ("no pude generar…") must not match. No \b
+// after a group that can end in an accent: Go's \b is ASCII. A host adds
+// another language with RegisterOutcomeClaims("show_chart", "fr", ...).
+var chartClaims = map[string][]*regexp.Regexp{
+	"es": {regexp.MustCompile(`(?i)\b(?:aqu[ií]\s+(?:est[aá]n?|tienes|va)|te\s+(?:muestro|dejo|comparto|presento)|ya\s+(?:est[aá]|tienes)|he\s+(?:generado|creado|preparado|armado)|acabo\s+de\s+(?:generar|crear|preparar|armar|generado|creado|preparado|armado)|gener[eé]|cre[eé]|prepar[eé])[^.\n]{0,40}\b(?:gr[aá]fic[oa]s?|chart)\b`)},
+	"en": {regexp.MustCompile(`(?i)\b(?:here(?:'s|\s+is|\s+are)|i(?:'ve|\s+have)\s+(?:created|generated|built|prepared)|i\s+(?:created|generated|built|prepared)|below\s+is)\s+(?:the|a|your|an)\s+(?:\w+\s+){0,2}(?:chart|graph)s?\b`)},
+	"pt": {regexp.MustCompile(`(?i)\b(?:aqui\s+(?:est[aá]n?|vai|v[aã]o)|segue(?:m)?|(?:te|lhe)\s+(?:mostro|deixo|apresento)|j[aá]\s+(?:est[aá]|gerei|criei|preparei)|gerei|criei|preparei|montei|acabei\s+de\s+(?:gerar|criar|preparar|montar))[^.\n]{0,40}\b(?:gr[aá]ficos?)\b`)},
+}
+
+// OutcomeClaims makes show_chart a tools.OutcomeClaimer: the orchestrator
+// checks the reply against these patterns and the turn's successful calls.
+func (t *ShowChartTool) OutcomeClaims() map[string][]*regexp.Regexp { return chartClaims }
 
 // PromptHint is the rule that travels with the tool (tools.PromptHinter): the
 // numbers come from a data tool, and a chart is only "shown" if this tool ran.
