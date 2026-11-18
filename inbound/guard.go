@@ -395,6 +395,18 @@ func (d *DynamicExecutor) tombstoneRows(ctx context.Context, st dynStore, op Ope
 	if meta == nil {
 		return nil, &ExecError{Kind: KindInternal, Code: "tombstones_unavailable"}
 	}
+	// The finder binds the values as parameters: each takes the type of its
+	// column (Postgres refuses a number bound to a text column).
+	classes := columnClasses(meta)
+	for f, v := range where {
+		if cl := classes[f]; cl != "" {
+			nv, cerr := coerceMatchValue(cl, v)
+			if cerr != nil {
+				return nil, &ExecError{Kind: KindInvalid, Code: CodeMatchValueInvalid, Err: fmt.Errorf("match field %q: %w", f, cerr)}
+			}
+			where[f] = nv
+		}
+	}
 	q := TombstoneQuery{Model: op.Route.Model, Org: op.Org, Where: where, Scope: sc, Limit: limit}
 	if supportsSoftDelete(meta) {
 		q.DeletedAtColumn = meta.Audit.DeletedAt
@@ -413,7 +425,7 @@ func (d *DynamicExecutor) tombstoneRows(ctx context.Context, st dynStore, op Ope
 	for _, r := range rows {
 		same := true
 		for _, f := range match {
-			if !valuesEqual(r[f], op.Values[f]) {
+			if !matchEqual(r[f], op.Values[f]) {
 				same = false
 				break
 			}

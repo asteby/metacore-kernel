@@ -485,6 +485,11 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 	if op.Branch != "" {
 		ctx = dynamic.WithBranchID(ctx, op.Branch)
 	}
+	// The match values take the type of their column before anything reads
+	// them (find, typed comparison, tombstones, write).
+	if err := normalizeMatch(ctx, st, &op); err != nil {
+		return Outcome{}, err
+	}
 	model := op.Route.Model
 	switch op.Route.Op {
 	case OpCreate:
@@ -813,7 +818,7 @@ func matchRows(ctx context.Context, st dynStore, model string, user modelbase.Au
 		if err != nil {
 			return nil, err
 		}
-		filters[f] = query.Filter{Op: query.OpEq, Value: fmt.Sprint(v)}
+		filters[f] = query.Filter{Op: query.OpEq, Value: filterString(v)}
 	}
 	rows, _, err := st.List(ctx, model, user, query.Params{Page: 1, PerPage: perPage, Filters: filters, SkipCount: true})
 	if err != nil {
@@ -824,7 +829,7 @@ func matchRows(ctx context.Context, st dynStore, model string, user modelbase.Au
 	for _, r := range rows {
 		ok := true
 		for _, f := range match {
-			if !valuesEqual(r[f], vals[f]) {
+			if !matchEqual(r[f], vals[f]) {
 				ok = false
 				break
 			}
