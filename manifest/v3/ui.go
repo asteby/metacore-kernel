@@ -1,5 +1,7 @@
 package v3
 
+import "encoding/json"
+
 // UI surfaces an addon declares beyond the dynamic table: federated pages
 // (frontend.pages[]), declarative views per nav entry (NavItem.View) and
 // detail panels per model (Model.Detail). Declarative first: a view or a panel
@@ -29,6 +31,37 @@ const (
 	// MaxPageBreadcrumbs caps the static breadcrumb trail of a page.
 	MaxPageBreadcrumbs = 4
 )
+
+// Limits of contributions.pages[].
+const (
+	// MaxContributionPages caps the declarative pages one addon declares.
+	MaxContributionPages = 32
+	// MaxPageUIBytes caps one page body before parsing it (genui/v2 has its
+	// own, equal, limit; checking here avoids decoding an oversized blob).
+	MaxPageUIBytes = 128 * 1024
+)
+
+// PageDef is one declarative page of the addon (contributions.pages[]): the
+// body is a genui/v2 document (no second UI language) wrapped with identity,
+// permission and an i18n title. Navigation reaches it with NavItem.Page.
+//
+// The body is validated by genui/v2 (block catalog, depth, sizes, refs).
+// Page-level fields planned for later phases (path, layout, requires,
+// url_state, refresh) are intentionally not part of this type yet.
+type PageDef struct {
+	// Key is the page's stable id, unique within the addon (snake_case).
+	Key string `json:"key"`
+	// Title is the i18n key of the page title (header, document title).
+	Title string `json:"title"`
+	// Icon is an optional lucide icon name.
+	Icon string `json:"icon,omitempty"`
+	// Permission gates the page: a dotted permission key, same vocabulary as
+	// NavItem.Permission ("hub_instances.index").
+	Permission string `json:"permission,omitempty"`
+	// UI is the genui/v2 document that is the page body. It must carry
+	// "i18n":"keys": every text is an i18n key of the addon's locales.
+	UI json.RawMessage `json:"ui"`
+}
 
 // PageShares is the closed set of lazy shared modules a page may ask the host
 // for (frontend.pages[].shares), mapped to the host capability that proves the

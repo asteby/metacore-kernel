@@ -2254,6 +2254,14 @@
             "$ref": "#/$defs/NotificationRule"
           }
         },
+        "pages": {
+          "type": "array",
+          "maxItems": 32,
+          "description": "Declarative pages of the addon (genui/v2 bodies). A NavItem points at one with `page`.",
+          "items": {
+            "$ref": "#/$defs/PageDef"
+          }
+        },
         "dashboard": {
           "type": "array",
           "description": "Widgets this addon contributes to the host's modular dashboard. Declarative kinds carry a query the host aggregates; kind 'custom' references a federated expose.",
@@ -2835,6 +2843,54 @@
         }
       }
     },
+    "PageDef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "title",
+        "ui"
+      ],
+      "description": "One declarative page of the addon. The body (ui) is a genui/v2 document validated by the kernel with the genui/v2 contract (closed block catalog, depth and size limits); it must set i18n to keys.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "maxLength": 64,
+          "description": "Stable id, unique within the addon."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "i18n key of the page title."
+        },
+        "icon": {
+          "type": "string",
+          "description": "Optional lucide icon name."
+        },
+        "permission": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_:]*)+$",
+          "description": "Dotted permission key gating the page."
+        },
+        "ui": {
+          "type": "object",
+          "required": [
+            "version",
+            "i18n"
+          ],
+          "properties": {
+            "version": {
+              "const": "genui/v2"
+            },
+            "i18n": {
+              "const": "keys"
+            }
+          },
+          "description": "genui/v2 document (see genui/v2/schema/genui-v2.schema.json). Full structural validation is done by the kernel validator."
+        }
+      }
+    },
     "DashboardWidget": {
       "type": "object",
       "additionalProperties": false,
@@ -3089,6 +3145,11 @@
       "properties": {
         "title": {
           "type": "string"
+        },
+        "page": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Key of a contributions.pages[] entry this nav item opens. Exclusive with url, model, view_type, view and group_by."
         },
         "url": {
           "type": "string"
