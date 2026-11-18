@@ -28,7 +28,7 @@ const (
 
 const guardSchema = `{"type":"object","required":["event_id","sku"],"additionalProperties":false,
  "properties":{"event_id":{"type":"string"},"sku":{"type":"string"},"quantity":{"type":"integer"},
- "updated_at":{"type":"string"},"version":{"type":"integer"}}}`
+ "source_at":{"type":"string"},"version":{"type":"integer"}}}`
 
 // Tombstones makes the fake a TombstoneFinder: soft-deleted rows of the org
 // that match, the most recently deleted (last in the slice) first.
@@ -62,7 +62,7 @@ func (f *fakeDyn) Tombstones(_ context.Context, _ string, org uuid.UUID, where m
 type noTomb struct{ dynStore }
 
 func guardFake() *fakeDyn {
-	return &fakeDyn{cols: []string{"sku", "quantity", "updated_at", "version", "idem", "branch_id"}}
+	return &fakeDyn{cols: []string{"sku", "quantity", "source_at", "version", "idem", "branch_id"}}
 }
 
 func guardContract(key, do, op, field string) Contract {
@@ -135,27 +135,27 @@ func assertDone(t *testing.T, code int, out map[string]any) {
 
 func TestGuardStaleUpdateDoesNotOverwrite(t *testing.T) {
 	f := guardFake()
-	c := guardContract("inv.up", ActionRecordUpsert, GuardGTE, "updated_at")
+	c := guardContract("inv.up", ActionRecordUpsert, GuardGTE, "source_at")
 	e := guardEnv(t, f, c)
-	id := gSeed(f, e.orgA, "S1", "updated_at", gT3)
+	id := gSeed(f, e.orgA, "S1", "source_at", gT3)
 
-	code, out := e.send(t, e.orgA, c.Key, gBody("e1", "S1", "updated_at", gT1, 1), nil)
+	code, out := e.send(t, e.orgA, c.Key, gBody("e1", "S1", "source_at", gT1, 1), nil)
 	assertStale(t, code, out)
-	if r := gRow(f, id); r["quantity"] != int64(5) || r["updated_at"] != gT3 || atomic.LoadInt32(&f.updates) != 0 {
+	if r := gRow(f, id); r["quantity"] != int64(5) || r["source_at"] != gT3 || atomic.LoadInt32(&f.updates) != 0 {
 		t.Fatalf("a stale event wrote: %v", r)
 	}
 
-	code, out = e.send(t, e.orgA, c.Key, gBody("e2", "S1", "updated_at", gT4, 7), nil)
+	code, out = e.send(t, e.orgA, c.Key, gBody("e2", "S1", "source_at", gT4, 7), nil)
 	assertDone(t, code, out)
-	if r := gRow(f, id); r["quantity"] != int64(7) || r["updated_at"] != gT4 {
+	if r := gRow(f, id); r["quantity"] != int64(7) || r["source_at"] != gT4 {
 		t.Fatalf("a newer event must apply: %v", r)
 	}
 
 	// The value is absent: the guard is opt-in by data and the event applies.
-	code, out = e.send(t, e.orgA, c.Key, gBody("e3", "S1", "updated_at", "", 8), nil)
+	code, out = e.send(t, e.orgA, c.Key, gBody("e3", "S1", "source_at", "", 8), nil)
 	assertDone(t, code, out)
 	// The value does not parse: it applies too.
-	code, out = e.send(t, e.orgA, c.Key, gBody("e4", "S1", "updated_at", "not-a-date", 9), nil)
+	code, out = e.send(t, e.orgA, c.Key, gBody("e4", "S1", "source_at", "not-a-date", 9), nil)
 	assertDone(t, code, out)
 	if r := gRow(f, id); r["quantity"] != int64(9) {
 		t.Fatalf("absent/unparseable must apply: %v", r)
@@ -183,11 +183,11 @@ func TestGuardEqualGteAppliesGtDoesNot(t *testing.T) {
 	run := func(op string) Outcome {
 		f := guardFake()
 		org := uuid.New()
-		gSeed(f, org, "S1", "updated_at", gT2)
+		gSeed(f, org, "S1", "source_at", gT2)
 		out, err := (&DynamicExecutor{store: f}).Execute(context.Background(), Operation{Org: org,
 			Route:  Route{Model: "inv", Op: OpUpsert, Match: []string{"sku"}},
-			Values: map[string]any{"sku": "S1", "updated_at": gT2, "quantity": int64(1)},
-			Guard:  &OperationGuard{Field: "updated_at", Op: op, Value: gT2, Match: []string{"sku"}}})
+			Values: map[string]any{"sku": "S1", "source_at": gT2, "quantity": int64(1)},
+			Guard:  &OperationGuard{Field: "source_at", Op: op, Value: gT2, Match: []string{"sku"}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -203,34 +203,34 @@ func TestGuardEqualGteAppliesGtDoesNot(t *testing.T) {
 
 func TestGuardTombstoneBlocksResurrection(t *testing.T) {
 	f := guardFake()
-	up := guardContract("inv.up", ActionRecordUpsert, GuardGTE, "updated_at")
-	del := guardContract("inv.del", ActionRecordDelete, GuardGTE, "updated_at")
+	up := guardContract("inv.up", ActionRecordUpsert, GuardGTE, "source_at")
+	del := guardContract("inv.del", ActionRecordDelete, GuardGTE, "source_at")
 	e := guardEnv(t, f, up, del)
-	id := gSeed(f, e.orgA, "S1", "updated_at", gT1)
+	id := gSeed(f, e.orgA, "S1", "source_at", gT1)
 
 	// A newer delete seals the tombstone with its own date.
-	code, out := e.send(t, e.orgA, del.Key, gBody("d1", "S1", "updated_at", gT3, 0), nil)
+	code, out := e.send(t, e.orgA, del.Key, gBody("d1", "S1", "source_at", gT3, 0), nil)
 	assertDone(t, code, out)
-	if !deleted(f, id) || gRow(f, id)["updated_at"] != gT3 {
+	if !deleted(f, id) || gRow(f, id)["source_at"] != gT3 {
 		t.Fatalf("the tombstone must be sealed with the delete date: %v", gRow(f, id))
 	}
 
 	// A late update (older than the delete) cannot resurrect the row.
-	code, out = e.send(t, e.orgA, up.Key, gBody("u1", "S1", "updated_at", gT2, 9), nil)
+	code, out = e.send(t, e.orgA, up.Key, gBody("u1", "S1", "source_at", gT2, 9), nil)
 	assertStale(t, code, out)
 	if len(f.rows) != 1 || atomic.LoadInt32(&f.creates) != 0 {
 		t.Fatalf("resurrected: %v", f.rows)
 	}
 
 	// A newer one is a legitimate recreation.
-	code, out = e.send(t, e.orgA, up.Key, gBody("u2", "S1", "updated_at", gT4, 9), nil)
+	code, out = e.send(t, e.orgA, up.Key, gBody("u2", "S1", "source_at", gT4, 9), nil)
 	assertDone(t, code, out)
 	if len(f.rows) != 2 || atomic.LoadInt32(&f.creates) != 1 {
 		t.Fatalf("recreation: %v", f.rows)
 	}
 
 	// An old delete cannot remove the recreated (newer) row.
-	code, out = e.send(t, e.orgA, del.Key, gBody("d2", "S1", "updated_at", gT3, 0), nil)
+	code, out = e.send(t, e.orgA, del.Key, gBody("d2", "S1", "source_at", gT3, 0), nil)
 	assertStale(t, code, out)
 	if deleted(f, f.rows[1]["id"].(string)) {
 		t.Fatal("an old delete removed the recreated row")
@@ -239,25 +239,25 @@ func TestGuardTombstoneBlocksResurrection(t *testing.T) {
 
 func TestGuardDeleteStaleKeepsRowAndNewerSeals(t *testing.T) {
 	f := guardFake()
-	del := guardContract("inv.del", ActionRecordDelete, GuardGTE, "updated_at")
+	del := guardContract("inv.del", ActionRecordDelete, GuardGTE, "source_at")
 	e := guardEnv(t, f, del)
-	id := gSeed(f, e.orgA, "S1", "updated_at", gT5)
+	id := gSeed(f, e.orgA, "S1", "source_at", gT5)
 
-	code, out := e.send(t, e.orgA, del.Key, gBody("d1", "S1", "updated_at", gT3, 0), nil)
+	code, out := e.send(t, e.orgA, del.Key, gBody("d1", "S1", "source_at", gT3, 0), nil)
 	assertStale(t, code, out)
 	if deleted(f, id) || atomic.LoadInt32(&f.deletes) != 0 || atomic.LoadInt32(&f.updates) != 0 {
 		t.Fatal("a stale delete must not touch the row")
 	}
 
-	code, out = e.send(t, e.orgA, del.Key, gBody("d2", "S1", "updated_at", gT6, 0), nil)
+	code, out = e.send(t, e.orgA, del.Key, gBody("d2", "S1", "source_at", gT6, 0), nil)
 	assertDone(t, code, out)
-	if !deleted(f, id) || gRow(f, id)["updated_at"] != gT6 {
+	if !deleted(f, id) || gRow(f, id)["source_at"] != gT6 {
 		t.Fatalf("delete + seal: %v", gRow(f, id))
 	}
 
 	// A delete without the guard value applies (opt-in by data).
-	id2 := gSeed(f, e.orgA, "S2", "updated_at", gT6)
-	code, out = e.send(t, e.orgA, del.Key, gBody("d3", "S2", "updated_at", "", 0), nil)
+	id2 := gSeed(f, e.orgA, "S2", "source_at", gT6)
+	code, out = e.send(t, e.orgA, del.Key, gBody("d3", "S2", "source_at", "", 0), nil)
 	assertDone(t, code, out)
 	if !deleted(f, id2) {
 		t.Fatal("an unguarded value must delete")
@@ -266,12 +266,12 @@ func TestGuardDeleteStaleKeepsRowAndNewerSeals(t *testing.T) {
 
 func TestGuardTombstoneOtherOrgDoesNotInterfere(t *testing.T) {
 	f := guardFake()
-	up := guardContract("inv.up", ActionRecordUpsert, GuardGTE, "updated_at")
+	up := guardContract("inv.up", ActionRecordUpsert, GuardGTE, "source_at")
 	e := guardEnv(t, f, up)
-	other := gSeed(f, e.orgB, "S1", "updated_at", gT6)
+	other := gSeed(f, e.orgB, "S1", "source_at", gT6)
 	f.rows[0]["deleted_at"] = "x" // org B's S1 is a newer tombstone
 
-	code, out := e.send(t, e.orgA, up.Key, gBody("u1", "S1", "updated_at", gT1, 3), nil)
+	code, out := e.send(t, e.orgA, up.Key, gBody("u1", "S1", "source_at", gT1, 3), nil)
 	assertDone(t, code, out)
 	if len(f.rows) != 2 || f.rows[1]["organization_id"] != e.orgA.String() || gRow(f, other)["quantity"] != int64(5) {
 		t.Fatalf("org A must create its own row: %v", f.rows)
@@ -284,10 +284,10 @@ func TestGuardCreateSkipsOwnRetryAndHonoursTombstone(t *testing.T) {
 	ex := &DynamicExecutor{store: f}
 	idem := org.String() + ":0"
 	rowID := uuid.NewString()
-	f.rows = append(f.rows, map[string]any{"id": rowID, "organization_id": org.String(), "sku": "S1", "idem": idem, "updated_at": gT2})
+	f.rows = append(f.rows, map[string]any{"id": rowID, "organization_id": org.String(), "sku": "S1", "idem": idem, "source_at": gT2})
 	op := Operation{Org: org, Route: Route{Model: "inv", Op: OpUpsert, Match: []string{"idem"}},
-		Values: map[string]any{"idem": idem, "sku": "S1", "updated_at": gT2},
-		Guard:  &OperationGuard{Field: "updated_at", Op: GuardGT, Value: gT2, Match: []string{"sku"}, Create: true}}
+		Values: map[string]any{"idem": idem, "sku": "S1", "source_at": gT2},
+		Guard:  &OperationGuard{Field: "source_at", Op: GuardGT, Value: gT2, Match: []string{"sku"}, Create: true}}
 	// The row found by the idempotency column is the event's own earlier
 	// attempt: even gt with an equal value must not call it stale.
 	if out, err := ex.Execute(context.Background(), op); err != nil || out.Stale || out.RecordID != rowID {
@@ -324,7 +324,7 @@ func TestGuardCheckContract(t *testing.T) {
 	f := guardFake()
 	d := &DynamicExecutor{store: f}
 	mk := func(do string, mut func(*Action)) Contract {
-		c := guardContract("k", do, GuardGTE, "updated_at")
+		c := guardContract("k", do, GuardGTE, "source_at")
 		a := c.Actions[0]
 		if mut != nil {
 			mut(&a)
@@ -337,7 +337,7 @@ func TestGuardCheckContract(t *testing.T) {
 			t.Fatalf("%s must pass: %v", do, err)
 		}
 	}
-	err := d.CheckContract(ctx, mk(ActionRecordUpsert, func(a *Action) { delete(a.Mapping, "updated_at") }))
+	err := d.CheckContract(ctx, mk(ActionRecordUpsert, func(a *Action) { delete(a.Mapping, "source_at") }))
 	if !errors.Is(err, ErrInvalidContract) || !strings.Contains(err.Error(), "guard_field_not_mapped") {
 		t.Fatalf("unmapped guard field: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestGuardCheckContract(t *testing.T) {
 }
 
 func TestGuardContractValidation(t *testing.T) {
-	if err := NewRegistry().Register(guardContract("k", ActionRecordUpsert, GuardGT, "updated_at")); err != nil {
+	if err := NewRegistry().Register(guardContract("k", ActionRecordUpsert, GuardGT, "source_at")); err != nil {
 		t.Fatalf("valid: %v", err)
 	}
 	bad := map[string]func(*Action){
@@ -379,20 +379,20 @@ func TestGuardContractValidation(t *testing.T) {
 		"no op":           func(a *Action) { a.Guard.Op = "" },
 		"event path":      func(a *Action) { a.Guard.Path = "event.key" },
 		"missing path":    func(a *Action) { a.Guard.Path = "payload.nope" },
-		"bare path":       func(a *Action) { a.Guard.Path = "updated_at" },
+		"bare path":       func(a *Action) { a.Guard.Path = "source_at" },
 		"system field":    func(a *Action) { a.Guard.Field = "deleted_at" },
 		"bad field":       func(a *Action) { a.Guard.Field = "Updated At" },
 		"field is match":  func(a *Action) { a.Guard.Field = "sku"; a.Guard.Path = "payload.sku" },
 		"field is absent": func(a *Action) { a.Guard.Field = "" },
 	}
 	for name, mut := range bad {
-		c := guardContract("k", ActionRecordUpsert, GuardGTE, "updated_at")
+		c := guardContract("k", ActionRecordUpsert, GuardGTE, "source_at")
 		mut(&c.Actions[0])
 		if err := NewRegistry().Register(c); !errors.Is(err, ErrInvalidContract) {
 			t.Errorf("%s must be rejected, got %v", name, err)
 		}
 	}
-	c := guardContract("k", ActionRecordUpsert, GuardGTE, "updated_at")
+	c := guardContract("k", ActionRecordUpsert, GuardGTE, "source_at")
 	c.Actions = []Action{{Do: ActionNotify, Template: "stock.alert", Guard: c.Actions[0].Guard}}
 	if err := NewRegistry().Register(c); !errors.Is(err, ErrInvalidContract) {
 		t.Errorf("guard on notify must be rejected, got %v", err)
@@ -407,13 +407,13 @@ func TestGormTombstones(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			db := open(t)
 			if err := db.Exec(`CREATE TABLE guard_items (id TEXT PRIMARY KEY, organization_id TEXT, sku TEXT,
-				updated_at TIMESTAMP, deleted_at TIMESTAMP)`).Error; err != nil {
+				source_at TIMESTAMP, deleted_at TIMESTAMP)`).Error; err != nil {
 				t.Fatal(err)
 			}
 			org, other := uuid.New(), uuid.New()
 			at := func(s string) time.Time { v, _ := time.Parse(time.RFC3339, s); return v }
 			ins := func(o uuid.UUID, sku string, upd time.Time, del any) {
-				if err := db.Exec(`INSERT INTO guard_items (id, organization_id, sku, updated_at, deleted_at) VALUES (?,?,?,?,?)`,
+				if err := db.Exec(`INSERT INTO guard_items (id, organization_id, sku, source_at, deleted_at) VALUES (?,?,?,?,?)`,
 					uuid.NewString(), o.String(), sku, upd, del).Error; err != nil {
 					t.Fatal(err)
 				}
@@ -430,7 +430,7 @@ func TestGormTombstones(t *testing.T) {
 			}
 			older := &OperationGuard{Op: GuardGTE, Value: gT2}
 			same := &OperationGuard{Op: GuardGTE, Value: gT3}
-			if !older.blocks(rows[0]["updated_at"]) || same.blocks(rows[0]["updated_at"]) {
+			if !older.blocks(rows[0]["source_at"]) || same.blocks(rows[0]["source_at"]) {
 				t.Fatalf("most recent tombstone first: %v", rows)
 			}
 		})
