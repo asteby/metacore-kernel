@@ -113,7 +113,7 @@ func TestUIValidation(t *testing.T) {
 		}, ""},
 		{"map precision outside the enum", func(t *testing.T, m map[string]any) {
 			obj(obj(navItem(t, m, "map")["view"])["map"])["precision"] = "street"
-		}, `view.map.precision "street" is not one of exact|city|country`},
+		}, "view/map/precision: value must be one of 'exact', 'city', 'country'"}, // the JSON schema enum rejects it before the Go rule
 		{"map precision and precision_field", func(t *testing.T, m map[string]any) {
 			mv := obj(obj(navItem(t, m, "map")["view"])["map"])
 			mv["precision"] = "country"
