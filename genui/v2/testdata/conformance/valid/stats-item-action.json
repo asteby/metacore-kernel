@@ -1,0 +1,31 @@
+{
+  "description": "stats con accion por item (set de un filtro del estado).",
+  "input": {
+    "version": "genui/v2",
+    "state": {
+      "filters": {
+        "presence": null
+      }
+    },
+    "blocks": [
+      {
+        "type": "stats",
+        "items": [
+          {
+            "label": "Caidas",
+            "value": "3",
+            "tone": "danger",
+            "action": {
+              "do": "set",
+              "path": "state.filters.presence",
+              "value": "down"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "description": "section declarativa con source declarada y empty; el title ya no es obligatorio.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "instances": {
+        "q": "t:hub_instances"
+      }
+    },
+    "blocks": [
+      {
+        "type": "section",
+        "mode": "declarative",
+        "chrome": "card",
+        "source": "data.instances",
+        "empty": {
+          "$t": "hub.empty"
+        },
+        "title": "Flota",
+        "on_denied": "hide",
+        "blocks": [
+          {
+            "type": "map",
+            "summary": "Instancias",
+            "source": "data.instances"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

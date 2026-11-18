@@ -1,0 +1,23 @@
+{
+  "description": "section custom: component+props, sin title ni blocks, permission y on_denied.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "section",
+        "mode": "custom",
+        "chrome": "bare",
+        "permission": "hub_instances.index",
+        "on_denied": "notice",
+        "component": "hub_fleet.instance_detail@1",
+        "props": {
+          "compact": true
+        },
+        "fallback": "Detalle no disponible"
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

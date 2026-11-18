@@ -1,0 +1,39 @@
+{
+  "description": "kpi_card con value/trend por $ref, format, tone, hint y cta.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "k": {
+        "widget": "vantora.dashboard.reach_total"
+      }
+    },
+    "blocks": [
+      {
+        "type": "kpi_card",
+        "label": {
+          "$t": "vantora.kpi.reach"
+        },
+        "value": {
+          "$ref": "data.k.value"
+        },
+        "format": "compact",
+        "trend": {
+          "$ref": "data.k.trend"
+        },
+        "tone": "warning",
+        "hint": "vs. ayer",
+        "cta": {
+          "do": "navigate",
+          "label": "Ver",
+          "route": {
+            "name": "page",
+            "key": "social_detail"
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

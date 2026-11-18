@@ -1,0 +1,23 @@
+{
+  "description": "source de section que no esta declarada en data.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "section",
+        "title": "X",
+        "source": "data.nada",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_target"
+  }
+}

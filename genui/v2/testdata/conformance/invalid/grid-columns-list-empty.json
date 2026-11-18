@@ -1,0 +1,26 @@
+{
+  "description": "columns como lista vacia.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "grid",
+        "areas": [
+          "a"
+        ],
+        "columns": [],
+        "blocks": [
+          {
+            "type": "text",
+            "text": "A",
+            "area": "a"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.required"
+  }
+}

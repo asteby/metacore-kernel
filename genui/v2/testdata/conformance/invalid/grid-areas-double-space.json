@@ -1,0 +1,30 @@
+{
+  "description": "Dos espacios entre celdas.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "grid",
+        "areas": [
+          "a  b"
+        ],
+        "blocks": [
+          {
+            "type": "text",
+            "text": "A",
+            "area": "a"
+          },
+          {
+            "type": "text",
+            "text": "B",
+            "area": "b"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.pattern"
+  }
+}

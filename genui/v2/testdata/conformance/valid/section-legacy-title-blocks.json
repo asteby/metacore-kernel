@@ -1,0 +1,22 @@
+{
+  "description": "section clasica (title + blocks, sin mode) sigue siendo valida.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "section",
+        "title": "Clasica",
+        "collapsible": true,
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

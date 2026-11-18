@@ -16,12 +16,14 @@ import (
 // rejected there with code genui.unknown_block. Nothing of that schema is
 // duplicated here.
 //
-// TODO(manifest-pages, fase 2): the page blocks proposed for the SDK that are
-// not in genui-v2.schema.json yet (grid.areas, section.mode/custom, map,
-// ranking, range, filter_bar, params with $ref to state) are rejected until
-// the schema gains them; and cross-checks between the body and the manifest
-// (widget/model/action/panel references, blocks[].permission) need the
-// schema first.
+// genui/v2 already accepts the page blocks the SDK implements (extended tabs,
+// section with mode/component, grid.areas/mobile, kpi_card, map.select).
+//
+// TODO(manifest-pages, fase 2): the blocks proposed but not implemented yet
+// (ranking, range, filter_bar, badge, params with $ref to state) are still
+// rejected until the schema gains them; and cross-checks between the body and
+// the manifest (widget/model/action/panel references, component against
+// contributions.blocks[], blocks[].permission) need the schema first.
 func validatePages(m *Manifest) []string {
 	if m.Contributions == nil {
 		return nil

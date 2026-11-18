@@ -1,0 +1,29 @@
+{
+  "description": "section hibrida: bloques del nucleo mezclados con un ext.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "section",
+        "mode": "hybrid",
+        "title": "Mixta",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          },
+          {
+            "type": "ext",
+            "ext": "vantora.election_simulator@1",
+            "props": {
+              "mode": "seat"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

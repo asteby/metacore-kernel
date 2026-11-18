@@ -1,0 +1,23 @@
+{
+  "description": "select fuera de la raiz state.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "instances": {
+        "q": "t:hub_instances"
+      }
+    },
+    "blocks": [
+      {
+        "type": "map",
+        "summary": "M",
+        "source": "data.instances",
+        "select": "data.selected"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.pattern"
+  }
+}

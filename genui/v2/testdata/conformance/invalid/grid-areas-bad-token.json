@@ -1,0 +1,25 @@
+{
+  "description": "Nombre de region con mayusculas.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "grid",
+        "areas": [
+          "Map map"
+        ],
+        "blocks": [
+          {
+            "type": "text",
+            "text": "A",
+            "area": "map"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.pattern"
+  }
+}

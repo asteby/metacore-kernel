@@ -1,0 +1,35 @@
+{
+  "description": "Mas pistas de columns que columnas de areas.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "grid",
+        "areas": [
+          "a b"
+        ],
+        "columns": [
+          "1fr",
+          "1fr",
+          "1fr"
+        ],
+        "blocks": [
+          {
+            "type": "text",
+            "text": "A",
+            "area": "a"
+          },
+          {
+            "type": "text",
+            "text": "B",
+            "area": "b"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_block"
+  }
+}

@@ -307,6 +307,10 @@ func Downgrade(in Doc, caps *Caps) (DowngradeResult, error) {
 					var kept []any
 					for _, t := range tabs {
 						to := copyObj(t.(obj))
+						if _, ok := to["blocks"]; !ok { // opcion custom (component): no tiene hijos que degradar
+							kept = append(kept, to)
+							continue
+						}
 						mk := mapBlocks(to["blocks"].([]any), true)
 						if len(mk) > 0 {
 							to["blocks"] = toAny(mk)

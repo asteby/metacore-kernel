@@ -1,0 +1,110 @@
+{
+  "description": "Pagina de flota completa (espejo de packages/genui/examples/fleet-map.page.json del SDK).",
+  "input": {
+    "version": "genui/v2",
+    "i18n": "keys",
+    "state": {
+      "selected": null,
+      "filters": {
+        "presence": null
+      }
+    },
+    "data": {
+      "online": {
+        "widget": "hub_fleet.dashboard.online_now"
+      },
+      "down": {
+        "widget": "hub_fleet.dashboard.down_now"
+      },
+      "instances": {
+        "q": "t:hub_instances"
+      }
+    },
+    "blocks": [
+      {
+        "type": "grid",
+        "areas": [
+          "kpis kpis",
+          "map detail"
+        ],
+        "columns": [
+          "1fr",
+          "380px"
+        ],
+        "rows": [
+          "auto",
+          "minmax(360px, 1fr)"
+        ],
+        "mobile": [
+          "kpis",
+          "map",
+          "detail"
+        ],
+        "blocks": [
+          {
+            "type": "stats",
+            "area": "kpis",
+            "items": [
+              {
+                "label": "En linea",
+                "value": {
+                  "$ref": "data.online.value"
+                },
+                "tone": "success"
+              },
+              {
+                "label": "Caidas",
+                "value": {
+                  "$ref": "data.down.value"
+                },
+                "tone": "danger",
+                "action": {
+                  "do": "set",
+                  "path": "state.filters.presence",
+                  "value": "down"
+                }
+              }
+            ]
+          },
+          {
+            "type": "section",
+            "area": "map",
+            "mode": "declarative",
+            "title": "Flota",
+            "source": "data.instances",
+            "empty": "Sin instancias",
+            "blocks": [
+              {
+                "type": "map",
+                "summary": "Mapa de instancias",
+                "source": "data.instances",
+                "fields": {
+                  "key": "id",
+                  "label": "customer",
+                  "status": "presence"
+                },
+                "select": "state.selected"
+              }
+            ]
+          },
+          {
+            "type": "section",
+            "area": "detail",
+            "mode": "custom",
+            "chrome": "bare",
+            "permission": "hub_instances.index",
+            "on_denied": "hide",
+            "component": "hub_fleet.instance_detail@1",
+            "props": {
+              "compact": true
+            },
+            "fallback": "Detalle no disponible"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

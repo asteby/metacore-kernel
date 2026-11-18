@@ -1,0 +1,69 @@
+{
+  "description": "grid con areas (con celda vacia), columns y rows como pistas, mobile y hijos con area.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "online": {
+        "widget": "hub_fleet.dashboard.online_now"
+      },
+      "instances": {
+        "q": "t:hub_instances"
+      }
+    },
+    "blocks": [
+      {
+        "type": "grid",
+        "areas": [
+          "kpis kpis",
+          "map detail",
+          ". detail"
+        ],
+        "columns": [
+          "1fr",
+          "380px"
+        ],
+        "rows": [
+          "auto",
+          "minmax(360px, 1fr)",
+          "auto"
+        ],
+        "mobile": [
+          "kpis",
+          "map",
+          "detail"
+        ],
+        "blocks": [
+          {
+            "type": "stats",
+            "area": "kpis",
+            "items": [
+              {
+                "label": "En linea",
+                "value": {
+                  "$ref": "data.online.value"
+                },
+                "tone": "success"
+              }
+            ]
+          },
+          {
+            "type": "map",
+            "area": "map",
+            "summary": "Instancias",
+            "source": "data.instances"
+          },
+          {
+            "type": "section",
+            "area": "detail",
+            "mode": "custom",
+            "chrome": "bare",
+            "component": "hub_fleet.instance_detail@1"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

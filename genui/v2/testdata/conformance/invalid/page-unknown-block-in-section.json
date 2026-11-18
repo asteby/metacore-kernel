@@ -1,0 +1,21 @@
+{
+  "description": "Un bloque desconocido dentro de una section sigue dando unknown_block.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "section",
+        "mode": "hybrid",
+        "blocks": [
+          {
+            "type": "ranking"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_block"
+  }
+}

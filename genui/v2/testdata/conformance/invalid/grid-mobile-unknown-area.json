@@ -1,0 +1,34 @@
+{
+  "description": "mobile con una region que no esta en areas.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "grid",
+        "areas": [
+          "a b"
+        ],
+        "mobile": [
+          "a",
+          "z"
+        ],
+        "blocks": [
+          {
+            "type": "text",
+            "text": "A",
+            "area": "a"
+          },
+          {
+            "type": "text",
+            "text": "B",
+            "area": "b"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.unknown_target"
+  }
+}
