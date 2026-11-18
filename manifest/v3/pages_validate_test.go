@@ -27,7 +27,7 @@ func page(key string, ui any) map[string]any {
 func nestedStacks(depth int) map[string]any {
 	var b any = map[string]any{"type": "text", "text": map[string]any{"$t": "inventory.t"}}
 	for i := 0; i < depth; i++ {
-		b = map[string]any{"type": "stack", "children": []any{b}}
+		b = map[string]any{"type": "stack", "blocks": []any{b}}
 	}
 	return b.(map[string]any)
 }
@@ -52,7 +52,7 @@ func TestPages(t *testing.T) {
 			[]any{map[string]any{"title": "g", "items": []any{map[string]any{"title": "x", "page": "a"}}}}), ""},
 		{"no pages keeps working", baseValid(), ""},
 		{"duplicate key", withPages([]any{page("a", pageBody(okBlock)), page("a", pageBody(okBlock))}, nil), "is duplicated"},
-		{"key not snake_case", withPages([]any{page("Fleet-Map", pageBody(okBlock))}, nil), "snake_case"},
+		{"key not snake_case", withPages([]any{page("Fleet-Map", pageBody(okBlock))}, nil), "contributions/pages/0/key"},
 		{"missing key", withPages([]any{map[string]any{"title": "t", "ui": pageBody(okBlock)}}, nil), "key"},
 		{"missing title", withPages([]any{map[string]any{"key": "a", "ui": pageBody(okBlock)}}, nil), "title"},
 		{"bad permission format", withPages([]any{func() any {
@@ -64,7 +64,7 @@ func TestPages(t *testing.T) {
 		{"literal i18n rejected", withPages([]any{page("a", map[string]any{"version": "genui/v2", "i18n": "literal", "blocks": []any{}})}, nil), "i18n"},
 		{"wrong version", withPages([]any{page("a", map[string]any{"version": "genui/v9", "i18n": "keys", "blocks": []any{}})}, nil), "ui"},
 		{"unknown block", withPages([]any{page("a", pageBody(map[string]any{"type": "carousel3d"}))}, nil), "genui.unknown_block"},
-		{"proposed block not in schema yet (map)", withPages([]any{page("a", pageBody(map[string]any{"type": "map"}))}, nil), "genui.unknown_block"},
+		{"proposed block not in schema yet (ranking)", withPages([]any{page("a", pageBody(map[string]any{"type": "ranking"}))}, nil), "genui.unknown_block"},
 		{"too deep", withPages([]any{page("a", pageBody(nestedStacks(10)))}, nil), "genui.limit.depth"},
 		{"depth at the limit is fine", withPages([]any{page("a", pageBody(nestedStacks(4)))}, nil), ""},
 		{"too many blocks", withPages([]any{page("a", pageBody(manyBlocks(MaxPageBlocksProbe)...))}, nil), "genui."},
