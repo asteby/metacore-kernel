@@ -17,6 +17,7 @@ var (
 	panelKeyRe   = pageKeyRe
 
 	mapFits        = map[string]struct{}{"": {}, "data": {}, "org_default": {}}
+	mapPrecisions  = map[string]struct{}{"": {}, "exact": {}, "city": {}, "country": {}}
 	mapLayerKinds  = map[string]struct{}{"points": {}, "zones": {}}
 	chartKinds     = map[string]struct{}{"bar": {}, "line": {}, "area": {}, "pie": {}, "donut": {}}
 	panelSpans     = map[string]struct{}{"": {}, "full": {}, "half": {}}
@@ -358,6 +359,14 @@ func (c *uiChecker) mapView(where, model string, mv *MapView, inPanel bool) {
 	}
 	c.column(where+".geometry", model, mv.Geometry)
 	c.column(where+".color_by", model, mv.ColorBy)
+	if _, ok := mapPrecisions[mv.Precision]; !ok {
+		c.addf("%s.precision %q is not one of exact|city|country", where, mv.Precision)
+	}
+	if mv.Precision != "" && mv.PrecisionField != "" {
+		c.addf("%s declares both precision and precision_field; use one", where)
+	}
+	c.column(where+".precision_field", model, mv.PrecisionField)
+	c.column(where+".area_field", model, mv.AreaField)
 	if len(mv.Popup) > maxMapPopup {
 		c.addf("%s.popup lists %d columns (max %d)", where, len(mv.Popup), maxMapPopup)
 	}

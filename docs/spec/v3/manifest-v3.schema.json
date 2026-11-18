@@ -6422,6 +6422,25 @@
             "pattern": "^[a-z][a-z0-9_]*$",
             "description": "Column whose option colours tint each feature."
           },
+          "precision": {
+            "type": "string",
+            "enum": [
+              "exact",
+              "city",
+              "country"
+            ],
+            "description": "Location precision of every point of the model. Approximate points aggregate into one bubble per location and the zoom is capped. Excludes precision_field."
+          },
+          "precision_field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Column carrying the precision per row (exact|city|country). Excludes precision."
+          },
+          "area_field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Column with the area name or code (e.g. country_iso) labelling the aggregated bubble."
+          },
           "popup": {
             "type": "array",
             "maxItems": 8,

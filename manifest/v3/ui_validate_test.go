@@ -103,6 +103,28 @@ func TestUIValidation(t *testing.T) {
 			mv := obj(obj(navItem(t, m, "map")["view"])["map"])
 			mv["popup"] = []any{"tracking_number", "weight"}
 		}, `view.map.popup[1] "weight" is not a column of model "Shipment"`},
+		{"map precision constant is valid", func(t *testing.T, m map[string]any) {
+			obj(obj(navItem(t, m, "map")["view"])["map"])["precision"] = "city"
+		}, ""},
+		{"map precision_field and area_field are valid", func(t *testing.T, m map[string]any) {
+			mv := obj(obj(navItem(t, m, "map")["view"])["map"])
+			mv["precision_field"] = "status"
+			mv["area_field"] = "carrier"
+		}, ""},
+		{"map precision outside the enum", func(t *testing.T, m map[string]any) {
+			obj(obj(navItem(t, m, "map")["view"])["map"])["precision"] = "street"
+		}, `view.map.precision "street" is not one of exact|city|country`},
+		{"map precision and precision_field", func(t *testing.T, m map[string]any) {
+			mv := obj(obj(navItem(t, m, "map")["view"])["map"])
+			mv["precision"] = "country"
+			mv["precision_field"] = "status"
+		}, "declares both precision and precision_field; use one"},
+		{"map precision_field unknown column", func(t *testing.T, m map[string]any) {
+			obj(obj(navItem(t, m, "map")["view"])["map"])["precision_field"] = "accuracy"
+		}, `view.map.precision_field "accuracy" is not a column of model "Shipment"`},
+		{"map area_field unknown column", func(t *testing.T, m map[string]any) {
+			obj(obj(navItem(t, m, "map")["view"])["map"])["area_field"] = "country_iso"
+		}, `view.map.area_field "country_iso" is not a column of model "Shipment"`},
 		{"map route on a nav entry", func(t *testing.T, m map[string]any) {
 			mv := obj(obj(navItem(t, m, "map")["view"])["map"])
 			mv["route"] = map[string]any{"relation": "events", "point": map[string]any{"lat": "lat", "lng": "lng"}, "order_by": "at"}

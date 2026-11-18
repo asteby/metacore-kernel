@@ -185,6 +185,16 @@ type MapView struct {
 	Cluster bool `json:"cluster,omitempty"`
 	// ColorBy names a column whose option colours tint each feature.
 	ColorBy string `json:"color_by,omitempty"`
+	// Precision is the location precision of every point of the model:
+	// "exact", "city" or "country". Approximate points are aggregated into
+	// one bubble per location and the zoom is capped. Excludes PrecisionField.
+	Precision string `json:"precision,omitempty"`
+	// PrecisionField names a column carrying the precision per row (same
+	// values as Precision). Excludes Precision.
+	PrecisionField string `json:"precision_field,omitempty"`
+	// AreaField names a column with the area name or code (e.g. country_iso)
+	// that labels the aggregated bubble.
+	AreaField string `json:"area_field,omitempty"`
 	// Popup lists the columns shown when a feature is selected (max 8).
 	Popup []string `json:"popup,omitempty"`
 	// Layers adds features from other models (branches, coverage zones).
