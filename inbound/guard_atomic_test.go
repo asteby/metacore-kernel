@@ -339,7 +339,10 @@ func TestGuardedUpsertCreateRaceConverges(t *testing.T) {
 				if i%2 == 0 {
 					ex = e.ex2
 				}
-				if _, err := ex.Execute(ctx, e.upsertOp("N1", int64(i), i)); err != nil {
+				// A concrete warehouse: the unique index does not see NULLs.
+				op := e.upsertOp("N1", int64(i), i)
+				op.Values["warehouse"] = "W9"
+				if _, err := ex.Execute(ctx, op); err != nil {
 					errs <- fmt.Errorf("event %d: %w", i, err)
 				}
 			}(i)
