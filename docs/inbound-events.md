@@ -275,25 +275,52 @@ escribible del modelo, `path` una ruta `payload.*` con un instante RFC 3339 o un
 `error_code: "stale_event"`, no se escribe nada y el recibo sigue `applied` (reutiliza `ingest.CompareCursor`
 para fechas y enteros).
 
-- **Opt-in por dato.** Si el valor del payload falta o no parsea, o `fila[field]` es `null` o de otro tipo,
-  el evento se aplica.
+- **Opt-in por dato, solo por ausencia.** Si el valor del payload está ausente o es `null` explícito, o
+  `fila[field]` es `null`, el evento se aplica. Un valor PRESENTE que no es instante RFC 3339 (con zona) ni
+  entero (`""`, `"N/A"`, `"2024-01-01"`, `"5"`, `1.5`, booleano) es un fallo del productor y NO se aplica:
+  `422 guard_value_invalid` antes de cualquier efecto (el recibo queda `failed`).
+- **Valores del futuro.** Un instante mayor que ahora + `DynamicExecutor.GuardMaxSkew` (24 h por omisión;
+  negativo desactiva la cota) falla con `422 guard_value_future`: firmado con el año 9999 congelaría la fila y
+  todo evento legítimo posterior quedaría `stale_event`. Los enteros (versiones) NO se acotan porque no hay un
+  reloj contra el cual compararlos; ponles `maximum` en el JSON Schema del contrato.
+- **Lectura de la BD.** Antes de comparar se normalizan los valores de la fila: `[]byte`, texto SQL con offsets
+  cortos (`+00`) o sin zona (UTC), `time.Time` en cualquier zona y `"5"` de una columna entera. Los instantes
+  se comparan al microsegundo (la precisión de un `timestamp` de Postgres: un evento con nanosegundos empata
+  con su copia guardada). Una columna `null` significa «sin valor» y aplica; un valor NO nulo ilegible o de otra
+  clase que el del evento (entero contra instante, texto basura) falla cerrado con `409
+  guard_row_value_unreadable` y no escribe nada. Los campos de `match` se comparan normalizados (uuid como
+  `[16]byte`/`[]byte`/mayúsculas, instantes con zona).
+- **Empates.** Con `gte` un evento igual al valor guardado se aplica; con `gt` no. Con segundos de precisión
+  el empate es frecuente: un `updated` del mismo segundo que el borrado resucita la fila con `gte`. Recomendación:
+  `gte` en `record.delete` (converge si se reintenta) y, en `upsert`/`create`, `gt` cuando el origen pueda emitir
+  borrado y alta en el mismo instante (reenviar un evento ya aplicado queda `stale_event`, que es inocuo) o,
+  mejor, un entero de versión.
 - **Fila viva** (`update`/`upsert`/`delete`): compara contra `fila[field]`. Un `record.create` (que corre como
   upsert sobre su `idempotency_field`) no se compara con la fila hallada por esa columna: es su propio intento.
 - **Sin fila viva** (`upsert`/`create`, modelo con borrado lógico): busca la lápida más reciente (borradas,
-  misma organización, mismo `match` y mismo alcance entidad/sucursal). Si tiene `field` y el evento es más
-  viejo, queda `stale_event` y la fila NO resucita; si no, se crea.
+  misma organización, mismo `match`, la sucursal de la operación —`scope.branch` o el `branch_id` mapeado— y el
+  alcance de la entidad). Todos esos filtros se aplican en SQL antes del `Limit` y se ordena por borrado más
+  reciente: lápidas de otra sucursal no bloquean ni desplazan la propia. Si tiene `field` y el evento es más
+  viejo, queda `stale_event` y la fila NO resucita; si no, se crea. Si el `create` pierde una carrera por índice
+  único, el ganador se relee y pasa por la misma guarda y la misma búsqueda de lápidas antes de actualizarlo.
 - **`record.delete` con guarda.** Con la fila viva y el evento viejo no borra. Si no, escribe
   `fila[field] = valor del evento` y hace el borrado lógico, de modo que la lápida queda sellada con la fecha
-  del borrado (un `updated` posterior más viejo queda `stale_event`). Limitación: `dynamic.Service` no ofrece una
+  del borrado (un `updated` posterior más viejo queda `stale_event`). El sello es un `UPDATE` por
+  `dynamic.Service` (hooks, eventos `updated`, auditoría), así que el borrado lógico con guarda exige que
+  `Authorize` conceda `"delete"` Y `"update"` (`403 forbidden` antes de cualquier efecto); sin valor de guarda
+  o en modo `hard` solo hace falta `"delete"`. Limitación (parte B): `dynamic.Service` no ofrece una
   transacción entre `Update` y `Delete`; ambos van seguidos bajo el candado por clave y el sello se escribe
   primero. Si el proceso muere entre los dos, la fila queda viva con el valor del evento y el reintento
-  converge con `gte`; con `gt` ese reintento queda `stale_event` (usa `gte` en borrados).
+  converge con `gte`; con `gt` ese reintento queda `stale_event` (usa `gte` en borrados). El candado es de un
+  solo proceso: con varias réplicas la guarda no cierra la carrera leer-comparar-escribir (parte B).
 - **Registro.** `DynamicExecutor.CheckContract` exige que `field` sea columna escribible (`WritableColumns`) y
   que esté en `mapping` (salvo `record.delete`, que solo exige la columna): `guard_field_not_mapped`. Un
   `upsert`/`create` con `match` sobre un modelo con borrado lógico exige poder leer lápidas
-  (`guard_tombstones_unavailable`): el host entrega `DynamicExecutor.Tombstones` (`TombstoneFinder`; hay una
-  implementación sobre GORM, `GormTombstones{DB, Table}`) porque `dynamic.Service` lista solo filas vivas.
-  `field` no puede ser campo de `match`.
+  (`guard_tombstones_unavailable`): el host entrega `DynamicExecutor.Tombstones` (`TombstoneFinder`:
+  `Tombstones(ctx, TombstoneQuery)`, que debe aplicar en la BD organización, `match`, sucursal y alcance antes
+  del límite) porque `dynamic.Service` lista solo filas vivas. `GormTombstones{DB, Table, OrgColumn}` es una
+  implementación: toma la columna de borrado de `Audit.DeletedAt` del metadato, `OrgColumn` (por omisión
+  `organization_id`; el metadato no la nombra) y valida los identificadores. `field` no puede ser campo de `match`.
 - **Ejecutor propio.** Debe implementar `GuardSupporter` (`SupportsGuard() bool`), leer `Operation.Guard` y
   devolver `Outcome{Stale: true}`; si no, el contrato con `guard` se rechaza al registrar.
 

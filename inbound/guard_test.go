@@ -31,21 +31,28 @@ const guardSchema = `{"type":"object","required":["event_id","sku"],"additionalP
  "source_at":{"type":"string"},"version":{"type":"integer"}}}`
 
 // Tombstones makes the fake a TombstoneFinder: soft-deleted rows of the org
-// that match, the most recently deleted (last in the slice) first.
-func (f *fakeDyn) Tombstones(_ context.Context, _ string, org uuid.UUID, where map[string]any, limit int) ([]map[string]any, error) {
+// that match, filtered by branch and scope BEFORE the limit (like the SQL
+// one), the most recently deleted (last in the slice) first.
+func (f *fakeDyn) Tombstones(_ context.Context, q TombstoneQuery) ([]map[string]any, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []map[string]any
-	for i := len(f.rows) - 1; i >= 0 && len(out) < limit; i-- {
+	for i := len(f.rows) - 1; i >= 0 && len(out) < q.Limit; i-- {
 		r := f.rows[i]
-		if r["organization_id"] != org.String() || r["deleted_at"] == nil {
+		if r["organization_id"] != q.Org.String() || r["deleted_at"] == nil {
 			continue
 		}
 		ok := true
-		for k, v := range where {
-			if fmt.Sprint(r[k]) != fmt.Sprint(v) {
+		for k, v := range q.Where {
+			if !valuesEqual(r[k], v) {
 				ok = false
 			}
+		}
+		if q.BranchColumn != "" && q.Branch != "" && !valuesEqual(r[q.BranchColumn], q.Branch) {
+			ok = false
+		}
+		if q.Scope != nil && !scopeAllows(r, q.Scope) {
+			ok = false
 		}
 		if ok {
 			cp := map[string]any{}
@@ -154,11 +161,13 @@ func TestGuardStaleUpdateDoesNotOverwrite(t *testing.T) {
 	// The value is absent: the guard is opt-in by data and the event applies.
 	code, out = e.send(t, e.orgA, c.Key, gBody("e3", "S1", "source_at", "", 8), nil)
 	assertDone(t, code, out)
-	// The value does not parse: it applies too.
+	// The value does not parse: it is a producer bug, never a silent skip.
 	code, out = e.send(t, e.orgA, c.Key, gBody("e4", "S1", "source_at", "not-a-date", 9), nil)
-	assertDone(t, code, out)
-	if r := gRow(f, id); r["quantity"] != int64(9) {
-		t.Fatalf("absent/unparseable must apply: %v", r)
+	if code != 422 || errCode(out) != CodeGuardValueInvalid {
+		t.Fatalf("a present but unparseable value must fail: %d %v", code, out)
+	}
+	if r := gRow(f, id); r["quantity"] != int64(8) {
+		t.Fatalf("absent must apply, unparseable must not: %v", r)
 	}
 }
 
@@ -302,20 +311,36 @@ func TestGuardCreateSkipsOwnRetryAndHonoursTombstone(t *testing.T) {
 	}
 }
 
-func TestGuardValuesOfAnotherKindApply(t *testing.T) {
+func TestGuardNullNeverBlocksUnreadableFailsClosed(t *testing.T) {
 	g := &OperationGuard{Op: GuardGT, Value: int64(5)}
-	for name, cur := range map[string]any{"nil": nil, "text": "garbage", "instant": time.Now(), "nilptr": (*int64)(nil)} {
-		if g.blocks(cur) {
-			t.Errorf("%s must not block", name)
+	for name, cur := range map[string]any{"nil": nil, "nilptr": (*int64)(nil)} {
+		if b, err := g.blocks(cur); b || err != nil {
+			t.Errorf("%s is null: it must not block nor fail: %v %v", name, b, err)
+		}
+	}
+	// Not null but unreadable or of another kind: fail closed.
+	for name, cur := range map[string]any{"text": "garbage", "instant": time.Now(), "bool": true, "float": 1.5} {
+		_, err := g.blocks(cur)
+		if k, code := execKind(err); k != KindConflict || code != CodeGuardRowUnreadable {
+			t.Errorf("%s must fail closed: %v", name, err)
 		}
 	}
 	n := int64(5)
-	if !g.blocks(&n) || !g.blocks(int64(9)) || g.blocks(int64(4)) {
-		t.Fatal("integer comparison")
+	for i, c := range []struct {
+		cur  any
+		want bool
+	}{{&n, true}, {int64(9), true}, {int64(4), false}, {"5", true}, {[]byte("4"), false}, {[]byte("6"), true}} {
+		if b, err := g.blocks(c.cur); err != nil || b != c.want {
+			t.Fatalf("integer comparison #%d: %v %v", i, b, err)
+		}
 	}
 	ts := &OperationGuard{Op: GuardGTE, Value: gT2}
-	if ts.blocks("2026-03-01 11:00:00+00:00") || !ts.blocks("2026-03-01 12:00:00+00:00") || ts.blocks("2026-03-01 10:00:00") {
-		t.Fatal("database timestamp strings")
+	for cur, want := range map[string]bool{
+		"2026-03-01 11:00:00+00:00": false, "2026-03-01 11:00:00+00": false, "2026-03-01T11:00:00Z": false,
+		"2026-03-01 12:00:00+00:00": true, "2026-03-01 10:00:00": false, "2026-03-01T10:59:59Z": false} {
+		if b, err := ts.blocks(cur); err != nil || b != want {
+			t.Fatalf("database timestamp %q: blocks=%v err=%v", cur, b, err)
+		}
 	}
 }
 
@@ -424,14 +449,16 @@ func TestGormTombstones(t *testing.T) {
 			ins(org, "S2", at(gT5), at(gT6))   // another sku
 			ins(other, "S1", at(gT6), at(gT6)) // another organization
 			g := GormTombstones{DB: db, Table: func(string) string { return "guard_items" }}
-			rows, err := g.Tombstones(context.Background(), "inv", org, map[string]any{"sku": "S1"}, 5)
+			rows, err := g.Tombstones(context.Background(), TombstoneQuery{Model: "inv", Org: org, Where: map[string]any{"sku": "S1"}, Limit: 5})
 			if err != nil || len(rows) != 2 {
 				t.Fatalf("rows=%v err=%v", rows, err)
 			}
 			older := &OperationGuard{Op: GuardGTE, Value: gT2}
 			same := &OperationGuard{Op: GuardGTE, Value: gT3}
-			if !older.blocks(rows[0]["source_at"]) || same.blocks(rows[0]["source_at"]) {
-				t.Fatalf("most recent tombstone first: %v", rows)
+			b1, e1 := older.blocks(rows[0]["source_at"])
+			b2, e2 := same.blocks(rows[0]["source_at"])
+			if e1 != nil || e2 != nil || !b1 || b2 {
+				t.Fatalf("most recent tombstone first: %v %v %v", rows, e1, e2)
 			}
 		})
 	}
