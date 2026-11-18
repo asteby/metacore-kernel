@@ -166,6 +166,9 @@ Un contrato puede declarar `actions` en lugar de `route` (son excluyentes; sin
 |---|---|---|
 | `record.create` / `record.update` / `record.upsert` | `model`, `mapping`, `match`, `defaults`, `scope` | reusa el `Executor` (mismo muro de organización y de modelo) |
 | `record.delete` | `model`, `mapping` (solo campos de `match`), `match`, `scope`, `mode`, `max_rows` | retira filas elegidas SOLO por `match`; borrado lógico por omisión (ver abajo) |
+| `record.action` | `model`, `mapping` (solo `match`), `match`, `action`, `params`, `on_ineligible`, `scope`, `max_rows` | ejecuta una acción del modelo con `ingest: true` sobre las filas elegidas por `match` (ver abajo) |
+| `record.transition` | `model`, `mapping` (solo `match`), `match`, `to`, `scope`, `max_rows` | mueve el `stage_field` a un estado de la máquina del modelo |
+| `record.restore` | `model`, `mapping` (solo `match`), `match`, `scope`, `max_rows` | revierte un borrado lógico |
 | `event.emit` | `name`, `payload` | `EventEmitter.Emit` (puerto mínimo; este paquete no importa `webhooks`) |
 | `automation.enqueue` | `name`, `payload` | `AutomationIngester.IngestEvent`, que el host adapta a `automation.Scheduler.Ingest` |
 | `notify` | `template`, `payload` (parámetros) | `Notifier.Notify`; el host renderiza con `notifications.Render` |
@@ -277,6 +280,76 @@ modo "borra todo":
 - **Valores de `match` vacíos o nulos (fix de seguridad).** Un valor de `match` ausente o `null` falla con `422 match_value_missing`; una cadena vacía o solo espacios con `422 match_value_empty`, SIEMPRE antes de consultar (también en `record.update`/`record.upsert`). Motivo: la capa de consulta descarta un filtro `eq` sobre `""` (sin `WHERE`) y devolvería filas sin filtrar. Cero numérico y `false` siguen siendo valores válidos.
 - **Registro.** `DynamicExecutor.CheckContract` exige `MaxDeleteRows <= 199` (la página de consulta se recorta a 200 y se lista `límite+1`) y rechaza modelos `append_only`. La razón de borrado obligatoria no está en el metadato del modelo: sigue fallando en ejecución como `422 rejected_by_model`. Limitación: tras un borrado, si el origen recrea una fila con el mismo `match` y se reintenta el recibo viejo, se borra la nueva (el borrado es por `match`, no por id).
 - **Ejecutor propio.** Debe implementar `OpSupporter` (`SupportsOp(Op) bool`) y devolver `true` para `OpDelete`; si no, el contrato con `record.delete` se rechaza al registrar. `DynamicExecutor` la implementa.
+
+**`record.action`, `record.transition`, `record.restore` (llevar un registro a cualquier estado del modelo).**
+Tres acciones para que la ingesta mueva un registro a un estado o acción que el modelo YA declara, sin una
+acción nueva por caso. Reutilizan lo que existe (`dynamic.Service.ExecAction`, la máquina de estados que valida
+`Service.Update`, `Service.Restore`) y los muros de `record.delete`: filas elegidas SOLO por `match`
+(obligatorio y no vacío; cada campo en `mapping` y el `mapping` sin nada más), organización y alcance de la ruta
+firmada, `max_rows` (1 por omisión, techo 100 y `MaxDeleteRows`; más coincidencias = `409 too_many_matches` sin
+tocar nada), valores de `match` ausentes/nulos/vacíos rechazados (`match_value_missing`/`match_value_empty`),
+`Authorize` y el recibo idempotente (`replayed`). `record.delete` no cambia; activar/desactivar es un
+`record.update {active:false}`.
+
+```json
+{"do": "record.action", "model": "orders", "match": ["external_ref"],
+ "mapping": {"external_ref": "{{payload.id}}"},
+ "action": "mark_paid", "params": {"reference": "{{payload.payment_ref}}"}, "on_ineligible": "noop"}
+{"do": "record.transition", "model": "orders", "match": ["external_ref"],
+ "mapping": {"external_ref": "{{payload.id}}"}, "to": "shipped"}
+{"do": "record.restore", "model": "orders", "match": ["external_ref"],
+ "mapping": {"external_ref": "{{payload.id}}"}}
+```
+
+- **`record.action {action, params, on_ineligible}`.** Por cada fila llama a `ExecAction`. **Lista blanca
+  cerrada por omisión:** solo corren las acciones del modelo con `ingest: true` en el manifest (campo
+  opcional de la acción; porque entre las acciones declaradas hay capturas de pago y operaciones
+  destructivas). Quedan SIEMPRE fuera las que tienen `approval`, `supervisor_policy` o `confirm_typed` y las de
+  `placement` `table`/`create` (el manifest v3 rechaza `ingest: true` combinado con ellas; el ejecutor lo
+  vuelve a comprobar). `params` son plantillas y es el payload de la acción: al registrar, `CheckContract`
+  rechaza una acción inexistente o sin `ingest: true` (`action_not_ingestable`), un `params` fuera de los
+  `Fields` de la acción (solo `reason` se acepta siempre; tampoco la llave de idempotencia, que pone el kernel)
+  y `max_rows > 1` si la acción no declara `idempotency`. `RequiresState` lo aplica `ExecAction` (sobre el
+  `stage_field` o `status`/`state`): una fila que no lo cumple con `on_ineligible: noop` (por omisión) deja el
+  paso `done` con `noop: true` y `reason: "state_not_eligible"`; con `fail`, `409 state_not_eligible`. Si la
+  acción declara `Idempotency`, el kernel pasa `params[KeyField] = <recibo>:<acción>:<fila>`, así que un
+  reintento reproduce la respuesta guardada en vez de volver a despachar. Si ya se despachó sobre varias filas y
+  una falla, el reintento retoma el paso completo: use `max_rows: 1` o una acción con idempotencia. Errores:
+  `422 action_not_ingestable`, `422 invalid_transition` (si la acción mueve la etapa), `422 action_declined`
+  (el despachador respondió sin éxito; nunca se reenvía su mensaje), `409 idempotency_in_flight`. Una
+  aprobación pendiente no puede ocurrir (la acción no tiene `approval`); si llegara, es un error de servidor
+  (`approval_unexpected`), nunca un paso aplicado. Sin coincidencias: `404 record_not_found` (un evento que
+  llega antes que su registro no se da por aplicado; se reintenta).
+- **`record.transition {to}`.** Azúcar sobre `record.update` que escribe el `stage_field` del modelo (la columna
+  NO se elige) y deja que `Service.Update` valide la transición y dispare sus hooks. Solo en modelos con
+  máquina de estados activa y `to` debe ser un estado de la máquina (`CheckContract`). Se juzgan todas las filas
+  antes de escribir ninguna: una transición no declarada es `422 invalid_transition` y no escribe nada;
+  `from == to` es `done` con `noop: true` (`reason: "already_in_state"`). Sin coincidencias: `404
+  record_not_found`.
+- **`record.restore`.** Inverso de borrado: busca entre las lápidas (mismo `match`, organización y alcance de
+  `record.delete`; `GormTombstones`/`DynamicExecutor.Tombstones`, obligatorio al registrar) y llama a
+  `Service.Restore`. El modelo debe tener `deleted_at` y no ser `append_only`. Sin lápidas: `done` con
+  `not_found: true` (como `record.delete`), o `noop: true` con `reason: "already_live"` si la fila ya está viva
+  (un reintento converge). Una fila viva con el mismo `match` junto a la lápida cuenta contra `max_rows`: con
+  el tope por omisión no se restaura para no duplicar la llave (`409 too_many_matches`).
+- **`Authorize`.** Recibe `action:<key>`, `transition:<estado>` o `restore` como acción (sin `Authorize`
+  decide el host, como siempre). Se consulta antes de leer filas.
+- **Resultado para los pasos siguientes.** `result.id` (primera fila), `result.affected` (filas cambiadas) y
+  `result.noop`; el recibo guarda `noop`/`reason`/`affected` por paso.
+- **Dry-run (contrato preparado).** `inbound` aún no tiene modo dry-run. `Operation.DryRun` ya lo respeta el
+  ejecutor para `record.action`: resuelve filas, estado y parámetros y devuelve `Outcome.WouldDispatch`
+  (`action`, `record_id`, `rows`, `state`, `eligible`, `params`) SIN llamar nunca a `ExecAction`. Cuando exista
+  el modo, solo hay que poner `DryRun` en la `Operation`.
+- **Catálogo de destinos (`/targets`).** `Target` gana `actions_available[]` (`key`, `label`, `params`,
+  `requires_state`, `permission`: solo las acciones `ingest: true` ejecutables; `IngestActions(modelo, defs)`),
+  `stage` (`field`, `stages[]`, `transitions[]`, o `null`; `StageOf`), `restorable` (`Restorable(meta)`) e
+  `ingest_cursor` (el `Model.ingest.cursor` del manifest, lo pone el host). Fixture del SDK:
+  `inbound/testdata/targets.json`.
+- **Ejecutor propio.** Debe implementar `OpSupporter` y devolver `true` para `OpAction`, `OpTransition` y
+  `OpRestore` según las acciones que declaren los contratos (mismo fail-closed al registrar). Recibe
+  `Operation{Route.Op, Route.Match, Values (el match), ActionKey, Params, OnIneligible, To, MaxRows, DryRun}` y
+  devuelve `Outcome{RecordID, Affected, Noop, Reason, NotFound}`. `dynStore` (interno) ganó `ExecAction`,
+  `Restore`, `ActionDef` y `ActiveStageMachine` (`dynamic.Service` ya los expone).
 
 **Guarda de orden `guard` (eventos tardíos o reintentados).** Cada acción `record.*` puede declarar
 `"guard": {"field": "source_updated_at", "path": "payload.updated_at", "op": "gte"}`. `field` es una columna

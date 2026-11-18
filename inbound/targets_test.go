@@ -101,11 +101,15 @@ func TestTargetFixture(t *testing.T) {
 		!targets[0].Permissions.Update || targets[0].Permissions.Delete || !targets[0].Scope.Branch {
 		t.Fatalf("fixture content: %+v", targets)
 	}
+	if tg := targets[0]; len(tg.ActionsAvailable) != 1 || tg.ActionsAvailable[0].Key != "reserve" || tg.Stage == nil || tg.Stage.Field != "status" ||
+		len(tg.Stage.Transitions) != 2 || !tg.Restorable || tg.IngestCursor != "source_updated_at" {
+		t.Fatalf("fixture state-op fields: %+v", tg)
+	}
 	// Round trip keeps snake_case keys the SDK reads.
 	out, _ := json.Marshal(targets[0])
 	var m map[string]any
 	_ = json.Unmarshal(out, &m)
-	for _, k := range []string{"addon", "addon_name", "model", "columns", "match_candidates", "soft_delete", "actions", "permissions", "scope", "guard_candidates"} {
+	for _, k := range []string{"addon", "addon_name", "model", "columns", "match_candidates", "soft_delete", "actions", "permissions", "scope", "guard_candidates", "actions_available", "stage", "restorable", "ingest_cursor"} {
 		if _, ok := m[k]; !ok {
 			t.Fatalf("missing key %q in %s", k, out)
 		}

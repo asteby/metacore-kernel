@@ -25,9 +25,17 @@ const (
 	ActionRecordUpsert = "record.upsert"
 	// ActionRecordDelete retires rows selected ONLY by match (never by id).
 	ActionRecordDelete = "record.delete"
-	ActionEventEmit    = "event.emit"
-	ActionNotify       = "notify"
-	ActionCommandRun   = "command.run"
+	// ActionRecordAction runs a model action declared with `ingest: true` on the
+	// rows selected by match (dynamic.Service.ExecAction).
+	ActionRecordAction = "record.action"
+	// ActionRecordTransition moves the stage_field of the rows selected by match
+	// to a state of the model machine (dynamic.Service.Update validates it).
+	ActionRecordTransition = "record.transition"
+	// ActionRecordRestore undoes a soft delete of the rows selected by match.
+	ActionRecordRestore = "record.restore"
+	ActionEventEmit     = "event.emit"
+	ActionNotify        = "notify"
+	ActionCommandRun    = "command.run"
 	// ActionAutomationEnqueue hands an event to the automation trigger
 	// (Scheduler.Ingest) through AutomationIngester.
 	ActionAutomationEnqueue = "automation.enqueue"
@@ -49,6 +57,34 @@ const (
 	// the executor applies its own (host-configurable) cap on top.
 	maxDeleteRowsCeiling = 100
 )
+
+// record.action on_ineligible policies and stable codes of record.action,
+// record.transition and record.restore.
+const (
+	OnIneligibleNoop = "noop"
+	OnIneligibleFail = "fail"
+	// CodeStateNotEligible is the reason of a noop step (and the 409 code with
+	// on_ineligible: fail) when the row state is not one the action RequiresState.
+	CodeStateNotEligible = "state_not_eligible"
+	// CodeInvalidTransition (422): the stage machine refuses from -> to.
+	CodeInvalidTransition = "invalid_transition"
+	// CodeActionNotIngestable (422): the action does not exist or is not ingest.
+	CodeActionNotIngestable = "action_not_ingestable"
+	// CodeAlreadyInState is the reason of a noop transition (from == to).
+	CodeAlreadyInState = "already_in_state"
+	// CodeAlreadyLive is the reason of a noop restore (the row is not deleted).
+	CodeAlreadyLive = "already_live"
+)
+
+// matchOnly reports whether the action selects rows ONLY by match and writes
+// nothing through mapping (delete, action, transition, restore).
+func matchOnly(do string) bool {
+	switch do {
+	case ActionRecordDelete, ActionRecordAction, ActionRecordTransition, ActionRecordRestore:
+		return true
+	}
+	return false
+}
 
 // Action is one step of a contract chain. Which fields apply depends on Do;
 // a field that does not belong to the action is a registration error.
@@ -72,9 +108,23 @@ type Action struct {
 	// record.delete: Mode is soft (default) | hard. soft needs a model with a
 	// deleted_at column; hard is refused unless the host opted the model in.
 	// MaxRows caps the rows one event may delete (default 1, at most 100);
-	// more matches than that fail the step without deleting anything.
+	// more matches than that fail the step without deleting anything. MaxRows
+	// has the same meaning in record.action, record.transition and
+	// record.restore.
 	Mode    string `json:"mode,omitempty"`
 	MaxRows int    `json:"max_rows,omitempty"`
+
+	// record.action: ActionKey names an action of the model declared with
+	// `ingest: true`; Params are its payload (templates, validated against the
+	// action Fields when the contract is registered). OnIneligible says what
+	// happens to a row whose state the action RequiresState rejects: noop
+	// (default, the step is applied with result.noop) | fail (409).
+	ActionKey    string         `json:"action,omitempty"`
+	Params       map[string]any `json:"params,omitempty"`
+	OnIneligible string         `json:"on_ineligible,omitempty"`
+	// record.transition: To is a state of the model stage machine; the model
+	// stage_field is always the column written.
+	To string `json:"to,omitempty"`
 
 	// Guard (record.*) protects against out-of-order or retried events: the
 	// action is skipped as stale_event when the event is older than the row.
@@ -157,10 +207,15 @@ type ActionStep struct {
 	Status   string `json:"status"`
 	RecordID string `json:"record_id,omitempty"`
 	Created  bool   `json:"created,omitempty"`
-	// Affected / NotFound are set by record.delete: rows retired, or nothing
-	// matched (already deleted: a successful no-op).
-	Affected  int    `json:"affected,omitempty"`
-	NotFound  bool   `json:"not_found,omitempty"`
+	// Affected / NotFound are set by record.delete (rows retired, or nothing
+	// matched: already deleted, a successful no-op) and Affected also by
+	// record.action|transition|restore (rows changed).
+	Affected int  `json:"affected,omitempty"`
+	NotFound bool `json:"not_found,omitempty"`
+	// Noop / Reason are set by record.action|transition|restore when nothing was
+	// done on purpose (state not eligible, already in state, already live).
+	Noop      bool   `json:"noop,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 	ErrorCode string `json:"error_code,omitempty"`
 }
 
@@ -298,8 +353,10 @@ type cAction struct {
 	Action
 	mapping map[string]node
 	payload map[string]node
-	when    *cCond
-	onErr   string
+	// params is Params compiled (record.action).
+	params map[string]node
+	when   *cCond
+	onErr  string
 	// guardPath is Guard.Path without the "payload." prefix.
 	guardPath string
 }
@@ -322,7 +379,7 @@ type validator struct {
 var (
 	tplRe   = regexp.MustCompile(`\{\{(.*?)\}\}`)
 	eventOK = map[string]bool{"key": true, "contract": true, "version": true, "org": true}
-	resOK   = map[string]bool{"id": true, "created": true, "affected": true}
+	resOK   = map[string]bool{"id": true, "created": true, "affected": true, "noop": true}
 )
 
 // compileActions validates the chain of a contract.
@@ -363,7 +420,8 @@ func compileAction(a Action, v *validator) (*cAction, error) {
 	ca := &cAction{Action: a}
 	isRecord := false
 	switch a.Do {
-	case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert, ActionRecordDelete:
+	case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert, ActionRecordDelete,
+		ActionRecordAction, ActionRecordTransition, ActionRecordRestore:
 		isRecord = true
 	case ActionEventEmit, ActionNotify, ActionCommandRun, ActionAutomationEnqueue:
 	default:
@@ -382,9 +440,11 @@ func compileAction(a Action, v *validator) (*cAction, error) {
 		set, ok bool
 	}{
 		{"idempotency_field", a.IdempotencyField != "", a.Do == ActionRecordCreate}, {"model", a.Model != "", isRecord}, {"match", len(a.Match) > 0, isRecord},
-		{"defaults", len(a.Defaults) > 0, isRecord && a.Do != ActionRecordDelete},
-		{"mode", a.Mode != "", a.Do == ActionRecordDelete}, {"max_rows", a.MaxRows != 0, a.Do == ActionRecordDelete}, {"scope", a.Scope != nil, isRecord},
-		{"mapping", len(a.Mapping) > 0, isRecord || isCmd}, {"guard", a.Guard != nil, isRecord},
+		{"defaults", len(a.Defaults) > 0, isRecord && !matchOnly(a.Do)},
+		{"mode", a.Mode != "", a.Do == ActionRecordDelete}, {"max_rows", a.MaxRows != 0, matchOnly(a.Do)}, {"scope", a.Scope != nil, isRecord},
+		{"mapping", len(a.Mapping) > 0, isRecord || isCmd}, {"guard", a.Guard != nil, isRecord && !isStateOp(a.Do)},
+		{"action", a.ActionKey != "", a.Do == ActionRecordAction}, {"params", len(a.Params) > 0, a.Do == ActionRecordAction},
+		{"on_ineligible", a.OnIneligible != "", a.Do == ActionRecordAction}, {"to", a.To != "", a.Do == ActionRecordTransition},
 		{"name", a.Name != "", isEmit}, {"payload", len(a.Payload) > 0, isEmit || isNotify},
 		{"template", a.Template != "", isNotify}, {"command", a.Command != "", isCmd}, {"op", a.Op != "", isCmd},
 	} {
@@ -412,8 +472,18 @@ func compileAction(a Action, v *validator) (*cAction, error) {
 				return nil, fmt.Errorf("idempotency_field %q must not be a default", f)
 			}
 		}
+		if matchOnly(a.Do) {
+			if err := checkSelect(a); err != nil {
+				return nil, err
+			}
+		}
 		if a.Do == ActionRecordDelete {
 			if err := checkDelete(a); err != nil {
+				return nil, err
+			}
+		}
+		if isStateOp(a.Do) {
+			if err := checkStateOp(a); err != nil {
 				return nil, err
 			}
 		}
@@ -487,6 +557,19 @@ func compileAction(a Action, v *validator) (*cAction, error) {
 			ca.mapping[to] = n
 		}
 	}
+	if len(a.Params) > 0 {
+		ca.params = make(map[string]node, len(a.Params))
+		for k, val := range a.Params {
+			if strings.TrimSpace(k) == "" || len(k) > 64 {
+				return nil, fmt.Errorf("params key %q not allowed", k)
+			}
+			n, err := compileValue(val, v)
+			if err != nil {
+				return nil, fmt.Errorf("params %q: %v", k, err)
+			}
+			ca.params[k] = n
+		}
+	}
 	if len(a.Payload) > 0 {
 		ca.payload = make(map[string]node, len(a.Payload))
 		for k, val := range a.Payload {
@@ -507,12 +590,19 @@ func compileAction(a Action, v *validator) (*cAction, error) {
 	return ca, nil
 }
 
-// checkDelete validates record.delete: rows are selected only by match, so the
-// mapping carries exactly the match fields (nothing is written), the mode is
-// known and max_rows stays within the ceiling.
-func checkDelete(a Action) error {
+// isStateOp reports whether the action is one of the state-moving record
+// actions that run on rows through dynamic.Service rather than through a
+// mapping (record.action, record.transition, record.restore).
+func isStateOp(do string) bool {
+	return do == ActionRecordAction || do == ActionRecordTransition || do == ActionRecordRestore
+}
+
+// checkSelect validates what delete, action, transition and restore share:
+// rows are selected only by a non-empty match, so the mapping carries exactly
+// the match fields (nothing is written) and max_rows stays within the ceiling.
+func checkSelect(a Action) error {
 	if len(a.Match) == 0 {
-		return fmt.Errorf("record.delete needs match fields (it never deletes without a filter)")
+		return fmt.Errorf("%s needs match fields (it never acts without a filter)", a.Do)
 	}
 	in := map[string]bool{}
 	for _, m := range a.Match {
@@ -520,16 +610,45 @@ func checkDelete(a Action) error {
 	}
 	for to := range a.Mapping {
 		if !in[to] {
-			return fmt.Errorf("record.delete mapping may only hold match fields (%q is not one)", to)
+			return fmt.Errorf("%s mapping may only hold match fields (%q is not one)", a.Do, to)
 		}
 	}
+	if a.MaxRows < 0 || a.MaxRows > maxDeleteRowsCeiling {
+		return fmt.Errorf("max_rows must be between 1 and %d", maxDeleteRowsCeiling)
+	}
+	return nil
+}
+
+// checkDelete validates record.delete on top of checkSelect: the mode is known.
+func checkDelete(a Action) error {
 	switch a.Mode {
 	case "", DeleteSoft, DeleteHard:
 	default:
 		return fmt.Errorf("mode must be soft|hard")
 	}
-	if a.MaxRows < 0 || a.MaxRows > maxDeleteRowsCeiling {
-		return fmt.Errorf("max_rows must be between 1 and %d", maxDeleteRowsCeiling)
+	return nil
+}
+
+var actionKeyRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+
+// checkStateOp validates the operands of record.action and record.transition.
+// Whether the action is ingest:true, the state exists and the params fit the
+// action Fields depends on the model and is checked by the executor.
+func checkStateOp(a Action) error {
+	switch a.Do {
+	case ActionRecordAction:
+		if !actionKeyRe.MatchString(a.ActionKey) {
+			return fmt.Errorf("record.action needs action (the key of an ingest action of the model)")
+		}
+		switch a.OnIneligible {
+		case "", OnIneligibleNoop, OnIneligibleFail:
+		default:
+			return fmt.Errorf("on_ineligible must be noop|fail")
+		}
+	case ActionRecordTransition:
+		if strings.TrimSpace(a.To) == "" || len(a.To) > 128 {
+			return fmt.Errorf("record.transition needs to (a state of the model machine)")
+		}
 	}
 	return nil
 }

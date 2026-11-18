@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/asteby/metacore-kernel/dynamic"
+	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/modelbase"
 	"github.com/asteby/metacore-kernel/query"
 )
@@ -47,6 +48,31 @@ type Operation struct {
 	// event carries no usable value). Executors that honour it implement
 	// GuardSupporter; a stale event is reported as Outcome.Stale.
 	Guard *OperationGuard
+	// ActionKey / Params (record.action): the model action to run and its
+	// payload; OnIneligible is noop (default) | fail. To (record.transition) is
+	// the target state. Route.Match selects the rows; MaxRows caps them.
+	ActionKey    string
+	Params       map[string]any
+	OnIneligible string
+	To           string
+	// DryRun (record.action): resolve the rows, their state and the payload and
+	// report them in Outcome.WouldDispatch WITHOUT dispatching anything. The
+	// handler does not set it yet (no dry-run mode in inbound); the executor
+	// honours it so the contract is ready.
+	DryRun bool
+}
+
+// WouldDispatch is what a dry-run record.action resolved for one row.
+type WouldDispatch struct {
+	Action string `json:"action"`
+	// RecordID is the first selected row; Rows how many were selected.
+	RecordID string `json:"record_id,omitempty"`
+	Rows     int    `json:"rows"`
+	// State is the lifecycle value of the row ("" when unreadable) and Eligible
+	// whether the action RequiresState accepts it (true when it declares none).
+	State    string         `json:"state,omitempty"`
+	Eligible bool           `json:"eligible"`
+	Params   map[string]any `json:"params,omitempty"`
 }
 
 // Outcome is what an executor reports back.
@@ -60,6 +86,13 @@ type Outcome struct {
 	NotFound bool
 	// Stale: the guard found a newer row or tombstone; nothing was written.
 	Stale bool
+	// Noop / Reason: record.action|transition|restore did nothing on purpose
+	// (state_not_eligible, already_in_state, already_live); it is a success.
+	// Affected counts the rows they changed.
+	Noop   bool
+	Reason string
+	// WouldDispatch is set by a dry-run record.action (Operation.DryRun).
+	WouldDispatch *WouldDispatch
 }
 
 // Executor applies model routes (create/update/upsert on a dynamic model).
@@ -70,8 +103,10 @@ type Executor interface {
 // OpSupporter is an optional Executor port: an Executor that implements it
 // declares which operations it handles. A contract that declares record.delete
 // is refused at registration unless the Executor reports SupportsOp(OpDelete),
-// so a custom executor whose default branch creates or upserts can never
-// receive a delete it would misread. DynamicExecutor supports every Op.
+// and likewise record.action / record.transition / record.restore for
+// OpAction / OpTransition / OpRestore, so a custom executor whose default
+// branch creates or upserts can never receive an operation it would misread.
+// DynamicExecutor supports every Op.
 type OpSupporter interface {
 	SupportsOp(op Op) bool
 }
@@ -144,6 +179,12 @@ type dynStore interface {
 	Update(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID, input map[string]any) (map[string]any, error)
 	Delete(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID) error
 	TableMetadata(ctx context.Context, model string) (*modelbase.TableMetadata, error)
+	// ExecAction, Restore, ActionDef and ActiveStageMachine back record.action,
+	// record.restore and record.transition (see record_ops.go).
+	ExecAction(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID, key string, payload map[string]any) (dynamic.ActionResult, error)
+	Restore(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID) (map[string]any, error)
+	ActionDef(ctx context.Context, model, key string) (*manifest.ActionDef, bool)
+	ActiveStageMachine(ctx context.Context, model string) (*dynamic.StageMachine, bool)
 }
 
 // HardDeleter physically removes a row. dynamic.Service only soft-deletes, so
@@ -185,7 +226,9 @@ type DynamicExecutor struct {
 	// models an enabled addon declared writable and the permission of whoever
 	// holds the inbound entry ("<model>.<action>"). It runs before any
 	// create|update|delete reaches the model (upsert asks "update", and
-	// "create" when it has to insert); false answers 403 forbidden. nil keeps
+	// "create" when it has to insert); record.action asks "action:<key>",
+	// record.transition "transition:<to>" and record.restore "restore"; false
+	// answers 403 forbidden. nil keeps
 	// the historical rule: the signed route is the authorization.
 	Authorize func(ctx context.Context, org uuid.UUID, model, action string) bool
 	// HardDeleter and HardDeleteModels enable record.delete mode "hard": it is
@@ -254,13 +297,18 @@ func (d *DynamicExecutor) CheckContract(ctx context.Context, c Contract) error {
 		if err := d.checkModel(ctx, who, a.Model, fields); err != nil {
 			return err
 		}
-		if a.Do != ActionRecordDelete {
+		if a.Do != ActionRecordDelete && !isStateOp(a.Do) {
 			if err := d.checkWritable(ctx, who, a.Model, a.Mapping); err != nil {
 				return err
 			}
 		}
 		if a.Do == ActionRecordDelete {
 			if err := d.checkDeleteModel(ctx, who, a); err != nil {
+				return err
+			}
+		}
+		if isStateOp(a.Do) {
+			if err := d.checkStateOpModel(ctx, who, a); err != nil {
 				return err
 			}
 		}
@@ -435,6 +483,8 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 		return create(ctx, st, model, user, withDefaults(op.CreateDefaults, op.Values))
 	case OpDelete:
 		return d.deleteRows(ctx, st, user, op, sc)
+	case OpAction, OpTransition, OpRestore:
+		return d.stateOp(ctx, st, user, op, sc)
 	case OpUpdate, OpUpsert:
 		if err := d.allow(ctx, op, "update"); err != nil {
 			return Outcome{}, err
