@@ -7,6 +7,8 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+
+	"github.com/asteby/metacore-kernel/runtime/ingest"
 )
 
 // checkChain verifies at startup that every port a chain needs is wired.
@@ -22,6 +24,9 @@ func (h *Handler) checkChain(c *compiled) []error {
 				add("actions[%d] %s: no Executor", i, a.Do)
 			} else if a.Do == ActionRecordDelete && !executorSupports(h.cfg.Executor, OpDelete) {
 				add("actions[%d] %s: the Executor does not declare OpDelete (implement OpSupporter)", i, a.Do)
+			}
+			if a.Guard != nil && h.cfg.Executor != nil && !executorGuards(h.cfg.Executor) {
+				add("actions[%d] %s: the Executor does not declare guard support (implement GuardSupporter)", i, a.Do)
 			}
 		case ActionCommandRun:
 			if _, ok := h.cfg.Commands.get(a.Command); !ok {
@@ -151,6 +156,17 @@ func (h *Handler) runChain(ctx context.Context, c *compiled, org uuid.UUID, evKe
 			}
 			return "", i, aerr
 		}
+		if out.Stale {
+			// The guard found a newer row or tombstone: nothing was written and
+			// the receipt still ends applied. Like a false `when`, it leaves
+			// result and the chain's record id untouched.
+			step.Status, step.ErrorCode = StepSkipped, CodeStaleEvent
+			*steps = append(*steps, step)
+			if e := save(); e != nil {
+				return "", i, e
+			}
+			continue
+		}
 		step.Status, step.RecordID, step.Created = StepDone, out.RecordID, out.Created
 		step.Affected, step.NotFound = out.Affected, out.NotFound
 		*steps = append(*steps, step)
@@ -227,6 +243,7 @@ func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *e
 		if a.Do == ActionRecordDelete {
 			op.DeleteMode, op.MaxRows = a.Mode, a.MaxRows
 		}
+		op.Guard = evalGuard(a, env.payload)
 		if a.Scope != nil {
 			op.Branch = scopeValue(env.payload, a.Scope.Branch)
 			op.Entity = scopeValue(env.payload, a.Scope.Entity)
@@ -270,6 +287,24 @@ func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *e
 		return Outcome{}, nil
 	}
 	return Outcome{}, &ExecError{Kind: KindInternal, Code: "bad_action"}
+}
+
+// evalGuard reads the event's guard value. It returns nil (the event applies)
+// when the action has no guard or the payload value is absent or is neither an
+// RFC 3339 instant nor an integer.
+func evalGuard(a *cAction, payload any) *OperationGuard {
+	if a.Guard == nil {
+		return nil
+	}
+	v, ok := lookup(payload, a.guardPath)
+	if !ok {
+		return nil
+	}
+	if _, err := ingest.CompareCursor(v, v); err != nil {
+		return nil
+	}
+	return &OperationGuard{Field: a.Guard.Field, Op: a.Guard.Op, Value: normalize(v),
+		Match: a.Match, Create: a.Do == ActionRecordCreate}
 }
 
 func (h *Handler) failChain(w http.ResponseWriter, ctx context.Context, cur Receipt, err error, at int) {

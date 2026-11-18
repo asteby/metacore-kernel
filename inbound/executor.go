@@ -42,6 +42,10 @@ type Operation struct {
 	// retire; <= 0 = 1) apply to OpDelete only. Route.Match selects the rows.
 	DeleteMode string
 	MaxRows    int
+	// Guard is the evaluated order guard of the action (nil: none, or the
+	// event carries no usable value). Executors that honour it implement
+	// GuardSupporter; a stale event is reported as Outcome.Stale.
+	Guard *OperationGuard
 }
 
 // Outcome is what an executor reports back.
@@ -53,6 +57,8 @@ type Outcome struct {
 	// (already deleted), which is a successful no-op.
 	Affected int
 	NotFound bool
+	// Stale: the guard found a newer row or tombstone; nothing was written.
+	Stale bool
 }
 
 // Executor applies model routes (create/update/upsert on a dynamic model).
@@ -187,6 +193,9 @@ type DynamicExecutor struct {
 	HardDeleteModels map[string]bool
 	// MaxDeleteRows caps rows per record.delete (default 100).
 	MaxDeleteRows int
+	// Tombstones lets an action guard see soft-deleted rows (see
+	// TombstoneFinder); when nil the store is used if it implements it.
+	Tombstones TombstoneFinder
 
 	store dynStore // test seam; nil means Service
 	locks [64]sync.Mutex
@@ -233,6 +242,11 @@ func (d *DynamicExecutor) CheckContract(ctx context.Context, c Contract) error {
 		}
 		if a.Do == ActionRecordDelete {
 			if err := d.checkDeleteModel(ctx, who, a); err != nil {
+				return err
+			}
+		}
+		if a.Guard != nil {
+			if err := d.checkGuard(ctx, who, a); err != nil {
 				return err
 			}
 		}
@@ -403,9 +417,16 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 		}
 		unlock := d.lock(op)
 		defer unlock()
-		id, err := find(ctx, st, model, user, op.Route.Match, op.Values, sc)
+		row, err := findRow(ctx, st, model, user, op.Route.Match, op.Values, sc)
 		if err != nil {
 			return Outcome{}, err
+		}
+		id, err := rowID(row)
+		if err != nil {
+			return Outcome{}, err
+		}
+		if id != uuid.Nil && op.Guard != nil && !op.Guard.Create && op.Guard.blocks(row[op.Guard.Field]) {
+			return Outcome{Stale: true}, nil
 		}
 		if id == uuid.Nil {
 			if op.Route.Op == OpUpdate {
@@ -413,6 +434,15 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 			}
 			if err := d.allow(ctx, op, "create"); err != nil {
 				return Outcome{}, err
+			}
+			if op.Guard != nil {
+				stale, err := d.tombstoneStale(ctx, st, op, sc)
+				if err != nil {
+					return Outcome{}, err
+				}
+				if stale {
+					return Outcome{Stale: true}, nil
+				}
 			}
 			out, cerr := create(ctx, st, model, user, withDefaults(op.CreateDefaults, op.Values))
 			if cerr == nil {
@@ -483,12 +513,20 @@ func (d *DynamicExecutor) deleteRows(ctx context.Context, st dynStore, user mode
 		return Outcome{}, &ExecError{Kind: KindConflict, Code: "too_many_matches"}
 	}
 	ids := make([]uuid.UUID, 0, len(hits))
+	stale := 0
 	for _, h := range hits {
+		if op.Guard != nil && op.Guard.blocks(h[op.Guard.Field]) {
+			stale++ // a newer row than this delete event: it stays
+			continue
+		}
 		id, perr := uuid.Parse(fmt.Sprint(h["id"]))
 		if perr != nil {
 			return Outcome{}, &ExecError{Kind: KindInternal, Code: "bad_record_id", Err: perr}
 		}
 		ids = append(ids, id)
+	}
+	if len(ids) == 0 && stale > 0 {
+		return Outcome{Stale: true}, nil
 	}
 	n := 0
 	for _, id := range ids {
@@ -496,7 +534,7 @@ func (d *DynamicExecutor) deleteRows(ctx context.Context, st dynStore, user mode
 		if mode == DeleteHard {
 			derr = d.HardDeleter.HardDelete(ctx, model, user, id)
 		} else {
-			derr = st.Delete(ctx, model, user, id)
+			derr = sealAndDelete(ctx, st, user, op, mode, id)
 		}
 		if derr != nil && !errors.Is(derr, dynamic.ErrRecordNotFound) {
 			return Outcome{}, mapDynamicErr(derr)
@@ -543,21 +581,64 @@ func update(ctx context.Context, st dynStore, model string, user modelbase.AuthU
 // row is re-checked against the wanted values (typed comparison); rows outside
 // the entity scope are invisible, so an upsert never touches another entity.
 func find(ctx context.Context, st dynStore, model string, user modelbase.AuthUser, match []string, vals map[string]any, sc *dynamic.EntityScope) (uuid.UUID, error) {
-	hits, err := matchRows(ctx, st, model, user, match, vals, sc, 3)
+	row, err := findRow(ctx, st, model, user, match, vals, sc)
 	if err != nil {
 		return uuid.Nil, err
 	}
+	return rowID(row)
+}
+
+// findRow is find returning the whole row (nil when none matches).
+func findRow(ctx context.Context, st dynStore, model string, user modelbase.AuthUser, match []string, vals map[string]any, sc *dynamic.EntityScope) (map[string]any, error) {
+	hits, err := matchRows(ctx, st, model, user, match, vals, sc, 3)
+	if err != nil {
+		return nil, err
+	}
 	if len(hits) > 1 {
-		return uuid.Nil, &ExecError{Kind: KindConflict, Code: "ambiguous_match"}
+		return nil, &ExecError{Kind: KindConflict, Code: "ambiguous_match"}
 	}
 	if len(hits) == 0 {
+		return nil, nil
+	}
+	return hits[0], nil
+}
+
+// rowID is the id of a row from findRow; uuid.Nil for no row.
+func rowID(row map[string]any) (uuid.UUID, error) {
+	if row == nil {
 		return uuid.Nil, nil
 	}
-	id, err := uuid.Parse(fmt.Sprint(hits[0]["id"]))
+	id, err := uuid.Parse(fmt.Sprint(row["id"]))
 	if err != nil {
 		return uuid.Nil, &ExecError{Kind: KindInternal, Code: "bad_record_id", Err: err}
 	}
 	return id, nil
+}
+
+// matchValue returns the usable value of a match field. An explicit null is
+// as missing as an absent key; an empty value must never reach List: query
+// drops an OpEq filter on "" (no WHERE), which would return unfiltered rows.
+// Zero and false are legitimate values.
+func matchValue(vals map[string]any, f string) (any, error) {
+	v, ok := vals[f]
+	if !ok || v == nil {
+		return nil, &ExecError{Kind: KindInvalid, Code: "match_value_missing"}
+	}
+	if sv, isStr := v.(string); isStr && strings.TrimSpace(sv) == "" {
+		return nil, &ExecError{Kind: KindInvalid, Code: "match_value_empty"}
+	}
+	return v, nil
+}
+
+// scopeAllows reports whether the entity scope (nil: none) sees the row.
+func scopeAllows(r map[string]any, sc *dynamic.EntityScope) bool {
+	if sc == nil {
+		return true
+	}
+	if b, has := r["branch_id"]; has && b != nil {
+		return sc.Allows(fmt.Sprint(b))
+	}
+	return sc.Allows("")
 }
 
 // matchRows lists up to perPage rows whose match columns equal vals and that
@@ -565,18 +646,9 @@ func find(ctx context.Context, st dynStore, model string, user modelbase.AuthUse
 func matchRows(ctx context.Context, st dynStore, model string, user modelbase.AuthUser, match []string, vals map[string]any, sc *dynamic.EntityScope, perPage int) ([]map[string]any, error) {
 	filters := make(map[string]query.Filter, len(match))
 	for _, f := range match {
-		v, ok := vals[f]
-		if !ok {
-			return nil, &ExecError{Kind: KindInvalid, Code: "match_value_missing"}
-		}
-		// An explicit null is as missing as an absent key; an empty value must
-		// never reach List: query drops an OpEq filter on "" (no WHERE), which
-		// would return unfiltered rows. Zero and false are legitimate values.
-		if v == nil {
-			return nil, &ExecError{Kind: KindInvalid, Code: "match_value_missing"}
-		}
-		if sv, isStr := v.(string); isStr && strings.TrimSpace(sv) == "" {
-			return nil, &ExecError{Kind: KindInvalid, Code: "match_value_empty"}
+		v, err := matchValue(vals, f)
+		if err != nil {
+			return nil, err
 		}
 		filters[f] = query.Filter{Op: query.OpEq, Value: fmt.Sprint(v)}
 	}
@@ -598,14 +670,8 @@ func matchRows(ctx context.Context, st dynStore, model string, user modelbase.Au
 			continue
 		}
 		matched++
-		if sc != nil {
-			if b, has := r["branch_id"]; has && b != nil {
-				if !sc.Allows(fmt.Sprint(b)) {
-					continue
-				}
-			} else if !sc.Allows("") {
-				continue
-			}
+		if !scopeAllows(r, sc) {
+			continue
 		}
 		hits = append(hits, r)
 	}
