@@ -178,6 +178,11 @@ type dynStore interface {
 	Create(ctx context.Context, model string, user modelbase.AuthUser, input map[string]any) (map[string]any, error)
 	Update(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID, input map[string]any) (map[string]any, error)
 	Delete(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID) error
+	// UpdateGuarded and DeleteSealed are the guarded writes of dynamic/guarded.go:
+	// the staleness check and the write happen under one row lock, and the seal
+	// plus the soft delete in one transaction.
+	UpdateGuarded(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID, input map[string]any, g *dynamic.WriteGuard) (map[string]any, error)
+	DeleteSealed(ctx context.Context, model string, user modelbase.AuthUser, id uuid.UUID, seal map[string]any, g *dynamic.WriteGuard) error
 	TableMetadata(ctx context.Context, model string) (*modelbase.TableMetadata, error)
 	// ExecAction, Restore, ActionDef and ActiveStageMachine back record.action,
 	// record.restore and record.transition (see record_ops.go).
@@ -209,9 +214,12 @@ const maxDeleteRowsExecutorLimit = 199
 // because the signed request is the authorization.
 //
 // Upsert is find-then-write. Inside one process the pair is serialized per
-// (org, model, match values); across replicas the model MUST carry a unique
-// index over the match fields (see docs/inbound-events.md): the loser's create
-// then fails, the executor re-reads and updates instead.
+// (org, model, match values) as an optimization only; across replicas the model
+// MUST carry a unique index over the match fields (see docs/inbound-events.md):
+// the loser's create then fails, the executor re-reads and updates instead.
+// With a guard the write is conditional on the database row (UpdateGuarded /
+// DeleteSealed lock the row and judge the guard on the committed value), so a
+// stale event never overwrites a newer one, whichever replica wrote it.
 type DynamicExecutor struct {
 	Service *dynamic.Service
 	// Caller builds the principal; default dynamic.NewSystemCaller.
@@ -249,10 +257,13 @@ type DynamicExecutor struct {
 
 	store dynStore         // test seam; nil means Service
 	now   func() time.Time // test seam; nil means time.Now
-	// TODO(parte B): locks only serialize inside one process; a multi-replica
-	// lock (advisory lock / conditional UPDATE) and a per-action key (the lock
-	// is derived from Route.Match, so a delete whose match differs from the
-	// upsert's takes another bucket) belong to part B.
+	// locks is an OPTIMIZATION, never a guarantee: it serializes the requests of
+	// this process that share a match key, so they do not queue on the database
+	// row lock. It does not cross replicas and an action whose match differs
+	// (a delete by sku+warehouse next to an upsert by sku) takes another bucket.
+	// What makes a guarded write correct is dynamic.Service.UpdateGuarded /
+	// DeleteSealed: the stale check runs on the row locked in the database, so
+	// it holds whatever the match and however many replicas there are.
 	locks [64]sync.Mutex
 }
 
@@ -489,65 +500,114 @@ func (d *DynamicExecutor) Execute(ctx context.Context, op Operation) (Outcome, e
 		if err := d.allow(ctx, op, "update"); err != nil {
 			return Outcome{}, err
 		}
+		// The in-process lock only reduces contention between the requests of
+		// this replica; the guarantee of a guarded write is the row lock of
+		// UpdateGuarded (see writeRow), which holds across replicas.
 		unlock := d.lock(op)
 		defer unlock()
-		row, err := findRow(ctx, st, model, user, op.Route.Match, op.Values, sc)
-		if err != nil {
-			return Outcome{}, err
-		}
-		id, err := rowID(row)
-		if err != nil {
-			return Outcome{}, err
-		}
-		if id != uuid.Nil {
-			stale, err := d.guardStale(ctx, st, op, sc, row)
-			if err != nil {
-				return Outcome{}, err
-			}
-			if stale {
-				return Outcome{Stale: true}, nil
+		// A row another replica deletes between the find and the guarded write
+		// is judged again from the top (a tombstone may now decide), a bounded
+		// number of times.
+		for attempt := 0; attempt < maxWriteAttempts; attempt++ {
+			out, gone, err := d.upsertOnce(ctx, st, user, op, sc)
+			if !gone {
+				return out, err
 			}
 		}
-		if id == uuid.Nil {
-			if op.Route.Op == OpUpdate {
-				return Outcome{}, &ExecError{Kind: KindNotFound, Code: "record_not_found"}
-			}
-			if err := d.allow(ctx, op, "create"); err != nil {
-				return Outcome{}, err
-			}
-			stale, err := d.guardStale(ctx, st, op, sc, nil)
-			if err != nil {
-				return Outcome{}, err
-			}
-			if stale {
-				return Outcome{Stale: true}, nil
-			}
-			out, cerr := create(ctx, st, model, user, withDefaults(op.CreateDefaults, op.Values))
-			if cerr == nil {
-				return out, nil
-			}
-			// Lost a cross-replica race (unique index) -> update the winner,
-			// but only after the guard and the tombstones have judged it too.
-			winner, ferr := findRow(ctx, st, model, user, op.Route.Match, op.Values, sc)
-			wid, ierr := rowID(winner)
-			if ferr != nil || ierr != nil || wid == uuid.Nil {
-				return Outcome{}, cerr
-			}
-			stale, err = d.guardStale(ctx, st, op, sc, winner)
-			if err == nil && !stale {
-				stale, err = d.guardStale(ctx, st, op, sc, nil)
-			}
-			if err != nil {
-				return Outcome{}, err
-			}
-			if stale {
-				return Outcome{Stale: true}, nil
-			}
-			return update(ctx, st, model, user, wid, op.Values)
-		}
-		return update(ctx, st, model, user, id, op.Values)
+		return Outcome{}, &ExecError{Kind: KindConflict, Code: "concurrent_modification"}
 	}
 	return Outcome{}, &ExecError{Kind: KindInternal, Code: "bad_op"}
+}
+
+// maxWriteAttempts bounds how many times an upsert/update re-reads the row
+// after losing it to a concurrent delete.
+const maxWriteAttempts = 3
+
+// upsertOnce is one find -> guard -> write pass of record.update|upsert. gone
+// reports that the row vanished under a guarded write and the pass must be
+// repeated.
+func (d *DynamicExecutor) upsertOnce(ctx context.Context, st dynStore, user modelbase.AuthUser, op Operation, sc *dynamic.EntityScope) (out Outcome, gone bool, err error) {
+	model := op.Route.Model
+	row, err := findRow(ctx, st, model, user, op.Route.Match, op.Values, sc)
+	if err != nil {
+		return Outcome{}, false, err
+	}
+	id, err := rowID(row)
+	if err != nil {
+		return Outcome{}, false, err
+	}
+	if id != uuid.Nil {
+		stale, err := d.guardStale(ctx, st, op, sc, row)
+		if err != nil {
+			return Outcome{}, false, err
+		}
+		if stale {
+			return Outcome{Stale: true}, false, nil
+		}
+		return d.writeRow(ctx, st, user, op, id)
+	}
+	if op.Route.Op == OpUpdate {
+		return Outcome{}, false, &ExecError{Kind: KindNotFound, Code: "record_not_found"}
+	}
+	if err := d.allow(ctx, op, "create"); err != nil {
+		return Outcome{}, false, err
+	}
+	stale, err := d.guardStale(ctx, st, op, sc, nil)
+	if err != nil {
+		return Outcome{}, false, err
+	}
+	if stale {
+		return Outcome{Stale: true}, false, nil
+	}
+	out, cerr := create(ctx, st, model, user, withDefaults(op.CreateDefaults, op.Values))
+	if cerr == nil {
+		return out, false, nil
+	}
+	// Lost a cross-replica race (unique index) -> update the winner,
+	// but only after the guard and the tombstones have judged it too.
+	winner, ferr := findRow(ctx, st, model, user, op.Route.Match, op.Values, sc)
+	wid, ierr := rowID(winner)
+	if ferr != nil || ierr != nil || wid == uuid.Nil {
+		return Outcome{}, false, cerr
+	}
+	stale, err = d.guardStale(ctx, st, op, sc, winner)
+	if err == nil && !stale {
+		stale, err = d.guardStale(ctx, st, op, sc, nil)
+	}
+	if err != nil {
+		return Outcome{}, false, err
+	}
+	if stale {
+		return Outcome{Stale: true}, false, nil
+	}
+	return d.writeRow(ctx, st, user, op, wid)
+}
+
+// writeRow updates the row id with the event's values. Without a guard it is a
+// plain Update. With one it is UpdateGuarded: the row is locked and the guard
+// is judged again on the locked, committed value, so an event that went stale
+// after the read (another replica wrote a newer one) is dropped instead of
+// overwriting it. gone reports the row no longer exists.
+func (d *DynamicExecutor) writeRow(ctx context.Context, st dynStore, user modelbase.AuthUser, op Operation, id uuid.UUID) (out Outcome, gone bool, err error) {
+	model := op.Route.Model
+	if op.Guard == nil {
+		out, err = update(ctx, st, model, user, id, op.Values)
+		return out, false, err
+	}
+	vals := make(map[string]any, len(op.Values))
+	for k, v := range op.Values {
+		vals[k] = v
+	}
+	row, err := st.UpdateGuarded(ctx, model, user, id, vals, op.Guard.writeGuard())
+	switch {
+	case err == nil:
+		return Outcome{RecordID: idOf(row, id.String())}, false, nil
+	case errors.Is(err, dynamic.ErrStaleWrite):
+		return Outcome{Stale: true}, false, nil
+	case errors.Is(err, dynamic.ErrRecordNotFound):
+		return Outcome{}, true, nil
+	}
+	return Outcome{}, false, mapDynamicErr(err)
 }
 
 // deleteRows runs OpDelete. Rows are selected only by Route.Match (typed
@@ -633,7 +693,7 @@ func (d *DynamicExecutor) deleteRows(ctx context.Context, st dynStore, user mode
 	if len(ids) == 0 && stale > 0 {
 		return Outcome{Stale: true}, nil
 	}
-	n := 0
+	n, lost := 0, 0
 	for _, id := range ids {
 		var derr error
 		if mode == DeleteHard {
@@ -641,12 +701,19 @@ func (d *DynamicExecutor) deleteRows(ctx context.Context, st dynStore, user mode
 		} else {
 			derr = sealAndDelete(ctx, st, user, op, mode, id)
 		}
+		if errors.Is(derr, dynamic.ErrStaleWrite) {
+			lost++ // a newer event sealed the row after we listed it: it stays
+			continue
+		}
 		if derr != nil && !errors.Is(derr, dynamic.ErrRecordNotFound) {
 			return Outcome{}, mapDynamicErr(derr)
 		}
 		if derr == nil {
 			n++
 		}
+	}
+	if n == 0 && lost > 0 {
+		return Outcome{Stale: true}, nil
 	}
 	if n == 0 {
 		return Outcome{NotFound: true}, nil

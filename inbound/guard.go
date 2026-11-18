@@ -488,20 +488,29 @@ func (d *DynamicExecutor) checkGuard(ctx context.Context, who string, a Action) 
 	return nil
 }
 
-// sealAndDelete stamps the guarded column with the event's value and then
-// soft-deletes, so the tombstone carries the deletion's date. dynamic.Service
-// exposes no transaction across Update and Delete: the pair runs under the
-// per-key lock and the stamp is written first, so a crash in between leaves a
-// live row with the newer value (a retry with gte converges).
-//
-// TODO(parte B): make seal + delete atomic (one transaction, or delete first
-// and seal the tombstone) so a failure between them cannot leave a live row
-// that a gt retry reports as stale_event forever.
+// writeGuard is the guard as dynamic.Service judges it on the locked row:
+// stale when the event does not satisfy "event op row[field]". A record.create
+// (Create) compares only tombstones, never the row it finds: that row is its
+// own earlier attempt.
+func (g *OperationGuard) writeGuard() *dynamic.WriteGuard {
+	return &dynamic.WriteGuard{Field: g.Field, Stale: func(cur any) (bool, error) {
+		if g.Create {
+			return false, nil
+		}
+		return g.blocks(cur)
+	}}
+}
+
+// sealAndDelete soft-deletes the row, stamping the guarded column with the
+// event's value first so the tombstone carries the deletion's date. With a
+// guard both statements run in ONE transaction (dynamic.Service.DeleteSealed):
+// a crash or a failed delete rolls the seal back too, so no live row is left
+// holding the event's value (which a "gt" retry would then report stale
+// forever). The guard is judged again on the locked row: a newer event that
+// won the race makes it return dynamic.ErrStaleWrite and nothing is written.
 func sealAndDelete(ctx context.Context, st dynStore, user modelbase.AuthUser, op Operation, mode string, id uuid.UUID) error {
 	if g := op.Guard; g != nil && mode == DeleteSoft {
-		if _, err := st.Update(ctx, op.Route.Model, user, id, map[string]any{g.Field: g.Value}); err != nil {
-			return err
-		}
+		return st.DeleteSealed(ctx, op.Route.Model, user, id, map[string]any{g.Field: g.Value}, g.writeGuard())
 	}
 	return st.Delete(ctx, op.Route.Model, user, id)
 }

@@ -151,7 +151,7 @@ Las peticiones sin autenticar no escriben en la bitácora.
 - **Nonces.** El caché es por organización (`MaxNonces` por org, 20000 por omisión; `MaxOrgs`) con expiración O(1) amortizada (cola FIFO por org, sin recorrer el mapa). Una organización que llena su ventana solo se bloquea a sí misma. Un verificador que implemente `PreparedVerifier` (`Prepare` autentica sin efectos y devuelve `commit`) hace que el nonce se consuma recién después del limitador por organización, `Content-Type`, esquema, llave y alcance: un 415/422/429 no gasta nonce, y una petición sin firma válida nunca toca el caché. Un `Verifier` simple sigue funcionando (autentica y consume de una vez).
 - **Limitador.** `TokenBucket` desaloja por LRU al llenarse `MaxKeys` (nunca rechaza una clave nueva solo por tabla llena). La llave pre-auth agrupa IPv6 por /64 (`LimiterKeyForIP`). La IP del cliente es `RemoteAddr`; `X-Forwarded-For` solo se honra si el par está en `Config.TrustedProxies` (`ClientIPFrom` toma la entrada más a la derecha que no sea proxy de confianza). Sin proxies de confianza, XFF se ignora porque es falsificable. `Config.ClientIP` sigue permitiendo reemplazarlo.
 - **Alcance (RFC 0001).** Si el contrato declara `scope.branch`/`scope.entity`, el evento DEBE traerlos (422 `scope_required`). `DynamicExecutor.EntityScope` es obligatorio cuando hay entidad: sin resolutor responde 500 (mal configurado) y si el resolutor devuelve `ok=false`, 403 `scope_unresolved`. La búsqueda de `update`/`upsert` ignora filas fuera del alcance (se crea una propia, jamás se modifica la de otra entidad) y una sucursal fuera del alcance es 403 `scope_forbidden`.
-- **Upsert.** Se serializa por (org, modelo, valores de `match`) dentro del proceso. Entre réplicas **el modelo debe tener un índice único sobre los campos de `match`** (por organización): quien pierde la carrera falla al crear, relee y actualiza a la ganadora.
+- **Upsert.** Se serializa por (org, modelo, valores de `match`) dentro del proceso (solo optimización; con guarda la garantía es el candado de fila, ver "Atomicidad"). Entre réplicas **el modelo debe tener un índice único sobre los campos de `match`** (por organización): quien pierde la carrera falla al crear, relee y actualiza a la ganadora.
 - **`match` válido al registrar.** `New`, `Handler.Check()` y `Handler.RegisterContract(ctx, c)` consultan `ContractChecker` (lo implementa `DynamicExecutor`): cada campo de `match` debe ser una columna declarada del modelo; si no, error `ErrInvalidContract` al arrancar, aunque la tabla esté vacía. La comparación de la fila encontrada es por tipo (números numéricamente, cadenas exactas). Requiere que el modelo esté registrado antes de cargar los contratos.
 - **Recibos.** `Finish` queda para compatibilidad; el manejador usa `AttemptFinisher.FinishAttempt` (ambos stores) con cerca por intento: un proceso lento tras vencer el arriendo no pisa al que reclamó. Los rechazos (`rejected`) se acotan por organización (`MaxRejected`, 500 por omisión) y se podan los más viejos. `ReceiptFilter.EventKey` exige `Contract` en todos los stores (`ErrEventKeyNeedsContract`).
 - **Números.** Valores que no caben en `float64` (`1e999`) se rechazan con 422 (`number_range`).
@@ -391,11 +391,22 @@ para fechas y enteros).
   del borrado (un `updated` posterior más viejo queda `stale_event`). El sello es un `UPDATE` por
   `dynamic.Service` (hooks, eventos `updated`, auditoría), así que el borrado lógico con guarda exige que
   `Authorize` conceda `"delete"` Y `"update"` (`403 forbidden` antes de cualquier efecto); sin valor de guarda
-  o en modo `hard` solo hace falta `"delete"`. Limitación (parte B): `dynamic.Service` no ofrece una
-  transacción entre `Update` y `Delete`; ambos van seguidos bajo el candado por clave y el sello se escribe
-  primero. Si el proceso muere entre los dos, la fila queda viva con el valor del evento y el reintento
-  converge con `gte`; con `gt` ese reintento queda `stale_event` (usa `gte` en borrados). El candado es de un
-  solo proceso: con varias réplicas la guarda no cierra la carrera leer-comparar-escribir (parte B).
+  o en modo `hard` solo hace falta `"delete"`.
+- **Atomicidad y varias réplicas (parte B).** La garantía NO es el candado en proceso (solo reduce contención entre
+  las peticiones de un proceso que comparten `match`; un delete con otro `match` que el upsert cae en otra cubeta)
+  sino la base de datos: la escritura con guarda va por `dynamic.Service.UpdateGuarded` y el borrado con guarda por
+  `DeleteSealed`. Ambos abren una transacción, bloquean la fila (un `UPDATE` sin cambio de la columna guardada: en
+  Postgres toma el candado de la fila y quien llegue después espera al `COMMIT`, en SQLite el de escritura), la
+  releen y recién entonces aplican `evento op fila[field]` sobre el valor confirmado. Si otra réplica escribió un
+  evento más nuevo entre la lectura y la escritura, el evento viejo queda `stale_event` y no escribe nada ni publica
+  eventos; si la fila desapareció entre ambos pasos, el ejecutor la vuelve a juzgar desde cero (hasta 3 veces;
+  luego `409 concurrent_modification`). La comparación se hace en Go y no en `WHERE campo <= ?` porque la columna
+  puede ser un instante guardado como texto, un entero o `NULL`, y la guarda falla cerrada ante un valor ilegible
+  (`guard_row_value_unreadable`); el candado de fila es lo que vuelve segura esa decisión. El sello y el borrado
+  lógico van en UNA transacción: si falla cualquiera de los dos se revierte el sello, no queda una fila viva con
+  el valor del evento y el reintento converge también con `gt`. Se publica un solo `updated` (el sello) y un solo
+  `deleted`, después del `COMMIT` y solo si tuvo éxito. Para crear sigue valiendo el índice único sobre `match`: el
+  perdedor de la carrera relee y pasa por la guarda.
 - **Registro.** `DynamicExecutor.CheckContract` exige que `field` sea columna escribible (`WritableColumns`) y
   que esté en `mapping` (salvo `record.delete`, que solo exige la columna): `guard_field_not_mapped`. Un
   `upsert`/`create` con `match` sobre un modelo con borrado lógico exige poder leer lápidas
