@@ -48,8 +48,8 @@ func (f *fakeDyn) UpdateGuarded(_ context.Context, _ string, u modelbase.AuthUse
 	return nil, dynamic.ErrRecordNotFound
 }
 
-// DeleteSealed seals and tombstones in one step (counts one update and one
-// delete, like the real pair of events).
+// DeleteSealed seals and tombstones in one step and counts ONE delete (the real
+// service publishes only "deleted": the seal is not an "updated").
 func (f *fakeDyn) DeleteSealed(_ context.Context, _ string, u modelbase.AuthUser, id uuid.UUID, seal map[string]any, g *dynamic.WriteGuard) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -64,7 +64,6 @@ func (f *fakeDyn) DeleteSealed(_ context.Context, _ string, u modelbase.AuthUser
 					return dynamic.ErrStaleWrite
 				}
 			}
-			atomic.AddInt32(&f.updates, 1)
 			atomic.AddInt32(&f.deletes, 1)
 			for k, v := range seal {
 				r[k] = v
@@ -443,7 +442,7 @@ func TestGuardedDeleteAndUpsertWithDifferentMatchDoNotClobber(t *testing.T) {
 		}
 
 		// A newer delete (t=7) goes through: sealed with its date, one
-		// `updated` and one `deleted`.
+		// `deleted` and NO `updated` (the seal is not an event).
 		upd, del := e.bus.count(".updated"), e.bus.count(".deleted")
 		out, err = e.ex1.Execute(ctx, e.deleteOp("S1", "W1", 7))
 		if err != nil || out.Affected != 1 {
@@ -452,8 +451,8 @@ func TestGuardedDeleteAndUpsertWithDifferentMatchDoNotClobber(t *testing.T) {
 		if r := e.row(id); !r.DeletedAt.Valid || !atomSealed(r, 7) {
 			t.Fatalf("tombstone not sealed with the delete's date: %+v", r)
 		}
-		if e.bus.count(".updated")-upd != 1 || e.bus.count(".deleted")-del != 1 {
-			t.Fatalf("events: updated +%d deleted +%d, want one each", e.bus.count(".updated")-upd, e.bus.count(".deleted")-del)
+		if e.bus.count(".updated")-upd != 0 || e.bus.count(".deleted")-del != 1 {
+			t.Fatalf("events: updated +%d deleted +%d, want 0 and 1", e.bus.count(".updated")-upd, e.bus.count(".deleted")-del)
 		}
 
 		// And an older upsert (t=6) cannot resurrect it.
@@ -503,8 +502,8 @@ func TestSealedDeleteIsAtomicAndRetryConvergesWithGt(t *testing.T) {
 		if r := e.row(id); !r.DeletedAt.Valid || !atomSealed(r, 3) {
 			t.Fatalf("retry did not delete and seal: %+v", r)
 		}
-		if e.bus.count(".updated")-upd != 1 || e.bus.count(".deleted")-del != 1 {
-			t.Fatalf("events after the retry: updated +%d deleted +%d, want one each",
+		if e.bus.count(".updated")-upd != 0 || e.bus.count(".deleted")-del != 1 {
+			t.Fatalf("events after the retry: updated +%d deleted +%d, want 0 and 1",
 				e.bus.count(".updated")-upd, e.bus.count(".deleted")-del)
 		}
 	})

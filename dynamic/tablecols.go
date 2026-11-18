@@ -105,12 +105,13 @@ func (s *Service) liveColumns(ctx context.Context, table string) map[string]stru
 		return e.cols
 	}
 	var cols map[string]struct{}
-	if s.db.Dialector != nil {
-		switch s.db.Dialector.Name() {
+	dbh := s.queryDB(ctx) // the open guarded transaction, when there is one
+	if dbh.Dialector != nil {
+		switch dbh.Dialector.Name() {
 		case "postgres":
-			cols = introspectColumns(ctx, s.db, table)
+			cols = introspectColumns(ctx, dbh, table)
 		case "sqlite":
-			cols = introspectSQLiteColumns(ctx, s.db, table)
+			cols = introspectSQLiteColumns(ctx, dbh, table)
 		}
 	}
 	s.colCache.put(table, liveColsEntry{cols: cols, at: time.Now(), gen: gen})

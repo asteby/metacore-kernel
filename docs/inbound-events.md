@@ -389,14 +389,16 @@ para fechas y enteros).
 - **`record.delete` con guarda.** Con la fila viva y el evento viejo no borra. Si no, escribe
   `fila[field] = valor del evento` y hace el borrado lógico, de modo que la lápida queda sellada con la fecha
   del borrado (un `updated` posterior más viejo queda `stale_event`). El sello es un `UPDATE` por
-  `dynamic.Service` (hooks, eventos `updated`, auditoría), así que el borrado lógico con guarda exige que
+  `dynamic.Service` (hooks before-update, validación, auditoría; NO publica `updated`, ver «Atomicidad»), así que el borrado lógico con guarda exige que
   `Authorize` conceda `"delete"` Y `"update"` (`403 forbidden` antes de cualquier efecto); sin valor de guarda
   o en modo `hard` solo hace falta `"delete"`.
 - **Atomicidad y varias réplicas (parte B).** La garantía NO es el candado en proceso (solo reduce contención entre
   las peticiones de un proceso que comparten `match`; un delete con otro `match` que el upsert cae en otra cubeta)
   sino la base de datos: la escritura con guarda va por `dynamic.Service.UpdateGuarded` y el borrado con guarda por
-  `DeleteSealed`. Ambos abren una transacción, bloquean la fila (un `UPDATE` sin cambio de la columna guardada: en
-  Postgres toma el candado de la fila y quien llegue después espera al `COMMIT`, en SQLite el de escritura), la
+  `DeleteSealed`. Ambos abren una transacción, bloquean la fila (`SELECT id … FOR UPDATE` filtrado por organización en Postgres y MySQL/MariaDB: toma el
+  candado sin escribir una versión nueva de la fila, así que no dispara triggers de `UPDATE` ni CDC y quien llegue
+  después espera al `COMMIT`; una fila de otra organización no se encuentra y no se bloquea. SQLite no tiene
+  candados de fila: ahí queda el `UPDATE` sin cambio de la columna guardada, que toma el de escritura de la BD), la
   releen y recién entonces aplican `evento op fila[field]` sobre el valor confirmado. Si otra réplica escribió un
   evento más nuevo entre la lectura y la escritura, el evento viejo queda `stale_event` y no escribe nada ni publica
   eventos; si la fila desapareció entre ambos pasos, el ejecutor la vuelve a juzgar desde cero (hasta 3 veces;
@@ -404,11 +406,34 @@ para fechas y enteros).
   puede ser un instante guardado como texto, un entero o `NULL`, y la guarda falla cerrada ante un valor ilegible
   (`guard_row_value_unreadable`); el candado de fila es lo que vuelve segura esa decisión. El sello y el borrado
   lógico van en UNA transacción: si falla cualquiera de los dos se revierte el sello, no queda una fila viva con
-  el valor del evento y el reintento converge también con `gt`. Se publica un solo `updated` (el sello) y un solo
-  `deleted`, después del `COMMIT` y solo si tuvo éxito. Para crear sigue valiendo el índice único sobre `match`: el
+  el valor del evento y el reintento converge también con `gt`. **Eventos de `DeleteSealed`: solo `deleted`.** El sello es un detalle de implementación del
+  borrado: al publicar, la fila ya está borrada y un suscriptor no podría releerla, así que NO se publica `updated`
+  ni corre el hook after-update (antes de este cambio se publicaban `updated` + `deleted`). El `deleted` sale
+  después del `COMMIT` y solo si tuvo éxito; su `before` es la fila ya sellada (la columna guardada trae el valor
+  del evento) y no trae `after`, igual que cualquier `deleted`. Los hooks before-update, la validación y los
+  sellos de auditoría del sello sí corren (dentro de la transacción) y los after-delete, la limpieza de archivos
+  y de pivotes son los de `Delete`. Los pasos que `update` hace tras el `COMMIT` (sincronizar pivotes, upsert de
+  extensiones, líneas de documento) son de mejor esfuerzo aquí: si uno falla se registra en el log y el borrado
+  sigue (`deleted` y limpieza); la fila ya no existe y un reintento solo respondería `not_found`.
+  **Conexiones.** Mientras la transacción está abierta TODA consulta (unicidad y referencias de la validación,
+  extensiones, introspección de columnas) usa la conexión de la transacción: una escritura con guarda nunca
+  necesita una segunda conexión, así que con un pool de una conexión no se bloquea y con N escrituras
+  concurrentes sobre un pool de N no hay inanición. **Orden de los hooks.** El juicio que vale es el hecho bajo
+  el candado; para no correr los hooks before-delete de un borrado que ya es viejo, `DeleteSealed` hace antes
+  de ellos una lectura barata y responde `ErrStaleWrite` si la fila confirmada ya es vieja. Si otra réplica la
+  hace vieja entre esa lectura y el candado, los before-delete sí corrieron y el borrado se rechaza igual con
+  `ErrStaleWrite`: un hook before-delete debe tolerar un borrado que luego se rechaza (ya debía, porque
+  `checkDeletable` o la transacción también pueden fallar después). El hard delete con guarda sigue juzgándose
+  solo al listar, fuera del candado. Bajo `REPEATABLE READ` un escritor concurrente que ya cambió la fila puede
+  recibir `40001` (serialization failure) en vez de esperar: es propio del nivel de aislamiento. Para crear sigue valiendo el índice único sobre `match`: el
   perdedor de la carrera relee y pasa por la guarda.
 - **Registro.** `DynamicExecutor.CheckContract` exige que `field` sea columna escribible (`WritableColumns`) y
-  que esté en `mapping` (salvo `record.delete`, que solo exige la columna): `guard_field_not_mapped`. Un
+  que esté en `mapping` (salvo `record.delete`, que solo exige la columna): `guard_field_not_mapped`. La columna
+  guardada se lee de la fila como JSON, así que su campo en el struct del modelo no puede llevar `omitempty` ni
+  `omitzero` (salvo que sea puntero) ni `json:"-"`: con `omitempty` y valor 0 la columna desaparece de la fila,
+  se lee como `NULL` y nunca bloquea. `dynamic.Service.CheckGuardField(ctx, model, field)` lo comprueba y el
+  registro falla con `guard_field_not_comparable` (`UpdateGuarded`/`DeleteSealed` lo verifican también en cada
+  llamada con `ErrInvalidInput`). Un
   `upsert`/`create` con `match` sobre un modelo con borrado lógico exige poder leer lápidas
   (`guard_tombstones_unavailable`): el host entrega `DynamicExecutor.Tombstones` (`TombstoneFinder`:
   `Tombstones(ctx, TombstoneQuery)`, que debe aplicar en la BD organización, `match`, sucursal y alcance antes
