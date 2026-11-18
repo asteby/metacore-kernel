@@ -94,15 +94,30 @@ type Action struct {
 	Op      Op     `json:"op,omitempty"`
 }
 
-// Condition is a declarative guard: exactly one of Eq or Exists.
+// Condition is a declarative guard: exactly one of Eq, Ne, In or Exists. Same
+// operators and semantics as webhooks.Condition (scalars only here):
 //
 //	{"path":"result.created","eq":true}
+//	{"path":"payload.action","ne":"deleted"}
+//	{"path":"payload.action","in":["created","updated"]}
 //	{"path":"payload.email","exists":true}
+//
+// A missing path makes eq and in false and ne true. Numbers compare by value
+// (1 == 1.0) and never equal a string ("1" != 1). In takes 1..MaxConditionIn
+// scalars.
 type Condition struct {
 	Path   string          `json:"path"`
 	Eq     json.RawMessage `json:"eq,omitempty"`
+	Ne     json.RawMessage `json:"ne,omitempty"`
+	In     []any           `json:"in,omitempty"`
 	Exists *bool           `json:"exists,omitempty"`
 }
+
+// MaxConditionIn caps the values of Condition.In.
+const MaxConditionIn = 50
+
+// CodeInvalidCondition prefixes the registration error of a bad `when`.
+const CodeInvalidCondition = "invalid_condition"
 
 // Guard ops.
 const (
@@ -291,10 +306,10 @@ type cAction struct {
 
 type cCond struct {
 	ns, path string
-	eq       any
-	hasEq    bool
+	op       string // eq|ne|in|exists
+	eq       any    // eq, ne
+	set      []any  // in
 	exists   bool
-	wantsEx  bool
 }
 
 // validator checks template references against what exists at that point of
@@ -485,7 +500,7 @@ func compileAction(a Action, v *validator) (*cAction, error) {
 	if a.When != nil {
 		cc, err := compileCond(*a.When, v)
 		if err != nil {
-			return nil, fmt.Errorf("when: %v", err)
+			return nil, fmt.Errorf("%s: when: %v", CodeInvalidCondition, err)
 		}
 		ca.when = cc
 	}
@@ -551,24 +566,57 @@ func compileCond(c Condition, v *validator) (*cCond, error) {
 		return nil, err
 	}
 	cc := &cCond{ns: ns, path: path}
-	if (len(c.Eq) > 0) == (c.Exists != nil) {
-		return nil, fmt.Errorf("exactly one of eq|exists")
+	n := 0
+	if len(c.Eq) > 0 {
+		n++
+		cc.op = "eq"
+	}
+	if len(c.Ne) > 0 {
+		n++
+		cc.op = "ne"
+	}
+	if c.In != nil {
+		n++
+		cc.op = "in"
 	}
 	if c.Exists != nil {
-		cc.wantsEx, cc.exists = true, *c.Exists
-		return cc, nil
+		n++
+		cc.op = "exists"
 	}
-	dec := json.NewDecoder(bytes.NewReader(c.Eq))
-	dec.UseNumber()
-	var val any
-	if err := dec.Decode(&val); err != nil {
-		return nil, fmt.Errorf("eq: %v", err)
+	if n != 1 {
+		return nil, fmt.Errorf("exactly one of eq|ne|in|exists")
 	}
-	switch val.(type) {
-	case map[string]any, []any:
-		return nil, fmt.Errorf("eq must be a scalar")
+	switch cc.op {
+	case "exists":
+		cc.exists = *c.Exists
+	case "eq", "ne":
+		raw := c.Eq
+		if cc.op == "ne" {
+			raw = c.Ne
+		}
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		var val any
+		if err := dec.Decode(&val); err != nil {
+			return nil, fmt.Errorf("%s: %v", cc.op, err)
+		}
+		switch val.(type) {
+		case map[string]any, []any:
+			return nil, fmt.Errorf("%s must be a scalar", cc.op)
+		}
+		cc.eq = normalize(val)
+	case "in":
+		if len(c.In) == 0 || len(c.In) > MaxConditionIn {
+			return nil, fmt.Errorf("in needs 1..%d values", MaxConditionIn)
+		}
+		for i, x := range c.In {
+			switch x.(type) {
+			case map[string]any, []any:
+				return nil, fmt.Errorf("in[%d] must be a scalar", i)
+			}
+			cc.set = append(cc.set, normalize(x))
+		}
 	}
-	cc.hasEq, cc.eq = true, normalize(val)
 	return cc, nil
 }
 
@@ -846,10 +894,25 @@ func evalMap(m map[string]node, e *evalEnv) (map[string]any, error) {
 
 func (c *cCond) holds(e *evalEnv) bool {
 	v, ok := e.resolve(c.ns, c.path)
-	if c.wantsEx {
+	switch c.op {
+	case "exists":
 		return ok == c.exists
+	case "eq":
+		return ok && equalScalar(normalize(v), c.eq)
+	case "ne":
+		return !ok || !equalScalar(normalize(v), c.eq)
+	case "in":
+		if !ok {
+			return false
+		}
+		nv := normalize(v)
+		for _, x := range c.set {
+			if equalScalar(nv, x) {
+				return true
+			}
+		}
 	}
-	return ok && equalScalar(normalize(v), c.eq)
+	return false
 }
 
 func equalScalar(a, b any) bool {

@@ -194,8 +194,18 @@ primera acción, un campo ajeno a la acción, un `match` fuera del `mapping`, m�
 acciones o un `do` desconocido fallan con `ErrInvalidContract`. En ejecución un valor
 ausente omite el campo (valor completo) o falla con `template_value_missing` (mezclado).
 
-**`when`.** `{"path": "...", "eq": <escalar>}` o `{"path": "...", "exists": true|false}`;
-falso = paso `skipped`.
+**`when`.** Exactamente UN operador por condición, sobre `payload.*`, `event.*` o `result.*`
+(mismos operadores y semántica que `webhooks.Condition`, solo escalares):
+`{"path": "...", "eq": <escalar>}`, `{"path": "...", "ne": <escalar>}`,
+`{"path": "...", "in": [<escalar>, ...]}` (1 a 50 valores) o `{"path": "...", "exists": true|false}`.
+Ruta ausente: `eq` e `in` son falsos y **`ne` es verdadero** (igual que en webhooks); use `exists`
+para exigir presencia. Los números se comparan por valor (`1` = `1.0`) y nunca igualan a una
+cadena (`1` ≠ `"1"`). Se valida al registrar: dos operadores, ninguno, `in` vacío o de más de 50
+valores, valores no escalares o una ruta `payload.*` fuera del esquema fallan con
+`ErrInvalidContract` (`actions[i] (...): invalid_condition: when: ...`). Falso = paso `skipped`.
+Ejemplo (despublicar en `deleted`, upsert en `created|updated`):
+`{"do":"record.upsert", ..., "when":{"path":"payload.action","in":["created","updated"]}}` y
+`{"do":"record.delete", ..., "when":{"path":"payload.action","eq":"deleted"}}`.
 
 **`on_error`.** `stop` (por omisión) o `continue`, por contrato o por acción. Con `continue`
 el paso queda `error` en el recibo y el evento termina `applied`.
