@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -58,6 +59,18 @@ type Outcome struct {
 type Executor interface {
 	Execute(ctx context.Context, op Operation) (Outcome, error)
 }
+
+// OpSupporter is an optional Executor port: an Executor that implements it
+// declares which operations it handles. A contract that declares record.delete
+// is refused at registration unless the Executor reports SupportsOp(OpDelete),
+// so a custom executor whose default branch creates or upserts can never
+// receive a delete it would misread. DynamicExecutor supports every Op.
+type OpSupporter interface {
+	SupportsOp(op Op) bool
+}
+
+// SupportsOp implements OpSupporter: the DynamicExecutor handles every Op.
+func (d *DynamicExecutor) SupportsOp(Op) bool { return true }
 
 // CommandFunc is a host-registered command. Contracts reference it by name;
 // they cannot define one.
@@ -136,6 +149,11 @@ type HardDeleter interface {
 
 // defaultMaxDeleteRows is the DynamicExecutor cap on rows per record.delete.
 const defaultMaxDeleteRows = 100
+
+// maxDeleteRowsCeiling is the highest MaxDeleteRows the executor accepts:
+// matchRows lists limit+1 rows and query.MaxPerPage (200) clips the page, so a
+// limit of 200 could not detect an excess.
+const maxDeleteRowsCeiling = 199
 
 // DynamicExecutor runs model routes through dynamic.Service as a system
 // principal scoped to the route's organization: tenant scoping, validation,
@@ -240,6 +258,12 @@ func (d *DynamicExecutor) checkModel(ctx context.Context, who, model string, fie
 // needs a model with deleted_at; hard needs the deleter and the explicit
 // opt-in of the model.
 func (d *DynamicExecutor) checkDeleteModel(ctx context.Context, who string, a Action) error {
+	if d.maxDeleteRows() > maxDeleteRowsCeiling {
+		return fmt.Errorf("%w: %s: MaxDeleteRows %d exceeds %d (query page cap)", ErrInvalidContract, who, d.maxDeleteRows(), maxDeleteRowsCeiling)
+	}
+	if err := d.checkAppendOnly(ctx, who, a); err != nil {
+		return err
+	}
 	if a.MaxRows > d.maxDeleteRows() {
 		return fmt.Errorf("%w: %s: max_rows %d exceeds the executor cap %d", ErrInvalidContract, who, a.MaxRows, d.maxDeleteRows())
 	}
@@ -256,6 +280,20 @@ func (d *DynamicExecutor) checkDeleteModel(ctx context.Context, who string, a Ac
 	meta, err := st.TableMetadata(ctx, a.Model)
 	if err != nil || !supportsSoftDelete(meta) {
 		return fmt.Errorf("%w: %s: model %q does not support soft delete (deleted_at)", ErrInvalidContract, who, a.Model)
+	}
+	return nil
+}
+
+// checkAppendOnly refuses record.delete on an append-only ledger (metadata
+// AppendOnly), soft and hard alike. A mandatory delete reason is not in the
+// model metadata: that policy still fails at runtime as a 422 rejected_by_model.
+func (d *DynamicExecutor) checkAppendOnly(ctx context.Context, who string, a Action) error {
+	st, err := d.st()
+	if err != nil {
+		return err
+	}
+	if meta, err := st.TableMetadata(ctx, a.Model); err == nil && meta != nil && meta.AppendOnly {
+		return fmt.Errorf("%w: %s: model %q is append-only and cannot be deleted", ErrInvalidContract, who, a.Model)
 	}
 	return nil
 }
@@ -495,6 +533,15 @@ func matchRows(ctx context.Context, st dynStore, model string, user modelbase.Au
 		v, ok := vals[f]
 		if !ok {
 			return nil, &ExecError{Kind: KindInvalid, Code: "match_value_missing"}
+		}
+		// An explicit null is as missing as an absent key; an empty value must
+		// never reach List: query drops an OpEq filter on "" (no WHERE), which
+		// would return unfiltered rows. Zero and false are legitimate values.
+		if v == nil {
+			return nil, &ExecError{Kind: KindInvalid, Code: "match_value_missing"}
+		}
+		if sv, isStr := v.(string); isStr && strings.TrimSpace(sv) == "" {
+			return nil, &ExecError{Kind: KindInvalid, Code: "match_value_empty"}
 		}
 		filters[f] = query.Filter{Op: query.OpEq, Value: fmt.Sprint(v)}
 	}

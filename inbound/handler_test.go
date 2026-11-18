@@ -59,6 +59,9 @@ type fakeExec struct {
 
 func newFakeExec() *fakeExec { return &fakeExec{rows: map[uuid.UUID][]map[string]any{}} }
 
+// SupportsOp declares the fake handles delete (OpSupporter).
+func (f *fakeExec) SupportsOp(Op) bool { return true }
+
 func (f *fakeExec) Execute(ctx context.Context, op Operation) (Outcome, error) {
 	atomic.AddInt32(&f.calls, 1)
 	if f.delay > 0 {

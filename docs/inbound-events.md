@@ -264,6 +264,9 @@ modo "borra todo":
   antes de un `event.emit`).
 - **Contrato de `Executor` propio.** `Operation` trae `Route.Op = OpDelete`, `DeleteMode` y `MaxRows`; debe
   devolver `Outcome{Affected, RecordID}` o `Outcome{NotFound: true}`. `dynStore` ganó `Delete`.
+- **Valores de `match` vacíos o nulos (fix de seguridad).** Un valor de `match` ausente o `null` falla con `422 match_value_missing`; una cadena vacía o solo espacios con `422 match_value_empty`, SIEMPRE antes de consultar (también en `record.update`/`record.upsert`). Motivo: la capa de consulta descarta un filtro `eq` sobre `""` (sin `WHERE`) y devolvería filas sin filtrar. Cero numérico y `false` siguen siendo valores válidos.
+- **Registro.** `DynamicExecutor.CheckContract` exige `MaxDeleteRows <= 199` (la página de consulta se recorta a 200 y se lista `límite+1`) y rechaza modelos `append_only`. La razón de borrado obligatoria no está en el metadato del modelo: sigue fallando en ejecución como `422 rejected_by_model`. Limitación: tras un borrado, si el origen recrea una fila con el mismo `match` y se reintenta el recibo viejo, se borra la nueva (el borrado es por `match`, no por id).
+- **Ejecutor propio.** Debe implementar `OpSupporter` (`SupportsOp(Op) bool`) y devolver `true` para `OpDelete`; si no, el contrato con `record.delete` se rechaza al registrar. `DynamicExecutor` la implementa.
 
 **Defaults solo al crear.** `defaults` (en `route` y en las acciones `record.*`) viajan como
 `Operation.CreateDefaults` y el ejecutor los aplica únicamente al crear la fila, nunca al

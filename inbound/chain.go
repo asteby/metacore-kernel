@@ -20,6 +20,8 @@ func (h *Handler) checkChain(c *compiled) []error {
 		case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert, ActionRecordDelete:
 			if h.cfg.Executor == nil {
 				add("actions[%d] %s: no Executor", i, a.Do)
+			} else if a.Do == ActionRecordDelete && !executorSupports(h.cfg.Executor, OpDelete) {
+				add("actions[%d] %s: the Executor does not declare OpDelete (implement OpSupporter)", i, a.Do)
 			}
 		case ActionCommandRun:
 			if _, ok := h.cfg.Commands.get(a.Command); !ok {
@@ -310,4 +312,11 @@ func chainScopeOK(c *compiled, payload any) bool {
 		}
 	}
 	return true
+}
+
+// executorSupports reports whether ex declared op through OpSupporter; an
+// Executor without it supports no destructive op.
+func executorSupports(ex Executor, op Op) bool {
+	s, ok := ex.(OpSupporter)
+	return ok && s.SupportsOp(op)
 }
