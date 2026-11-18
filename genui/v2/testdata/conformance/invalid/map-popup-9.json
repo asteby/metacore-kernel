@@ -1,0 +1,29 @@
+{
+  "description": "popup admite como maximo 8 columnas.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "points": {
+        "q": "t:hub.Instance?limit=200"
+      }
+    },
+    "blocks": [
+      {
+        "type": "map",
+        "summary": "Instancias",
+        "source": "data.points",
+        "fields": {
+          "key": "id",
+          "lat": "lat",
+          "lng": "lng",
+          "label": "name"
+        },
+        "popup": ["a","b","c","d","e","f","g","h","i"]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.items"
+  }
+}
