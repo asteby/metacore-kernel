@@ -76,6 +76,10 @@ type Action struct {
 	Mode    string `json:"mode,omitempty"`
 	MaxRows int    `json:"max_rows,omitempty"`
 
+	// Guard (record.*) protects against out-of-order or retried events: the
+	// action is skipped as stale_event when the event is older than the row.
+	Guard *Guard `json:"guard,omitempty"`
+
 	// event.emit | automation.enqueue (event name)
 	Name string `json:"name,omitempty"`
 	// Payload is the body of event.emit / the params of notify; string leaves
@@ -98,6 +102,27 @@ type Condition struct {
 	Path   string          `json:"path"`
 	Eq     json.RawMessage `json:"eq,omitempty"`
 	Exists *bool           `json:"exists,omitempty"`
+}
+
+// Guard ops.
+const (
+	GuardGTE = "gte"
+	GuardGT  = "gt"
+)
+
+// CodeStaleEvent is the ErrorCode of a step skipped by its Guard.
+const CodeStaleEvent = "stale_event"
+
+// Guard is the declarative order guard of a record action. Path is a
+// payload.* reference holding an RFC 3339 instant or an integer (a version);
+// the event is applied only when "event Op row[Field]" holds. A missing or
+// unparseable payload value applies the event (the guard is opt-in by data).
+//
+//	{"field":"source_updated_at","path":"payload.updated_at","op":"gte"}
+type Guard struct {
+	Field string `json:"field"`
+	Path  string `json:"path"`
+	Op    string `json:"op"`
 }
 
 // Step statuses recorded in the receipt.
@@ -259,6 +284,8 @@ type cAction struct {
 	payload map[string]node
 	when    *cCond
 	onErr   string
+	// guardPath is Guard.Path without the "payload." prefix.
+	guardPath string
 }
 
 type cCond struct {
@@ -341,7 +368,7 @@ func compileAction(a Action, v *validator) (*cAction, error) {
 		{"idempotency_field", a.IdempotencyField != "", a.Do == ActionRecordCreate}, {"model", a.Model != "", isRecord}, {"match", len(a.Match) > 0, isRecord},
 		{"defaults", len(a.Defaults) > 0, isRecord && a.Do != ActionRecordDelete},
 		{"mode", a.Mode != "", a.Do == ActionRecordDelete}, {"max_rows", a.MaxRows != 0, a.Do == ActionRecordDelete}, {"scope", a.Scope != nil, isRecord},
-		{"mapping", len(a.Mapping) > 0, isRecord || isCmd},
+		{"mapping", len(a.Mapping) > 0, isRecord || isCmd}, {"guard", a.Guard != nil, isRecord},
 		{"name", a.Name != "", isEmit}, {"payload", len(a.Payload) > 0, isEmit || isNotify},
 		{"template", a.Template != "", isNotify}, {"command", a.Command != "", isCmd}, {"op", a.Op != "", isCmd},
 	} {
@@ -386,6 +413,13 @@ func compileAction(a Action, v *validator) (*cAction, error) {
 			if !fieldRe.MatchString(to) || forbidden[to] {
 				return nil, fmt.Errorf("default field %q not allowed", to)
 			}
+		}
+		if a.Guard != nil {
+			gp, err := checkGuard(a, v)
+			if err != nil {
+				return nil, err
+			}
+			ca.guardPath = gp
 		}
 		if a.Scope != nil {
 			for _, p := range []string{a.Scope.Branch, a.Scope.Entity} {
@@ -482,6 +516,32 @@ func checkDelete(a Action) error {
 		return fmt.Errorf("max_rows must be between 1 and %d", maxDeleteRowsCeiling)
 	}
 	return nil
+}
+
+// checkGuard validates the shape of a guard and returns its payload path
+// (without the "payload." prefix). Whether the field is a writable, mapped
+// column of the model is checked by the executor (ContractChecker).
+func checkGuard(a Action, v *validator) (string, error) {
+	g := a.Guard
+	if !fieldRe.MatchString(g.Field) || forbidden[g.Field] {
+		return "", fmt.Errorf("guard.field %q not allowed", g.Field)
+	}
+	for _, m := range a.Match {
+		if m == g.Field {
+			return "", fmt.Errorf("guard.field %q must not be a match field", g.Field)
+		}
+	}
+	if g.Op != GuardGTE && g.Op != GuardGT {
+		return "", fmt.Errorf("guard.op must be %s|%s", GuardGTE, GuardGT)
+	}
+	ns, path, err := v.ref(strings.TrimSpace(g.Path))
+	if err != nil {
+		return "", fmt.Errorf("guard.path: %v", err)
+	}
+	if ns != "payload" {
+		return "", fmt.Errorf("guard.path must be payload.<path>")
+	}
+	return path, nil
 }
 
 func compileCond(c Condition, v *validator) (*cCond, error) {

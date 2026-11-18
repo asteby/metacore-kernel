@@ -268,6 +268,35 @@ modo "borra todo":
 - **Registro.** `DynamicExecutor.CheckContract` exige `MaxDeleteRows <= 199` (la página de consulta se recorta a 200 y se lista `límite+1`) y rechaza modelos `append_only`. La razón de borrado obligatoria no está en el metadato del modelo: sigue fallando en ejecución como `422 rejected_by_model`. Limitación: tras un borrado, si el origen recrea una fila con el mismo `match` y se reintenta el recibo viejo, se borra la nueva (el borrado es por `match`, no por id).
 - **Ejecutor propio.** Debe implementar `OpSupporter` (`SupportsOp(Op) bool`) y devolver `true` para `OpDelete`; si no, el contrato con `record.delete` se rechaza al registrar. `DynamicExecutor` la implementa.
 
+**Guarda de orden `guard` (eventos tardíos o reintentados).** Cada acción `record.*` puede declarar
+`"guard": {"field": "source_updated_at", "path": "payload.updated_at", "op": "gte"}`. `field` es una columna
+escribible del modelo, `path` una ruta `payload.*` con un instante RFC 3339 o un entero (versión) y `op` es
+`gte` o `gt`. Se aplica el evento solo si `evento op fila[field]`; si no, el paso queda `skipped` con
+`error_code: "stale_event"`, no se escribe nada y el recibo sigue `applied` (reutiliza `ingest.CompareCursor`
+para fechas y enteros).
+
+- **Opt-in por dato.** Si el valor del payload falta o no parsea, o `fila[field]` es `null` o de otro tipo,
+  el evento se aplica.
+- **Fila viva** (`update`/`upsert`/`delete`): compara contra `fila[field]`. Un `record.create` (que corre como
+  upsert sobre su `idempotency_field`) no se compara con la fila hallada por esa columna: es su propio intento.
+- **Sin fila viva** (`upsert`/`create`, modelo con borrado lógico): busca la lápida más reciente (borradas,
+  misma organización, mismo `match` y mismo alcance entidad/sucursal). Si tiene `field` y el evento es más
+  viejo, queda `stale_event` y la fila NO resucita; si no, se crea.
+- **`record.delete` con guarda.** Con la fila viva y el evento viejo no borra. Si no, escribe
+  `fila[field] = valor del evento` y hace el borrado lógico, de modo que la lápida queda sellada con la fecha
+  del borrado (un `updated` posterior más viejo queda `stale_event`). Limitación: `dynamic.Service` no ofrece una
+  transacción entre `Update` y `Delete`; ambos van seguidos bajo el candado por clave y el sello se escribe
+  primero. Si el proceso muere entre los dos, la fila queda viva con el valor del evento y el reintento
+  converge con `gte`; con `gt` ese reintento queda `stale_event` (usa `gte` en borrados).
+- **Registro.** `DynamicExecutor.CheckContract` exige que `field` sea columna escribible (`WritableColumns`) y
+  que esté en `mapping` (salvo `record.delete`, que solo exige la columna): `guard_field_not_mapped`. Un
+  `upsert`/`create` con `match` sobre un modelo con borrado lógico exige poder leer lápidas
+  (`guard_tombstones_unavailable`): el host entrega `DynamicExecutor.Tombstones` (`TombstoneFinder`; hay una
+  implementación sobre GORM, `GormTombstones{DB, Table}`) porque `dynamic.Service` lista solo filas vivas.
+  `field` no puede ser campo de `match`.
+- **Ejecutor propio.** Debe implementar `GuardSupporter` (`SupportsGuard() bool`), leer `Operation.Guard` y
+  devolver `Outcome{Stale: true}`; si no, el contrato con `guard` se rechaza al registrar.
+
 **Defaults solo al crear.** `defaults` (en `route` y en las acciones `record.*`) viajan como
 `Operation.CreateDefaults` y el ejecutor los aplica únicamente al crear la fila, nunca al
 actualizar (un `status: new` no revierte el estado en cada upsert).
