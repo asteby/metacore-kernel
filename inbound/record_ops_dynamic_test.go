@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -18,10 +19,26 @@ import (
 // dynamic.Service, on SQLite (CGO) and on Postgres (TEST_POSTGRES_DSN, the CI
 // job "postgres").
 
+// stageOrder spells the audit columns out (instead of embedding
+// modelbase.BaseUUIDModel, whose DeletedAt is json:"-") because
+// dynamic.Service.Restore only sees a deleted_at column the struct exposes, as
+// every addon model built by BuildStructType does.
 type stageOrder struct {
-	modelbase.BaseUUIDModel
-	Reference string `json:"reference" gorm:"size:64"`
-	Status    string `json:"status" gorm:"size:32"`
+	ID             uuid.UUID      `json:"id" gorm:"type:uuid;primaryKey"`
+	OrganizationID uuid.UUID      `json:"organization_id" gorm:"type:uuid;index"`
+	CreatedByID    *uuid.UUID     `json:"created_by_id,omitempty" gorm:"type:uuid"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
+	Reference      string         `json:"reference" gorm:"size:64"`
+	Status         string         `json:"status" gorm:"size:32"`
+}
+
+func (s *stageOrder) BeforeCreate(*gorm.DB) error {
+	if s.ID == uuid.Nil {
+		s.ID = uuid.New()
+	}
+	return nil
 }
 
 func (stageOrder) TableName() string { return "inbound_stage_orders" }
