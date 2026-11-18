@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
 	"sync"
@@ -45,6 +46,11 @@ type Receipt struct {
 	Shadow bool `gorm:"not null;default:false" json:"shadow,omitempty"`
 	// Progress is the per-action state of a chain (ids and codes only, never
 	// the body); a retry resumes after the last finished action.
+	// INVARIANT: ids and codes only. A shadow step also carries column NAMES and the
+	// redacted new value of a column that is safe to show (ColumnChange.To), never
+	// the current value of a row (ColumnChange.From: runChain and serveShadowRoute
+	// strip it before SaveProgress). Receipts written by the first dry-run release
+	// may still hold a `from`; a replay strips it, and purging them is advised.
 	Progress []ActionStep `gorm:"serializer:json;type:text" json:"actions,omitempty"`
 	// Claim is org|contract|keyhash while the event key is reserved; NULL for
 	// rejected rows. The unique index makes the reservation atomic.
@@ -108,9 +114,20 @@ func HashKey(org uuid.UUID, contract, key string) string {
 }
 
 // shadowKeyHash is the key hash of a dry-run event: another key space than
-// HashKey, so the shadow reservation never collides with the real one.
+// HashKey, so the shadow reservation never collides with the real one. The
+// event key is free text of the producer, so the fields are length-prefixed
+// under a domain tag: no key (`shadow|K`, `a|b`...) can spell the input of
+// another. Receipts of a dry run written with the earlier scheme
+// (HashKey(org, contract+"|shadow", key)) are not found by it: they stay as
+// history (a retry of such an event is evaluated again, harmlessly) and an
+// EventKey filter with Shadow set does not list them.
 func shadowKeyHash(org uuid.UUID, contract, key string) string {
-	return HashKey(org, contract+"|shadow", key)
+	h := sha256.New()
+	h.Write([]byte("shadow\x00"))
+	for _, f := range []string{org.String(), contract, key} {
+		fmt.Fprintf(h, "%d:%s;", len(f), f)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // keyHashes are the hashes an EventKey filter matches, per the Shadow filter.

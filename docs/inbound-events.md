@@ -536,7 +536,9 @@ Cada paso de `actions[]` (un contrato de `route` tiene uno solo) lleva:
 |---|---|
 | `would` | `create`, `update`, `upsert-create`, `upsert-update`, `delete`, `restore`, `transition`, `action`; o `would_emit`, `would_notify`, `would_enqueue`, `would_command` (efectos suprimidos; `target` = nombre del evento, plantilla, automatización o comando) |
 | `record_id`, `rows`, `affected` | la fila (la primera) y cuántas tocaría; `record_id` vacío si la fila se crearía |
-| `changes` | `{columna: {from, to}}`: en un alta, todas las columnas; en una modificación, solo las que cambian |
+| `changes` | `{columna: {to}}` o `{columna: {redacted: true}}`: en un alta, todas las columnas; en una modificación, solo las que cambian. **Nunca `from`** (el valor actual de la fila) en la respuesta a un evento firmado, en el recibo ni en `replayed`; solo `Handler.DryRun` (panel) lo puede traer, ver «Qué se redacta» |
+| `on_simulated_row` | el paso busca una fila por el id de una que un paso previo solo HABRÍA creado: es una previsión, no se verificó contra ninguna fila |
+| `fidelity` (en la respuesta, no por paso) | siempre `"partial"`: es una previsión, no una repetición completa de la ruta real (ver «Qué NO se verifica») |
 | `noop` / `reason` | no cambiaría nada: sin columnas distintas, `already_in_state`, `state_not_eligible`, `already_live` |
 | `status: skipped` + `error_code` | `when` falso, o `stale_event` (la guarda de orden y las lápidas juzgan igual que en real) |
 | `state`, `param_keys` | estado del ciclo de vida leído de la fila (`record.action`); solo las CLAVES del payload de la acción |
@@ -548,34 +550,81 @@ que no cabe es `rejected_by_model`), se exige lo `required` en un alta, se eval�
 `when`, la guarda y las lápidas, y se corre `Authorize`. **No se toman candados de
 escritura ni se llama a `Create/Update/Delete/Restore/ExecAction/UpdateGuarded/DeleteSealed`**,
 así que no hay eventos canónicos, hooks ni auditoría. En una cadena, la fila que
-se crearía no tiene id: los pasos siguientes ven `{{result.id}}` =
-`dry-run:<índice>`.
+se crearía no tiene id: los pasos siguientes ven `{{result.id}}` = un uuid
+válido reservado (`00000000-0000-0000-d12e-<índice en hex>`, versión 0: un uuid
+real nunca lo tiene). Un paso cuyo `match` usa ese id se juzga contra una fila
+que aún no existe: ya no falla con `record_not_found` (falso `would_fail`), se
+reporta como previsión (`on_simulated_row: true`).
 
-**Qué NO se verifica** (solo el resultado real lo dirá): reglas de validación
-declarativas del modelo, unicidad, existencia de referencias, hooks `before_*`,
-aprobaciones, la máquina de estados en altas, ni nada que un
-`TombstoneFinder`/`dynamic.Service` propio haga fuera del ejecutor.
+**Qué NO se verifica** (solo el resultado real lo dirá; por eso toda respuesta
+lleva `fidelity: "partial"` y `would_apply` NO promete que lo real aplique):
+columnas `protected`/`generated`/`readonly` escritas (la ruta real rechaza
+`protected_field`), reglas de validación declarativas del modelo, unicidad,
+existencia de referencias, hooks `before_*`/`after_*`, aprobaciones, la máquina
+de estados en altas, ni nada que un `TombstoneFinder`/`dynamic.Service` propio
+haga fuera del ejecutor. Tampoco se evalúa un `record.update` por el id de una
+fila que un paso previo solo habría creado (`on_simulated_row`). Para comparar
+sombra y real, un `would_apply` sin su par real no es un «ok».
 
-**Qué se redacta.** El reporte nunca incluye el valor de una columna cuando
-cumple cualquiera de estas: protegida (`protected`), oculta (`hidden`), con
-`readPermission`, generada, **no declarada** en el metadato, de valor no escalar,
-con nombre de aspecto personal (correo, teléfono, nombre, dirección,
-RFC/CURP/DNI, tarjeta/cuenta, contraseña/token, notas/comentarios…; lista
-`personalHints`) o que el host marque con `DynamicExecutor.DryRunRedact(model, column) bool`.
-Esa columna sale como `{"redacted": true}` (solo su nombre). El metadato de
-columnas no trae una marca de sensibilidad propia: la lista por nombre es un
-piso, y un host con datos personales en columnas de nombre neutro DEBE cubrirlas
-con `DryRunRedact`. Los strings se truncan a 200 caracteres y de `record.action`
-solo se reportan las claves de los parámetros. Los recibos no guardan el cuerpo;
-el reporte que guardan es el mismo (redactado). Tampoco se puede usar para
-sondear filas ajenas: el `match` se resuelve con la misma organización y entidad
-que la ejecución real, y un `match` sin filas responde lo mismo que en real
+**Qué se redacta: DENEGAR POR DEFECTO.** Se pensó para pedidos reales (nombre,
+correo, teléfono, dirección, RFC, tarjeta). El metadato de columnas no trae una
+marca de sensibilidad y **el nombre de la columna NO es la garantía** (un dato
+personal vive en `razon_social`, `contacto` o `ciudad` igual que en `email`). El
+reporte muestra el valor de una columna (`to`) solo si se cumplen TODAS:
+
+1. está declarada y no es `protected`, `hidden`, con `readPermission` ni `generated`;
+2. `DynamicExecutor.DryRunRedact(model, column)` no la veta;
+3. el host la permitió en `DynamicExecutor.DryRunAllow(model, column) bool`
+   (cualquier escalar), **o bien** su tipo declarado no puede llevar texto libre
+   Y el valor mismo tiene esa forma: número, booleano, `date`/`datetime`,
+   `uuid` o referencia a otra tabla (`ref`), o un valor entre las `options`
+   declaradas (`select`, estado, etapa) — un texto fuera de las opciones sale
+   redactado aunque la columna sea un `select`;
+4. (solo por tipo) su nombre no parece personal: segunda barrera, en español e
+   inglés (`email`, `phone`, `nombre`, `razon_social`, `cliente`, `contacto`,
+   `titular`, `empresa`, `ciudad`, `colonia`, `lat`/`lng`, `nss`, `ine`, `pin`,
+   `cvv`, `otp`, `api_key`, `tarjeta`, `rfc`, `curp`…; las palabras cortas solo
+   cuentan como palabra entera, así `lat` no atrapa `plate`).
+
+Todo lo demás (`text`, `string`, `textarea`, `email`, `phone`, `password`,
+`json`, tipo desconocido o sin tipo) sale como `{"redacted": true}`: solo su
+nombre. El campo de etapa de un `record.transition` se muestra (es un valor del
+ciclo de vida), salvo que esté protegido, oculto o vetado. `DryRunRedact` es un
+veto adicional y siempre gana; `DryRunAllow` es la lista blanca explícita del
+host para columnas de texto que sí quiere ver y no levanta `protected`/`hidden`/
+`readPermission`/`generated`. Los strings que se muestran se truncan a 200
+caracteres y de `record.action` solo se reportan las claves de los parámetros.
+
+**`from` (el valor actual de la fila) NO sale hacia el productor.** Es un dato de
+la base, no del evento: la respuesta HTTP a un evento firmado, el recibo
+(`Receipt.Progress`, invariante «solo ids y códigos», más nombres de columna y
+el `to` ya redactado) y `replayed` llevan solo nombres de columna y `to`. Solo
+`Handler.DryRun` (panel con sesión) puede traer `from`, con la misma regla de
+redacción, y **únicamente si el host cableó `DynamicExecutor.Authorize` y este
+responde `true` a la acción `"read"` del modelo**; sin `Authorize` (o si niega
+`read`) el panel recibe solo nombres y `to`. `Authorize` debe tratar `"read"`
+con el permiso de lectura del usuario real: el ejecutor lee como el
+llamador de sistema de la organización. Los recibos sombra escritos por la
+primera versión (#626) pueden conservar `from`: `Handler.Receipts` y `replayed`
+lo quitan al leer; se aconseja purgarlos. Tampoco se puede usar para sondear
+filas ajenas: el `match` se resuelve con la misma organización y entidad que la
+ejecución real, y un `match` sin filas responde lo mismo que en real
 (`record_not_found`, `upsert-create`, `not_found`).
+
+**Defensa en profundidad (solo lectura).** Con `Operation.DryRun`,
+`DynamicExecutor.Execute` entrega a todo el código del ejecutor un almacén de
+SOLO LECTURA: `Create`, `Update`, `Delete`, `UpdateGuarded`, `DeleteSealed`,
+`ExecAction` y `Restore` devuelven `dry_run_write_blocked` aunque una rama
+olvide mirar `op.DryRun`. `DryRunSupporter` es **autodeclarativo**: un
+envoltorio que incrusta `*DynamicExecutor` hereda `SupportsDryRun() == true` y
+podría sobrescribir `Execute` para escribir, saltándose esta defensa. No
+incruste `*DynamicExecutor` para envolver `Execute`; si lo hace, sobrescriba
+también `SupportsDryRun` para que responda `false` (el contrato se rechaza).
 
 **Recibo e idempotencia.** El recibo de un evento en sombra es un recibo normal
 (`applied`/`failed`) con `shadow: true` y los pasos `would_*` en `actions`
 (consultable con `Handler.Receipts` y `ReceiptFilter.Shadow`). Su reserva vive en
-**otro espacio de llaves** (hash de `<contrato>|shadow` en lugar de `<contrato>`):
+**otro espacio de llaves** (`sha256("shadow\x00"` + organización, contrato y llave, cada campo con su longitud; el hash real no cambia, así que ninguna llave real, ni `shadow|K`, puede deletrear la sombra):
 nunca cuenta como `applied` real ni impide que el MISMO evento se aplique de
 verdad al quitar el `dry_run`. Un reintento del mismo evento en sombra responde
 `replayed` con el mismo resultado previsto (`shadow: true`); otro cuerpo con la
@@ -587,3 +636,25 @@ entre la sombra y el real. No hay comparación automática entre las dos vías: 
 bitácora guarda los dos recibos para que el host los compare. `command.run` no se
 ejecuta, así que el efecto de un comando propio no se simula. La columna `shadow`
 de `metacore_inbound_receipts` la crea `NewGormReceiptStore` (AutoMigrate).
+
+**Cambio de hash de la reserva sombra.** Los recibos sombra guardados con el
+esquema anterior (`HashKey(org, contrato+"|shadow", llave)`) quedan huérfanos:
+siguen en la bitácora como historia, un reintento de ese evento se evalúa de
+nuevo (inofensivo, es sombra) y un filtro `EventKey` con `Shadow` no los lista.
+Los recibos reales no se tocan.
+
+**Orden de despliegue (obligatorio).** Una réplica SIN soporte de `dry_run` ignora
+el campo (no valida campos desconocidos) y ejecutaría el contrato DE VERDAD:
+doble escritura. Por eso un contrato con `dry_run` se escribe
+(`json.Marshal(Contract)`) con `schema_version: 2` y una marca de compuerta
+(`on_error` en un contrato de ruta, `route.op` en uno de cadena) que toda réplica
+vieja rechaza al cargar como contrato inválido; la versión nueva la quita al
+leer. Persista los contratos con `json.Marshal(Contract)`, no con un JSON a mano
+que solo añade `"dry_run": true`. Aun así: (1) actualice TODAS las réplicas a esta
+versión antes de activar un solo `dry_run`; (2) una réplica nueva rechaza un
+`schema_version` mayor al suyo y cualquier `requires:*` que no conoce; (3) tras
+cambiar `dry_run` use `Handler.SetDryRun(ctx, key, version, bool)` o
+`RegisterContract` (recompilan y revalidan; cambiar solo la fila deja el
+contrato compilado del proceso con el modo anterior) y compruebe el modo efectivo
+con `Handler.ContractStates()` en cada réplica (expóngalo en un endpoint de
+estado).

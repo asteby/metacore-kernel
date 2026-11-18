@@ -224,13 +224,17 @@ type ActionStep struct {
 	// event, template, automation, command or action; Rows how many rows it would
 	// touch; State the lifecycle state read from the row; ParamKeys the keys (never
 	// the values) of a record.action payload. Changes lists column names and,
-	// where the column may be disclosed, the old and new value (see ColumnChange).
+	// where the column may be disclosed, the new value (see ColumnChange; never the
+	// current value of the row, except in Handler.DryRun).
 	Would     string                  `json:"would,omitempty"`
 	Target    string                  `json:"target,omitempty"`
 	Rows      int                     `json:"rows,omitempty"`
 	State     string                  `json:"state,omitempty"`
 	ParamKeys []string                `json:"param_keys,omitempty"`
 	Changes   map[string]ColumnChange `json:"changes,omitempty"`
+	// OnSimulated: the step matched on the id of a row that an earlier step only
+	// would have created, so it is a forecast with nothing verified against a row.
+	OnSimulated bool `json:"on_simulated_row,omitempty"`
 }
 
 // ------------------------------------------------------------ side ports ---

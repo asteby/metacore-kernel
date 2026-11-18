@@ -352,6 +352,9 @@ func (d *DynamicExecutor) tombstoner(st dynStore) TombstoneFinder {
 	if d.Tombstones != nil {
 		return d.Tombstones
 	}
+	if ro, ok := st.(roStore); ok {
+		st = ro.dynStore // reading tombstones is a read; the dry-run wrapper hides the optional port
+	}
 	tf, _ := st.(TombstoneFinder)
 	return tf
 }
