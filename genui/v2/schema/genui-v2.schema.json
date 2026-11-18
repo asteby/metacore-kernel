@@ -1373,25 +1373,25 @@
     "areaRow": {
       "type": "string",
       "maxLength": 400,
-      "pattern": "^(.|[a-z][a-z0-9_]{0,31})( (.|[a-z][a-z0-9_]{0,31})){0,11}$",
+      "pattern": "^(\\.|[a-z][a-z0-9_]{0,31})( (\\.|[a-z][a-z0-9_]{0,31})){0,11}$",
       "description": "Fila de la plantilla de `grid.areas`: nombres de región o `.` (celda vacía) separados por un espacio."
     },
     "gridTrack": {
       "type": "string",
       "maxLength": 64,
-      "pattern": "^(auto|[0-9]+(.[0-9]+)?fr|[0-9]{1,4}px|minmax( *[0-9]{1,4}px *, *([0-9]+(.[0-9]+)?fr|[0-9]{1,4}px) *))$",
+      "pattern": "^(auto|[0-9]+(\\.[0-9]+)?fr|[0-9]{1,4}px|minmax\\( *[0-9]{1,4}px *, *([0-9]+(\\.[0-9]+)?fr|[0-9]{1,4}px) *\\))$",
       "description": "Pista de `grid.columns`/`grid.rows`: auto, Nfr, Npx o minmax(Npx, Nfr|Npx). Sin CSS libre."
     },
     "statePath": {
       "type": "string",
-      "pattern": "^(?!(?:.*.)?(?:__proto__|constructor|prototype)(?:.|$))state(.[A-Za-z_][A-Za-z0-9_]{0,63}|.[0-9]{1,3}){1,6}$",
+      "pattern": "^(?!(?:.*\\.)?(?:__proto__|constructor|prototype)(?:\\.|$))state(\\.[A-Za-z_][A-Za-z0-9_]{0,63}|\\.[0-9]{1,3}){1,6}$",
       "x-no-proto": true,
       "description": "Ruta de escritura en el estado de la página: raíz state."
     },
     "permissionKey": {
       "type": "string",
       "maxLength": 128,
-      "pattern": "^[a-z][a-z0-9_]*(?:.[a-z][a-z0-9_:]*)+$",
+      "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_:]*)+$",
       "description": "Clave de permiso del manifiesto (<addon>.<recurso>.<acción>)."
     },
     "chrome": {
