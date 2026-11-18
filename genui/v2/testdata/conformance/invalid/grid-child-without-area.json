@@ -1,0 +1,29 @@
+{
+  "description": "Hijo de un grid con areas sin area.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "grid",
+        "areas": [
+          "a b"
+        ],
+        "blocks": [
+          {
+            "type": "text",
+            "text": "A",
+            "area": "a"
+          },
+          {
+            "type": "text",
+            "text": "B"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_block"
+  }
+}

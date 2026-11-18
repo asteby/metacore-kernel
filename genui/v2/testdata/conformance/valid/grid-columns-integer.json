@@ -1,0 +1,26 @@
+{
+  "description": "grid clasico con columns entero y un hijo con area ignorada (sin areas).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "grid",
+        "columns": 2,
+        "blocks": [
+          {
+            "type": "text",
+            "text": "A",
+            "area": "a"
+          },
+          {
+            "type": "text",
+            "text": "B"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

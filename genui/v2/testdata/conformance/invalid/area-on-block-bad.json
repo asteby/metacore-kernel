@@ -1,0 +1,17 @@
+{
+  "description": "area mal formada en un bloque cualquiera.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "text",
+        "text": "x",
+        "area": "1a"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.pattern"
+  }
+}

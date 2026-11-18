@@ -1,0 +1,25 @@
+{
+  "description": "$ref en tone (enum).",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "k": {
+        "widget": "a.dashboard.c"
+      }
+    },
+    "blocks": [
+      {
+        "type": "kpi_card",
+        "label": "X",
+        "value": 1,
+        "tone": {
+          "$ref": "data.k.tone"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.ref_not_allowed"
+  }
+}

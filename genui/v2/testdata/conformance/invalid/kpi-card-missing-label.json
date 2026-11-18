@@ -1,0 +1,16 @@
+{
+  "description": "kpi_card sin label.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "kpi_card",
+        "value": 1
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.required"
+  }
+}

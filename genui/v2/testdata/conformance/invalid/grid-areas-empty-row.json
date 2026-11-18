@@ -1,0 +1,25 @@
+{
+  "description": "Una fila de areas vacia.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "grid",
+        "areas": [
+          ""
+        ],
+        "blocks": [
+          {
+            "type": "text",
+            "text": "A",
+            "area": "a"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.pattern"
+  }
+}

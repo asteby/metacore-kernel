@@ -1,0 +1,32 @@
+{
+  "description": "variant tabs, chrome card y mobile select.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "tabs",
+        "variant": "tabs",
+        "chrome": "card",
+        "mobile": "select",
+        "tabs": [
+          {
+            "key": "a",
+            "label": {
+              "$t": "hub.a"
+            },
+            "icon": "chart",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

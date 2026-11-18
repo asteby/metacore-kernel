@@ -562,13 +562,41 @@ func (c *ctx) blockRules(b obj, typ, path string) {
 		}
 	case "tabs":
 		keys := map[string]bool{}
-		for _, t := range b["tabs"].([]any) {
-			k := str(asObj(t)["key"])
+		for i, t := range b["tabs"].([]any) {
+			opt := asObj(t)
+			k := str(opt["key"])
 			if keys[k] {
 				panic(fail(CodeDuplicateID, path, "%s: pestana duplicada %s", path, k))
 			}
 			keys[k] = true
+			// Cada opcion tiene blocks (declarativa/hibrida) o component+props (bloque custom), nunca ambos.
+			where := fmt.Sprintf("%s.tabs[%d]", path, i)
+			switch {
+			case has(opt, "blocks") && has(opt, "component"):
+				panic(fail(CodeInvalidBlock, where, "%s: la opcion usa blocks o component, no ambos", where))
+			case !has(opt, "blocks") && !has(opt, "component"):
+				panic(fail(CodeRequired, where, "%s: la opcion requiere blocks o component", where))
+			case has(opt, "props") && !has(opt, "component"):
+				panic(fail(CodeInvalidBlock, where, "%s: props solo aplica con component", where))
+			}
 		}
+	case "section":
+		// declarative|hybrid -> blocks; custom -> component (+ props). Excluyentes.
+		mode := str(b["mode"])
+		switch {
+		case present("component") && present("blocks"):
+			panic(fail(CodeInvalidBlock, path, "%s: section usa blocks o component, no ambos", path))
+		case present("component") && mode != "custom":
+			panic(fail(CodeInvalidBlock, path, "%s: component requiere mode custom", path))
+		case present("blocks") && mode == "custom":
+			panic(fail(CodeInvalidBlock, path, "%s: mode custom usa component, no blocks", path))
+		case !present("component") && !present("blocks"):
+			panic(fail(CodeRequired, path, "%s: section requiere blocks, o component con mode custom", path))
+		case present("props") && !present("component"):
+			panic(fail(CodeInvalidBlock, path, "%s: props solo aplica con component", path))
+		}
+	case "grid":
+		c.gridRules(b, path)
 	case "form", "wizard":
 		keys := map[string]bool{}
 		fields, _ := b["fields"].([]any)
@@ -606,6 +634,65 @@ func (c *ctx) blockRules(b obj, typ, path string) {
 		}
 		if typ == "wizard" && !present("ref") && !(len(steps) > 0 && hasFields) {
 			panic(fail(CodeRequired, path, "%s: wizard requiere steps y fields, o ref", path))
+		}
+	}
+}
+
+// gridRules checks the page layout of a grid. Without areas the grid is the
+// classic one (integer columns); rows, mobile and track-list columns need
+// areas. With areas the template must be rectangular and every child must be
+// placed in a declared region (a child without a valid area would never be
+// painted).
+func (c *ctx) gridRules(b obj, path string) {
+	areas, hasAreas := b["areas"].([]any)
+	_, colsList := b["columns"].([]any)
+	if !hasAreas {
+		for _, k := range []string{"rows", "mobile"} {
+			if has(b, k) {
+				panic(fail(CodeInvalidBlock, path, "%s: %s requiere areas", path, k))
+			}
+		}
+		if colsList {
+			panic(fail(CodeInvalidBlock, path, "%s: columns como lista de pistas requiere areas", path))
+		}
+		return
+	}
+	width := -1
+	names := map[string]bool{}
+	for _, row := range areas {
+		cells := strings.Fields(str(row))
+		if width < 0 {
+			width = len(cells)
+		} else if len(cells) != width {
+			panic(fail(CodeInvalidBlock, path, "%s: areas debe ser rectangular (todas las filas con %d celdas)", path, width))
+		}
+		for _, n := range cells {
+			if n != "." {
+				names[n] = true
+			}
+		}
+	}
+	if cols := lenOf(b["columns"]); colsList && cols > width {
+		panic(fail(CodeInvalidBlock, path, "%s: columns tiene %d pistas y areas %d columnas", path, cols, width))
+	}
+	if lenOf(b["rows"]) > len(areas) {
+		panic(fail(CodeInvalidBlock, path, "%s: rows tiene mas pistas que filas de areas", path))
+	}
+	mobile, _ := b["mobile"].([]any)
+	for _, m := range mobile {
+		if !names[str(m)] {
+			panic(fail(CodeUnknownTarget, path, "%s: mobile usa una region inexistente %v", path, m))
+		}
+	}
+	kids, _ := b["blocks"].([]any)
+	for i, k := range kids {
+		a, ok := asObj(k)["area"].(string)
+		where := fmt.Sprintf("%s.blocks[%d]", path, i)
+		if !ok {
+			panic(fail(CodeInvalidBlock, where, "%s: el hijo de un grid con areas debe declarar area", where))
+		}
+		if !names[a] {
+			panic(fail(CodeUnknownTarget, where+".area", "%s.area: la region %s no esta en areas", where, a))
 		}
 	}
 }

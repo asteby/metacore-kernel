@@ -1,0 +1,65 @@
+{
+  "description": "tabs extendido (conmutador de vistas): variant, state, default, keep_alive, chrome, label, mobile y por opcion icon, permission, blocks o component+props.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "instances": {
+        "q": "t:hub_instances"
+      }
+    },
+    "state": {
+      "view": "map"
+    },
+    "blocks": [
+      {
+        "type": "tabs",
+        "variant": "segmented",
+        "state": "state.view",
+        "default": "map",
+        "keep_alive": true,
+        "chrome": "bare",
+        "label": "Vista",
+        "mobile": "scroll",
+        "tabs": [
+          {
+            "key": "map",
+            "label": "Mapa",
+            "icon": "map",
+            "blocks": [
+              {
+                "type": "map",
+                "summary": "Instancias",
+                "source": "data.instances"
+              }
+            ]
+          },
+          {
+            "key": "cards",
+            "label": "Tarjetas",
+            "icon": "cards",
+            "permission": "hub_instances.index",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ]
+          },
+          {
+            "key": "data",
+            "label": "Datos",
+            "icon": "table",
+            "component": "hub_fleet.instances_table@1",
+            "props": {
+              "compact": true,
+              "limit": 50
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

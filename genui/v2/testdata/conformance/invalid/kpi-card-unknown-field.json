@@ -1,0 +1,21 @@
+{
+  "description": "Campo no permitido en kpi_card.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "kpi_card",
+        "label": "X",
+        "value": 1,
+        "spark": [
+          1,
+          2
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.field_not_allowed"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "description": "props de component con un objeto libre.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "tabs",
+        "tabs": [
+          {
+            "key": "a",
+            "label": "A",
+            "component": "hub.sim@1",
+            "props": {
+              "x": {
+                "y": 1
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.type"
+  }
+}

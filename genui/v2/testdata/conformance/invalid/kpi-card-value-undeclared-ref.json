@@ -1,0 +1,19 @@
+{
+  "description": "value con $ref a una fuente no declarada.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "kpi_card",
+        "label": "X",
+        "value": {
+          "$ref": "data.nada.value"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.bad_ref"
+  }
+}

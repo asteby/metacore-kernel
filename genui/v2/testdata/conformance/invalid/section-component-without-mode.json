@@ -1,0 +1,21 @@
+{
+  "description": "component sin mode custom.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "instances": {
+        "q": "t:hub_instances"
+      }
+    },
+    "blocks": [
+      {
+        "type": "section",
+        "component": "hub.x@1"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_block"
+  }
+}

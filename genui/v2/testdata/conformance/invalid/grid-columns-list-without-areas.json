@@ -1,0 +1,25 @@
+{
+  "description": "columns como lista de pistas sin areas.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "grid",
+        "columns": [
+          "1fr",
+          "2fr"
+        ],
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Hola"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_block"
+  }
+}

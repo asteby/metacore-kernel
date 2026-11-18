@@ -1,0 +1,25 @@
+{
+  "description": "map con select hacia el estado de la pagina.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "instances": {
+        "q": "t:hub_instances"
+      }
+    },
+    "state": {
+      "selected": null
+    },
+    "blocks": [
+      {
+        "type": "map",
+        "summary": "Instancias",
+        "source": "data.instances",
+        "select": "state.selected"
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

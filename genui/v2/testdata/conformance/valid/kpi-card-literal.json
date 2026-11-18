@@ -1,0 +1,18 @@
+{
+  "description": "kpi_card con valor literal y tendencia en enum.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "kpi_card",
+        "label": "Alertas",
+        "value": 3,
+        "trend": "up",
+        "area": "x"
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

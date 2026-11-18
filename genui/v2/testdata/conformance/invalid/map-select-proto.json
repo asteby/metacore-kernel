@@ -1,0 +1,23 @@
+{
+  "description": "select con un segmento de prototipo.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "instances": {
+        "q": "t:hub_instances"
+      }
+    },
+    "blocks": [
+      {
+        "type": "map",
+        "summary": "M",
+        "source": "data.instances",
+        "select": "state.__proto__"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.forbidden_key"
+  }
+}

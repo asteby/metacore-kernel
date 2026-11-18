@@ -65,6 +65,20 @@ func TestPages(t *testing.T) {
 		{"wrong version", withPages([]any{page("a", map[string]any{"version": "genui/v9", "i18n": "keys", "blocks": []any{}})}, nil), "ui"},
 		{"unknown block", withPages([]any{page("a", pageBody(map[string]any{"type": "carousel3d"}))}, nil), "genui.unknown_block"},
 		{"proposed block not in schema yet (ranking)", withPages([]any{page("a", pageBody(map[string]any{"type": "ranking"}))}, nil), "genui.unknown_block"},
+		{"page blocks: grid areas + kpi_card + custom section + tabs component", withPages([]any{page("a", pageBody(map[string]any{
+			"type": "grid", "areas": []any{"kpis kpis", "main side"}, "columns": []any{"1fr", "320px"}, "mobile": []any{"kpis", "main", "side"},
+			"blocks": []any{
+				map[string]any{"type": "kpi_card", "area": "kpis", "label": map[string]any{"$t": "inventory.k"}, "value": 3.0},
+				map[string]any{"type": "tabs", "area": "main", "variant": "segmented", "tabs": []any{
+					map[string]any{"key": "t", "label": map[string]any{"$t": "inventory.t"}, "icon": "table", "blocks": []any{okBlock}},
+					map[string]any{"key": "c", "label": map[string]any{"$t": "inventory.c"}, "component": "inventory.board@1", "props": map[string]any{"n": 1.0}},
+				}},
+				map[string]any{"type": "section", "area": "side", "mode": "custom", "chrome": "bare", "permission": "inventory.stock.index", "component": "inventory.detail@1"},
+			}}))}, nil), ""},
+		{"page blocks: section with component and blocks", withPages([]any{page("a", pageBody(map[string]any{
+			"type": "section", "mode": "custom", "component": "inventory.detail@1", "blocks": []any{okBlock}}))}, nil), "genui.invalid_block"},
+		{"page blocks: component with a bad name", withPages([]any{page("a", pageBody(map[string]any{
+			"type": "section", "mode": "custom", "component": "Detail"}))}, nil), "genui.pattern"},
 		{"too deep", withPages([]any{page("a", pageBody(nestedStacks(10)))}, nil), "genui.limit.depth"},
 		{"depth at the limit is fine", withPages([]any{page("a", pageBody(nestedStacks(4)))}, nil), ""},
 		{"too many blocks", withPages([]any{page("a", pageBody(manyBlocks(MaxPageBlocksProbe)...))}, nil), "genui."},

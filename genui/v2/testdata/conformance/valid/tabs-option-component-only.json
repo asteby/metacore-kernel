@@ -1,0 +1,21 @@
+{
+  "description": "Una opcion de tabs solo con component (bloque custom registrado), sin props.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "tabs",
+        "tabs": [
+          {
+            "key": "sim",
+            "label": "Simulador",
+            "component": "vantora.election_simulator@1"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}
