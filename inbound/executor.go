@@ -210,6 +210,9 @@ func (d *DynamicExecutor) CheckContract(ctx context.Context, c Contract) error {
 		if err := d.checkModel(ctx, c.Key, c.Route.Model, c.Route.Match); err != nil {
 			return err
 		}
+		if err := d.checkWritable(ctx, c.Key, c.Route.Model, c.Route.Mapping); err != nil {
+			return err
+		}
 	}
 	for i, a := range c.Actions {
 		if a.Model == "" {
@@ -222,6 +225,11 @@ func (d *DynamicExecutor) CheckContract(ctx context.Context, c Contract) error {
 		who := fmt.Sprintf("%s actions[%d]", c.Key, i)
 		if err := d.checkModel(ctx, who, a.Model, fields); err != nil {
 			return err
+		}
+		if a.Do != ActionRecordDelete {
+			if err := d.checkWritable(ctx, who, a.Model, a.Mapping); err != nil {
+				return err
+			}
 		}
 		if a.Do == ActionRecordDelete {
 			if err := d.checkDeleteModel(ctx, who, a); err != nil {
@@ -249,6 +257,33 @@ func (d *DynamicExecutor) checkModel(ctx context.Context, who, model string, fie
 	for _, m := range fields {
 		if !cols[m] {
 			return fmt.Errorf("%w: %s: field %q is not a filterable column of model %q", ErrInvalidContract, who, m, model)
+		}
+	}
+	return nil
+}
+
+// checkWritable requires every mapping target to be a column an entry may write
+// (WritableColumns): a system, readonly, generated or protected column fails
+// registration instead of being rejected at runtime.
+func (d *DynamicExecutor) checkWritable(ctx context.Context, who, model string, mapping map[string]string) error {
+	if len(mapping) == 0 {
+		return nil
+	}
+	st, err := d.st()
+	if err != nil {
+		return err
+	}
+	meta, err := st.TableMetadata(ctx, model)
+	if err != nil || meta == nil {
+		return fmt.Errorf("%w: %s: model %q has no metadata", ErrInvalidContract, who, model)
+	}
+	ok := map[string]bool{}
+	for _, c := range WritableColumns(meta) {
+		ok[c.Name] = true
+	}
+	for to := range mapping {
+		if !ok[to] {
+			return fmt.Errorf("%w: %s: mapping target %q is not a writable column of model %q", ErrInvalidContract, who, to, model)
 		}
 	}
 	return nil

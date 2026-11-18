@@ -88,10 +88,7 @@ var (
 	keyRe     = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	tmplRe    = regexp.MustCompile(`\{([^{}]+)\}`)
 	fieldRe   = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,63}$`)
-	forbidden = map[string]bool{
-		"id": true, "organization_id": true, "tenant_id": true, "created_by_id": true,
-		"created_at": true, "updated_at": true, "deleted_at": true,
-	}
+	forbidden = SystemFields
 )
 
 // compiled is a validated contract plus its compiled schema.

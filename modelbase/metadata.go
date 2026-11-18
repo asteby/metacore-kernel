@@ -92,6 +92,10 @@ type TableMetadata struct {
 	// values. See docs/audit-columns.md.
 	Audit *AuditMeta `json:"audit,omitempty"`
 
+	// UniqueIndexes lists the model's unique indexes (composite and partial
+	// ones; single-column ones also show on ColumnDef.Unique). Optional.
+	UniqueIndexes []UniqueIndexMeta `json:"unique_indexes,omitempty"`
+
 	// DocumentForms declares the guided, per-document-type create flow (cards
 	// per type, fields per type, optional line-items step) the SDK renders
 	// instead of the generic create modal. Nil for ordinary models, so the field
@@ -103,6 +107,14 @@ type TableMetadata struct {
 }
 
 // AuditMeta is the served description of a model's audit columns.
+// UniqueIndexMeta is a declared unique index spanning one or more columns.
+// Partial marks a predicate index (e.g. WHERE deleted_at IS NULL). Optional
+// metadata used to derive the inbound match candidates.
+type UniqueIndexMeta struct {
+	Columns []string `json:"columns"`
+	Partial bool     `json:"partial,omitempty"`
+}
+
 type AuditMeta struct {
 	CreatedAt string `json:"created_at,omitempty"`
 	CreatedBy string `json:"created_by,omitempty"`
@@ -216,6 +228,18 @@ type ColumnDef struct {
 	// the host projects it so form derivation excludes it from create and marks
 	// it read-only in edit. The column still renders in tables/detail. Pure UI.
 	Readonly bool `json:"readonly,omitempty"`
+
+	// Required, Unique, Generated, Protected and Default mirror the declared
+	// manifest column (DDL/write-gate facts) so a consumer of the served
+	// metadata, e.g. the inbound target catalogue, can tell which columns an
+	// integration may write and which identify a row. Generated is the STORED
+	// expression (non-empty = never writable); Protected is the server-enforced
+	// write gate. All optional; zero values keep the legacy shape.
+	Required  bool   `json:"required,omitempty"`
+	Unique    bool   `json:"unique,omitempty"`
+	Generated string `json:"generated,omitempty"`
+	Protected bool   `json:"protected,omitempty"`
+	Default   any    `json:"default,omitempty"`
 
 	// ReadPermission, when set, is the permission a caller must hold to read
 	// this column. The dynamic runtime removes it from every read of a caller

@@ -286,3 +286,32 @@ scope_unresolved`, rama fuera de alcance -> `403 scope_forbidden`). Al registrar
 
 **Cableado.** `Config.Emitter`, `Config.Notifier`, `Config.Automation`; `New`/`Check` fallan
 al arrancar si una cadena usa una acción sin su puerto o un comando no registrado.
+
+## Destinos escribibles (`SystemFields`, `WritableColumns`, `Target`)
+
+Una sola fuente de verdad de «qué columnas puede escribir una entrada»:
+
+- `inbound.SystemFields`: columnas que una entrada jamás escribe aunque el modelo las declare
+  (`id`, `organization_id`, `tenant_id`, `branch_id`, `entity_id`, `created_by_id`,
+  `created_by`, `updated_by`, `created_at`, `updated_at`, `deleted_at`). Es la unión de la
+  lista histórica del kernel y de la compuerta del host OPS; el compilador de contratos
+  (`forbidden`) y el catálogo la comparten.
+- `WritableColumns(meta)`: columnas del modelo escribibles = fuera de `SystemFields` y sin
+  `readonly`, `generated` ni `protected`. Devuelve `[]TargetColumn{Name, Label, Type, Required,
+  Unique, Ref, Options, Default}`.
+- `MatchCandidates(meta)`: conjuntos de columnas que identifican una fila (columnas únicas e
+  índices únicos compuestos), ignorando `organization_id` (el ejecutor ya acota por ella) y
+  contando índices parciales (`WHERE deleted_at IS NULL`). Descarta los conjuntos con columnas
+  no escribibles. Los índices salen de `TableMetadata.UniqueIndexes`
+  (`dynamic.DeriveUniqueIndexes(def)` los proyecta desde `ModelDefinition.Indices`; los únicos
+  compuestos sin `where` de un manifest v3 viajan ahora también ahí, solo informativos: el DDL
+  no los emite desde `Indices`). El host que arma su `TableMetadata` debe copiarlos.
+- `Target` (JSON snake_case: `addon`, `addon_name`, `model`, `label`, `columns`,
+  `match_candidates`, `soft_delete`, `actions`, `permissions{create,update,delete}`,
+  `scope{branch,entity}`, `guard_candidates`) e interfaz `TargetSource{Targets(ctx, org)}`
+  que implementa el host para alimentar el constructor de la UI. Fixture compartida con el SDK:
+  `inbound/testdata/targets.json`.
+
+**Registro.** `CheckContract` valida también las claves de `mapping` (de `route` y de las
+acciones `record.create|update|upsert`) contra `WritableColumns`: mapear una columna de
+sistema, de solo lectura, generada o protegida falla al arrancar con `ErrInvalidContract`.
