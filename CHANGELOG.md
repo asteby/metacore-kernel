@@ -42,6 +42,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Security
 
+- `inbound` (**fix de seguridad**, parche): un valor de `match` vacío o `null` ya no llega a la consulta. La capa de consulta descarta el filtro `eq` sobre `""`, de modo que un `record.delete` (y `update`/`upsert`) con `match` vacío listaba filas sin filtrar y podía retirar una fila arbitraria de la organización. Ahora `""`/solo espacios = `422 match_value_empty` y `null` = `422 match_value_missing`, antes de consultar (cero y `false` siguen permitidos). Además `DynamicExecutor.CheckContract` exige `MaxDeleteRows <= 199` y rechaza `record.delete` sobre modelos `append_only` al registrar. **Compatibilidad:** nueva interfaz opcional `OpSupporter` (`SupportsOp(Op) bool`); un `Executor` propio que no la implemente deja de aceptar contratos con `record.delete` (error al registrar) hasta que la implemente declarando `OpDelete`. `DynamicExecutor` la implementa y soporta todo.
+
 - `dynamic` (**cambio de comportamiento**): sin `Config.Permissions` el CRUD dinámico ahora DENIEGA (fail-closed) en vez de permitir todo. Salidas explícitas: `Config.PermissionsEnforcedByHost` (el host autoriza en su capa; ahora SÍ cambia la decisión) o `Config.AllowUnconfiguredPermissions` (comportamiento histórico, con advertencia en el log). `AccessPolicy` solo estrecha y no se cambia: un modelo sin política sigue regido por el chequeo de capacidades.
 
 - `dynamic`: `Update` descarta `id` y `organization_id` del body (mass assignment: mover una fila de tenant o cambiar su id) y `Config.UpdateDenyFields` (modelo o `"*"` -> campos) permite vedar más, p. ej. `role`/`email` en modelos de usuario. Las columnas de auditoría (`created_by_id`, `deleted_at`…) ya se descartaban.
