@@ -1401,17 +1401,30 @@
       ],
       "description": "Marco de una sección/vista: card (el host pinta marco y estados) o bare."
     },
+    "iconName": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9]{0,63}$",
+      "x-no-proto": true,
+      "description": "Nombre de un icono que resuelve el host (p. ej. MapPin de lucide): identificador alfanumérico sin separadores."
+    },
     "tabIcon": {
-      "enum": [
-        "map",
-        "cards",
-        "table",
-        "dashboard",
-        "list",
-        "calendar",
-        "chart"
+      "anyOf": [
+        {
+          "enum": [
+            "map",
+            "cards",
+            "table",
+            "dashboard",
+            "list",
+            "calendar",
+            "chart"
+          ]
+        },
+        {
+          "$ref": "#/$defs/iconName"
+        }
       ],
-      "description": "Icono de una opción de tabs: conjunto cerrado."
+      "description": "Icono de una opción de tabs: uno del conjunto base (map, cards, table, dashboard, list, calendar, chart) o un nombre de icono que resuelve el host."
     },
     "extName": {
       "type": "string",

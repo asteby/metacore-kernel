@@ -1,0 +1,27 @@
+{
+  "description": "Nombre de icono de 64 caracteres (límite).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "tabs",
+        "tabs": [
+          {
+            "key": "a",
+            "label": "A",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hola"
+              }
+            ],
+            "icon": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}
