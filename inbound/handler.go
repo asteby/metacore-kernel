@@ -176,11 +176,14 @@ type FieldIssue struct {
 
 // SuccessBody is the 200 envelope.
 type SuccessBody struct {
-	Status    string `json:"status"` // applied | replayed
-	ReceiptID string `json:"receipt_id"`
-	RecordID  string `json:"record_id,omitempty"`
+	Status    string       `json:"status"` // applied | replayed | would_apply (dry run)
+	ReceiptID string       `json:"receipt_id"`
+	RecordID  string       `json:"record_id,omitempty"`
 	Actions   []ActionStep `json:"actions,omitempty"`
-	Created   bool   `json:"created,omitempty"`
+	Created   bool         `json:"created,omitempty"`
+	// Shadow is true for a dry-run contract: nothing was written; Actions holds
+	// what each step WOULD have done.
+	Shadow bool `json:"shadow,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -275,6 +278,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, CodeUnknownContract, "unknown contract")
 		return
 	}
+	if c.DryRun {
+		w.Header().Set(ShadowHeader, "true")
+	}
 
 	// Cheap checks and the per-org limiter run BEFORE the nonce is consumed, so
 	// a 415/422/429 never burns a nonce.
@@ -299,7 +305,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sum := sha256.Sum256(body)
-	base := Receipt{OrgID: org, Contract: c.Key, Version: c.Version, BodyHash: hex.EncodeToString(sum[:])}
+	base := Receipt{OrgID: org, Contract: c.Key, Version: c.Version, BodyHash: hex.EncodeToString(sum[:]), Shadow: c.DryRun}
 
 	// Origin mark and hop counter travel INSIDE the signed body (reserved
 	// keys, removed before schema validation); a header would be unsigned.
@@ -331,7 +337,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	op := Operation{Org: org, Contract: c.Key, EventKey: evKey, Route: c.Route, Values: applyMapping(c.Route, payload),
-		CreateDefaults: c.Route.Defaults, Origin: OriginPrefix + c.Key, Hop: hop}
+		CreateDefaults: c.Route.Defaults, Origin: OriginPrefix + c.Key, Hop: hop, DryRun: c.DryRun}
 	if sc := c.Route.Scope; sc != nil {
 		op.Branch = scopeValue(payload, sc.Branch)
 		op.Entity = scopeValue(payload, sc.Entity)
@@ -359,6 +365,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	base.KeyHash = HashKey(org, c.Key, evKey)
+	if c.DryRun {
+		// Own key space: the shadow reservation neither blocks nor stands for the
+		// real application of the same event.
+		base.KeyHash = shadowKeyHash(org, c.Key, evKey)
+	}
 	if c.Log.KeyInClear {
 		base.EventKey = evKey
 	}
@@ -380,6 +391,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	out, xerr := h.execute(r.Context(), c, op)
 	if xerr != nil {
 		h.fail(w, r.Context(), cur, xerr)
+		return
+	}
+	if c.DryRun {
+		h.serveShadowRoute(w, r.Context(), c, cur, out)
 		return
 	}
 	h.finish(r.Context(), cur, StatusApplied, out.RecordID, "")
@@ -433,7 +448,7 @@ func (h *Handler) answerExisting(w http.ResponseWriter, cur Receipt, bodyHash st
 			writeErr(w, http.StatusConflict, CodeIdempotencyClash, "event key already used with a different payload")
 			return
 		}
-		writeJSON(w, http.StatusOK, SuccessBody{Status: "replayed", ReceiptID: cur.ID.String(), RecordID: cur.RecordID, Actions: cur.Progress})
+		writeJSON(w, http.StatusOK, SuccessBody{Status: "replayed", ReceiptID: cur.ID.String(), RecordID: cur.RecordID, Actions: cur.Progress, Shadow: cur.Shadow})
 	case StatusFailed:
 		// Only reached when a partially applied chain is retried with another body.
 		writeErr(w, http.StatusConflict, CodeIdempotencyClash, "event key already used with a different payload")
@@ -457,10 +472,16 @@ func (h *Handler) execute(ctx context.Context, c *compiled, op Operation) (out O
 		if !ok {
 			return Outcome{}, &ExecError{Kind: KindInternal, Code: "command_missing"}
 		}
+		if op.DryRun {
+			return Outcome{Would: &WouldResult{Would: "would_command", Target: c.Route.Command}}, nil
+		}
 		return fn(ctx, op)
 	}
 	if h.cfg.Executor == nil {
 		return Outcome{}, &ExecError{Kind: KindInternal, Code: "executor_unavailable"}
+	}
+	if op.DryRun && !executorDryRuns(h.cfg.Executor) {
+		return Outcome{}, &ExecError{Kind: KindInternal, Code: "dry_run_unsupported"}
 	}
 	return h.cfg.Executor.Execute(ctx, op)
 }
@@ -597,6 +618,11 @@ func (h *Handler) checkOne(ctx context.Context, c *compiled) error {
 		errs = append(errs, fmt.Errorf("contract %s v%d: no Executor for model routes", c.Key, c.Version))
 	} else if cc, ok := h.cfg.Executor.(ContractChecker); ok {
 		if err := cc.CheckContract(ctx, c.Contract); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if c.DryRun {
+		if err := h.checkDryRun(c); err != nil {
 			errs = append(errs, err)
 		}
 	}

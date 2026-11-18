@@ -53,12 +53,16 @@ func (h *Handler) checkChain(c *compiled) []error {
 // finished one, and answers the request.
 func (h *Handler) serveChain(w http.ResponseWriter, ctx context.Context, c *compiled, org uuid.UUID, evKey string, payload any, hop int, cur Receipt) {
 	steps := append([]ActionStep(nil), cur.Progress...)
-	recID, failedAt, err := h.runChain(ctx, c, org, evKey, payload, hop, cur, &steps)
+	recID, failedAt, err := h.runChain(ctx, c, org, evKey, payload, hop, cur, &steps, c.DryRun)
 	if err != nil {
 		h.failChain(w, ctx, cur, err, failedAt)
 		return
 	}
 	h.finish(ctx, cur, StatusApplied, recID, "")
+	if c.DryRun {
+		writeJSON(w, http.StatusOK, SuccessBody{Status: StatusWouldApply, ReceiptID: cur.ID.String(), RecordID: recID, Actions: steps, Shadow: true})
+		return
+	}
 	writeJSON(w, http.StatusOK, SuccessBody{Status: "applied", ReceiptID: cur.ID.String(), RecordID: recID, Actions: steps})
 }
 
@@ -82,7 +86,7 @@ func resultOf(s ActionStep) map[string]any {
 // runChain executes the chain. steps holds the progress found in the receipt
 // and is updated (and persisted) after every action. On failure it returns the
 // index of the action that stopped the chain.
-func (h *Handler) runChain(ctx context.Context, c *compiled, org uuid.UUID, evKey string, payload any, hop int, cur Receipt, steps *[]ActionStep) (recID string, failedAt int, err error) {
+func (h *Handler) runChain(ctx context.Context, c *compiled, org uuid.UUID, evKey string, payload any, hop int, cur Receipt, steps *[]ActionStep, dry bool) (recID string, failedAt int, err error) {
 	origin := OriginPrefix + c.Key
 	ctx = WithOrigin(ctx, origin)
 	env := &evalEnv{payload: payload, event: map[string]any{
@@ -93,6 +97,9 @@ func (h *Handler) runChain(ctx context.Context, c *compiled, org uuid.UUID, evKe
 	// (another worker re-claimed the event after the lease) aborts the chain
 	// before any further effect.
 	save := func() error {
+		if rid == uuid.Nil {
+			return nil // ephemeral run (Handler.DryRun): there is no receipt to keep
+		}
 		owned, e := h.cfg.Receipts.SaveProgress(context.WithoutCancel(ctx), rid, cur.Attempts, *steps)
 		if e != nil {
 			h.cfg.Logger.Error("inbound: save progress", "receipt", rid, "err_type", fmt.Sprintf("%T", e))
@@ -140,7 +147,7 @@ func (h *Handler) runChain(ctx context.Context, c *compiled, org uuid.UUID, evKe
 			}
 			continue
 		}
-		out, aerr := h.runAction(ctx, c, a, env, org, evKey, rid, i, origin, hop)
+		out, aerr := h.runAction(ctx, c, a, env, org, evKey, rid, i, origin, hop, dry)
 		if aerr != nil {
 			step.ErrorCode = errCodeOf(aerr)
 			if a.onErr == OnErrorContinue {
@@ -170,12 +177,15 @@ func (h *Handler) runChain(ctx context.Context, c *compiled, org uuid.UUID, evKe
 			}
 			continue
 		}
-		step.Status, step.RecordID, step.Created = StepDone, out.RecordID, out.Created
-		step.Affected, step.NotFound = out.Affected, out.NotFound
-		step.Noop, step.Reason = out.Noop, out.Reason
+		step.applyOutcome(out)
 		*steps = append(*steps, step)
 		if a.isRecordLike() {
 			env.result = resultOf(step)
+			if dry && step.Created && step.RecordID == "" {
+				// A row that would be created has no id yet: a later step that reads
+				// {{result.id}} must still resolve, as it does in the real run.
+				env.result["id"] = fmt.Sprintf("dry-run:%d", i)
+			}
 		}
 		if out.RecordID != "" && a.isRecordLike() {
 			recID = out.RecordID
@@ -220,7 +230,7 @@ func errCodeOf(err error) string {
 	return "internal"
 }
 
-func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *evalEnv, org uuid.UUID, evKey string, rid uuid.UUID, idx int, origin string, hop int) (out Outcome, err error) {
+func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *evalEnv, org uuid.UUID, evKey string, rid uuid.UUID, idx int, origin string, hop int, dry bool) (out Outcome, err error) {
 	ctx, cancel := context.WithTimeout(ctx, h.cfg.ExecTimeout)
 	defer cancel()
 	defer func() {
@@ -239,6 +249,9 @@ func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *e
 		}
 		op := Operation{Org: org, Contract: c.Key, EventKey: evKey, Values: vals, Origin: origin, Hop: hop, IdempotencyKey: idem}
 		if a.Do == ActionCommandRun {
+			if dry {
+				return Outcome{Would: &WouldResult{Would: "would_command", Target: a.Command}}, nil
+			}
 			fn, ok := h.cfg.Commands.get(a.Command)
 			if !ok {
 				return Outcome{}, &ExecError{Kind: KindInternal, Code: "command_missing"}
@@ -252,6 +265,10 @@ func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *e
 		if h.cfg.Executor == nil {
 			return Outcome{}, &ExecError{Kind: KindInternal, Code: "executor_unavailable"}
 		}
+		if dry && !executorDryRuns(h.cfg.Executor) {
+			return Outcome{}, &ExecError{Kind: KindInternal, Code: "dry_run_unsupported"}
+		}
+		op.DryRun = dry
 		// Defaults apply only when a row is created, never on update.
 		op.CreateDefaults = a.Defaults
 		op.Route = Route{Model: a.Model, Match: a.Match, Op: Op(a.Do[len("record."):])}
@@ -288,11 +305,22 @@ func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *e
 				return Outcome{}, &ExecError{Kind: KindInvalid, Code: CodeScopeRequired}
 			}
 		}
-		return h.cfg.Executor.Execute(ctx, op)
+		out, err = h.cfg.Executor.Execute(ctx, op)
+		if dry && err == nil && a.Do == ActionRecordCreate && out.Would != nil {
+			// A chain create runs as an upsert on its idempotency column; it is
+			// still a create to whoever reads the report.
+			out.Would.Would = "create"
+		}
+		return out, err
 	case ActionEventEmit, ActionAutomationEnqueue, ActionNotify:
 		body, perr := evalMap(a.payload, env)
 		if perr != nil {
 			return Outcome{}, perr
+		}
+		if dry {
+			// The effect is reported, never run: nothing is emitted, notified or
+			// enqueued.
+			return Outcome{Would: &WouldResult{Would: wouldEffect(a.Do), Target: effectName(a)}}, nil
 		}
 		var e error
 		switch a.Do {

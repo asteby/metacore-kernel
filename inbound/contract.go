@@ -85,6 +85,12 @@ type Contract struct {
 	Actions []Action `json:"actions,omitempty"`
 	// OnError is the default policy of the chain: stop (default) | continue.
 	OnError string `json:"on_error,omitempty"`
+	// DryRun puts the contract in shadow mode: real signed events go through the
+	// same signature, schema, scope and idempotency checks and are evaluated end
+	// to end, but NOTHING is written and no side effect runs; the receipt records
+	// what the event WOULD have done (see docs/inbound-events.md, "Modo sombra").
+	// The executor must implement DryRunSupporter or registration fails.
+	DryRun bool `json:"dry_run,omitempty"`
 	// IgnoreOrigins lists origin marks (exact or "prefix*") whose events are
 	// ignored with 200 "ignored"; the contract own origin is always ignored.
 	IgnoreOrigins []string `json:"ignore_origins,omitempty"`

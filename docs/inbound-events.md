@@ -491,3 +491,99 @@ Una sola fuente de verdad de «qué columnas puede escribir una entrada»:
 **Registro.** `CheckContract` valida también las claves de `mapping` (de `route` y de las
 acciones `record.create|update|upsert`) contra `WritableColumns`: mapear una columna de
 sistema, de solo lectura, generada o protegida falla al arrancar con `ErrInvalidContract`.
+
+## Modo sombra / dry-run
+
+Sirve para recibir eventos REALES de otro sistema, evaluarlos completos y
+registrar qué HABRÍA hecho, sin escribir nada en el negocio: la base de una
+migración «en sombra» (dos vías en paralelo, sin doble escritura).
+
+**Cómo configurarlo.** Campo opcional del contrato, al mismo nivel que `log` y
+`on_error`:
+
+```json
+{ "key": "pedido.cambiado", "version": 2, "dry_run": true, "auth": "hmac_canonical_v1", "...": "..." }
+```
+
+Un contrato con `dry_run: true` verifica la firma, el esquema, la llave de
+idempotencia y el alcance exactamente igual que uno real. Para dejar de hacerlo
+en sombra se registra otra versión (o se quita el campo) y se vuelve a cargar:
+no hay otro interruptor.
+
+- **Registro cerrado.** Un `Executor` propio que no implemente `DryRunSupporter`
+  (`SupportsDryRun() bool`) no puede registrar un contrato `dry_run` con rutas de
+  modelo o acciones `record.*` (`ErrDryRunUnsupported`, error de arranque), y el
+  `Handler` nunca le entrega una operación en dry-run. `DynamicExecutor` lo
+  implementa. Un envoltorio que solo expone `Execute` falla cerrado.
+- **Probar con un evento de ejemplo (panel).**
+  `Handler.DryRun(ctx, DryRunRequest{Org, Contract, Version, Body, Header})`
+  evalúa un cuerpo en modo sombra aunque el contrato no sea `dry_run`: sin firma
+  (el host ya autorizó al usuario), sin recibo y sin reserva de idempotencia (se
+  puede repetir el mismo ejemplo). Devuelve `*DryRunResult{Status, Actions,
+  ErrorCode, HTTPStatus, FailedAction}`; los rechazos previos a la evaluación
+  (contrato desconocido, JSON, esquema, llave, alcance) son `*DryRunError` con el
+  mismo `Status`/`Code` que daría el evento real.
+
+**Qué responde.** `200` con `{"status":"would_apply","shadow":true,"receipt_id":…,"actions":[…]}`
+y la cabecera `X-Inbound-Shadow: true` en TODAS las respuestas del contrato,
+errores incluidos. Los errores son los reales (`ambiguous_match`,
+`match_value_empty`, `invalid_transition`, `state_not_eligible` con
+`on_ineligible: fail`, `forbidden`, `rejected_by_model`…) con su mismo estado
+HTTP: un productor que reintenta ante un 4xx/5xx lo seguirá haciendo en sombra.
+Cada paso de `actions[]` (un contrato de `route` tiene uno solo) lleva:
+
+| campo | significado |
+|---|---|
+| `would` | `create`, `update`, `upsert-create`, `upsert-update`, `delete`, `restore`, `transition`, `action`; o `would_emit`, `would_notify`, `would_enqueue`, `would_command` (efectos suprimidos; `target` = nombre del evento, plantilla, automatización o comando) |
+| `record_id`, `rows`, `affected` | la fila (la primera) y cuántas tocaría; `record_id` vacío si la fila se crearía |
+| `changes` | `{columna: {from, to}}`: en un alta, todas las columnas; en una modificación, solo las que cambian |
+| `noop` / `reason` | no cambiaría nada: sin columnas distintas, `already_in_state`, `state_not_eligible`, `already_live` |
+| `status: skipped` + `error_code` | `when` falso, o `stale_event` (la guarda de orden y las lápidas juzgan igual que en real) |
+| `state`, `param_keys` | estado del ciclo de vida leído de la fila (`record.action`); solo las CLAVES del payload de la acción |
+
+**Qué se evalúa.** Se resuelve el `match` (mismas validaciones, `max_rows`,
+`ambiguous_match`, `too_many_matches`, alcance de organización y de
+entidad/sucursal), se convierten los valores al tipo de su columna (#625; un valor
+que no cabe es `rejected_by_model`), se exige lo `required` en un alta, se evalúan
+`when`, la guarda y las lápidas, y se corre `Authorize`. **No se toman candados de
+escritura ni se llama a `Create/Update/Delete/Restore/ExecAction/UpdateGuarded/DeleteSealed`**,
+así que no hay eventos canónicos, hooks ni auditoría. En una cadena, la fila que
+se crearía no tiene id: los pasos siguientes ven `{{result.id}}` =
+`dry-run:<índice>`.
+
+**Qué NO se verifica** (solo el resultado real lo dirá): reglas de validación
+declarativas del modelo, unicidad, existencia de referencias, hooks `before_*`,
+aprobaciones, la máquina de estados en altas, ni nada que un
+`TombstoneFinder`/`dynamic.Service` propio haga fuera del ejecutor.
+
+**Qué se redacta.** El reporte nunca incluye el valor de una columna cuando
+cumple cualquiera de estas: protegida (`protected`), oculta (`hidden`), con
+`readPermission`, generada, **no declarada** en el metadato, de valor no escalar,
+con nombre de aspecto personal (correo, teléfono, nombre, dirección,
+RFC/CURP/DNI, tarjeta/cuenta, contraseña/token, notas/comentarios…; lista
+`personalHints`) o que el host marque con `DynamicExecutor.DryRunRedact(model, column) bool`.
+Esa columna sale como `{"redacted": true}` (solo su nombre). El metadato de
+columnas no trae una marca de sensibilidad propia: la lista por nombre es un
+piso, y un host con datos personales en columnas de nombre neutro DEBE cubrirlas
+con `DryRunRedact`. Los strings se truncan a 200 caracteres y de `record.action`
+solo se reportan las claves de los parámetros. Los recibos no guardan el cuerpo;
+el reporte que guardan es el mismo (redactado). Tampoco se puede usar para
+sondear filas ajenas: el `match` se resuelve con la misma organización y entidad
+que la ejecución real, y un `match` sin filas responde lo mismo que en real
+(`record_not_found`, `upsert-create`, `not_found`).
+
+**Recibo e idempotencia.** El recibo de un evento en sombra es un recibo normal
+(`applied`/`failed`) con `shadow: true` y los pasos `would_*` en `actions`
+(consultable con `Handler.Receipts` y `ReceiptFilter.Shadow`). Su reserva vive en
+**otro espacio de llaves** (hash de `<contrato>|shadow` en lugar de `<contrato>`):
+nunca cuenta como `applied` real ni impide que el MISMO evento se aplique de
+verdad al quitar el `dry_run`. Un reintento del mismo evento en sombra responde
+`replayed` con el mismo resultado previsto (`shadow: true`); otro cuerpo con la
+misma llave, `409 idempotency_conflict`, como en real. Para ver solo los recibos
+reales use `Shadow: &false`; con `EventKey` y sin `Shadow` se buscan ambos.
+
+**Límites.** El resultado es una fotografía: otro evento puede cambiar la fila
+entre la sombra y el real. No hay comparación automática entre las dos vías: la
+bitácora guarda los dos recibos para que el host los compare. `command.run` no se
+ejecuta, así que el efecto de un comando propio no se simula. La columna `shadow`
+de `metacore_inbound_receipts` la crea `NewGormReceiptStore` (AutoMigrate).

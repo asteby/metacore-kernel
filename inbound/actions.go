@@ -217,6 +217,20 @@ type ActionStep struct {
 	Noop      bool   `json:"noop,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 	ErrorCode string `json:"error_code,omitempty"`
+	// Shadow (dry-run) fields, set only by a dry-run: Would is what the step
+	// would have done (create, update, upsert-create, upsert-update, delete,
+	// restore, transition, action, or would_emit, would_notify, would_enqueue,
+	// would_command for the side effects that were suppressed); Target names the
+	// event, template, automation, command or action; Rows how many rows it would
+	// touch; State the lifecycle state read from the row; ParamKeys the keys (never
+	// the values) of a record.action payload. Changes lists column names and,
+	// where the column may be disclosed, the old and new value (see ColumnChange).
+	Would     string                  `json:"would,omitempty"`
+	Target    string                  `json:"target,omitempty"`
+	Rows      int                     `json:"rows,omitempty"`
+	State     string                  `json:"state,omitempty"`
+	ParamKeys []string                `json:"param_keys,omitempty"`
+	Changes   map[string]ColumnChange `json:"changes,omitempty"`
 }
 
 // ------------------------------------------------------------ side ports ---
