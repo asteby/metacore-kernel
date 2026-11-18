@@ -16,9 +16,28 @@
     ],
     "match_candidates": [["sku"], ["warehouse", "external_id"]],
     "soft_delete": true,
-    "actions": ["record.create", "record.update", "record.upsert", "record.delete"],
+    "actions": ["record.create", "record.update", "record.upsert", "record.delete", "record.action", "record.transition", "record.restore"],
     "permissions": {"create": true, "update": true, "delete": false},
     "scope": {"branch": true, "entity": false},
-    "guard_candidates": ["status"]
+    "guard_candidates": ["status"],
+    "actions_available": [
+      {
+        "key": "reserve",
+        "label": "Reservar",
+        "params": [
+          {"name": "quantity", "label": "Cantidad", "type": "number", "required": true},
+          {"name": "reason", "label": "Motivo", "type": "text"}
+        ],
+        "requires_state": ["active"],
+        "permission": "inventory.items.action:reserve"
+      }
+    ],
+    "stage": {
+      "field": "status",
+      "stages": [{"key": "active", "label": "Activo"}, {"key": "archived", "label": "Archivado"}],
+      "transitions": [{"from": "active", "to": "archived"}, {"from": "archived", "to": "active"}]
+    },
+    "restorable": true,
+    "ingest_cursor": "source_updated_at"
   }
 ]

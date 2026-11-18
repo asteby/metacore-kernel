@@ -23,6 +23,12 @@ const (
 	// OpDelete only exists inside a chain (record.delete); a route or a
 	// command.run cannot declare it.
 	OpDelete Op = "delete"
+	// OpAction, OpTransition and OpRestore also only exist inside a chain
+	// (record.action, record.transition, record.restore). Like OpDelete they
+	// select rows by Route.Match and write nothing through Values.
+	OpAction     Op = "action"
+	OpTransition Op = "transition"
+	OpRestore    Op = "restore"
 )
 
 // Route says where a validated event lands. Exactly one of Model or Command.

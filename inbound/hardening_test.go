@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/asteby/metacore-kernel/dynamic"
+	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/modelbase"
 	"github.com/asteby/metacore-kernel/query"
 )
@@ -217,6 +218,11 @@ type fakeDyn struct {
 	noSoftDelete bool
 	// appendOnly makes the model report AppendOnly.
 	appendOnly bool
+	// record.action | transition | restore fixtures (record_ops_test.go).
+	actions map[string]*manifest.ActionDef
+	sm      *dynamic.StageMachine
+	execs   []execCall
+	execFn  func(execCall) (dynamic.ActionResult, error)
 }
 
 func (f *fakeDyn) TableMetadata(context.Context, string) (*modelbase.TableMetadata, error) {
@@ -291,6 +297,11 @@ func (f *fakeDyn) Update(_ context.Context, _ string, u modelbase.AuthUser, id u
 	atomic.AddInt32(&f.updates, 1)
 	for _, r := range f.rows {
 		if r["id"] == id.String() && r["organization_id"] == u.GetOrganizationID().String() {
+			if f.sm != nil {
+				if to, has := in[f.sm.Field]; has && !f.sm.Allows(dynamic.StageValue(r[f.sm.Field]), dynamic.StageValue(to)) {
+					return nil, dynamic.ErrInvalidTransition
+				}
+			}
 			for k, v := range in {
 				r[k] = v
 			}

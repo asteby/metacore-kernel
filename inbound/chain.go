@@ -18,11 +18,12 @@ func (h *Handler) checkChain(c *compiled) []error {
 	}
 	for i, a := range c.chain {
 		switch a.Do {
-		case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert, ActionRecordDelete:
+		case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert, ActionRecordDelete,
+			ActionRecordAction, ActionRecordTransition, ActionRecordRestore:
 			if h.cfg.Executor == nil {
 				add("actions[%d] %s: no Executor", i, a.Do)
-			} else if a.Do == ActionRecordDelete && !executorSupports(h.cfg.Executor, OpDelete) {
-				add("actions[%d] %s: the Executor does not declare OpDelete (implement OpSupporter)", i, a.Do)
+			} else if op, gated := gatedOp(a.Do); gated && !executorSupports(h.cfg.Executor, op) {
+				add("actions[%d] %s: the Executor does not declare Op %q (implement OpSupporter)", i, a.Do, op)
 			}
 			if a.Guard != nil && h.cfg.Executor != nil && !executorGuards(h.cfg.Executor) {
 				add("actions[%d] %s: the Executor does not declare guard support (implement GuardSupporter)", i, a.Do)
@@ -69,8 +70,11 @@ func resultOf(s ActionStep) map[string]any {
 	if s.Do != ActionEventEmit && s.Do != ActionNotify && s.Do != ActionAutomationEnqueue {
 		m["created"] = s.Created
 	}
-	if s.Do == ActionRecordDelete {
+	if matchOnly(s.Do) {
 		m["affected"] = int64(s.Affected)
+	}
+	if isStateOp(s.Do) {
+		m["noop"] = s.Noop
 	}
 	return m
 }
@@ -168,6 +172,7 @@ func (h *Handler) runChain(ctx context.Context, c *compiled, org uuid.UUID, evKe
 		}
 		step.Status, step.RecordID, step.Created = StepDone, out.RecordID, out.Created
 		step.Affected, step.NotFound = out.Affected, out.NotFound
+		step.Noop, step.Reason = out.Noop, out.Reason
 		*steps = append(*steps, step)
 		if a.isRecordLike() {
 			env.result = resultOf(step)
@@ -184,10 +189,27 @@ func (h *Handler) runChain(ctx context.Context, c *compiled, org uuid.UUID, evKe
 
 func (a *cAction) isRecordLike() bool {
 	switch a.Do {
-	case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert, ActionRecordDelete, ActionCommandRun:
+	case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert, ActionRecordDelete,
+		ActionRecordAction, ActionRecordTransition, ActionRecordRestore, ActionCommandRun:
 		return true
 	}
 	return false
+}
+
+// gatedOp returns the Op an Executor must declare through OpSupporter to run
+// the action: the ones that are not a plain create|update|upsert.
+func gatedOp(do string) (Op, bool) {
+	switch do {
+	case ActionRecordDelete:
+		return OpDelete, true
+	case ActionRecordAction:
+		return OpAction, true
+	case ActionRecordTransition:
+		return OpTransition, true
+	case ActionRecordRestore:
+		return OpRestore, true
+	}
+	return "", false
 }
 
 func errCodeOf(err error) string {
@@ -209,7 +231,8 @@ func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *e
 	}()
 	idem := fmt.Sprintf("%s:%d", rid, idx)
 	switch a.Do {
-	case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert, ActionRecordDelete, ActionCommandRun:
+	case ActionRecordCreate, ActionRecordUpdate, ActionRecordUpsert, ActionRecordDelete,
+		ActionRecordAction, ActionRecordTransition, ActionRecordRestore, ActionCommandRun:
 		vals, merr := evalMap(a.mapping, env)
 		if merr != nil {
 			return Outcome{}, merr
@@ -239,8 +262,18 @@ func (h *Handler) runAction(ctx context.Context, c *compiled, a *cAction, env *e
 			op.Values[a.IdempotencyField] = idem
 			op.Route.Op, op.Route.Match = OpUpsert, []string{a.IdempotencyField}
 		}
-		if a.Do == ActionRecordDelete {
+		if matchOnly(a.Do) {
 			op.DeleteMode, op.MaxRows = a.Mode, a.MaxRows
+		}
+		if a.Do == ActionRecordAction {
+			params, perr := evalMap(a.params, env)
+			if perr != nil {
+				return Outcome{}, perr
+			}
+			op.ActionKey, op.Params, op.OnIneligible = a.ActionKey, params, a.OnIneligible
+		}
+		if a.Do == ActionRecordTransition {
+			op.To = a.To
 		}
 		g, gerr := evalGuard(a, env.payload)
 		if gerr != nil {

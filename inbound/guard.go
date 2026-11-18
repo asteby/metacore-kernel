@@ -370,36 +370,32 @@ func eventBranch(op Operation) string {
 	return ""
 }
 
-// tombstoneStale reports whether the most recent tombstone of the row an
-// upsert/create would produce is newer than the event (same organization,
-// same match, and the branch / entity scope of the operation: a tombstone of
-// another branch never blocks). It is what stops a late event from
-// resurrecting a deleted row.
-func (d *DynamicExecutor) tombstoneStale(ctx context.Context, st dynStore, op Operation, sc *dynamic.EntityScope) (bool, error) {
-	g := op.Guard
-	if len(g.Match) == 0 {
-		return false, nil
-	}
+// tombstoneRows returns the soft-deleted rows of the organization whose match
+// columns equal the operation values, most recently deleted first, up to limit.
+// It applies the branch / entity scope of the operation: a tombstone of another
+// branch is never returned. The finder filters in the database; the re-check
+// here is defence in depth for a host finder that does not.
+func (d *DynamicExecutor) tombstoneRows(ctx context.Context, st dynStore, op Operation, match []string, sc *dynamic.EntityScope, limit int) ([]map[string]any, error) {
 	tf := d.tombstoner(st)
 	if tf == nil {
-		return false, &ExecError{Kind: KindInternal, Code: "tombstones_unavailable"}
+		return nil, &ExecError{Kind: KindInternal, Code: "tombstones_unavailable"}
 	}
-	where := make(map[string]any, len(g.Match))
-	for _, f := range g.Match {
+	where := make(map[string]any, len(match))
+	for _, f := range match {
 		v, err := matchValue(op.Values, f)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		where[f] = v
 	}
 	meta, err := st.TableMetadata(ctx, op.Route.Model)
 	if err != nil {
-		return false, mapDynamicErr(err)
+		return nil, mapDynamicErr(err)
 	}
 	if meta == nil {
-		return false, &ExecError{Kind: KindInternal, Code: "tombstones_unavailable"}
+		return nil, &ExecError{Kind: KindInternal, Code: "tombstones_unavailable"}
 	}
-	q := TombstoneQuery{Model: op.Route.Model, Org: op.Org, Where: where, Scope: sc, Limit: 20}
+	q := TombstoneQuery{Model: op.Route.Model, Org: op.Org, Where: where, Scope: sc, Limit: limit}
 	if supportsSoftDelete(meta) {
 		q.DeletedAtColumn = meta.Audit.DeletedAt
 	}
@@ -411,13 +407,12 @@ func (d *DynamicExecutor) tombstoneStale(ctx context.Context, st dynStore, op Op
 	}
 	rows, err := tf.Tombstones(ctx, q)
 	if err != nil {
-		return false, mapDynamicErr(err)
+		return nil, mapDynamicErr(err)
 	}
-	// The finder filters in the database; this re-check is defence in depth
-	// for a host finder that does not.
+	var out []map[string]any
 	for _, r := range rows {
 		same := true
-		for _, f := range g.Match {
+		for _, f := range match {
 			if !valuesEqual(r[f], op.Values[f]) {
 				same = false
 				break
@@ -429,7 +424,27 @@ func (d *DynamicExecutor) tombstoneStale(ctx context.Context, st dynStore, op Op
 		if q.Branch != "" && !valuesEqual(r[branchColumn], q.Branch) {
 			continue
 		}
-		return g.blocks(r[g.Field]) // the most recent tombstone decides
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// tombstoneStale reports whether the most recent tombstone of the row an
+// upsert/create would produce is newer than the event (same organization,
+// same match, and the branch / entity scope of the operation: a tombstone of
+// another branch never blocks). It is what stops a late event from
+// resurrecting a deleted row.
+func (d *DynamicExecutor) tombstoneStale(ctx context.Context, st dynStore, op Operation, sc *dynamic.EntityScope) (bool, error) {
+	g := op.Guard
+	if len(g.Match) == 0 {
+		return false, nil
+	}
+	rows, err := d.tombstoneRows(ctx, st, op, g.Match, sc, 20)
+	if err != nil {
+		return false, err
+	}
+	if len(rows) > 0 {
+		return g.blocks(rows[0][g.Field]) // the most recent tombstone decides
 	}
 	return false, nil
 }

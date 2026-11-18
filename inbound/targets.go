@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/asteby/metacore-kernel/dynamic"
+	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/modelbase"
 	"github.com/google/uuid"
 )
@@ -61,6 +63,124 @@ type Target struct {
 	Scope           TargetScope       `json:"scope"`
 	// GuardCandidates are columns usable in an action guard (e.g. a status).
 	GuardCandidates []string `json:"guard_candidates,omitempty"`
+	// ActionsAvailable are the model actions a record.action may run: only the
+	// ingest: true ones the executor would accept (see IngestActions). Always an
+	// array.
+	ActionsAvailable []TargetAction `json:"actions_available"`
+	// Stage is the model stage machine for record.transition, null when the
+	// model has none (see StageOf).
+	Stage *TargetStage `json:"stage"`
+	// Restorable says record.restore applies: the model soft-deletes and is not
+	// append-only (see Restorable).
+	Restorable bool `json:"restorable"`
+	// IngestCursor is the Model.ingest.cursor of the model, when it declares an
+	// ingest sink: the column that orders its events (set by the host from the
+	// manifest).
+	IngestCursor string `json:"ingest_cursor,omitempty"`
+}
+
+// TargetActionParam is one payload field of an ingest action.
+type TargetActionParam struct {
+	Name     string `json:"name"`
+	Label    string `json:"label,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Required bool   `json:"required,omitempty"`
+}
+
+// TargetAction is a model action a record.action may run. Permission is the
+// string DynamicExecutor.Authorize receives for it, prefixed by the model
+// ("<model>.action:<key>").
+type TargetAction struct {
+	Key           string              `json:"key"`
+	Label         string              `json:"label,omitempty"`
+	Params        []TargetActionParam `json:"params"`
+	RequiresState []string            `json:"requires_state,omitempty"`
+	Permission    string              `json:"permission"`
+}
+
+// TargetStageItem is one state of a stage machine.
+type TargetStageItem struct {
+	Key   string `json:"key"`
+	Label string `json:"label,omitempty"`
+}
+
+// TargetTransition is one allowed move of a stage machine.
+type TargetTransition struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// TargetStage is the stage machine of a model: the column record.transition
+// writes (always this one), its states and the allowed moves.
+type TargetStage struct {
+	Field       string             `json:"field"`
+	Stages      []TargetStageItem  `json:"stages"`
+	Transitions []TargetTransition `json:"transitions"`
+}
+
+// IngestActions projects the actions of a model an inbound event may run:
+// only those the executor accepts (declared ingest: true, no approval,
+// supervisor policy or typed confirmation, a record placement). The idempotency
+// key field is left out of Params: the kernel sets it. The result is never nil.
+func IngestActions(model string, defs []manifest.ActionDef) []TargetAction {
+	out := []TargetAction{}
+	for i := range defs {
+		d := &defs[i]
+		if !ingestable(d) {
+			continue
+		}
+		skip := ""
+		if d.Idempotency != nil {
+			skip = d.Idempotency.KeyField
+		}
+		params := []TargetActionParam{}
+		add := func(fs []manifest.FieldDef) {
+			for _, f := range fs {
+				k := f.Key
+				if k == "" {
+					k = f.Name
+				}
+				if k == "" || k == skip {
+					continue
+				}
+				params = append(params, TargetActionParam{Name: k, Label: f.Label, Type: f.Type, Required: f.Required})
+			}
+		}
+		add(d.Fields)
+		for _, s := range d.Steps {
+			add(s.Fields)
+		}
+		label := d.Label
+		if label == "" {
+			label = d.Name
+		}
+		out = append(out, TargetAction{
+			Key: d.Key, Label: label, Params: params,
+			RequiresState: d.RequiresState, Permission: model + "." + "action:" + d.Key,
+		})
+	}
+	return out
+}
+
+// StageOf projects an active stage machine (nil for none).
+func StageOf(sm *dynamic.StageMachine) *TargetStage {
+	if sm == nil || sm.Field == "" || len(sm.Stages) == 0 {
+		return nil
+	}
+	t := &TargetStage{Field: sm.Field, Stages: make([]TargetStageItem, 0, len(sm.Stages)), Transitions: make([]TargetTransition, 0, len(sm.Transitions))}
+	for _, s := range sm.Stages {
+		t.Stages = append(t.Stages, TargetStageItem{Key: s.Key, Label: s.Label})
+	}
+	for _, tr := range sm.Transitions {
+		t.Transitions = append(t.Transitions, TargetTransition{From: tr.From, To: tr.To})
+	}
+	return t
+}
+
+// Restorable reports whether record.restore can work on a model: it
+// soft-deletes (deleted_at) and is not an append-only ledger.
+func Restorable(meta *modelbase.TableMetadata) bool {
+	return supportsSoftDelete(meta) && !meta.AppendOnly
 }
 
 // TargetSource lists the targets an organization may write by inbound events.
