@@ -1698,6 +1698,11 @@ type Contributions struct {
 	// dashboard surface omit it. See DashboardWidget for the full contract.
 	Dashboard []DashboardWidget `json:"dashboard,omitempty"`
 
+	// Pages contributes declarative pages (a genui/v2 body wrapped with an
+	// identity, a permission and an i18n title). A navigation entry opens one
+	// with NavItem.Page. Optional; see PageDef.
+	Pages []PageDef `json:"pages,omitempty"`
+
 	// Documents contributes printable document templates. Each entry binds a
 	// bundle-relative HTML template to one of the addon's models; the host
 	// hydrates the template with the record (and its child rows) and the org
@@ -2162,6 +2167,11 @@ type NavItem struct {
 	Model      string    `json:"model,omitempty"`
 	Permission string    `json:"permission,omitempty"`
 	Items      []NavItem `json:"items,omitempty"`
+
+	// Page opens the declarative page contributions.pages[].key instead of a
+	// model screen. A page entry has its own identity: it must not combine
+	// with url, model, view_type, view or group_by. Empty = unchanged.
+	Page string `json:"page,omitempty"`
 
 	// Filter declares a static column→value filter the host applies when it
 	// renders this entry's list view, so an addon can publish one nav entry per
