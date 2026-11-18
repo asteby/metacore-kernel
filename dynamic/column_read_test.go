@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -387,6 +388,14 @@ func TestColumnRead_RelationSearchSkipsHiddenColumn(t *testing.T) {
 // Export / facets
 // ---------------------------------------------------------------------------
 
+// costToken matches the seeded cost (777) only as a standalone token. A bare
+// substring check is flaky: random UUIDs in the body (ids) are hex and may
+// contain "777" (e.g. df2777c1-...). Letters, digits or '-' next to the digits
+// mean they belong to an identifier, not to the cost value.
+var costToken = regexp.MustCompile(`(^|[^0-9A-Za-z-])777($|[^0-9A-Za-z-])`)
+
+func hasCost(s string) bool { return costToken.MatchString(s) }
+
 func TestColumnRead_ExportOmitsHiddenColumn(t *testing.T) {
 	fx := newCRFixture(t, nil)
 	st, _, raw := fx.get(t, "cashier", "/dynamic/cr_products/export?columns=name,cost,price")
@@ -394,11 +403,11 @@ func TestColumnRead_ExportOmitsHiddenColumn(t *testing.T) {
 		t.Fatalf("export: %d %s", st, raw)
 	}
 	header := strings.SplitN(strings.TrimPrefix(raw, "\ufeff"), "\n", 2)[0]
-	if strings.Contains(strings.ToLower(header), "cost") || strings.Contains(raw, "777") {
+	if strings.Contains(strings.ToLower(header), "cost") || hasCost(raw) {
 		t.Fatalf("cashier export leaked cost: %q", raw)
 	}
 	_, _, raw = fx.get(t, "manager", "/dynamic/cr_products/export?columns=name,cost,price")
-	if !strings.Contains(raw, "777") {
+	if !hasCost(raw) {
 		t.Fatalf("manager export must carry cost: %q", raw)
 	}
 }
@@ -444,7 +453,7 @@ func TestColumnRead_OptionsMaskSourceColumns(t *testing.T) {
 	}
 	o := res.Options[0]
 	raw, _ := json.Marshal(o)
-	if strings.Contains(string(raw), "777") {
+	if hasCost(string(raw)) {
 		t.Fatalf("cashier option leaked cost: %s", raw)
 	}
 	if _, ok := o.Extra["price"]; !ok {
@@ -455,7 +464,7 @@ func TestColumnRead_OptionsMaskSourceColumns(t *testing.T) {
 	}
 
 	res, _ = fx.svc.Options(ctx, fx.manager, OptionsQuery{Model: "cr_products", Field: "product_id"})
-	if raw, _ := json.Marshal(res.Options[0]); !strings.Contains(string(raw), "777") {
+	if raw, _ := json.Marshal(res.Options[0]); !hasCost(string(raw)) {
 		t.Fatalf("manager option must carry cost: %s", raw)
 	}
 
@@ -474,7 +483,7 @@ func TestColumnRead_OptionsMaskSourceColumns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if raw, _ := json.Marshal(res.Options); strings.Contains(string(raw), "777") {
+	if raw, _ := json.Marshal(res.Options); hasCost(string(raw)) {
 		t.Fatalf("hidden label leaked: %s", raw)
 	}
 }
@@ -497,7 +506,7 @@ func TestColumnRead_SearchPickerMasksColumns(t *testing.T) {
 		t.Fatalf("cashier search matched the hidden cost: %+v", hits)
 	}
 	hits, _ = fx.svc.Search(ctx, fx.cashier, SearchQuery{Model: "cr_products", Q: "Widg"})
-	if raw, _ := json.Marshal(hits); len(hits) != 1 || strings.Contains(string(raw), "777") {
+	if raw, _ := json.Marshal(hits); len(hits) != 1 || hasCost(string(raw)) {
 		t.Fatalf("cashier search projection: %s", raw)
 	}
 	if hits, _ := fx.svc.Search(ctx, fx.manager, SearchQuery{Model: "cr_products", Q: "777"}); len(hits) != 1 {
@@ -797,7 +806,7 @@ func TestColumnRead_ApprovalViewAndEventMasked(t *testing.T) {
 		t.Fatalf("an approver holding the permission must see the cost: %+v", v)
 	}
 	// The stored request is untouched.
-	if !strings.Contains(req.Snapshot, "777") {
+	if !hasCost(req.Snapshot) {
 		t.Fatal("ApprovalView mutated the request")
 	}
 
