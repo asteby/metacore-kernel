@@ -3630,6 +3630,10 @@
           "pattern": "^[a-z][a-z0-9_]*$",
           "description": "Requires an on-the-spot supervisor authorization of this policy (`general.approve_<policy>`). A holder of the capability runs the action directly; anyone else sends the id of a single-use PIN grant (`approval_id` in the payload). The SDK prompts for the PIN by itself."
         },
+        "ingest": {
+          "type": "boolean",
+          "description": "Opts the action in to be run by an inbound event (record.action of the inbound chain). Default false: an action without it is never reachable from an ingest contract. Invalid together with approval, supervisor_policy, confirm_typed or a 'table'/'create' placement."
+        },
         "modal_width": {
           "type": [
             "string",

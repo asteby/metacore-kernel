@@ -2375,6 +2375,15 @@ type Action struct {
 	// Approval, which parks the request for an asynchronous decision.
 	SupervisorPolicy string `json:"supervisor_policy,omitempty"`
 
+	// Ingest opts the action in to be run by an inbound event (`record.action`
+	// of the inbound chain): without it the kernel refuses to run the action
+	// from an ingest contract, so a declared payment capture or a destructive
+	// operation can never be reached by a signed event by accident. It is
+	// incompatible with Approval, SupervisorPolicy and ConfirmTyped (an event
+	// cannot approve, hold a PIN or type a confirmation) and with a `table` or
+	// `create` placement (no record context). Default false.
+	Ingest bool `json:"ingest,omitempty"`
+
 	// ModalWidth lets an addon size the action's modal explicitly: a CSS length
 	// ("720px", "60rem") or a number (px). Empty = the host's default (compact
 	// for a flat field list, roomy for line-items). The SDK reads it as

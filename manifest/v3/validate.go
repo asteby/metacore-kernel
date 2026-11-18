@@ -1830,6 +1830,9 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 			if a.SupervisorPolicy != "" && !supervisorPolicyRe.MatchString(a.SupervisorPolicy) {
 				errs = append(errs, fmt.Sprintf("contributions.actions[%d].supervisor_policy %q must match ^[a-z][a-z0-9_]*$", ai, a.SupervisorPolicy))
 			}
+			if a.Ingest {
+				errs = append(errs, validateActionIngest(ai, a)...)
+			}
 			if a.Idempotency != nil && strings.TrimSpace(a.Idempotency.KeyField) == "" {
 				errs = append(errs, fmt.Sprintf("contributions.actions[%d].idempotency requires a non-empty key_field", ai))
 			}
@@ -2392,6 +2395,27 @@ func validateReasonRequired(m *Manifest, mi int, mod Model) []string {
 		if _, ok := declared[k]; !ok {
 			errs = append(errs, fmt.Sprintf("%s.actions: %q is not an action targeting this model", where, k))
 		}
+	}
+	return errs
+}
+
+// validateActionIngest checks the combinations an `ingest: true` action may not
+// have: anything that needs a human (approval, supervisor PIN, typed
+// confirmation) or has no record to act on (table / create placement).
+func validateActionIngest(ai int, a Action) []string {
+	var errs []string
+	w := fmt.Sprintf("contributions.actions[%d].ingest", ai)
+	if a.Approval != nil {
+		errs = append(errs, w+" cannot be combined with approval (an inbound event cannot approve)")
+	}
+	if a.SupervisorPolicy != "" {
+		errs = append(errs, w+" cannot be combined with supervisor_policy (an inbound event cannot hold a PIN)")
+	}
+	if a.ConfirmTyped != nil {
+		errs = append(errs, w+" cannot be combined with confirm_typed (an inbound event cannot type a confirmation)")
+	}
+	if a.Placement == "table" || a.Placement == "create" {
+		errs = append(errs, fmt.Sprintf("%s requires a record action (placement %q has no record)", w, a.Placement))
 	}
 	return errs
 }

@@ -912,8 +912,11 @@ type ActionDef struct {
 	// `general.approve_<policy>` or a single-use PIN grant id in
 	// payload.approval_id). See dynamic.ConsumePINGrant.
 	SupervisorPolicy string `json:"supervisorPolicy,omitempty"`
-	Confirm          bool   `json:"confirm,omitempty"`
-	ConfirmMessage   string `json:"confirmMessage,omitempty"`
+	// Ingest is the projection of v3 Action.ingest: the action may be run by an
+	// inbound event (inbound `record.action`). Closed by default.
+	Ingest         bool   `json:"ingest,omitempty"`
+	Confirm        bool   `json:"confirm,omitempty"`
+	ConfirmMessage string `json:"confirmMessage,omitempty"`
 	// ConfirmTyped is the projection of v3 Action.confirm_typed: the user types
 	// the current value of Field to confirm; the server verifies payload.confirm_text.
 	ConfirmTyped *v3.ConfirmTyped `json:"confirmTyped,omitempty"`

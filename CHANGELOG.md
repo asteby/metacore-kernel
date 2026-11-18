@@ -9,6 +9,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `manifest/v3` + `manifest` (retrocompatible, primer paso de `record.action` de `inbound`): campo opcional `Action.ingest` (`ingest: true`, por omisión `false`), proyectado a `manifest.ActionDef.Ingest`. Es la lista blanca cerrada de las acciones que un evento entrante podrá ejecutar; se exige el opt-in porque entre las acciones declaradas hay capturas de pago y operaciones destructivas. El manifest v3 rechaza `ingest: true` combinado con `approval`, `supervisor_policy`, `confirm_typed` o `placement` `table`/`create`. Schema editado en las dos copias. Nada cambia para las acciones existentes.
+
 - `inbound` (retrocompatible): la condición `when` de las acciones gana `ne` e `in` (`Condition.Ne`, `Condition.In`), con la semántica de `webhooks.Condition` (solo escalares): ruta ausente → `eq`/`in` falsos y `ne` verdadero; números por valor, nunca iguales a una cadena. Exactamente un operador entre `eq|ne|in|exists`; `in` de 1 a `MaxConditionIn` (50) valores. Se valida al registrar con error `invalid_condition` e índice de la acción (`ErrInvalidContract`). Los contratos con `eq`/`exists` se comportan igual. Docs en `docs/inbound-events.md`.
 
 
