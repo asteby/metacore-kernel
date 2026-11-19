@@ -202,6 +202,9 @@ type MapView struct {
 	// point. It only tints the avatar ring and initials; status colouring stays
 	// on ColorBy.
 	ColorField string `json:"color_field,omitempty"`
+	// SubtitleField names a column printed as the second line under the name
+	// of each point in popups and lists (e.g. a host or an address).
+	SubtitleField string `json:"subtitle_field,omitempty"`
 	// Popup lists the columns shown when a feature is selected (max 8).
 	Popup []string `json:"popup,omitempty"`
 	// Layers adds features from other models (branches, coverage zones).

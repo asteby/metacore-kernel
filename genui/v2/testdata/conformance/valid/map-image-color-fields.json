@@ -19,7 +19,8 @@
           "label": "name"
         },
         "image_field": "brand_logo_url",
-        "color_field": "brand_primary_color"
+        "color_field": "brand_primary_color",
+        "subtitle_field": "host"
       }
     ]
   },

@@ -6451,6 +6451,11 @@
             "pattern": "^[a-z][a-z0-9_]*$",
             "description": "Column with the brand colour (#RGB or #RRGGBB) of each point. Only tints the avatar ring and initials; status colouring stays on color_by."
           },
+          "subtitle_field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Column printed as the second line under the name of each point in popups and lists (e.g. a host or an address)."
+          },
           "popup": {
             "type": "array",
             "maxItems": 8,

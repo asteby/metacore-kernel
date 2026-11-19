@@ -3286,6 +3286,9 @@
         },
         "color_field": {
           "$ref": "#/$defs/key"
+        },
+        "subtitle_field": {
+          "$ref": "#/$defs/key"
         }
       }
     },

@@ -89,7 +89,7 @@ con `Manifest.NavView(model, viewType)`); el manifest lite solo lleva
 
 | Tipo | Campos | Reglas |
 |---|---|---|
-| `map` | `point {lat, lng}` \| `geometry`, `cluster`, `color_by`, `precision` | `precision_field` (`exact|city|country`), `area_field`, `image_field`, `color_field`, `popup[]` (≤ 8), `layers[]` (≤ 8: `kind points\|zones`, `model`, `point`/`geometry`, `icon`, `label`, `color_by`), `fit` (`data`\|`org_default`) | exactamente uno de `point`/`geometry`; `precision` y `precision_field` son excluyentes; `route` solo en paneles |
+| `map` | `point {lat, lng}` \| `geometry`, `cluster`, `color_by`, `precision` | `precision_field` (`exact|city|country`), `area_field`, `image_field`, `color_field`, `subtitle_field`, `popup[]` (≤ 8), `layers[]` (≤ 8: `kind points\|zones`, `model`, `point`/`geometry`, `icon`, `label`, `color_by`), `fit` (`data`\|`org_default`) | exactamente uno de `point`/`geometry`; `precision` y `precision_field` son excluyentes; `route` solo en paneles |
 | `timeline` | `date_field`, `title_field`, `status_field?`, `description_field?`, `group_by?` | en nav lista las filas del modelo; `source` solo en paneles |
 | `calendar` | `start_field`, `end_field?`, `title_field?`, `color_by?`, `all_day_field?` | |
 | `chart` | `kind` (`bar\|line\|area\|pie\|donut`), `query` (= `WidgetQuery` del tablero), `format?` | mismas reglas que un widget; `query.model` = el modelo del nav |

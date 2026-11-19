@@ -115,7 +115,11 @@ func TestUIValidation(t *testing.T) {
 			mv := obj(obj(navItem(t, m, "map")["view"])["map"])
 			mv["image_field"] = "status"
 			mv["color_field"] = "carrier"
+			mv["subtitle_field"] = "tracking_number"
 		}, ""},
+		{"map subtitle_field unknown column", func(t *testing.T, m map[string]any) {
+			obj(obj(navItem(t, m, "map")["view"])["map"])["subtitle_field"] = "host"
+		}, `view.map.subtitle_field "host" is not a column of model "Shipment"`},
 		{"map image_field unknown column", func(t *testing.T, m map[string]any) {
 			obj(obj(navItem(t, m, "map")["view"])["map"])["image_field"] = "logo_url"
 		}, `view.map.image_field "logo_url" is not a column of model "Shipment"`},

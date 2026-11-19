@@ -519,7 +519,7 @@ func (c *ctx) blockRules(b obj, typ, path string) {
 		if present("fields") && !present("source") {
 			panic(fail(CodeInvalidBlock, path, "%s: fields solo aplica con source", path))
 		}
-		for _, k := range []string{"popup", "precision_field", "area_field", "image_field", "color_field"} {
+		for _, k := range []string{"popup", "precision_field", "area_field", "image_field", "color_field", "subtitle_field"} {
 			if present(k) && !present("source") {
 				panic(fail(CodeInvalidBlock, path, "%s: %s solo aplica con source", path, k))
 			}

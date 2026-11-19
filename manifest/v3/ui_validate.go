@@ -369,6 +369,7 @@ func (c *uiChecker) mapView(where, model string, mv *MapView, inPanel bool) {
 	c.column(where+".area_field", model, mv.AreaField)
 	c.column(where+".image_field", model, mv.ImageField)
 	c.column(where+".color_field", model, mv.ColorField)
+	c.column(where+".subtitle_field", model, mv.SubtitleField)
 	if len(mv.Popup) > maxMapPopup {
 		c.addf("%s.popup lists %d columns (max %d)", where, len(mv.Popup), maxMapPopup)
 	}
