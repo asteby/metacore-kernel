@@ -1,6 +1,7 @@
 package query
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -671,5 +672,27 @@ func TestBuilder_CountDoesNotMutateBase(t *testing.T) {
 		if r.Status != "active" {
 			t.Errorf("base filter lost: %+v", r)
 		}
+	}
+}
+
+func TestCheckFilters_Strict(t *testing.T) {
+	meta := &modelbase.TableMetadata{Columns: []modelbase.ColumnDef{{Key: "status"}}}
+	strict := New(meta)
+	ok := Params{Filters: map[string]Filter{"status": {Op: OpEq, Value: "a"}}}
+	if err := strict.CheckFilters(ok); err != nil {
+		t.Fatalf("valid: %v", err)
+	}
+	for name, p := range map[string]Params{
+		"unknown col": {Filters: map[string]Filter{"nope": {Op: OpEq, Value: "a"}}},
+		"bad value":   {Filters: map[string]Filter{"status": {Op: OpIn, Value: "a"}}},
+		"bad op":      {Filters: map[string]Filter{"status": {Op: FilterOp("zz"), Value: "a"}}},
+		"unknown rel": {RelationFilters: []RelationFilter{{Relation: "x", Field: "y", Op: OpEq, Value: "a"}}},
+	} {
+		if err := strict.CheckFilters(p); !errors.Is(err, ErrUnknownFilter) {
+			t.Errorf("%s: want ErrUnknownFilter, got %v", name, err)
+		}
+	}
+	if err := New(meta, WithLenientFilters()).CheckFilters(Params{Filters: map[string]Filter{"nope": {Op: OpEq, Value: "a"}}}); err != nil {
+		t.Fatalf("lenient: %v", err)
 	}
 }

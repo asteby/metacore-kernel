@@ -52,3 +52,13 @@ const (
 	// pathological ILIKE patterns.
 	MaxSearchTermLength = 100
 )
+
+// ErrUnknownFilter is returned by Builder.CheckFilters when a request filter
+// cannot be applied: the column is not declared on the model, the identifier
+// is unsafe, the operator is not supported, the value is malformed for its
+// operator, or a relation filter targets an unknown relation/field. A filter
+// that is silently ignored returns MORE rows than the caller asked for, which
+// is a data leak and a business error, so the dynamic runtime maps this to
+// HTTP 400. Hosts that need the old drop-silently behaviour for one release
+// opt in with WithLenientFilters / dynamic.Config.LenientFilters.
+var ErrUnknownFilter = errors.New("query: unknown or invalid filter")

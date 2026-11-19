@@ -78,6 +78,10 @@ type Builder struct {
 	// statement text does not grow with the id list. Empty means every `in:`
 	// binds as text[].
 	uuidCols map[string]struct{}
+
+	// lenientFilters keeps the legacy drop-silently behaviour (logged) for
+	// CheckFilters. See WithLenientFilters.
+	lenientFilters bool
 }
 
 // SearchClause builds the SQL fragment and bind value for ONE column of the
