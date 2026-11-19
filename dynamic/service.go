@@ -303,6 +303,12 @@ type Config struct {
 	// sources. nil = the lines field is ignored, as before. See document_lines.go.
 	DocumentLinesResolver DocumentLinesResolver
 
+	// InlineRelationsResolver returns the create_inline relations of a model (see
+	// DeriveInlineRelations). When set, Create accepts `_children` = {relation:
+	// [rows]} and writes parent + children in one call, undoing everything when a
+	// child fails. nil = `_children` is rejected (422). See inline_children.go.
+	InlineRelationsResolver InlineRelationsResolver
+
 	// ExtensionResolver returns the model's 1:1 extension tables (manifest v3
 	// Model.extends) installed and enabled for the request's organization —
 	// host-wired from the addon registry like RelationResolver. When set, List
@@ -455,6 +461,7 @@ type Service struct {
 	fileDeleter       FileDeleter
 	relations         RelationResolver
 	documentLines     DocumentLinesResolver
+	inlineRelations   InlineRelationsResolver
 	extensions        ExtensionResolver
 	optionDisplays    OptionDisplayResolver
 	accessPolicies    AccessPolicyResolver
@@ -560,6 +567,7 @@ func New(cfg Config) *Service {
 		fileDeleter:       cfg.FileDeleter,
 		relations:         cfg.RelationResolver,
 		documentLines:     cfg.DocumentLinesResolver,
+		inlineRelations:   cfg.InlineRelationsResolver,
 		extensions:        cfg.ExtensionResolver,
 		optionDisplays:    cfg.OptionDisplayResolver,
 		accessPolicies:    cfg.AccessPolicyResolver,
@@ -972,6 +980,14 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 		return nil, err
 	}
 
+	// Inline children (`_children`, create_inline relations): rows of the
+	// child models, out of the input here (orig keeps them for an approval
+	// replay), validated with the parent below and written after it.
+	inline, inlineVE, err := s.takeInlineChildren(ctx, model, user, input)
+	if err != nil {
+		return nil, err
+	}
+
 	s.scope.InjectOnCreate(input, user)
 	input[ColCreatedByID] = user.GetID()
 	input[ColUpdatedByID] = user.GetID()
@@ -1000,7 +1016,7 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	if err != nil {
 		return nil, err
 	}
-	if err := mergeValidation(s.validateWrite(ctx, model, tableName, user, input, nil, nil), extVE); err != nil {
+	if err := mergeValidation(mergeValidation(s.validateWrite(ctx, model, tableName, user, input, nil, nil), extVE), inlineVE); err != nil {
 		return nil, err
 	}
 	// document_forms: an option gated by a sibling (`when`) must apply.
@@ -1136,11 +1152,27 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	// Document lines: same post-insert boundary. Written before the document's
 	// created event so its subscribers see the lines, and the document is
 	// re-read so the served totals include the line rollups.
+	var docWritten []string
 	if docLines != nil && len(docLines.rows) > 0 {
-		if written, err := s.writeDocumentLines(ctx, user, docLines, idStr); err != nil {
+		written, err := s.writeDocumentLines(ctx, user, docLines, idStr)
+		if err != nil {
 			s.undoDocument(ctx, user, model, tableName, instance, idStr, docLines, written)
 			return nil, err
 		}
+		docWritten = written
+	}
+	// Inline children (create_inline relations): same boundary, after the
+	// lines. A failing child takes the parent, the lines and the children
+	// already written with it.
+	if inline != nil {
+		written, err := s.writeInlineChildren(ctx, user, inline, idStr)
+		if err != nil {
+			s.undoInlineChildren(ctx, written)
+			s.undoDocument(ctx, user, model, tableName, instance, idStr, docLines, docWritten)
+			return nil, err
+		}
+	}
+	if (docLines != nil && len(docLines.rows) > 0) || inline != nil {
 		if err := s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance).First(instance, "id = ?", idStr).Error; err == nil {
 			after = toMap(instance)
 		}

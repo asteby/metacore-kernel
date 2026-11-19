@@ -43,15 +43,15 @@ type Manifest struct {
 	ExtensionPoints *ExtensionPoints `json:"extension_points,omitempty"`
 	// Events declares the event catalog (RFC 0003): what this addon emits and
 	// consumes. Optional; see event_catalog.go.
-	Events *EventsDecl `json:"events,omitempty"`
-	Lifecycle       *Lifecycle       `json:"lifecycle,omitempty"`
-	I18n            *I18n            `json:"i18n,omitempty"`
-	RBAC            *RBAC            `json:"rbac,omitempty"`
-	Settings        []Setting        `json:"settings,omitempty"`
-	Billing         *Billing         `json:"billing,omitempty"`
-	Preset          *Preset          `json:"preset,omitempty"`
-	Theme           *Theme           `json:"theme,omitempty"`
-	ConnectorPack   *ConnectorPack   `json:"connector_pack,omitempty"`
+	Events        *EventsDecl    `json:"events,omitempty"`
+	Lifecycle     *Lifecycle     `json:"lifecycle,omitempty"`
+	I18n          *I18n          `json:"i18n,omitempty"`
+	RBAC          *RBAC          `json:"rbac,omitempty"`
+	Settings      []Setting      `json:"settings,omitempty"`
+	Billing       *Billing       `json:"billing,omitempty"`
+	Preset        *Preset        `json:"preset,omitempty"`
+	Theme         *Theme         `json:"theme,omitempty"`
+	ConnectorPack *ConnectorPack `json:"connector_pack,omitempty"`
 
 	// Connectors declares the third-party credential providers this addon needs
 	// (e.g. "github"). Unlike the standalone kind:ConnectorPack manifest, these
@@ -1053,6 +1053,16 @@ type ModelRelation struct {
 	// they remain reachable from the model's own page / the detail view.
 	// Optional; defaults false. Only meaningful for one_to_many.
 	Embed bool `json:"embed,omitempty"`
+
+	// CreateInline declares that the child rows are captured together with the
+	// parent: the kernel's Create accepts them under `_children.<name>` and
+	// writes parent + children in one call (all-or-nothing). Requires
+	// kind one_to_many, embed true and not readonly. Optional; defaults false.
+	CreateInline bool `json:"create_inline,omitempty"`
+
+	// Min is the minimum number of child rows a create carrying `_children`
+	// must send for this relation. Only with create_inline; >= 0.
+	Min int `json:"min,omitempty"`
 
 	// Rollups declare PARENT columns whose value is an aggregate over this
 	// relation's child rows (Tier-1 of the declarative compute engine, akin to
@@ -2875,10 +2885,10 @@ type AgentCapability struct {
 // kind "guide": the copilot host drives the user through Steps, matching
 // natural-language Intents to trigger the guide.
 type AgentGuide struct {
-	ID          string           `json:"id"`
-	Title       string           `json:"title,omitempty"`
-	Description string           `json:"description,omitempty"`
-	Intents     []string         `json:"intents,omitempty"`
+	ID          string   `json:"id"`
+	Title       string   `json:"title,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Intents     []string `json:"intents,omitempty"`
 	// Prerequisites lists other guide IDs that should run (or be offered) before
 	// this one — e.g. customer segments before price lists.
 	Prerequisites []string         `json:"prerequisites,omitempty"`

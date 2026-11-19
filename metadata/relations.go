@@ -73,14 +73,16 @@ func deriveRefsFromDef(def modelbase.ModelDefiner, meta *modelbase.TableMetadata
 				continue
 			}
 			meta.Relations = append(meta.Relations, modelbase.RelationMeta{
-				Name:       r.Name,
-				Kind:       r.Kind,
-				Through:    r.Through,
-				ForeignKey: r.ForeignKey,
-				Scope:      r.Scope,
-				Label:      r.Label,
-				Readonly:   r.Readonly,
-				Embed:      r.Embed,
+				Name:         r.Name,
+				Kind:         r.Kind,
+				Through:      r.Through,
+				ForeignKey:   r.ForeignKey,
+				Scope:        r.Scope,
+				Label:        r.Label,
+				Readonly:     r.Readonly,
+				Embed:        r.Embed,
+				CreateInline: r.CreateInline,
+				Min:          r.Min,
 			})
 		}
 	}

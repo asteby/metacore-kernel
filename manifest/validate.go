@@ -417,6 +417,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 		if err := validateComputeRollups(md.Relations, colsByModel[md.ModelKey], colsByModel); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}
+		if err := validateInlineRelations(md.Relations, colsByModel); err != nil {
+			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
+		}
 		if err := validateStageMachine(md); err != nil {
 			return fmt.Errorf("manifest.model_definitions[%d].%w", i, err)
 		}

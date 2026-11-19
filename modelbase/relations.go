@@ -50,6 +50,13 @@ type RelationDef struct {
 	// manifest.RelationDef.Embed so the value survives the manifest → host hop.
 	// Pure UI metadata; defaults false (the modal does not embed).
 	Embed bool `json:"embed,omitempty"`
+
+	// CreateInline / Min mirror manifest.RelationDef.CreateInline / Min: the
+	// create form captures this relation's child rows with the parent (posted
+	// under `_children.<name>`), at least Min of them. Projected onto
+	// RelationMeta so the SDK renders the inline sub-table on create.
+	CreateInline bool `json:"create_inline,omitempty"`
+	Min          int  `json:"min,omitempty"`
 }
 
 // HasRelations is implemented by compiled models that declare model-to-model

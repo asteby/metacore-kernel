@@ -1760,6 +1760,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 			if rel.ForeignKey == "" {
 				errs = append(errs, fmt.Sprintf("%s.foreign_key is empty", where))
 			}
+			errs = append(errs, validateInlineRelation(where, rel, colsByModel)...)
 			// Tier-1 rollups: target must be a column on the PARENT (this
 			// model); from (if present) must be a column on the CHILD
 			// (relation.Through); fn must be in the enum; exactly one of
@@ -2450,7 +2451,6 @@ func validateActionIngest(ai int, a Action) []string {
 }
 
 var supervisorPolicyRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
-
 
 // auditColumnTypeProblem reports why a column named like one of the kernel's
 // standard audit columns has an unusable type, or "" when the name is not an

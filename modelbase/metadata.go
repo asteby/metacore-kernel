@@ -191,6 +191,15 @@ type RelationMeta struct {
 	// independently-managed child collection stays cheap to open. Projected
 	// from manifest/v3 ModelRelation.embed. Pure UI.
 	Embed bool `json:"embed,omitempty"`
+	// CreateInline declares that the create form captures this relation's child
+	// rows together with the parent: the SDK posts them under
+	// `_children.<name>` and the kernel writes parent + children in one call.
+	// Only on one_to_many + embed relations. Projected from manifest/v3
+	// ModelRelation.create_inline.
+	CreateInline bool `json:"create_inline,omitempty"`
+	// Min is the minimum number of child rows the create form must carry
+	// (only with CreateInline).
+	Min int `json:"min,omitempty"`
 }
 
 // ColumnDef describes a single column in a TableMetadata.

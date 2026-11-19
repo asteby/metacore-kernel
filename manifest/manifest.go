@@ -1731,6 +1731,18 @@ type RelationDef struct {
 	// Optional; defaults false. Pure UI metadata.
 	Embed bool `json:"embed,omitempty"`
 
+	// CreateInline declares that the child rows of this relation are captured
+	// together with the parent: Service.Create accepts them under
+	// `_children.<Name>` and writes parent + children in one call (see
+	// docs/inline-relations.md). Requires Kind one_to_many, Embed true and not
+	// Readonly. Optional; defaults false. Mirrors v3 ModelRelation.create_inline.
+	CreateInline bool `json:"create_inline,omitempty"`
+
+	// Min is the minimum number of child rows a create must carry under
+	// `_children.<Name>`. Only with CreateInline; >= 0. Enforced only when the
+	// create sends `_children` (a plain create without it is unchanged).
+	Min int `json:"min,omitempty"`
+
 	// Rollups declare PARENT columns the kernel maintains as aggregates over
 	// this relation's child rows (Tier-1 of the declarative compute engine).
 	// On every child create/update/delete the dynamic engine recomputes each
