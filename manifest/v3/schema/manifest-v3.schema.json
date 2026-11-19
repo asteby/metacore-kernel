@@ -2262,6 +2262,14 @@
             "$ref": "#/$defs/PageDef"
           }
         },
+        "blocks": {
+          "type": "array",
+          "maxItems": 64,
+          "description": "Named, reusable genui/v2 blocks defined once and referenced from pages ({type:'ref',ref}), dashboard widgets (block) and other blocks. The host expands references when it serves the catalog.",
+          "items": {
+            "$ref": "#/$defs/BlockDef"
+          }
+        },
         "dashboard": {
           "type": "array",
           "description": "Widgets this addon contributes to the host's modular dashboard. Declarative kinds carry a query the host aggregates; kind 'custom' references a federated expose.",
@@ -2891,6 +2899,47 @@
         }
       }
     },
+    "BlockDef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "ui"
+      ],
+      "description": "One named, reusable block. The body (ui) is a genui/v2 document validated like pages[].ui (i18n keys, max 64 KB).",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "maxLength": 64,
+          "description": "Unique within the addon; another addon references it as '<addon>.<key>'."
+        },
+        "title": {
+          "type": "string",
+          "description": "Optional i18n key describing the block."
+        },
+        "permission": {
+          "type": "string",
+          "description": "Optional permission gating the block wherever it is referenced."
+        },
+        "ui": {
+          "type": "object",
+          "required": [
+            "version",
+            "i18n"
+          ],
+          "properties": {
+            "version": {
+              "const": "genui/v2"
+            },
+            "i18n": {
+              "const": "keys"
+            }
+          },
+          "description": "genui/v2 document. Its top-level blocks are what a reference splices in; its data sources travel with them."
+        }
+      }
+    },
     "DashboardWidget": {
       "type": "object",
       "additionalProperties": false,
@@ -2927,8 +2976,10 @@
             "donut",
             "list",
             "progress",
+            "block",
             "custom"
-          ]
+          ],
+          "description": "Renderer. 'block' = documented tile: the body is a genui/v2 document (inline ui OR a block reference; no query, no expose); 'custom' = federated component (expose)."
         },
         "size": {
           "type": "string",
@@ -2993,6 +3044,32 @@
         "expose": {
           "type": "string",
           "description": "Federated module name from the addon's frontend bundle (kind:'custom')."
+        },
+        "ui": {
+          "type": "object",
+          "required": [
+            "version",
+            "i18n"
+          ],
+          "properties": {
+            "version": {
+              "const": "genui/v2"
+            },
+            "i18n": {
+              "const": "keys"
+            }
+          },
+          "description": "Tile body of a kind:'block' widget (forbidden for any other kind; exclusive with block): a genui/v2 document validated like pages[].ui, max 64 KB. Full structural validation is done by the kernel validator."
+        },
+        "block": {
+          "type": "string",
+          "pattern": "^([a-z][a-z0-9_-]*\\.)?[a-z][a-z0-9_]*$",
+          "description": "Reference to a named block ('<key>' of contributions.blocks[], or '<addon>.<key>' of an addon in compatibility.requires) used as the tile body. kind:'block' only; exclusive with ui."
+        },
+        "refresh_s": {
+          "type": "integer",
+          "minimum": 10,
+          "description": "Optional backup poll interval in seconds (>= 10). Applies to any kind."
         },
         "condition": {
           "$ref": "#/$defs/Condition",

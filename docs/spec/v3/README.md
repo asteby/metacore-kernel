@@ -592,3 +592,38 @@ if err := v3.Validate(raw); err != nil {
 `v3.Validate` runs the JSON schema check and a small set of cross-field
 invariants the schema cannot express (e.g. `kind: "Preset"` forbids
 `models`). It is the same validator the kernel installer calls.
+
+## Dashboard block widgets and named blocks
+
+`contributions.dashboard[]` accepts `kind: "block"`: the tile body is a
+genui/v2 document, so a widget can show a map, a live list or a health strip
+without a federated bundle or an aggregation `query`.
+
+- A block widget has exactly **one origin**: `ui` (inline genui/v2, validated
+  exactly like `contributions.pages[].ui`, `i18n: "keys"`, at most 64 KB) **or**
+  `block` (a reference, below). It forbids `query` and `expose`; every other
+  kind forbids `ui` and `block`.
+- `refresh_s` (integer >= 10, any kind) is the backup poll interval in seconds.
+
+To avoid defining the same UI twice (a sidebar page and a dashboard tile),
+declare it ONCE in `contributions.blocks[]` (`{key, title?, permission?, ui}`;
+`key` snake_case and unique per addon, `ui` validated like a page body, 64 KB
+cap) and reference it:
+
+- from a widget: `"block": "<key>"` or `"<addon>.<key>"` (the addon must be in
+  `compatibility.requires`);
+- from a page body, a named block or a widget `ui`: a node
+  `{"type": "ref", "ref": "<key>"}` placed where a block goes. It takes nothing
+  but `type` and `ref`.
+
+`ref` exists only in the manifest. `v3.ExpandBlockRefs(m, foreign)` returns the
+manifest with every reference replaced: the node is spliced with the block's
+top-level blocks, the block's `data` sources are merged into the document's
+(same name, different definition = error), a block with `permission` is wrapped
+in a `section` carrying it, and a widget gets the block as its `ui`. Nesting is
+limited to 3 levels and cycles are errors. Validation expands first and then
+validates the result with genui/v2, so the genui schema, the SDK and the browser
+never see a `ref`. References to another addon are expanded only when the host
+passes that addon's (already expanded) catalog as `foreign`; the validator
+checks the addon is required and substitutes a placeholder. The host MUST
+expand when it serves the catalog and pages. Expansion is idempotent.
