@@ -85,6 +85,63 @@ el embed pasa a `ui` v2. Los tipos sin equivalente (stacked, horizontal,
 scatter, radar, composed) conservan el embed `chart`. Es una ayuda de
 transición: un `inline` no se puede autorizar contra los permisos del usuario.
 
+## Presentación de tablas: feed «En vivo» (`table`)
+
+El bloque `table` admite, todo opcional y aditivo (una tabla sin estas
+propiedades se ve igual que antes):
+
+| Propiedad | Dónde | Para qué |
+|---|---|---|
+| `max_height` (`sm`\|`md`\|`lg`) | bloque | Alto máximo con scroll interno y cabecera fija; la medida en rem la define el host (SDK). Úsalo en widgets y feeds que no deben crecer con las filas |
+| `density` (`compact`\|`comfortable`) | bloque | Espaciado de filas; `comfortable` por omisión |
+| `variant` (`text`\|`badge`\|`icon_text`) | columna | Presenta el valor como texto (por omisión), insignia con tono o icono + texto |
+| `tones` | columna | valor -> tono (`default`, `muted`, `info`, `success`, `warning`, `danger`; el mismo enum que `status_tones` del mapa) |
+| `labels` | columna | valor -> texto literal o `{"$t": clave}` que el host traduce con `t` |
+| `icons` | columna | valor -> nombre de icono del host (`^[A-Za-z][A-Za-z0-9]{0,63}$`, como `tabs.icon`) |
+
+Reglas: `tones`, `labels` e `icons` solo con `variant` `badge` o `icon_text`
+(`genui.invalid_block`); hasta 32 entradas por mapa y claves de 1 a 64
+caracteres `[A-Za-z0-9_.:-]`; un valor sin entrada usa el tono `default`, el
+valor crudo y ningún icono. `format: "relative_date"` ya es válido en el
+contrato; quien lo aplica es el renderer del SDK. El vector de referencia es
+`genui/v2/testdata/conformance/valid/table-live-feed-badge.json`.
+
+```json
+{
+  "version": "genui/v2",
+  "data": { "events": { "q": "t:hub.Event?limit=50" } },
+  "blocks": [
+    {
+      "type": "table",
+      "title": { "$t": "feed.title" },
+      "source": "data.events",
+      "max_height": "md",
+      "density": "compact",
+      "columns": [
+        { "key": "created_at", "label": { "$t": "feed.at" }, "format": "relative_date" },
+        { "key": "name", "label": { "$t": "feed.event" } },
+        {
+          "key": "result",
+          "label": { "$t": "feed.result" },
+          "variant": "badge",
+          "tones": { "ok": "success", "pending": "warning", "error": "danger" },
+          "labels": {
+            "ok": { "$t": "feed.result.ok" },
+            "pending": { "$t": "feed.result.pending" },
+            "error": "Error"
+          },
+          "icons": { "ok": "CheckCircle", "pending": "Clock", "error": "XCircle" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+El perfil del agente (`AgentProfile`) no enumera propiedades por bloque: solo
+bloques, verbos, fuentes y límites; las propiedades nuevas ya entran por el
+esquema, cuyas descripciones son lo que lee el modelo.
+
 ## No cubierto aquí
 
 Bloque `proposal` (F5), «fijar»/`user_blocks` (F6), la implementación de los

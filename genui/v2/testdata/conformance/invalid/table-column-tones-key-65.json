@@ -1,0 +1,32 @@
+{
+  "description": "Las claves de los mapas de columna tienen como máximo 64 caracteres.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "table",
+        "title": "En vivo",
+        "columns": [
+          {
+            "key": "result",
+            "label": "Resultado",
+            "variant": "badge",
+            "tones": {
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "info"
+            }
+          }
+        ],
+        "rows": [
+          {
+            "at": "2026-11-19T10:00:00Z",
+            "result": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.pattern"
+  }
+}

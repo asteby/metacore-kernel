@@ -1,0 +1,32 @@
+{
+  "description": "Columna icon_text: icono y texto por valor, sin tonos (los valores sin entrada usan el texto crudo).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "table",
+        "title": "En vivo",
+        "columns": [
+          {
+            "key": "result",
+            "label": "Resultado",
+            "variant": "icon_text",
+            "icons": {
+              "ok": "Check",
+              "error": "X"
+            }
+          }
+        ],
+        "rows": [
+          {
+            "at": "2026-11-19T10:00:00Z",
+            "result": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

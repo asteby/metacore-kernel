@@ -488,6 +488,22 @@ func (c *ctx) blockRules(b obj, typ, path string) {
 	present := func(k string) bool { return has(b, k) }
 	switch typ {
 	case "table":
+		// tones/labels/icons de una columna solo tienen sentido con una
+		// presentacion por valor (badge o icon_text); con text se ignorarian.
+		cs, _ := b["columns"].([]any)
+		for i, col := range cs {
+			co := asObj(col)
+			v := str(co["variant"])
+			if v == "badge" || v == "icon_text" {
+				continue
+			}
+			for _, k := range []string{"tones", "labels", "icons"} {
+				if has(co, k) {
+					where := fmt.Sprintf("%s.columns[%d]", path, i)
+					panic(fail(CodeInvalidBlock, where, "%s: %s solo aplica con variant badge o icon_text", where, k))
+				}
+			}
+		}
 		cols := lenOf(b["columns"])
 		switch {
 		case present("source"):

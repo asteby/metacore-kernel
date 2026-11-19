@@ -1,0 +1,47 @@
+{
+  "description": "max_height acepta sm, md y lg; density acepta comfortable.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "table",
+        "max_height": "sm",
+        "density": "comfortable",
+        "columns": [
+          {
+            "key": "a",
+            "label": "A"
+          }
+        ],
+        "rows": []
+      },
+      {
+        "type": "table",
+        "max_height": "md",
+        "density": "comfortable",
+        "columns": [
+          {
+            "key": "a",
+            "label": "A"
+          }
+        ],
+        "rows": []
+      },
+      {
+        "type": "table",
+        "max_height": "lg",
+        "density": "comfortable",
+        "columns": [
+          {
+            "key": "a",
+            "label": "A"
+          }
+        ],
+        "rows": []
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

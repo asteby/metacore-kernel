@@ -1,0 +1,32 @@
+{
+  "description": "labels solo aplica con variant badge o icon_text (variant text explícito).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "table",
+        "title": "En vivo",
+        "columns": [
+          {
+            "key": "result",
+            "label": "Resultado",
+            "variant": "text",
+            "labels": {
+              "ok": "OK"
+            }
+          }
+        ],
+        "rows": [
+          {
+            "at": "2026-11-19T10:00:00Z",
+            "result": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_block"
+  }
+}
