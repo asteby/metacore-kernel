@@ -34,6 +34,14 @@ const (
 	// audit-column standard (docs/audit-columns.md). Promote to a hard error
 	// everywhere one minor release after it ships.
 	RuleAuditColumnType = "audit_column_type"
+
+	// RuleFinalStageOutgoing: a transition leaving an is_final stage must
+	// carry `reopen: true` or an approval block (the explicit exit). Introduced with the
+	// strict stage machine (P3). Promote to a hard error everywhere one minor
+	// release after it ships.
+	// Warning-only in BOTH modes (warnOnlyWindow): the hub reads bundles with
+	// Strict, and reopen/archive exits are legitimate in real addons.
+	RuleFinalStageOutgoing = "final_stage_outgoing"
 )
 
 // RuleWebhookActionSigning and RuleRBACPermissionResolves are declared in
@@ -69,6 +77,7 @@ const (
 var legacyTolerated = []string{
 	RuleRequiresStateInStages,
 	RuleAuditColumnType,
+	RuleFinalStageOutgoing,
 	RuleWebhookActionSigning,
 	RuleRBACPermissionResolves,
 	RuleSlotKindUnknown,
@@ -80,6 +89,7 @@ var legacyTolerated = []string{
 // warnOnlyWindow marks the legacyTolerated rules that are reported as warnings
 // even when Options.Strict is set (see the note above).
 var warnOnlyWindow = map[string]struct{}{
+	RuleFinalStageOutgoing:          {},
 	RuleWebhookActionSigning:        {},
 	RuleRBACPermissionResolves:      {},
 	RuleSlotKindUnknown:             {},

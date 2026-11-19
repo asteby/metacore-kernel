@@ -60,6 +60,14 @@ type Config struct {
 	// filters; it will be removed.
 	LenientFilters bool
 
+	// StrictStageCreate rejects (422 invalid_transition) a CREATE that lands a
+	// record directly in an `is_final` or `locked` stage of its stage machine
+	// (a sale born "cancelled", an order born "delivered"): a final stage is
+	// reached by a declared transition, never by inserting there. Off by
+	// default for ONE release: the create still succeeds and is logged as
+	// `stage.create_in_final`, so hosts can find the offenders first.
+	StrictStageCreate bool
+
 	// RequirePermissions makes a missing Permissions service DENY every
 	// request instead of allowing it. Without this, `perms == nil` fails OPEN:
 	// the safest default a host can pick is to fail closed, so a wiring
@@ -456,6 +464,7 @@ type Service struct {
 	updateDeny        map[string][]string
 	requireTenant     bool
 	lenientFilters    bool
+	strictStageCreate bool
 	tableNameResolver TableNameResolver
 	bus               Publisher
 	addonKeyForModel  func(ctx context.Context, model string) string
@@ -556,6 +565,7 @@ func New(cfg Config) *Service {
 		requirePerms:      cfg.RequirePermissions || !(cfg.PermissionsEnforcedByHost || cfg.AllowUnconfiguredPermissions),
 		requireTenant:     cfg.RequireTenantScope,
 		lenientFilters:    cfg.LenientFilters,
+		strictStageCreate: cfg.StrictStageCreate,
 		hooks:             cfg.Hooks,
 		scope:             cfg.Scoper,
 		optsResolver:      cfg.OptionsConfigResolver,
@@ -1034,7 +1044,11 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	// The same lifecycle rule Update enforces: a create that names the stage
 	// column must land on a declared stage (an empty from is a placement, not
 	// a move). Models without a machine are unrestricted.
-	if err := GateWrite(s.resolveStageMachine(ctx, model), nil, input, nil); err != nil {
+	csm := s.resolveStageMachine(ctx, model)
+	if err := GateWrite(csm, nil, input, nil); err != nil {
+		return nil, err
+	}
+	if err := s.checkCreateStage(csm, model, input); err != nil {
 		return nil, err
 	}
 
@@ -1378,6 +1392,17 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 				}
 				for k, v := range input {
 					merged[k] = v
+				}
+				// Per-transition policy (P3): roles, requires_fields and guard
+				// reject the move; `approval` parks it for a supervisor and the
+				// approved replay skips exactly this gate.
+				roles, bypass := s.transitionRoles(ctx, user, model, fromStage, toStage)
+				if err := CheckTransitionPolicy(sm, fromStage, toStage, merged, roles, bypass); err != nil {
+					return err
+				}
+				if ce := transitionApproval(ctx, model, sm, fromStage, toStage, merged); ce != nil {
+					pendingCE, pendingBefore = ce, before
+					return errApprovalPending
 				}
 				if ApplyTransitionSets(sm, fromStage, toStage, merged) {
 					for _, h := range sm.MatchingHooks(fromStage, toStage) {

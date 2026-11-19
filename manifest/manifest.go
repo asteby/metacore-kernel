@@ -1516,13 +1516,28 @@ type StageDef struct {
 	IsFinal bool   `json:"isFinal,omitempty"`
 	// Locked: a record in this stage is read-only (v3 Stage.Locked).
 	Locked bool `json:"locked,omitempty"`
+	// EditableWhenLocked: columns that stay writable in a Locked stage
+	// (v3 Stage.EditableWhenLocked).
+	EditableWhenLocked []string `json:"editableWhenLocked,omitempty"`
 }
 
 // TransitionDef is the host/runtime projection of a v3 Transition: one allowed
-// (from → to) stage move.
+// (from → to) stage move plus its optional policy (see manifest/v3.Transition).
 type TransitionDef struct {
-	From string `json:"from"`
-	To   string `json:"to"`
+	From           string         `json:"from"`
+	To             string         `json:"to"`
+	Guard          string         `json:"guard,omitempty"`
+	Roles          []string       `json:"roles,omitempty"`
+	RequiresFields []string       `json:"requiresFields,omitempty"`
+	Approval       *ApprovalDef   `json:"approval,omitempty"`
+	Reopen         bool           `json:"reopen,omitempty"`
+	SLA            *TransitionSLA `json:"sla,omitempty"`
+}
+
+// TransitionSLA is the host projection of v3 TransitionSLA (informational).
+type TransitionSLA struct {
+	Hours    int    `json:"hours"`
+	OnBreach string `json:"onBreach,omitempty"`
 }
 
 // TransitionHookDef is the host/runtime projection of a v3 TransitionHook. Set

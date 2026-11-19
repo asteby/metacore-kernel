@@ -1,0 +1,1170 @@
+{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": {
+    "key": "link_inbox",
+    "name": "Inbox",
+    "description": "Receive, organize and reply to your customer conversations from WhatsApp, web chat and other channels in one shared inbox.",
+    "version": "0.9.1",
+    "category": "vertical.link",
+    "icon": {
+      "type": "svg",
+      "slug": "assets/link.svg"
+    },
+    "author": "Asteby",
+    "license": "Apache-2.0",
+    "readme": "README.md",
+    "features": [
+      "See every conversation in a shared inbox, organized as a board by stage.",
+      "Keep contacts and channels together across WhatsApp, web chat, Instagram, Telegram and API.",
+      "Receive customer messages without duplicates, even when a channel retries.",
+      "Reply from the inbox and your answer reaches the customer on the same channel.",
+      "Get a notice for each new message and when a WhatsApp channel disconnects.",
+      "Link a conversation to a customer and start a quote from it."
+    ],
+    "i18n": {
+      "es": {
+        "name": "Inbox",
+        "description": "Recibe, organiza y responde las conversaciones con tus clientes desde WhatsApp, el chat web y otros canales en una sola bandeja compartida.",
+        "features": [
+          "Ve todas las conversaciones en una bandeja compartida, organizadas en un tablero por etapa.",
+          "Reúne contactos y canales de WhatsApp, chat web, Instagram, Telegram y API.",
+          "Recibe los mensajes de tus clientes sin duplicados, aunque el canal reintente.",
+          "Responde desde la bandeja y tu respuesta llega al cliente por el mismo canal.",
+          "Recibe un aviso por cada mensaje nuevo y cuando un canal de WhatsApp se desconecta.",
+          "Vincula una conversación con un cliente y genera una cotización desde ahí."
+        ]
+      },
+      "en": {
+        "name": "Inbox",
+        "description": "Receive, organize and reply to your customer conversations from WhatsApp, web chat and other channels in one shared inbox.",
+        "features": [
+          "See every conversation in a shared inbox, organized as a board by stage.",
+          "Keep contacts and channels together across WhatsApp, web chat, Instagram, Telegram and API.",
+          "Receive customer messages without duplicates, even when a channel retries.",
+          "Reply from the inbox and your answer reaches the customer on the same channel.",
+          "Get a notice for each new message and when a WhatsApp channel disconnects.",
+          "Link a conversation to a customer and start a quote from it."
+        ]
+      }
+    }
+  },
+  "compatibility": {
+    "requires": [
+      {
+        "key": "kernel",
+        "version": ">=3.0.0 <4.0.0"
+      },
+      {
+        "key": "customers",
+        "version": ">=0.38.0 <1.0.0",
+        "optional": true,
+        "reason": "Optional: link_customer sets Conversation.customer_id (soft-ref, no ref/FK) so the inbox agent can see which account a conversation belongs to. Without customers installed the field stays empty and the action is a no-op."
+      },
+      {
+        "key": "quotes",
+        "version": ">=0.2.0 <1.0.0",
+        "optional": true,
+        "reason": "Optional: create_quote_from_conversation opens a draft quotes.Quote with conversation_id (and customer_id when linked) so an agent can quote a customer without leaving the inbox. Also subscribes to quotes.quote_accepted to post a system message back into the conversation."
+      },
+      {
+        "key": "connector_whatsapp",
+        "version": ">=0.4.0 <1.0.0",
+        "optional": true,
+        "reason": "Optional: when the WhatsApp connector is installed and enabled, WhatsApp messages, connection changes and delivery receipts reach the inbox directly instead of through the signed channel-gateway webhooks. Without it, the webhooks keep serving any other channel.",
+        "enables": [
+          "action:Device.connect_device",
+          "action:Device.create_and_connect"
+        ]
+      }
+    ]
+  },
+  "tenancy": {
+    "isolation": "shared",
+    "rls_column": "organization_id"
+  },
+  "capabilities": [
+    {
+      "kind": "db:write",
+      "target": "addon_link_inbox.*",
+      "reason": "Upsert contacts, conversations and messages as they arrive from the channel gateway."
+    },
+    {
+      "kind": "db:read",
+      "target": "addon_link_inbox.*",
+      "reason": "Read conversations/messages for the inbox and the idempotent dedup probe on whatsapp_id."
+    },
+    {
+      "kind": "http:fetch",
+      "target": "hub.asteby.com",
+      "reason": "Dispatch outbound replies to the org's channel-gateway URL (gateway_url setting, default https://hub.asteby.com/gateway). Scoped to the exact managed gateway host. Appliance / self-hosted installs whose gateway runs on a different host must replace this grant with their own gateway host at install time."
+    },
+    {
+      "kind": "event:emit",
+      "target": "link_inbox.message_received"
+    },
+    {
+      "kind": "event:subscribe",
+      "target": "link_inbox.Message.created",
+      "reason": "When a message is created with a non-contact sender (a human agent, bot or flow reply), dispatch it to the channel gateway so it reaches the customer."
+    },
+    {
+      "kind": "event:subscribe",
+      "target": "link_inbox.Device.deleted",
+      "reason": "When a channel (device) is deleted in ops, disconnect its WhatsApp session on the channel-gateway so inbound messages stop."
+    },
+    {
+      "kind": "db:read",
+      "target": "customers",
+      "reason": "link_customer validates the customer_id picked in the action actually exists (and belongs to the org) before saving it on the Conversation. No-op when customers is not installed."
+    },
+    {
+      "kind": "db:write",
+      "target": "quotes",
+      "reason": "create_quote_from_conversation opens a draft quotes.Quote for the conversation (optional dependency, see compatibility.requires)."
+    },
+    {
+      "kind": "event:subscribe",
+      "target": "quotes.quote_accepted",
+      "reason": "Post a system message into the originating Conversation when a quote born from create_quote_from_conversation is accepted (event payload carries conversation_id only when the quote has one)."
+    },
+    {
+      "kind": "event:subscribe",
+      "target": "connector_whatsapp.whatsapp.message.received",
+      "reason": "Receive WhatsApp messages straight from the WhatsApp connector instead of the signed webhook. Needs the connector installed and enabled in the same organization; without it this event never fires, which is not an error."
+    },
+    {
+      "kind": "event:subscribe",
+      "target": "connector_whatsapp.whatsapp.connection.updated",
+      "reason": "Update a channel's connection status in real time from the WhatsApp connector."
+    },
+    {
+      "kind": "event:subscribe",
+      "target": "connector_whatsapp.whatsapp.message.updated",
+      "reason": "Record delivery and read receipts on the message."
+    },
+    {
+      "kind": "event:subscribe",
+      "target": "connector_whatsapp.whatsapp.message.failed",
+      "reason": "Record a failed WhatsApp send on the message, with its error."
+    }
+  ],
+  "connectors": [
+    {
+      "key": "channel_gateway",
+      "label": "link_inbox.connector.channel_gateway",
+      "auth": "token",
+      "credentials": [
+        {
+          "key": "webhook_secret",
+          "type": "secret",
+          "required": true,
+          "label": "link_inbox.connector.field.webhook_secret"
+        }
+      ]
+    }
+  ],
+  "schedules": [
+    {
+      "key": "reconcile_sessions",
+      "every": "5m",
+      "do": "wasm:reconcile_sessions"
+    }
+  ],
+  "webhooks": [
+    {
+      "key": "incoming",
+      "path": "/webhooks/incoming",
+      "verify": "hmac-sha256",
+      "secret_ref": "channel_gateway.webhook_secret",
+      "do": "wasm:ingest_message"
+    },
+    {
+      "key": "status",
+      "path": "/webhooks/status",
+      "verify": "hmac-sha256",
+      "secret_ref": "channel_gateway.webhook_secret",
+      "do": "wasm:on_device_status"
+    }
+  ],
+  "models": [
+    {
+      "key": "Contact",
+      "table": "contacts",
+      "label": "link_inbox.model.contact",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "primary_key": true,
+          "default": "gen_random_uuid()",
+          "label": "link_inbox.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "link_inbox.field.organization_id"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "label": "link_inbox.field.name"
+        },
+        {
+          "name": "phone",
+          "type": "text",
+          "label": "link_inbox.field.phone",
+          "display": "phone",
+          "comment": "Global single-column unique (contacts_phone_uq) added so the migration importer's naturalKeyColumn can resolve FKs to Contact - manifest.FromV3 only folds a single-column unique index into ColumnDef.Unique, and the only prior index here (contacts_org_phone_idx) is a non-unique composite. Nullable, so multiple contacts with no phone stay fine (Postgres allows many NULLs in a unique index). Verified against real production data before adding: addon_link_inbox.contacts had 0 rows platform-wide at the time (2026-09-01), so zero collision risk today. Point-in-time guarantee, not permanent - if two real orgs' contacts ever land on the same phone, the constraint will reject the later create at that org's next deploy."
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "label": "link_inbox.field.email",
+          "display": "email"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text",
+          "label": "link_inbox.field.avatar_url",
+          "display": "image"
+        },
+        {
+          "name": "tags",
+          "type": "jsonb",
+          "default": "[]",
+          "label": "link_inbox.field.tags",
+          "display": "tags"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_inbox.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_inbox.field.updated_at"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "label": "link_inbox.field.deleted_at"
+        }
+      ],
+      "indices": [
+        {
+          "name": "contacts_org_idx",
+          "columns": [
+            "organization_id"
+          ]
+        },
+        {
+          "name": "contacts_org_phone_idx",
+          "columns": [
+            "organization_id",
+            "phone"
+          ]
+        },
+        {
+          "name": "contacts_phone_uq",
+          "columns": [
+            "phone"
+          ],
+          "unique": true
+        }
+      ],
+      "relations": [
+        {
+          "name": "conversations",
+          "kind": "one_to_many",
+          "through": "Conversation",
+          "foreign_key": "contact_id",
+          "label": "link_inbox.relation.conversations"
+        }
+      ]
+    },
+    {
+      "key": "Device",
+      "table": "devices",
+      "label": "link_inbox.model.device",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "primary_key": true,
+          "default": "gen_random_uuid()",
+          "label": "link_inbox.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "link_inbox.field.organization_id"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "not_null": true,
+          "label": "link_inbox.field.name"
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "not_null": true,
+          "default": "whatsapp",
+          "label": "link_inbox.field.type",
+          "options": [
+            {
+              "value": "web",
+              "label": "link_inbox.options.device_type.web",
+              "color": "sky"
+            },
+            {
+              "value": "whatsapp",
+              "label": "link_inbox.options.device_type.whatsapp",
+              "color": "green"
+            },
+            {
+              "value": "instagram",
+              "label": "link_inbox.options.device_type.instagram",
+              "color": "rose"
+            },
+            {
+              "value": "telegram",
+              "label": "link_inbox.options.device_type.telegram",
+              "color": "blue"
+            },
+            {
+              "value": "api",
+              "label": "link_inbox.options.device_type.api",
+              "color": "slate"
+            }
+          ]
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "default": "qr",
+          "label": "link_inbox.field.provider",
+          "depends_on": "type",
+          "options": [
+            {
+              "value": "qr",
+              "label": "link_inbox.options.provider.qr",
+              "color": "amber",
+              "when": {
+                "field": "type",
+                "in": [
+                  "whatsapp"
+                ]
+              }
+            },
+            {
+              "value": "meta",
+              "label": "link_inbox.options.provider.meta",
+              "color": "blue",
+              "when": {
+                "field": "type",
+                "in": [
+                  "whatsapp",
+                  "instagram"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "identifier",
+          "type": "text",
+          "label": "link_inbox.field.identifier"
+        },
+        {
+          "name": "access_user_ids",
+          "type": "jsonb",
+          "default": "null",
+          "label": "link_inbox.field.access_user_ids",
+          "description": "link_inbox.field_help.access_user_ids"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "not_null": true,
+          "default": "disconnected",
+          "readonly": true,
+          "label": "link_inbox.field.status",
+          "display": "status",
+          "options": [
+            {
+              "value": "disconnected",
+              "label": "link_inbox.options.device_status.disconnected",
+              "color": "slate"
+            },
+            {
+              "value": "connecting",
+              "label": "link_inbox.options.device_status.connecting",
+              "color": "amber"
+            },
+            {
+              "value": "connected",
+              "label": "link_inbox.options.device_status.connected",
+              "color": "green"
+            },
+            {
+              "value": "error",
+              "label": "link_inbox.options.device_status.error",
+              "color": "red"
+            }
+          ]
+        },
+        {
+          "name": "disconnect_reason",
+          "type": "text",
+          "readonly": true,
+          "label": "link_inbox.field.disconnect_reason"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_inbox.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_inbox.field.updated_at"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "label": "link_inbox.field.deleted_at"
+        }
+      ],
+      "indices": [
+        {
+          "name": "devices_org_idx",
+          "columns": [
+            "organization_id"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "Conversation",
+      "table": "conversations",
+      "label": "link_inbox.model.conversation",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "primary_key": true,
+          "default": "gen_random_uuid()",
+          "label": "link_inbox.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "link_inbox.field.organization_id"
+        },
+        {
+          "name": "contact_id",
+          "type": "uuid",
+          "ref": "link_inbox.Contact",
+          "label": "link_inbox.field.contact_id"
+        },
+        {
+          "name": "device_id",
+          "type": "uuid",
+          "ref": "link_inbox.Device",
+          "label": "link_inbox.field.device_id"
+        },
+        {
+          "name": "customer_id",
+          "type": "uuid",
+          "label": "link_inbox.field.customer_id",
+          "description": "link_inbox.field_help.customer_id"
+        },
+        {
+          "name": "assigned_user",
+          "type": "uuid",
+          "label": "link_inbox.field.assigned_user"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "not_null": true,
+          "default": "nuevo",
+          "label": "link_inbox.field.status"
+        },
+        {
+          "name": "process_type",
+          "type": "text",
+          "not_null": true,
+          "default": "user",
+          "label": "link_inbox.field.process_type",
+          "options": [
+            {
+              "value": "agent",
+              "label": "link_inbox.options.process_type.agent",
+              "color": "violet"
+            },
+            {
+              "value": "flow",
+              "label": "link_inbox.options.process_type.flow",
+              "color": "sky"
+            },
+            {
+              "value": "user",
+              "label": "link_inbox.options.process_type.user",
+              "color": "slate"
+            }
+          ]
+        },
+        {
+          "name": "needs_human_help",
+          "type": "boolean",
+          "default": false,
+          "label": "link_inbox.field.needs_human_help",
+          "display": "boolean"
+        },
+        {
+          "name": "unread_count",
+          "type": "integer",
+          "default": 0,
+          "label": "link_inbox.field.unread_count"
+        },
+        {
+          "name": "last_message_at",
+          "type": "timestamptz",
+          "label": "link_inbox.field.last_message_at",
+          "display": "date"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_inbox.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_inbox.field.updated_at"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "label": "link_inbox.field.deleted_at"
+        }
+      ],
+      "indices": [
+        {
+          "name": "conversations_org_status_idx",
+          "columns": [
+            "organization_id",
+            "status"
+          ]
+        },
+        {
+          "name": "conversations_org_contact_idx",
+          "columns": [
+            "organization_id",
+            "contact_id"
+          ]
+        }
+      ],
+      "relations": [
+        {
+          "name": "messages",
+          "kind": "one_to_many",
+          "through": "Message",
+          "foreign_key": "conversation_id",
+          "label": "link_inbox.relation.messages"
+        }
+      ],
+      "stage_field": "status",
+      "stages": [
+        {
+          "key": "nuevo",
+          "label": "link_inbox.stage.nuevo",
+          "color": "sky",
+          "order": 0
+        },
+        {
+          "key": "abierto",
+          "label": "link_inbox.stage.abierto",
+          "color": "blue",
+          "order": 1
+        },
+        {
+          "key": "esperando",
+          "label": "link_inbox.stage.esperando",
+          "color": "amber",
+          "order": 2
+        },
+        {
+          "key": "resuelto",
+          "label": "link_inbox.stage.resuelto",
+          "color": "green",
+          "order": 3
+        },
+        {
+          "key": "cerrado",
+          "label": "link_inbox.stage.cerrado",
+          "color": "slate",
+          "order": 4,
+          "is_final": true
+        }
+      ],
+      "transitions": [
+        {
+          "from": "nuevo",
+          "to": "abierto"
+        },
+        {
+          "from": "abierto",
+          "to": "esperando"
+        },
+        {
+          "from": "esperando",
+          "to": "abierto"
+        },
+        {
+          "from": "abierto",
+          "to": "resuelto"
+        },
+        {
+          "from": "esperando",
+          "to": "resuelto"
+        },
+        {
+          "from": "resuelto",
+          "to": "abierto"
+        },
+        {
+          "from": "resuelto",
+          "to": "cerrado"
+        },
+        {
+          "from": "abierto",
+          "to": "cerrado"
+        },
+        {
+          "from": "cerrado",
+          "to": "abierto"
+        }
+      ]
+    },
+    {
+      "key": "Message",
+      "table": "messages",
+      "label": "link_inbox.model.message",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "primary_key": true,
+          "default": "gen_random_uuid()",
+          "label": "link_inbox.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "link_inbox.field.organization_id"
+        },
+        {
+          "name": "conversation_id",
+          "type": "uuid",
+          "not_null": true,
+          "ref": "link_inbox.Conversation",
+          "label": "link_inbox.field.conversation_id"
+        },
+        {
+          "name": "sender_type",
+          "type": "text",
+          "not_null": true,
+          "default": "contact",
+          "label": "link_inbox.field.sender_type",
+          "options": [
+            {
+              "value": "contact",
+              "label": "link_inbox.options.sender_type.contact",
+              "color": "slate"
+            },
+            {
+              "value": "agent",
+              "label": "link_inbox.options.sender_type.agent",
+              "color": "blue"
+            },
+            {
+              "value": "bot",
+              "label": "link_inbox.options.sender_type.bot",
+              "color": "violet"
+            },
+            {
+              "value": "flow",
+              "label": "link_inbox.options.sender_type.flow",
+              "color": "sky"
+            },
+            {
+              "value": "user",
+              "label": "link_inbox.options.sender_type.user",
+              "color": "green"
+            },
+            {
+              "value": "system",
+              "label": "link_inbox.options.sender_type.system",
+              "color": "slate"
+            }
+          ]
+        },
+        {
+          "name": "content",
+          "type": "text",
+          "label": "link_inbox.field.content",
+          "widget": "textarea"
+        },
+        {
+          "name": "content_type",
+          "type": "text",
+          "not_null": true,
+          "default": "text",
+          "label": "link_inbox.field.content_type"
+        },
+        {
+          "name": "media_url",
+          "type": "text",
+          "label": "link_inbox.field.media_url",
+          "display": "url"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "default": "{}",
+          "label": "link_inbox.field.metadata"
+        },
+        {
+          "name": "whatsapp_id",
+          "type": "text",
+          "readonly": true,
+          "label": "link_inbox.field.whatsapp_id"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_inbox.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_inbox.field.updated_at"
+        }
+      ],
+      "indices": [
+        {
+          "name": "messages_conversation_idx",
+          "columns": [
+            "conversation_id"
+          ]
+        },
+        {
+          "name": "messages_org_whatsapp_id_uq",
+          "columns": [
+            "organization_id",
+            "whatsapp_id"
+          ],
+          "unique": true
+        }
+      ]
+    }
+  ],
+  "frontend": {
+    "entry": "/api/metacore/addons/link_inbox/frontend/dist/remoteEntry.js",
+    "format": "federation",
+    "expose": "./LinkInboxPanel",
+    "container": "metacore_link_inbox",
+    "layout": "immersive"
+  },
+  "contributions": {
+    "navigation": [
+      {
+        "title": "link_inbox.nav.group",
+        "icon": "MessagesSquare",
+        "target": "sidebar.communication",
+        "items": [
+          {
+            "title": "link_inbox.nav.chat",
+            "icon": "MessagesSquare",
+            "url": "addon://link_inbox/chat",
+            "permission": "link_inbox.conversation.read"
+          },
+          {
+            "title": "link_inbox.nav.inbox",
+            "icon": "SquareKanban",
+            "model": "Conversation",
+            "view_type": "kanban",
+            "group_by": "status",
+            "permission": "link_inbox.conversation.read"
+          },
+          {
+            "title": "link_inbox.nav.conversations",
+            "icon": "MessageSquare",
+            "model": "Conversation",
+            "view_type": "table",
+            "permission": "link_inbox.conversation.read"
+          },
+          {
+            "title": "link_inbox.nav.contacts",
+            "icon": "Users",
+            "model": "Contact",
+            "permission": "link_inbox.contact.read"
+          },
+          {
+            "title": "link_inbox.nav.devices",
+            "icon": "Smartphone",
+            "model": "Device",
+            "permission": "link_inbox.device.read"
+          },
+          {
+            "title": "link_inbox.nav.messages",
+            "icon": "Mail",
+            "model": "Message",
+            "permission": "link_inbox.message.read"
+          }
+        ]
+      }
+    ],
+    "subscriptions": [
+      {
+        "event": "link_inbox.Message.created",
+        "handler": {
+          "type": "wasm",
+          "function": "send_message"
+        },
+        "comment": "A message created with sender_type != contact (a human agent, bot or flow reply) is dispatched to the channel gateway. Inbound messages (sender_type=contact, written by ingest_message) are skipped so there is no echo loop."
+      },
+      {
+        "event": "link_inbox.Device.deleted",
+        "handler": {
+          "type": "wasm",
+          "function": "on_device_deleted"
+        },
+        "comment": "Soft-delete of a Device tears down the gateway Baileys session so WhatsApp stops delivering to a removed channel."
+      },
+      {
+        "event": "quotes.quote_accepted",
+        "handler": {
+          "type": "wasm",
+          "function": "on_quote_accepted"
+        },
+        "comment": "Optional bridge: when an accepted quote carries a conversation_id (created via create_quote_from_conversation), post a system message into that Conversation announcing the resulting sales order. A quote with no conversation_id (e.g. born elsewhere) is a clean no-op."
+      },
+      {
+        "event": "connector_whatsapp.whatsapp.message.received",
+        "handler": {
+          "type": "wasm",
+          "function": "ingest_whatsapp_event"
+        },
+        "comment": "WhatsApp messages from connector_whatsapp arrive straight on the event bus, replacing the signed /webhooks/incoming bridge for WhatsApp. ingest_whatsapp_event shares its ingestion core with ingest_message so both entrypoints agree on what ingesting a message means. The /webhooks/incoming path stays declared for any other channel gateway (web widget, Instagram, Telegram) still fronted by it."
+      },
+      {
+        "event": "connector_whatsapp.whatsapp.connection.updated",
+        "handler": {
+          "type": "wasm",
+          "function": "on_whatsapp_connection_event"
+        },
+        "comment": "Native event-plane sibling of the /webhooks/status HMAC callback (on_device_status), WhatsApp-specific. Shares applyDeviceStatus with on_device_status so both entrypoints agree on what a connection transition means for Device.status."
+      },
+      {
+        "event": "connector_whatsapp.whatsapp.message.updated",
+        "handler": {
+          "type": "wasm",
+          "function": "on_whatsapp_message_status"
+        },
+        "comment": "Delivery/read receipt from the WhatsApp native event plane. Annotates Message.delivery_status by whatsapp_id; a message this org never ingested is a clean no-op."
+      },
+      {
+        "event": "connector_whatsapp.whatsapp.message.failed",
+        "handler": {
+          "type": "wasm",
+          "function": "on_whatsapp_message_status"
+        },
+        "comment": "Outbound send failure from the WhatsApp native event plane. Same handler as message.updated — the payload's error field (vs. status) discriminates the two."
+      }
+    ],
+    "notifications": [
+      {
+        "key": "inbound_message",
+        "on": "link_inbox.Message.created",
+        "when": {
+          "after.sender_type": "contact"
+        },
+        "to": {
+          "type": "org"
+        },
+        "exclude_actor": true,
+        "title": "link_inbox.notification.new_message",
+        "body": "{{after.content}}",
+        "severity": "info",
+        "icon": "message-circle",
+        "link": "/addons/link_inbox/chat?c={{after.conversation_id}}",
+        "comment": "Bell + toast (SSE). Query ?c= opens that conversation in the immersive chat."
+      },
+      {
+        "key": "device_disconnected",
+        "on": "link_inbox.Device.updated",
+        "entered": {
+          "field": "status",
+          "values": [
+            "disconnected",
+            "error"
+          ]
+        },
+        "to": {
+          "type": "org"
+        },
+        "title": "link_inbox.notification.device_disconnected",
+        "body": "{{after.name}} · {{after.disconnect_reason}}",
+        "severity": "warning",
+        "icon": "smartphone",
+        "link": "/m/Device"
+      }
+    ],
+    "actions": [
+      {
+        "key": "connect_device",
+        "label": "link_inbox.action.connect_device",
+        "icon": "QrCode",
+        "target_model": "Device",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "connect_device"
+        },
+        "requires_state": [
+          "disconnected",
+          "error",
+          "connecting"
+        ],
+        "modal": "link_inbox.connect_device"
+      },
+      {
+        "key": "create_and_connect",
+        "label": "link_inbox.action.create_and_connect",
+        "icon": "QrCode",
+        "target_model": "Device",
+        "placement": "create",
+        "handler": {
+          "type": "wasm",
+          "function": "connect_device"
+        },
+        "modal": "link_inbox.connect_device"
+      },
+      {
+        "key": "link_customer",
+        "label": "link_inbox.action.link_customer",
+        "icon": "UserRoundPlus",
+        "target_model": "Conversation",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "link_customer"
+        },
+        "fields": [
+          {
+            "key": "customer_id",
+            "label": "link_inbox.action.link_customer.fields.customer",
+            "type": "dynamic_select",
+            "required": true,
+            "ref": "Customer",
+            "placeholder": "link_inbox.action.link_customer.fields.customer_placeholder"
+          }
+        ]
+      },
+      {
+        "key": "create_quote_from_conversation",
+        "label": "link_inbox.action.create_quote_from_conversation",
+        "icon": "FileText",
+        "target_model": "Conversation",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "create_quote_from_conversation"
+        },
+        "fields": [
+          {
+            "key": "note",
+            "label": "link_inbox.action.create_quote_from_conversation.fields.note",
+            "type": "string",
+            "required": false,
+            "widget": "textarea"
+          }
+        ]
+      }
+    ],
+    "dashboard": [
+      {
+        "key": "open_conversations",
+        "title": "link_inbox.widget.open_conversations",
+        "subtitle": "link_inbox.widget.open_conversations_sub",
+        "icon": "MessageSquare",
+        "kind": "stat",
+        "size": "sm",
+        "group": "link_inbox.nav.group",
+        "order": 10,
+        "accent": "emerald",
+        "format": "number",
+        "permission": "link_inbox.conversation.read",
+        "query": {
+          "model": "Conversation",
+          "aggregate": "count",
+          "where": {
+            "status": "abierto"
+          }
+        }
+      },
+      {
+        "key": "conversations_by_status",
+        "title": "link_inbox.widget.conversations_by_status",
+        "subtitle": "link_inbox.widget.conversations_by_status_sub",
+        "icon": "SquareKanban",
+        "kind": "bar",
+        "size": "md",
+        "group": "link_inbox.nav.group",
+        "order": 20,
+        "accent": "sky",
+        "format": "number",
+        "permission": "link_inbox.conversation.read",
+        "empty": "link_inbox.widget.conversations_by_status_empty",
+        "query": {
+          "model": "Conversation",
+          "aggregate": "count",
+          "group_by": "status",
+          "label_field": "status",
+          "order": "desc"
+        }
+      }
+    ]
+  },
+  "extension_points": {
+    "events": [
+      {
+        "name": "link_inbox.message_received",
+        "description": "DEPRECATED: no live emitter and no subscriber - nothing publishes this event, do not subscribe to it. Was: Emitted when an inbound message from a contact is ingested. Downstream consumers (link_agents) subscribe to drive bots/flows."
+      }
+    ]
+  },
+  "i18n": {
+    "default_locale": "es-MX",
+    "bundles": [
+      {
+        "locale": "es-MX",
+        "path": "locales/es-MX.json"
+      },
+      {
+        "locale": "en-US",
+        "path": "locales/en-US.json"
+      }
+    ]
+  },
+  "rbac": {
+    "roles": [
+      {
+        "key": "inbox_agent",
+        "label": "link_inbox.role.agent",
+        "description": "link_inbox.role.agent_description",
+        "permissions": [
+          "link_inbox.conversation.read",
+          "link_inbox.conversation.write",
+          "link_inbox.contact.read",
+          "link_inbox.contact.write",
+          "link_inbox.message.read",
+          "link_inbox.message.write",
+          "link_inbox.device.read"
+        ]
+      },
+      {
+        "key": "inbox_manager",
+        "label": "link_inbox.role.manager",
+        "description": "link_inbox.role.manager_description",
+        "permissions": [
+          "link_inbox.conversation.read",
+          "link_inbox.conversation.write",
+          "link_inbox.contact.read",
+          "link_inbox.contact.write",
+          "link_inbox.message.read",
+          "link_inbox.message.write",
+          "link_inbox.device.read",
+          "link_inbox.device.write"
+        ]
+      }
+    ],
+    "permissions": [
+      {
+        "key": "link_inbox.conversation.read",
+        "label": "link_inbox.perm.conversation_read"
+      },
+      {
+        "key": "link_inbox.conversation.write",
+        "label": "link_inbox.perm.conversation_write"
+      },
+      {
+        "key": "link_inbox.contact.read",
+        "label": "link_inbox.perm.contact_read"
+      },
+      {
+        "key": "link_inbox.contact.write",
+        "label": "link_inbox.perm.contact_write"
+      },
+      {
+        "key": "link_inbox.message.read",
+        "label": "link_inbox.perm.message_read"
+      },
+      {
+        "key": "link_inbox.message.write",
+        "label": "link_inbox.perm.message_write"
+      },
+      {
+        "key": "link_inbox.device.read",
+        "label": "link_inbox.perm.device_read"
+      },
+      {
+        "key": "link_inbox.device.write",
+        "label": "link_inbox.perm.device_write"
+      }
+    ]
+  },
+  "settings": [
+    {
+      "key": "gateway_url",
+      "type": "string",
+      "label": "link_inbox.settings.gateway_url",
+      "required": false,
+      "default": "https://hub.asteby.com/gateway",
+      "description": "link_inbox.settings.gateway_url_description"
+    },
+    {
+      "key": "gateway_token",
+      "type": "secret",
+      "label": "link_inbox.settings.gateway_token",
+      "required": false,
+      "description": "link_inbox.settings.gateway_token_description"
+    }
+  ]
+}

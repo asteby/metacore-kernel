@@ -860,6 +860,44 @@ func validateStageMachine(mi int, mod Model, ownCols map[string]struct{}) []stri
 		if _, ok := stageKeys[t.To]; !ok {
 			errs = append(errs, fmt.Sprintf("%s.transitions[%d].to %q is not a declared stage key", where, ti, t.To))
 		}
+		tw := fmt.Sprintf("%s.transitions[%d]", where, ti)
+		if g := strings.TrimSpace(t.Guard); g != "" {
+			if err := validateConstraintExpr(g, ownCols); err != nil {
+				errs = append(errs, fmt.Sprintf("%s.guard %q: %v", tw, t.Guard, err))
+			}
+		}
+		for ri, r := range t.Roles {
+			if strings.TrimSpace(r) == "" {
+				errs = append(errs, fmt.Sprintf("%s.roles[%d] is empty", tw, ri))
+			}
+		}
+		for fi, f := range t.RequiresFields {
+			if _, ok := ownCols[f]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.requires_fields[%d] %q is not a declared column on the model", tw, fi, f))
+			}
+		}
+		if t.Approval != nil {
+			errs = append(errs, validateApprovalPolicy(tw+".approval", t.Approval)...)
+			if strings.TrimSpace(t.Approval.When) != "" {
+				errs = append(errs, fmt.Sprintf("%s.approval.when is only valid on contributions.actions[].approval", tw))
+			}
+		}
+		if t.SLA != nil && t.SLA.Hours < 1 {
+			errs = append(errs, fmt.Sprintf("%s.sla.hours must be >= 1", tw))
+		}
+		if t.SLA != nil && t.SLA.OnBreach != "" && t.SLA.OnBreach != "notify" && t.SLA.OnBreach != "escalate" {
+			errs = append(errs, fmt.Sprintf("%s.sla.on_breach %q is not one of notify|escalate", tw, t.SLA.OnBreach))
+		}
+	}
+	for si, st := range mod.Stages {
+		if len(st.EditableWhenLocked) > 0 && !st.Locked {
+			errs = append(errs, fmt.Sprintf("%s.stages[%d].editable_when_locked requires locked: true", where, si))
+		}
+		for ci, c := range st.EditableWhenLocked {
+			if _, ok := ownCols[c]; !ok {
+				errs = append(errs, fmt.Sprintf("%s.stages[%d].editable_when_locked[%d] %q is not a declared column on the model", where, si, ci, c))
+			}
+		}
 	}
 
 	// Hooks: from/to must be "*" or a declared stage key. A hook must carry `set`,
@@ -1653,6 +1691,12 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 		// (the schema pattern already enforces the shape). Mirrors the legacy
 		// validator so a manifest fails identically on both surfaces.
 		errs = append(errs, validateStageMachine(mi, mod, ownCols)...)
+		// A final stage has no way out unless the reopen is an approved,
+		// explicit transition (P3). Legacy manifests declared exits freely, so
+		// the rule is a warning for one release (see compat.go).
+		for _, msg := range finalStageExits(mod) {
+			*warnings = append(*warnings, fmt.Sprintf("[%s] models[%d] (%s): %s", RuleFinalStageOutgoing, mi, mod.Key, msg)) // warning-only in both modes
+		}
 		// Record presentation vocabulary (display_for, card_role, title_field,
 		// subtitle_field): references must resolve against the model's columns.
 		errs = append(errs, validateRecordPresentation(mi, mod, ownCols)...)
@@ -2668,4 +2712,23 @@ func hasExplicitCapabilities(m *Manifest) bool {
 		}
 	}
 	return false
+}
+
+// finalStageExits reports the transitions that leave an is_final stage
+// that is neither an approved move nor flagged `reopen: true`. A way out of a
+// terminal stage must be explicit (P3: "is_final sin salidas salvo reopen").
+func finalStageExits(mod Model) []string {
+	final := map[string]struct{}{}
+	for _, st := range mod.Stages {
+		if st.IsFinal {
+			final[st.Key] = struct{}{}
+		}
+	}
+	var out []string
+	for ti, t := range mod.Transitions {
+		if _, ok := final[t.From]; ok && t.Approval == nil && !t.Reopen {
+			out = append(out, fmt.Sprintf("transitions[%d] leaves the final stage %q (-> %q) without `reopen: true` or an approval block", ti, t.From, t.To))
+		}
+	}
+	return out
 }

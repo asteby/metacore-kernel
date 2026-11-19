@@ -3377,6 +3377,13 @@
         "locked": {
           "type": "boolean",
           "description": "A record in this stage is read-only: an update may only move the stage along a declared transition, and a delete is rejected (422 record_locked). Opt-in; is_final alone keeps the record editable."
+        },
+        "editable_when_locked": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Columns that stay writable while the record is in this locked stage; every other column is refused 422 record_locked. Only meaningful with locked."
         }
       }
     },
@@ -3396,6 +3403,55 @@
         "to": {
           "type": "string",
           "description": "Destination stage key."
+        },
+        "guard": {
+          "type": "string",
+          "description": "Predicate '<arith> <op> <arith>' over the merged row's numeric columns (same grammar as constraint expr); a false predicate rejects the move."
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Org roles allowed to make this move; empty = any role with update permission."
+        },
+        "requires_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Columns that must be non-empty on the merged row for the move."
+        },
+        "approval": {
+          "$ref": "#/$defs/ApprovalPolicy",
+          "description": "The move parks as a pending approval request and applies once an approver role approves it."
+        },
+        "reopen": {
+          "type": "boolean",
+          "description": "Marks a deliberate exit from an is_final stage (reopen / archive). Exits from a final stage without reopen or approval are flagged (warning) by the final_stage_outgoing rule."
+        },
+        "sla": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "hours"
+          ],
+          "properties": {
+            "hours": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Hours a record may stay in the destination stage before it is overdue."
+            },
+            "on_breach": {
+              "type": "string",
+              "enum": [
+                "notify",
+                "escalate"
+              ],
+              "description": "Host reaction on breach (informational for the kernel)."
+            }
+          },
+          "description": "Time budget of the destination stage."
         }
       }
     },

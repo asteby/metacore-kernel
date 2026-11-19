@@ -1,0 +1,2429 @@
+{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": {
+    "key": "link_marketing",
+    "name": "Marketing Studio",
+    "description": "Create campaigns, brand-governed creatives and product mockups from Link with provider-neutral AI generation.",
+    "version": "0.11.0",
+    "category": "vertical.link",
+    "icon": {
+      "type": "lucide",
+      "slug": "Megaphone",
+      "color": "#7C3AED"
+    },
+    "author": "Asteby",
+    "license": "Apache-2.0",
+    "readme": "README.md",
+    "features": [
+      "Save reusable brand kits with your palette, tone and visual rules.",
+      "Take each campaign from brief to review, approval and publishing.",
+      "Review every creative with moderation that is separate from approval.",
+      "Request AI images with a monthly quota and the real cost of each job.",
+      "Mark which product photos are authorized to be used in mockups.",
+      "Works with the image generator you install, such as Nano Banana (Gemini)."
+    ],
+    "i18n": {
+      "es": {
+        "name": "Estudio de Marketing",
+        "description": "Crea campañas, piezas gobernadas por marca y mockups de producto desde Link con generación de IA desacoplada del proveedor.",
+        "features": [
+          "Guarda kits de marca reutilizables con tu paleta, tono y reglas visuales.",
+          "Lleva cada campaña del brief a la revisión, la aprobación y la publicación.",
+          "Revisa cada pieza con una moderación separada de la aprobación.",
+          "Pide imágenes con IA con una cuota mensual y el costo real de cada trabajo.",
+          "Marca qué fotos de producto están autorizadas para usarse en mockups.",
+          "Funciona con el generador de imágenes que instales, como Nano Banana (Gemini)."
+        ]
+      },
+      "en": {
+        "name": "Marketing Studio",
+        "description": "Create campaigns, brand-governed creatives and product mockups from Link with provider-neutral AI generation.",
+        "features": [
+          "Save reusable brand kits with your palette, tone and visual rules.",
+          "Take each campaign from brief to review, approval and publishing.",
+          "Review every creative with moderation that is separate from approval.",
+          "Request AI images with a monthly quota and the real cost of each job.",
+          "Mark which product photos are authorized to be used in mockups.",
+          "Works with the image generator you install, such as Nano Banana (Gemini)."
+        ]
+      }
+    }
+  },
+  "compatibility": {
+    "requires": [
+      {
+        "key": "kernel",
+        "version": ">=3.0.0 <4.0.0"
+      },
+      {
+        "key": "connector_nanobanana",
+        "version": ">=0.3.0 <1.0.0",
+        "optional": true,
+        "reason": "Optional: generates the images for creatives. Without an image generator installed you can still manage brand kits, campaigns and uploads, but you cannot request AI generations. Generation only completes with connector_nanobanana 0.4.0 or later: earlier versions use the old dot-separated event names (image.generated) and their jobs would stay queued. The minimum will be raised to 0.4.0 once that version is released."
+      }
+    ],
+    "provides": [
+      "marketing-studio",
+      "marketing"
+    ]
+  },
+  "tenancy": {
+    "isolation": "shared",
+    "rls_column": "organization_id"
+  },
+  "capabilities": [
+    {
+      "kind": "db:read",
+      "target": "marketing_*",
+      "reason": "Read organization-scoped brand kits, campaigns, product references, creatives, creative versions and generation jobs."
+    },
+    {
+      "kind": "db:write",
+      "target": "marketing_*",
+      "reason": "Persist organization-scoped marketing lifecycle, moderation and generation job state."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.generation_job.requested",
+      "reason": "Ask the installed image generator to produce the image of a queued generation job."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.campaign.submitted_for_review",
+      "reason": "Announce that a campaign was sent to review."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.campaign.approved",
+      "reason": "Announce that a campaign was approved."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.campaign.rejected",
+      "reason": "Announce that a campaign was rejected."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.campaign.published",
+      "reason": "Announce that a campaign was published."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.campaign.archived",
+      "reason": "Announce that a campaign was archived."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.creative.approved",
+      "reason": "Announce that a creative passed moderation."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.creative.rejected",
+      "reason": "Announce that a creative was rejected in moderation."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.creative.flagged",
+      "reason": "Announce that a creative was flagged in moderation."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.generation_job.completed",
+      "reason": "Announce that a generation job finished with an image."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.generation_job.failed",
+      "reason": "Announce that a generation job failed."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.copy.requested",
+      "reason": "Ask the installed text provider bridge to write the copy of a creative."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.copy.applied",
+      "reason": "Announce that generated copy was applied to a creative."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.brand.analyze_requested",
+      "reason": "Ask the installed brand analyzer bridge to analyze a brand kit."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.brand.analysis_applied",
+      "reason": "Announce that a brand analysis was applied to the brand kit."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.brand.analysis_failed",
+      "reason": "Announce that a brand analysis failed."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.compose.requested",
+      "reason": "Ask the creative render bridge to compose a still creative."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.motion.requested",
+      "reason": "Ask the creative render bridge to render a motion creative."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.render.completed",
+      "reason": "Announce that a creative render finished."
+    },
+    {
+      "kind": "event:emit",
+      "target": "marketing.render.failed",
+      "reason": "Announce that a creative render failed."
+    },
+    {
+      "kind": "event:subscribe",
+      "target": "connector_nanobanana.image_generated",
+      "reason": "Resolve the generation job that an installed image generator (Nano Banana) completed, without this addon ever calling the provider. Needs the generator installed and enabled in the same organization; without it this event never fires, which is not an error."
+    },
+    {
+      "kind": "event:subscribe",
+      "target": "connector_nanobanana.image_failed",
+      "reason": "Resolve the generation job that an installed image generator could not complete (rate_limit, invalid_key, blocked_content or transport_error), under the same optional-dependency rule."
+    }
+  ],
+  "contributions": {
+    "navigation": [
+      {
+        "title": "link_marketing.nav.group",
+        "icon": "Megaphone",
+        "target": "sidebar.operations",
+        "items": [
+          {
+            "title": "link_marketing.nav.campaigns",
+            "icon": "Megaphone",
+            "url": "/m/marketing_campaigns",
+            "model": "Campaign",
+            "permission": "marketing.campaigns.read",
+            "view_type": "table"
+          },
+          {
+            "title": "link_marketing.nav.creatives",
+            "icon": "Palette",
+            "url": "/m/marketing_creatives",
+            "model": "Creative",
+            "permission": "marketing.creatives.read",
+            "view_type": "table"
+          },
+          {
+            "title": "link_marketing.nav.brand_kits",
+            "icon": "SwatchBook",
+            "url": "/m/marketing_brand_kits",
+            "model": "BrandKit",
+            "permission": "marketing.brand_kits.read",
+            "view_type": "table"
+          },
+          {
+            "title": "link_marketing.nav.product_references",
+            "icon": "Image",
+            "url": "/m/marketing_product_references",
+            "model": "ProductReference",
+            "permission": "marketing.product_references.read",
+            "view_type": "table"
+          }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "key": "submit_review",
+        "label": "link_marketing.action.submit_review",
+        "icon": "Send",
+        "target_model": "Campaign",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_Campaign_submit_review"
+        },
+        "requires_state": [
+          "draft"
+        ]
+      },
+      {
+        "key": "approve",
+        "label": "link_marketing.action.approve_campaign",
+        "icon": "CheckCircle",
+        "target_model": "Campaign",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_Campaign_approve"
+        },
+        "requires_state": [
+          "in_review"
+        ],
+        "confirm": true,
+        "confirm_message": "link_marketing.action.approve_campaign_confirm"
+      },
+      {
+        "key": "reject",
+        "label": "link_marketing.action.reject_campaign",
+        "icon": "XCircle",
+        "target_model": "Campaign",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_Campaign_reject"
+        },
+        "requires_state": [
+          "in_review"
+        ],
+        "fields": [
+          {
+            "key": "reason",
+            "label": "link_marketing.action.fields.reason",
+            "type": "string",
+            "required": true,
+            "widget": "textarea"
+          }
+        ]
+      },
+      {
+        "key": "publish",
+        "label": "link_marketing.action.publish_campaign",
+        "icon": "Rocket",
+        "target_model": "Campaign",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_Campaign_publish"
+        },
+        "requires_state": [
+          "approved"
+        ],
+        "confirm": true,
+        "confirm_message": "link_marketing.action.publish_campaign_confirm"
+      },
+      {
+        "key": "archive",
+        "label": "link_marketing.action.archive_campaign",
+        "icon": "Archive",
+        "target_model": "Campaign",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_Campaign_archive"
+        },
+        "requires_state": [
+          "draft",
+          "in_review",
+          "approved",
+          "published"
+        ],
+        "confirm": true,
+        "confirm_message": "link_marketing.action.archive_campaign_confirm"
+      },
+      {
+        "key": "request_generation",
+        "label": "link_marketing.action.request_generation",
+        "icon": "Sparkles",
+        "target_model": "Creative",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_Creative_request_generation"
+        },
+        "requires_state": [
+          "draft",
+          "rejected"
+        ],
+        "fields": [
+          {
+            "key": "provider_key",
+            "label": "link_marketing.action.fields.provider_key",
+            "type": "string",
+            "required": true
+          },
+          {
+            "key": "prompt",
+            "label": "link_marketing.action.fields.prompt",
+            "type": "string",
+            "required": true,
+            "widget": "textarea"
+          },
+          {
+            "key": "format",
+            "label": "link_marketing.action.fields.format",
+            "type": "string",
+            "required": false,
+            "widget": "select",
+            "default": "1:1",
+            "options": [
+              {
+                "value": "1:1",
+                "label": "link_marketing.action.format_option.square"
+              },
+              {
+                "value": "4:5",
+                "label": "link_marketing.action.format_option.portrait"
+              },
+              {
+                "value": "9:16",
+                "label": "link_marketing.action.format_option.story"
+              },
+              {
+                "value": "16:9",
+                "label": "link_marketing.action.format_option.landscape"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "key": "submit_moderation",
+        "label": "link_marketing.action.submit_moderation",
+        "icon": "ShieldQuestion",
+        "target_model": "Creative",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_Creative_submit_moderation"
+        },
+        "requires_state": [
+          "draft"
+        ]
+      },
+      {
+        "key": "approve",
+        "label": "link_marketing.action.approve_creative",
+        "icon": "CheckCircle",
+        "target_model": "Creative",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_Creative_approve"
+        },
+        "requires_state": [
+          "pending_review"
+        ]
+      },
+      {
+        "key": "reject",
+        "label": "link_marketing.action.reject_creative",
+        "icon": "XCircle",
+        "target_model": "Creative",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_Creative_reject"
+        },
+        "requires_state": [
+          "pending_review"
+        ],
+        "fields": [
+          {
+            "key": "reason",
+            "label": "link_marketing.action.fields.reason",
+            "type": "string",
+            "required": true,
+            "widget": "textarea"
+          }
+        ]
+      },
+      {
+        "key": "flag",
+        "label": "link_marketing.action.flag_creative",
+        "icon": "Flag",
+        "target_model": "Creative",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_Creative_flag"
+        },
+        "fields": [
+          {
+            "key": "notes",
+            "label": "link_marketing.action.fields.moderation_notes",
+            "type": "string",
+            "required": true,
+            "widget": "textarea"
+          }
+        ]
+      },
+      {
+        "key": "complete",
+        "label": "link_marketing.action.complete_generation",
+        "icon": "CheckCircle2",
+        "target_model": "GenerationJob",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_GenerationJob_complete"
+        },
+        "requires_state": [
+          "queued",
+          "processing"
+        ],
+        "fields": [
+          {
+            "key": "result_asset_url",
+            "label": "link_marketing.action.fields.result_asset_url",
+            "type": "string",
+            "required": true
+          },
+          {
+            "key": "provider_reference",
+            "label": "link_marketing.action.fields.provider_reference",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "cost_amount",
+            "label": "link_marketing.action.fields.cost_amount",
+            "type": "number",
+            "required": false
+          },
+          {
+            "key": "cost_currency",
+            "label": "link_marketing.action.fields.cost_currency",
+            "type": "string",
+            "required": false
+          }
+        ]
+      },
+      {
+        "key": "fail",
+        "label": "link_marketing.action.fail_generation",
+        "icon": "AlertTriangle",
+        "target_model": "GenerationJob",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_GenerationJob_fail"
+        },
+        "requires_state": [
+          "queued",
+          "processing"
+        ],
+        "fields": [
+          {
+            "key": "error_code",
+            "label": "link_marketing.action.fields.error_code",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "error_message",
+            "label": "link_marketing.action.fields.error_message",
+            "type": "string",
+            "required": true,
+            "widget": "textarea"
+          }
+        ]
+      },
+      {
+        "key": "generate_copy",
+        "label": "link_marketing.action.generate_copy",
+        "icon": "PenLine",
+        "target_model": "Creative",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_Creative_generate_copy"
+        },
+        "requires_state": [
+          "draft",
+          "rejected"
+        ],
+        "fields": [
+          {
+            "key": "brief",
+            "label": "link_marketing.action.fields.brief",
+            "type": "string",
+            "required": false,
+            "widget": "textarea"
+          }
+        ]
+      },
+      {
+        "key": "apply_copy",
+        "label": "link_marketing.action.apply_copy",
+        "icon": "ClipboardPaste",
+        "target_model": "Creative",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_Creative_apply_copy"
+        },
+        "requires_state": [
+          "draft",
+          "rejected"
+        ],
+        "fields": [
+          {
+            "key": "title",
+            "label": "link_marketing.action.fields.title",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "subtitle",
+            "label": "link_marketing.action.fields.subtitle",
+            "type": "string",
+            "required": false,
+            "widget": "textarea"
+          },
+          {
+            "key": "cta_url",
+            "label": "link_marketing.action.fields.cta_url",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "caption",
+            "label": "link_marketing.action.fields.caption",
+            "type": "string",
+            "required": false,
+            "widget": "textarea"
+          },
+          {
+            "key": "bg_prompt",
+            "label": "link_marketing.action.fields.bg_prompt",
+            "type": "string",
+            "required": false,
+            "widget": "textarea"
+          }
+        ]
+      },
+      {
+        "key": "compose",
+        "label": "link_marketing.action.compose",
+        "icon": "Layers",
+        "target_model": "Creative",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_Creative_compose"
+        },
+        "requires_state": [
+          "draft",
+          "rejected",
+          "pending_review",
+          "approved"
+        ],
+        "fields": []
+      },
+      {
+        "key": "animate",
+        "label": "link_marketing.action.animate",
+        "icon": "Film",
+        "target_model": "Creative",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_Creative_animate"
+        },
+        "requires_state": [
+          "draft",
+          "rejected",
+          "pending_review",
+          "approved"
+        ],
+        "fields": [
+          {
+            "key": "duration_seconds",
+            "label": "link_marketing.action.fields.duration_seconds",
+            "type": "string",
+            "required": false
+          }
+        ]
+      },
+      {
+        "key": "apply_render",
+        "label": "link_marketing.action.apply_render",
+        "icon": "FileCheck",
+        "target_model": "Creative",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_Creative_apply_render"
+        },
+        "requires_state": [
+          "draft",
+          "rejected",
+          "pending_review",
+          "approved"
+        ],
+        "fields": [
+          {
+            "key": "asset_url",
+            "label": "link_marketing.action.fields.asset_url",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "render_kind",
+            "label": "link_marketing.action.fields.render_kind",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "error_message",
+            "label": "link_marketing.action.fields.error_message",
+            "type": "string",
+            "required": false
+          }
+        ]
+      },
+      {
+        "key": "analyze_brand",
+        "label": "link_marketing.action.analyze_brand",
+        "icon": "Sparkles",
+        "target_model": "BrandKit",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_BrandKit_analyze_brand"
+        },
+        "fields": [
+          {
+            "key": "website",
+            "label": "link_marketing.action.fields.website",
+            "type": "string",
+            "required": false
+          }
+        ]
+      },
+      {
+        "key": "apply_brand_analysis",
+        "label": "link_marketing.action.apply_brand_analysis",
+        "icon": "ClipboardPaste",
+        "target_model": "BrandKit",
+        "placement": "row",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_BrandKit_apply_brand_analysis"
+        },
+        "fields": [
+          {
+            "key": "logo_asset_url",
+            "label": "link_marketing.action.fields.logo_asset_url",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "tagline",
+            "label": "link_marketing.action.fields.tagline",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "primary_color",
+            "label": "link_marketing.action.fields.primary_color",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "bg_color",
+            "label": "link_marketing.action.fields.bg_color",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "text_color",
+            "label": "link_marketing.action.fields.text_color",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "subtext_color",
+            "label": "link_marketing.action.fields.subtext_color",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "style",
+            "label": "link_marketing.action.fields.style",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "palette",
+            "label": "link_marketing.action.fields.palette",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "tone",
+            "label": "link_marketing.action.fields.tone",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "visual_rules",
+            "label": "link_marketing.action.fields.visual_rules",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "icp_negocio",
+            "label": "link_marketing.action.fields.icp_negocio",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "icp_rol",
+            "label": "link_marketing.action.fields.icp_rol",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "icp_audiencia",
+            "label": "link_marketing.action.fields.icp_audiencia",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "icp_dolor",
+            "label": "link_marketing.action.fields.icp_dolor",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "icp_consecuencia",
+            "label": "link_marketing.action.fields.icp_consecuencia",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "icp_beneficio",
+            "label": "link_marketing.action.fields.icp_beneficio",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "icp_prueba",
+            "label": "link_marketing.action.fields.icp_prueba",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "icp_objecion",
+            "label": "link_marketing.action.fields.icp_objecion",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "icp_cta",
+            "label": "link_marketing.action.fields.icp_cta",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "icp_hashtags",
+            "label": "link_marketing.action.fields.icp_hashtags",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "site_title",
+            "label": "link_marketing.action.fields.site_title",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "analysis_notes",
+            "label": "link_marketing.action.fields.analysis_notes",
+            "type": "string",
+            "required": false
+          },
+          {
+            "key": "error_message",
+            "label": "link_marketing.action.fields.error_message",
+            "type": "string",
+            "required": false
+          }
+        ]
+      }
+    ],
+    "subscriptions": [
+      {
+        "event": "connector_nanobanana.image_generated",
+        "handler": {
+          "type": "wasm",
+          "function": "on_nanobanana_image_generated"
+        },
+        "comment": "An image generator finished a job: resolve it as completed with the same logic as GenerationJob.complete."
+      },
+      {
+        "event": "connector_nanobanana.image_failed",
+        "handler": {
+          "type": "wasm",
+          "function": "on_nanobanana_image_failed"
+        },
+        "comment": "An image generator could not finish a job: resolve it as failed with the same logic as GenerationJob.fail."
+      }
+    ]
+  },
+  "rbac": {
+    "roles": [
+      {
+        "key": "marketing_manager",
+        "label": "link_marketing.role.manager",
+        "permissions": [
+          "marketing.campaigns.read",
+          "marketing.campaigns.write",
+          "marketing.creatives.read",
+          "marketing.creatives.write",
+          "marketing.brand_kits.read",
+          "marketing.brand_kits.write",
+          "marketing.product_references.read",
+          "marketing.product_references.write",
+          "marketing.generations.create"
+        ]
+      },
+      {
+        "key": "marketing_approver",
+        "label": "link_marketing.role.approver",
+        "permissions": [
+          "marketing.campaigns.read",
+          "marketing.campaigns.approve",
+          "marketing.campaigns.publish",
+          "marketing.creatives.read",
+          "marketing.creatives.approve",
+          "marketing.creatives.moderate"
+        ]
+      }
+    ],
+    "permissions": [
+      {
+        "key": "marketing.campaigns.read",
+        "label": "link_marketing.permission.campaigns_read"
+      },
+      {
+        "key": "marketing.campaigns.write",
+        "label": "link_marketing.permission.campaigns_write"
+      },
+      {
+        "key": "marketing.campaigns.approve",
+        "label": "link_marketing.permission.campaigns_approve"
+      },
+      {
+        "key": "marketing.campaigns.publish",
+        "label": "link_marketing.permission.campaigns_publish"
+      },
+      {
+        "key": "marketing.creatives.read",
+        "label": "link_marketing.permission.creatives_read"
+      },
+      {
+        "key": "marketing.creatives.write",
+        "label": "link_marketing.permission.creatives_write"
+      },
+      {
+        "key": "marketing.creatives.approve",
+        "label": "link_marketing.permission.creatives_approve"
+      },
+      {
+        "key": "marketing.creatives.moderate",
+        "label": "link_marketing.permission.creatives_moderate"
+      },
+      {
+        "key": "marketing.brand_kits.read",
+        "label": "link_marketing.permission.brand_kits_read"
+      },
+      {
+        "key": "marketing.brand_kits.write",
+        "label": "link_marketing.permission.brand_kits_write"
+      },
+      {
+        "key": "marketing.product_references.read",
+        "label": "link_marketing.permission.product_references_read"
+      },
+      {
+        "key": "marketing.product_references.write",
+        "label": "link_marketing.permission.product_references_write"
+      },
+      {
+        "key": "marketing.generations.create",
+        "label": "link_marketing.permission.generations_create"
+      }
+    ]
+  },
+  "settings": [
+    {
+      "key": "monthly_generation_quota",
+      "type": "number",
+      "label": "link_marketing.settings.monthly_generation_quota",
+      "description": "link_marketing.settings.monthly_generation_quota_description",
+      "default": 100,
+      "required": false
+    }
+  ],
+  "models": [
+    {
+      "key": "BrandKit",
+      "table": "marketing_brand_kits",
+      "label": "link_marketing.model.brand_kit",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "primary_key": true,
+          "label": "link_marketing.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "link_marketing.field.organization_id"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "not_null": true,
+          "label": "link_marketing.field.name",
+          "section": "general"
+        },
+        {
+          "name": "tagline",
+          "type": "text",
+          "label": "link_marketing.field.tagline",
+          "section": "voice"
+        },
+        {
+          "name": "website",
+          "type": "text",
+          "label": "link_marketing.field.website",
+          "section": "general"
+        },
+        {
+          "name": "is_default",
+          "type": "boolean",
+          "not_null": true,
+          "default": false,
+          "label": "link_marketing.field.is_default",
+          "section": "visuals",
+          "comment": "Default kit pre-selected for new campaigns/creatives in this org. Exactly one should be true; enforced by handle_BrandKit_set_default, not a DB constraint."
+        },
+        {
+          "name": "primary_color",
+          "type": "text",
+          "label": "link_marketing.field.primary_color",
+          "section": "visuals",
+          "widget": "color",
+          "default": "'#6366F1'"
+        },
+        {
+          "name": "bg_color",
+          "type": "text",
+          "label": "link_marketing.field.bg_color",
+          "section": "visuals",
+          "widget": "color",
+          "default": "'#0A0B0D'"
+        },
+        {
+          "name": "text_color",
+          "type": "text",
+          "label": "link_marketing.field.text_color",
+          "section": "visuals",
+          "widget": "color",
+          "default": "'#FFFFFF'"
+        },
+        {
+          "name": "subtext_color",
+          "type": "text",
+          "label": "link_marketing.field.subtext_color",
+          "section": "visuals",
+          "widget": "color",
+          "default": "'#E8E8E8'"
+        },
+        {
+          "name": "logo_asset_url",
+          "type": "text",
+          "label": "link_marketing.field.logo_asset_url",
+          "section": "visuals",
+          "widget": "upload"
+        },
+        {
+          "name": "logo_light_asset_url",
+          "type": "text",
+          "label": "link_marketing.field.logo_light_asset_url",
+          "widget": "upload",
+          "section": "visuals"
+        },
+        {
+          "name": "logo_dark_asset_url",
+          "type": "text",
+          "label": "link_marketing.field.logo_dark_asset_url",
+          "widget": "upload",
+          "section": "visuals"
+        },
+        {
+          "name": "style",
+          "type": "text",
+          "label": "link_marketing.field.style",
+          "section": "visuals",
+          "default": "'auto'",
+          "options": [
+            {
+              "value": "auto",
+              "label": "link_marketing.options.style.auto"
+            },
+            {
+              "value": "bold",
+              "label": "link_marketing.options.style.bold"
+            },
+            {
+              "value": "editorial",
+              "label": "link_marketing.options.style.editorial"
+            }
+          ]
+        },
+        {
+          "name": "palette",
+          "type": "jsonb",
+          "default": "'[]'",
+          "label": "link_marketing.field.palette",
+          "section": "visuals",
+          "comment": "Array of {value:'#hex', label?} swatches. First entry is the primary brand color."
+        },
+        {
+          "name": "tone",
+          "type": "text",
+          "widget": "textarea",
+          "label": "link_marketing.field.tone",
+          "section": "voice",
+          "comment": "Free-text brand voice guidance (formal/playful/technical, forbidden words, etc.) fed verbatim into every generation prompt."
+        },
+        {
+          "name": "visual_rules",
+          "type": "text",
+          "widget": "textarea",
+          "label": "link_marketing.field.visual_rules",
+          "section": "voice",
+          "comment": "Free-text do/don't rules (logo clear space, forbidden imagery, typography) applied by whichever provider generates on behalf of this kit."
+        },
+        {
+          "name": "analysis_notes",
+          "type": "text",
+          "label": "link_marketing.field.analysis_notes",
+          "readonly": true,
+          "widget": "textarea",
+          "section": "visuals"
+        },
+        {
+          "name": "icp_negocio",
+          "type": "text",
+          "label": "link_marketing.field.icp_negocio",
+          "section": "icp"
+        },
+        {
+          "name": "icp_rol",
+          "type": "text",
+          "label": "link_marketing.field.icp_rol",
+          "section": "icp"
+        },
+        {
+          "name": "icp_audiencia",
+          "type": "text",
+          "label": "link_marketing.field.icp_audiencia",
+          "section": "icp"
+        },
+        {
+          "name": "icp_dolor",
+          "type": "text",
+          "label": "link_marketing.field.icp_dolor",
+          "section": "icp",
+          "widget": "textarea"
+        },
+        {
+          "name": "icp_consecuencia",
+          "type": "text",
+          "label": "link_marketing.field.icp_consecuencia",
+          "section": "icp",
+          "widget": "textarea"
+        },
+        {
+          "name": "icp_beneficio",
+          "type": "text",
+          "label": "link_marketing.field.icp_beneficio",
+          "section": "icp",
+          "widget": "textarea"
+        },
+        {
+          "name": "icp_prueba",
+          "type": "text",
+          "label": "link_marketing.field.icp_prueba",
+          "section": "icp",
+          "widget": "textarea"
+        },
+        {
+          "name": "icp_objecion",
+          "type": "text",
+          "label": "link_marketing.field.icp_objecion",
+          "section": "icp",
+          "widget": "textarea"
+        },
+        {
+          "name": "icp_cta",
+          "type": "text",
+          "label": "link_marketing.field.icp_cta",
+          "section": "icp"
+        },
+        {
+          "name": "icp_hashtags",
+          "type": "text",
+          "label": "link_marketing.field.icp_hashtags",
+          "section": "icp"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_marketing.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_marketing.field.updated_at"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "label": "link_marketing.field.deleted_at"
+        }
+      ],
+      "indices": [
+        {
+          "name": "marketing_brand_kits_org_idx",
+          "columns": [
+            "organization_id"
+          ]
+        }
+      ],
+      "form_layout": {
+        "mode": "steps",
+        "sections": [
+          {
+            "key": "general",
+            "title": "link_marketing.form.brand_chat",
+            "assist": {
+              "provider": "brand.website_dna",
+              "label": "link_marketing.assist.brand_label",
+              "input": [
+                "name",
+                "website"
+              ],
+              "output": [
+                "name",
+                "website",
+                "logo_asset_url",
+                "logo_light_asset_url",
+                "logo_dark_asset_url",
+                "primary_color",
+                "bg_color",
+                "text_color",
+                "subtext_color",
+                "style",
+                "palette",
+                "tone",
+                "visual_rules",
+                "tagline",
+                "icp_negocio",
+                "icp_rol",
+                "icp_audiencia",
+                "icp_dolor",
+                "icp_consecuencia",
+                "icp_beneficio",
+                "icp_prueba",
+                "icp_objecion",
+                "icp_cta",
+                "icp_hashtags"
+              ],
+              "trigger": "auto"
+            }
+          },
+          {
+            "key": "visuals",
+            "title": "link_marketing.form.visuals",
+            "description": "link_marketing.form.visuals_help"
+          },
+          {
+            "key": "voice",
+            "title": "link_marketing.form.voice",
+            "description": "link_marketing.form.voice_help"
+          },
+          {
+            "key": "icp",
+            "title": "link_marketing.form.icp",
+            "description": "link_marketing.form.icp_help"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Campaign",
+      "table": "marketing_campaigns",
+      "label": "link_marketing.model.campaign",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "primary_key": true,
+          "label": "link_marketing.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "link_marketing.field.organization_id"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "not_null": true,
+          "label": "link_marketing.field.name",
+          "section": "general"
+        },
+        {
+          "name": "objective",
+          "type": "text",
+          "label": "link_marketing.field.objective",
+          "section": "general"
+        },
+        {
+          "name": "brief",
+          "type": "text",
+          "widget": "textarea",
+          "label": "link_marketing.field.brief",
+          "section": "general",
+          "comment": "Full creative brief. Copied into every GenerationJob prompt context for this campaign."
+        },
+        {
+          "name": "brand_kit_id",
+          "type": "uuid",
+          "ref": "link_marketing.BrandKit",
+          "label": "link_marketing.field.brand_kit_id",
+          "section": "general"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "not_null": true,
+          "default": "draft",
+          "readonly": true,
+          "display": "status",
+          "label": "link_marketing.field.status",
+          "options": [
+            {
+              "value": "draft",
+              "label": "link_marketing.options.status.draft",
+              "color": "gray"
+            },
+            {
+              "value": "in_review",
+              "label": "link_marketing.options.status.in_review",
+              "color": "amber"
+            },
+            {
+              "value": "approved",
+              "label": "link_marketing.options.status.approved",
+              "color": "blue"
+            },
+            {
+              "value": "published",
+              "label": "link_marketing.options.status.published",
+              "color": "green"
+            },
+            {
+              "value": "archived",
+              "label": "link_marketing.options.status.archived",
+              "color": "slate"
+            }
+          ],
+          "section": "general"
+        },
+        {
+          "name": "submitted_at",
+          "type": "timestamptz",
+          "readonly": true,
+          "label": "link_marketing.field.submitted_at"
+        },
+        {
+          "name": "approved_by",
+          "type": "uuid",
+          "readonly": true,
+          "label": "link_marketing.field.approved_by",
+          "comment": "User id captured from the action envelope's actor when handle_Campaign_approve runs."
+        },
+        {
+          "name": "approved_at",
+          "type": "timestamptz",
+          "readonly": true,
+          "label": "link_marketing.field.approved_at"
+        },
+        {
+          "name": "rejection_reason",
+          "type": "text",
+          "readonly": true,
+          "label": "link_marketing.field.rejection_reason"
+        },
+        {
+          "name": "published_at",
+          "type": "timestamptz",
+          "readonly": true,
+          "label": "link_marketing.field.published_at"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_marketing.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_marketing.field.updated_at"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "label": "link_marketing.field.deleted_at"
+        }
+      ],
+      "indices": [
+        {
+          "name": "marketing_campaigns_org_status_idx",
+          "columns": [
+            "organization_id",
+            "status"
+          ]
+        }
+      ],
+      "relations": [
+        {
+          "name": "creatives",
+          "embed": true,
+          "kind": "one_to_many",
+          "through": "Creative",
+          "foreign_key": "campaign_id",
+          "label": "link_marketing.relation.creatives"
+        }
+      ],
+      "form_layout": {
+        "mode": "sections",
+        "sections": [
+          {
+            "key": "general",
+            "title": "link_marketing.form.general"
+          }
+        ]
+      },
+      "stage_field": "status",
+      "stages": [
+        {
+          "key": "draft",
+          "label": "link_marketing.campaign.stages.draft",
+          "color": "slate",
+          "order": 0
+        },
+        {
+          "key": "in_review",
+          "label": "link_marketing.campaign.stages.in_review",
+          "color": "amber",
+          "order": 1
+        },
+        {
+          "key": "approved",
+          "label": "link_marketing.campaign.stages.approved",
+          "color": "blue",
+          "order": 2
+        },
+        {
+          "key": "published",
+          "label": "link_marketing.campaign.stages.published",
+          "color": "green",
+          "order": 3,
+          "is_final": true
+        },
+        {
+          "key": "archived",
+          "label": "link_marketing.campaign.stages.archived",
+          "color": "gray",
+          "order": 4,
+          "is_final": true
+        }
+      ],
+      "transitions": [
+        {
+          "from": "draft",
+          "to": "in_review"
+        },
+        {
+          "from": "in_review",
+          "to": "draft"
+        },
+        {
+          "from": "in_review",
+          "to": "approved"
+        },
+        {
+          "from": "approved",
+          "to": "published"
+        },
+        {
+          "from": "draft",
+          "to": "archived"
+        },
+        {
+          "from": "in_review",
+          "to": "archived"
+        },
+        {
+          "from": "approved",
+          "to": "archived"
+        },
+        {
+          "from": "published",
+          "to": "archived"
+        }
+      ]
+    },
+    {
+      "key": "ProductReference",
+      "table": "marketing_product_references",
+      "label": "link_marketing.model.product_reference",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "primary_key": true,
+          "label": "link_marketing.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "link_marketing.field.organization_id"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "not_null": true,
+          "label": "link_marketing.field.name",
+          "section": "general"
+        },
+        {
+          "name": "product_id",
+          "type": "uuid",
+          "label": "link_marketing.field.product_id",
+          "section": "general",
+          "comment": "Soft link to products.Product (optional dependency, no ref/picker to avoid a hard install requirement)."
+        },
+        {
+          "name": "asset_url",
+          "type": "text",
+          "not_null": true,
+          "label": "link_marketing.field.asset_url",
+          "section": "general",
+          "comment": "Authorized source photo/render the provider is allowed to use for mockups."
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "widget": "textarea",
+          "label": "link_marketing.field.description",
+          "section": "general"
+        },
+        {
+          "name": "authorized",
+          "type": "boolean",
+          "not_null": true,
+          "default": false,
+          "label": "link_marketing.field.authorized",
+          "section": "approval",
+          "comment": "Must be true before any GenerationJob may reference this asset (checked by handle_Creative_request_generation)."
+        },
+        {
+          "name": "authorized_by",
+          "type": "uuid",
+          "readonly": true,
+          "label": "link_marketing.field.authorized_by",
+          "section": "approval"
+        },
+        {
+          "name": "authorized_at",
+          "type": "timestamptz",
+          "readonly": true,
+          "label": "link_marketing.field.authorized_at",
+          "section": "approval"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_marketing.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_marketing.field.updated_at"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "label": "link_marketing.field.deleted_at"
+        }
+      ],
+      "indices": [
+        {
+          "name": "marketing_product_references_org_idx",
+          "columns": [
+            "organization_id"
+          ]
+        }
+      ],
+      "form_layout": {
+        "mode": "sections",
+        "sections": [
+          {
+            "key": "general",
+            "title": "link_marketing.form.general"
+          },
+          {
+            "key": "approval",
+            "title": "link_marketing.form.approval"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Creative",
+      "table": "marketing_creatives",
+      "label": "link_marketing.model.creative",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "primary_key": true,
+          "label": "link_marketing.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "link_marketing.field.organization_id"
+        },
+        {
+          "name": "campaign_id",
+          "type": "uuid",
+          "not_null": true,
+          "ref": "link_marketing.Campaign",
+          "label": "link_marketing.field.campaign_id",
+          "section": "general"
+        },
+        {
+          "name": "brand_kit_id",
+          "type": "uuid",
+          "ref": "link_marketing.BrandKit",
+          "label": "link_marketing.field.brand_kit_id",
+          "section": "general"
+        },
+        {
+          "name": "product_reference_id",
+          "type": "uuid",
+          "ref": "link_marketing.ProductReference",
+          "label": "link_marketing.field.product_reference_id",
+          "section": "general"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "label": "link_marketing.field.name",
+          "section": "general"
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "label": "link_marketing.field.kind",
+          "section": "format",
+          "default": "'signal'",
+          "options": [
+            {
+              "value": "cover",
+              "label": "link_marketing.options.kind.cover"
+            },
+            {
+              "value": "signal",
+              "label": "link_marketing.options.kind.signal"
+            },
+            {
+              "value": "pain",
+              "label": "link_marketing.options.kind.pain"
+            },
+            {
+              "value": "offer",
+              "label": "link_marketing.options.kind.offer"
+            },
+            {
+              "value": "cta",
+              "label": "link_marketing.options.kind.cta"
+            },
+            {
+              "value": "feature",
+              "label": "link_marketing.options.kind.feature"
+            },
+            {
+              "value": "testimonial",
+              "label": "link_marketing.options.kind.testimonial"
+            },
+            {
+              "value": "launch",
+              "label": "link_marketing.options.kind.launch"
+            },
+            {
+              "value": "story",
+              "label": "link_marketing.options.kind.story"
+            },
+            {
+              "value": "banner",
+              "label": "link_marketing.options.kind.banner"
+            },
+            {
+              "value": "myth-vs",
+              "label": "link_marketing.options.kind.myth-vs"
+            }
+          ]
+        },
+        {
+          "name": "format",
+          "type": "text",
+          "label": "link_marketing.field.format",
+          "section": "format",
+          "default": "'1:1'",
+          "options": [
+            {
+              "value": "1:1",
+              "label": "link_marketing.options.format.1:1"
+            },
+            {
+              "value": "4:5",
+              "label": "link_marketing.options.format.4:5"
+            },
+            {
+              "value": "9:16",
+              "label": "link_marketing.options.format.9:16"
+            },
+            {
+              "value": "16:9",
+              "label": "link_marketing.options.format.16:9"
+            }
+          ]
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "label": "link_marketing.field.title",
+          "section": "copy"
+        },
+        {
+          "name": "subtitle",
+          "type": "text",
+          "label": "link_marketing.field.subtitle",
+          "section": "copy",
+          "widget": "textarea"
+        },
+        {
+          "name": "cta_url",
+          "type": "text",
+          "label": "link_marketing.field.cta_url",
+          "section": "copy"
+        },
+        {
+          "name": "number",
+          "type": "text",
+          "label": "link_marketing.field.number",
+          "section": "copy"
+        },
+        {
+          "name": "caption",
+          "type": "text",
+          "label": "link_marketing.field.caption",
+          "section": "copy",
+          "widget": "textarea"
+        },
+        {
+          "name": "bg_prompt",
+          "type": "text",
+          "label": "link_marketing.field.bg_prompt",
+          "section": "background",
+          "widget": "textarea"
+        },
+        {
+          "name": "background_asset_url",
+          "type": "text",
+          "label": "link_marketing.field.background_asset_url",
+          "readonly": true,
+          "section": "output"
+        },
+        {
+          "name": "composed_asset_url",
+          "type": "text",
+          "label": "link_marketing.field.composed_asset_url",
+          "readonly": true,
+          "section": "output"
+        },
+        {
+          "name": "motion_asset_url",
+          "type": "text",
+          "label": "link_marketing.field.motion_asset_url",
+          "readonly": true,
+          "section": "output"
+        },
+        {
+          "name": "render_error",
+          "type": "text",
+          "label": "link_marketing.field.render_error",
+          "readonly": true,
+          "section": "output"
+        },
+        {
+          "name": "current_version",
+          "type": "integer",
+          "not_null": true,
+          "default": 0,
+          "readonly": true,
+          "label": "link_marketing.field.current_version",
+          "section": "general",
+          "comment": "Mirrors the highest CreativeVersion.version created for this creative; bumped on generation completion and on manual uploads."
+        },
+        {
+          "name": "latest_generation_job_id",
+          "type": "uuid",
+          "ref": "link_marketing.GenerationJob",
+          "readonly": true,
+          "label": "link_marketing.field.latest_generation_job_id",
+          "section": "general"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "not_null": true,
+          "default": "draft",
+          "readonly": true,
+          "display": "status",
+          "label": "link_marketing.field.status",
+          "options": [
+            {
+              "value": "draft",
+              "label": "link_marketing.options.creative_status.draft",
+              "color": "gray"
+            },
+            {
+              "value": "pending_review",
+              "label": "link_marketing.options.creative_status.pending_review",
+              "color": "amber"
+            },
+            {
+              "value": "approved",
+              "label": "link_marketing.options.creative_status.approved",
+              "color": "green"
+            },
+            {
+              "value": "rejected",
+              "label": "link_marketing.options.creative_status.rejected",
+              "color": "red"
+            }
+          ],
+          "section": "moderation"
+        },
+        {
+          "name": "moderation_status",
+          "type": "text",
+          "not_null": true,
+          "default": "pending",
+          "display": "status",
+          "label": "link_marketing.field.moderation_status",
+          "section": "moderation",
+          "options": [
+            {
+              "value": "pending",
+              "label": "link_marketing.options.moderation_status.pending",
+              "color": "gray"
+            },
+            {
+              "value": "approved",
+              "label": "link_marketing.options.moderation_status.approved",
+              "color": "green"
+            },
+            {
+              "value": "flagged",
+              "label": "link_marketing.options.moderation_status.flagged",
+              "color": "red"
+            }
+          ],
+          "comment": "Independent of lifecycle `status`: a creative can be approved for publication yet later flagged by moderation."
+        },
+        {
+          "name": "moderated_by",
+          "type": "uuid",
+          "readonly": true,
+          "label": "link_marketing.field.moderated_by",
+          "section": "moderation"
+        },
+        {
+          "name": "moderated_at",
+          "type": "timestamptz",
+          "readonly": true,
+          "label": "link_marketing.field.moderated_at",
+          "section": "moderation"
+        },
+        {
+          "name": "moderation_notes",
+          "type": "text",
+          "widget": "textarea",
+          "readonly": true,
+          "label": "link_marketing.field.moderation_notes",
+          "section": "moderation"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_marketing.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_marketing.field.updated_at"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "label": "link_marketing.field.deleted_at"
+        }
+      ],
+      "indices": [
+        {
+          "name": "marketing_creatives_org_campaign_idx",
+          "columns": [
+            "organization_id",
+            "campaign_id"
+          ]
+        },
+        {
+          "name": "marketing_creatives_org_status_idx",
+          "columns": [
+            "organization_id",
+            "status"
+          ]
+        }
+      ],
+      "relations": [
+        {
+          "name": "versions",
+          "embed": true,
+          "kind": "one_to_many",
+          "through": "CreativeVersion",
+          "foreign_key": "creative_id",
+          "label": "link_marketing.relation.versions"
+        }
+      ],
+      "form_layout": {
+        "mode": "steps",
+        "sections": [
+          {
+            "key": "general",
+            "title": "link_marketing.form.general"
+          },
+          {
+            "key": "format",
+            "title": "link_marketing.form.format"
+          },
+          {
+            "key": "copy",
+            "title": "link_marketing.form.copy"
+          },
+          {
+            "key": "background",
+            "title": "link_marketing.form.background"
+          },
+          {
+            "key": "moderation",
+            "title": "link_marketing.form.moderation"
+          },
+          {
+            "key": "output",
+            "title": "link_marketing.form.output"
+          }
+        ]
+      },
+      "stage_field": "status",
+      "stages": [
+        {
+          "key": "draft",
+          "label": "link_marketing.creative.stages.draft",
+          "color": "slate",
+          "order": 0
+        },
+        {
+          "key": "pending_review",
+          "label": "link_marketing.creative.stages.pending_review",
+          "color": "amber",
+          "order": 1
+        },
+        {
+          "key": "approved",
+          "label": "link_marketing.creative.stages.approved",
+          "color": "green",
+          "order": 2,
+          "is_final": true
+        },
+        {
+          "key": "rejected",
+          "label": "link_marketing.creative.stages.rejected",
+          "color": "red",
+          "order": 3,
+          "is_final": true
+        }
+      ],
+      "transitions": [
+        {
+          "from": "draft",
+          "to": "pending_review"
+        },
+        {
+          "from": "pending_review",
+          "to": "approved"
+        },
+        {
+          "from": "pending_review",
+          "to": "rejected"
+        },
+        {
+          "from": "rejected",
+          "to": "pending_review"
+        }
+      ]
+    },
+    {
+      "key": "CreativeVersion",
+      "table": "marketing_creative_versions",
+      "label": "link_marketing.model.creative_version",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "primary_key": true,
+          "label": "link_marketing.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "link_marketing.field.organization_id"
+        },
+        {
+          "name": "creative_id",
+          "type": "uuid",
+          "not_null": true,
+          "ref": "link_marketing.Creative",
+          "label": "link_marketing.field.creative_id",
+          "section": "general"
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "not_null": true,
+          "label": "link_marketing.field.version",
+          "section": "general"
+        },
+        {
+          "name": "source",
+          "type": "text",
+          "not_null": true,
+          "default": "generated",
+          "label": "link_marketing.field.source",
+          "section": "general",
+          "options": [
+            {
+              "value": "generated",
+              "label": "link_marketing.options.source.generated"
+            },
+            {
+              "value": "uploaded",
+              "label": "link_marketing.options.source.uploaded"
+            }
+          ]
+        },
+        {
+          "name": "generation_job_id",
+          "type": "uuid",
+          "ref": "link_marketing.GenerationJob",
+          "label": "link_marketing.field.generation_job_id",
+          "section": "general",
+          "comment": "Lineage: which provider request produced this version, empty when source=uploaded."
+        },
+        {
+          "name": "asset_url",
+          "type": "text",
+          "not_null": true,
+          "label": "link_marketing.field.asset_url",
+          "section": "general"
+        },
+        {
+          "name": "prompt_snapshot",
+          "type": "text",
+          "widget": "textarea",
+          "readonly": true,
+          "label": "link_marketing.field.prompt_snapshot",
+          "section": "general",
+          "comment": "Frozen copy of the prompt actually sent to the provider (brief + brand tone + rules), independent of later edits to Campaign.brief."
+        },
+        {
+          "name": "created_by",
+          "type": "uuid",
+          "readonly": true,
+          "label": "link_marketing.field.created_by",
+          "section": "general"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_marketing.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_marketing.field.updated_at"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "label": "link_marketing.field.deleted_at"
+        }
+      ],
+      "indices": [
+        {
+          "name": "marketing_creative_versions_org_creative_idx",
+          "columns": [
+            "organization_id",
+            "creative_id"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "GenerationJob",
+      "table": "marketing_generation_jobs",
+      "label": "link_marketing.model.generation_job",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "primary_key": true,
+          "label": "link_marketing.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "link_marketing.field.organization_id"
+        },
+        {
+          "name": "campaign_id",
+          "type": "uuid",
+          "not_null": true,
+          "ref": "link_marketing.Campaign",
+          "label": "link_marketing.field.campaign_id",
+          "section": "general"
+        },
+        {
+          "name": "brand_kit_id",
+          "type": "uuid",
+          "ref": "link_marketing.BrandKit",
+          "label": "link_marketing.field.brand_kit_id",
+          "section": "general"
+        },
+        {
+          "name": "creative_id",
+          "type": "uuid",
+          "ref": "link_marketing.Creative",
+          "label": "link_marketing.field.creative_id",
+          "section": "general",
+          "comment": "Set by handle_Creative_request_generation before dispatch."
+        },
+        {
+          "name": "product_reference_id",
+          "type": "uuid",
+          "ref": "link_marketing.ProductReference",
+          "label": "link_marketing.field.product_reference_id",
+          "section": "general",
+          "comment": "Lineage: authorized product asset used as mockup input, when any."
+        },
+        {
+          "name": "provider_key",
+          "type": "text",
+          "not_null": true,
+          "label": "link_marketing.field.provider_key",
+          "section": "provider",
+          "comment": "Logical id of the installed generation provider (e.g. a future 'nanobanana'). link_marketing never hardcodes a provider: any connector that declares capability 'marketing-generation-provider' and subscribes to marketing.generation_job.requested can serve a provider_key. Resolving provider_key -> installed connector is an ops/kernel routing concern, not this addon's."
+        },
+        {
+          "name": "prompt",
+          "type": "text",
+          "not_null": true,
+          "widget": "textarea",
+          "label": "link_marketing.field.prompt",
+          "section": "provider"
+        },
+        {
+          "name": "format",
+          "type": "text",
+          "default": "1:1",
+          "label": "link_marketing.field.format",
+          "section": "provider"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "not_null": true,
+          "default": "queued",
+          "readonly": true,
+          "display": "status",
+          "label": "link_marketing.field.status",
+          "options": [
+            {
+              "value": "queued",
+              "label": "link_marketing.options.job_status.queued",
+              "color": "gray"
+            },
+            {
+              "value": "processing",
+              "label": "link_marketing.options.job_status.processing",
+              "color": "blue"
+            },
+            {
+              "value": "completed",
+              "label": "link_marketing.options.job_status.completed",
+              "color": "green"
+            },
+            {
+              "value": "failed",
+              "label": "link_marketing.options.job_status.failed",
+              "color": "red"
+            }
+          ],
+          "section": "general"
+        },
+        {
+          "name": "cost_amount",
+          "type": "numeric",
+          "readonly": true,
+          "display": "currency",
+          "label": "link_marketing.field.cost_amount",
+          "section": "cost",
+          "comment": "Real cost reported by the provider callback (handle_GenerationJob_complete), not an estimate."
+        },
+        {
+          "name": "cost_currency",
+          "type": "text",
+          "readonly": true,
+          "label": "link_marketing.field.cost_currency",
+          "section": "cost"
+        },
+        {
+          "name": "provider_reference",
+          "type": "text",
+          "readonly": true,
+          "label": "link_marketing.field.provider_reference",
+          "section": "provider",
+          "comment": "Provider-side job/request id, echoed back for support and reconciliation."
+        },
+        {
+          "name": "result_asset_url",
+          "type": "text",
+          "readonly": true,
+          "label": "link_marketing.field.result_asset_url",
+          "section": "cost"
+        },
+        {
+          "name": "output_asset_id",
+          "type": "text",
+          "readonly": true,
+          "label": "link_marketing.field.output_asset_id",
+          "section": "cost"
+        },
+        {
+          "name": "error_code",
+          "type": "text",
+          "readonly": true,
+          "label": "link_marketing.field.error_code",
+          "section": "cost"
+        },
+        {
+          "name": "error_message",
+          "type": "text",
+          "readonly": true,
+          "label": "link_marketing.field.error_message",
+          "section": "cost"
+        },
+        {
+          "name": "requested_by",
+          "type": "uuid",
+          "readonly": true,
+          "label": "link_marketing.field.requested_by",
+          "section": "general"
+        },
+        {
+          "name": "completed_at",
+          "type": "timestamptz",
+          "readonly": true,
+          "label": "link_marketing.field.completed_at",
+          "section": "cost"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_marketing.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "link_marketing.field.updated_at"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "label": "link_marketing.field.deleted_at"
+        }
+      ],
+      "indices": [
+        {
+          "name": "marketing_generation_jobs_org_status_idx",
+          "columns": [
+            "organization_id",
+            "status"
+          ]
+        },
+        {
+          "name": "marketing_generation_jobs_org_created_idx",
+          "columns": [
+            "organization_id",
+            "created_at"
+          ]
+        }
+      ],
+      "form_layout": {
+        "mode": "sections",
+        "sections": [
+          {
+            "key": "general",
+            "title": "link_marketing.form.general"
+          },
+          {
+            "key": "provider",
+            "title": "link_marketing.form.provider"
+          },
+          {
+            "key": "cost",
+            "title": "link_marketing.form.cost"
+          }
+        ]
+      },
+      "stage_field": "status",
+      "stages": [
+        {
+          "key": "queued",
+          "label": "link_marketing.job.stages.queued",
+          "color": "slate",
+          "order": 0
+        },
+        {
+          "key": "processing",
+          "label": "link_marketing.job.stages.processing",
+          "color": "blue",
+          "order": 1
+        },
+        {
+          "key": "completed",
+          "label": "link_marketing.job.stages.completed",
+          "color": "green",
+          "order": 2,
+          "is_final": true
+        },
+        {
+          "key": "failed",
+          "label": "link_marketing.job.stages.failed",
+          "color": "red",
+          "order": 3,
+          "is_final": true
+        }
+      ],
+      "transitions": [
+        {
+          "from": "queued",
+          "to": "processing"
+        },
+        {
+          "from": "queued",
+          "to": "completed"
+        },
+        {
+          "from": "queued",
+          "to": "failed"
+        },
+        {
+          "from": "processing",
+          "to": "completed"
+        },
+        {
+          "from": "processing",
+          "to": "failed"
+        }
+      ]
+    }
+  ],
+  "i18n": {
+    "default_locale": "es-MX",
+    "bundles": [
+      {
+        "locale": "es-MX",
+        "path": "locales/es-MX.json"
+      },
+      {
+        "locale": "en-US",
+        "path": "locales/en-US.json"
+      }
+    ]
+  }
+}
