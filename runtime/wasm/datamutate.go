@@ -256,7 +256,7 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 	if inv.mutationGuard != nil && action != "deleted" {
 		if gErr := inv.mutationGuard(execCtx, req.Table, after); gErr != nil {
 			rollback()
-			return fail(guardErrCode(gErr), gErr.Error())
+			return withApprovalDetail(fail(guardErrCode(gErr), gErr.Error()), gErr)
 		}
 	}
 

@@ -469,7 +469,7 @@ func isTemporalColumnType(t string) bool {
 	return false
 }
 
-var ruleThenKinds = map[string]struct{}{"flag": {}, "notify": {}}
+var ruleThenKinds = map[string]struct{}{"flag": {}, "notify": {}, "request_approval": {}}
 var ruleSeverities = map[string]struct{}{"info": {}, "warning": {}, "error": {}}
 var ruleEventTypes = map[string]struct{}{"created": {}, "updated": {}, "transitioned": {}}
 
@@ -543,9 +543,27 @@ func validateRules(m *Manifest, colsByModel map[string]map[string]struct{}) []st
 		if r.Then.Kind == "" {
 			errs = append(errs, fmt.Sprintf("%s.then.kind is required", where))
 		} else if _, ok := ruleThenKinds[r.Then.Kind]; !ok {
-			errs = append(errs, fmt.Sprintf("%s.then.kind %q is not one of flag|notify", where, r.Then.Kind))
+			errs = append(errs, fmt.Sprintf("%s.then.kind %q is not one of flag|notify|request_approval", where, r.Then.Kind))
 		} else if r.Then.Kind == "notify" && len(r.Then.NotifyRoles) == 0 {
 			errs = append(errs, fmt.Sprintf("%s.then.notify_roles is required when then.kind is notify", where))
+		}
+		if r.Then.Kind == "request_approval" {
+			if r.Then.Approval == nil {
+				errs = append(errs, fmt.Sprintf("%s.then.approval is required when then.kind is request_approval", where))
+			} else {
+				errs = append(errs, validateApprovalPolicy(where+".then.approval", r.Then.Approval)...)
+				if strings.TrimSpace(r.Then.Approval.When) != "" {
+					errs = append(errs, fmt.Sprintf("%s.then.approval.when is not allowed on a rule (the rule's own `when` is the predicate)", where))
+				}
+			}
+			if len(r.EventTypes) > 0 {
+				errs = append(errs, fmt.Sprintf("%s.event_types is not allowed with then.kind request_approval (the guard checks every create/update)", where))
+			}
+			if !isOwn {
+				errs = append(errs, fmt.Sprintf("%s.model %q must be a model this addon owns for then.kind request_approval", where, r.Model))
+			}
+		} else if r.Then.Approval != nil {
+			errs = append(errs, fmt.Sprintf("%s.then.approval is only valid when then.kind is request_approval", where))
 		}
 		if r.Then.Severity != "" {
 			if _, ok := ruleSeverities[r.Then.Severity]; !ok {

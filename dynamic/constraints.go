@@ -103,6 +103,9 @@ func evalConstraintsSkipping(mc *ModelConstraints, row map[string]any, skipKey s
 		if err != nil {
 			return fmt.Errorf("%w: constraint %q: %v", ErrInvalidInput, c.Expr, err)
 		}
+		if c.Invert {
+			ok = !ok // a rule: the predicate triggers the guard when TRUE
+		}
 		if ok {
 			continue
 		}
@@ -192,4 +195,21 @@ func findComparisonOp(expr string) (string, int) {
 		}
 	}
 	return "", -1
+}
+
+// BuildModelConstraints folds a model definition's guards into the
+// ModelConstraints a host's ConstraintResolver returns: every column
+// Constraint, the pre-write rule guards projected from contributions.rules[]
+// (P5, then.kind request_approval), the cross-record rules and the locking
+// strategy. Returns (nil, false) when the model declares none.
+func BuildModelConstraints(md manifest.ModelDefinition) (*ModelConstraints, bool) {
+	mc := &ModelConstraints{Locking: md.Locking, Rules: md.Rules}
+	for _, c := range md.Columns {
+		mc.Constraints = append(mc.Constraints, c.Constraints...)
+	}
+	mc.Constraints = append(mc.Constraints, md.RuleGuards...)
+	if !mc.active() {
+		return nil, false
+	}
+	return mc, true
 }

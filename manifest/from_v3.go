@@ -142,6 +142,7 @@ func FromV3(m *v3.Manifest) Manifest {
 
 	out.Capabilities = mapCapabilities(m.Capabilities)
 	out.ModelDefinitions = mapModels(m.Models)
+	attachRuleGuards(out.ModelDefinitions, m)
 	// Shared tenancy (default): every model is org-scoped at the host layer even
 	// when the author omitted organization_id from columns[]. Ops DDL always
 	// materializes the managed column; OrgScoped=false historically built a
@@ -2048,4 +2049,35 @@ func mapColumnGrant(g *v3.GrantBinding) *GrantDef {
 		return nil
 	}
 	return &GrantDef{Policy: g.Policy, Sets: g.Sets, ContextEq: g.ContextEq, ContextGte: g.ContextGte}
+}
+
+// attachRuleGuards projects contributions.rules[] with then.kind
+// request_approval onto the ModelDefinition they target as inverted
+// ConstraintDefs (ErrorKey "rule:<key>"), so the dynamic engine parks the write
+// for approval through the same machinery as a column constraint.
+func attachRuleGuards(defs []ModelDefinition, m *v3.Manifest) {
+	if m.Contributions == nil {
+		return
+	}
+	for _, r := range m.Contributions.Rules {
+		if r.Then.Kind != "request_approval" || r.Then.Approval == nil {
+			continue
+		}
+		for i := range defs {
+			if defs[i].ModelKey != r.Model {
+				continue
+			}
+			pol := mapApprovalPolicy(r.Then.Approval)
+			if pol.Label == "" {
+				pol.Label = r.Then.Message
+			}
+			defs[i].RuleGuards = append(defs[i].RuleGuards, ConstraintDef{
+				Expr:        r.When,
+				ErrorKey:    "rule:" + r.Key,
+				OnViolation: "request_approval",
+				Approval:    pol,
+				Invert:      true,
+			})
+		}
+	}
 }

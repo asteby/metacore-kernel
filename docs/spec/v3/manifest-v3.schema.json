@@ -6349,10 +6349,11 @@
       "properties": {
         "kind": {
           "type": "string",
-          "description": "'flag' records a rule_flags row for a review queue; 'notify' pushes an in-app notification to notify_roles.",
+          "description": "'flag' records a rule_flags row for a review queue; 'notify' pushes an in-app notification to notify_roles; 'request_approval' is a pre-write guard: when the predicate holds the write is parked for the approval policy's roles.",
           "enum": [
             "flag",
-            "notify"
+            "notify",
+            "request_approval"
           ]
         },
         "severity": {
@@ -6374,6 +6375,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "approval": {
+          "$ref": "#/$defs/ApprovalPolicy",
+          "description": "Who may approve. Required when kind is request_approval, forbidden otherwise."
         }
       }
     },
