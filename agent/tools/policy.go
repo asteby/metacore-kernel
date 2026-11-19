@@ -179,3 +179,12 @@ func (r ToolResult) FormatForLLMLimit(maxBytes int) (text string, truncated bool
 		"no lo presentes como total. Para ver el resto, repite la consulta más acotada: agrega filtros, "+
 		"pide menos columnas, baja el limit o pide la siguiente página; para totales o conteos usa una agregación.]", omitted), true
 }
+
+// OutcomeSatisfier lets a tool declare that its success also backs the
+// outcome claims of other tools: show_ui draws what show_chart used to, so
+// "aquí está el gráfico" after a successful show_ui is not an unbacked claim
+// about show_chart. The relation is declared by the tool that supersedes, not
+// hardcoded in the guard.
+type OutcomeSatisfier interface {
+	SatisfiesOutcomes() []string
+}

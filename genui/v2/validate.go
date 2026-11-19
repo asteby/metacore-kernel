@@ -36,6 +36,10 @@ type Doc = map[string]any
 type Options struct {
 	// AllowExternalLinks permits literal http(s) links. Off by default: only the chat turns it on.
 	AllowExternalLinks bool
+	// Profile, when set, adds the rules of a surface on top of the contract
+	// (block/verb/source whitelists, literal-data ban, stricter limits). It
+	// only narrows; nil is the bare contract. See Profile and AgentProfile.
+	Profile *Profile
 }
 
 type obj = map[string]any
