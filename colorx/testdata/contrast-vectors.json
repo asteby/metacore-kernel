@@ -1,0 +1,193 @@
+{
+  "ensureContrast": [
+    {
+      "bg": "#ffffff",
+      "expect": "oklch(0.5593 0.0000 89.88)",
+      "fg": "#777777",
+      "min": 4.5,
+      "ratio": 4.668
+    },
+    {
+      "bg": "#ffffff",
+      "expect": "oklch(0.5658 0.0000 89.88)",
+      "fg": "#767676",
+      "min": 4.5,
+      "ratio": 4.543
+    },
+    {
+      "bg": "#ffffff",
+      "expect": "oklch(0.5619 0.1684 90.43)",
+      "fg": "#f5c518",
+      "min": 4.5,
+      "ratio": 4.6
+    },
+    {
+      "bg": "#101828",
+      "expect": "oklch(0.6021 0.1536 253.47)",
+      "fg": "#2f7fd6",
+      "min": 4.5,
+      "ratio": 4.514
+    },
+    {
+      "bg": "#101828",
+      "expect": "oklch(0.6058 0.1481 260.69)",
+      "fg": "#0b3d91",
+      "min": 4.5,
+      "ratio": 4.539
+    },
+    {
+      "bg": "#ffffff",
+      "expect": "oklch(0.4568 0.0000 89.88)",
+      "fg": "#888888",
+      "min": 7,
+      "ratio": 7.225
+    },
+    {
+      "bg": "#ffffff",
+      "expect": "oklch(0.6600 0.0000 89.88)",
+      "fg": "#ffffff",
+      "min": 3,
+      "ratio": 3.111
+    },
+    {
+      "bg": "#fef2f2",
+      "expect": "oklch(0.5658 0.2220 17.58)",
+      "fg": "#e11d48",
+      "min": 4.5,
+      "ratio": 4.672
+    }
+  ],
+  "onColor": [
+    {
+      "bg": "#ffffff",
+      "expect": "#000000",
+      "min": 4.5,
+      "ratio": 21
+    },
+    {
+      "bg": "#000000",
+      "expect": "#ffffff",
+      "min": 4.5,
+      "ratio": 21
+    },
+    {
+      "bg": "#2f7fd6",
+      "expect": "#000000",
+      "min": 4.5,
+      "ratio": 5.128
+    },
+    {
+      "bg": "#777777",
+      "expect": "#000000",
+      "min": 4.5,
+      "ratio": 4.689
+    },
+    {
+      "bg": "#767676",
+      "expect": "#000000",
+      "min": 4.5,
+      "ratio": 4.623
+    },
+    {
+      "bg": "#f5c518",
+      "expect": "#000000",
+      "min": 4.5,
+      "ratio": 12.882
+    },
+    {
+      "bg": "#0b3d91",
+      "expect": "#ffffff",
+      "min": 4.5,
+      "ratio": 10.045
+    },
+    {
+      "bg": "#ff0000",
+      "expect": "#000000",
+      "min": 4.5,
+      "ratio": 5.252
+    },
+    {
+      "bg": "#00ff00",
+      "expect": "#000000",
+      "min": 4.5,
+      "ratio": 15.304
+    },
+    {
+      "bg": "#808080",
+      "expect": "#000000",
+      "min": 4.5,
+      "ratio": 5.317
+    },
+    {
+      "bg": "rgb(200 30 60)",
+      "expect": "#ffffff",
+      "min": 4.5,
+      "ratio": 5.665
+    },
+    {
+      "bg": "hsl(210 80% 50%)",
+      "expect": "#000000",
+      "min": 4.5,
+      "ratio": 5.241
+    },
+    {
+      "bg": "oklch(0.8 0.08 255)",
+      "expect": "#000000",
+      "min": 4.5,
+      "ratio": 11.268
+    },
+    {
+      "bg": "#ffffff80",
+      "expect": "#000000",
+      "min": 4.5,
+      "ratio": 21
+    },
+    {
+      "bg": "#1a1a1a",
+      "expect": "#ffffff",
+      "min": 7,
+      "ratio": 17.404
+    }
+  ],
+  "pickBacking": [
+    {
+      "candidates": [
+        "#ffffff",
+        "#f5c518",
+        "#2f7fd6",
+        "#0b3d91"
+      ],
+      "expect": "#0b3d91",
+      "fg": "#ffffff",
+      "ratio": 10.045
+    },
+    {
+      "candidates": [
+        "#0b3d91",
+        "#2f7fd6",
+        "#f5c518"
+      ],
+      "expect": "#f5c518",
+      "fg": "#000000",
+      "ratio": 12.882
+    },
+    {
+      "candidates": [
+        "#ffffff",
+        "#000000"
+      ],
+      "expect": "#000000",
+      "fg": "#2f7fd6",
+      "ratio": 5.128
+    },
+    {
+      "candidates": [
+        "#fafafa",
+        "#eeeeee"
+      ],
+      "expect": "#eeeeee",
+      "fg": "#ffffff",
+      "ratio": 1.16
+    }
+  ]
+}
