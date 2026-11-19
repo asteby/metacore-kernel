@@ -1530,7 +1530,7 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 			for k, v := range input {
 				merged[k] = v
 			}
-			if err := evalConstraintsCtx(ctx, model, mc, merged); err != nil {
+			if err := evalConstraintsUpdateCtx(ctx, model, mc, merged, before, input); err != nil {
 				var ce *ConstraintError
 				if errors.As(err, &ce) && ce.RequestsApproval() {
 					pendingCE, pendingBefore = ce, before
