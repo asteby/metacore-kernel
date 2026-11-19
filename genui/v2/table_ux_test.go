@@ -69,7 +69,7 @@ func TestTableUX(t *testing.T) {
 		{"mapas vacios con variant text", pgDoc(nil, tuxTable(nil, tuxCol("tones", map[string]any{}))), CodeInvalidBlock},
 
 		{"tono fuera del enum", pgDoc(nil, tuxTable(nil, badge("tones", map[string]any{"ok": "green"}))), CodeEnum},
-		{"tono no cadena", pgDoc(nil, tuxTable(nil, badge("tones", map[string]any{"ok": 1.0}))), CodeType},
+		{"tono no cadena", pgDoc(nil, tuxTable(nil, badge("tones", map[string]any{"ok": 1.0}))), CodeEnum},
 		{"tones no es objeto", pgDoc(nil, tuxTable(nil, badge("tones", []any{"success"}))), CodeType},
 		{"tones con 32 entradas", pgDoc(nil, tuxTable(nil, badge("tones", tuxMap(32, "info")))), ""},
 		{"tones con 33 entradas", pgDoc(nil, tuxTable(nil, badge("tones", tuxMap(33, "info")))), CodeLimitProperties},
@@ -81,10 +81,12 @@ func TestTableUX(t *testing.T) {
 		{"clave de labels vacia", pgDoc(nil, tuxTable(nil, badge("labels", map[string]any{"": "x"}))), CodePattern},
 		{"clave de icons vacia", pgDoc(nil, tuxTable(nil, badge("icons", map[string]any{"": "Check"}))), CodePattern},
 		{"clave de tones con $", pgDoc(nil, tuxTable(nil, badge("tones", map[string]any{"$ref": "info"}))), CodeRefNotAllowed},
-		{"clave de tones prototipo", pgDoc(nil, tuxTable(nil, badge("tones", map[string]any{"constructor": "info"}))), ""},
+		{"clave de tones prototipo", pgDoc(nil, tuxTable(nil, badge("tones", map[string]any{"constructor": "info"}))), CodeForbiddenKey},
+		{"clave de tones __proto__", pgDoc(nil, tuxTable(nil, badge("tones", map[string]any{"__proto__": "info"}))), CodeForbiddenKey},
+		{"clave de labels prototype", pgDoc(nil, tuxTable(nil, badge("labels", map[string]any{"prototype": "x"}))), CodeForbiddenKey},
 
 		{"label con $t y args", pgDoc(nil, tuxTable(nil, badge("labels", map[string]any{"ok": map[string]any{"$t": "feed.ok", "args": map[string]any{"n": 1.0}}}))), ""},
-		{"label vinculacion no permitida", pgDoc(nil, tuxTable(nil, badge("labels", map[string]any{"ok": map[string]any{"$ref": "data.x.y"}}))), CodeFieldNotAllowed},
+		{"label vinculacion no permitida", pgDoc(nil, tuxTable(nil, badge("labels", map[string]any{"ok": map[string]any{"$ref": "data.x.y"}}))), CodeRequired},
 		{"label $t con proto", pgDoc(nil, tuxTable(nil, badge("labels", map[string]any{"ok": map[string]any{"$t": "a.__proto__.b"}}))), CodeForbiddenKey},
 		{"label literal de 160", pgDoc(nil, tuxTable(nil, badge("labels", map[string]any{"ok": strings.Repeat("a", 160)}))), ""},
 		{"label literal de 161", pgDoc(nil, tuxTable(nil, badge("labels", map[string]any{"ok": strings.Repeat("a", 161)}))), CodeLimitLength},
