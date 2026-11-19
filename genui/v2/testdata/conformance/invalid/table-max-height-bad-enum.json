@@ -1,0 +1,29 @@
+{
+  "description": "max_height solo admite sm, md o lg (no medidas libres).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "table",
+        "title": "En vivo",
+        "max_height": "24rem",
+        "columns": [
+          {
+            "key": "result",
+            "label": "Resultado"
+          }
+        ],
+        "rows": [
+          {
+            "at": "2026-11-19T10:00:00Z",
+            "result": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.enum"
+  }
+}

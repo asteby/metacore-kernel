@@ -1,3 +1,3 @@
 sdk_commit 70e9da4330feb79cbde664c1b54a9e4bda7be62e+kernel-local
-content_sha256 e2f5f8377d92599830af294b3277b82f1067e41a1ef23261ca1343a2b41ff726
+content_sha256 d2f363bd82fe52eaee899319356da18c3687846292126ef9794f9fafec570929
 note esquema y vectores ampliados en el kernel (feat/genui-v2-page-blocks; feat/genui-map-block-precision: map popup/precision/precision_field/area_field; feat/genui-map-image-field: map image_field/color_field/subtitle_field) sobre ese commit del SDK; el SDK debe sincronizarse con este esquema tras el release del kernel; tabs.icon acepta el enum base o un nombre de icono del host (^[A-Za-z][A-Za-z0-9]{0,63}$, $defs/iconName).

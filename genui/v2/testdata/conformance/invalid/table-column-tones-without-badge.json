@@ -1,0 +1,33 @@
+{
+  "description": "tones solo aplica con variant badge o icon_text (aquí la columna es text por defecto).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "table",
+        "title": "En vivo",
+        "columns": [
+          {
+            "key": "result",
+            "label": "Resultado",
+            "tones": {
+              "ok": "success",
+              "pending": "warning",
+              "error": "danger"
+            }
+          }
+        ],
+        "rows": [
+          {
+            "at": "2026-11-19T10:00:00Z",
+            "result": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_block"
+  }
+}

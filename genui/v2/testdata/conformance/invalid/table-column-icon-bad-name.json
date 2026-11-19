@@ -1,0 +1,32 @@
+{
+  "description": "Un valor de icons es un nombre de icono del host (alfanumérico, sin guiones).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "table",
+        "title": "En vivo",
+        "columns": [
+          {
+            "key": "result",
+            "label": "Resultado",
+            "variant": "badge",
+            "icons": {
+              "ok": "check-circle"
+            }
+          }
+        ],
+        "rows": [
+          {
+            "at": "2026-11-19T10:00:00Z",
+            "result": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.pattern"
+  }
+}

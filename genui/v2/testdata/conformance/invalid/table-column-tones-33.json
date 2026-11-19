@@ -1,0 +1,64 @@
+{
+  "description": "Máximo 32 entradas por mapa de columna.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "table",
+        "title": "En vivo",
+        "columns": [
+          {
+            "key": "result",
+            "label": "Resultado",
+            "variant": "badge",
+            "tones": {
+              "v0": "info",
+              "v1": "info",
+              "v2": "info",
+              "v3": "info",
+              "v4": "info",
+              "v5": "info",
+              "v6": "info",
+              "v7": "info",
+              "v8": "info",
+              "v9": "info",
+              "v10": "info",
+              "v11": "info",
+              "v12": "info",
+              "v13": "info",
+              "v14": "info",
+              "v15": "info",
+              "v16": "info",
+              "v17": "info",
+              "v18": "info",
+              "v19": "info",
+              "v20": "info",
+              "v21": "info",
+              "v22": "info",
+              "v23": "info",
+              "v24": "info",
+              "v25": "info",
+              "v26": "info",
+              "v27": "info",
+              "v28": "info",
+              "v29": "info",
+              "v30": "info",
+              "v31": "info",
+              "v32": "info"
+            }
+          }
+        ],
+        "rows": [
+          {
+            "at": "2026-11-19T10:00:00Z",
+            "result": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.limit.properties"
+  }
+}

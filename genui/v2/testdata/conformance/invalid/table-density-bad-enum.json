@@ -1,0 +1,29 @@
+{
+  "description": "density solo admite compact o comfortable.",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "table",
+        "title": "En vivo",
+        "density": "dense",
+        "columns": [
+          {
+            "key": "result",
+            "label": "Resultado"
+          }
+        ],
+        "rows": [
+          {
+            "at": "2026-11-19T10:00:00Z",
+            "result": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.enum"
+  }
+}

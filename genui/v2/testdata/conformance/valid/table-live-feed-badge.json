@@ -1,0 +1,66 @@
+{
+  "description": "Feed «En vivo»: tabla con alto acotado (scroll interno), filas compactas, fecha relativa y columna result como insignia con tono, texto traducido e icono por valor.",
+  "input": {
+    "version": "genui/v2",
+    "data": {
+      "events": {
+        "q": "t:hub.Event?limit=50"
+      }
+    },
+    "blocks": [
+      {
+        "type": "table",
+        "title": {
+          "$t": "feed.title"
+        },
+        "source": "data.events",
+        "max_height": "md",
+        "density": "compact",
+        "columns": [
+          {
+            "key": "created_at",
+            "label": {
+              "$t": "feed.at"
+            },
+            "format": "relative_date"
+          },
+          {
+            "key": "name",
+            "label": {
+              "$t": "feed.event"
+            }
+          },
+          {
+            "key": "result",
+            "label": {
+              "$t": "feed.result"
+            },
+            "variant": "badge",
+            "tones": {
+              "ok": "success",
+              "pending": "warning",
+              "error": "danger"
+            },
+            "labels": {
+              "ok": {
+                "$t": "feed.result.ok"
+              },
+              "pending": {
+                "$t": "feed.result.pending"
+              },
+              "error": "Error"
+            },
+            "icons": {
+              "ok": "CheckCircle",
+              "pending": "Clock",
+              "error": "XCircle"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}
