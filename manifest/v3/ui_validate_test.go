@@ -111,6 +111,21 @@ func TestUIValidation(t *testing.T) {
 			mv["precision_field"] = "status"
 			mv["area_field"] = "carrier"
 		}, ""},
+		{"map image_field and color_field are valid", func(t *testing.T, m map[string]any) {
+			mv := obj(obj(navItem(t, m, "map")["view"])["map"])
+			mv["image_field"] = "status"
+			mv["color_field"] = "carrier"
+			mv["subtitle_field"] = "tracking_number"
+		}, ""},
+		{"map subtitle_field unknown column", func(t *testing.T, m map[string]any) {
+			obj(obj(navItem(t, m, "map")["view"])["map"])["subtitle_field"] = "host"
+		}, `view.map.subtitle_field "host" is not a column of model "Shipment"`},
+		{"map image_field unknown column", func(t *testing.T, m map[string]any) {
+			obj(obj(navItem(t, m, "map")["view"])["map"])["image_field"] = "logo_url"
+		}, `view.map.image_field "logo_url" is not a column of model "Shipment"`},
+		{"map color_field unknown column", func(t *testing.T, m map[string]any) {
+			obj(obj(navItem(t, m, "map")["view"])["map"])["color_field"] = "brand_color"
+		}, `view.map.color_field "brand_color" is not a column of model "Shipment"`},
 		{"map precision outside the enum", func(t *testing.T, m map[string]any) {
 			obj(obj(navItem(t, m, "map")["view"])["map"])["precision"] = "street"
 		}, "view/map/precision': value must be one of 'exact', 'city', 'country'"}, // the JSON schema enum rejects it before the Go rule

@@ -1,0 +1,26 @@
+{
+  "description": "image_field solo aplica con source (los puntos en linea no lo llevan).",
+  "input": {
+    "version": "genui/v2",
+    "blocks": [
+      {
+        "type": "map",
+        "summary": "Sucursales",
+        "points": [
+          {
+            "key": "a",
+            "lat": 19.4,
+            "lng": -99.1,
+            "label": "Centro",
+            "status": "ok"
+          }
+        ],
+        "image_field": "logo_url"
+      }
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "code": "genui.invalid_block"
+  }
+}

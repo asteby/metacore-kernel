@@ -3280,6 +3280,15 @@
         },
         "area_field": {
           "$ref": "#/$defs/key"
+        },
+        "image_field": {
+          "$ref": "#/$defs/key"
+        },
+        "color_field": {
+          "$ref": "#/$defs/key"
+        },
+        "subtitle_field": {
+          "$ref": "#/$defs/key"
         }
       }
     },

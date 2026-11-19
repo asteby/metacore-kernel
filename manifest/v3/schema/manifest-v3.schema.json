@@ -6441,6 +6441,21 @@
             "pattern": "^[a-z][a-z0-9_]*$",
             "description": "Column with the area name or code (e.g. country_iso) labelling the aggregated bubble."
           },
+          "image_field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Column with the image or logo URL of each point (store, branch, vehicle...). Untrusted data: renderers accept only https or same-origin paths."
+          },
+          "color_field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Column with the brand colour (#RGB or #RRGGBB) of each point. Only tints the avatar ring and initials; status colouring stays on color_by."
+          },
+          "subtitle_field": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Column printed as the second line under the name of each point in popups and lists (e.g. a host or an address)."
+          },
           "popup": {
             "type": "array",
             "maxItems": 8,
