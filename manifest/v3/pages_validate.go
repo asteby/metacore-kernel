@@ -103,11 +103,23 @@ func validatePages(m *Manifest) []string {
 // validatePageBody validates one page body with genui/v2 and requires
 // i18n:"keys" (page text is always an i18n key of the addon).
 func validatePageBody(where string, ui []byte) []string {
+	return validateUIDoc(where, ui, MaxPageUIBytes)
+}
+
+// hasJSON reports whether a raw JSON field is present (non-empty, not null).
+func hasJSON(raw []byte) bool {
+	return len(raw) != 0 && string(raw) != "null"
+}
+
+// validateUIDoc is the single validator of an embedded genui/v2 document
+// (page bodies, named blocks and kind:"block" dashboard widgets): presence,
+// byte cap, genui/v2.Parse and i18n:"keys". Only the cap differs by caller.
+func validateUIDoc(where string, ui []byte, maxBytes int) []string {
 	if len(ui) == 0 || string(ui) == "null" {
 		return []string{where + ".ui is required (a genui/v2 document)"}
 	}
-	if len(ui) > MaxPageUIBytes {
-		return []string{fmt.Sprintf("%s.ui is %d bytes; the maximum is %d", where, len(ui), MaxPageUIBytes)}
+	if len(ui) > maxBytes {
+		return []string{fmt.Sprintf("%s.ui is %d bytes; the maximum is %d", where, len(ui), maxBytes)}
 	}
 	doc, err := genuiv2.Parse(ui, genuiv2.Options{})
 	if err != nil {

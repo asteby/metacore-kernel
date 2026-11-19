@@ -39,6 +39,13 @@ const (
 	// MaxPageUIBytes caps one page body before parsing it (genui/v2 has its
 	// own, equal, limit; checking here avoids decoding an oversized blob).
 	MaxPageUIBytes = 128 * 1024
+	// MaxWidgetUIBytes caps the genui/v2 body of a kind:"block" dashboard
+	// widget (contributions.dashboard[].ui) before parsing it. Tighter than a
+	// page: a widget is a tile of the board, not a screen.
+	MaxWidgetUIBytes = 64 * 1024
+	// MinWidgetRefreshS is the floor of DashboardWidget.RefreshS (seconds):
+	// the backup poll must not hammer the host.
+	MinWidgetRefreshS = 10
 )
 
 // PageDef is one declarative page of the addon (contributions.pages[]): the

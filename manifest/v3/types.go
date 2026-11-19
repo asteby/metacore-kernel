@@ -1703,6 +1703,13 @@ type Contributions struct {
 	// with NavItem.Page. Optional; see PageDef.
 	Pages []PageDef `json:"pages,omitempty"`
 
+	// Blocks contributes named, reusable genui/v2 blocks, defined ONCE and
+	// referenced from page bodies ({"type":"ref","ref":"<key>"}), from
+	// dashboard widgets (DashboardWidget.Block) and from other blocks. Another
+	// addon in compatibility.requires references one as "<addon>.<key>".
+	// Optional; see BlockDef and ExpandBlockRefs.
+	Blocks []BlockDef `json:"blocks,omitempty"`
+
 	// Documents contributes printable document templates. Each entry binds a
 	// bundle-relative HTML template to one of the addon's models; the host
 	// hydrates the template with the record (and its child rows) and the org
@@ -2033,7 +2040,11 @@ type DocumentDef struct {
 // computes the aggregate from Query with the kernel aggregation engine and the
 // SDK paints it with a built-in renderer. Kind "custom" is FEDERATED: the host
 // mounts the addon's own React component (named by Expose, from the addon's
-// frontend bundle) into Slot, with the same Card chrome so it blends in.
+// frontend bundle) into Slot, with the same Card chrome so it blends in. Kind
+// "block" is DOCUMENTED: the tile body is a genui/v2 document, either inline
+// (UI) or a reference to a named block (Block), validated exactly like
+// PageDef.UI, so a widget composes any block of the catalog (map, timeline,
+// metric, chart...) without a bundle or a query.
 type DashboardWidget struct {
 	// Key is the widget's stable id, unique within the addon. The capability
 	// gating it is "<addon>.dashboard.<key>". Required, snake_case.
@@ -2045,7 +2056,7 @@ type DashboardWidget struct {
 	// Icon is an optional lucide slug rendered in the accent colour.
 	Icon string `json:"icon,omitempty"`
 	// Kind is the renderer selector: stat|bar|line|area|pie|donut|list|
-	// progress|custom. Required.
+	// progress|block|custom. Required.
 	Kind string `json:"kind"`
 	// Size is the grid span over a 4-column grid: sm(1)|md(2)|lg(3)|full(4).
 	// Default sm.
@@ -2084,6 +2095,22 @@ type DashboardWidget struct {
 	// (e.g. "./StockHeatmap") rendered for a kind:"custom" widget. Required for
 	// "custom"; the addon must also declare a frontend block. Ignored otherwise.
 	Expose string `json:"expose,omitempty"`
+
+	// UI is the genui/v2 document that is the tile body of a kind:"block"
+	// widget. A block widget has exactly ONE origin: this inline document or
+	// Block. Forbidden for every other kind. Same contract as PageDef.UI
+	// (closed block catalog, depth/blocks limits, i18n:"keys") with a
+	// MaxWidgetUIBytes cap. Block widgets carry neither Query nor Expose.
+	UI json.RawMessage `json:"ui,omitempty"`
+	// Block references a named block (contributions.blocks[].key of this
+	// addon, or "<addon>.<key>" of an addon in compatibility.requires) as the
+	// tile body, so the same block is defined once and shown on a page and on
+	// the dashboard. Exclusive with UI; kind:"block" only. The host expands it
+	// (ExpandBlockRefs) when it serves the catalog.
+	Block string `json:"block,omitempty"`
+	// RefreshS is the optional backup poll interval in seconds (>= 10) the
+	// host re-fetches the widget at. Applies to any kind. 0/absent = no poll.
+	RefreshS int `json:"refresh_s,omitempty"`
 
 	// Condition gates this contribution server-side: when set, the host only
 	// serves it to organizations where the predicate holds (e.g. another addon

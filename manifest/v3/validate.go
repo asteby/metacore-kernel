@@ -185,7 +185,7 @@ func validateRollupSpec(where string, r Rollup, ownCols, childCols map[string]st
 var (
 	dashKinds = map[string]struct{}{
 		"stat": {}, "bar": {}, "line": {}, "area": {}, "pie": {},
-		"donut": {}, "list": {}, "progress": {}, "custom": {},
+		"donut": {}, "list": {}, "progress": {}, "block": {}, "custom": {},
 	}
 	dashAggregates = map[string]struct{}{
 		"count": {}, "sum": {}, "avg": {}, "min": {}, "max": {},
@@ -285,7 +285,7 @@ func validateDashboard(m *Manifest) []string {
 			continue
 		}
 		if _, ok := dashKinds[w.Kind]; !ok {
-			errs = append(errs, fmt.Sprintf("%s.kind %q is not one of stat|bar|line|area|pie|donut|list|progress|custom", where, w.Kind))
+			errs = append(errs, fmt.Sprintf("%s.kind %q is not one of stat|bar|line|area|pie|donut|list|progress|block|custom", where, w.Kind))
 		}
 		if w.Size != "" {
 			if _, ok := dashSizes[w.Size]; !ok {
@@ -296,6 +296,29 @@ func validateDashboard(m *Manifest) []string {
 			if _, ok := dashFormats[w.Format]; !ok {
 				errs = append(errs, fmt.Sprintf("%s.format %q is not one of number|currency|percent|compact", where, w.Format))
 			}
+		}
+
+		if w.RefreshS != 0 && w.RefreshS < MinWidgetRefreshS {
+			errs = append(errs, fmt.Sprintf("%s.refresh_s %d must be an integer >= %d (seconds)", where, w.RefreshS, MinWidgetRefreshS))
+		}
+		if w.Kind != "block" && hasJSON(w.UI) {
+			errs = append(errs, fmt.Sprintf("%s.ui is only allowed for kind=block (got kind=%s)", where, w.Kind))
+		}
+
+		if w.Kind == "block" {
+			// Documented kind: the body is a genui/v2 document (inline, or the
+			// expansion of a named block), validated exactly like a page body.
+			// The one-origin rule (ui XOR block) lives in validateBlockRefs.
+			if hasJSON(w.UI) {
+				errs = append(errs, validateUIDoc(where, w.UI, MaxWidgetUIBytes)...)
+			}
+			if w.Query != nil {
+				errs = append(errs, fmt.Sprintf("%s.query is not allowed for kind=block (its data lives in the ui document)", where))
+			}
+			if w.Expose != "" {
+				errs = append(errs, fmt.Sprintf("%s.expose is not allowed for kind=block (use kind=custom for a federated component)", where))
+			}
+			continue
 		}
 
 		if w.Kind == "custom" {
@@ -1751,10 +1774,15 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	}
 
 	if m.Contributions != nil {
-		errs = append(errs, validateDashboard(&m)...)
+		// Named blocks: validate the definitions and expand every ref FIRST;
+		// dashboard widgets and pages are then validated on the expansion,
+		// i.e. on exactly what the host serves.
+		expanded, blockErrs := validateBlockRefs(&m)
+		errs = append(errs, blockErrs...)
+		errs = append(errs, validateDashboard(expanded)...)
 		errs = append(errs, validateGuides(&m)...)
 		errs = append(errs, validateNavViewTypes(&m)...)
-		errs = append(errs, validatePages(&m)...)
+		errs = append(errs, validatePages(expanded)...)
 		errs = append(errs, validateDocuments(&m, colsByModel)...)
 		errs = append(errs, validatePublicRoutes(&m)...)
 		errs = append(errs, validateAPIRoutes(&m)...)
