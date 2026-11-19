@@ -46,6 +46,14 @@ type Config struct {
 	// false, or keep those models out of the org-scoped surface.
 	RequireTenantScope bool
 
+	// LenientFilters keeps the legacy behaviour for ONE release: a list/aggregate
+	// filter on an unknown column, with an unsupported operator or a malformed
+	// value is dropped (and logged as `filter.dropped`) instead of answering
+	// HTTP 400 (query.ErrUnknownFilter). A dropped filter returns more rows than
+	// the caller asked for, so leave this false unless a client still sends junk
+	// filters; it will be removed.
+	LenientFilters bool
+
 	// RequirePermissions makes a missing Permissions service DENY every
 	// request instead of allowing it. Without this, `perms == nil` fails OPEN:
 	// the safest default a host can pick is to fail closed, so a wiring
@@ -441,6 +449,7 @@ type Service struct {
 	requirePerms      bool
 	updateDeny        map[string][]string
 	requireTenant     bool
+	lenientFilters    bool
 	tableNameResolver TableNameResolver
 	bus               Publisher
 	addonKeyForModel  func(ctx context.Context, model string) string
@@ -540,6 +549,7 @@ func New(cfg Config) *Service {
 		updateDeny:        cfg.UpdateDenyFields,
 		requirePerms:      cfg.RequirePermissions || !(cfg.PermissionsEnforcedByHost || cfg.AllowUnconfiguredPermissions),
 		requireTenant:     cfg.RequireTenantScope,
+		lenientFilters:    cfg.LenientFilters,
 		hooks:             cfg.Hooks,
 		scope:             cfg.Scoper,
 		optsResolver:      cfg.OptionsConfigResolver,
@@ -637,6 +647,9 @@ func (s *Service) listBuilderOpts() []query.Option {
 	var opts []query.Option
 	if s.listSearchClause != nil {
 		opts = append(opts, query.WithSearchClause(query.SearchClause(s.listSearchClause)))
+	}
+	if s.lenientFilters {
+		opts = append(opts, query.WithLenientFilters())
 	}
 	return opts
 }
@@ -752,6 +765,9 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 	if rels, ok := instance.(modelbase.HasRelations); ok {
 		builder = builder.WithRelations(rels.DefineRelations())
 	}
+	if err := builder.CheckFilters(params); err != nil {
+		return nil, query.PageMeta{}, err
+	}
 	db = builder.Apply(db, params)
 
 	var total int64
@@ -853,6 +869,9 @@ func (s *Service) Aggregate(ctx context.Context, model string, user modelbase.Au
 		WithExtensions(queryExtensions(mask.extensions(exts)))
 	if rels, ok := instance.(modelbase.HasRelations); ok {
 		builder = builder.WithRelations(rels.DefineRelations())
+	}
+	if err := builder.CheckFilters(params); err != nil {
+		return nil, err
 	}
 	db = builder.ApplyForAggregate(db, params)
 

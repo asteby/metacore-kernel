@@ -623,6 +623,13 @@ func (h *Handler) handleError(c fiber.Ctx, err error) error {
 	if errors.Is(err, ErrInvalidTransition) {
 		return respondErr(c, fiber.StatusUnprocessableEntity, err.Error())
 	}
+	if errors.Is(err, query.ErrUnknownFilter) {
+		return c.Status(fiber.StatusBadRequest).JSON(withCorrelation(c, fiber.Map{
+			"success": false,
+			"message": err.Error(),
+			"code":    "unknown_filter",
+		}))
+	}
 	if errors.Is(err, ErrConstraintViolation) {
 		return respondErr(c, fiber.StatusUnprocessableEntity, err.Error())
 	}
