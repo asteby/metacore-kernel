@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/modelbase"
@@ -131,12 +132,20 @@ var seqPlaceholderRe = regexp.MustCompile(`\{seq(?::0(\d+))?\}`)
 // FormatSequence renders a sequence's Format template around the numeric value.
 // `{seq}` emits the bare number; `{seq:0N}` zero-pads to width N (e.g.
 // "A-{seq:06}" with 42 → "A-000042"). A template with no placeholder is returned
-// unchanged (validation rejects that shape at publish time).
+// unchanged (validation rejects that shape at publish time). Period and scope
+// tokens are left as written; use FormatSequenceAt to render them.
 func FormatSequence(format string, n int64) string {
+	return FormatSequenceAt(format, n, time.Time{}, "")
+}
+
+// FormatSequenceAt is FormatSequence plus the v2 tokens: {yyyy} {yy} {mm} {dd}
+// render the period date `at` (skipped when `at` is zero) and {scope} renders
+// the partition's scope value (skipped when empty).
+func FormatSequenceAt(format string, n int64, at time.Time, scope string) string {
 	if format == "" {
 		return strconv.FormatInt(n, 10)
 	}
-	return seqPlaceholderRe.ReplaceAllStringFunc(format, func(m string) string {
+	out := seqPlaceholderRe.ReplaceAllStringFunc(format, func(m string) string {
 		sub := seqPlaceholderRe.FindStringSubmatch(m)
 		if len(sub) == 2 && sub[1] != "" {
 			width, _ := strconv.Atoi(sub[1])
@@ -144,6 +153,92 @@ func FormatSequence(format string, n int64) string {
 		}
 		return strconv.FormatInt(n, 10)
 	})
+	if !at.IsZero() {
+		out = strings.NewReplacer(
+			"{yyyy}", at.Format("2006"), "{yy}", at.Format("06"),
+			"{mm}", at.Format("01"), "{dd}", at.Format("02"),
+		).Replace(out)
+	}
+	if scope != "" {
+		out = strings.ReplaceAll(out, "{scope}", scope)
+	}
+	return out
+}
+
+// sequenceNow is the clock period-scoped counters read (UTC). Tests swap it.
+var sequenceNow = func() time.Time { return time.Now().UTC() }
+
+// periodKey is the counter-partition suffix of a period: "" (none), "2026",
+// "2026-11" or "2026-11-19".
+func periodKey(period string, at time.Time) string {
+	switch period {
+	case "year":
+		return at.Format("2006")
+	case "month":
+		return at.Format("2006-01")
+	case "day":
+		return at.Format("2006-01-02")
+	}
+	return ""
+}
+
+// seqPartition is the resolved counter partition of one issuance: the value
+// stored in metacore_sequences.scope_value and the {scope} token text.
+type seqPartition struct {
+	value string // scope_value column: "<scope>" or "<scope>|<period>" or "<period>"
+	scope string // {scope} token
+	at    time.Time
+}
+
+// resolvePartition derives the partition of `spec` for one issuance.
+// `branch` is the branch id (user's or row's), `row` the record being numbered
+// (read for scope: column). An empty column value falls back to the org-wide
+// partition, mirroring the branch-less fallback.
+func resolvePartition(spec manifest.SequenceDef, branch string, row map[string]any) seqPartition {
+	at := sequenceNow()
+	p := seqPartition{at: at}
+	switch strings.ToLower(spec.Scope) {
+	case "branch":
+		p.scope = branch
+	case "column":
+		if v := row[spec.ScopeColumn]; v != nil {
+			if str := strings.TrimSpace(fmt.Sprint(v)); str != "" && str != nilUUIDString {
+				p.scope = str
+			}
+		}
+	}
+	p.value = p.scope
+	if pk := periodKey(spec.Period, at); pk != "" {
+		if p.value != "" {
+			p.value += "|"
+		}
+		p.value += pk
+	}
+	if spec.Period == "" || spec.Period == "none" {
+		p.at = time.Time{}
+	}
+	return p
+}
+
+func userBranch(user modelbase.AuthUser) string {
+	if b, ok := user.(interface{ GetBranchID() uuid.UUID }); ok {
+		if id := b.GetBranchID(); id != uuid.Nil {
+			return id.String()
+		}
+	}
+	return ""
+}
+
+// assignsOnCreate reports whether a sequence stamps its columns at create.
+func assignsOnCreate(spec manifest.SequenceDef) bool {
+	return spec.AssignOn == "" || spec.AssignOn == "create"
+}
+
+// assignsOnStage reports whether the sequence stamps when the record enters
+// `stage` (assign_on: "transition:<stage>").
+func assignsOnStage(spec manifest.SequenceDef, stage string) bool {
+	st, ok := strings.CutPrefix(spec.AssignOn, "transition:")
+	return ok && st == stage
 }
 
 // scopeValueFor derives the partition value for a sequence's scope. "branch"
@@ -163,7 +258,17 @@ func scopeValueFor(scope string, user modelbase.AuthUser) string {
 // NextSequence issues the next formatted folio for (model, key) in the user's
 // tenant, honoring the sequence's scope. It is the entry point a host wires into
 // the wasm `sequence_next` import and the dynamic engine uses for auto-stamping.
+// A `scope: column` sequence needs NextSequenceScoped (the partition value).
 func (s *Service) NextSequence(ctx context.Context, user modelbase.AuthUser, model, key string) (string, error) {
+	return s.NextSequenceScoped(ctx, user, model, key, "")
+}
+
+// NextSequenceScoped is NextSequence for a `scope: column` sequence: scopeValue
+// is the partition (the issuer id, the clinic) the folio is drawn from. For
+// org/branch sequences scopeValue is ignored. A gapless sequence is refused:
+// its guarantee only holds inside the numbered row's transaction, i.e. through
+// its bound columns.
+func (s *Service) NextSequenceScoped(ctx context.Context, user modelbase.AuthUser, model, key, scopeValue string) (string, error) {
 	ms, ok := s.resolveSequences(ctx, model)
 	if !ok {
 		return "", fmt.Errorf("dynamic: model %q declares no sequences", model)
@@ -172,15 +277,26 @@ func (s *Service) NextSequence(ctx context.Context, user modelbase.AuthUser, mod
 	if !ok {
 		return "", fmt.Errorf("dynamic: model %q has no sequence %q", model, key)
 	}
+	if spec.Gapless {
+		return "", fmt.Errorf("dynamic: sequence %q on %q is gapless: it is issued only through its bound column", key, model)
+	}
 	orgID := orgIDFromUser(user)
 	if orgID == uuid.Nil {
 		return "", fmt.Errorf("dynamic: sequence_next requires a bound org")
 	}
-	n, err := nextSequenceValue(ctx, s.db, orgID, scopeValueFor(spec.Scope, user), ms.counterModel(model), key)
+	row := map[string]any{}
+	if spec.Scope == "column" {
+		if strings.TrimSpace(scopeValue) == "" {
+			return "", fmt.Errorf("dynamic: sequence %q on %q is scope=column: scope_value is required", key, model)
+		}
+		row[spec.ScopeColumn] = scopeValue
+	}
+	part := resolvePartition(spec, userBranch(user), row)
+	n, err := nextSequenceValue(ctx, s.db, orgID, part.value, ms.counterModel(model), key)
 	if err != nil {
 		return "", err
 	}
-	return FormatSequence(spec.Format, n), nil
+	return FormatSequenceAt(spec.Format, n, part.at, part.scope), nil
 }
 
 // StampSequences is the wasm-side twin of assignSequences: it fills every
@@ -219,17 +335,21 @@ func (s *Service) StampSequences(ctx context.Context, tx *gorm.DB, orgID uuid.UU
 		if !ok {
 			return fmt.Errorf("dynamic: column %q binds unknown sequence %q on %q", col, key, model)
 		}
-		scopeValue := ""
-		if strings.EqualFold(spec.Scope, "branch") {
-			if id, err := uuid.Parse(fmt.Sprint(row["branch_id"])); err == nil && id != uuid.Nil {
-				scopeValue = id.String()
-			}
+		if !assignsOnCreate(spec) {
+			continue // issued when the record enters its stage
 		}
-		n, err := bumpSequence(ctx, tx, orgID, scopeValue, ms.counterModel(model), key)
+		// There is no AuthUser here, so a `scope: branch` sequence takes its
+		// partition from the row's own `branch_id`.
+		branch := ""
+		if id, err := uuid.Parse(fmt.Sprint(row["branch_id"])); err == nil && id != uuid.Nil {
+			branch = id.String()
+		}
+		part := resolvePartition(spec, branch, row)
+		n, err := bumpSequence(ctx, tx, orgID, part.value, ms.counterModel(model), key)
 		if err != nil {
 			return err
 		}
-		row[col] = FormatSequence(spec.Format, n)
+		row[col] = FormatSequenceAt(spec.Format, n, part.at, part.scope)
 	}
 	return nil
 }
@@ -246,17 +366,62 @@ func (s *Service) resolveSequences(ctx context.Context, model string) (*ModelSeq
 	return ms, true
 }
 
-// assignSequences stamps the next folio value onto every sequence-bound column
+// hasGaplessCreateBinding reports whether a create of `model` must number its
+// row inside the insert transaction (a gapless sequence bound to a column the
+// caller left empty).
+func (s *Service) hasGaplessCreateBinding(ctx context.Context, model string, input map[string]any) bool {
+	ms, ok := s.resolveSequences(ctx, model)
+	if !ok {
+		return false
+	}
+	for col, key := range ms.ColumnBindings {
+		if v, present := input[col]; present && v != nil && v != "" {
+			continue
+		}
+		if spec, ok := ms.spec(key); ok && spec.Gapless && assignsOnCreate(spec) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasTransitionSequences reports whether `model` declares a sequence issued on
+// entering a stage; Update then runs in a transaction so the number commits
+// with the row (gapless) and the stage move.
+func (s *Service) hasTransitionSequences(ctx context.Context, model string) bool {
+	ms, ok := s.resolveSequences(ctx, model)
+	if !ok {
+		return false
+	}
+	for _, key := range ms.ColumnBindings {
+		if spec, ok := ms.spec(key); ok && !assignsOnCreate(spec) {
+			return true
+		}
+	}
+	return false
+}
+
+// assignSequences stamps the next folio value onto every create-bound column
 // that the caller left empty, mutating `input` in place before the create write.
 // A column whose value the caller supplied is left untouched (an explicit folio
-// wins, e.g. during an ETL import of historical numbers).
-func (s *Service) assignSequences(ctx context.Context, model string, user modelbase.AuthUser, input map[string]any) error {
+// wins, e.g. during an ETL import of historical numbers). `db` is the handle the
+// counter runs on: nil = the service handle (autocommit, gap-tolerant); a
+// transaction numbers the row atomically with its insert. gapless selects which
+// half runs: false = the non-gapless sequences (before the insert transaction),
+// true = the gapless ones (inside it).
+func (s *Service) assignSequences(ctx context.Context, db *gorm.DB, model string, user modelbase.AuthUser, input map[string]any, gapless bool) error {
 	ms, ok := s.resolveSequences(ctx, model)
 	if !ok || len(ms.ColumnBindings) == 0 {
 		return nil
 	}
 	orgID := orgIDFromUser(user)
-	for col, key := range ms.ColumnBindings {
+	cols := make([]string, 0, len(ms.ColumnBindings))
+	for c := range ms.ColumnBindings {
+		cols = append(cols, c)
+	}
+	sort.Strings(cols)
+	for _, col := range cols {
+		key := ms.ColumnBindings[col]
 		if v, present := input[col]; present && v != nil && v != "" {
 			continue
 		}
@@ -264,11 +429,62 @@ func (s *Service) assignSequences(ctx context.Context, model string, user modelb
 		if !ok {
 			return fmt.Errorf("dynamic: column %q binds unknown sequence %q on %q", col, key, model)
 		}
-		n, err := nextSequenceValue(ctx, s.db, orgID, scopeValueFor(spec.Scope, user), ms.counterModel(model), key)
-		if err != nil {
+		if !assignsOnCreate(spec) || spec.Gapless != gapless {
+			continue
+		}
+		if err := s.stampOne(ctx, db, ms, spec, model, orgID, user, col, input, input); err != nil {
 			return err
 		}
-		input[col] = FormatSequence(spec.Format, n)
+	}
+	return nil
+}
+
+// stampOne issues one folio into dest[col]; `row` is the record the scope
+// column is read from.
+func (s *Service) stampOne(ctx context.Context, db *gorm.DB, ms *ModelSequences, spec manifest.SequenceDef, model string, orgID uuid.UUID, user modelbase.AuthUser, col string, row, dest map[string]any) error {
+	part := resolvePartition(spec, userBranch(user), row)
+	var n int64
+	var err error
+	if db != nil {
+		if err = ensureSequenceTable(s.db); err == nil {
+			n, err = bumpSequence(ctx, db, orgID, part.value, ms.counterModel(model), spec.Key)
+		}
+	} else {
+		n, err = nextSequenceValue(ctx, s.db, orgID, part.value, ms.counterModel(model), spec.Key)
+	}
+	if err != nil {
+		return err
+	}
+	dest[col] = FormatSequenceAt(spec.Format, n, part.at, part.scope)
+	return nil
+}
+
+// assignTransitionSequences issues, on `db` (the update transaction), the
+// folios of every column bound to a sequence with assign_on
+// "transition:<toStage>" whose current value is empty. merged is the record
+// as it will be (persisted ∪ patch); numbers are written into input.
+func (s *Service) assignTransitionSequences(ctx context.Context, db *gorm.DB, model string, user modelbase.AuthUser, toStage string, merged, input map[string]any) error {
+	ms, ok := s.resolveSequences(ctx, model)
+	if !ok {
+		return nil
+	}
+	cols := make([]string, 0, len(ms.ColumnBindings))
+	for c := range ms.ColumnBindings {
+		cols = append(cols, c)
+	}
+	sort.Strings(cols)
+	for _, col := range cols {
+		spec, ok := ms.spec(ms.ColumnBindings[col])
+		if !ok || !assignsOnStage(spec, toStage) {
+			continue
+		}
+		if v := merged[col]; v != nil && v != "" {
+			continue // already numbered (re-entering the stage keeps its folio)
+		}
+		if err := s.stampOne(ctx, db, ms, spec, model, orgIDFromUser(user), user, col, merged, input); err != nil {
+			return err
+		}
+		merged[col] = input[col]
 	}
 	return nil
 }

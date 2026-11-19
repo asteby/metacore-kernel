@@ -1591,9 +1591,13 @@ type GrantDef struct {
 // SequenceDef is the host/runtime projection of a v3 Model.Sequence: an atomic
 // folio counter the kernel maintains per org (or branch). See manifest/v3.Sequence.
 type SequenceDef struct {
-	Key    string `json:"key"`
-	Scope  string `json:"scope,omitempty"`
-	Format string `json:"format"`
+	Key         string `json:"key"`
+	Scope       string `json:"scope,omitempty"`
+	ScopeColumn string `json:"scopeColumn,omitempty"`
+	Period      string `json:"period,omitempty"`
+	Gapless     bool   `json:"gapless,omitempty"`
+	AssignOn    string `json:"assignOn,omitempty"`
+	Format      string `json:"format"`
 }
 
 // ConstraintDef is the host/runtime projection of a v3 Column.Constraint: a

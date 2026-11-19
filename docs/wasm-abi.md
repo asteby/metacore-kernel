@@ -29,6 +29,7 @@ keep them in sync.
 | 1.4     | proposal | adds `data_mutate` host import; ONE org-scoped row mutation (`create` / `update` / `delete` with atomic `inc`) against a LOGICAL table resolved through the embedder-injected `TableResolver` (NOT the addon-schema `search_path`), followed by a post-commit `*dynamic.CanonicalEvent` on the host bus. Gated by `db:write <logical table>`. |
 | 1.5     | proposal | adds `data_query` host import; read-only sibling of `data_mutate`: ONE org-scoped, equality-filtered SELECT against a LOGICAL table resolved through the SAME `TableResolver` (NOT the addon-schema `search_path` of `db_query`, whose shadow schemas hold no live rows in embedding hosts). Soft-delete aware (`deleted_at IS NULL` auto-appended). Gated by `db:read <logical table>`. No events. |
 | 1.11    | proposal | adds `ctx_get` (read-only execution context: acting user id/email, role keys, the org's currency/tax/locale/timezone — the `env.user` / `env.company` of an Odoo module), each slice gated by a `ctx:user` / `ctx:roles` / `ctx:org_config` manifest capability, and makes `data_mutate` / `data_batch` **create** stamp the model's declared sequence-bound columns (folios) exactly like `POST /data` when the embedder wires `Host.WithSequenceStamp`. Additive: guests built against 1.0 – 1.10 keep working; a guest that already passes the folio (or mints it with `sequence_next`) is unaffected. See § 20 and § 14.10. |
+| 1.21    | proposal | `sequence_next` (§ 17) accepts an optional `scope_value` (the partition of a `scope: column` sequence: issuer, clinic) and the host formats the v2 tokens `{yyyy}` `{yy}` `{mm}` `{dd}` `{scope}`; `Host.WithSequenceNextScoped` wires it (`dynamic.Service.NextSequenceScoped`). Additive: a request without `scope_value` is the 1.11 request; a host wired only with `WithSequenceNext` refuses a request that carries one (`scope_unsupported`). A `gapless` sequence is refused by `sequence_next` (its guarantee only holds through its bound column). `data_mutate`/`data_batch` create honours `scope_column`, `period` and `assign_on: create` through `WithSequenceStamp`. |
 | 1.12    | proposal | when the embedder wires `Host.WithStageMachine`, `data_mutate` / `data_batch` refuse a create or update that is not a declared stage transition (`invalid_transition`), the same rule as `dynamic.Service` Create/Update. Incrementing the lifecycle column is refused. Unwired hosts keep the previous behaviour. See § 14.11. |
 | 1.13    | proposal | when the embedder wires `Host.WithExtensions`, `data_mutate` / `data_batch` / `data_query` accept `"<Ext>.<column>"` (and a nested object under the extension key) and read or write the 1:1 extension table instead of the owner table. Unwired hosts still reject a dotted column name. See § 14.12 and § 15.9. |
 | 1.14    | proposal | `data_mutate` / `data_query` / `data_batch` copy `dynamic.CorrelationIDFromContext` onto `meta.correlation_id` and, on failure, onto `error.correlation_id`. The field is absent when the invocation context has no id. `envelopeVersion` stays `1`. See § 14.13. |
@@ -2271,8 +2272,13 @@ sequence_next(reqPtr: u32, reqLen: u32) -> u64   // ptr|len envelope
 ### 17.2 Request contract
 
 ```json
-{ "model": "sales_orders", "key": "folio" }
+{ "model": "sales_orders", "key": "folio", "scope_value": "<issuer id>" }
 ```
+
+`scope_value` (v1.21, optional) is the partition of a `scope: "column"`
+sequence (one series per issuer / clinic) and is required for those; it is
+ignored for org/branch sequences. A `gapless` sequence cannot be drawn here
+(`sequence_error`): its number is issued inside the numbered row's transaction.
 
 `organization_id` is deliberately absent — tenant scope ALWAYS comes from the
 invocation context, same rule as `data_mutate` (§ 14). The `(model, key)` pair

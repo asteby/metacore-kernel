@@ -17,6 +17,8 @@ const DataSequenceEnvelopeVersion = 1
 type sequenceNextRequest struct {
 	Model string `json:"model"`
 	Key   string `json:"key"`
+	// ScopeValue (ABI 1.21) is the partition of a `scope: column` sequence.
+	ScopeValue string `json:"scope_value,omitempty"`
 }
 
 // executeSequenceNext issues the next formatted folio value for (model, key) in
@@ -48,7 +50,7 @@ func executeSequenceNext(ctx context.Context, inv *invocation, reqJSON []byte) [
 	if req.Model == "" || req.Key == "" {
 		return fail("invalid_request", "model and key are required")
 	}
-	if inv.sequenceNext == nil {
+	if inv.sequenceNext == nil && inv.sequenceScoped == nil {
 		return fail("sequence_unavailable", "host has no sequence backend configured")
 	}
 	if orgID == uuid.Nil {
@@ -65,7 +67,16 @@ func executeSequenceNext(ctx context.Context, inv *invocation, reqJSON []byte) [
 		}
 	}
 
-	value, err := inv.sequenceNext(ctx, orgID, req.Model, req.Key)
+	var value string
+	var err error
+	switch {
+	case inv.sequenceScoped != nil:
+		value, err = inv.sequenceScoped(ctx, orgID, req.Model, req.Key, req.ScopeValue)
+	case req.ScopeValue != "":
+		return fail("scope_unsupported", "host sequence backend does not support scope_value (needs ABI 1.21 Host.WithSequenceNextScoped)")
+	default:
+		value, err = inv.sequenceNext(ctx, orgID, req.Model, req.Key)
+	}
 	if err != nil {
 		return fail("sequence_error", err.Error())
 	}
