@@ -2,9 +2,11 @@ package dynamic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -183,13 +185,13 @@ func TestSequencesV2_CON01_ConcurrentCreates(t *testing.T) {
 		}
 	}
 	for _, gapless := range []bool{false, true} {
-		t.Run(fmt.Sprintf("SQLite/gapless=%v", gapless), func(t *testing.T) {
+		t.Run(fmt.Sprintf("SQLite_gapless=%v", gapless), func(t *testing.T) {
 			db := setupTestDB(t)
 			sqlDB, _ := db.DB()
 			sqlDB.SetMaxOpenConns(1)
 			run(t, db, gapless)
 		})
-		t.Run(fmt.Sprintf("Postgres/gapless=%v", gapless), func(t *testing.T) {
+		t.Run(fmt.Sprintf("Postgres_gapless=%v", gapless), func(t *testing.T) {
 			dsn := os.Getenv("TEST_POSTGRES_DSN")
 			if dsn == "" {
 				t.Skip("TEST_POSTGRES_DSN not set")
@@ -210,7 +212,13 @@ func TestSequencesV2_CON01_ConcurrentCreates(t *testing.T) {
 }
 
 // assign_on: transition:<stage> numera al entrar a la etapa, no al crear.
-func TestSequencesV2_AssignOnTransition(t *testing.T) {
+type transitionSeqFixture struct {
+	svc  *Service
+	user *fakeUser
+}
+
+func newTransitionSeqFixture(t *testing.T) *transitionSeqFixture {
+	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{DisableForeignKeyConstraintWhenMigrating: true})
 	if err != nil {
 		t.Fatal(err)
@@ -241,8 +249,13 @@ func TestSequencesV2_AssignOnTransition(t *testing.T) {
 			return ms, m == "test_orders"
 		},
 	})
+	return &transitionSeqFixture{svc: svc, user: newUser(uuid.New())}
+}
+
+func TestSequencesV2_AssignOnTransition(t *testing.T) {
+	f := newTransitionSeqFixture(t)
+	svc, user := f.svc, f.user
 	ctx := context.Background()
-	user := newUser(uuid.New())
 	mk := func() uuid.UUID {
 		out, err := svc.Create(ctx, "test_orders", user, map[string]any{"status": "draft"})
 		if err != nil {
@@ -269,5 +282,75 @@ func TestSequencesV2_AssignOnTransition(t *testing.T) {
 	}
 	if got := post(a); got != "P-0002" {
 		t.Fatalf("a cancelled draft must not burn a number; got %s", got)
+	}
+}
+
+// {scope} con la columna de scope vacia: 422, nunca "{scope}-001".
+func TestSequencesV2_EmptyScopeTokenRejected(t *testing.T) {
+	db := setupTestDB(t)
+	svc := sequenceService(t, db, folioV2(manifest.SequenceDef{
+		Scope: "column", ScopeColumn: "product_specs", Format: "{scope}-{seq:03}",
+	}))
+	_, err := svc.Create(context.Background(), "test_products", newUser(uuid.New()), map[string]any{"price": 1.0})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("empty scope with {scope}: %v, want validation error", err)
+	}
+	if _, ok := ve.Fields["product_specs"]; !ok {
+		t.Fatalf("error must name the scope column: %+v", ve.Fields)
+	}
+}
+
+// Un scope largo + periodo desborda varchar(64) en Postgres: se reemplaza por
+// un hash estable (misma entrada => misma serie).
+func TestSequencesV2_LongScopeIsHashed(t *testing.T) {
+	long := strings.Repeat("x", 90)
+	spec := manifest.SequenceDef{Scope: "column", ScopeColumn: "c", Period: "day", Format: "{seq}"}
+	at := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	a, err := resolvePartition(spec, "", map[string]any{"c": long}, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := resolvePartition(spec, "", map[string]any{"c": long}, at)
+	c, _ := resolvePartition(spec, "", map[string]any{"c": long + "y"}, at)
+	if len(a.value) > 64 || a.value != b.value || a.value == c.value {
+		t.Fatalf("hash partition: %q %q %q", a.value, b.value, c.value)
+	}
+}
+
+// Un POST que crea directo en la etapa de assign_on recibe su folio al crear.
+func TestSequencesV2_CreateDirectlyInAssignOnStage(t *testing.T) {
+	f := newTransitionSeqFixture(t)
+	out, err := f.svc.Create(context.Background(), "test_orders", f.user, map[string]any{"status": "posted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out["reference"] != "P-0001" {
+		t.Fatalf("born in posted must be numbered, got %v", out["reference"])
+	}
+}
+
+// En gapless un folio explicito del cliente se rechaza (protected_field).
+func TestSequencesV2_GaplessRejectsExplicitFolio(t *testing.T) {
+	db := setupTestDB(t)
+	svc := sequenceService(t, db, folioV2(manifest.SequenceDef{Gapless: true, Format: "G-{seq:03}"}))
+	_, err := svc.Create(context.Background(), "test_products", newUser(uuid.New()), map[string]any{"name": "HACK-1", "price": 1.0})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("explicit gapless folio: %v, want protected_field", err)
+	}
+}
+
+// Config.SequenceClock corta el periodo en el calendario de la organizacion.
+func TestSequencesV2_SequenceClockHook(t *testing.T) {
+	db := setupTestDB(t)
+	svc := sequenceService(t, db, folioV2(manifest.SequenceDef{Period: "day", Format: "{yyyy}{mm}{dd}-{seq:02}"}))
+	// 2026-03-09 23:30 UTC es 2026-03-10 en una zona UTC+2.
+	svc.sequenceClock = func(context.Context, uuid.UUID) time.Time {
+		return time.Date(2026, 3, 9, 23, 30, 0, 0, time.UTC).In(time.FixedZone("x", 2*3600))
+	}
+	got, err := svc.NextSequence(context.Background(), newUser(uuid.New()), "test_products", "folio")
+	if err != nil || got != "20260310-01" {
+		t.Fatalf("org-calendar day: %q %v", got, err)
 	}
 }

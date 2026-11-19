@@ -52,6 +52,12 @@ type Config struct {
 	// through the dynamic runtime. Writes are not covered by this flag.
 	RequireTenantScope bool
 
+	// SequenceClock returns the instant period-scoped sequences (period: year|
+	// month|day) are cut on for an organization. nil = UTC. Wire it to the
+	// org's timezone before using a period in a fiscal series: a UTC cut makes
+	// the folio's day/year roll over hours away from the business's midnight.
+	SequenceClock func(ctx context.Context, orgID uuid.UUID) time.Time
+
 	// LenientFilters keeps the legacy behaviour for ONE release: a list/aggregate
 	// filter on an unknown column, with an unsupported operator or a malformed
 	// value is dropped (and logged as `filter.dropped`) instead of answering
@@ -465,6 +471,7 @@ type Service struct {
 	requireTenant     bool
 	lenientFilters    bool
 	strictStageCreate bool
+	sequenceClock     func(ctx context.Context, orgID uuid.UUID) time.Time
 	tableNameResolver TableNameResolver
 	bus               Publisher
 	addonKeyForModel  func(ctx context.Context, model string) string
@@ -566,6 +573,7 @@ func New(cfg Config) *Service {
 		requireTenant:     cfg.RequireTenantScope,
 		lenientFilters:    cfg.LenientFilters,
 		strictStageCreate: cfg.StrictStageCreate,
+		sequenceClock:     cfg.SequenceClock,
 		hooks:             cfg.Hooks,
 		scope:             cfg.Scoper,
 		optsResolver:      cfg.OptionsConfigResolver,
@@ -1120,6 +1128,9 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	// autocommit statement (a failed INSERT below can skip one); a GAPLESS one is
 	// drawn inside the insert transaction below, so a failed insert releases it.
 	// An explicitly-supplied value wins (ETL imports keep historical numbers).
+	if err := s.rejectExplicitGapless(ctx, model, user, input); err != nil {
+		return nil, err
+	}
 	gapless := s.hasGaplessCreateBinding(ctx, model, input)
 	if err := s.assignSequences(ctx, nil, model, user, input, false); err != nil {
 		return nil, err

@@ -2,6 +2,8 @@ package dynamic
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"sort"
@@ -190,12 +192,13 @@ type seqPartition struct {
 	at    time.Time
 }
 
-// resolvePartition derives the partition of `spec` for one issuance.
-// `branch` is the branch id (user's or row's), `row` the record being numbered
-// (read for scope: column). An empty column value falls back to the org-wide
-// partition, mirroring the branch-less fallback.
-func resolvePartition(spec manifest.SequenceDef, branch string, row map[string]any) seqPartition {
-	at := sequenceNow()
+// resolvePartition derives the partition of `spec` for one issuance at time
+// `at` (the period is cut on that clock; see Service.seqNow). `branch` is the
+// branch id (user's or row's), `row` the record being numbered (read for
+// scope: column). An empty scope falls back to the org-wide partition, EXCEPT
+// when the format renders {scope}: a folio like "{scope}-001" must never be
+// issued, so that case is a 422 on the scope column.
+func resolvePartition(spec manifest.SequenceDef, branch string, row map[string]any, at time.Time) (seqPartition, error) {
 	p := seqPartition{at: at}
 	switch strings.ToLower(spec.Scope) {
 	case "branch":
@@ -207,6 +210,15 @@ func resolvePartition(spec manifest.SequenceDef, branch string, row map[string]a
 			}
 		}
 	}
+	if p.scope == "" && strings.Contains(spec.Format, "{scope}") {
+		field := spec.ScopeColumn
+		if field == "" {
+			field = "branch_id"
+		}
+		ve := &ValidationError{}
+		ve.add(field, codeRequired, map[string]any{"sequence": spec.Key})
+		return p, ve
+	}
 	p.value = p.scope
 	if pk := periodKey(spec.Period, at); pk != "" {
 		if p.value != "" {
@@ -214,10 +226,26 @@ func resolvePartition(spec manifest.SequenceDef, branch string, row map[string]a
 		}
 		p.value += pk
 	}
+	// metacore_sequences.scope_value is varchar(64): SQLite does not enforce
+	// it, Postgres does. A longer partition is replaced by a stable hash.
+	if len(p.value) > 64 {
+		sum := sha256.Sum256([]byte(p.value))
+		p.value = "h:" + hex.EncodeToString(sum[:])[:40]
+	}
 	if spec.Period == "" || spec.Period == "none" {
 		p.at = time.Time{}
 	}
-	return p
+	return p, nil
+}
+
+// seqNow is the instant period-scoped counters are cut on. Default: UTC. A
+// host wires Config.SequenceClock to cut on the organization's own calendar
+// (a fiscal "day"/"year" must follow the org timezone, not UTC).
+func (s *Service) seqNow(ctx context.Context, orgID uuid.UUID) time.Time {
+	if s.sequenceClock != nil {
+		return s.sequenceClock(ctx, orgID)
+	}
+	return sequenceNow()
 }
 
 func userBranch(user modelbase.AuthUser) string {
@@ -232,6 +260,13 @@ func userBranch(user modelbase.AuthUser) string {
 // assignsOnCreate reports whether a sequence stamps its columns at create.
 func assignsOnCreate(spec manifest.SequenceDef) bool {
 	return spec.AssignOn == "" || spec.AssignOn == "create"
+}
+
+// assignsAtCreate reports whether the sequence stamps on a CREATE: assign_on
+// create, or assign_on transition:<stage> when the row is created directly in
+// that stage (no transition will ever fire for it).
+func assignsAtCreate(spec manifest.SequenceDef, createStage string) bool {
+	return assignsOnCreate(spec) || (createStage != "" && assignsOnStage(spec, createStage))
 }
 
 // assignsOnStage reports whether the sequence stamps when the record enters
@@ -291,7 +326,10 @@ func (s *Service) NextSequenceScoped(ctx context.Context, user modelbase.AuthUse
 		}
 		row[spec.ScopeColumn] = scopeValue
 	}
-	part := resolvePartition(spec, userBranch(user), row)
+	part, err := resolvePartition(spec, userBranch(user), row, s.seqNow(ctx, orgID))
+	if err != nil {
+		return "", err
+	}
 	n, err := nextSequenceValue(ctx, s.db, orgID, part.value, ms.counterModel(model), key)
 	if err != nil {
 		return "", err
@@ -335,7 +373,7 @@ func (s *Service) StampSequences(ctx context.Context, tx *gorm.DB, orgID uuid.UU
 		if !ok {
 			return fmt.Errorf("dynamic: column %q binds unknown sequence %q on %q", col, key, model)
 		}
-		if !assignsOnCreate(spec) {
+		if !assignsAtCreate(spec, s.createStageOf(ctx, model, row)) {
 			continue // issued when the record enters its stage
 		}
 		// There is no AuthUser here, so a `scope: branch` sequence takes its
@@ -344,7 +382,10 @@ func (s *Service) StampSequences(ctx context.Context, tx *gorm.DB, orgID uuid.UU
 		if id, err := uuid.Parse(fmt.Sprint(row["branch_id"])); err == nil && id != uuid.Nil {
 			branch = id.String()
 		}
-		part := resolvePartition(spec, branch, row)
+		part, err := resolvePartition(spec, branch, row, s.seqNow(ctx, orgID))
+		if err != nil {
+			return err
+		}
 		n, err := bumpSequence(ctx, tx, orgID, part.value, ms.counterModel(model), key)
 		if err != nil {
 			return err
@@ -378,7 +419,7 @@ func (s *Service) hasGaplessCreateBinding(ctx context.Context, model string, inp
 		if v, present := input[col]; present && v != nil && v != "" {
 			continue
 		}
-		if spec, ok := ms.spec(key); ok && spec.Gapless && assignsOnCreate(spec) {
+		if spec, ok := ms.spec(key); ok && spec.Gapless && assignsAtCreate(spec, s.createStageOf(ctx, model, input)) {
 			return true
 		}
 	}
@@ -429,7 +470,7 @@ func (s *Service) assignSequences(ctx context.Context, db *gorm.DB, model string
 		if !ok {
 			return fmt.Errorf("dynamic: column %q binds unknown sequence %q on %q", col, key, model)
 		}
-		if !assignsOnCreate(spec) || spec.Gapless != gapless {
+		if !assignsAtCreate(spec, s.createStageOf(ctx, model, input)) || spec.Gapless != gapless {
 			continue
 		}
 		if err := s.stampOne(ctx, db, ms, spec, model, orgID, user, col, input, input); err != nil {
@@ -442,9 +483,11 @@ func (s *Service) assignSequences(ctx context.Context, db *gorm.DB, model string
 // stampOne issues one folio into dest[col]; `row` is the record the scope
 // column is read from.
 func (s *Service) stampOne(ctx context.Context, db *gorm.DB, ms *ModelSequences, spec manifest.SequenceDef, model string, orgID uuid.UUID, user modelbase.AuthUser, col string, row, dest map[string]any) error {
-	part := resolvePartition(spec, userBranch(user), row)
+	part, err := resolvePartition(spec, userBranch(user), row, s.seqNow(ctx, orgID))
+	if err != nil {
+		return err
+	}
 	var n int64
-	var err error
 	if db != nil {
 		if err = ensureSequenceTable(s.db); err == nil {
 			n, err = bumpSequence(ctx, db, orgID, part.value, ms.counterModel(model), spec.Key)
@@ -487,4 +530,41 @@ func (s *Service) assignTransitionSequences(ctx context.Context, db *gorm.DB, mo
 		merged[col] = input[col]
 	}
 	return nil
+}
+
+// createStageOf is the stage a row is being created in ("" without a stage
+// machine or when the input does not name one).
+func (s *Service) createStageOf(ctx context.Context, model string, input map[string]any) string {
+	sm := s.resolveStageMachine(ctx, model)
+	if sm == nil {
+		return ""
+	}
+	return StageValue(input[sm.Field])
+}
+
+// rejectExplicitGapless refuses a client-supplied value in a column bound to a
+// GAPLESS sequence: an explicit folio would either leave a hole in the series
+// or collide with a later number. The system principal (ETL / historical
+// imports) is exempt, like on every other protected path.
+func (s *Service) rejectExplicitGapless(ctx context.Context, model string, user modelbase.AuthUser, input map[string]any) error {
+	if _, ok := user.(systemPrincipal); ok {
+		return nil
+	}
+	ms, ok := s.resolveSequences(ctx, model)
+	if !ok {
+		return nil
+	}
+	ve := &ValidationError{}
+	for col, key := range ms.ColumnBindings {
+		if v, present := input[col]; !present || v == nil || v == "" {
+			continue
+		}
+		if spec, ok := ms.spec(key); ok && spec.Gapless {
+			ve.add(col, codeProtected, map[string]any{"sequence": key})
+		}
+	}
+	if ve.Empty() {
+		return nil
+	}
+	return ve
 }

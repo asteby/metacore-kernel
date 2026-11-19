@@ -44,6 +44,10 @@ jobs:
           go-version: '1.27'
           cache: true
       - run: go test -count=1 -v -run 'Postgres' ./dynamic/
+      # CON-01 (50 creaciones concurrentes) vive en subtests ".../Postgres_*": el
+      # `-run 'Postgres'` de arriba solo mira nombres de nivel superior y no lo
+      # ejecuta. `-count=1` y -v dejan ver que NO se salta.
+      - run: go test -count=1 -v -run 'SequencesV2_CON01/Postgres' ./dynamic/ | tee con01.log && ! grep -q -- '--- SKIP' con01.log && grep -q -- '--- PASS: TestSequencesV2_CON01/Postgres' con01.log
       # El installer también tiene tests que necesitan Postgres real (gated por
       # TEST_POSTGRES_DSN y que, sin esto, se SALTAN en silencio): el pre-flight de
       # Upgrade (rollback sin tocar la versión instalada), las columnas de
