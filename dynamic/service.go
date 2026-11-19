@@ -34,16 +34,22 @@ type Config struct {
 	// RequirePermissions turns it into a hard denial — see below.
 	Permissions *permission.Service
 
-	// RequireTenantScope makes the options/search readers REFUSE to answer when
-	// they could not apply tenant scoping, instead of quietly returning rows
-	// across every organization. Two cases stop being silent:
+	// RequireTenantScope makes every tenant-scoped reader — List, Aggregate,
+	// Get, Facets, Options and Search — REFUSE to answer (ErrTenantScopeUnavailable,
+	// HTTP 403) when they could not apply tenant scoping, instead of quietly
+	// returning rows across every organization. Two cases stop being silent:
 	//
 	//   - no user on the request, for a model that IS org-scoped;
 	//   - a model with no organization_id column at all, which for a
 	//     multi-tenant host usually means a manifest forgot to declare it.
 	//
-	// Hosts with genuinely global catalogues (countries, currencies) leave it
-	// false, or keep those models out of the org-scoped surface.
+	// Multi-tenant hosts (ops) SHOULD set it: Postgres RLS is not a boundary
+	// today, so this Go-side scope is the only isolation. Default false keeps
+	// the legacy behaviour for single-tenant hosts. Hosts with genuinely global
+	// catalogues (countries, currencies) either leave it false or keep those
+	// models out of the org-scoped surface — there is no per-model allowlist
+	// yet, so enabling it makes every model without organization_id unreadable
+	// through the dynamic runtime. Writes are not covered by this flag.
 	RequireTenantScope bool
 
 	// LenientFilters keeps the legacy behaviour for ONE release: a list/aggregate
@@ -751,7 +757,10 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 		return nil, query.PageMeta{}, err
 	}
 	db := s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance)
-	db = s.scope.ScopeQuery(db, user)
+	db, err = s.scopeRead(db, instance, user)
+	if err != nil {
+		return nil, query.PageMeta{}, err
+	}
 
 	// Wire relations into the builder so ?with= preloads and
 	// f_<relation>.<field> filters work without callers having to plumb
@@ -857,7 +866,10 @@ func (s *Service) Aggregate(ctx context.Context, model string, user modelbase.Au
 	params.SortBy = ""
 
 	db := s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance)
-	db = s.scope.ScopeQuery(db, user)
+	db, err = s.scopeRead(db, instance, user)
+	if err != nil {
+		return nil, err
+	}
 	// The footer scans into a map (no schema) — mirror Find's soft-delete
 	// filter or totals include rows the list never shows.
 	db = scopeSoftDelete(db, instance)
@@ -946,7 +958,10 @@ func (s *Service) getRow(ctx context.Context, model string, user modelbase.AuthU
 		return nil, err
 	}
 	db := s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance)
-	db = s.scope.ScopeQuery(db, user)
+	db, err = s.scopeRead(db, instance, user)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := db.First(instance, "id = ?", id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -1875,6 +1890,18 @@ func (s *Service) scopeOrDeny(db *gorm.DB, instance any, user modelbase.AuthUser
 		}
 		return db, nil
 	}
+}
+
+// scopeRead scopes a List/Aggregate/Get read. Without RequireTenantScope it is
+// exactly the host's ScopeQuery (unchanged legacy behaviour); with it, the read
+// goes through scopeOrDeny so a model with no organization_id column, or no
+// user on an org-scoped model, answers ErrTenantScopeUnavailable instead of
+// running unscoped (or failing with a SQL error).
+func (s *Service) scopeRead(db *gorm.DB, instance any, user modelbase.AuthUser) (*gorm.DB, error) {
+	if s.requireTenant {
+		return s.scopeOrDeny(db, instance, user)
+	}
+	return s.scope.ScopeQuery(db, user), nil
 }
 
 // checkPerm gates one model+action for one user.
