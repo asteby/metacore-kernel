@@ -156,17 +156,18 @@ func (s *Service) Facets(ctx context.Context, user modelbase.AuthUser, q FacetsQ
 
 // facetOwnerScope is the owner model's table under the caller's org/branch
 // scope and without soft-deleted rows — the set the list the chips filter
-// shows. Table resolution mirrors queryDynamicOptions; tenant scoping fires
-// only when the model carries an organization_id column (hasOrgColumn). No
+// shows. Table resolution mirrors queryDynamicOptions; tenant scoping goes through
+// scopeOrDeny: it fires when the model carries an organization_id column and,
+// under Config.RequireTenantScope, an unscopable read is refused. No
 // .Model(instance): facets scan into facetRow, not the model struct.
 func (s *Service) facetOwnerScope(ctx context.Context, user modelbase.AuthUser, model string, instance any) (*gorm.DB, error) {
 	tableName, err := s.tableNameFor(ctx, model, instance)
 	if err != nil {
 		return nil, err
 	}
-	db := s.db.WithContext(ctx).Table(tableName)
-	if user != nil && hasOrgColumn(instance) {
-		db = s.scope.ScopeQuery(db, user)
+	db, err := s.scopeOrDeny(s.db.WithContext(ctx).Table(tableName), instance, user)
+	if err != nil {
+		return nil, err
 	}
 	return scopeSoftDelete(db, instance), nil
 }

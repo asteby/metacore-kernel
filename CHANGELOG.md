@@ -14,6 +14,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- `dynamic` (**P1-F1 tenancy, aditivo; solo cambia con `Config.RequireTenantScope: true`**): `RequireTenantScope` ahora cubre TODOS los lectores con alcance de tenant: `List`, `Aggregate`, `Get`, `Facets` (`facetOwnerScope` pasa por `scopeOrDeny`, antes omitia el alcance sin usuario o sin `organization_id`), `Options` y `Search`. Un modelo sin `organization_id`, o un modelo de org sin usuario, responde `ErrTenantScopeUnavailable` (403) en vez de leer entre organizaciones (o fallar con un error SQL). Documentado en `Config.RequireTenantScope`: los hosts multi-tenant deben activarlo (RLS no es frontera hoy); no hay allowlist por modelo aun, asi que los modelos globales quedan ilegibles con el flag. Las escrituras no estan cubiertas. Pruebas: `dynamic/require_tenant_scope_test.go`.
+
 - `query`, `dynamic` (**cambio de comportamiento, minor; P2 filtros estrictos / SEG-01**): un filtro de lista/agregado que no se puede aplicar (columna desconocida o insegura, operador no soportado, valor mal formado para su operador, relacion o campo de relacion desconocido) ya NO se ignora en silencio —lo que devolvia todas las filas— sino que `Service.List`/`Aggregate` responden `query.ErrUnknownFilter` (HTTP 400, `code: "unknown_filter"`). Nuevo `Builder.CheckFilters(params)` (`Apply*` conserva firma y sigue descartando; el valor vacio `f_col=` sigue siendo "sin filtro"). **Salida por un release**: `dynamic.Config.LenientFilters` / `query.WithLenientFilters()` restauran el descarte y registran cada filtro con `filter.dropped`; se retirara. Pruebas: `dynamic/strict_filters_test.go`, `query/builder_test.go`.
 
 ### Fixed
