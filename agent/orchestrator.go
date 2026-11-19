@@ -1798,8 +1798,19 @@ func unbackedClaim(registry *tools.ToolRegistry, msg string, succeeded map[strin
 	if registry == nil || m == "" {
 		return ""
 	}
+	covered := map[string]bool{}
 	for _, t := range registry.List() {
-		if succeeded[t.Name()] {
+		if !succeeded[t.Name()] {
+			continue
+		}
+		if sat, ok := tools.As[tools.OutcomeSatisfier](t); ok {
+			for _, n := range sat.SatisfiesOutcomes() {
+				covered[n] = true
+			}
+		}
+	}
+	for _, t := range registry.List() {
+		if succeeded[t.Name()] || covered[t.Name()] {
 			continue
 		}
 		for _, re := range claimPatterns(t) {

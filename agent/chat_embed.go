@@ -7,12 +7,13 @@ import (
 	"strings"
 
 	"github.com/asteby/metacore-kernel/genui"
+	genuiv2 "github.com/asteby/metacore-kernel/genui/v2"
 	"github.com/asteby/metacore-kernel/vector"
 )
 
 // ChatEmbed is a clickable record/view card or a live chart shown under Aby's reply.
 type ChatEmbed struct {
-	Type          string     `json:"type"` // record | view | count | chart | image
+	Type          string     `json:"type"` // record | view | count | chart | image | ui | text
 	Model         string     `json:"model"`
 	ModelTitle    string     `json:"model_title,omitempty"`
 	ID            string     `json:"id,omitempty"`
@@ -32,6 +33,17 @@ type ChatEmbed struct {
 	// links, timelines, charts or a confirmation form drawn from the SDK's
 	// whitelist. Any tool whose result carries a "ui" key produces one.
 	UI *genui.Spec `json:"ui,omitempty"`
+	// Version is the contract of the document a "ui" embed carries: "genui/v2"
+	// (document in UIV2) or empty/"genui/v1" (document in UI). A client reads
+	// the field that Version names.
+	Version string `json:"version,omitempty"`
+	// UIV2 is a validated genui/v2 document (Type "ui", Version "genui/v2"): the
+	// SAME blocks the pages and the dashboard render, from show_ui.
+	UIV2 genuiv2.Doc `json:"ui_v2,omitempty"`
+	// Fallback is the plain-text rendition of the embed for clients that cannot
+	// draw it (voice, WhatsApp, old apps). DowngradeEmbeds turns an embed the
+	// client cannot render into Type "text" carrying only this.
+	Fallback string `json:"fallback,omitempty"`
 }
 
 const maxRecordEmbeds = 2
@@ -75,10 +87,23 @@ func (q *QueryResult) LLMText() string {
 // charts, images) using the host's ModelRegistry for labels.
 type EmbedBuilder struct {
 	models ModelRegistry
+	// uiOpts validate a genui/v2 "ui" that arrives from a tool OTHER than
+	// show_ui (show_ui's own result was already validated by its profile).
+	uiOpts genuiv2.Options
 }
 
 // NewEmbedBuilder returns a builder bound to the host's registry.
-func NewEmbedBuilder(models ModelRegistry) *EmbedBuilder { return &EmbedBuilder{models: models} }
+func NewEmbedBuilder(models ModelRegistry) *EmbedBuilder {
+	return &EmbedBuilder{models: models, uiOpts: genuiv2.AgentProfile().Options()}
+}
+
+// SetUIOptions replaces how a genui/v2 "ui" from a foreign tool is validated
+// (default: the agent profile with external links off). A host that widens the
+// show_ui profile passes the same one here.
+func (b *EmbedBuilder) SetUIOptions(o genuiv2.Options) *EmbedBuilder {
+	b.uiOpts = o
+	return b
+}
 
 // FromToolResult builds chat embeds from successful data tools.
 func (b *EmbedBuilder) FromToolResult(toolName string, result any, params map[string]any) []ChatEmbed {
@@ -91,30 +116,100 @@ func (b *EmbedBuilder) FromToolResult(toolName string, result any, params map[st
 	case "vector_search":
 		return b.embedsFromVectorResult(result)
 	case "show_chart":
-		return embedsFromChartResult(result)
+		return b.embedsFromChartResult(result)
 	case "generate_image":
 		return embedsFromImageResult(result)
 	default:
-		return embedsFromUIResult(result)
+		return b.embedsFromUIResult(result)
 	}
 }
 
 // embedsFromUIResult turns a tool result with a "ui" key into a "ui" embed.
-// Invalid specs are dropped (never rendered).
-func embedsFromUIResult(result any) []ChatEmbed {
-	m, ok := asMap(result)
-	if !ok {
-		return nil
+// A genui/v2 document becomes an embed of Version "genui/v2" (UIV2); a genui/v1
+// spec keeps its typed v1 path. Invalid documents are dropped (never rendered).
+//
+// show_ui's own result (*ShowUIResult) was validated by the tool with its
+// profile, so only the contract is re-checked here (defence in depth, external
+// links off). A "ui" from any other tool goes through the builder's options.
+func (b *EmbedBuilder) embedsFromUIResult(result any) []ChatEmbed {
+	var raw any
+	opts := b.uiOpts
+	fallback := ""
+	switch r := result.(type) {
+	case *ShowUIResult:
+		if r == nil || r.UI == nil {
+			return nil
+		}
+		raw, fallback, opts = r.UI, r.Fallback, genuiv2.Options{}
+	default:
+		m, ok := asMap(result)
+		if !ok {
+			return nil
+		}
+		raw = m["ui"]
+		if raw == nil {
+			return nil
+		}
+		fallback, _ = m["fallback"].(string)
 	}
-	raw, ok := m["ui"]
-	if !ok || raw == nil {
-		return nil
+	if isV2Doc(raw) {
+		doc, err := genuiv2.Parse(raw, opts)
+		if err != nil {
+			return nil
+		}
+		title, _ := doc["title"].(string)
+		if fallback == "" {
+			fallback = UIFallbackText(doc)
+		}
+		return []ChatEmbed{{Type: "ui", Version: genuiv2.Version, Title: title, UIV2: doc, Fallback: ClipRunes(fallback, maxUIFallback)}}
 	}
 	spec, err := genui.FromAny(raw)
 	if err != nil {
 		return nil
 	}
 	return []ChatEmbed{{Type: "ui", Title: spec.Title, UI: spec}}
+}
+
+func isV2Doc(raw any) bool {
+	switch d := raw.(type) {
+	case map[string]any:
+		return d["version"] == genuiv2.Version
+	}
+	return false
+}
+
+// DowngradeEmbeds adapts embeds to what the client can render (caps comes from
+// the client; nil = a v1-only client). A genui/v2 "ui" embed goes through
+// genuiv2.Downgrade: a block the client lacks becomes its fallback, a v1-only
+// client gets a valid genui/v1 spec in UI. If the document cannot be degraded
+// the embed becomes Type "text" with only its Fallback (or is dropped when it
+// has none), so the user always gets the conclusion. Other embeds pass through.
+func DowngradeEmbeds(embeds []ChatEmbed, caps *genuiv2.Caps) []ChatEmbed {
+	out := make([]ChatEmbed, 0, len(embeds))
+	for _, e := range embeds {
+		if e.Type != "ui" || e.UIV2 == nil {
+			out = append(out, e)
+			continue
+		}
+		res, err := genuiv2.Downgrade(e.UIV2, caps)
+		if err == nil && len(res.Spec) > 0 {
+			if res.Spec["version"] == genuiv2.VersionV1 {
+				if spec, ferr := genui.FromAny(res.Spec); ferr == nil {
+					e.UIV2, e.UI, e.Version = nil, spec, genuiv2.VersionV1
+					out = append(out, e)
+					continue
+				}
+			} else {
+				e.UIV2 = res.Spec
+				out = append(out, e)
+				continue
+			}
+		}
+		if e.Fallback != "" {
+			out = append(out, ChatEmbed{Type: "text", Title: e.Title, Fallback: e.Fallback})
+		}
+	}
+	return out
 }
 
 func embedsFromImageResult(result any) []ChatEmbed {
@@ -205,7 +300,15 @@ func (b *EmbedBuilder) countEmbed(model string, params map[string]any, total int
 	}}
 }
 
-func embedsFromChartResult(result any) []ChatEmbed {
+// embedsFromChartResult builds the chart embed of show_chart. When the tool was
+// asked to also emit a genui/v2 document (ShowChartTool.EmitUI) and it is
+// valid, that document wins: one renderer for everything.
+func (b *EmbedBuilder) embedsFromChartResult(result any) []ChatEmbed {
+	if m, ok := asMap(result); ok && m["ui"] != nil {
+		if ui := b.embedsFromUIResult(result); len(ui) > 0 {
+			return ui
+		}
+	}
 	spec := chartSpecFromResult(result)
 	if spec == nil || len(spec.Rows) == 0 {
 		return nil
@@ -534,6 +637,10 @@ func DedupeEmbeds(embeds []ChatEmbed) []ChatEmbed {
 			if e.Chart != nil {
 				key = fmt.Sprintf("chart|%s|%s|%d", e.Chart.Kind, e.Title, len(e.Chart.Rows))
 			}
+		}
+		if e.Type == "ui" && e.UIV2 != nil {
+			b, _ := json.Marshal(e.UIV2)
+			key = "ui2|" + string(b)
 		}
 		if e.Type == "ui" && e.UI != nil {
 			b, _ := json.Marshal(e.UI)

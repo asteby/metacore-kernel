@@ -42,6 +42,11 @@ func validatePrepared(d obj, opts Options) (err error) {
 	if d["version"] != Version {
 		panic(fail(CodeUnsupportedVersion, "version", "version debe ser %s", Version))
 	}
+	// The profile runs first: a block or verb the surface forbids is reported
+	// as such, not as a missing field of a shape the author should not use.
+	if opts.Profile != nil {
+		opts.Profile.check(d)
+	}
 	c := &ctx{doc: d, opts: opts, blockIDs: map[string]string{}}
 	c.check(d, rootSchema, "$", 1)
 	for _, s := range c.submits {

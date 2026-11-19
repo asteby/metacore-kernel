@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/asteby/metacore-kernel/agent/contextmgr"
+	genuiv2 "github.com/asteby/metacore-kernel/genui/v2"
 )
 
 const (
@@ -41,9 +42,34 @@ type ChartSpec struct {
 
 // ShowChartTool stages an interactive, downloadable chart embed. Aby should
 // call it after query/aggregate when a visual is clearer than a table.
-type ShowChartTool struct{}
+//
+// Deprecated: show_chart carries figures typed by the model, so the server
+// cannot verify they come from an authorized query. Use ShowUITool (show_ui),
+// where the chart is a genui/v2 block that reads a declared source (q: or
+// widget) with the viewer's permissions, rendered by the same component as the
+// pages and the dashboard. show_chart keeps working unchanged; EmitUI makes it
+// also emit an equivalent genui/v2 document (inline source) so a client can
+// migrate to the single renderer before hosts move to show_ui. Removal is
+// tracked in the CHANGELOG.
+type ShowChartTool struct {
+	emitUI bool
+}
 
+// NewShowChartTool returns the legacy chart tool.
+//
+// Deprecated: use NewShowUITool.
 func NewShowChartTool() *ShowChartTool { return &ShowChartTool{} }
+
+// EmitUI makes the result also carry the chart as a genui/v2 document
+// (ChartSpec.UIDoc, inline source). The embed builder then emits a "ui" embed
+// of Version genui/v2 instead of the legacy "chart" embed whenever the kind
+// has a v2 equivalent; any other kind keeps the legacy embed. Migration aid only.
+func (t *ShowChartTool) EmitUI() *ShowChartTool { t.emitUI = true; return t }
+
+// SatisfiesOutcomes implements tools.OutcomeSatisfier: both tools draw a chart,
+// so whichever ran backs "aquí está el gráfico" (the claim guard checks each
+// registered tool separately).
+func (t *ShowChartTool) SatisfiesOutcomes() []string { return []string{"show_ui"} }
 
 func (t *ShowChartTool) Name() string     { return "show_chart" }
 func (t *ShowChartTool) Category() string { return "data" }
@@ -111,13 +137,68 @@ func (t *ShowChartTool) Execute(ctx context.Context, params map[string]any, agen
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	out := map[string]any{
 		"ok":     true,
 		"kind":   spec.Kind,
 		"title":  spec.Title,
 		"points": len(spec.Rows),
 		"chart":  spec,
-	}, nil
+	}
+	if t.emitUI {
+		if doc, err := spec.UIDoc(); err == nil {
+			out["ui"] = doc
+			out["fallback"] = ClipRunes(spec.Title+" · "+spec.Note, maxUIFallback)
+		}
+	}
+	return out, nil
+}
+
+// chartV2Kind maps a legacy chart kind to the kind of the genui/v2 chart block
+// ("" = no equivalent: stacked/horizontal bars, scatter, radar and composed
+// stay on the legacy renderer instead of being drawn as something else).
+var chartV2Kind = map[string]string{"bar": "bar", "line": "line", "area": "area", "pie": "pie", "donut": "donut"}
+
+// UIDoc translates the spec into a genui/v2 document with ONE chart block over
+// an inline source (the rows the model typed). It exists for the migration
+// from show_chart to show_ui; it is not the path for new charts, because an
+// inline source cannot be authorized against the user's permissions. It
+// returns an error for a kind with no v2 equivalent, and the document is
+// validated against the bare contract before it is returned.
+func (s *ChartSpec) UIDoc() (genuiv2.Doc, error) {
+	kind := chartV2Kind[s.Kind]
+	if kind == "" {
+		return nil, fmt.Errorf("chart kind %q has no genui/v2 equivalent", s.Kind)
+	}
+	series := make([]any, 0, len(s.Series))
+	for _, se := range s.Series {
+		series = append(series, map[string]any{"key": se.Key, "label": se.Label})
+	}
+	rows := make([]any, 0, len(s.Rows))
+	for _, r := range s.Rows {
+		row := make(map[string]any, len(r))
+		for k, v := range r {
+			row[k] = v
+		}
+		rows = append(rows, row)
+	}
+	summary := s.Title
+	if s.Note != "" {
+		summary = s.Title + ". " + s.Note
+	}
+	block := map[string]any{
+		"type": "chart", "kind": kind, "title": s.Title, "x": s.XKey,
+		"series": series, "source": "data.chart", "summary": summary,
+	}
+	if s.Note != "" {
+		block["caption"] = s.Note
+	}
+	doc := map[string]any{
+		"version": genuiv2.Version,
+		"title":   s.Title,
+		"data":    map[string]any{"chart": map[string]any{"inline": rows}},
+		"blocks":  []any{block},
+	}
+	return genuiv2.Parse(doc, genuiv2.Options{})
 }
 
 func parseChartSpec(params map[string]any) (*ChartSpec, error) {

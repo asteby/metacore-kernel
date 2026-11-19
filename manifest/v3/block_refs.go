@@ -374,3 +374,39 @@ func validateBlockRefs(m *Manifest) (*Manifest, []string) {
 	}
 	return em, errs
 }
+
+// ExpandDocBlockRefs expands the ref nodes of ONE genui document (a chat
+// message, a saved block) against a catalog of named blocks, the same splice
+// ExpandBlockRefs does for manifests: blocks replace the ref, their data
+// sources merge into the document's (a clash is an error), a block with a
+// permission is wrapped in a section carrying it. Every ref must be qualified
+// ("<addon>.<key>"): the document has no addon of its own. catalog is what the
+// CALLER may use (the host filters it by enabled addons and the viewer's
+// permissions before calling); entries must already be expanded. The input is
+// not modified. A document without refs is returned as a copy, unchanged.
+func ExpandDocBlockRefs(doc map[string]any, catalog ForeignBlocks) (map[string]any, error) {
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("document is not serializable: %w", err)
+	}
+	x := &blockExpander{
+		requires: map[string]struct{}{},
+		own:      map[string]BlockDef{},
+		foreign:  ForeignBlocks{},
+	}
+	for addon, blocks := range catalog {
+		x.requires[addon] = struct{}{}
+		x.foreign[addon] = blocks
+	}
+	out := x.doc("document", raw, nil)
+	if len(x.errs) > 0 {
+		return nil, errors.New(strings.Join(x.errs, "; "))
+	}
+	dec := json.NewDecoder(bytes.NewReader(out))
+	dec.UseNumber()
+	var res map[string]any
+	if err := dec.Decode(&res); err != nil {
+		return nil, fmt.Errorf("document is not an object: %w", err)
+	}
+	return res, nil
+}
