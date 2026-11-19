@@ -3426,6 +3426,10 @@
           "$ref": "#/$defs/ApprovalPolicy",
           "description": "The move parks as a pending approval request and applies once an approver role approves it."
         },
+        "reopen": {
+          "type": "boolean",
+          "description": "Marks a deliberate exit from an is_final stage (reopen / archive). Exits from a final stage without reopen or approval are flagged (warning) by the final_stage_outgoing rule."
+        },
         "sla": {
           "type": "object",
           "additionalProperties": false,

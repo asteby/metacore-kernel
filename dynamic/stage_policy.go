@@ -108,17 +108,19 @@ func transitionApproval(ctx context.Context, model string, sm *StageMachine, fro
 	}
 }
 
-// rolesOf resolves the acting user's role set for transition gating.
-func (s *Service) transitionRoles(ctx context.Context, user modelbase.AuthUser) ([]string, bool) {
+// transitionRoles resolves the acting user's role set for transition gating.
+// The roles gate is skipped (bypass=true) for the system principal and for the
+// replay of THIS very transition's approval (same model, same constraint key):
+// the approver was authorized by role and the replay runs as the requester.
+// Any other replay (another record state, another transition) is gated normally.
+func (s *Service) transitionRoles(ctx context.Context, user modelbase.AuthUser, model, from, to string) ([]string, bool) {
 	if _, ok := user.(systemPrincipal); ok {
 		return nil, true
 	}
 	if user == nil {
 		return nil, false
 	}
-	if r, ok := ApprovalReplayFromContext(ctx); ok && r.Kind != "" {
-		// The approver was authorized by role when approving; the replayed
-		// mutation runs as the requester and must not be re-gated on roles.
+	if r, ok := ApprovalReplayFromContext(ctx); ok && r.skipsConstraint(model, transitionKey(from, to)) {
 		return nil, true
 	}
 	return s.principalRoles(ctx, user), false

@@ -1000,6 +1000,7 @@ func mapModelTransitions(in []v3.Transition) []TransitionDef {
 			Roles:          append([]string(nil), t.Roles...),
 			RequiresFields: append([]string(nil), t.RequiresFields...),
 			Approval:       mapApprovalPolicy(t.Approval),
+			Reopen:         t.Reopen,
 		}
 		if t.SLA != nil {
 			td.SLA = &TransitionSLA{Hours: t.SLA.Hours, OnBreach: t.SLA.OnBreach}

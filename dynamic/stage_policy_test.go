@@ -223,3 +223,28 @@ func TestStagePolicy_CreateInFinalStage(t *testing.T) {
 		t.Fatalf("strict create in final: %v", err)
 	}
 }
+
+// Un replay de OTRA transicion no hereda el bypass de roles: A->confirmed
+// aparcada, el registro pasa a otro estado, el replay no debe saltarse roles.
+func TestStagePolicy_ReplayBypassIsScopedToItsTransition(t *testing.T) {
+	f := setupPolicyFixture(t, false)
+	agent := f.user("agent")
+	mgr := f.user("manager")
+	id := f.order(t, mgr, "confirmed", "RB-1")
+	// Replay de una aprobacion de OTRA transicion (draft->confirmed) sobre
+	// confirmed->delivered (requiere cashier/manager): el agente no pasa.
+	ctx := WithApprovalReplay(context.Background(), ApprovalReplay{
+		Kind: ApprovalKindConstraint, ConstraintKey: transitionKey("draft", "confirmed"), Model: "test_orders",
+	})
+	_, err := f.svc.Update(ctx, "test_orders", agent, id, map[string]any{"status": "delivered"})
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("foreign replay must not bypass roles: %v", err)
+	}
+	// El replay de ESTA transicion si salta roles (el aprobador ya los valido).
+	ctx = WithApprovalReplay(context.Background(), ApprovalReplay{
+		Kind: ApprovalKindConstraint, ConstraintKey: transitionKey("confirmed", "delivered"), Model: "test_orders",
+	})
+	if _, err := f.svc.Update(ctx, "test_orders", agent, id, map[string]any{"status": "delivered"}); err != nil {
+		t.Fatalf("own replay: %v", err)
+	}
+}

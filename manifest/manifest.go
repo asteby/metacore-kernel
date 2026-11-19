@@ -1530,6 +1530,7 @@ type TransitionDef struct {
 	Roles          []string       `json:"roles,omitempty"`
 	RequiresFields []string       `json:"requiresFields,omitempty"`
 	Approval       *ApprovalDef   `json:"approval,omitempty"`
+	Reopen         bool           `json:"reopen,omitempty"`
 	SLA            *TransitionSLA `json:"sla,omitempty"`
 }
 

@@ -1,6 +1,7 @@
 package v3
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -83,8 +84,18 @@ func TestStagePolicy_FinalStageExitCompatWindow(t *testing.T) {
 	if len(warns) != 1 || !strings.Contains(warns[0], "["+RuleFinalStageOutgoing+"]") {
 		t.Fatalf("want one tagged warning, got %v", warns)
 	}
-	if _, err := ValidateWithOptions(raw, Options{Strict: true}); err == nil {
-		t.Fatal("strict must refuse an exit from a final stage without approval")
+	// Warning-only in BOTH modes: the hub reads bundles with Strict and real
+	// addons reopen/archive from final stages.
+	if w, err := ValidateWithOptions(raw, Options{Strict: true}); err != nil || len(w) != 1 {
+		t.Fatalf("strict must only warn: warns=%v err=%v", w, err)
+	}
+	// With `reopen: true` it is the explicit exit: clean in both modes.
+	reopen := mustJSON(t, strictStageModel([]interface{}{
+		map[string]interface{}{"from": "draft", "to": "done"},
+		map[string]interface{}{"from": "done", "to": "draft", "reopen": true},
+	}, policyStages))
+	if w, err := ValidateWithOptions(reopen, Options{Strict: true}); err != nil || len(w) != 0 {
+		t.Fatalf("reopen exit: warns=%v err=%v", w, err)
 	}
 	// With approval it is the explicit reopen: clean in both modes.
 	ok := mustJSON(t, strictStageModel([]interface{}{
@@ -93,5 +104,30 @@ func TestStagePolicy_FinalStageExitCompatWindow(t *testing.T) {
 	}, policyStages))
 	if w, err := ValidateWithOptions(ok, Options{Strict: true}); err != nil || len(w) != 0 {
 		t.Fatalf("approved reopen: warns=%v err=%v", w, err)
+	}
+}
+
+// Regresion: bundles reales del corpus addons (el hub los lee con Strict). Sus
+// salidas de etapa final (cerrado->abierto, published->archived,
+// rejected->pending_review) no pueden volverse error.
+func TestStagePolicy_RealBundlesStillValidateStrict(t *testing.T) {
+	for _, f := range []string{"testdata/real_link_inbox.manifest.json", "testdata/real_link_marketing.manifest.json"} {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		warns, err := ValidateWithOptions(raw, Options{Strict: true})
+		if err != nil {
+			t.Fatalf("%s must validate in Strict: %v", f, err)
+		}
+		found := false
+		for _, w := range warns {
+			if strings.Contains(w, "["+RuleFinalStageOutgoing+"]") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: expected a final_stage_outgoing warning, got %v", f, warns)
+		}
 	}
 }

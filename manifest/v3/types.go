@@ -948,8 +948,7 @@ type Stage struct {
 // The optional policy fields gate WHO may make the move and UNDER WHAT
 // CONDITIONS; each is additive (a transition with only From/To behaves as
 // before) and enforced by the generic Update path (REST/PATCH):
-//   - Roles: the acting user must hold one of these org roles (422
-//     invalid_transition otherwise).
+//   - Roles: the acting user must hold one of these org roles (403 otherwise).
 //   - RequiresFields: columns that must be non-empty on the merged row
 //     (persisted values overlaid with the incoming patch) for the move.
 //   - Guard: a predicate `<arith> <op> <arith>` over the merged row's numeric
@@ -957,6 +956,14 @@ type Stage struct {
 //   - Approval: the move parks as a pending ApprovalRequest and only applies
 //     once a user holding Approval.Roles approves it (e.g. cancelling a paid
 //     sale, reopening a final stage).
+//   - Reopen: marks a deliberate exit from an is_final stage (reopen a closed
+//     conversation, archive a published campaign). Without Reopen or Approval
+//     an exit from a final stage is flagged by the final_stage_outgoing rule.
+//
+// SCOPE: these policies are enforced by the generic Update path only. The wasm
+// data_mutate / data_batch imports apply just the (from → to) whitelist
+// (GateWrite): no roles, approval, guard, requires_fields or locked-stage check
+// (tracked as K3b, wasm parity).
 //   - SLA: how long a record may sit in the destination stage; informational
 //     metadata projected to hosts (the kernel does not enforce the breach).
 type Transition struct {
@@ -966,6 +973,7 @@ type Transition struct {
 	Roles          []string        `json:"roles,omitempty"`
 	RequiresFields []string        `json:"requires_fields,omitempty"`
 	Approval       *ApprovalPolicy `json:"approval,omitempty"`
+	Reopen         bool            `json:"reopen,omitempty"`
 	SLA            *TransitionSLA  `json:"sla,omitempty"`
 }
 

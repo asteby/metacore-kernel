@@ -1695,7 +1695,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 		// explicit transition (P3). Legacy manifests declared exits freely, so
 		// the rule is a warning for one release (see compat.go).
 		for _, msg := range finalStageExits(mod) {
-			tolerate(RuleFinalStageOutgoing, fmt.Sprintf("models[%d] (%s): %s", mi, mod.Key, msg))
+			*warnings = append(*warnings, fmt.Sprintf("[%s] models[%d] (%s): %s", RuleFinalStageOutgoing, mi, mod.Key, msg)) // warning-only in both modes
 		}
 		// Record presentation vocabulary (display_for, card_role, title_field,
 		// subtitle_field): references must resolve against the model's columns.
@@ -2715,9 +2715,8 @@ func hasExplicitCapabilities(m *Manifest) bool {
 }
 
 // finalStageExits reports the transitions that leave an is_final stage
-// without an approval block. A reopen of a terminal stage must be a declared
-// transition that requests approval (P3: "is_final sin salidas salvo reopen
-// con approval").
+// that is neither an approved move nor flagged `reopen: true`. A way out of a
+// terminal stage must be explicit (P3: "is_final sin salidas salvo reopen").
 func finalStageExits(mod Model) []string {
 	final := map[string]struct{}{}
 	for _, st := range mod.Stages {
@@ -2727,8 +2726,8 @@ func finalStageExits(mod Model) []string {
 	}
 	var out []string
 	for ti, t := range mod.Transitions {
-		if _, ok := final[t.From]; ok && t.Approval == nil {
-			out = append(out, fmt.Sprintf("transitions[%d] leaves the final stage %q (-> %q) without an approval block", ti, t.From, t.To))
+		if _, ok := final[t.From]; ok && t.Approval == nil && !t.Reopen {
+			out = append(out, fmt.Sprintf("transitions[%d] leaves the final stage %q (-> %q) without `reopen: true` or an approval block", ti, t.From, t.To))
 		}
 	}
 	return out
