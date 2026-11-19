@@ -34,6 +34,12 @@ const (
 	// audit-column standard (docs/audit-columns.md). Promote to a hard error
 	// everywhere one minor release after it ships.
 	RuleAuditColumnType = "audit_column_type"
+
+	// RuleFinalStageOutgoing: a transition leaving an is_final stage must
+	// carry an approval block (the explicit "reopen"). Introduced with the
+	// strict stage machine (P3). Promote to a hard error everywhere one minor
+	// release after it ships.
+	RuleFinalStageOutgoing = "final_stage_outgoing"
 )
 
 // RuleWebhookActionSigning and RuleRBACPermissionResolves are declared in
@@ -69,6 +75,7 @@ const (
 var legacyTolerated = []string{
 	RuleRequiresStateInStages,
 	RuleAuditColumnType,
+	RuleFinalStageOutgoing,
 	RuleWebhookActionSigning,
 	RuleRBACPermissionResolves,
 	RuleSlotKindUnknown,

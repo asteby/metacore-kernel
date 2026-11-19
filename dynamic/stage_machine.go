@@ -372,6 +372,22 @@ func (sm *StageMachine) LockedAt(stage string) bool {
 	return false
 }
 
+// editableWhenLocked reports whether column stays writable in a locked stage
+// (Stage.EditableWhenLocked).
+func (sm *StageMachine) editableWhenLocked(stage, column string) bool {
+	for _, s := range sm.Stages {
+		if s.Key != stage {
+			continue
+		}
+		for _, c := range s.EditableWhenLocked {
+			if c == column {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // CheckStageLock refuses an update of a row whose CURRENT stage is `locked`
 // (a posted journal entry, a stamped document) unless the only change is the
 // stage itself — that move is then validated as a transition as usual. Fields
@@ -390,6 +406,9 @@ func CheckStageLock(sm *StageMachine, before, input map[string]any) error {
 	ve := &ValidationError{}
 	for key, raw := range input {
 		if key == sm.Field || key == "id" {
+			continue
+		}
+		if sm.editableWhenLocked(from, key) {
 			continue
 		}
 		if _, managed := managedColumns[key]; managed {

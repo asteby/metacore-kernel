@@ -1225,6 +1225,35 @@ func validateStageMachine(md ModelDefinition) error {
 			return fmt.Errorf("transitions[%d].to %q is not a declared stage key", i, t.To)
 		}
 	}
+	ownCols := make(map[string]struct{}, len(md.Columns))
+	for _, c := range md.Columns {
+		ownCols[c.Name] = struct{}{}
+	}
+	for i, t := range md.Transitions {
+		if g := strings.TrimSpace(t.Guard); g != "" {
+			if err := validateConstraintExprStrict(g, ownCols); err != nil {
+				return fmt.Errorf("transitions[%d].guard %q: %v", i, t.Guard, err)
+			}
+		}
+		for _, f := range t.RequiresFields {
+			if _, ok := ownCols[f]; !ok {
+				return fmt.Errorf("transitions[%d].requiresFields %q is not a declared column on the model", i, f)
+			}
+		}
+		if t.Approval != nil && len(t.Approval.Roles) == 0 {
+			return fmt.Errorf("transitions[%d].approval.roles is empty (declare at least one approver role)", i)
+		}
+	}
+	for i, st := range md.Stages {
+		if len(st.EditableWhenLocked) > 0 && !st.Locked {
+			return fmt.Errorf("stages[%d].editableWhenLocked requires locked", i)
+		}
+		for _, c := range st.EditableWhenLocked {
+			if _, ok := ownCols[c]; !ok {
+				return fmt.Errorf("stages[%d].editableWhenLocked %q is not a declared column on the model", i, c)
+			}
+		}
+	}
 	colNames := make(map[string]struct{}, len(md.Columns))
 	for _, c := range md.Columns {
 		colNames[c.Name] = struct{}{}

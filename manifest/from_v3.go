@@ -980,6 +980,8 @@ func mapModelStages(in []v3.Stage) []StageDef {
 			Order:   s.Order,
 			IsFinal: s.IsFinal,
 			Locked:  s.Locked,
+
+			EditableWhenLocked: append([]string(nil), s.EditableWhenLocked...),
 		})
 	}
 	return out
@@ -991,7 +993,18 @@ func mapModelTransitions(in []v3.Transition) []TransitionDef {
 	}
 	out := make([]TransitionDef, 0, len(in))
 	for _, t := range in {
-		out = append(out, TransitionDef{From: t.From, To: t.To})
+		td := TransitionDef{
+			From:           t.From,
+			To:             t.To,
+			Guard:          t.Guard,
+			Roles:          append([]string(nil), t.Roles...),
+			RequiresFields: append([]string(nil), t.RequiresFields...),
+			Approval:       mapApprovalPolicy(t.Approval),
+		}
+		if t.SLA != nil {
+			td.SLA = &TransitionSLA{Hours: t.SLA.Hours, OnBreach: t.SLA.OnBreach}
+		}
+		out = append(out, td)
 	}
 	return out
 }

@@ -933,14 +933,49 @@ type Stage struct {
 	// data_mutate) are not this gate's business. Opt-in: IsFinal alone keeps
 	// the record editable.
 	Locked bool `json:"locked,omitempty"`
+	// EditableWhenLocked lists the columns that stay writable while the record
+	// sits in this `locked` stage (a delivered sale still accepts `notes`, a
+	// stamped invoice its `payment_reference`). Every other column is refused
+	// 422 record_locked. Only meaningful with Locked; the names must be
+	// declared columns of the model. Empty = fully read-only (the default).
+	EditableWhenLocked []string `json:"editable_when_locked,omitempty"`
 }
 
 // Transition is one allowed move between two stages of a stage machine. From
 // and To are Stage keys; the kernel rejects any Update that moves the
 // StageField to a (from, to) pair not present in the model's Transitions.
+//
+// The optional policy fields gate WHO may make the move and UNDER WHAT
+// CONDITIONS; each is additive (a transition with only From/To behaves as
+// before) and enforced by the generic Update path (REST/PATCH):
+//   - Roles: the acting user must hold one of these org roles (422
+//     invalid_transition otherwise).
+//   - RequiresFields: columns that must be non-empty on the merged row
+//     (persisted values overlaid with the incoming patch) for the move.
+//   - Guard: a predicate `<arith> <op> <arith>` over the merged row's numeric
+//     columns (same grammar as Constraint.Expr); false rejects the move.
+//   - Approval: the move parks as a pending ApprovalRequest and only applies
+//     once a user holding Approval.Roles approves it (e.g. cancelling a paid
+//     sale, reopening a final stage).
+//   - SLA: how long a record may sit in the destination stage; informational
+//     metadata projected to hosts (the kernel does not enforce the breach).
 type Transition struct {
-	From string `json:"from"`
-	To   string `json:"to"`
+	From           string          `json:"from"`
+	To             string          `json:"to"`
+	Guard          string          `json:"guard,omitempty"`
+	Roles          []string        `json:"roles,omitempty"`
+	RequiresFields []string        `json:"requires_fields,omitempty"`
+	Approval       *ApprovalPolicy `json:"approval,omitempty"`
+	SLA            *TransitionSLA  `json:"sla,omitempty"`
+}
+
+// TransitionSLA is the time budget of the destination stage of a Transition.
+type TransitionSLA struct {
+	// Hours a record may stay in the destination stage before it is overdue.
+	Hours int `json:"hours"`
+	// OnBreach names what the host does on breach: "notify" (default) or
+	// "escalate". Informational for the kernel.
+	OnBreach string `json:"on_breach,omitempty"`
 }
 
 // TransitionHook is a declarative side effect the kernel fires when a record
