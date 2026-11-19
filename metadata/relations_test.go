@@ -267,6 +267,31 @@ func (m *orgRefModalModel) DefineModal() modelbase.ModalMetadata {
 	}
 }
 
+// TestService_ProjectsRelationCreateInlineOntoTableMetadata locks create_inline
+// and min onto the served payload: the SDK's create form reads them to render
+// the inline sub-table and enforce the minimum rows.
+func TestService_ProjectsRelationCreateInlineOntoTableMetadata(t *testing.T) {
+	svc := New(Config{CacheTTL: time.Minute})
+	key := registerRelated(t, "DiscountRules", []modelbase.RelationDef{
+		{Name: "tiers", Kind: "one_to_many", Through: "DiscountRuleTier", ForeignKey: "discount_rule_id", Embed: true, CreateInline: true, Min: 1},
+		{Name: "audits", Kind: "one_to_many", Through: "Audit", ForeignKey: "discount_rule_id", Embed: true},
+	})
+	meta, err := svc.GetTable(context.Background(), key)
+	if err != nil {
+		t.Fatalf("GetTable: %v", err)
+	}
+	byName := map[string]modelbase.RelationMeta{}
+	for _, r := range meta.Relations {
+		byName[r.Name] = r
+	}
+	if !byName["tiers"].CreateInline || byName["tiers"].Min != 1 {
+		t.Errorf("tiers = %+v, want create_inline and min 1", byName["tiers"])
+	}
+	if byName["audits"].CreateInline || byName["audits"].Min != 0 {
+		t.Errorf("audits = %+v, want neither (opt-in)", byName["audits"])
+	}
+}
+
 // TestService_ProjectsRelationEmbedOntoTableMetadata locks the composition flag
 // onto the served payload: the SDK's record modal embeds ONLY the relations
 // declaring embed, so losing the flag silently un-embeds a document's lines.

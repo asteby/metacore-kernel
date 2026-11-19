@@ -857,15 +857,17 @@ func mapModelRelations(in []v3.ModelRelation) []RelationDef {
 	out := make([]RelationDef, 0, len(in))
 	for _, r := range in {
 		out = append(out, RelationDef{
-			Name:       r.Name,
-			Kind:       r.Kind,
-			Through:    r.Through,
-			ForeignKey: r.ForeignKey,
-			Scope:      r.Scope,
-			Label:      r.Label,
-			Readonly:   r.Readonly,
-			Embed:      r.Embed,
-			Rollups:    mapRollups(r.Rollups),
+			Name:         r.Name,
+			Kind:         r.Kind,
+			Through:      r.Through,
+			ForeignKey:   r.ForeignKey,
+			Scope:        r.Scope,
+			Label:        r.Label,
+			Readonly:     r.Readonly,
+			Embed:        r.Embed,
+			CreateInline: r.CreateInline,
+			Min:          r.Min,
+			Rollups:      mapRollups(r.Rollups),
 		})
 	}
 	return out

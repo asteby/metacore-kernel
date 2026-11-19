@@ -1403,6 +1403,15 @@
           "type": "boolean",
           "description": "When true, this relation is a COMPOSITION (a document's LINES) and the record modal renders its children inline as a sub-table. Opt-in: the modal embeds ONLY relations declaring it, so a parent with a large independently-managed child collection (stock movements, transfers) stays cheap to open — those relations stay reachable from their own model page. Pure UI metadata; defaults false. Only meaningful for one_to_many."
         },
+        "create_inline": {
+          "type": "boolean",
+          "description": "When true, the create form captures this relation's child rows together with the parent: the kernel's Create accepts them under `_children.<name>` and writes parent + children in one call, all-or-nothing. Requires kind one_to_many, embed true and not readonly; the child model (through) must be a model of the manifest and foreign_key one of its columns. Defaults false."
+        },
+        "min": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Minimum number of child rows a create carrying `_children` must send for this relation. Only with create_inline."
+        },
         "rollups": {
           "type": "array",
           "description": "Tier-1 parent-aggregate specs over this relation's child rows. Only meaningful for one_to_many.",

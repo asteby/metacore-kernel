@@ -814,14 +814,28 @@ func lineError(field string, at, i int, err error) error {
 // lines already written: a document must not survive without the lines the
 // user saw. Hard delete — its created event was never published.
 func (s *Service) undoDocument(ctx context.Context, user modelbase.AuthUser, model, table string, instance any, docID string, dl *documentLines, lineIDs []string) {
-	if len(lineIDs) > 0 {
-		if inst, ok := s.lookupModel(ctx, dl.typ.LineModel); ok {
-			if lt, err := s.tableNameFor(ctx, dl.typ.LineModel, inst); err == nil {
-				_ = s.db.WithContext(ctx).Table(lt).Where("id IN ?", lineIDs).Delete(map[string]any{}).Error
-			}
-		}
+	if len(lineIDs) > 0 && dl != nil {
+		s.hardDeleteRows(ctx, dl.typ.LineModel, lineIDs)
 	}
 	_ = s.db.WithContext(ctx).Table(table).Where("id = ?", docID).Delete(map[string]any{}).Error
+}
+
+// hardDeleteRows removes rows of model by id, bypassing hooks and soft delete:
+// the compensation of a multi-row create that could not be completed (document
+// lines, inline children). Errors are ignored — it is best effort by design.
+func (s *Service) hardDeleteRows(ctx context.Context, model string, ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	inst, ok := s.lookupModel(ctx, model)
+	if !ok {
+		return
+	}
+	table, err := s.tableNameFor(ctx, model, inst)
+	if err != nil {
+		return
+	}
+	_ = s.db.WithContext(ctx).Table(table).Where("id IN ?", ids).Delete(map[string]any{}).Error
 }
 
 // replaceDocumentLines swaps a document's lines for the posted ones (Update).
