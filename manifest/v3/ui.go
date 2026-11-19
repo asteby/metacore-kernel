@@ -195,6 +195,13 @@ type MapView struct {
 	// AreaField names a column with the area name or code (e.g. country_iso)
 	// that labels the aggregated bubble.
 	AreaField string `json:"area_field,omitempty"`
+	// ImageField names a column with the image or logo URL of each point (a
+	// store, branch, vehicle...). Renderers treat it as untrusted data.
+	ImageField string `json:"image_field,omitempty"`
+	// ColorField names a column with the brand colour (#RGB or #RRGGBB) of each
+	// point. It only tints the avatar ring and initials; status colouring stays
+	// on ColorBy.
+	ColorField string `json:"color_field,omitempty"`
 	// Popup lists the columns shown when a feature is selected (max 8).
 	Popup []string `json:"popup,omitempty"`
 	// Layers adds features from other models (branches, coverage zones).
