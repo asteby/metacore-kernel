@@ -158,6 +158,12 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 		}
 	}
 
+	// Row condition (Action.condition): the target row must satisfy the declared
+	// data predicate. Enforced here so a hidden button is not the only gate.
+	if !def.Condition.RowMatches(row) {
+		return ActionResult{}, &ActionConditionError{Model: model, Action: key}
+	}
+
 	if err := s.validateActionPayload(def, payload); err != nil {
 		return ActionResult{}, err
 	}

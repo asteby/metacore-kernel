@@ -853,6 +853,13 @@ type Model struct {
 	// machine (a stage is a mutation by definition) and with model extensions.
 	AppendOnly bool `json:"append_only,omitempty"`
 
+	// RowConditions gates the generic UPDATE and DELETE of the model on the
+	// PERSISTED row, as data (see RowConditions): `update: {field: "id",
+	// operator: "neq", value: 1}` protects a default row, `delete: {field:
+	// "debt", operator: "lte", value: 0}` forbids deleting a customer that still
+	// owes. Refused with 409 `row_condition_failed`; nil = ungated.
+	RowConditions *RowConditions `json:"row_conditions,omitempty"`
+
 	// Audit controls the kernel's audit-column standard (created_at, updated_at,
 	// deleted_at, created_by_id, updated_by_id, deleted_by_id — docs/audit-columns.md).
 	// The kernel adds those columns to EVERY model whether or not the manifest
@@ -2098,9 +2105,10 @@ type ConfigEntry struct {
 // RecordFieldCondition gates a row action or printable document on a field
 // value read from the target record (status/state gates use requires_state).
 type RecordFieldCondition struct {
-	Field    string `json:"field"`
-	Operator string `json:"operator,omitempty"` // eq|neq|in|not_in|truthy|falsy (default eq)
-	Value    any    `json:"value,omitempty"`
+	Field      string         `json:"field,omitempty"`
+	Operator   string         `json:"operator,omitempty"` // see RowCondition (default eq)
+	Value      any            `json:"value,omitempty"`
+	Conditions []RowCondition `json:"conditions,omitempty"`
 }
 
 // DocumentDef is one printable document an addon contributes
@@ -3520,10 +3528,14 @@ type Condition struct {
 	// does not understand a value falls back to "hide", never less safe than
 	// serving the contribution.
 	Unmet string `json:"unmet,omitempty"`
-	// Field/Operator/Value optionally gate a row action on the target record.
-	Field    string `json:"field,omitempty"`
-	Operator string `json:"operator,omitempty"`
-	Value    any    `json:"value,omitempty"`
+	// Field/Operator/Value optionally gate a row action on the target record
+	// (see RowCondition for the operator vocabulary); with operator all|any,
+	// Conditions combines nested predicates. The SERVER enforces it: an action
+	// whose target row does not match is refused, whatever the client shows.
+	Field      string         `json:"field,omitempty"`
+	Operator   string         `json:"operator,omitempty"`
+	Value      any            `json:"value,omitempty"`
+	Conditions []RowCondition `json:"conditions,omitempty"`
 }
 
 // Unmet policies for Condition.Unmet.

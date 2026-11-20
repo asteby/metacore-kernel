@@ -625,6 +625,21 @@ func (h *Handler) handleError(c fiber.Ctx, err error) error {
 	if errors.Is(err, ErrInvalidState) {
 		return respondErr(c, fiber.StatusConflict, err.Error())
 	}
+	if errors.Is(err, ErrRowConditionFailed) {
+		body := fiber.Map{"success": false, "message": err.Error(), "code": "row_condition_failed"}
+		var rce *RowConditionError
+		if errors.As(err, &rce) && rce.ErrorKey != "" {
+			body["message_key"] = rce.ErrorKey
+		}
+		return c.Status(fiber.StatusConflict).JSON(withCorrelation(c, body))
+	}
+	if errors.Is(err, ErrActionConditionNotMet) {
+		return c.Status(fiber.StatusConflict).JSON(withCorrelation(c, fiber.Map{
+			"success": false,
+			"message": err.Error(),
+			"code":    "action_condition_not_met",
+		}))
+	}
 	if errors.Is(err, ErrAppendOnly) {
 		return c.Status(fiber.StatusConflict).JSON(withCorrelation(c, fiber.Map{
 			"success": false,

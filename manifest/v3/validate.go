@@ -441,8 +441,12 @@ func validateDocuments(m *Manifest, colsByModel map[string]map[string]struct{}) 
 		} else if _, ok := docPapers[d.Paper]; !ok {
 			errs = append(errs, fmt.Sprintf("%s.paper %q is not one of A4|letter|ticket80", where, d.Paper))
 		}
-		if d.Condition != nil && strings.TrimSpace(d.Condition.Field) == "" {
-			errs = append(errs, fmt.Sprintf("%s.condition.field is required", where))
+		if d.Condition != nil {
+			if row := d.Condition.Row(); row == nil {
+				errs = append(errs, fmt.Sprintf("%s.condition.field is required", where))
+			} else {
+				errs = append(errs, row.Validate(where+".condition", nil)...)
+			}
 		}
 	}
 	return errs
@@ -1750,6 +1754,18 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 		if mod.AppendOnly && (mod.StageField != "" || len(mod.Stages) > 0 || len(mod.Transitions) > 0 || len(mod.OnTransition) > 0) {
 			errs = append(errs, fmt.Sprintf("models[%d]: append_only cannot be combined with a stage machine (stage_field/stages/transitions/on_transition)", mi))
 		}
+		// Row conditions (update/delete gates): shape, operators and that every
+		// leaf reads a column of the model (or a kernel-owned standard column).
+		if mod.RowConditions != nil {
+			known := map[string]struct{}{"id": {}, "organization_id": {}, "created_at": {}, "updated_at": {}, "deleted_at": {}, "created_by_id": {}, "updated_by_id": {}, "deleted_by_id": {}}
+			for c := range ownCols {
+				known[c] = struct{}{}
+			}
+			errs = append(errs, mod.RowConditions.Validate(fmt.Sprintf("models[%d].row_conditions", mi), known)...)
+			if mod.AppendOnly {
+				errs = append(errs, fmt.Sprintf("models[%d].row_conditions is meaningless with append_only (the model is never updated or deleted)", mi))
+			}
+		}
 		// Audit-column standard: a declared standard column must carry the
 		// standard type (the kernel adds the missing ones itself). A clash
 		// (e.g. deleted_at as text) would make the kernel's soft-delete and
@@ -2122,8 +2138,8 @@ func validateConditions(m *Manifest) []string {
 		}
 		key := strings.TrimSpace(c.AddonInstalled)
 		conn := strings.TrimSpace(c.ConnectorConnected)
-		field := strings.TrimSpace(c.Field)
-		if key == "" && conn == "" && field == "" {
+		row := c.Row()
+		if key == "" && conn == "" && row == nil {
 			errs = append(errs, fmt.Sprintf("%s.condition declares no predicate (set addon_installed, connector_connected or field)", where))
 			return
 		}
@@ -2135,6 +2151,7 @@ func validateConditions(m *Manifest) []string {
 				errs = append(errs, fmt.Sprintf("%s.condition.connector_connected %q is not a connector declared by this addon", where, conn))
 			}
 		}
+		errs = append(errs, row.Validate(where+".condition", nil)...)
 		switch strings.TrimSpace(c.Unmet) {
 		case "", UnmetHide, UnmetDisable:
 		default:

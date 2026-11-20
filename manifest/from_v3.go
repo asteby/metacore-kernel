@@ -764,6 +764,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 			def.ReasonRequired = &ReasonRequiredDef{Delete: rr.Delete, Actions: rr.Actions, MinLength: rr.MinLength}
 		}
 		def.AppendOnly = m.AppendOnly
+		def.RowConditions = m.RowConditions
 		def.NoAudit = m.Audit != nil && !*m.Audit
 		def.Rules = mapModelRules(m.Rules)
 		def.Sequences = mapModelSequences(m.Sequences)
@@ -1296,6 +1297,7 @@ func mapCondition(c *v3.Condition) *ConditionDef {
 		Field:              c.Field,
 		Operator:           c.Operator,
 		Value:              c.Value,
+		Conditions:         c.Conditions,
 	}
 }
 
