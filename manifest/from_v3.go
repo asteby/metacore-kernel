@@ -2078,13 +2078,18 @@ func attachRuleGuards(defs []ModelDefinition, m *v3.Manifest) {
 			if pol.Label == "" {
 				pol.Label = r.Then.Message
 			}
-			defs[i].RuleGuards = append(defs[i].RuleGuards, ConstraintDef{
+			g := ConstraintDef{
 				Expr:        r.When,
 				ErrorKey:    "rule:" + r.Key,
 				OnViolation: "request_approval",
 				Approval:    pol,
 				Invert:      true,
-			})
+			}
+			if r.EnabledSetting != "" {
+				g.EnabledSetting = r.EnabledSetting
+				g.AddonKey = m.Metadata.Key
+			}
+			defs[i].RuleGuards = append(defs[i].RuleGuards, g)
 		}
 	}
 }

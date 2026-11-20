@@ -1810,6 +1810,11 @@ func validateConstraints(md ModelDefinition, ownCols map[string]struct{}) error 
 	if md.AppendOnly && (md.StageField != "" || len(md.Stages) > 0 || len(md.Transitions) > 0 || len(md.OnTransition) > 0) {
 		return fmt.Errorf("append_only cannot be combined with a stage machine (stage_field/stages/transitions/on_transition)")
 	}
+	for gi, g := range md.RuleGuards {
+		if g.EnabledSetting != "" && g.AddonKey == "" {
+			return fmt.Errorf("ruleGuards[%d]: enabledSetting %q requires addonKey (the addon that owns the setting)", gi, g.EnabledSetting)
+		}
+	}
 	for j, col := range md.Columns {
 		for k, con := range col.Constraints {
 			where := fmt.Sprintf("columns[%d].constraints[%d]", j, k)

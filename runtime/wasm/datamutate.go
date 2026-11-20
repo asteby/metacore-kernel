@@ -257,7 +257,7 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 	// rolls the write back exactly like on the Service.Create/Update path.
 	// Deletes are exempt: guards predicate over resulting row state.
 	if inv.mutationGuard != nil && action != "deleted" {
-		if gErr := inv.mutationGuard(execCtx, req.Table, after); gErr != nil {
+		if gErr := inv.mutationGuard(WithOrgID(execCtx, orgID), req.Table, after); gErr != nil {
 			rollback()
 			return withApprovalDetail(fail(guardErrCode(gErr), gErr.Error()), gErr)
 		}

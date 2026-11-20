@@ -208,7 +208,7 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 		// row inside the shared transaction — one violated constraint rolls the
 		// ENTIRE batch back. Deletes are exempt (no resulting row state).
 		if inv.mutationGuard != nil && res.action != "deleted" {
-			if gErr := inv.mutationGuard(execCtx, p.req.Table, res.after); gErr != nil {
+			if gErr := inv.mutationGuard(WithOrgID(execCtx, orgID), p.req.Table, res.after); gErr != nil {
 				rollbackScope()
 				return withApprovalDetail(fail(guardErrCode(gErr), fmt.Sprintf("mutations[%d]: %s", i, gErr.Error())), gErr)
 			}

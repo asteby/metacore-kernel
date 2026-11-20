@@ -6348,6 +6348,11 @@
           },
           "uniqueItems": true
         },
+        "enabled_setting": {
+          "type": "string",
+          "description": "Opt-in per organization: key of a boolean, org-scoped entry of this manifest's settings[]. The rule is evaluated only while that setting is true for the org (off by default; a missing/false setting, no resolver or a resolver error skips the rule). Empty = always evaluated.",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
         "then": {
           "$ref": "#/$defs/RuleThen"
         }

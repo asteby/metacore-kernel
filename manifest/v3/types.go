@@ -1861,6 +1861,14 @@ type RuleDef struct {
 	// EventTypes restricts which canonical actions trigger evaluation:
 	// created | updated | transitioned. Empty means all three.
 	EventTypes []string `json:"event_types,omitempty"`
+	// EnabledSetting makes the rule opt-in per organization: it names a
+	// BOOLEAN, org-scoped entry of this manifest's own settings[]. The rule is
+	// evaluated only while that setting is true for the acting org; when the
+	// setting is false/unset, the host has no resolver or the resolver errors,
+	// the rule is skipped (OFF by default, fail closed toward off). Empty =
+	// always evaluated (the legacy behaviour). Lets one addon ship a
+	// guard (price floor, credit cap, ...) that each org switches on.
+	EnabledSetting string `json:"enabled_setting,omitempty"`
 	// Then is the rule's outcome. Required.
 	Then RuleThen `json:"then"`
 }
