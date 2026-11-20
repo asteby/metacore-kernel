@@ -105,7 +105,7 @@ func (h *Handler) create(c fiber.Ctx) error {
 	}
 	var b createBody
 	if err := json.Unmarshal(c.Body(), &b); err != nil {
-		return fail(c, invalid("cuerpo inválido"))
+		return fail(c, invalid("invalid body"))
 	}
 	a, err := h.svc.Create(c, id, CreateInput{Kind: b.Kind, Spec: b.Spec, Origin: OriginUI, Propose: b.Propose})
 	if err != nil {
@@ -162,7 +162,7 @@ func (h *Handler) update(c fiber.Ctx) error {
 	}
 	var b updateBody
 	if err := json.Unmarshal(c.Body(), &b); err != nil {
-		return fail(c, invalid("cuerpo inválido"))
+		return fail(c, invalid("invalid body"))
 	}
 	a, err := h.svc.Update(c, id, autoID, UpdateInput{Spec: b.Spec, ExpectedVersion: b.Version})
 	if err != nil {
@@ -215,20 +215,22 @@ func ok(c fiber.Ctx, data any) error {
 
 func fail(c fiber.Ctx, err error) error {
 	status := fiber.StatusInternalServerError
-	msg := "error interno"
+	msg, code := "internal error", "automation.internal"
 	switch {
 	case errors.Is(err, ErrInvalid):
-		status, msg = fiber.StatusUnprocessableEntity, err.Error()
+		status, msg, code = fiber.StatusUnprocessableEntity, err.Error(), "automation.invalid"
 	case errors.Is(err, ErrNotFound):
-		status, msg = fiber.StatusNotFound, ErrNotFound.Error()
+		status, msg, code = fiber.StatusNotFound, ErrNotFound.Error(), "automation.not_found"
 	case errors.Is(err, ErrForbidden):
-		status, msg = fiber.StatusForbidden, ErrForbidden.Error()
+		status, msg, code = fiber.StatusForbidden, ErrForbidden.Error(), "automation.forbidden"
 	case errors.Is(err, ErrLimit):
-		status, msg = fiber.StatusTooManyRequests, err.Error()
-	case errors.Is(err, ErrConflict), errors.Is(err, ErrBadState):
-		status, msg = fiber.StatusConflict, err.Error()
+		status, msg, code = fiber.StatusTooManyRequests, err.Error(), "automation.limit"
+	case errors.Is(err, ErrConflict):
+		status, msg, code = fiber.StatusConflict, err.Error(), "automation.conflict"
+	case errors.Is(err, ErrBadState):
+		status, msg, code = fiber.StatusConflict, err.Error(), "automation.bad_state"
 	case errors.Is(err, ErrDisabled):
-		status, msg = fiber.StatusServiceUnavailable, err.Error()
+		status, msg, code = fiber.StatusServiceUnavailable, err.Error(), "automation.disabled"
 	}
-	return c.Status(status).JSON(fiber.Map{"success": false, "message": msg})
+	return c.Status(status).JSON(fiber.Map{"success": false, "message": msg, "code": code})
 }

@@ -380,3 +380,15 @@ func TestConsumeApprovalRollsBackWithTx(t *testing.T) {
 		t.Fatalf("tras rollback la autorización debe seguir vigente: %v", err)
 	}
 }
+
+func TestApprovalCatalog(t *testing.T) {
+	cat := (ApprovalRequest{}).DefineTranslations()
+	if len(cat["es"]) == 0 || len(cat["en"]) != len(cat["es"]) {
+		t.Fatalf("approval catalog es/en out of sync: es=%d en=%d", len(cat["es"]), len(cat["en"]))
+	}
+	for _, c := range (ApprovalRequest{}).DefineTable().Columns {
+		if !strings.HasPrefix(c.Label, "models.approval_requests.") {
+			t.Errorf("column %s label %q is not an i18n key", c.Key, c.Label)
+		}
+	}
+}

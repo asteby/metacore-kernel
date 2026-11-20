@@ -88,16 +88,16 @@ func (e Envelope) Key() string { return e.Entity + "|" + e.ExternalID }
 func (e Envelope) Validate() error {
 	var errs []string
 	if strings.TrimSpace(e.Source) == "" {
-		errs = append(errs, "source vacío")
+		errs = append(errs, "source is empty")
 	}
 	if strings.TrimSpace(e.Entity) == "" {
-		errs = append(errs, "entity vacío")
+		errs = append(errs, "entity is empty")
 	}
 	if strings.TrimSpace(e.ExternalID) == "" {
-		errs = append(errs, "external_id vacío")
+		errs = append(errs, "external_id is empty")
 	}
 	if strings.TrimSpace(e.SourceVersion) == "" {
-		errs = append(errs, "source_version vacío")
+		errs = append(errs, "source_version is empty")
 	}
 	for name, v := range map[string]string{"source": e.Source, "entity": e.Entity, "external_id": e.ExternalID, "branch_external_id": e.BranchExternalID} {
 		if len(v) > maxIDLen {
@@ -108,10 +108,10 @@ func (e Envelope) Validate() error {
 		errs = append(errs, fmt.Sprintf("source_version supera %d bytes", maxCursorLen))
 	}
 	if len(e.Facets) > MaxFacets {
-		errs = append(errs, fmt.Sprintf("%d facetas (máximo %d)", len(e.Facets), MaxFacets))
+		errs = append(errs, fmt.Sprintf("%d facets (max %d)", len(e.Facets), MaxFacets))
 	}
 	if len(e.Requires) > MaxRequires {
-		errs = append(errs, fmt.Sprintf("%d dependencias (máximo %d)", len(e.Requires), MaxRequires))
+		errs = append(errs, fmt.Sprintf("%d dependencies (max %d)", len(e.Requires), MaxRequires))
 	}
 	switch e.Op {
 	case OpUpsert:
@@ -133,7 +133,7 @@ func (e Envelope) Validate() error {
 		}
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf("legacybridge: envelope %s inválido: %s", e.Key(), strings.Join(errs, "; "))
+		return fmt.Errorf("legacybridge: invalid envelope %s: %s", e.Key(), strings.Join(errs, "; "))
 	}
 	return nil
 }
@@ -183,13 +183,13 @@ func ParseNDJSON(r io.Reader) ([]Envelope, error) {
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.UseNumber()
 		if err := dec.Decode(&e); err != nil {
-			return nil, fmt.Errorf("legacybridge: línea %d: %w", line, err)
+			return nil, fmt.Errorf("legacybridge: line %d: %w", line, err)
 		}
 		out = append(out, e)
 	}
 	if err := sc.Err(); err != nil {
 		if errors.Is(err, bufio.ErrTooLong) {
-			return nil, fmt.Errorf("legacybridge: línea %d supera %d bytes", line+1, MaxEnvelopeBytes)
+			return nil, fmt.Errorf("legacybridge: line %d exceeds %d bytes", line+1, MaxEnvelopeBytes)
 		}
 		return nil, err
 	}

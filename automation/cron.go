@@ -34,7 +34,7 @@ func ParseCron(expr string) (*Cron, error) {
 	}
 	f := strings.Fields(e)
 	if len(f) != 5 {
-		return nil, fmt.Errorf("cron %q: se esperan 5 campos (minuto hora día mes día-semana)", expr)
+		return nil, fmt.Errorf("cron %q: expected 5 fields (minute hour day month weekday)", expr)
 	}
 	c := &Cron{expr: expr}
 	var err error
@@ -45,13 +45,13 @@ func ParseCron(expr string) (*Cron, error) {
 		return nil, fmt.Errorf("cron %q hora: %w", expr, err)
 	}
 	if c.dom, c.domStar, err = cronField(f[2], 1, 31); err != nil {
-		return nil, fmt.Errorf("cron %q día: %w", expr, err)
+		return nil, fmt.Errorf("cron %q day: %w", expr, err)
 	}
 	if c.month, _, err = cronField(f[3], 1, 12); err != nil {
 		return nil, fmt.Errorf("cron %q mes: %w", expr, err)
 	}
 	if c.dow, c.dowStar, err = cronField(f[4], 0, 7); err != nil {
-		return nil, fmt.Errorf("cron %q día de la semana: %w", expr, err)
+		return nil, fmt.Errorf("cron %q weekday: %w", expr, err)
 	}
 	if c.dow&(1<<7) != 0 {
 		c.dow |= 1
@@ -65,7 +65,7 @@ func (c *Cron) String() string { return c.expr }
 
 func cronField(s string, lo, hi int) (bits uint64, star bool, err error) {
 	if s == "" {
-		return 0, false, fmt.Errorf("campo vacío")
+		return 0, false, fmt.Errorf("empty field")
 	}
 	for _, part := range strings.Split(s, ",") {
 		rng, stepS, hasStep := strings.Cut(part, "/")
@@ -73,7 +73,7 @@ func cronField(s string, lo, hi int) (bits uint64, star bool, err error) {
 		if hasStep {
 			step, err = strconv.Atoi(stepS)
 			if err != nil || step <= 0 || step > hi {
-				return 0, false, fmt.Errorf("paso inválido %q", part)
+				return 0, false, fmt.Errorf("invalid step %q", part)
 			}
 		}
 		var a, b int
@@ -86,14 +86,14 @@ func cronField(s string, lo, hi int) (bits uint64, star bool, err error) {
 		case strings.Contains(rng, "-"):
 			x, y, _ := strings.Cut(rng, "-")
 			if a, err = strconv.Atoi(x); err != nil {
-				return 0, false, fmt.Errorf("rango inválido %q", part)
+				return 0, false, fmt.Errorf("invalid range %q", part)
 			}
 			if b, err = strconv.Atoi(y); err != nil {
-				return 0, false, fmt.Errorf("rango inválido %q", part)
+				return 0, false, fmt.Errorf("invalid range %q", part)
 			}
 		default:
 			if a, err = strconv.Atoi(rng); err != nil {
-				return 0, false, fmt.Errorf("valor inválido %q", part)
+				return 0, false, fmt.Errorf("invalid value %q", part)
 			}
 			b = a
 			if hasStep {

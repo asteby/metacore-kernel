@@ -447,7 +447,7 @@ func TestFailuresAutoPauseAndPermissionLossIsPermanent(t *testing.T) {
 	h.clk.Set(h.get(a.ID).NextRunAt.Add(time.Second))
 	h.svc.Tick(ctx)
 	h.drain()
-	if got := h.get(a.ID); got.Status != StatusError || !strings.Contains(got.StatusReason, "ya no está permitida") {
+	if got := h.get(a.ID); got.Status != StatusError || !strings.Contains(got.StatusReason, "is no longer allowed") {
 		t.Fatalf("permission loss: %+v", got)
 	}
 }

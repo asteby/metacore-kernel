@@ -64,17 +64,17 @@ func FetchMedia(deps *TransformDeps, rawURL string) (*FetchedMedia, error) {
 func FetchMediaWith(deps *TransformDeps, rawURL string, opt FetchOptions) (*FetchedMedia, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
-		return nil, fmt.Errorf("URL vacía")
+		return nil, fmt.Errorf("empty URL")
 	}
 	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
-		return nil, fmt.Errorf("URL debe empezar con http:// o https:// (recibido: %q)", rawURL)
+		return nil, fmt.Errorf("URL must start with http:// or https:// (got: %q)", rawURL)
 	}
 	if deps == nil {
 		deps = &TransformDeps{}
 	}
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {
-		return nil, fmt.Errorf("URL inválida: %q", rawURL)
+		return nil, fmt.Errorf("invalid URL: %q", rawURL)
 	}
 	pol := deps.Policy
 	if len(pol.AllowHosts) > 0 && !netguard.HostAllowed(pol.AllowHosts, strings.ToLower(u.Host)) {
@@ -165,7 +165,7 @@ func (d *download) reset() { d.data, d.partial = nil, false }
 func (d *download) attempt(ctx context.Context, client *http.Client, rawURL string, pol MediaPolicy, opt FetchOptions) (retryAfter time.Duration, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return 0, fmt.Errorf("URL inválida: %w", err)
+		return 0, fmt.Errorf("invalid URL: %w", err)
 	}
 	// Sin compresión de transporte: un Range sobre bytes ya descomprimidos no coincidiría con el servidor.
 	req.Header.Set("Accept-Encoding", "identity")
@@ -186,7 +186,7 @@ func (d *download) attempt(ctx context.Context, client *http.Client, rawURL stri
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("no se pudo descargar: %w", err)
+		return 0, fmt.Errorf("download failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -198,15 +198,15 @@ func (d *download) attempt(ctx context.Context, client *http.Client, rawURL stri
 		return 0, nil
 	case resp.StatusCode == http.StatusRequestedRangeNotSatisfiable:
 		d.reset() // se reintenta desde cero: no es un error definitivo
-		return 0, fmt.Errorf("no se pudo descargar: el servidor rechazó el rango pedido")
+		return 0, fmt.Errorf("download failed: the server rejected the requested range")
 	case resp.StatusCode == http.StatusPartialContent && resuming:
 		start, ok := contentRangeStart(resp.Header.Get("Content-Range"))
 		if !ok || start != int64(len(d.data)) || resp.Header.Get("Content-Encoding") != "" {
 			d.reset() // el servidor no continuó donde se esperaba: nunca se mezclan bytes de dos respuestas
-			return 0, fmt.Errorf("no se pudo descargar: rango inesperado %q", resp.Header.Get("Content-Range"))
+			return 0, fmt.Errorf("download failed: unexpected range %q", resp.Header.Get("Content-Range"))
 		}
 		if int64(len(d.data))+resp.ContentLength > max && resp.ContentLength > 0 {
-			return 0, fmt.Errorf("%w (máximo %d)", ErrMediaTooLarge, max)
+			return 0, fmt.Errorf("%w (max %d)", ErrMediaTooLarge, max)
 		}
 		before := int64(len(d.data))
 		if err := d.read(resp.Body, max); err != nil {
@@ -222,7 +222,7 @@ func (d *download) attempt(ctx context.Context, client *http.Client, rawURL stri
 	d.reset()
 	d.etag, d.lastMod = resp.Header.Get("ETag"), resp.Header.Get("Last-Modified")
 	if resp.ContentLength > max {
-		return 0, fmt.Errorf("%w (%d bytes, máximo %d)", ErrMediaTooLarge, resp.ContentLength, max)
+		return 0, fmt.Errorf("%w (%d bytes, max %d)", ErrMediaTooLarge, resp.ContentLength, max)
 	}
 	return 0, d.read(resp.Body, max)
 }
@@ -235,14 +235,14 @@ func (d *download) read(body io.Reader, max int64) error {
 	d.data = append(d.data, chunk...)
 	if int64(len(d.data)) > max {
 		d.reset()
-		return fmt.Errorf("%w (máximo %d bytes)", ErrMediaTooLarge, max)
+		return fmt.Errorf("%w (max %d bytes)", ErrMediaTooLarge, max)
 	}
 	if err != nil {
 		d.partial = len(d.data) > 0 && d.ifRange() != ""
 		if !d.partial {
 			d.reset()
 		}
-		return fmt.Errorf("no se pudo descargar: %w", err)
+		return fmt.Errorf("download failed: %w", err)
 	}
 	d.partial = false
 	return nil

@@ -8,14 +8,14 @@ import (
 // Domain errors. Handlers map them to HTTP status codes; agent tools turn them
 // into short Spanish messages for the person.
 var (
-	ErrInvalid      = errors.New("automatización inválida")
-	ErrNotFound     = errors.New("automatización no encontrada")
-	ErrForbidden    = errors.New("no tienes permiso para esta automatización")
-	ErrLimit        = errors.New("límite de automatizaciones alcanzado")
-	ErrConflict     = errors.New("la automatización cambió; recarga e intenta de nuevo")
-	ErrBadState     = errors.New("la automatización no admite esa acción en su estado actual")
-	ErrBudget       = errors.New("presupuesto de la automatización excedido")
-	ErrDisabled     = errors.New("automatizaciones desactivadas")
+	ErrInvalid      = errors.New("invalid automation")
+	ErrNotFound     = errors.New("automation not found")
+	ErrForbidden    = errors.New("you do not have permission for this automation")
+	ErrLimit        = errors.New("automation limit reached")
+	ErrConflict     = errors.New("the automation changed; reload and try again")
+	ErrBadState     = errors.New("the automation does not allow that action in its current state")
+	ErrBudget       = errors.New("automation budget exceeded")
+	ErrDisabled     = errors.New("automations are disabled")
 	errPermanentRun = errors.New("fallo permanente de la corrida")
 )
 

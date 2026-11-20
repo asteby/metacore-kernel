@@ -20,14 +20,14 @@ func (s *Service) validateSpec(ctx context.Context, kind string, spec *Spec, id 
 	switch kind {
 	case KindAutomation:
 		if spec.Trigger == nil {
-			return invalid("falta el disparador (trigger)")
+			return invalid("the trigger is missing")
 		}
 		if len(spec.Inputs) > 0 {
-			return invalid("solo las herramientas dinámicas declaran inputs")
+			return invalid("only dynamic tools declare inputs")
 		}
 	case KindTool:
 		if spec.Trigger != nil {
-			return invalid("una herramienta dinámica no lleva disparador")
+			return invalid("a dynamic tool has no trigger")
 		}
 	default:
 		return invalid("tipo desconocido %q", kind)
@@ -64,7 +64,7 @@ func (s *Service) validateSpec(ctx context.Context, kind string, spec *Spec, id 
 			if rootVars[root] || seen[root] || strings.HasPrefix(root, "$") {
 				return nil
 			}
-			return invalid("el paso %q usa %q, que no es un paso anterior", st.ID, path)
+			return invalid("step %q uses %q, which is not an earlier step", st.ID, path)
 		}
 		refTemplate := func(tpl string) error {
 			for _, m := range templateVarRe.FindAllStringSubmatch(tpl, -1) {
@@ -78,7 +78,7 @@ func (s *Service) validateSpec(ctx context.Context, kind string, spec *Spec, id 
 		case StepTool:
 			tool, ok := allowed[st.Tool]
 			if !ok {
-				return invalid("la herramienta %q no está permitida para automatizaciones", st.Tool)
+				return invalid("tool %q is not allowed for automations", st.Tool)
 			}
 			if err := checkArgs(st.ID, tool, st.Args, refTemplate); err != nil {
 				return err
@@ -97,7 +97,7 @@ func (s *Service) validateSpec(ctx context.Context, kind string, spec *Spec, id 
 			}
 		case StepSummarize:
 			if kind == KindTool && st.Mode == "llm" {
-				return invalid("una herramienta dinámica no resume con IA (el agente que la usa ya lo hace)")
+				return invalid("a dynamic tool does not summarize with AI (the agent using it already does)")
 			}
 			if err := ref(st.From); err != nil {
 				return err
@@ -107,12 +107,12 @@ func (s *Service) validateSpec(ctx context.Context, kind string, spec *Spec, id 
 			}
 		case StepDeliver:
 			if kind == KindTool {
-				return invalid("una herramienta dinámica no entrega notificaciones (paso %q)", st.ID)
+				return invalid("a dynamic tool does not deliver notifications (step %q)", st.ID)
 			}
 			deliveries++
 			for _, ch := range st.Channels {
 				if !p.channelAllowed(ch) {
-					return invalid("el canal %q no está disponible", ch)
+					return invalid("channel %q is not available", ch)
 				}
 			}
 			for _, tpl := range []string{st.Title, st.Body, st.Link} {
@@ -124,17 +124,17 @@ func (s *Service) validateSpec(ctx context.Context, kind string, spec *Spec, id 
 				return err
 			}
 			if st.Link != "" && !strings.HasPrefix(st.Link, "/") {
-				return invalid("el enlace de la entrega debe ser una ruta interna (/…)")
+				return invalid("the delivery link must be an internal path (/…)")
 			}
 		}
 		_ = i
 		seen[st.ID] = true
 	}
 	if deliveries > 2 {
-		return invalid("máximo dos pasos de entrega")
+		return invalid("at most two delivery steps")
 	}
 	if kind == KindAutomation && deliveries == 0 {
-		return invalid("la automatización no entrega nada: agrega un paso deliver")
+		return invalid("the automation delivers nothing: add a deliver step")
 	}
 	return nil
 }
@@ -155,18 +155,18 @@ func (s *Service) validateTrigger(t *Trigger, now time.Time) error {
 			return invalid("%v", err)
 		}
 		if c.Next(now, loc).IsZero() {
-			return invalid("la expresión cron %q nunca se cumple", t.Cron)
+			return invalid("the cron expression %q never fires", t.Cron)
 		}
 		if gap := c.MinGap(now, loc, 300); gap < p.MinInterval {
-			return invalid("la frecuencia mínima es cada %s (la expresión dispara cada %s)", humanDuration(p.MinInterval), humanDuration(gap))
+			return invalid("the minimum frequency is every %s (the expression fires every %s)", humanDuration(p.MinInterval), humanDuration(gap))
 		}
 	case TriggerInterval:
 		d, err := time.ParseDuration(t.Every)
 		if err != nil || d <= 0 {
-			return invalid("intervalo inválido %q", t.Every)
+			return invalid("invalid interval %q", t.Every)
 		}
 		if d < p.MinInterval {
-			return invalid("la frecuencia mínima es cada %s", humanDuration(p.MinInterval))
+			return invalid("the minimum frequency is every %s", humanDuration(p.MinInterval))
 		}
 	case TriggerOnce:
 		loc, err := loadLocation(t.Timezone, p.DefaultTimezone)
@@ -178,21 +178,21 @@ func (s *Service) validateTrigger(t *Trigger, now time.Time) error {
 			return err
 		}
 		if !at.After(now) {
-			return invalid("la fecha %s ya pasó", at.In(loc).Format("02/01/2006 15:04"))
+			return invalid("the date %s has already passed", at.In(loc).Format("02/01/2006 15:04"))
 		}
 		if at.Sub(now) > p.MaxOnceHorizon {
-			return invalid("la fecha está demasiado lejos (máximo %s)", humanDuration(p.MaxOnceHorizon))
+			return invalid("the date is too far away (maximum %s)", humanDuration(p.MaxOnceHorizon))
 		}
 	case TriggerEvent:
 		if t.Cooldown != "" {
 			d, err := time.ParseDuration(t.Cooldown)
 			if err != nil || d < 0 {
-				return invalid("cooldown inválido %q", t.Cooldown)
+				return invalid("invalid cooldown %q", t.Cooldown)
 			}
 		}
 		for _, w := range t.Where {
 			if strings.HasPrefix(w.Field, "$") {
-				return invalid("las condiciones del evento solo leen su payload")
+				return invalid("event conditions only read their payload")
 			}
 		}
 	}
@@ -206,7 +206,7 @@ func checkArgs(stepID string, tool CatalogTool, args map[string]any, refTemplate
 	for name, v := range args {
 		decl, ok := tool.Parameters[name].(map[string]any)
 		if !ok {
-			return invalid("%s: la herramienta %q no tiene el parámetro %q", stepID, tool.Name, name)
+			return invalid("%s: tool %q has no parameter %q", stepID, tool.Name, name)
 		}
 		if s, isStr := v.(string); isStr && templateVarRe.MatchString(s) {
 			if err := refTemplate(s); err != nil {
@@ -222,7 +222,7 @@ func checkArgs(stepID string, tool CatalogTool, args map[string]any, refTemplate
 		decl, _ := d.(map[string]any)
 		if req, _ := decl["required"].(bool); req {
 			if _, ok := args[name]; !ok {
-				return invalid("%s: falta el parámetro obligatorio %q de %q", stepID, name, tool.Name)
+				return invalid("%s: missing required parameter %q of %q", stepID, name, tool.Name)
 			}
 		}
 	}
@@ -236,22 +236,22 @@ func checkType(name string, decl map[string]any, v any) error {
 		f, ok := v.(float64)
 		if !ok || f != float64(int64(f)) {
 			if _, isInt := v.(int); !isInt {
-				return fmt.Errorf("%q debe ser entero", name)
+				return fmt.Errorf("%q must be an integer", name)
 			}
 		}
 	case "number":
 		switch v.(type) {
 		case float64, int, int64:
 		default:
-			return fmt.Errorf("%q debe ser numérico", name)
+			return fmt.Errorf("%q must be numeric", name)
 		}
 	case "boolean":
 		if _, ok := v.(bool); !ok {
-			return fmt.Errorf("%q debe ser verdadero/falso", name)
+			return fmt.Errorf("%q must be true/false", name)
 		}
 	case "string", "":
 		if _, ok := v.(string); !ok {
-			return fmt.Errorf("%q debe ser texto", name)
+			return fmt.Errorf("%q must be text", name)
 		}
 	}
 	if enum, ok := decl["enum"].([]any); ok && len(enum) > 0 {

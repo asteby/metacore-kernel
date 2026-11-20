@@ -118,7 +118,7 @@ func BuildRecordWithDeps(spec modelbase.ImportSpec, raw map[string]any, deps *Tr
 				if gen, ok := lookupGenerator(col.Generator); ok {
 					generated, err := gen()
 					if err != nil {
-						issues = append(issues, RowIssue{Column: col.Header, Message: fmt.Sprintf("no se pudo generar el valor: %v", err), Code: IssueGenerator, Params: map[string]any{"column": col.Header, "error": err.Error()}})
+						issues = append(issues, RowIssue{Column: col.Header, Message: fmt.Sprintf("could not generate the value: %v", err), Code: IssueGenerator, Params: map[string]any{"column": col.Header, "error": err.Error()}})
 						continue
 					}
 					setPath(record, col.Key, generated)
@@ -130,7 +130,7 @@ func BuildRecordWithDeps(spec modelbase.ImportSpec, raw map[string]any, deps *Tr
 				// surface as an opaque database error much later.
 			}
 			if col.Required {
-				issues = append(issues, RowIssue{Column: col.Header, Message: fmt.Sprintf("falta '%s'", col.Header), Code: IssueRequired, Params: map[string]any{"column": col.Header}})
+				issues = append(issues, RowIssue{Column: col.Header, Message: fmt.Sprintf("'%s' is missing", col.Header), Code: IssueRequired, Params: map[string]any{"column": col.Header}})
 			}
 			continue
 		}
@@ -151,7 +151,7 @@ func BuildRecordWithDeps(spec modelbase.ImportSpec, raw map[string]any, deps *Tr
 			if !ok {
 				issues = append(issues, RowIssue{
 					Column:  col.Header,
-					Message: fmt.Sprintf("transform '%s' no registrado", col.Transform),
+					Message: fmt.Sprintf("transform '%s' is not registered", col.Transform),
 					Code:    IssueTransformUnknown, Params: map[string]any{"column": col.Header, "transform": col.Transform},
 				})
 				continue
@@ -214,7 +214,7 @@ func coerceCell(col modelbase.ImportColumn, value string) (any, error) {
 	case "number":
 		n, err := strconv.ParseFloat(value, 64)
 		if err != nil {
-			return nil, cellError{IssueNumber, value, fmt.Sprintf("'%s' debe ser un número (recibido: %q)", col.Header, value)}
+			return nil, cellError{IssueNumber, value, fmt.Sprintf("'%s' must be a number (got: %q)", col.Header, value)}
 		}
 		return n, nil
 	case "boolean":
@@ -224,7 +224,7 @@ func coerceCell(col modelbase.ImportColumn, value string) (any, error) {
 		case "false", "0", "no":
 			return false, nil
 		}
-		return nil, cellError{IssueBoolean, value, fmt.Sprintf("'%s' debe ser sí o no (recibido: %q)", col.Header, value)}
+		return nil, cellError{IssueBoolean, value, fmt.Sprintf("'%s' must be yes or no (got: %q)", col.Header, value)}
 	case "date":
 		// Only unambiguous layouts are accepted, and the value is normalised to
 		// ISO before it reaches Create. Supporting both D/M/Y and M/D/Y would
@@ -235,11 +235,11 @@ func coerceCell(col modelbase.ImportColumn, value string) (any, error) {
 				return parsed.Format("2006-01-02"), nil
 			}
 		}
-		return nil, cellError{IssueDate, value, fmt.Sprintf("'%s' debe ser una fecha con formato AAAA-MM-DD (recibido: %q)", col.Header, value)}
+		return nil, cellError{IssueDate, value, fmt.Sprintf("'%s' must be a date formatted YYYY-MM-DD (got: %q)", col.Header, value)}
 	case "email":
 		at := strings.Index(value, "@")
 		if at <= 0 || at == len(value)-1 || strings.Contains(value, " ") {
-			return nil, cellError{IssueEmail, value, fmt.Sprintf("'%s' no es un correo válido (recibido: %q)", col.Header, value)}
+			return nil, cellError{IssueEmail, value, fmt.Sprintf("'%s' is not a valid email (got: %q)", col.Header, value)}
 		}
 		return value, nil
 	default:
@@ -418,7 +418,7 @@ func ParseXLSX(r io.Reader) ([]map[string]any, error) {
 
 	sheets := f.GetSheetList()
 	if len(sheets) == 0 {
-		return nil, fmt.Errorf("el archivo no tiene hojas")
+		return nil, fmt.Errorf("the file has no sheets")
 	}
 	rows, err := f.GetRows(sheets[0])
 	if err != nil {

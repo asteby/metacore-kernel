@@ -55,7 +55,7 @@ func (r OwnershipRule) Normalize() (OwnershipRule, error) {
 		return r, fmt.Errorf("legacybridge: regla de propiedad sin system")
 	}
 	if !r.Owner.Valid() {
-		return r, fmt.Errorf("legacybridge: dueño %q inválido (legacy|local)", r.Owner)
+		return r, fmt.Errorf("legacybridge: invalid owner %q (legacy|local)", r.Owner)
 	}
 	return r, nil
 }

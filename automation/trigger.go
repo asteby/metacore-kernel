@@ -34,7 +34,7 @@ func parseOnce(at string, loc *time.Location) (time.Time, error) {
 			return t, nil
 		}
 	}
-	return time.Time{}, invalid("fecha y hora inválida %q (usa AAAA-MM-DDTHH:MM)", at)
+	return time.Time{}, invalid("invalid date and time %q (use YYYY-MM-DDTHH:MM)", at)
 }
 
 // NextRun computes the next fire strictly after `after` for a scheduled
@@ -59,7 +59,7 @@ func NextRun(t *Trigger, after time.Time, defaultTZ string) (next time.Time, ok 
 	case TriggerInterval:
 		d, err := time.ParseDuration(t.Every)
 		if err != nil || d <= 0 {
-			return time.Time{}, false, invalid("intervalo inválido %q", t.Every)
+			return time.Time{}, false, invalid("invalid interval %q", t.Every)
 		}
 		return after.Add(d), true, nil
 	case TriggerOnce:
