@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **legacybridge: `PendingStore.DuePending` y `Applier.RetryWaiting` son por
+  origen `(org, system)`.** La cola global ordenada por `next_attempt` dejaba al
+  frente los pendientes de un origen sin configuración y, con 200 o más, los de
+  las demás organizaciones no se reintentaban. Índice nuevo
+  `idx_bridge_pending_org_due (org_id, system, next_attempt)` en `Schema`.
+
 ### Added
 
 - `manifest/v3`, `manifest`, `dynamic`, `runtime/wasm` (**`contributions.rules[].enabled_setting`: regla opt-in por organizacion**; aditivo, un manifest sin el campo se comporta y se proyecta IDENTICO): nombra un setting **booleano y de alcance org** del propio `settings[]` del addon dueño; la regla `request_approval` (K5) solo se evalua mientras ese setting sea `true` para la org. **Apagado por defecto y falla cerrado hacia apagado**: setting falso/ausente, resolver no cableado, org nula o resolver con error => la regla NO se evalua. Validacion v3 (error tipado: la clave debe existir en `settings[]`, ser `boolean`, alcance org, y solo se admite con `then.kind: request_approval`; esquema JSON en sus 2 copias; el validador legacy exige `addonKey` con `enabledSetting`). Proyeccion: `ConstraintDef.EnabledSetting` + `AddonKey` (`omitempty`). Evaluacion: `dynamic.Config.SettingResolver func(ctx, orgID, addonKey, key) (bool, error)`; `ResolveEnabledGuards` memoiza por (addon, key) dentro de la escritura y nunca muta `ModelConstraints`; aplica en `Service.Create/Update` (y por tanto en el replay de aprobaciones) y, para el camino wasm, `dynamic.EvalRowConstraintsFor(ctx, orgID, mc, row, resolver)` (`EvalRowConstraints` a secas trata esos guards como apagados). `data_mutate`/`data_batch` ahora etiquetan el ctx del `WithMutationGuard` con la org (`wasm.OrgIDFromContext`). **Accion para hosts**: cablear `SettingResolver` (ops: leer `metacore_installations.settings` de org+addon, con cache corta) y, si usan `WithMutationGuard`, llamar `EvalRowConstraintsFor`. El setting referido debe ser booleano, org y con `default` false o ausente (error de validacion v3 si no; el resolver debe devolver el valor EFECTIVO, ver `manifest.ResolveSetting`). Aprobar una solicitud tras apagar el setting aplica la escritura ya aprobada una vez. **Antes de publicar addons#2849 (cableado en ops, no incluido aqui)**: `backend/services/dynamic_erp_primitives.go:~441` (MutationGuard) debe pasar de `EvalRowConstraints` a `EvalRowConstraintsFor(ctx, wasm.OrgIDFromContext(ctx), mc, row, resolver)` en el mismo bump; resolver con valor efectivo leyendo `metacore_installations.settings`; cache 30-60 s por (org, addon, key) invalidada en `PUT /addons/:key/settings`; metrica/alerta `enabled_setting.resolve_failed`; auditar los otros escritores de settings (presets, capability_dispatch/apiconn, copiloto, tokens de API) para que un cajero no apague el piso, y auditar quien cambia el toggle. Docs: `docs/spec/v3/README.md`. Pruebas: `dynamic/rule_enabled_setting_test.go`, `runtime/wasm/enabled_setting_guard_test.go`.
@@ -715,6 +723,27 @@ afectar a un manifest o host fuera de ese conjunto:
     envenenada.
   - `Outbound.RetryDead`/`Discard` reciben la organización: un comando de otra
     org responde `ErrCommandNotFound`.
+- **legacybridge/sqlpoll: adaptador de origen `sql_poll`.** Lee por consulta
+  la base del legado (MySQL/MariaDB, Postgres o SQLite) con un usuario de solo
+  lectura y produce envelopes, uno por fila. El mapeo es dato (`Profile`:
+  tabla, llave, `updated_at`, sucursal y columnas `copy`/`ref`/`meta`/`bool`/
+  `const`); los identificadores se validan y se citan con las comillas del
+  dialecto, y todo valor va como parámetro.
+  - `Poll`: cambios después del cursor en orden (`updated_at`, llave), con
+    ventana de asentamiento (`Settle`) y fechas sin zona interpretadas en
+    `Location`.
+  - `Sync`: Poll + Ingest por flujo con el cursor del host; retoma tras una
+    caída y converge con dos corridas a la vez.
+  - `Reconcile`: recorre la tabla por llave contra `bridge_refs`; reemite lo
+    que falta o cambió sin tocar `updated_at` y emite `op=delete` de las llaves
+    borradas en duro (comprobando antes que de verdad no existan).
+  - `key_type` (`integer` por omisión, o `text`): una llave de texto se ordena y
+    compara en binario (`BINARY` / `COLLATE "C"` / `COLLATE BINARY`), igual que
+    el desempate del cursor, así una collation que no es binaria no lo atasca.
+    Un cursor que no avanza es `ErrCursorStalled` en `StreamReport.Error`, no un
+    bucle silencioso.
+  - `QueryTimeout` (30 s por omisión) por consulta y `Scan` (recorrido por
+    llave sin tocar cursores, para adoptar filas que el host ya tiene).
 
 ### Fixed
 
