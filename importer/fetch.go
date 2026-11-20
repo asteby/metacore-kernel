@@ -186,7 +186,7 @@ func (d *download) attempt(ctx context.Context, client *http.Client, rawURL stri
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("no se pudo descargar: %w", err)
+		return 0, fmt.Errorf("download failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -203,7 +203,7 @@ func (d *download) attempt(ctx context.Context, client *http.Client, rawURL stri
 		start, ok := contentRangeStart(resp.Header.Get("Content-Range"))
 		if !ok || start != int64(len(d.data)) || resp.Header.Get("Content-Encoding") != "" {
 			d.reset() // el servidor no continuó donde se esperaba: nunca se mezclan bytes de dos respuestas
-			return 0, fmt.Errorf("no se pudo descargar: rango inesperado %q", resp.Header.Get("Content-Range"))
+			return 0, fmt.Errorf("download failed: unexpected range %q", resp.Header.Get("Content-Range"))
 		}
 		if int64(len(d.data))+resp.ContentLength > max && resp.ContentLength > 0 {
 			return 0, fmt.Errorf("%w (max %d)", ErrMediaTooLarge, max)
@@ -242,7 +242,7 @@ func (d *download) read(body io.Reader, max int64) error {
 		if !d.partial {
 			d.reset()
 		}
-		return fmt.Errorf("no se pudo descargar: %w", err)
+		return fmt.Errorf("download failed: %w", err)
 	}
 	d.partial = false
 	return nil

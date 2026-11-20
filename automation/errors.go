@@ -15,7 +15,7 @@ var (
 	ErrConflict     = errors.New("the automation changed; reload and try again")
 	ErrBadState     = errors.New("the automation does not allow that action in its current state")
 	ErrBudget       = errors.New("automation budget exceeded")
-	ErrDisabled     = errors.New("automatizaciones desactivadas")
+	ErrDisabled     = errors.New("automations are disabled")
 	errPermanentRun = errors.New("fallo permanente de la corrida")
 )
 

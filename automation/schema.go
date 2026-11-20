@@ -48,7 +48,7 @@ func validateSchema(raw []byte) error {
 		return invalid("invalid JSON: %v", err)
 	}
 	if err := compiledSchema.Validate(inst); err != nil {
-		return invalid("no cumple el esquema %s: %v", SpecVersion, err)
+		return invalid("does not match schema %s: %v", SpecVersion, err)
 	}
 	return nil
 }

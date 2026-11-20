@@ -410,19 +410,19 @@ func storeMedia(ctx context.Context, deps *TransformDeps, u *url.URL, data []byt
 
 	if hs, ok := deps.Store.(HashedMediaStore); ok {
 		if name, found, err := hs.Lookup(ctx, hexsum); err != nil {
-			return "", fmt.Errorf("no se pudo guardar: %w", err)
+			return "", fmt.Errorf("could not save: %w", err)
 		} else if found {
 			return name, nil
 		}
 		name, err := hs.PutHashed(ctx, hexsum, suggested, bytes.NewReader(data), detected)
 		if err != nil {
-			return "", fmt.Errorf("no se pudo guardar: %w", err)
+			return "", fmt.Errorf("could not save: %w", err)
 		}
 		return name, nil
 	}
 	name, err := deps.Store.Put(ctx, suggested, bytes.NewReader(data), detected)
 	if err != nil {
-		return "", fmt.Errorf("no se pudo guardar: %w", err)
+		return "", fmt.Errorf("could not save: %w", err)
 	}
 	return name, nil
 }

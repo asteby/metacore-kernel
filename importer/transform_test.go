@@ -143,7 +143,7 @@ func TestUnknownTransformFailsRow(t *testing.T) {
 		},
 	}
 	_, issues := BuildRecord(spec, map[string]any{"Nombre": "X"})
-	if len(issues) != 1 || !strings.Contains(issues[0].Message, "no registrado") {
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, "is not registered") {
 		t.Fatalf("issues: %+v", issues)
 	}
 }

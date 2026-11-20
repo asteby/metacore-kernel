@@ -11,7 +11,8 @@
 # // comments are ignored):
 #   niche   : CFDI, SAT, MXN, llanta, vehicle plate, folio fiscal, ClaveProd*,
 #             es-MX, and RFC used as a tax id (RFC 3339 / RFC 5322 etc. are fine)
-#   spanish : any of áéíóúñ¿¡ in code
+#   spanish : any of áéíóúñ¿¡ in code, or common unaccented Spanish error phrases
+#             inside a string literal (debe ser, falta, no se pudo, no existe...)
 #
 # scripts/kernel-neutrality-baseline.txt lists "<path> <check> <count>" with a
 # "# justification" line above each group. A file/check not listed must have 0
@@ -32,7 +33,7 @@ scan() {
       next if /^\s*(\/\/|\*|\/\*)/;
       while (/\s\/\//g) { my $pre = substr($_, 0, $-[0]); my $q = () = $pre =~ /"/g; my $b = () = $pre =~ /`/g; if ($q % 2 == 0 && $b % 2 == 0) { $_ = $pre; last } }
       $n{niche}++   if /\b(CFDI|SAT|MXN|ClaveProd\w*)\b|\bRFC\b(?![\s-]*\d)(?!-PAYMENTS)|(?i:\b(llantas?|folio fiscal|vehicle[ _]plate)\b|es-MX|"rfc")/;
-      $n{spanish}++ if /[áéíóúñ¿¡]/;
+      $n{spanish}++ if /[áéíóúñ¿¡]/ || /"[^"]*\b(debe ser|falta |no se pudo|no existe|desactivad[ao]s?|automatizaci[oó]n)\b/;
       END { printf "%s %s %d\n", $ARGV, $_, $n{$_} for grep { $n{$_} } sort keys %n }
     ' "$f" | sed "s|^[^ ]*|$f|"
   done

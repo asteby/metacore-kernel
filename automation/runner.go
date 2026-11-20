@@ -507,7 +507,7 @@ func bindInputs(decl []InputParam, args map[string]any) (map[string]any, error) 
 				continue
 			}
 			if in.Required {
-				return nil, invalid("falta %q", in.Name)
+				return nil, invalid("%q is missing", in.Name)
 			}
 			continue
 		}
@@ -790,7 +790,7 @@ func (deliverNode) Execute(ctx context.Context, node *flow.FlowNode, ec *flow.Ex
 		return &flow.NodeResult{Output: map[string]any{"sent": 0, "count": len(items), "already": true}}, nil
 	}
 	if env.svc.deliverer == nil {
-		return nil, errors.New("sin canal de entrega configurado")
+		return nil, errors.New("no delivery channel configured")
 	}
 	db := env.svc.db.WithContext(ctx)
 	// Claim the item keys first (dedupe across runs); release them if the

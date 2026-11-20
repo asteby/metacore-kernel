@@ -215,20 +215,22 @@ func ok(c fiber.Ctx, data any) error {
 
 func fail(c fiber.Ctx, err error) error {
 	status := fiber.StatusInternalServerError
-	msg := "error interno"
+	msg, code := "internal error", "automation.internal"
 	switch {
 	case errors.Is(err, ErrInvalid):
-		status, msg = fiber.StatusUnprocessableEntity, err.Error()
+		status, msg, code = fiber.StatusUnprocessableEntity, err.Error(), "automation.invalid"
 	case errors.Is(err, ErrNotFound):
-		status, msg = fiber.StatusNotFound, ErrNotFound.Error()
+		status, msg, code = fiber.StatusNotFound, ErrNotFound.Error(), "automation.not_found"
 	case errors.Is(err, ErrForbidden):
-		status, msg = fiber.StatusForbidden, ErrForbidden.Error()
+		status, msg, code = fiber.StatusForbidden, ErrForbidden.Error(), "automation.forbidden"
 	case errors.Is(err, ErrLimit):
-		status, msg = fiber.StatusTooManyRequests, err.Error()
-	case errors.Is(err, ErrConflict), errors.Is(err, ErrBadState):
-		status, msg = fiber.StatusConflict, err.Error()
+		status, msg, code = fiber.StatusTooManyRequests, err.Error(), "automation.limit"
+	case errors.Is(err, ErrConflict):
+		status, msg, code = fiber.StatusConflict, err.Error(), "automation.conflict"
+	case errors.Is(err, ErrBadState):
+		status, msg, code = fiber.StatusConflict, err.Error(), "automation.bad_state"
 	case errors.Is(err, ErrDisabled):
-		status, msg = fiber.StatusServiceUnavailable, err.Error()
+		status, msg, code = fiber.StatusServiceUnavailable, err.Error(), "automation.disabled"
 	}
-	return c.Status(status).JSON(fiber.Map{"success": false, "message": msg})
+	return c.Status(status).JSON(fiber.Map{"success": false, "message": msg, "code": code})
 }

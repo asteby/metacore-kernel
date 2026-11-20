@@ -118,7 +118,7 @@ func BuildRecordWithDeps(spec modelbase.ImportSpec, raw map[string]any, deps *Tr
 				if gen, ok := lookupGenerator(col.Generator); ok {
 					generated, err := gen()
 					if err != nil {
-						issues = append(issues, RowIssue{Column: col.Header, Message: fmt.Sprintf("no se pudo generar el valor: %v", err), Code: IssueGenerator, Params: map[string]any{"column": col.Header, "error": err.Error()}})
+						issues = append(issues, RowIssue{Column: col.Header, Message: fmt.Sprintf("could not generate the value: %v", err), Code: IssueGenerator, Params: map[string]any{"column": col.Header, "error": err.Error()}})
 						continue
 					}
 					setPath(record, col.Key, generated)
@@ -130,7 +130,7 @@ func BuildRecordWithDeps(spec modelbase.ImportSpec, raw map[string]any, deps *Tr
 				// surface as an opaque database error much later.
 			}
 			if col.Required {
-				issues = append(issues, RowIssue{Column: col.Header, Message: fmt.Sprintf("falta '%s'", col.Header), Code: IssueRequired, Params: map[string]any{"column": col.Header}})
+				issues = append(issues, RowIssue{Column: col.Header, Message: fmt.Sprintf("'%s' is missing", col.Header), Code: IssueRequired, Params: map[string]any{"column": col.Header}})
 			}
 			continue
 		}
@@ -151,7 +151,7 @@ func BuildRecordWithDeps(spec modelbase.ImportSpec, raw map[string]any, deps *Tr
 			if !ok {
 				issues = append(issues, RowIssue{
 					Column:  col.Header,
-					Message: fmt.Sprintf("transform '%s' no registrado", col.Transform),
+					Message: fmt.Sprintf("transform '%s' is not registered", col.Transform),
 					Code:    IssueTransformUnknown, Params: map[string]any{"column": col.Header, "transform": col.Transform},
 				})
 				continue
@@ -418,7 +418,7 @@ func ParseXLSX(r io.Reader) ([]map[string]any, error) {
 
 	sheets := f.GetSheetList()
 	if len(sheets) == 0 {
-		return nil, fmt.Errorf("el archivo no tiene hojas")
+		return nil, fmt.Errorf("the file has no sheets")
 	}
 	rows, err := f.GetRows(sheets[0])
 	if err != nil {

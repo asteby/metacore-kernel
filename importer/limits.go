@@ -162,7 +162,7 @@ func ParseJSONLimited(body []byte, lim ParseLimits) ([]map[string]any, error) {
 					return nil, err
 				}
 				if t != json.Delim('[') {
-					return nil, fmt.Errorf("json: \"data\" debe ser un arreglo")
+					return nil, fmt.Errorf("json: \"data\" must be an array")
 				}
 				if rows, err = readArray(); err != nil {
 					return nil, err

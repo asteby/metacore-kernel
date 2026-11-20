@@ -60,7 +60,7 @@ func idParam(params map[string]any) (uuid.UUID, error) {
 func specParam(params map[string]any) (json.RawMessage, error) {
 	v, ok := params["spec"]
 	if !ok || v == nil {
-		return nil, invalid("falta spec (objeto automation/v1)")
+		return nil, invalid("spec is missing (automation/v1 object)")
 	}
 	if s, ok := v.(string); ok {
 		return json.RawMessage(s), nil

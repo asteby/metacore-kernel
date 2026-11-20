@@ -20,7 +20,7 @@ func (s *Service) validateSpec(ctx context.Context, kind string, spec *Spec, id 
 	switch kind {
 	case KindAutomation:
 		if spec.Trigger == nil {
-			return invalid("falta el disparador (trigger)")
+			return invalid("the trigger is missing")
 		}
 		if len(spec.Inputs) > 0 {
 			return invalid("only dynamic tools declare inputs")
@@ -64,7 +64,7 @@ func (s *Service) validateSpec(ctx context.Context, kind string, spec *Spec, id 
 			if rootVars[root] || seen[root] || strings.HasPrefix(root, "$") {
 				return nil
 			}
-			return invalid("el paso %q usa %q, que no es un paso anterior", st.ID, path)
+			return invalid("step %q uses %q, which is not an earlier step", st.ID, path)
 		}
 		refTemplate := func(tpl string) error {
 			for _, m := range templateVarRe.FindAllStringSubmatch(tpl, -1) {
@@ -124,7 +124,7 @@ func (s *Service) validateSpec(ctx context.Context, kind string, spec *Spec, id 
 				return err
 			}
 			if st.Link != "" && !strings.HasPrefix(st.Link, "/") {
-				return invalid("el enlace de la entrega debe ser una ruta interna (/…)")
+				return invalid("the delivery link must be an internal path (/…)")
 			}
 		}
 		_ = i
@@ -192,7 +192,7 @@ func (s *Service) validateTrigger(t *Trigger, now time.Time) error {
 		}
 		for _, w := range t.Where {
 			if strings.HasPrefix(w.Field, "$") {
-				return invalid("las condiciones del evento solo leen su payload")
+				return invalid("event conditions only read their payload")
 			}
 		}
 	}
@@ -236,7 +236,7 @@ func checkType(name string, decl map[string]any, v any) error {
 		f, ok := v.(float64)
 		if !ok || f != float64(int64(f)) {
 			if _, isInt := v.(int); !isInt {
-				return fmt.Errorf("%q debe ser entero", name)
+				return fmt.Errorf("%q must be an integer", name)
 			}
 		}
 	case "number":
@@ -247,11 +247,11 @@ func checkType(name string, decl map[string]any, v any) error {
 		}
 	case "boolean":
 		if _, ok := v.(bool); !ok {
-			return fmt.Errorf("%q debe ser verdadero/falso", name)
+			return fmt.Errorf("%q must be true/false", name)
 		}
 	case "string", "":
 		if _, ok := v.(string); !ok {
-			return fmt.Errorf("%q debe ser texto", name)
+			return fmt.Errorf("%q must be text", name)
 		}
 	}
 	if enum, ok := decl["enum"].([]any); ok && len(enum) > 0 {
