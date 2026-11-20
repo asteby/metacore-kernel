@@ -1894,6 +1894,11 @@ type ColumnDef struct {
 	// sort or aggregate by it (dynamic.ReadMask). Empty = no column gate.
 	ReadPermission string `json:"read_permission,omitempty"`
 
+	// WritePermission carries the v3 Column.write_permission onto
+	// modelbase.ColumnDef.WritePermission: a caller without it cannot change the
+	// column through the dynamic create/update (403 column_write_denied).
+	WritePermission string `json:"write_permission,omitempty"`
+
 	// RejectDeletedRef carries the v3 Column.reject_deleted_ref opt-in: a
 	// create whose Ref points at a soft-deleted row is rejected. See
 	// manifest/v3.Column.RejectDeletedRef.

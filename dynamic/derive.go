@@ -111,6 +111,9 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			// ReadPermission rides through: the dynamic runtime strips the
 			// column from the reads of a caller lacking the permission.
 			ReadPermission: c.ReadPermission,
+			// WritePermission rides through: the dynamic runtime rejects a changed
+			// value from a caller lacking it, and a client may render it read-only.
+			WritePermission: c.WritePermission,
 			// Write facts (inbound target catalogue): see ColumnDef.Required.
 			Required:  c.Required,
 			Unique:    c.Unique,

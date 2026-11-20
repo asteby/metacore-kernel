@@ -658,6 +658,9 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// ReadPermission rides through so the dynamic runtime strips the
 				// column from every read of a caller lacking the permission.
 				ReadPermission: c.ReadPermission,
+				// WritePermission rides through so the dynamic create/update rejects a
+				// changed value from a caller lacking the permission.
+				WritePermission: c.WritePermission,
 				// RejectDeletedRef rides through so a create pointing at a
 				// soft-deleted ref target is refused (opt-in, VEN-N08).
 				RejectDeletedRef: c.RejectDeletedRef,

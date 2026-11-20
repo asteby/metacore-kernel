@@ -160,6 +160,17 @@ func (s *Service) validateColumns(ctx context.Context, cols []manifest.ColumnDef
 
 		raw, present := input[name]
 
+		// WritePermission: a per-caller write gate (column_write.go). A caller who
+		// lacks the permission may only echo the persisted/default value back (an
+		// edit form posts every field); a real change is refused with a typed 403.
+		if col.WritePermission != "" && present && !s.mayWriteColumn(ctx, user, col.WritePermission) {
+			if protectedNoop(raw, col, before, isUpdate) {
+				delete(input, name)
+				continue
+			}
+			return nil, &ColumnWriteDeniedError{Model: tableName, Column: name}
+		}
+
 		// Protected: a SERVER-ENFORCED write gate, unlike Readonly (UI-only
 		// guidance). Present in generic create/update input, this column is
 		// ALWAYS rejected — no role/permission bypass. The only legitimate way

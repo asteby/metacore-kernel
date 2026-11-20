@@ -1826,6 +1826,13 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 			}
 			cwhere := fmt.Sprintf("models[%d].columns[%d]", mi, ci)
 			errs = append(errs, validateReadPermission(&m, cwhere, c.ReadPermission)...)
+			errs = append(errs, validateColumnPermission(&m, cwhere, "write_permission", c.WritePermission)...)
+			if c.WritePermission != "" && c.Protected {
+				errs = append(errs, fmt.Sprintf("%s.write_permission conflicts with protected (a protected column is writable by nobody through generic writes)", cwhere))
+			}
+			if c.WritePermission != "" && c.Generated != "" {
+				errs = append(errs, fmt.Sprintf("%s.write_permission is meaningless on a generated column (never writable)", cwhere))
+			}
 			errs = append(errs, validateOptionFilter(cwhere, c.OptionFilter)...)
 			errs = append(errs, validateExtraColumns(cwhere, c.Options.Dynamic, colsByModel[c.Options.Dynamic.sourceOrEmpty()])...)
 			if c.Options.Len() == 0 {
@@ -2220,11 +2227,17 @@ var PermissionKeyRe = regexp.MustCompile(`^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_:]*)
 // another addon or of the host is only shape-checked: it is resolved by the
 // permission service at runtime.
 func validateReadPermission(m *Manifest, where, perm string) []string {
+	return validateColumnPermission(m, where, "read_permission", perm)
+}
+
+// validateColumnPermission is the shared body of validateReadPermission and the
+// write_permission check: field names the key in messages.
+func validateColumnPermission(m *Manifest, where, field, perm string) []string {
 	if perm == "" {
 		return nil
 	}
 	if !PermissionKeyRe.MatchString(perm) {
-		return []string{fmt.Sprintf("%s.read_permission %q is not a valid permission key (want e.g. \"<addon>.<resource>.<action>\")", where, perm)}
+		return []string{fmt.Sprintf("%s.%s %q is not a valid permission key (want e.g. \"<addon>.<resource>.<action>\")", where, field, perm)}
 	}
 	own := m.Metadata.Key
 	if own == "" || !strings.HasPrefix(perm, own+".") {
@@ -2237,7 +2250,7 @@ func validateReadPermission(m *Manifest, where, perm string) []string {
 			}
 		}
 	}
-	return []string{fmt.Sprintf("%s.read_permission %q is not declared in rbac.permissions", where, perm)}
+	return []string{fmt.Sprintf("%s.%s %q is not declared in rbac.permissions", where, field, perm)}
 }
 
 // validatePermissionModels checks rbac.permissions[].models: every entry names
