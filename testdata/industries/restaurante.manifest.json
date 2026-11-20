@@ -1,0 +1,50 @@
+{
+  "apiVersion": "asteby.com/v3", "kind": "Addon",
+  "metadata": {"key": "industry_restaurante", "name": "Industry gate: restaurante", "version": "1.0.0"},
+  "compatibility": {"requires": [{"key": "kernel", "version": ">=3.0.0 <4.0.0"}]},
+  "tenancy": {"isolation": "shared", "rls_column": "organization_id"},
+  "capabilities": [{"kind": "db:write", "target": "addon_industry_restaurante.*"}],
+  "models": [{
+    "key": "Comanda", "table": "ind_comandas",
+    "stage_field": "status",
+    "stages": [
+      {"key": "mesa", "order": 0},
+      {"key": "comanda", "order": 1},
+      {"key": "cocina", "order": 2},
+      {"key": "cuenta", "order": 3},
+      {"key": "pagada", "order": 4, "is_final": true, "locked": true},
+      {"key": "cancelada", "order": 5, "is_final": true, "locked": true}
+    ],
+    "transitions": [
+      {"from": "mesa", "to": "comanda", "roles": ["mesero", "gerente"], "requires_fields": ["mesa"]},
+      {"from": "comanda", "to": "cocina", "roles": ["mesero", "gerente"], "requires_fields": ["total"], "guard": "total > 0"},
+      {"from": "cocina", "to": "cuenta", "roles": ["mesero", "gerente"]},
+      {"from": "cuenta", "to": "pagada", "roles": ["mesero", "gerente"], "guard": "paid_total >= total"},
+      {"from": "comanda", "to": "cancelada", "approval": {"roles": ["gerente"], "reason_required": true}},
+      {"from": "cocina", "to": "cancelada", "approval": {"roles": ["gerente"], "reason_required": true}},
+      {"from": "cuenta", "to": "cancelada", "approval": {"roles": ["gerente"], "reason_required": true}},
+      {"from": "pagada", "to": "cuenta", "reopen": true, "approval": {"roles": ["gerente"], "reason_required": true}}
+    ],
+    "sequences": [
+      {"key": "comanda_no", "scope": "column", "scope_column": "turno_id", "period": "day", "format": "{scope}-{dd}-{seq:03}"},
+      {"key": "ticket", "gapless": true, "assign_on": "transition:cuenta", "format": "T-{seq:06}"}
+    ],
+    "columns": [
+      {"name": "id", "type": "uuid"},
+      {"name": "organization_id", "type": "uuid", "not_null": true},
+      {"name": "status", "type": "text"},
+      {"name": "mesa", "type": "text"},
+      {"name": "turno_id", "type": "text"},
+      {"name": "comanda_no", "type": "text", "sequence": "comanda_no"},
+      {"name": "folio_ticket", "type": "text", "sequence": "ticket"},
+      {"name": "total", "type": "numeric"},
+      {"name": "paid_total", "type": "numeric"},
+      {"name": "discount_pct", "type": "numeric"}
+    ]
+  }],
+  "contributions": {"rules": [{
+    "key": "descuento_alto", "model": "Comanda", "when": "discount_pct > 10",
+    "then": {"kind": "request_approval", "message": "restaurante.descuento_alto",
+             "approval": {"roles": ["gerente"]}}
+  }]}
+}
