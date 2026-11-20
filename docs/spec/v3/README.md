@@ -405,7 +405,13 @@ Semantics: **off by default**. A false/missing setting, a host without a
 `SettingResolver`, or a resolver error all skip the rule (fail closed toward
 off; the failure is logged). Omitting the field keeps today's always-on
 behaviour. Validation rejects an unknown key, a non-boolean or branch/market
-scoped setting, and use with `flag`/`notify` rules. The host wires
+scoped setting, a setting whose `default` is anything but `false`/absent
+(opt-in rules are OFF by default), and use with `flag`/`notify` rules. The
+referenced setting must be boolean, org-scoped and default to false or none.
+The host resolver must return the EFFECTIVE value (the stored one, else the
+manifest default, i.e. false; see `manifest.ResolveSetting(def, orgValues,
+nil)`), never the raw stored value. Approving a parked request after the
+setting was turned off still applies the approved write once. The host wires
 `dynamic.Config.SettingResolver(ctx, orgID, addonKey, key)`; it runs at most
 once per (addon, key) per write, so hosts should cache the org's settings.
 

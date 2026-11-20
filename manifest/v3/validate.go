@@ -583,6 +583,8 @@ func validateRules(m *Manifest, colsByModel map[string]map[string]struct{}) []st
 				errs = append(errs, fmt.Sprintf("%s.enabled_setting %q must reference a boolean setting (is %q)", where, r.EnabledSetting, found.Type))
 			case found.Scope != "" && found.Scope != "org":
 				errs = append(errs, fmt.Sprintf("%s.enabled_setting %q must reference an org-scoped setting (scope %q)", where, r.EnabledSetting, found.Scope))
+			case found.Default != nil && found.Default != false:
+				errs = append(errs, fmt.Sprintf("%s.enabled_setting %q: the setting's default must be false or absent (an opt-in rule is OFF by default; default %v would show the toggle on while the rule is skipped)", where, r.EnabledSetting, found.Default))
 			}
 		}
 		if r.Then.Severity != "" {

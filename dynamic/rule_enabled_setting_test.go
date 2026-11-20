@@ -163,6 +163,7 @@ func TestEnabledSetting_ManifestValidation(t *testing.T) {
 		"missing":  strings.Replace(enabledSettingManifest, `"enabled_setting": "enforce_cap"`, `"enabled_setting": "nope"`, 1),
 		"notbool":  strings.Replace(enabledSettingManifest, `{"key": "enforce_cap", "type": "boolean"}`, `{"key": "enforce_cap", "type": "string"}`, 1),
 		"branch":   strings.Replace(enabledSettingManifest, `{"key": "enforce_cap", "type": "boolean"}`, `{"key": "enforce_cap", "type": "boolean", "scope": "branch"}`, 1),
+		"defaulttrue": strings.Replace(enabledSettingManifest, `{"key": "enforce_cap", "type": "boolean"}`, `{"key": "enforce_cap", "type": "boolean", "default": true}`, 1),
 		"notguard": strings.Replace(strings.Replace(enabledSettingManifest, `"kind": "request_approval"`, `"kind": "flag"`, 1), `"approval": {"roles": ["manager"]}`, `"severity": "info"`, 1),
 	}
 	for name, src := range cases {
@@ -173,5 +174,47 @@ func TestEnabledSetting_ManifestValidation(t *testing.T) {
 	}
 	if _, err := v3.Parse([]byte(enabledSettingManifest)); err != nil {
 		t.Fatalf("valid manifest rejected: %v", err)
+	}
+}
+
+// Dos guards que comparten el setting: el resolver corre UNA vez por escritura.
+func TestEnabledSetting_SharedSettingResolvedOnce(t *testing.T) {
+	g := func(key string) manifest.ConstraintDef {
+		return manifest.ConstraintDef{Expr: "price > 100", ErrorKey: key, Invert: true, OnViolation: "request_approval",
+			Approval: &manifest.ApprovalDef{Roles: []string{"manager"}}, EnabledSetting: "enforce_cap", AddonKey: "pricing"}
+	}
+	mc := &ModelConstraints{Constraints: []manifest.ConstraintDef{g("rule:a"), g("rule:b")}}
+	var calls int
+	out := ResolveEnabledGuards(context.Background(), uuid.New(), mc, func(context.Context, uuid.UUID, string, string) (bool, error) {
+		calls++
+		return true, nil
+	})
+	if calls != 1 || len(out.Constraints) != 2 {
+		t.Fatalf("calls=%d guards=%d, want 1 call and 2 guards", calls, len(out.Constraints))
+	}
+}
+
+// Aprobar con el setting APAGADO entre la solicitud y la decision: el replay
+// aplica la escritura ya aprobada (el guard simplemente no esta; no hay nada
+// que saltar). Comportamiento documentado en el CHANGELOG.
+func TestEnabledSetting_ApproveAfterSettingTurnedOff(t *testing.T) {
+	org := uuid.New()
+	on := true
+	svc, _ := enabledSettingSvc(t, func(context.Context, uuid.UUID, string, string) (bool, error) { return on, nil })
+	ctx := context.Background()
+	u := newUser(org)
+	_, err := svc.Create(ctx, "test_products", u, map[string]any{"name": "tardio", "price": 150.0})
+	var ar *ApprovalRequiredError
+	if !errors.As(err, &ar) {
+		t.Fatalf("create: %v", err)
+	}
+	on = false
+	if _, err := svc.ApproveRequest(ctx, u, ar.Request.ID, ""); err != nil {
+		t.Fatalf("approve with setting off: %v", err)
+	}
+	var n int64
+	svc.db.Raw("SELECT COUNT(*) FROM test_products WHERE name = 'tardio'").Scan(&n)
+	if n != 1 {
+		t.Fatalf("approved write must apply exactly once, got %d", n)
 	}
 }
