@@ -3861,6 +3861,20 @@
           "type": "boolean",
           "description": "Opts the action in to be run by an inbound event (record.action of the inbound chain). Default false: an action without it is never reachable from an ingest contract. Invalid together with approval, supervisor_policy, confirm_typed or a 'table'/'create' placement."
         },
+        "stage_authority": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["authority", "transitions"],
+          "description": "Makes the action the authority for the listed stage transitions of its target model: while it runs, wasm writes of those moves skip the transition's roles and approval (guard, requires_fields and locked always apply). Invalid with ingest.",
+          "properties": {
+            "authority": { "type": "string", "enum": ["action_permission"] },
+            "transitions": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "pattern": "^[^>\\s]+->[^>\\s]+$" }
+            }
+          }
+        },
         "modal_width": {
           "type": [
             "string",

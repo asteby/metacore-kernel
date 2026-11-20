@@ -247,6 +247,9 @@ func (s *Service) ExecAction(ctx context.Context, model string, user modelbase.A
 	// handler creates/updates (e.g. customers' collect_payment) stamped
 	// created_by_id as empty and the UI fell back to "Sistema".
 	ctx = WithActorID(ctx, user.GetID().String())
+	// An action that is the declared authority for some stage transitions
+	// (Action.stage_authority) tells the wasm stage-policy gate so while it runs.
+	ctx = withActionStageAuthority(ctx, model, key, def.StageAuthority)
 	// Same for the active branch, when the host's user carries one (the
 	// optional GetBranchID sequence.go already honours) and the host did not
 	// already put it in ctx: a document the handler creates without naming a

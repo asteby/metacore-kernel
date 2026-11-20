@@ -138,6 +138,10 @@ type invocation struct {
 	// (Host.WithStageMachine). nil = data_mutate / data_batch do not gate
 	// stage moves.
 	stageMachine StageMachineFn
+	// stagePolicy is the embedder-injected per-transition policy gate
+	// (Host.WithStagePolicy). nil = data_mutate / data_batch apply only the
+	// from -> to whitelist.
+	stagePolicy StagePolicyFn
 	// extensions resolves 1:1 extension tables (Host.WithExtensions).
 	extensions ExtensionFn
 	// approvalRequester is the embedder-injected dynamic.Service.RequestApproval

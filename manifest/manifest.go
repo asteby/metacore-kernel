@@ -919,9 +919,13 @@ type ActionDef struct {
 	SupervisorPolicy string `json:"supervisorPolicy,omitempty"`
 	// Ingest is the projection of v3 Action.ingest: the action may be run by an
 	// inbound event (inbound `record.action`). Closed by default.
-	Ingest         bool   `json:"ingest,omitempty"`
-	Confirm        bool   `json:"confirm,omitempty"`
-	ConfirmMessage string `json:"confirmMessage,omitempty"`
+	Ingest bool `json:"ingest,omitempty"`
+	// StageAuthority is the projection of v3 Action.stage_authority: the exact
+	// "from->to" stage transitions this action is the authority for (they skip
+	// the transition's roles/approval while the action runs). Nil = none.
+	StageAuthority *StageAuthorityDef `json:"stageAuthority,omitempty"`
+	Confirm        bool               `json:"confirm,omitempty"`
+	ConfirmMessage string             `json:"confirmMessage,omitempty"`
 	// ConfirmTyped is the projection of v3 Action.confirm_typed: the user types
 	// the current value of Field to confirm; the server verifies payload.confirm_text.
 	ConfirmTyped *v3.ConfirmTyped `json:"confirmTyped,omitempty"`
@@ -2168,5 +2172,24 @@ type CrossRuleDef struct {
 type AddonRequirement struct {
 	Key      string `json:"key"`
 	Range    string `json:"range,omitempty"`
-	Optional bool   `json:"optional,omitempty"`
+}
+
+
+// StageAuthorityDef is the runtime projection of v3 StageAuthority.
+type StageAuthorityDef struct {
+	Transitions []string `json:"transitions"`
+}
+
+// Covers reports whether the action is the authority for from -> to.
+func (d *StageAuthorityDef) Covers(from, to string) bool {
+	if d == nil {
+		return false
+	}
+	key := from + "->" + to
+	for _, t := range d.Transitions {
+		if t == key {
+			return true
+		}
+	}
+	return false
 }

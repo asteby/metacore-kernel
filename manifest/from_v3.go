@@ -1243,6 +1243,9 @@ func mapActions(m *v3.Manifest) map[string][]ActionDef {
 			Condition:        mapCondition(a.Condition),
 		}
 		def.Trigger = handlerToTrigger(a.Handler)
+		if a.StageAuthority != nil {
+			def.StageAuthority = &StageAuthorityDef{Transitions: append([]string(nil), a.StageAuthority.Transitions...)}
+		}
 		if a.Idempotency != nil {
 			def.Idempotency = &IdempotencyDef{KeyField: a.Idempotency.KeyField}
 		}

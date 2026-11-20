@@ -196,10 +196,10 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 			rollbackScope()
 			return fail(code, fmt.Sprintf("mutations[%d]: %s", i, cErr.Error()))
 		}
-		res, code, mErr := applyMutation(work, p.req, p.data, p.inc, orgID, p.tbl, now, dynamic.ActorIDFromContext(ctx), dynamic.BranchIDFromContext(ctx), stageFor(inv, p.req.Table, p.req.Model), extensionsFor(inv, p.req.Table, p.req.Model), updateStampFor(execCtx, inv, work, orgID, p.req))
+		res, code, mErr := applyMutation(work, p.req, p.data, p.inc, orgID, p.tbl, now, dynamic.ActorIDFromContext(ctx), dynamic.BranchIDFromContext(ctx), stageFor(inv, p.req.Table, p.req.Model), stagePolicyFor(execCtx, inv, addonKey, orgID, p.req), extensionsFor(inv, p.req.Table, p.req.Model), updateStampFor(execCtx, inv, work, orgID, p.req))
 		if mErr != nil {
 			rollbackScope()
-			return dataMutateFailDB(inv, addonKey, code, p.req.Table, mErr, orgID, start, dynamic.CorrelationIDFromContext(ctx), true, fmt.Sprintf("mutations[%d]: ", i), fail)
+			return withApprovalDetail(dataMutateFailDB(inv, addonKey, code, p.req.Table, mErr, orgID, start, dynamic.CorrelationIDFromContext(ctx), true, fmt.Sprintf("mutations[%d]: ", i), fail), mErr)
 		}
 		// Declarative guards (Host.WithMutationGuard) check the post-mutation
 		// row inside the shared transaction — one violated constraint rolls the

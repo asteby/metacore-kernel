@@ -74,6 +74,23 @@ type Config struct {
 	// `stage.create_in_final`, so hosts can find the offenders first.
 	StrictStageCreate bool
 
+	// WasmStagePolicy sets how the wasm data_mutate / data_batch imports apply
+	// the stage machine's per-transition policy (roles, approval, guard,
+	// requires_fields, locked stage) that Service.Update already enforces:
+	//
+	//   - WasmStagePolicyWarn (DEFAULT for one release): evaluate it and log
+	//     `stage_policy.wasm_bypass` for every write it would refuse, but let
+	//     the write through, so installed addons that cancel / close records on
+	//     purpose can be found and fixed first.
+	//   - WasmStagePolicyEnforce: refuse (roles -> forbidden, guard ->
+	//     invalid_transition, requires_fields -> validation_failed, locked ->
+	//     record_locked) or park (approval -> approval_required + a pending
+	//     ApprovalRequest) exactly like the REST path.
+	//   - WasmStagePolicyOff: the legacy from->to whitelist only.
+	//
+	// Empty = warn. See docs/wasm-abi.md § 14.11.
+	WasmStagePolicy WasmStagePolicyMode
+
 	// RequirePermissions makes a missing Permissions service DENY every
 	// request instead of allowing it. Without this, `perms == nil` fails OPEN:
 	// the safest default a host can pick is to fail closed, so a wiring
@@ -471,6 +488,7 @@ type Service struct {
 	requireTenant     bool
 	lenientFilters    bool
 	strictStageCreate bool
+	wasmStagePolicy   WasmStagePolicyMode
 	sequenceClock     func(ctx context.Context, orgID uuid.UUID) time.Time
 	tableNameResolver TableNameResolver
 	bus               Publisher
@@ -573,6 +591,7 @@ func New(cfg Config) *Service {
 		requireTenant:     cfg.RequireTenantScope,
 		lenientFilters:    cfg.LenientFilters,
 		strictStageCreate: cfg.StrictStageCreate,
+		wasmStagePolicy:   cfg.WasmStagePolicy.normalize(),
 		sequenceClock:     cfg.SequenceClock,
 		hooks:             cfg.Hooks,
 		scope:             cfg.Scoper,

@@ -1932,6 +1932,9 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 			if a.Ingest {
 				errs = append(errs, validateActionIngest(ai, a)...)
 			}
+			if a.StageAuthority != nil {
+				errs = append(errs, validateStageAuthority(ai, a, modelByKey)...)
+			}
 			if a.Idempotency != nil && strings.TrimSpace(a.Idempotency.KeyField) == "" {
 				errs = append(errs, fmt.Sprintf("contributions.actions[%d].idempotency requires a non-empty key_field", ai))
 			}
@@ -2515,6 +2518,40 @@ func validateActionIngest(ai int, a Action) []string {
 	}
 	if a.Placement == "table" || a.Placement == "create" {
 		errs = append(errs, fmt.Sprintf("%s requires a record action (placement %q has no record)", w, a.Placement))
+	}
+	return errs
+}
+
+// validateStageAuthority checks an action's stage_authority block: the only
+// authority is action_permission, every transition is a declared `from->to` of
+// the target model's stage machine, and an inbound-event action cannot carry it
+// (an event has no caller permission to be the authority).
+func validateStageAuthority(ai int, a Action, models map[string]Model) []string {
+	var errs []string
+	w := fmt.Sprintf("contributions.actions[%d].stage_authority", ai)
+	sa := a.StageAuthority
+	if sa.Authority != StageAuthorityActionPermission {
+		errs = append(errs, fmt.Sprintf("%s.authority %q must be %q", w, sa.Authority, StageAuthorityActionPermission))
+	}
+	if len(sa.Transitions) == 0 {
+		errs = append(errs, w+".transitions must list at least one \"from->to\" pair")
+	}
+	if a.Ingest {
+		errs = append(errs, w+" cannot be combined with ingest (an inbound event holds no action permission)")
+	}
+	mod, ok := models[a.TargetModel]
+	if !ok {
+		errs = append(errs, fmt.Sprintf("%s requires target_model to be a model of this manifest (got %q)", w, a.TargetModel))
+		return errs
+	}
+	declared := make(map[string]struct{}, len(mod.Transitions))
+	for _, t := range mod.Transitions {
+		declared[t.From+"->"+t.To] = struct{}{}
+	}
+	for _, pair := range sa.Transitions {
+		if _, ok := declared[pair]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.transitions %q is not a transition of model %q", w, pair, a.TargetModel))
+		}
 	}
 	return errs
 }

@@ -1824,6 +1824,73 @@ the INSERT or UPDATE. A refused move rolls the transaction back and returns
 - Actions keep their own `requires_state` check, which reads this same
   `stage_field` when the dynamic service has a machine for the model.
 
+#### Per-transition policy (K3b)
+
+The whitelist above is only the first gate. A transition may also declare
+`roles`, `requires_fields`, `guard` and `approval`, and a stage may be `locked`
+(with `editable_when_locked`); `Service.Update` enforces all of it. With
+
+```go
+host.WithStageMachine(machines).WithStagePolicy(svc.EnforceWasmStageWrite)
+```
+
+`data_mutate` / `data_batch` UPDATE and DELETE apply the same checks, with the
+same functions, inside the write transaction (before the UPDATE/DELETE). Creates
+are not covered (`Config.StrictStageCreate` governs a create in a final stage).
+`Config.WasmStagePolicy` selects the mode:
+
+| mode | effect |
+|------|--------|
+| `warn` (default for one release) | evaluates the policy, logs `stage_policy.wasm_bypass addon= model= op= record= move= reason=` and lets the write through; nothing is parked |
+| `enforce` | refuses or parks, below |
+| `off` | whitelist only (pre-K3b) |
+
+Refusals (`enforce`), all rolling the transaction (the whole `data_batch`) back:
+
+| check | `error.code` |
+|-------|--------------|
+| locked stage (any column but `editable_when_locked`, or a delete) | `record_locked` |
+| `requires_fields` empty on the merged row | `validation_failed` |
+| `guard` false | `invalid_transition` |
+| `roles` not held by the acting user | `forbidden` |
+| `approval` | `approval_required` (parked, below) |
+
+`inc` deltas are folded into absolute values for these checks.
+
+**Actor.** The guest runs as the actor of the invocation context
+(`dynamic.WithActorID`): roles resolve through `Config.ApprovalRequesterResolver`
+plus `Config.ActorRolesResolver` / `RolesProvider`, like REST. No actor, the
+`SystemActorID`, or an actor that cannot be resolved is the system principal and
+**does not skip `roles` or `approval`** (fail closed). An approved replay of the
+very same transition passes.
+
+**Approval is parked.** The move is stored as the same `ApprovalRequest` the REST
+path creates (constraint key `transition:<from>-><to>`; the system principal
+parks it as `SystemActorID`). The envelope is the existing `approval_required`
+one:
+
+```json
+{"success": false, "error": {
+  "code": "approval_required", "message": "...",
+  "policy":  {"key": "transition:posted->void", "label": "...", "roles": ["manager"], "reason_required": false, "expires_hours": 0},
+  "context": {"expr": "posted -> void", "values": {"from": "posted", "to": "void"}},
+  "approval_request_id": "<uuid>"}}
+```
+
+`approval_request_id` is new and additive. Nothing the guest did in the call
+was committed; on approval the kernel replays the row patch through
+`Service.Update` as the original requester, so it is applied exactly once.
+Other effects the handler would have had in the same transaction are NOT
+replayed: put them in `on_transition` hooks. A retry of the same handler while
+the request is pending reuses it.
+
+**Actions that cancel on purpose.** An action declares in the manifest
+`stage_authority: {authority: "action_permission", transitions: ["posted->void"]}`.
+While that action runs (set by `ExecAction`, never by the guest), exactly those
+transitions skip `roles` and `approval`; `guard`, `requires_fields` and `locked`
+still apply. It is invalid together with `ingest` and each pair must be a
+declared transition of the action's target model.
+
 ### 14.12 Extension columns (v1.13)
 
 A 1:1 extension (`Model.extends`) stores its columns in its own table, with
