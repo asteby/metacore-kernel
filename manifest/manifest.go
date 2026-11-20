@@ -1334,6 +1334,12 @@ type ModelDefinition struct {
 	// See manifest/v3.Sequence. Empty = the model has no folios.
 	Sequences []SequenceDef `json:"sequences,omitempty"`
 
+	// RuleGuards are the pre-write guards projected from the addon's
+	// contributions.rules[] with then.kind request_approval that target this
+	// model (P5). Same evaluation as column Constraints (Invert = true);
+	// dynamic.BuildModelConstraints folds them in.
+	RuleGuards []ConstraintDef `json:"ruleGuards,omitempty"`
+
 	// Snapshots carries the v3 Model.snapshots (columns copied from a related row
 	// at create) through the v3 → host conversion. See manifest/v3.Snapshot.
 	Snapshots []SnapshotDef `json:"snapshots,omitempty"`
@@ -1614,6 +1620,11 @@ type ConstraintDef struct {
 	// Approval carries the v3 Constraint.approval policy (who may approve, reason
 	// / expiry / label). Only meaningful with OnViolation == "request_approval".
 	Approval *ApprovalDef `json:"approval,omitempty"`
+	// Invert flips the polarity: the predicate states what TRIGGERS the guard
+	// (a v3 contributions.rules[] `when` with then.kind request_approval), so
+	// the write is flagged when Expr is TRUE. Constraints leave it false (Expr
+	// states what must hold).
+	Invert bool `json:"invert,omitempty"`
 }
 
 // RequestsApproval reports whether a false predicate must open an approval

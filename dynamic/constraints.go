@@ -3,6 +3,7 @@ package dynamic
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/asteby/metacore-kernel/manifest"
@@ -87,6 +88,35 @@ func evalConstraints(mc *ModelConstraints, row map[string]any) error {
 // ErrorKey — the replay of an approved request skips exactly the guard the
 // supervisor approved and nothing else. skipKey == "" exempts nothing.
 func evalConstraintsSkipping(mc *ModelConstraints, row map[string]any, skipKey string) error {
+	return evalConstraintsCore(mc, row, skipKey, nil, nil)
+}
+
+// ruleStillRelevant decides whether an UPDATE re-triggers an inverted guard (a
+// rule). A rule that already held on the persisted row and whose columns the
+// patch does not touch was approved (or grandfathered) before: a PUT that only
+// renames the record must not ask for the same approval again. It fires when
+// the row did NOT trigger before (the update moves it into the triggered
+// state) or when a column the predicate reads changes.
+func ruleStillRelevant(c manifest.ConstraintDef, before, input map[string]any) bool {
+	env := make(map[string]float64, len(before))
+	for k, v := range before {
+		env[k] = computeexpr.ToFloat(v)
+	}
+	triggeredBefore, err := evalConstraintExpr(c.Expr, env)
+	if err != nil || !triggeredBefore {
+		return true
+	}
+	for _, id := range exprIdentRe.FindAllString(c.Expr, -1) {
+		if raw, present := input[id]; present && !unchangedFromPersisted(raw, before, id) {
+			return true
+		}
+	}
+	return false
+}
+
+// evalConstraintsCore is evalConstraintsSkipping plus the update context:
+// before/input are the persisted row and the patch (nil on create).
+func evalConstraintsCore(mc *ModelConstraints, row map[string]any, skipKey string, before, input map[string]any) error {
 	if !mc.active() {
 		return nil
 	}
@@ -99,9 +129,15 @@ func evalConstraintsSkipping(mc *ModelConstraints, row map[string]any, skipKey s
 		if skipKey != "" && c.ErrorKey == skipKey && c.RequestsApproval() {
 			continue
 		}
+		if c.Invert && before != nil && !ruleStillRelevant(c, before, input) {
+			continue
+		}
 		ok, err := evalConstraintExpr(c.Expr, env)
 		if err != nil {
 			return fmt.Errorf("%w: constraint %q: %v", ErrInvalidInput, c.Expr, err)
+		}
+		if c.Invert {
+			ok = !ok // a rule: the predicate triggers the guard when TRUE
 		}
 		if ok {
 			continue
@@ -124,11 +160,18 @@ func evalConstraintsSkipping(mc *ModelConstraints, row map[string]any, skipKey s
 // replay marker on ctx (skipping the approved guard for the replayed model)
 // and otherwise behaves like evalConstraints.
 func evalConstraintsCtx(ctx context.Context, model string, mc *ModelConstraints, row map[string]any) error {
+	return evalConstraintsUpdateCtx(ctx, model, mc, row, nil, nil)
+}
+
+// evalConstraintsUpdateCtx is evalConstraintsCtx for an UPDATE: before is the
+// persisted row and input the patch, so rule guards can tell whether the write
+// touches what they watch.
+func evalConstraintsUpdateCtx(ctx context.Context, model string, mc *ModelConstraints, row, before, input map[string]any) error {
 	skip := ""
 	if r, ok := ApprovalReplayFromContext(ctx); ok && r.Kind == ApprovalKindConstraint && r.matchesModel(model) {
 		skip = r.ConstraintKey
 	}
-	return evalConstraintsSkipping(mc, row, skip)
+	return evalConstraintsCore(mc, row, skip, before, input)
 }
 
 // comparison operators, longest-match first so ">=" is not mis-split as ">".
@@ -192,4 +235,55 @@ func findComparisonOp(expr string) (string, int) {
 		}
 	}
 	return "", -1
+}
+
+// BuildModelConstraints folds a model definition's guards into the
+// ModelConstraints a host's ConstraintResolver returns: every column
+// Constraint, the pre-write rule guards projected from contributions.rules[]
+// (P5, then.kind request_approval), the cross-record rules and the locking
+// strategy. Returns (nil, false) when the model declares none.
+func BuildModelConstraints(md manifest.ModelDefinition) (*ModelConstraints, bool) {
+	mc := &ModelConstraints{Locking: md.Locking, Rules: md.Rules}
+	for _, c := range md.Columns {
+		mc.Constraints = append(mc.Constraints, c.Constraints...)
+	}
+	mc.Constraints = append(mc.Constraints, md.RuleGuards...)
+	if !mc.active() {
+		return nil, false
+	}
+	return mc, true
+}
+
+// UnwiredRuleGuards lists the rule guards (contributions.rules[] with
+// then.kind request_approval, ModelDefinition.RuleGuards) that the host's
+// ConstraintResolver does NOT return for their model: a host that assembles
+// ModelConstraints by hand instead of calling BuildModelConstraints silently
+// loses them (the rule is declared but never enforced: fail-open). Each entry
+// is "<model>: <errorKey>". Call it after installing/upgrading an addon; it
+// logs one `rule_guards.unwired` line per finding.
+func (s *Service) UnwiredRuleGuards(ctx context.Context, defs []manifest.ModelDefinition) []string {
+	var out []string
+	for _, md := range defs {
+		if len(md.RuleGuards) == 0 {
+			continue
+		}
+		have := map[string]struct{}{}
+		for _, name := range []string{md.ModelKey, md.TableName} {
+			if name == "" || s.constraints == nil {
+				continue
+			}
+			if mc, ok := s.constraints(ctx, name); ok && mc != nil {
+				for _, c := range mc.Constraints {
+					have[c.ErrorKey] = struct{}{}
+				}
+			}
+		}
+		for _, g := range md.RuleGuards {
+			if _, ok := have[g.ErrorKey]; !ok {
+				out = append(out, md.ModelKey+": "+g.ErrorKey)
+				log.Printf("dynamic: rule_guards.unwired model=%s rule=%s: the ConstraintResolver does not return it (use dynamic.BuildModelConstraints); the rule is NOT enforced", md.ModelKey, g.ErrorKey)
+			}
+		}
+	}
+	return out
 }

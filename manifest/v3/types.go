@@ -1866,8 +1866,20 @@ type RuleDef struct {
 
 // RuleThen is the outcome of a RuleDef whose When predicate holds.
 type RuleThen struct {
-	// Kind is "flag" (record a rule_flags row) or "notify" (in-app
-	// notification). Required.
+	// Kind is "flag" (record a rule_flags row), "notify" (in-app notification)
+	// or "request_approval" (P5). Required.
+	//
+	// request_approval makes the rule a PRE-WRITE guard instead of a post-event
+	// observation: when `when` holds on the row about to be written, the write
+	// is not applied but parked as a pending ApprovalRequest and every surface
+	// answers `approval_required` (REST 202-class error with the request id,
+	// wasm data_mutate / data_batch envelope code with {policy, context}). A
+	// user holding Approval.Roles approves it and the SAME write is replayed,
+	// skipping only this rule. It unifies price floors, out-of-cap discounts,
+	// overdue credit and refunds without a ticket under one declarative
+	// primitive (same engine as column constraints with
+	// on_violation: request_approval, with the predicate polarity inverted:
+	// the constraint states what must hold, the rule what triggers).
 	Kind string `json:"kind"`
 	// Severity is info | warning | error. Defaults to "warning".
 	Severity string `json:"severity,omitempty"`
@@ -1877,6 +1889,10 @@ type RuleThen struct {
 	// NotifyRoles lists the roles to notify when Kind is "notify". Required
 	// (non-empty) for "notify"; ignored for "flag".
 	NotifyRoles []string `json:"notify_roles,omitempty"`
+	// Approval says who may approve (roles, reason_required, expires_hours,
+	// label). Required when Kind is "request_approval", forbidden otherwise.
+	// `approval.when` is not allowed (the rule's own `when` is the predicate).
+	Approval *ApprovalPolicy `json:"approval,omitempty"`
 }
 
 // PublicRoute is one public, login-less view of a record an addon contributes
