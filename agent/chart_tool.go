@@ -118,7 +118,7 @@ func (t *ShowChartTool) Parameters() map[string]any {
 			"type": "string", "description": "Axis label for X",
 		},
 		"unit": map[string]any{
-			"type": "string", "description": "Unit for Y (MXN, piezas, %)",
+			"type": "string", "description": "Unit for Y (the organization's currency code, pieces, %)",
 		},
 		"series": map[string]any{
 			"type": "array", "description": "Numeric series: [{key, label}]", "required": true,

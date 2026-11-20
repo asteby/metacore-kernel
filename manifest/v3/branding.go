@@ -197,7 +197,7 @@ func (l *LoginCopy) Validate() []string {
 	for _, loc := range locales {
 		lw := w + ".i18n." + loc
 		if !loginLocaleRe.MatchString(loc) {
-			errs = append(errs, fmt.Sprintf("%s: %q is not a locale key (e.g. es, en, es-MX)", w+".i18n", loc))
+			errs = append(errs, fmt.Sprintf("%s: %q is not a locale key (e.g. es, en, pt-BR)", w+".i18n", loc))
 		}
 		t := l.I18n[loc]
 		errs = append(errs, loginTexts(lw, t.Eyebrow, t.Title, t.TitleAccent, t.Subtitle)...)

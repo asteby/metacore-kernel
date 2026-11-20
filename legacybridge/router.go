@@ -72,7 +72,7 @@ func NewRouter(cfg RouterConfig) (*Router, error) {
 			return nil, errors.New("legacybridge: ruta sin Model o Translate")
 		}
 		if rt.Direction != ToOwner && rt.Direction != Replicate {
-			return nil, fmt.Errorf("legacybridge: ruta %s con dirección %q", rt.Model, rt.Direction)
+			return nil, fmt.Errorf("legacybridge: route %s with direction %q", rt.Model, rt.Direction)
 		}
 		r.routes[rt.Model] = append(r.routes[rt.Model], rt)
 	}

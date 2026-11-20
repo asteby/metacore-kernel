@@ -342,7 +342,7 @@ func (o *Outbound) Run(ctx context.Context, every time.Duration) {
 // organización responde igual que uno inexistente.
 func (o *Outbound) commandOf(ctx context.Context, org, id string) (Command, error) {
 	if org == "" {
-		return Command{}, errors.New("legacybridge: operación sobre un comando sin organización")
+		return Command{}, errors.New("legacybridge: operation on a command without an organization")
 	}
 	c, ok, err := o.cfg.Store.GetCommand(ctx, id)
 	if err != nil {
@@ -362,7 +362,7 @@ func (o *Outbound) RetryDead(ctx context.Context, org, id string) (Command, erro
 		return c, err
 	}
 	if c.Status != CommandDead {
-		return c, fmt.Errorf("legacybridge: solo un comando dead se reintenta (está %s)", c.Status)
+		return c, fmt.Errorf("legacybridge: only a dead command can be retried (it is %s)", c.Status)
 	}
 	now := o.cfg.Now().UTC()
 	c.Status, c.Attempts, c.NextAttemptAt, c.CreatedAt, c.UpdatedAt = CommandPending, 0, now, now, now
@@ -380,7 +380,7 @@ func (o *Outbound) Discard(ctx context.Context, org, id, actor string) (Command,
 		return c, err
 	}
 	if c.Status != CommandDead {
-		return c, fmt.Errorf("legacybridge: solo un comando dead se descarta (está %s)", c.Status)
+		return c, fmt.Errorf("legacybridge: only a dead command can be discarded (it is %s)", c.Status)
 	}
 	c.Status, c.UpdatedAt = CommandDiscarded, o.cfg.Now().UTC()
 	c.LastError = truncate(strings.TrimSpace("descartado por "+actor+": "+c.LastError), maxCommandError)

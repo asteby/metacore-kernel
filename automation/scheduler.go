@@ -52,7 +52,7 @@ func (s *Service) Tick(ctx context.Context) (int, error) {
 			a := &due[i]
 			spec, err := a.ParsedSpec()
 			if err != nil {
-				s.markError(tx, a, "especificación ilegible")
+				s.markError(tx, a, "unreadable spec")
 				continue
 			}
 			slot := a.NextRunAt.UTC().Format(time.RFC3339)

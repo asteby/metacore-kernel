@@ -81,7 +81,7 @@ func TestBuildImportRecordReportsMissingRequiredAndBadTypes(t *testing.T) {
 	for _, i := range issues {
 		joined += i.Message + "|"
 	}
-	for _, want := range []string{"Nombre completo", "correo válido", "número"} {
+	for _, want := range []string{"Nombre completo", "valid email", "number"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("issues should mention %q: %s", want, joined)
 		}

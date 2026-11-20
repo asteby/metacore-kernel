@@ -38,14 +38,14 @@ const maxSpecBytes = 32 << 10
 
 func validateSchema(raw []byte) error {
 	if len(raw) == 0 {
-		return invalid("spec vacía")
+		return invalid("empty spec")
 	}
 	if len(raw) > maxSpecBytes {
-		return invalid("la especificación excede %d bytes", maxSpecBytes)
+		return invalid("the spec exceeds %d bytes", maxSpecBytes)
 	}
 	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 	if err != nil {
-		return invalid("JSON inválido: %v", err)
+		return invalid("invalid JSON: %v", err)
 	}
 	if err := compiledSchema.Validate(inst); err != nil {
 		return invalid("no cumple el esquema %s: %v", SpecVersion, err)

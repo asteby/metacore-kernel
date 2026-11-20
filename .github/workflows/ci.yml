@@ -19,6 +19,8 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin main
           scripts/check-ed25519-verify.sh origin/main
+      - name: kernel neutrality gate (no niche vocabulary / Spanish prose in non-test code; baseline shrinks only)
+        run: scripts/check-kernel-neutrality.sh origin/main
       - run: go vet ./...
       - run: go test -race -coverprofile=coverage.out ./...
       - uses: codecov/codecov-action@v7

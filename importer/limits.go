@@ -34,14 +34,14 @@ type ErrParseLimit struct {
 func (e ErrParseLimit) Error() string {
 	switch e.What {
 	case "rows":
-		return fmt.Sprintf("demasiadas filas; máximo permitido: %d", e.Limit)
+		return fmt.Sprintf("too many rows; maximum allowed: %d", e.Limit)
 	case "columns":
 		if e.Row == 0 {
-			return fmt.Sprintf("el encabezado tiene demasiadas columnas; máximo permitido: %d", e.Limit)
+			return fmt.Sprintf("the header has too many columns; maximum allowed: %d", e.Limit)
 		}
-		return fmt.Sprintf("la fila %d tiene demasiadas columnas; máximo permitido: %d", e.Row, e.Limit)
+		return fmt.Sprintf("row %d has too many columns; maximum allowed: %d", e.Row, e.Limit)
 	default:
-		return fmt.Sprintf("la fila %d tiene una celda de más de %d bytes", e.Row, e.Limit)
+		return fmt.Sprintf("row %d has a cell larger than %d bytes", e.Row, e.Limit)
 	}
 }
 

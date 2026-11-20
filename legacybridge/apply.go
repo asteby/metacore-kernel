@@ -125,7 +125,7 @@ func NewApplier(cfg Config) (*Applier, error) {
 		cfg.DefaultOwner = OwnerLegacy
 	}
 	if !cfg.DefaultOwner.Valid() {
-		return nil, fmt.Errorf("legacybridge: DefaultOwner %q inválido", cfg.DefaultOwner)
+		return nil, fmt.Errorf("legacybridge: DefaultOwner %q is invalid", cfg.DefaultOwner)
 	}
 	if cfg.MaxWait <= 0 {
 		cfg.MaxWait = 24 * time.Hour
@@ -173,17 +173,17 @@ func (a *Applier) Ingest(ctx context.Context, org string, b Batch) (IngestResult
 		return IngestResult{}, errors.New("legacybridge: lote sin source")
 	}
 	if len(b.Envelopes) > MaxBatchEnvelopes {
-		return IngestResult{}, fmt.Errorf("legacybridge: el lote trae %d envelopes (máximo %d)", len(b.Envelopes), MaxBatchEnvelopes)
+		return IngestResult{}, fmt.Errorf("legacybridge: the batch carries %d envelopes (max %d)", len(b.Envelopes), MaxBatchEnvelopes)
 	}
 	if len(b.Cursor) > maxCursorLen {
-		return IngestResult{}, fmt.Errorf("legacybridge: cursor de %d bytes (máximo %d)", len(b.Cursor), maxCursorLen)
+		return IngestResult{}, fmt.Errorf("legacybridge: cursor of %d bytes (max %d)", len(b.Cursor), maxCursorLen)
 	}
 	stream := b.Stream
 	if stream == "" {
 		stream = defaultStream
 	}
 	if len(stream) > maxIDLen {
-		return IngestResult{}, fmt.Errorf("legacybridge: stream de %d bytes (máximo %d)", len(stream), maxIDLen)
+		return IngestResult{}, fmt.Errorf("legacybridge: stream of %d bytes (max %d)", len(stream), maxIDLen)
 	}
 	out := IngestResult{Counts: map[Outcome]int{}}
 	failed := false
@@ -309,7 +309,7 @@ func (a *Applier) apply(ctx context.Context, org string, env Envelope) (Result, 
 	if !missingBranch {
 		if owner := ResolveOwner(rules, env.Entity, branch, phase, a.cfg.DefaultOwner); owner != OwnerLegacy {
 			res.Outcome = OutcomeConflict
-			res.Detail = fmt.Sprintf("el dueño de %s en la sucursal %q (fase %q) es el host", env.Entity, branch, phase)
+			res.Detail = fmt.Sprintf("the owner of %s at branch %q (phase %q) is the host", env.Entity, branch, phase)
 			return res, nil
 		}
 	}
@@ -489,7 +489,7 @@ func (a *Applier) review(ctx context.Context, org, system string, env Envelope, 
 		res.Outcome = OutcomeConflict
 	}
 	if a.cfg.Review == nil {
-		a.cfg.Logger.Warn("envelope a revisión sin ReviewStore", "org", org, "entity", env.Entity, "external_id", env.ExternalID, "code", code)
+		a.cfg.Logger.Warn("envelope sent to review without a ReviewStore", "org", org, "entity", env.Entity, "external_id", env.ExternalID, "code", code)
 		return res
 	}
 	var rec map[string]any
@@ -509,7 +509,7 @@ func (a *Applier) review(ctx context.Context, org, system string, env Envelope, 
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := a.cfg.Review.Put(ctx, e); err != nil {
-		a.cfg.Logger.Error("guardar revisión", "org", org, "entity", env.Entity, "external_id", env.ExternalID, "err", err)
+		a.cfg.Logger.Error("save review", "org", org, "entity", env.Entity, "external_id", env.ExternalID, "err", err)
 		res.Outcome, res.Detail = OutcomeError, err.Error()
 	}
 	return res

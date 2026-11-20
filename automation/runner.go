@@ -193,7 +193,7 @@ func (s *Service) execute(ctx context.Context, rj runJob, attempt int, final boo
 	}
 	// Daily cap per automation.
 	if s.runsToday(ctx, a.ID, now) > s.limits(&a).MaxRunsPerDay {
-		s.finishRun(ctx, &a, run, nil, fmt.Errorf("%w: máximo de corridas por día", ErrBudget), true)
+		s.finishRun(ctx, &a, run, nil, fmt.Errorf("%w: maximum runs per day reached", ErrBudget), true)
 		return run, nil
 	}
 	spec, err := a.ParsedSpec()
@@ -313,7 +313,7 @@ func (s *Service) run(ctx context.Context, a *Automation, spec *Spec, id Identit
 		if ctx.Err() != nil {
 			return env, ctx.Err()
 		}
-		return env, errors.New("la corrida excedió el tiempo máximo")
+		return env, errors.New("the run exceeded the maximum time")
 	default:
 		msg := res.Error
 		if res.ErrorNode != "" {
@@ -539,7 +539,7 @@ func (toolNode) Execute(ctx context.Context, node *flow.FlowNode, ec *flow.Execu
 	}
 	tool, ok := env.tools[st.Tool]
 	if !ok {
-		env.permanent = fmt.Errorf("%w: la herramienta %q ya no está permitida", errPermanentRun, st.Tool)
+		env.permanent = fmt.Errorf("%w: tool %q is no longer allowed", errPermanentRun, st.Tool)
 		return nil, env.permanent
 	}
 	args := make(map[string]any, len(st.Args))
@@ -547,7 +547,7 @@ func (toolNode) Execute(ctx context.Context, node *flow.FlowNode, ec *flow.Execu
 		args[k] = resolveValue(ec, v)
 	}
 	if env.svc.catalog == nil {
-		return nil, errors.New("sin catálogo de herramientas")
+		return nil, errors.New("no tool catalog")
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -703,7 +703,7 @@ func (summarizeNode) Execute(ctx context.Context, node *flow.FlowNode, ec *flow.
 	}
 	if env.dryRun {
 		// Previews never spend tokens.
-		env.note("Vista previa con plantilla: en la corrida real este paso se resume con IA (modelo económico, con tope).")
+		env.note("Template preview: in the real run this step is summarized with AI (low-cost model, capped).")
 		return &flow.NodeResult{Output: map[string]any{"text": deterministic, "count": len(items), "llm": false}}, nil
 	}
 	hash := hashOf(env.auto.ID.String() + "|" + st.Instructions + "|" + jsonOf(items))
@@ -721,11 +721,11 @@ func (summarizeNode) Execute(ctx context.Context, node *flow.FlowNode, ec *flow.
 	}
 	p := env.svc.policy
 	if env.svc.summarizer == nil {
-		env.note("Resumen sin modelo de lenguaje (no hay proveedor conectado): se usó la plantilla.")
+		env.note("Summary without a language model (no provider connected): the template was used.")
 		return &flow.NodeResult{Output: map[string]any{"text": deterministic, "count": len(items), "llm": false}}, nil
 	}
 	if p.DailyBudgetUSD <= 0 || env.svc.orgSpendToday(ctx, env.auto.OrganizationID)+env.maxCost > p.DailyBudgetUSD {
-		env.note("Presupuesto diario de IA agotado o no configurado: se usó la plantilla.")
+		env.note("Daily AI budget exhausted or not configured: the template was used.")
 		return &flow.NodeResult{Output: map[string]any{"text": deterministic, "count": len(items), "llm": false}}, nil
 	}
 	maxTok := st.MaxTokens
@@ -739,7 +739,7 @@ func (summarizeNode) Execute(ctx context.Context, node *flow.FlowNode, ec *flow.
 		Instructions: st.Instructions, Items: items, MaxTokens: maxTok,
 	})
 	if err != nil || strings.TrimSpace(res.Text) == "" {
-		env.note("El modelo no respondió: se usó la plantilla.")
+		env.note("The model did not respond: the template was used.")
 		return &flow.NodeResult{Output: map[string]any{"text": deterministic, "count": len(items), "llm": false}}, nil
 	}
 	env.mu.Lock()

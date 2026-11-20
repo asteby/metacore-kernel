@@ -536,7 +536,7 @@ func (s *Service) schedule(a *Automation, spec *Spec, now time.Time) error {
 		return err
 	}
 	if spec.Trigger.Type == TriggerOnce && !ok {
-		return invalid("la fecha del recordatorio ya pasó")
+		return invalid("the reminder date has already passed")
 	}
 	if ok {
 		n := next.UTC()

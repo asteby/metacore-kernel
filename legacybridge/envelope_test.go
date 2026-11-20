@@ -57,7 +57,7 @@ func TestParseNDJSON(t *testing.T) {
 	if got[0].Aggregate.Root["n"].(interface{ String() string }).String() != "1.50" {
 		t.Fatal("los números se conservan como json.Number (sin perder decimales)")
 	}
-	if _, err := ParseNDJSON(strings.NewReader("{nope}\n")); err == nil || !strings.Contains(err.Error(), "línea 1") {
+	if _, err := ParseNDJSON(strings.NewReader("{nope}\n")); err == nil || !strings.Contains(err.Error(), "line 1") {
 		t.Fatalf("línea inválida: %v", err)
 	}
 }

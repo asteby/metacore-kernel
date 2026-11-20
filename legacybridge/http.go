@@ -38,7 +38,7 @@ func Sign(secret []byte, timestamp string, body []byte) string {
 }
 
 // ErrBadSignature: firma ausente, inválida o fuera de la ventana de tiempo.
-var ErrBadSignature = errors.New("legacybridge: firma inválida")
+var ErrBadSignature = errors.New("legacybridge: invalid signature")
 
 // Verify comprueba la firma y que timestamp (segundos Unix) esté dentro de
 // MaxClockSkew de now. Compara en tiempo constante.
@@ -129,14 +129,14 @@ func (h *HTTPConnector) Send(ctx context.Context, c Command) (Delivery, error) {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		return parseDelivery(raw), nil
 	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable:
-		err := fmt.Errorf("legacybridge: %s respondió %d: %s", c.Kind, resp.StatusCode, snippet(raw))
+		err := fmt.Errorf("legacybridge: %s answered %d: %s", c.Kind, resp.StatusCode, snippet(raw))
 		if d := retryAfterHeader(resp.Header.Get("Retry-After")); d > 0 {
 			return Delivery{}, RetryAfter(err, d)
 		}
 		return Delivery{}, err
 	case resp.StatusCode >= 500, resp.StatusCode == http.StatusRequestTimeout, resp.StatusCode == http.StatusTooEarly,
 		resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden:
-		return Delivery{}, fmt.Errorf("legacybridge: %s respondió %d: %s", c.Kind, resp.StatusCode, snippet(raw))
+		return Delivery{}, fmt.Errorf("legacybridge: %s answered %d: %s", c.Kind, resp.StatusCode, snippet(raw))
 	default:
 		return Delivery{}, Permanent(fmt.Errorf("legacybridge: %s rechazado %d: %s", c.Kind, resp.StatusCode, snippet(raw)))
 	}

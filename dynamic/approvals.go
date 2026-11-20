@@ -22,6 +22,7 @@ package dynamic
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -150,29 +151,29 @@ func (ApprovalRequest) TableName() string { return "approval_requests" }
 // reach the table (decisions go through Approve/RejectRequest only).
 func (ApprovalRequest) DefineTable() modelbase.TableMetadata {
 	return modelbase.TableMetadata{
-		Title:             "Aprobaciones",
+		Title:             "models.approval_requests.table.title",
 		EnableCRUDActions: false,
 		DefaultPerPage:    25,
 		PerPageOptions:    []int{25, 50, 100},
 		SearchColumns:     []string{"model_key", "label", "constraint_key", "action_key", "status"},
 		Columns: []modelbase.ColumnDef{
-			{Key: "requested_at", Label: "Fecha", Type: "datetime", Sortable: true},
-			{Key: "label", Label: "Solicitud", Type: "text", Sortable: true},
+			{Key: "requested_at", Label: "models.approval_requests.table.columns.requested_at", Type: "datetime", Sortable: true},
+			{Key: "label", Label: "models.approval_requests.table.columns.label", Type: "text", Sortable: true},
 			{
-				Key: "status", Label: "Estado", Type: "select", Sortable: true,
+				Key: "status", Label: "models.approval_requests.table.columns.status", Type: "select", Sortable: true,
 				Options: []modelbase.OptionDef{
-					{Value: ApprovalStatusPending, Label: "Pendiente", Color: "yellow"},
-					{Value: ApprovalStatusApproved, Label: "Aprobada", Color: "blue"},
-					{Value: ApprovalStatusApplied, Label: "Aplicada", Color: "green"},
-					{Value: ApprovalStatusRejected, Label: "Rechazada", Color: "red"},
-					{Value: ApprovalStatusExpired, Label: "Expirada", Color: "gray"},
-					{Value: ApprovalStatusFailed, Label: "Fallida", Color: "red"},
+					{Value: ApprovalStatusPending, Label: "models.approval_requests.status.pending", Color: "yellow"},
+					{Value: ApprovalStatusApproved, Label: "models.approval_requests.status.approved", Color: "blue"},
+					{Value: ApprovalStatusApplied, Label: "models.approval_requests.status.applied", Color: "green"},
+					{Value: ApprovalStatusRejected, Label: "models.approval_requests.status.rejected", Color: "red"},
+					{Value: ApprovalStatusExpired, Label: "models.approval_requests.status.expired", Color: "gray"},
+					{Value: ApprovalStatusFailed, Label: "models.approval_requests.status.failed", Color: "red"},
 				},
 			},
-			{Key: "model_key", Label: "Módulo", Type: "text", Sortable: true},
-			{Key: "kind", Label: "Tipo", Type: "text", Sortable: true},
-			{Key: "requested_by", Label: "Solicitante", Type: "text"},
-			{Key: "expires_at", Label: "Expira", Type: "datetime", Sortable: true},
+			{Key: "model_key", Label: "models.approval_requests.table.columns.model_key", Type: "text", Sortable: true},
+			{Key: "kind", Label: "models.approval_requests.table.columns.kind", Type: "text", Sortable: true},
+			{Key: "requested_by", Label: "models.approval_requests.table.columns.requested_by", Type: "text"},
+			{Key: "expires_at", Label: "models.approval_requests.table.columns.expires_at", Type: "datetime", Sortable: true},
 		},
 	}
 }
@@ -181,16 +182,29 @@ func (ApprovalRequest) DefineTable() modelbase.TableMetadata {
 // view; hosts typically render their own diff panel).
 func (ApprovalRequest) DefineModal() modelbase.ModalMetadata {
 	return modelbase.ModalMetadata{
-		Title: "Solicitud de aprobación",
+		Title: "models.approval_requests.modal.title",
 		Fields: []modelbase.FieldDef{
-			{Key: "label", Label: "Solicitud", Type: "text"},
-			{Key: "status", Label: "Estado", Type: "text"},
-			{Key: "model_key", Label: "Módulo", Type: "text"},
-			{Key: "requested_at", Label: "Fecha", Type: "date"},
-			{Key: "reason", Label: "Motivo", Type: "textarea"},
+			{Key: "label", Label: "models.approval_requests.modal.fields.label", Type: "text"},
+			{Key: "status", Label: "models.approval_requests.modal.fields.status", Type: "text"},
+			{Key: "model_key", Label: "models.approval_requests.modal.fields.model_key", Type: "text"},
+			{Key: "requested_at", Label: "models.approval_requests.modal.fields.requested_at", Type: "date"},
+			{Key: "reason", Label: "models.approval_requests.modal.fields.reason", Type: "textarea"},
 		},
 	}
 }
+
+// DefineTranslations ships the es/en catalog for the keys above, so hosts
+// that register the model get localized labels without an app bundle.
+func (ApprovalRequest) DefineTranslations() map[string]map[string]string {
+	var cat map[string]map[string]string
+	if err := json.Unmarshal(approvalCatalogJSON, &cat); err != nil {
+		return nil // embedded asset; guarded by TestApprovalCatalog
+	}
+	return cat
+}
+
+//go:embed locales/approval_requests.json
+var approvalCatalogJSON []byte
 
 // RoleList parses the stored approver roles.
 func (r *ApprovalRequest) RoleList() []string {
@@ -527,15 +541,15 @@ type approvalActor struct {
 	role string
 }
 
-func (a *approvalActor) GetID() uuid.UUID             { return a.id }
-func (a *approvalActor) GetOrganizationID() uuid.UUID { return a.org }
-func (a *approvalActor) GetEmail() string             { return "" }
-func (a *approvalActor) GetRole() string              { return a.role }
-func (a *approvalActor) GetPasswordHash() string      { return "" }
-func (a *approvalActor) SetEmail(string)              {}
-func (a *approvalActor) SetName(string)               {}
-func (a *approvalActor) SetPasswordHash(string)       {}
-func (a *approvalActor) SetRole(v string)             { a.role = v }
+func (a *approvalActor) GetID() uuid.UUID              { return a.id }
+func (a *approvalActor) GetOrganizationID() uuid.UUID  { return a.org }
+func (a *approvalActor) GetEmail() string              { return "" }
+func (a *approvalActor) GetRole() string               { return a.role }
+func (a *approvalActor) GetPasswordHash() string       { return "" }
+func (a *approvalActor) SetEmail(string)               {}
+func (a *approvalActor) SetName(string)                {}
+func (a *approvalActor) SetPasswordHash(string)        {}
+func (a *approvalActor) SetRole(v string)              { a.role = v }
 func (a *approvalActor) SetOrganizationID(v uuid.UUID) { a.org = v }
 
 // approvalRequester resolves the principal the replay runs as.

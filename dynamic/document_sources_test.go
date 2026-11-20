@@ -63,7 +63,7 @@ func TestCreate_RejectsASourceTheOptionFilterHides(t *testing.T) {
 	in := invoiceFrom(order, item, 1, "draft")
 	_, err := svc.Create(ctx, "DlInvoice", user, in)
 	fe := sourceFieldError(t, err)
-	if fe.Code != "source_not_eligible" || !strings.Contains(fe.Message, "«Venta»") {
+	if fe.Code != "source_not_eligible" || !strings.Contains(fe.Message, `"Venta"`) {
 		t.Fatalf("field error = %+v", fe)
 	}
 	var n int64

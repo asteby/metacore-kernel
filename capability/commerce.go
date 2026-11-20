@@ -334,7 +334,7 @@ var (
 		opt("email", TypeString, ""),
 		opt("name", TypeString, ""),
 		opt("phone", TypeString, ""),
-		opt("tax_id", TypeString, "RFC / VAT id"),
+		opt("tax_id", TypeString, "tax id (e.g. RFC, VAT, NIT)"),
 	)
 
 	// LineSchema is an order/cart line as payments and tax see it.
@@ -367,7 +367,7 @@ var (
 		opt("title", TypeString, ""),
 		opt("id", TypeString, "order line id"),
 		opt("unit_price", TypeDecimal, ""),
-		opt("product_code", TypeString, "fiscal product key (SAT ClaveProdServ, carta porte)"),
+		opt("product_code", TypeString, "product/service tax classification code (the jurisdiction's catalog key)"),
 		opt("weight_kg", TypeDecimal, "weight of ONE unit, kg (quote and label by item; parcels stay the source of truth when present)"),
 		opt("length_cm", TypeDecimal, "length of one unit, cm"),
 		opt("width_cm", TypeDecimal, "width of one unit, cm"),
@@ -589,7 +589,7 @@ var invoiceDocSchema = schema(
 	req("document_id", TypeString, "opaque id of the document inside the provider; pass it back to fiscal.invoice.document"),
 	enum(req("status", TypeString, ""), InvoiceDocStatuses),
 	enum(req("kind", TypeString, ""), InvoiceDocKinds),
-	opt("fiscal_uuid", TypeString, "folio fiscal (CFDI UUID) or the country's equivalent"),
+	opt("fiscal_uuid", TypeString, "fiscal document id issued by the tax authority (e.g. a UUID) or the country's equivalent"),
 	opt("series", TypeString, ""),
 	opt("folio", TypeString, ""),
 	opt("total", TypeDecimal, ""),
@@ -1489,17 +1489,17 @@ func commerceContractList() []Contract {
 		// ------------------------------------------------------------ fiscal
 		{
 			Key: FiscalInvoiceCreate, Kind: KindQuery, Cardinality: One,
-			Doc: "issue a fiscal invoice for an order (CFDI 4.0 in MX via the fiscal_mexico family)",
+			Doc: "issue a fiscal invoice for an order (the format is the jurisdiction's: e.g. CFDI, e-invoice, SDI; resolved by the installed fiscal addon)",
 			Input: schema(
 				req("order_ref", TypeString, ""),
 				req("currency", TypeCurrency, ""),
 				obj(req("customer", TypeObject, ""), &Schema{Fields: []Field{
-					req("tax_id", TypeString, "RFC / VAT id"),
+					req("tax_id", TypeString, "tax id (e.g. RFC, VAT, NIT)"),
 					req("name", TypeString, "legal name"),
 					opt("email", TypeString, ""),
 					opt("postal_code", TypeString, "fiscal domicile postal code"),
-					opt("tax_regime", TypeString, "e.g. SAT régimen fiscal"),
-					opt("use", TypeString, "e.g. SAT uso CFDI"),
+					opt("tax_regime", TypeString, "tax regime code of the jurisdiction"),
+					opt("use", TypeString, "invoice usage code of the jurisdiction"),
 					opt("country", TypeCountry, ""),
 				}}),
 				list(req("lines", TypeArray, ""), schema(
@@ -1508,12 +1508,12 @@ func commerceContractList() []Contract {
 					req("quantity", TypeDecimal, "decimal: fiscal quantities can be fractional"),
 					req("unit_price", TypeDecimal, "before tax"),
 					opt("discount", TypeDecimal, ""),
-					opt("product_code", TypeString, "fiscal product key (SAT ClaveProdServ)"),
-					opt("unit_code", TypeString, "fiscal unit key (SAT ClaveUnidad)"),
+					opt("product_code", TypeString, "product/service tax classification code (jurisdiction catalog)"),
+					opt("unit_code", TypeString, "tax unit-of-measure code (jurisdiction catalog)"),
 					opt("sku", TypeString, ""),
 					list(opt("taxes", TypeArray, ""), TaxLineSchema),
 				)),
-				opt("payment_form", TypeString, "e.g. SAT forma de pago (04, 03, 01)"),
+				opt("payment_form", TypeString, "payment method code of the jurisdiction's tax catalog"),
 				opt("payment_method", TypeString, "e.g. PUE / PPD"),
 				opt("series", TypeString, ""),
 				opt("subtotal", TypeDecimal, ""),
@@ -1525,7 +1525,7 @@ func commerceContractList() []Contract {
 			Output: schema(
 				req("invoice_id", TypeString, "provider id"),
 				enum(req("status", TypeString, ""), []string{"issued", "pending", "failed"}),
-				opt("fiscal_uuid", TypeString, "folio fiscal (CFDI UUID)"),
+				opt("fiscal_uuid", TypeString, "fiscal document id issued by the tax authority (e.g. a UUID)"),
 				opt("series", TypeString, ""),
 				opt("folio", TypeString, ""),
 				opt("total", TypeDecimal, ""),
@@ -1540,7 +1540,7 @@ func commerceContractList() []Contract {
 			Doc: "cancel an issued fiscal invoice",
 			Input: schema(
 				req("invoice_id", TypeString, ""),
-				opt("reason", TypeString, "e.g. SAT motivo 01 / 02 / 03 / 04"),
+				opt("reason", TypeString, "cancellation reason code of the jurisdiction"),
 				opt("substitution_id", TypeString, "replacing invoice fiscal_uuid (motivo 01)"),
 			),
 			Output: schema(

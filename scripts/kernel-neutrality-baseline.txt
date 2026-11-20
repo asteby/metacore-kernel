@@ -1,0 +1,69 @@
+# kernel-neutrality baseline: <path> <niche|spanish> <max hits>. Only goes down.
+
+# Documentation examples listing several jurisdictions' tax ids / invoice formats (e.g. RFC, VAT, NIT; CFDI, e-invoice, SDI) in capability field docs.
+capability/commerce.go niche 3
+
+# Secret scrubber: also redacts the Spanish word for password (contrasena).
+diag/scrub.go spanish 1
+
+# Humanize dictionaries: es-locale label tables and multi-country acronym lists (data, not messages).
+i18n/humanize.go niche 3
+i18n/humanize.go spanish 19
+
+# Importer input vocabulary: boolean token 'si' and currency symbol/code stripping (accepted input, not output text).
+importer/importer.go spanish 1
+importer/numbers.go niche 1
+
+# PII field-name list of the inbound dry-run redactor (multi-country identifiers).
+inbound/dryrun.go niche 1
+
+# ISO 4217 minor-unit table.
+money/iso.go niche 1
+
+# Payments conformance suite uses a fixed sample currency for its fixtures.
+payments/conformance/cases.go niche 51
+payments/conformance/conformance.go niche 1
+payments/conformance/refsim/refsim.go niche 2
+
+# DEBT (agent): LLM-facing prompts, tool descriptions and tool results in Spanish. Move to per-language prompt catalogs; counts may only go down.
+agent/ai_adapter.go spanish 8
+agent/attachments.go spanish 4
+agent/capability.go spanish 2
+agent/catalog_index.go spanish 1
+agent/catalog_text.go spanish 6
+agent/catalog_tools.go spanish 9
+agent/chart_tool.go spanish 10
+agent/claude/direct_runner.go spanish 5
+agent/compact_result.go spanish 2
+agent/copilot.go spanish 4
+agent/core_tools.go spanish 13
+agent/dynamic_tools.go spanish 1
+agent/egress_guard.go spanish 1
+agent/erp_card.go spanish 2
+agent/guide.go spanish 15
+agent/image_tool.go spanish 2
+agent/knowledge.go spanish 8
+agent/memory_render.go spanish 4
+agent/memory_tools.go spanish 8
+agent/modules_context.go spanish 3
+agent/orchestrator.go spanish 55
+agent/provider_error.go spanish 14
+agent/query_exec.go spanish 1
+agent/query_tree.go spanish 13
+agent/semantic_catalog.go spanish 4
+agent/show_ui_tool.go spanish 9
+agent/smart_orchestrator.go spanish 17
+agent/tool_exec.go spanish 2
+agent/toolharness/harness.go spanish 3
+agent/tools/policy.go spanish 3
+
+# DEBT (automation): Spanish agent tool names/descriptions, view labels and trigger labels; move to i18n keys.
+automation/agenttools.go spanish 19
+automation/service.go spanish 1
+automation/trigger.go spanish 6
+automation/view.go spanish 7
+
+# DEBT (payments/inbox): stored reason texts (Motivo) shown in incidents; move to codes + params.
+payments/inbox/classify.go spanish 5
+payments/inbox/incidents.go spanish 3
+payments/inbox/store.go spanish 1

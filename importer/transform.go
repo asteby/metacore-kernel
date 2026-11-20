@@ -156,7 +156,7 @@ var defaultMediaTypes = []string{"image/jpeg", "image/png", "image/webp", "image
 // Typed media errors; all are wrapped with %w so errors.Is / errors.As work.
 var (
 	// ErrMediaTooLarge: the file exceeds MediaPolicy.MaxBytes.
-	ErrMediaTooLarge = errors.New("el archivo excede el tamaño máximo permitido")
+	ErrMediaTooLarge = errors.New("the file exceeds the maximum allowed size")
 	// ErrMediaType: the sniffed type is not allowed (or not an image at all).
 	ErrMediaType = errors.New("tipo de archivo no permitido")
 	// ErrMediaHost: the host is outside MediaPolicy.AllowHosts.

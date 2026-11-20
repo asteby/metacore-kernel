@@ -257,7 +257,7 @@ func ValidateWhereMap(where map[string]any) error {
 			// en silencio dejaría dos sintaxis para lo mismo y una de ellas
 			// seguiría significando otra cosa en el resto del kernel, donde un
 			// valor vacío es "sin filtro". El mensaje nombra la forma correcta.
-			return fmt.Errorf("query.Aggregate: where %q: un valor null no expresa una comparación con NULL; usá {%q: {\"null\": true}}", col, col)
+			return fmt.Errorf("query.Aggregate: where %q: a null value does not express a comparison with NULL; use {%q: {\"null\": true}}", col, col)
 		case map[string]any:
 			if len(t) != 1 {
 				return fmt.Errorf("query.Aggregate: where %q: se esperaba un solo {operador: valor}, llegaron %d", col, len(t))

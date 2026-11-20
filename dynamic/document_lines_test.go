@@ -163,7 +163,7 @@ func TestAddQuantityErrors_SpanishMessagePerLine(t *testing.T) {
 	}
 	got := ve.Fields["items.1.quantity"]
 	if len(got) != 1 || got[0].Code != "exceeds_remaining" ||
-		!strings.Contains(got[0].Message, "Renglón 2: la cantidad 1 excede lo pendiente de «Venta» (0)") {
+		!strings.Contains(got[0].Message, "Line 2: quantity 1 exceeds what is pending on \"Venta\" (0)") {
 		t.Fatalf("items.1 = %+v", got)
 	}
 	if _, bad := ve.Fields["items.2.quantity"]; bad {
@@ -360,7 +360,7 @@ func TestCreate_RejectsQuantityOverPending(t *testing.T) {
 		t.Fatalf("err = %v, want a 422 ValidationError", err)
 	}
 	fe := ve.Fields["items.1.quantity"] // [sección, renglón]
-	if len(fe) != 1 || fe[0].Code != "exceeds_remaining" || !strings.Contains(fe[0].Message, "excede lo pendiente de «Venta» (2)") {
+	if len(fe) != 1 || fe[0].Code != "exceeds_remaining" || !strings.Contains(fe[0].Message, `pending on "Venta" (2)`) {
 		t.Fatalf("field errors = %+v", ve.Fields)
 	}
 	var n int64

@@ -673,13 +673,13 @@ func (s *Service) checkDocumentSources(ctx context.Context, user modelbase.AuthU
 			ve.Fields = appendFieldError(ve.Fields, src.LinkField, FieldError{
 				Code:    "source_not_found",
 				Params:  map[string]any{"source": src.Label},
-				Message: "No se encontró el documento origen elegido" + sourceSuffix(*src) + ".",
+				Message: "The selected source document" + sourceSuffix(*src) + " was not found.",
 			})
 		case !src.OptionFilter.Match(rows[0]):
 			ve.Fields = appendFieldError(ve.Fields, src.LinkField, FieldError{
 				Code:    "source_not_eligible",
 				Params:  map[string]any{"source": src.Label},
-				Message: "El documento origen elegido" + sourceSuffix(*src) + " ya no se puede usar (por ejemplo, ya se convirtió, se canceló o cambió de estado). Elige otro.",
+				Message: "The selected source document" + sourceSuffix(*src) + " can no longer be used (for example it was already converted, cancelled or changed state). Pick another.",
 			})
 		}
 	}
@@ -723,7 +723,7 @@ func addQuantityErrors(ve *ValidationError, field string, rows []map[string]any,
 			ve.Fields = appendFieldError(ve.Fields, key, FieldError{
 				Code:    "source_line_not_found",
 				Params:  map[string]any{"line": i + 1, "source": src.Label},
-				Message: fmt.Sprintf("Renglón %d: el renglón de origen ya no existe en %s.", i+1, sourceName(src)),
+				Message: fmt.Sprintf("Line %d: the source line no longer exists in %s.", i+1, sourceName(src)),
 			})
 			continue
 		}
@@ -737,7 +737,7 @@ func addQuantityErrors(ve *ValidationError, field string, rows []map[string]any,
 			ve.Fields = appendFieldError(ve.Fields, key, FieldError{
 				Code:   "exceeds_remaining",
 				Params: map[string]any{"line": i + 1, "requested": qty, "remaining": roundQty(left), "source": src.Label},
-				Message: fmt.Sprintf("Renglón %d: la cantidad %s excede lo pendiente de %s (%s). Ajusta la cantidad; lo demás ya está registrado en otro documento.",
+				Message: fmt.Sprintf("Line %d: quantity %s exceeds what is pending on %s (%s). Adjust the quantity; the rest is already recorded in another document.",
 					i+1, fmtQty(qty), sourceName(src), fmtQty(roundQty(left))),
 			})
 		}
@@ -756,16 +756,16 @@ func appendFieldError(m map[string][]FieldError, key string, fe FieldError) map[
 // (" en «Cotización»"), or nothing when its label is an i18n key.
 func sourceSuffix(src DocumentLineSource) string {
 	if strings.TrimSpace(src.Label) != "" && !strings.Contains(src.Label, ".") {
-		return " en «" + src.Label + "»"
+		return " in \"" + src.Label + "\""
 	}
 	return ""
 }
 
 func sourceName(src DocumentLineSource) string {
 	if strings.TrimSpace(src.Label) != "" && !strings.Contains(src.Label, ".") {
-		return "«" + src.Label + "»"
+		return "\"" + src.Label + "\""
 	}
-	return "el documento origen"
+	return "the source document"
 }
 
 // writeDocumentLines creates the lines of a document through the regular
@@ -807,7 +807,7 @@ func lineError(field string, at, i int, err error) error {
 		}
 		return out
 	}
-	return fmt.Errorf("renglón %d: %w", i+1, err)
+	return fmt.Errorf("line %d: %w", i+1, err)
 }
 
 // undoDocument removes a document whose lines could not be written, with the

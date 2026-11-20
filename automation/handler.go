@@ -105,7 +105,7 @@ func (h *Handler) create(c fiber.Ctx) error {
 	}
 	var b createBody
 	if err := json.Unmarshal(c.Body(), &b); err != nil {
-		return fail(c, invalid("cuerpo inválido"))
+		return fail(c, invalid("invalid body"))
 	}
 	a, err := h.svc.Create(c, id, CreateInput{Kind: b.Kind, Spec: b.Spec, Origin: OriginUI, Propose: b.Propose})
 	if err != nil {
@@ -162,7 +162,7 @@ func (h *Handler) update(c fiber.Ctx) error {
 	}
 	var b updateBody
 	if err := json.Unmarshal(c.Body(), &b); err != nil {
-		return fail(c, invalid("cuerpo inválido"))
+		return fail(c, invalid("invalid body"))
 	}
 	a, err := h.svc.Update(c, id, autoID, UpdateInput{Spec: b.Spec, ExpectedVersion: b.Version})
 	if err != nil {

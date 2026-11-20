@@ -106,7 +106,7 @@ type rememberFactTool struct{ mem *copilotMemory }
 func (t *rememberFactTool) Name() string     { return "remember_fact" }
 func (t *rememberFactTool) Category() string { return "context" }
 func (t *rememberFactTool) Description() string {
-	return "Guarda un dato o preferencia durable del usuario (ej. \"reporta en MXN\"). Solo lo que seguirá valiendo."
+	return "Guarda un dato o preferencia durable del usuario (ej. \"reporta en la moneda de la organización\"). Solo lo que seguirá valiendo."
 }
 func (t *rememberFactTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{

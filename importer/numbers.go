@@ -72,11 +72,11 @@ func ParseMixedNumber(raw string) (float64, error) {
 		return 0, fmt.Errorf("%w: %q %s", ErrNumberInvalid, raw, why)
 	}
 	if s == "" {
-		return bad("no trae dígitos")
+		return bad("has no digits")
 	}
 	for _, r := range s {
 		if !(r >= '0' && r <= '9') && !strings.ContainsRune(".,' ", r) {
-			return bad("trae caracteres que no son de un número")
+			return bad("contains characters that are not part of a number")
 		}
 	}
 	if s[0] < '0' || s[0] > '9' {
@@ -99,7 +99,7 @@ func ParseMixedNumber(raw string) (float64, error) {
 			other = ','
 		}
 		if strings.LastIndexByte(s, other) > last {
-			return bad("el separador de miles va después del decimal")
+			return bad("the thousands separator comes after the decimal")
 		}
 		intPart, frac = s[:last], s[last+1:]
 		if frac == "" {
@@ -133,7 +133,7 @@ func ParseMixedNumber(raw string) (float64, error) {
 		case len(last) >= 1 && len(last) <= 2:
 			intPart, frac = strings.Join(groups[:len(groups)-1], sep), last
 		default:
-			return bad("el último bloque no tiene 3 dígitos ni es decimal de 1-2")
+			return bad("the last group is neither 3 digits nor a 1-2 digit decimal")
 		}
 	default:
 		intPart = s
@@ -144,11 +144,11 @@ func ParseMixedNumber(raw string) (float64, error) {
 		return bad(err.Error())
 	}
 	if frac != "" && strings.Trim(frac, "0123456789") != "" {
-		return bad("la parte decimal no es numérica")
+		return bad("the decimal part is not numeric")
 	}
 	if digits == "" {
 		if frac == "" {
-			return bad("no trae dígitos")
+			return bad("has no digits")
 		}
 		digits = "0"
 	}
@@ -200,11 +200,11 @@ func groupedDigits(s string) (string, error) {
 	}
 	parts = append(parts, cur.String())
 	if len(parts[0]) < 1 || len(parts[0]) > 3 {
-		return "", errors.New("el primer bloque de miles debe tener 1-3 dígitos")
+		return "", errors.New("the first thousands group must have 1-3 digits")
 	}
 	for _, p := range parts[1:] {
 		if len(p) != 3 {
-			return "", errors.New("los bloques de miles deben tener 3 dígitos")
+			return "", errors.New("thousands groups must have 3 digits")
 		}
 	}
 	return strings.Join(parts, ""), nil
