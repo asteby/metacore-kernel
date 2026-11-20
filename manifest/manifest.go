@@ -1138,6 +1138,10 @@ type FieldDef struct {
 	// Scan opts this field/column into camera barcode scan-to-fill (see
 	// modelbase.FieldDef.Scan). Forwarded through the host round-trip.
 	Scan bool `json:"scan,omitempty"`
+	// Searchable forces (true) or disables (false) the searchable combobox of a
+	// select field; nil lets the renderer decide by option count (see
+	// modelbase.FieldDef.Searchable). Forwarded through the host round-trip.
+	Searchable *bool `json:"searchable,omitempty"`
 
 	// OptionsSource forwards the v3 ActionField.options_source (a host-registered
 	// dynamic options provider key, e.g. "connector_repos"). It rides the matching

@@ -382,6 +382,25 @@ type ModalMetadata struct {
 // config — same contract as ColumnDef.Validation.Custom. Ref points at a
 // foreign-key target model so the SDK can resolve the field's option list
 // against the canonical `/api/options/:ref?field=id` endpoint.
+// SearchableSelectThreshold is the option count above which a static select
+// is served as a searchable combobox (FieldDef.Searchable). A select with this
+// many options or fewer stays a flat dropdown. The SDK uses the same default.
+const SearchableSelectThreshold = 8
+
+// SearchableFor resolves the served FieldDef.Searchable for a select with n
+// options: the explicit value wins; otherwise true above the threshold and nil
+// (renderer default) at or below it.
+func SearchableFor(explicit *bool, n int) *bool {
+	if explicit != nil {
+		return explicit
+	}
+	if n > SearchableSelectThreshold {
+		t := true
+		return &t
+	}
+	return nil
+}
+
 type FieldDef struct {
 	Key      string `json:"key"`
 	Label    string `json:"label"`
@@ -447,6 +466,17 @@ type FieldDef struct {
 	// business-agnostic UI metadata; ignored by the DDL plane and by hosts/SDKs
 	// that don't implement it. Empty = no scan affordance.
 	Scan bool `json:"scan,omitempty"`
+
+	// Searchable opts a (static-options) select field into the SEARCHABLE
+	// combobox: the SDK renders a type-to-filter picker (case/accent
+	// insensitive, matches label, value and option description) instead of the
+	// flat dropdown. Tri-state on purpose: nil = let the renderer decide (it
+	// switches to the combobox above SearchableSelectThreshold options), true =
+	// always searchable, false = always the flat select. DeriveFormFields emits
+	// true for a select with more than SearchableSelectThreshold options. Pure
+	// UI metadata; ignored by the DDL plane and by SDKs that predate it. NOT the
+	// same as ColumnDef.Searchable (search index / filter), which is untouched.
+	Searchable *bool `json:"searchable,omitempty"`
 
 	// Readonly marks a SYSTEM-GENERATED field the user must never hand-edit — a
 	// value the addon/host populates server-side (e.g. an external id/number a
