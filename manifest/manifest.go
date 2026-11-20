@@ -1303,6 +1303,11 @@ type ModelDefinition struct {
 	OrgScoped  bool        `json:"org_scoped,omitempty"`
 	SoftDelete bool        `json:"soft_delete,omitempty"`
 	Columns    []ColumnDef `json:"columns"`
+	// DisplayColumns are the kernel-managed columns (id, created_at, updated_at)
+	// the manifest opted into showing in the list table (v3 Column.show_in_table). They
+	// are NOT part of Columns, so DDL, validation and forms never see them; only
+	// the derived table metadata (dynamic.DeriveTableColumns) appends them.
+	DisplayColumns []ColumnDef `json:"display_columns,omitempty"`
 	// Indices carries the v3 model's PARTIAL indices (those with a Where). Plain
 	// single-column indices keep riding ColumnDef.Index/Unique; only entries with
 	// a Where are emitted from here (see IndexDef).

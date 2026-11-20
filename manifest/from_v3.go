@@ -586,6 +586,14 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				continue
 			}
 			if _, managed := managedColumns[c.Name]; managed {
+				if c.ShowInTable {
+					def.DisplayColumns = append(def.DisplayColumns, ColumnDef{
+						Name: c.Name, Type: c.Type, Label: c.Label,
+						Description: c.Description, Tooltip: c.Tooltip,
+						CellStyle: c.Display, StyleConfig: c.DisplayConfig,
+						Visibility: c.Visibility, ReadPermission: c.ReadPermission,
+					})
+				}
 				continue
 			}
 			// v3 Column.Comment has no legacy ColumnDef slot, so it

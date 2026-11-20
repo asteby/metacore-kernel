@@ -1843,6 +1843,16 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 			cwhere := fmt.Sprintf("models[%d].columns[%d]", mi, ci)
 			errs = append(errs, validateReadPermission(&m, cwhere, c.ReadPermission)...)
 			errs = append(errs, validateColumnPermission(&m, cwhere, "write_permission", c.WritePermission)...)
+			if c.ShowInTable {
+				switch c.Name {
+				case "id", "created_at", "updated_at":
+				default:
+					errs = append(errs, fmt.Sprintf("%s.show_in_table is only valid on a kernel-managed column (id|created_at|updated_at); %q already shows in the table unless visibility hides it", cwhere, c.Name))
+				}
+				if c.Visibility == "modal" || c.Visibility == "list" {
+					errs = append(errs, fmt.Sprintf("%s.show_in_table conflicts with visibility %q (the column would never reach the table)", cwhere, c.Visibility))
+				}
+			}
 			if c.WritePermission != "" && c.Protected {
 				errs = append(errs, fmt.Sprintf("%s.write_permission conflicts with protected (a protected column is writable by nobody through generic writes)", cwhere))
 			}

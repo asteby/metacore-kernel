@@ -55,8 +55,14 @@ var managedFormColumns = map[string]struct{}{
 // Hosts that adopt a different i18n convention can still overwrite Label per
 // column after calling this; the derivation only sets a sensible default.
 func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
-	out := make([]modelbase.ColumnDef, 0, len(def.Columns))
-	for _, c := range def.Columns {
+	cols := def.Columns
+	if len(def.DisplayColumns) > 0 {
+		// Kernel-managed columns the manifest opted into showing (created_at, …)
+		// follow the declared ones; they are not part of Columns on purpose.
+		cols = append(append([]manifest.ColumnDef(nil), def.Columns...), def.DisplayColumns...)
+	}
+	out := make([]modelbase.ColumnDef, 0, len(cols))
+	for _, c := range cols {
 		col := modelbase.ColumnDef{
 			Key:      c.Name,
 			Label:    columnLabel(c),
