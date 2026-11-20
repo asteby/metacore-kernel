@@ -280,6 +280,10 @@ type Config struct {
 	// refuse with ErrAppendOnly (HTTP 409, code "append_only"); Create is
 	// unaffected. nil = every model stays writable (back-compat).
 	AppendOnlyResolver AppendOnlyResolver
+	// RowConditionResolver returns the per-row gates (manifest row_conditions) the
+	// generic Update and Delete enforce against the persisted row. nil leaves every
+	// model ungated (back-compat). See row_condition.go.
+	RowConditionResolver RowConditionResolver
 
 	// ValidationSchemaResolver returns the declarative column definitions the
 	// pre-write field-validation pass enforces for a model name — the host wires
@@ -508,6 +512,7 @@ type Service struct {
 	reasonPolicies    ReasonPolicyResolver
 	supervisorBypass  SupervisorBypass
 	appendOnly        AppendOnlyResolver
+	rowConditions     RowConditionResolver
 	validationSchema  ValidationSchemaResolver
 	customValidators  validate.Resolver
 	sequences         SequenceResolver
@@ -619,6 +624,7 @@ func New(cfg Config) *Service {
 		reasonPolicies:    cfg.ReasonPolicyResolver,
 		supervisorBypass:  cfg.SupervisorBypass,
 		appendOnly:        cfg.AppendOnlyResolver,
+		rowConditions:     cfg.RowConditionResolver,
 		validationSchema:  cfg.ValidationSchemaResolver,
 		customValidators:  cfg.CustomValidatorResolver,
 		sequences:         cfg.SequenceResolver,
@@ -1343,6 +1349,9 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 	if err := s.refuseIfAppendOnly(ctx, model, "update"); err != nil {
 		return nil, err
 	}
+	if err := s.refuseIfRowCondition(ctx, model, "update", user, id); err != nil {
+		return nil, err
+	}
 
 	tableName, err := s.tableNameFor(ctx, model, instance)
 	if err != nil {
@@ -1792,6 +1801,9 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 		return err
 	}
 	if err := s.refuseIfAppendOnly(ctx, model, "delete"); err != nil {
+		return err
+	}
+	if err := s.refuseIfRowCondition(ctx, model, "delete", user, id); err != nil {
 		return err
 	}
 

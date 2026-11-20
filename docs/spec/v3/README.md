@@ -706,3 +706,39 @@ caller cannot change so the host can serve them read-only. It is enforced in the
 field-validation pass, so it needs `Config.ValidationSchemaResolver` (as
 `protected` does) and uses the same permission decision as `read_permission`
 (`Config.ColumnReadChecker` or `Permissions`).
+
+## Row conditions as data
+
+One declarative per-row predicate (`RowCondition`) gates actions, printable
+documents and the generic CRUD of a model. Leaf: `{field, operator, value}`;
+group: `{operator: "all"|"any", conditions: [...]}` (nestable, an empty list
+passes). Operators (the SDK `ActionCondition` vocabulary): `eq` `neq` `in`
+`not_in` `gt` `gte` `lt` `lte` `truthy` `falsy`, plus `all` / `any`. `gt`..`lte`
+compare numerically (a non-numeric side never matches); `truthy`/`falsy` take no
+`value`. Legacy aliases (`equals`, `==`, `!=`, `notin`, `present`, `set`,
+`blank`, `empty`) still evaluate.
+
+```json
+{ "key": "collect", "target_model": "Customer",
+  "handler": { "type": "compiled", "function": "Collect" },
+  "condition": { "operator": "all", "conditions": [
+    { "field": "debt", "operator": "gt", "value": 0 },
+    { "field": "id",   "operator": "neq", "value": "00000000-0000-0000-0000-000000000001" } ] } }
+```
+
+```json
+"row_conditions": {
+  "update": { "field": "id", "operator": "neq", "value": "...", "error_key": "customers.default_locked" },
+  "delete": { "field": "debt", "operator": "lte", "value": 0 } }
+```
+
+The server enforces both against the PERSISTED row (never the request body), so
+a hidden button is not the only gate: `Service.ExecAction` refuses with 409
+`action_condition_not_met`; `Service.Update`/`Delete` refuse with 409
+`row_condition_failed` (plus `message_key` when `error_key` is set). Hosts wire
+`Config.RowConditionResolver` from `ModelDefinition.RowConditions` (actions need
+nothing: `ActionDef.Condition.RowMatches`). A system caller is not gated; create
+has no persisted row and is not gated; `row_conditions` cannot be combined with
+`append_only`. `Condition.Row()`, `RecordFieldCondition.Row()` and
+`RowCondition.Eval` are the shared evaluators; a host's legacy path calls them
+instead of re-implementing the operators.

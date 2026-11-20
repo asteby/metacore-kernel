@@ -1156,6 +1156,16 @@
             "$ref": "#/$defs/CrossRule"
           }
         },
+        "row_conditions": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Gates the generic UPDATE and DELETE of the model on the PERSISTED row, as data: update {field: id, operator: neq, value: 1} protects a default row; delete {field: debt, operator: lte, value: 0} forbids deleting a customer that still owes. The server refuses with 409 (code row_condition_failed) whatever the client shows. Create has no persisted row and is not gated; actions carry their own condition.",
+          "minProperties": 1,
+          "properties": {
+            "update": {"$ref": "#/$defs/RowGate"},
+            "delete": {"$ref": "#/$defs/RowGate"}
+          }
+        },
         "append_only": {
           "type": "boolean",
           "description": "Marks the model as an append-only ledger: rows can be created but never updated or deleted. The kernel refuses every UPDATE/DELETE (REST and the wasm data_mutate/data_batch imports) with code 'append_only'; a mistake is corrected with a reversing row. Incompatible with a stage machine."
@@ -2852,12 +2862,51 @@
         }
       }
     },
+    "RowCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Declarative per-row predicate (data, not code), shared by action conditions, document conditions and models[].row_conditions. Leaf: field + operator (+ value). Group: operator all|any + conditions. The server evaluates it against the persisted row; the SDK renders the same vocabulary.",
+      "properties": {
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Dot-path to a column of the row. Unused by all/any groups."
+        },
+        "operator": {
+          "type": "string",
+          "description": "eq|neq|in|not_in|gt|gte|lt|lte|truthy|falsy compare the field; all|any combine conditions. Defaults to eq on a leaf.",
+          "enum": ["eq", "equals", "==", "neq", "notequals", "not_equals", "!=", "in", "not_in", "notin", "gt", "gte", "lt", "lte", "truthy", "present", "set", "falsy", "blank", "empty", "all", "any"]
+        },
+        "value": {
+          "description": "The operand for eq/neq/gt/gte/lt/lte, a list for in/not_in. Omitted for truthy/falsy and groups."
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RowCondition"
+          },
+          "description": "Members of an all/any group."
+        }
+      }
+    },
+    "RowGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A RowCondition plus the i18n key of the refusal.",
+      "properties": {
+        "field": {"type": "string", "minLength": 1},
+        "operator": {
+          "type": "string",
+          "enum": ["eq", "equals", "==", "neq", "notequals", "not_equals", "!=", "in", "not_in", "notin", "gt", "gte", "lt", "lte", "truthy", "present", "set", "falsy", "blank", "empty", "all", "any"]
+        },
+        "value": {},
+        "conditions": {"type": "array", "items": {"$ref": "#/$defs/RowCondition"}},
+        "error_key": {"type": "string", "description": "i18n key of the refusal message. Empty = a generic one."}
+      }
+    },
     "RecordFieldCondition": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "field"
-      ],
       "description": "Gates a row action or printable document on a field value from the target record.",
       "properties": {
         "field": {
@@ -2879,6 +2928,12 @@
             "in",
             "not_in",
             "notin",
+            "gt",
+            "gte",
+            "lt",
+            "lte",
+            "all",
+            "any",
             "truthy",
             "present",
             "set",
@@ -2888,7 +2943,14 @@
           ]
         },
         "value": {
-          "description": "Right-hand value for eq/neq/in. Omitted for truthy/falsy operators."
+          "description": "Right-hand value: the operand for eq/neq/gt/gte/lt/lte, a list for in/not_in. Omitted for truthy/falsy and for all/any groups."
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RowCondition"
+          },
+          "description": "Members of an all/any group (AND / OR, nestable; an empty list passes). Only with operator all or any."
         }
       }
     },
@@ -6263,6 +6325,12 @@
             "in",
             "not_in",
             "notin",
+            "gt",
+            "gte",
+            "lt",
+            "lte",
+            "all",
+            "any",
             "truthy",
             "present",
             "set",
@@ -6272,7 +6340,14 @@
           ]
         },
         "value": {
-          "description": "Right-hand value for eq/neq/in when field is set."
+          "description": "Right-hand value: the operand for eq/neq/gt/gte/lt/lte, a list for in/not_in. Omitted for truthy/falsy and groups."
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RowCondition"
+          },
+          "description": "Members of an all/any group (AND / OR, nestable; an empty list passes). Only with operator all or any."
         }
       }
     },

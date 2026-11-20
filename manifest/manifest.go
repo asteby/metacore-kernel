@@ -1375,6 +1375,10 @@ type ModelDefinition struct {
 	// model is an append-only ledger and every UPDATE/DELETE on it is refused
 	// (dynamic.Service and the wasm data_mutate / data_batch imports).
 	AppendOnly bool `json:"append_only,omitempty"`
+	// RowConditions is the host/runtime projection of v3 Model.row_conditions:
+	// per-row data gates on the generic UPDATE and DELETE, enforced by
+	// dynamic.Service through Config.RowConditionResolver.
+	RowConditions *v3.RowConditions `json:"row_conditions,omitempty"`
 
 	// NoAudit is the host/runtime projection of v3 Model `audit: false`: the
 	// model opts out of the kernel audit-column standard (who-columns and the
@@ -2059,6 +2063,9 @@ type ConditionDef struct {
 	Field    string `json:"field,omitempty"`
 	Operator string `json:"operator,omitempty"`
 	Value    any    `json:"value,omitempty"`
+	// Conditions combines nested row predicates when Operator is all|any
+	// (see v3.RowCondition). Same vocabulary as the SDK ActionCondition.
+	Conditions []v3.RowCondition `json:"conditions,omitempty"`
 }
 
 // UnmetPolicy resolves the effective unmet policy — the declared value, else
@@ -2207,3 +2214,22 @@ func (d *StageAuthorityDef) Covers(from, to string) bool {
 	}
 	return false
 }
+
+// Row returns the record-level predicate of the ConditionDef (field/operator/
+// value/conditions), or nil when it declares none. Org-level predicates are not
+// part of it.
+func (c *ConditionDef) Row() *v3.RowCondition {
+	if c == nil {
+		return nil
+	}
+	rc := v3.RowCondition{Field: c.Field, Operator: c.Operator, Value: c.Value, Conditions: c.Conditions}
+	if rc.IsEmpty() {
+		return nil
+	}
+	return &rc
+}
+
+// RowMatches reports whether row satisfies the record-level predicate; a nil
+// ConditionDef, or one without a row predicate, matches. The SERVER enforces it
+// (dynamic.Service.ExecAction) so a hidden button is not the only gate.
+func (c *ConditionDef) RowMatches(row map[string]any) bool { return c.Row().Eval(row) }

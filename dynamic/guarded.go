@@ -314,6 +314,9 @@ func (s *Service) DeleteSealed(ctx context.Context, model string, user modelbase
 	if err := s.refuseIfAppendOnly(ctx, model, "delete"); err != nil {
 		return err
 	}
+	if err := s.refuseIfRowCondition(ctx, model, "delete", user, id); err != nil {
+		return err
+	}
 	tableName, err := s.tableNameFor(ctx, model, instance)
 	if err != nil {
 		return err
