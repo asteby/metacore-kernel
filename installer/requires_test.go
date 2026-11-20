@@ -11,6 +11,7 @@ import (
 	"github.com/asteby/metacore-kernel/manifest"
 	v3 "github.com/asteby/metacore-kernel/manifest/v3"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 func mf(key, version string, reqs ...manifest.AddonRequirement) manifest.Manifest {
@@ -289,6 +290,104 @@ func TestParseRequiresMode(t *testing.T) {
 	for in, want := range map[string]RequiresMode{"": RequiresWarn, "OFF": RequiresOff, "enforce": RequiresEnforce, "x": RequiresWarn} {
 		if got := ParseRequiresMode(in); got != want {
 			t.Fatalf("%q -> %q", in, got)
+		}
+	}
+}
+
+func TestInRange_PrereleaseToleranceAnyRange(t *testing.T) {
+	for _, rng := range []string{">=1.3.0", "^1.2.0"} {
+		if err := CheckInstallable([]InstalledAddon{{Key: "b", Version: "1.3.0-rc.1"}}, mf("a", "1", req("b", rng))); err != nil {
+			t.Fatalf("range %s: prerelease must be tolerated: %v", rng, err)
+		}
+	}
+	if err := CheckInstallable([]InstalledAddon{{Key: "b", Version: "1.1.0-rc.1"}}, mf("a", "1", req("b", "^1.2.0"))); err == nil {
+		t.Fatal("1.1.0-rc.1 must not satisfy ^1.2.0")
+	}
+}
+
+func TestUninstallBaseSatisfiedViaProvides(t *testing.T) {
+	inst := []InstalledAddon{
+		{Key: "hr", Version: "3.0.0", Provides: []string{"hr_lite"}},
+		ia(mf("payroll", "1.0.0", req("hr_lite", ">=1.0.0"))),
+	}
+	err := CheckUninstallable(inst, "hr")
+	var hd ErrHasDependents
+	if !errors.As(err, &hd) || !reflect.DeepEqual(hd.Dependents, []string{"payroll"}) {
+		t.Fatalf("want payroll as dependent via provides, got %v", err)
+	}
+}
+
+func TestInstaller_CascadeDoesNotCrossOrgs(t *testing.T) {
+	i, orgA := requiresInstaller(t, RequiresEnforce)
+	orgB := uuid.New()
+	for _, o := range []uuid.UUID{orgA, orgB} {
+		seed(t, i, o, mf("base", "1.0.0"))
+		seed(t, i, o, mf("dep", "1.0.0", req("base", "")))
+	}
+	if err := i.UninstallWithOptions(orgA, "base", UninstallOptions{Cascade: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"base", "dep"} {
+		if ok, _ := i.IsInstalled(orgA, k); ok {
+			t.Fatalf("org A still has %s", k)
+		}
+		if ok, _ := i.IsInstalled(orgB, k); !ok {
+			t.Fatalf("org B lost %s", k)
+		}
+	}
+}
+
+type failingUninstall struct{ *lifecycle.ManifestOnly }
+
+func (failingUninstall) OnUninstall(*gorm.DB, uuid.UUID) error { return errors.New("boom") }
+
+// A failure mid-cascade is NOT rolled back: dependents already processed stay
+// uninstalled, the failing addon and everything after it (including the base)
+// stay installed. Documented in the CHANGELOG.
+func TestInstaller_CascadeMidFailureLeavesPartialState(t *testing.T) {
+	i, org := requiresInstaller(t, RequiresEnforce)
+	seed(t, i, org, mf("base", "1.0.0"))
+	seed(t, i, org, mf("mid", "1.0.0", req("base", "")))
+	seed(t, i, org, mf("leaf", "1.0.0", req("mid", "")))
+	i.Lifecycles.Register("mid", failingUninstall{&lifecycle.ManifestOnly{Data: mf("mid", "1.0.0", req("base", ""))}})
+
+	err := i.UninstallWithOptions(org, "base", UninstallOptions{Cascade: true})
+	if err == nil || !strings.Contains(err.Error(), `"mid"`) {
+		t.Fatalf("want failure naming mid, got %v", err)
+	}
+	for k, want := range map[string]bool{"leaf": false, "mid": true, "base": true} {
+		if got, _ := i.IsInstalled(org, k); got != want {
+			t.Fatalf("%s installed=%v, want %v", k, got, want)
+		}
+	}
+}
+
+// Simulates a restart: rows exist but the lifecycle registry is empty, so the
+// resolver has no requires (known false negative).
+func TestInstaller_RowsWithoutLifecycleDoNotBlock(t *testing.T) {
+	i, org := requiresInstaller(t, RequiresEnforce)
+	seedInstallation(t, i.DB, org, "base", "1.0.0", nil)
+	seedInstallation(t, i.DB, org, "dep", "1.0.0", nil)
+	if err := i.checkUninstallRequires(org, "base"); err != nil {
+		t.Fatalf("no lifecycle => no known dependents: %v", err)
+	}
+	installed, err := i.installedAddons(org)
+	if err != nil || len(installed) != 2 {
+		t.Fatalf("rows must still count as installed: %v %v", installed, err)
+	}
+}
+
+func TestInstaller_LookupErrorModes(t *testing.T) {
+	for mode, wantErr := range map[RequiresMode]bool{RequiresWarn: false, "": false, RequiresOff: false, RequiresEnforce: true} {
+		i, org := requiresInstaller(t, mode)
+		if err := i.DB.Exec(`DROP TABLE metacore_installations`).Error; err != nil {
+			t.Fatal(err)
+		}
+		if got := i.checkRequires("install", org, mf("a", "1")) != nil; got != wantErr {
+			t.Fatalf("install mode %q: err=%v want %v", mode, got, wantErr)
+		}
+		if got := i.checkUninstallRequires(org, "a") != nil; got != wantErr {
+			t.Fatalf("uninstall mode %q: err=%v want %v", mode, got, wantErr)
 		}
 	}
 }
