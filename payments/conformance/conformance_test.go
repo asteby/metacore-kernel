@@ -3,7 +3,7 @@ package conformance_test
 import (
 	"context"
 	"encoding/json"
-	"sort"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +23,7 @@ func TestReferenceProviderConforms(t *testing.T) {
 	if rep.Verdict() != "conforms" {
 		t.Fatalf("reference provider does not conform:\n%s", rep)
 	}
-	if p, _, _, _ := rep.Counts(); p != len(conformance.Cases()) {
+	if p := rep.Counts().Pass; p != len(conformance.Cases()) {
 		t.Fatalf("passed %d of %d cases", p, len(conformance.Cases()))
 	}
 }
@@ -56,7 +56,8 @@ func TestBrokenProvidersFail(t *testing.T) {
 		quirk refsim.Quirk
 		fails []string
 	}{
-		{refsim.QuirkNoSignatureCheck, []string{"WH-02", "WH-03"}},
+		{refsim.QuirkNoSignatureCheck, []string{"WH-02", "WH-03", "WH-08"}},
+		{refsim.QuirkSigHeaderOnly, []string{"WH-02"}},
 		{refsim.QuirkNoTimestampCheck, []string{"WH-05"}},
 		{refsim.QuirkNoSessionIdempotency, []string{"SES-02"}},
 		{refsim.QuirkDoubleSessionAfterLost, []string{"IND-01"}},
@@ -180,26 +181,62 @@ func (limited) Age(context.Context, conformance.Webhook, time.Duration) (conform
 	return conformance.Webhook{}, conformance.ErrUnsupported
 }
 
-func TestUnsupportedSandboxCapabilitiesSkipOnlyWhenLenient(t *testing.T) {
-	tg := refsim.New().Target("limited")
-	tg.Sandbox = limited{tg.Sandbox}
-	strict := conformance.Run(context.Background(), tg, conformance.Options{})
-	if strict.Conforms() {
-		t.Fatalf("strict must not conform when cases cannot run:\n%s", strict)
-	}
-	lenient := conformance.Run(context.Background(), tg, conformance.Options{Lenient: true})
-	if !lenient.Conforms() {
-		t.Fatalf("lenient run must conform:\n%s", lenient)
-	}
-	var skipped []string
-	for _, c := range lenient.Cases {
-		if c.Result == conformance.Skip {
-			skipped = append(skipped, c.ID)
+func TestUnsupportedSandboxCapabilitiesAreNeverConforms(t *testing.T) {
+	for _, q := range []refsim.Quirk{"", refsim.QuirkDoubleSessionAfterLost, refsim.QuirkDoubleRefundAfterLost} {
+		var qs []refsim.Quirk
+		if q != "" {
+			qs = append(qs, q)
+		}
+		tg := refsim.New(qs...).Target("limited")
+		tg.Sandbox = limited{tg.Sandbox}
+		strict := conformance.Run(context.Background(), tg, conformance.Options{})
+		if strict.Conforms() || strict.Verdict() != "fails" {
+			t.Fatalf("%q strict:\n%s", q, strict)
+		}
+		lenient := conformance.Run(context.Background(), tg, conformance.Options{Lenient: true})
+		if lenient.Conforms() || lenient.Verdict() != "conforms_lenient" {
+			t.Fatalf("%q lenient must have its own verdict, never conforms:\n%s", q, lenient)
+		}
+		if lenient.Counts().Skip < 6 {
+			t.Fatalf("%q: %s", q, lenient)
 		}
 	}
-	sort.Strings(skipped)
-	if len(skipped) < 6 {
-		t.Fatalf("skipped %v", skipped)
+}
+
+func TestCoreCasesCannotBeWaivedAndWaiversAreCapped(t *testing.T) {
+	tg := refsim.New(refsim.QuirkNoSignatureCheck).Target("w")
+	for _, id := range conformance.CoreCases {
+		r := conformance.Run(context.Background(), tg, conformance.Options{Waive: map[string]string{id: "skip it"}})
+		if r.Verdict() != "aborted" || !strings.Contains(r.Aborted, "core") {
+			t.Errorf("waiving core case %s must abort:\n%s", id, r)
+		}
+	}
+	many := map[string]string{}
+	for _, id := range []string{"SES-01", "SES-04", "MON-01", "MON-02", "MON-03", "MON-04"} {
+		many[id] = "x"
+	}
+	if r := conformance.Run(context.Background(), tg, conformance.Options{Waive: many}); r.Verdict() != "aborted" || !strings.Contains(r.Aborted, "at most") {
+		t.Fatalf("more than MaxWaivers must abort:\n%s", r)
+	}
+}
+
+// Declared limits are not_applicable: never a failure, never a waiver.
+func TestDeclaredLimitsAreNotApplicable(t *testing.T) {
+	tg := refsim.New(refsim.NoExoticCurrencies, refsim.NoRefBeforePay).Target("limits")
+	tg.Supports.NoRefBeforePay = "payment id exists only after the buyer pays"
+	rep := conformance.Run(context.Background(), tg, conformance.Options{})
+	if !rep.Conforms() || rep.Verdict() != "conforms" || rep.Counts().NotApplicable != 3 {
+		t.Fatalf("want conforms with MON-03, MON-06, RF-05 not applicable:\n%s", rep)
+	}
+	for _, c := range rep.Cases {
+		if c.Result == conformance.NotApplicable && c.Detail == "" {
+			t.Errorf("%s: not_applicable without a reason", c.ID)
+		}
+	}
+	// without the declaration the missing reference is a skip, not silence
+	tg.Supports = conformance.Supports{}
+	if r := conformance.Run(context.Background(), tg, conformance.Options{}); r.Conforms() {
+		t.Fatalf("undeclared missing reference must not conform:\n%s", r)
 	}
 }
 
@@ -208,20 +245,37 @@ func TestUnsupportedSandboxCapabilitiesSkipOnlyWhenLenient(t *testing.T) {
 // genuine state. A signature-less provider that cross-checks against its
 // records conforms in hint mode and fails in signed mode.
 func TestHintRereadMode(t *testing.T) {
-	tg := refsim.New(refsim.QuirkNoSignatureCheck, refsim.QuirkNoTimestampCheck).Target("hint")
-	if rep := conformance.Run(context.Background(), tg, conformance.Options{WebhookMode: conformance.WebhookHintReread}); !rep.Conforms() {
+	hint := conformance.Options{WebhookMode: conformance.WebhookHintReread}
+	// a real hint+reread provider conforms in hint mode, fails in signed mode
+	tg := refsim.New(refsim.HintReread).Target("hint")
+	if rep := conformance.Run(context.Background(), tg, hint); !rep.Conforms() {
 		t.Fatalf("hint mode:\n%s", rep)
 	}
-	if rep := conformance.Run(context.Background(), tg, conformance.Options{}); rep.Conforms() || !failed(rep, "WH-03") {
-		t.Fatalf("signed mode must reject a signature-less provider:\n%s", rep)
+	if rep := conformance.Run(context.Background(), tg, conformance.Options{}); rep.Conforms() {
+		t.Fatalf("signed mode must reject a provider with no signature:\n%s", rep)
 	}
-	// a hint provider that believes the notification amount instead of its records fails
-	bad := refsim.New(refsim.QuirkNoSignatureCheck, refsim.QuirkNoTimestampCheck, refsim.QuirkEchoSessionAmount).Target("bad")
-	if rep := conformance.Run(context.Background(), bad, conformance.Options{WebhookMode: conformance.WebhookHintReread}); rep.Conforms() {
+	// a provider with no signature that believes the notification body is not
+	// a re-read: a forged "paid" for a pending session exposes it
+	bad := refsim.New(refsim.QuirkNoSignatureCheck, refsim.QuirkNoTimestampCheck).Target("bad")
+	rep := conformance.Run(context.Background(), bad, hint)
+	if rep.Conforms() || !failed(rep, "WH-08") {
+		t.Fatalf("a body-trusting provider must fail WH-08 in hint mode:\n%s", rep)
+	}
+	if rep := conformance.Run(context.Background(), refsim.New().Target("ref"), hint); !rep.Conforms() {
 		t.Fatalf("%s", rep)
 	}
-	if rep := conformance.Run(context.Background(), refsim.New().Target("ref"), conformance.Options{WebhookMode: conformance.WebhookHintReread}); !rep.Conforms() {
-		t.Fatalf("%s", rep)
+}
+
+// The doc must not describe an API that does not exist.
+func TestDocMatchesAPI(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/conformance-payments.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gone := range []string{"Strict:", "Forge", "ErrFaultUnsupported"} {
+		if strings.Contains(string(raw), gone) {
+			t.Errorf("docs/conformance-payments.md mentions %q, which no longer exists", gone)
+		}
 	}
 }
 

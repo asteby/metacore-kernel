@@ -12,7 +12,14 @@ import (
 	"github.com/asteby/metacore-kernel/payments"
 )
 
-var errSkip = errors.New("skipped")
+var (
+	errSkip = errors.New("skipped")
+	errNA   = errors.New("not applicable")
+)
+
+func naf(format string, a ...any) error {
+	return fmt.Errorf("%w: %s", errNA, fmt.Sprintf(format, a...))
+}
 
 func skipf(format string, a ...any) error {
 	return fmt.Errorf("%w: %s", errSkip, fmt.Sprintf(format, a...))

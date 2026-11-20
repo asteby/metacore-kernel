@@ -163,7 +163,24 @@ type Target struct {
 	Name    string
 	Invoke  Invoker
 	Sandbox Sandbox
+	// Supports is what the provider declares it cannot do by design. A case
+	// that depends on it is reported not_applicable (with the declared reason)
+	// instead of failing a strict run.
+	Supports Supports
 }
+
+// Supports are the provider's declared limits.
+type Supports struct {
+	// NoRefBeforePay: the provider holds no payment reference until the buyer
+	// pays, so a pending payment cannot even be named for a refund (RF-05).
+	// The text is the reason shown in the report.
+	NoRefBeforePay string
+}
+
+// UnsupportedCurrencyCode is the typed error (capability.NewCodedError) a
+// provider answers when it cannot charge a currency at all. MON-03 (JPY) and
+// MON-06 (KWD) are then not_applicable for it.
+const UnsupportedCurrencyCode = "unsupported_currency"
 
 // Options tune a run. The zero value is the strict, complete run.
 type Options struct {
@@ -173,13 +190,15 @@ type Options struct {
 	Only []string
 	// Waive exempts case ids (they must exist) for a written, non-blank
 	// reason. Waived cases are reported as "waived" with the reason, and the
-	// list travels in Report.Waivers; they do not fail the run. The preflight
-	// (sandbox only) and the per-call test_mode / x_environment checks cannot
-	// be waived.
+	// list travels in Report.Waivers; they do not fail the run. At most
+	// MaxWaivers may be given, and the CoreCases cannot be waived at all:
+	// asking for it aborts the run. The preflight (sandbox only) and the
+	// per-call test_mode / x_environment checks cannot be waived either.
 	Waive map[string]string
-	// Lenient lets skipped cases (a sandbox that cannot inject a fault or
-	// count effects, an asynchronous refund that never settled) pass. The
-	// default is strict: a skip fails the run.
+	// Lenient tolerates skipped cases (a sandbox that cannot inject a fault,
+	// count effects or age a webhook; an asynchronous refund that never
+	// settled). The verdict is then "conforms_lenient", never "conforms", and
+	// Conforms() is false. The default is strict: a skip fails the run.
 	Lenient bool
 	// WebhookMode defaults to WebhookSigned.
 	WebhookMode WebhookMode
@@ -193,12 +212,27 @@ type Options struct {
 	RunID string
 }
 
+// MaxWaivers is the most cases a run may waive.
+const MaxWaivers = 5
+
+// CoreCases are the cases that prove the money cannot be lost, duplicated or
+// forged; they can never be waived. A provider that truly cannot run them
+// does not conform (Lenient reports it as conforms_lenient).
+var CoreCases = []string{"SES-02", "WH-02", "WH-03", "WH-08", "RF-02", "RF-03", "IND-01", "IND-02", "IND-03"}
+
 // Result states.
 const (
-	Pass   = "pass"
-	Fail   = "fail"
-	Skip   = "skip"
+	Pass = "pass"
+	Fail = "fail"
+	// Skip: the case could not conclude (unsupported sandbox capability,
+	// refund never settled). Fails a strict run.
+	Skip = "skip"
+	// Waived: exempted by Options.Waive, with the reason in the report.
 	Waived = "waived"
+	// NotApplicable: the provider declared (Target.Supports, or the typed
+	// unsupported_currency error) that the case cannot apply to it, with the
+	// reason. It never fails a run.
+	NotApplicable = "not_applicable"
 )
 
 // CaseResult is the outcome of one case.
@@ -230,57 +264,67 @@ type Report struct {
 	Cases   []CaseResult `json:"cases"`
 }
 
-// Counts returns the number of passed, failed, skipped and waived cases.
-func (r Report) Counts() (pass, fail, skip, waived int) {
+// Tally counts the cases of a report by state.
+type Tally struct{ Pass, Fail, Skip, Waived, NotApplicable int }
+
+// Counts tallies the cases by state.
+func (r Report) Counts() Tally {
+	var t Tally
 	for _, c := range r.Cases {
 		switch c.Result {
 		case Pass:
-			pass++
+			t.Pass++
 		case Fail:
-			fail++
+			t.Fail++
 		case Waived:
-			waived++
+			t.Waived++
+		case NotApplicable:
+			t.NotApplicable++
 		default:
-			skip++
+			t.Skip++
 		}
 	}
-	return
+	return t
 }
 
 // Partial reports whether the run was restricted with Options.Only.
 func (r Report) Partial() bool { return len(r.Only) > 0 }
 
-// Conforms reports whether the provider conforms to CONF-PAYMENTS@1: the run
-// was complete (not Only, not aborted), no case failed, none was skipped
-// (unless Lenient) and at least one passed. Waived cases do not fail it but
-// are listed in Waivers: trace them.
-func (r Report) Conforms() bool {
-	p, f, s, _ := r.Counts()
-	return r.Aborted == "" && !r.Partial() && f == 0 && p > 0 && (r.Lenient || s == 0)
-}
-
-// Verdict is Conforms spelled out: "conforms", "conforms_with_waivers",
-// "partial" (Only), "aborted" or "fails".
+// Verdict: "aborted", "partial" (Only), "fails", "conforms_lenient" (no
+// failure but some case was skipped and Lenient tolerated it),
+// "conforms_with_waivers" or "conforms".
 func (r Report) Verdict() string {
+	t := r.Counts()
 	switch {
 	case r.Aborted != "":
 		return "aborted"
 	case r.Partial():
 		return "partial"
-	case !r.Conforms():
+	case t.Fail > 0 || t.Pass == 0 || (t.Skip > 0 && !r.Lenient):
 		return "fails"
+	case t.Skip > 0:
+		return "conforms_lenient"
 	case len(r.Waivers) > 0:
 		return "conforms_with_waivers"
 	}
 	return "conforms"
 }
 
+// Conforms reports whether the provider conforms to CONF-PAYMENTS@1: the
+// verdict is conforms or conforms_with_waivers (a complete run, nothing
+// failed, nothing skipped; waivers are listed in Waivers: trace them).
+// conforms_lenient is NOT conformance: some case could not run.
+func (r Report) Conforms() bool {
+	v := r.Verdict()
+	return v == "conforms" || v == "conforms_with_waivers"
+}
+
 // String is a human-readable table.
 func (r Report) String() string {
 	var b strings.Builder
-	p, f, s, w := r.Counts()
-	fmt.Fprintf(&b, "%s provider=%s run=%s mode=%s: %s (%d passed, %d failed, %d skipped, %d waived)\n",
-		r.Suite, r.Provider, r.RunID, r.WebhookMode, r.Verdict(), p, f, s, w)
+	t := r.Counts()
+	fmt.Fprintf(&b, "%s provider=%s run=%s mode=%s: %s (%d passed, %d failed, %d skipped, %d waived, %d not applicable)\n",
+		r.Suite, r.Provider, r.RunID, r.WebhookMode, r.Verdict(), t.Pass, t.Fail, t.Skip, t.Waived, t.NotApplicable)
 	if r.Aborted != "" {
 		fmt.Fprintf(&b, "  ABORTED %s\n", r.Aborted)
 	}
@@ -343,7 +387,15 @@ func Run(ctx context.Context, t Target, opts Options) Report {
 	for _, c := range allCases {
 		known[c.ID] = true
 	}
+	if len(opts.Waive) > MaxWaivers {
+		return abort("%d waivers: at most %d may be waived", len(opts.Waive), MaxWaivers)
+	}
 	for id, reason := range opts.Waive {
+		for _, core := range CoreCases {
+			if id == core {
+				return abort("%s is a core case and cannot be waived", id)
+			}
+		}
 		if !known[id] {
 			return abort("waiver for unknown case %q", id)
 		}
@@ -417,6 +469,8 @@ func runCase(ctx context.Context, t Target, opts Options, c Case) (res CaseResul
 	switch {
 	case err == nil:
 		res.Result = Pass
+	case errors.Is(err, errNA):
+		res.Result, res.Detail = NotApplicable, strings.TrimPrefix(err.Error(), errNA.Error()+": ")
 	case errors.Is(err, errSkip):
 		res.Result, res.Detail = Skip, err.Error()
 	default:
@@ -454,6 +508,8 @@ func RunT(t *testing.T, target Target, opts Options) Report {
 				t.Errorf("skipped (strict): %s: %s", c.Title, c.Detail)
 			case Waived:
 				t.Skipf("waived: %s", c.Detail)
+			case NotApplicable:
+				t.Skipf("not applicable: %s", c.Detail)
 			}
 		})
 	}

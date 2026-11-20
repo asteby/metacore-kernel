@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"time"
@@ -28,12 +29,13 @@ var allCases = []Case{
 	{"MON-09", "a refund in another currency is rejected", caseMoneyRefundCurrency},
 	// ------------------------------------------------------------- webhook
 	{"WH-01", "a validly signed webhook confirms the payment", caseWebhookValid},
-	{"WH-02", "a webhook altered after signing is rejected (or re-read to the genuine state)", caseWebhookTampered},
+	{"WH-02", "a webhook with a corrupted signature, or altered after signing, is rejected by its signature (or re-read to the genuine state)", caseWebhookTampered},
 	{"WH-03", "a webhook without signature headers is rejected (or re-read to the genuine state)", caseWebhookUnsigned},
 	{"WH-04", "a replayed webhook has the same dedupe id and is ignored by the ledger rule", caseWebhookReplay},
 	{"WH-05", "a correctly signed but stale webhook (old timestamp) is rejected", caseWebhookStale},
 	{"WH-06", "a late pending notification after paid never regresses the payment", caseWebhookLatePending},
 	{"WH-07", "a second captured payment of the same order_ref is refused or flagged in also_captured", caseDoubleCharge},
+	{"WH-08", "a forged notification saying paid for a still-pending session is not believed", caseWebhookForgedPaid},
 	// -------------------------------------------------------------- status
 	{"ST-01", "status re-read agrees with what was charged (provider is the truth)", caseStatusAgrees},
 	{"ST-02", "an unknown reference is an error, never an invented payment", caseStatusUnknown},
@@ -164,7 +166,19 @@ func caseMoneyMalformed(e *env) error {
 	return nil
 }
 
+// currencyNA turns the typed unsupported_currency answer into not_applicable.
+func (e *env) currencyNA(amount, currency string) error {
+	_, err := e.session(e.newOrder(amount, currency))
+	if codeOf(err) == UnsupportedCurrencyCode {
+		return naf("the provider declares %s unsupported (%s)", currency, UnsupportedCurrencyCode)
+	}
+	return nil
+}
+
 func caseMoneyZeroDecimal(e *env) error {
+	if err := e.currencyNA("1500", "JPY"); err != nil {
+		return err
+	}
 	p, err := e.pay("1500", "JPY")
 	if err != nil {
 		return err
@@ -260,6 +274,9 @@ func refundSettled(e *env, ref string) error {
 }
 
 func caseMoneyThreeDecimals(e *env) error {
+	if err := e.currencyNA("10.005", "KWD"); err != nil {
+		return err
+	}
 	p, err := e.pay("10.005", "KWD")
 	if err != nil {
 		return failf("KWD has 3 decimals, 10.005 is valid money: %v", err)
@@ -341,20 +358,90 @@ func caseWebhookValid(e *env) error {
 	return nil
 }
 
-// tamper alters the body itself (the suite never trusts the sandbox author to
-// forge it). Signed mode: one digit, enough to break any signature. Hint mode:
-// every digit (ids, amounts), so a provider that believes the body instead of
-// re-reading its own records returns a different payment.
-func tamper(body string, all bool) string {
+// corruptSignature returns the headers with the signature corrupted: the
+// longest header value (a signature is the longest, e.g. a hex HMAC) gets its
+// last character changed. The body stays genuine.
+func corruptSignature(h map[string]string) map[string]string {
+	out := map[string]string{}
+	longest := ""
+	for k, v := range h {
+		out[k] = v
+		if len(v) > len(h[longest]) {
+			longest = k
+		}
+	}
+	if v := out[longest]; v != "" {
+		last := v[len(v)-1]
+		repl := byte('0')
+		if last == '0' {
+			repl = '1'
+		}
+		out[longest] = v[:len(v)-1] + string(repl)
+	}
+	return out
+}
+
+// tamperBody alters the fields that have effect (any "amount*" and "status"
+// key, at any depth) so the notification claims something else, keeping every
+// id intact: the provider cannot reject it merely because a lookup failed.
+// A body that is not JSON gets its digits shifted.
+func tamperBody(body string) string {
+	var v any
+	if err := json.Unmarshal([]byte(body), &v); err != nil {
+		return shiftDigits(body)
+	}
+	changed := false
+	var walk func(any) any
+	walk = func(x any) any {
+		switch t := x.(type) {
+		case map[string]any:
+			for k, val := range t {
+				lk := strings.ToLower(k)
+				switch {
+				case strings.Contains(lk, "amount"):
+					if s, ok := val.(string); ok {
+						t[k] = "999999.00"
+						_ = s
+						changed = true
+					} else if _, ok := val.(float64); ok {
+						t[k] = 999999.0
+						changed = true
+					}
+				case lk == "status" || strings.HasSuffix(lk, "_status"):
+					if s, ok := val.(string); ok {
+						if strings.EqualFold(s, "paid") {
+							t[k] = "failed"
+						} else {
+							t[k] = "paid"
+						}
+						changed = true
+					}
+				default:
+					t[k] = walk(val)
+				}
+			}
+		case []any:
+			for i := range t {
+				t[i] = walk(t[i])
+			}
+		}
+		return x
+	}
+	v = walk(v)
+	if !changed {
+		return shiftDigits(body)
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+func shiftDigits(body string) string {
 	b := []byte(body)
 	changed := false
 	for i, c := range b {
 		if c >= '0' && c <= '9' {
 			b[i] = '0' + (c-'0'+1)%10
 			changed = true
-			if !all {
-				break
-			}
 		}
 	}
 	if !changed {
@@ -401,9 +488,19 @@ func caseWebhookTampered(e *env) error {
 	if err != nil {
 		return err
 	}
+	// 1. the genuine body with a corrupted signature: only a provider that
+	// really verifies the HMAC rejects it (the lookup would succeed).
+	bad := Webhook{RawBody: p.Webhook.RawBody, Query: p.Webhook.Query, Headers: corruptSignature(p.Webhook.Headers)}
+	if err := e.untrusted("a genuine webhook with a corrupted signature", p.Outcome, bad); err != nil {
+		return err
+	}
+	// 2. altered amount / status under the original signature.
 	w := p.Webhook
-	w.RawBody = tamper(w.RawBody, e.opts.WebhookMode == WebhookHintReread)
-	return e.untrusted("a webhook altered after signing", p.Outcome, w)
+	w.RawBody = tamperBody(w.RawBody)
+	if w.RawBody == p.Webhook.RawBody {
+		return failf("suite could not alter the body")
+	}
+	return e.untrusted("a webhook with altered amount / status under the original signature", p.Outcome, w)
 }
 
 func caseWebhookUnsigned(e *env) error {
@@ -478,6 +575,51 @@ func caseWebhookLatePending(e *env) error {
 		return failf("after a late pending notification the payment reads %s, want paid", st.Status)
 	}
 	return nil
+}
+
+// caseWebhookForgedPaid builds, from a real paid notification of session A,
+// an unsigned one that says paid for session B (still pending). It must be
+// rejected, or answered with B's genuine state: B must read pending after.
+func caseWebhookForgedPaid(e *env) error {
+	a, err := e.session(e.newOrder("90.00", "MXN"))
+	if err != nil {
+		return err
+	}
+	bo := e.newOrder("90.00", "MXN")
+	b, err := e.session(bo)
+	if err != nil {
+		return err
+	}
+	w, err := e.t.Sandbox.Settle(e.ctx, SettleSpec{SessionID: a.SessionID, Status: payments.StatusPaid})
+	if err != nil {
+		return failf("sandbox settle: %v", err)
+	}
+	// the real shape of a paid notification, pointed at B
+	body := strings.ReplaceAll(w.RawBody, a.SessionID, b.SessionID)
+	body = strings.ReplaceAll(body, orderOf(e, a), bo.OrderRef)
+	if a.ProviderRef != "" && b.ProviderRef != "" {
+		body = strings.ReplaceAll(body, a.ProviderRef, b.ProviderRef)
+	}
+	if body == w.RawBody {
+		return failf("suite could not point the notification at another session")
+	}
+	forged := Webhook{RawBody: body, Query: w.Query} // no signature
+	if o, err := e.confirm(forged); err == nil && o.Status.Captured() {
+		return failf("an unsigned notification made session %s %s", b.SessionID, o.Status)
+	}
+	st, err := e.status(map[string]any{"session_id": b.SessionID})
+	if err == nil && st.Status.Captured() {
+		return failf("after a forged notification the pending session reads %s", st.Status)
+	}
+	return nil
+}
+
+// orderOf is the order_ref of session s as the provider reports it.
+func orderOf(e *env, s sessionOut) string {
+	if st, err := e.status(map[string]any{"session_id": s.SessionID}); err == nil {
+		return st.OrderRef
+	}
+	return "\x00none"
 }
 
 func caseDoubleCharge(e *env) error {
@@ -732,7 +874,10 @@ func caseRefundUncaptured(e *env) error {
 		}
 	}
 	if ref == "" {
-		return skipf("the provider holds no payment reference before the buyer pays")
+		if r := e.t.Supports.NoRefBeforePay; r != "" {
+			return naf("%s", r)
+		}
+		return skipf("the provider holds no payment reference before the buyer pays (declare Target.Supports.NoRefBeforePay if by design)")
 	}
 	if _, err := e.refund(ref, "1.00", "MXN", e.next("rkey")); !rejected(err) {
 		return failf("a payment still pending: want the refund rejected, got %v", err)

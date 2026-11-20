@@ -34,6 +34,17 @@ type Quirk string
 const (
 	AsyncRefunds Quirk = "async_refunds" // NOT a defect: refunds answer pending and settle on the next read
 
+	// HintReread is NOT a defect: the provider verifies no signature but
+	// treats a notification as a hint and answers from its own records
+	// (MercadoPago style). Run it with WebhookMode hint_reread.
+	HintReread Quirk = "hint_reread"
+	// NoExoticCurrencies is NOT a defect: JPY and KWD answer the typed
+	// unsupported_currency error (declared limit of the provider).
+	NoExoticCurrencies Quirk = "no_exotic_currencies"
+	// NoRefBeforePay is NOT a defect: no provider_ref exists until paid.
+	NoRefBeforePay Quirk = "no_ref_before_pay"
+
+	QuirkSigHeaderOnly           Quirk = "signature_header_only"     // requires the signature header, never verifies the HMAC
 	QuirkNoSignatureCheck        Quirk = "no_signature_check"        // accepts any webhook
 	QuirkNoTimestampCheck        Quirk = "no_timestamp_check"        // accepts stale (replayed) webhooks
 	QuirkNoSessionIdempotency    Quirk = "no_session_idempotency"    // a retry creates another session
@@ -156,6 +167,9 @@ func (s *Sim) checkMoney(amount, currency string) (payments.Amount, error) {
 	if err != nil {
 		return a, coded("invalid_input", err.Error())
 	}
+	if s.quirks[NoExoticCurrencies] && (currency == "JPY" || currency == "KWD") {
+		return a, coded(conformance.UnsupportedCurrencyCode, currency)
+	}
 	ccyOK := capability.ValidCurrency(currency)
 	if s.quirks[QuirkAcceptLowercaseCcy] && len(currency) == 3 && strings.ToUpper(currency) != currency {
 		ccyOK = true
@@ -192,10 +206,14 @@ func (s *Sim) testMode(live bool) bool {
 }
 
 func (s *Sim) sessionOut(x *session) map[string]any {
+	ref := x.ref
+	if s.quirks[NoRefBeforePay] {
+		ref = ""
+	}
 	return map[string]any{
 		"session_id": x.id, "status": "pending", "action_type": "redirect",
 		"redirect_url": "https://sandbox.refsim.test/pay/" + x.id,
-		"provider_ref": x.ref, "test_mode": !s.quirks[QuirkLiveMode],
+		"provider_ref": ref, "test_mode": !s.quirks[QuirkLiveMode],
 	}
 }
 
@@ -239,9 +257,9 @@ func (s *Sim) doSession(in map[string]any) (map[string]any, error) {
 
 // hook is the body of a notification.
 type hook struct {
+	SessionID   string `json:"session_id"`
 	EventID     string `json:"event_id"`
 	OrderRef    string `json:"order_ref"`
-	SessionID   string `json:"session_id"`
 	ProviderRef string `json:"provider_ref"`
 	Status      string `json:"status"`
 	Amount      string `json:"amount"`
@@ -259,11 +277,11 @@ func (s *Sim) doConfirm(in map[string]any) (map[string]any, error) {
 	hdr, _ := in["headers"].(map[string]any)
 	sig, _ := hdr["x-signature"].(string)
 	tsv, _ := hdr["x-timestamp"].(string)
-	if !s.quirks[QuirkNoSignatureCheck] {
+	if !s.quirks[QuirkNoSignatureCheck] && !s.quirks[HintReread] {
 		if sig == "" || tsv == "" {
 			return nil, coded("invalid_signature", "missing signature")
 		}
-		if !hmac.Equal([]byte(sig), []byte(s.sign(tsv, body))) {
+		if !s.quirks[QuirkSigHeaderOnly] && !hmac.Equal([]byte(sig), []byte(s.sign(tsv, body))) {
 			return nil, coded("invalid_signature", "bad signature")
 		}
 		if !s.quirks[QuirkNoTimestampCheck] {
@@ -280,6 +298,12 @@ func (s *Sim) doConfirm(in map[string]any) (map[string]any, error) {
 	x := s.byID[h.SessionID]
 	if x == nil {
 		return nil, coded("unknown_session", "the notification is about no known session")
+	}
+	if s.quirks[HintReread] {
+		// the body is only a pointer: the answer is the provider's own record
+		out := s.outcome(x)
+		out["event_id"] = h.EventID
+		return out, nil
 	}
 	if h.Currency != x.currency {
 		return nil, coded("currency_mismatch", "notification currency differs from the session's")
@@ -400,7 +424,7 @@ func (s *Sim) doStatus(in map[string]any) (map[string]any, error) {
 			}
 		}
 	}
-	if x == nil {
+	if x == nil || (s.quirks[NoRefBeforePay] && x.status == payments.StatusPending && str(in, "provider_ref") == "") {
 		return nil, coded(capability.PaymentsStatusNotFound, "no payment for the reference")
 	}
 	return s.outcome(x), nil
