@@ -108,9 +108,10 @@ var (
 	// "webhook"; "prompt" is reserved for a future LLM dispatcher and
 	// validates but runs as a no-op until a host wires one in.
 	validLifecycleHookTargets = map[string]struct{}{
-		"wasm":    {},
-		"webhook": {},
-		"prompt":  {},
+		"wasm":     {},
+		"compiled": {},
+		"webhook":  {},
+		"prompt":   {},
 	}
 	// lifecycleBeforeEvents lists the events that semantically veto the
 	// operation on error. Used to reject `async: true` combined with a
@@ -1680,8 +1681,8 @@ func validateComputeFormulas(formulas []Formula, ownCols map[string]struct{}) er
 			if strings.TrimSpace(f.Expr) != "" {
 				return fmt.Errorf("formulas[%d]: expr must be empty when tier is 3", i)
 			}
-			if !strings.HasPrefix(f.Handler, "wasm:") || len(f.Handler) <= len("wasm:") {
-				return fmt.Errorf("formulas[%d]: handler %q must be \"wasm:<export>\" when tier is 3", i, f.Handler)
+			if !v3.ValidFormulaHandler(f.Handler) {
+				return fmt.Errorf("formulas[%d]: handler %q must be \"wasm:<export>\" or \"compiled:<fn>\" when tier is 3", i, f.Handler)
 			}
 		default:
 			return fmt.Errorf("formulas[%d]: tier %d is not one of 2|3", i, f.Tier)
@@ -1977,7 +1978,7 @@ func (m *Manifest) validateLifecycleHooks() error {
 				return fmt.Errorf("manifest.lifecycle_hooks[%q][%d]: event %q does not match map key", event, i, h.Event)
 			}
 			if _, ok := validLifecycleHookTargets[h.Target.Type]; !ok {
-				return fmt.Errorf("manifest.lifecycle_hooks[%q][%d].target.type: unknown %q (want wasm|webhook|prompt)", event, i, h.Target.Type)
+				return fmt.Errorf("manifest.lifecycle_hooks[%q][%d].target.type: unknown %q (want wasm|compiled|webhook|prompt)", event, i, h.Target.Type)
 			}
 			switch h.Target.Type {
 			case "wasm":
@@ -1993,6 +1994,16 @@ func (m *Manifest) validateLifecycleHooks() error {
 					if _, ok := exports[h.Target.Function]; !ok {
 						return fmt.Errorf("manifest.lifecycle_hooks[%q][%d].target.function: %q not declared in backend.exports", event, i, h.Target.Function)
 					}
+				}
+			case "compiled":
+				// A Go export of a compiled-in module: dispatched through the same
+				// seam as a wasm export, so it is NOT cross-checked against
+				// Backend.Exports (a pure compiled module has no wasm backend).
+				if strings.TrimSpace(h.Target.Function) == "" {
+					return fmt.Errorf("manifest.lifecycle_hooks[%q][%d].target.function: required when type=compiled", event, i)
+				}
+				if !triggerExportRe.MatchString(h.Target.Function) {
+					return fmt.Errorf("manifest.lifecycle_hooks[%q][%d].target.function: invalid symbol %q", event, i, h.Target.Function)
 				}
 			case "webhook":
 				if strings.TrimSpace(h.Target.URL) == "" {

@@ -593,3 +593,22 @@ func TestServiceCreate_FormulaIntoIntegerColumn(t *testing.T) {
 		t.Fatalf("updated cents = %d/%d, want 29/87", row.UnitPriceCents, row.TotalCents)
 	}
 }
+
+// A compiled Tier-3 formula with no executor fails closed: the target is never
+// silently left as the client sent it (unlike a wasm formula in a
+// declarative-only deployment).
+func TestApplyFormulas_CompiledWithoutExecutorFailsClosed(t *testing.T) {
+	fb := formulaBinding{
+		model:    "test_products",
+		table:    "test_products",
+		formulas: []manifest.Formula{{Target: "price", Tier: 3, Handler: "compiled:resolve_price"}},
+	}
+	input := map[string]any{"price": 1.0}
+	if err := applyFormulas(context.Background(), nil, fb, input, nil); err == nil {
+		t.Fatal("expected an error: compiled formula without an executor")
+	}
+	fb.formulas[0].Handler = "wasm:resolve_price"
+	if err := applyFormulas(context.Background(), nil, fb, input, nil); err != nil {
+		t.Fatalf("wasm formula keeps the legacy skip: %v", err)
+	}
+}

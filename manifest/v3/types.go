@@ -1041,8 +1041,9 @@ type Formula struct {
 	//           arithmetic expression cannot express (price-list resolution,
 	//           tiered margins, rounding policies).
 	Tier int `json:"tier,omitempty"`
-	// Handler is the Tier-3 backend, "wasm:<export>" — an export the addon's
-	// wasm module declares. Required (and only allowed) when Tier is 3. The
+	// Handler is the Tier-3 backend, "wasm:<export>" or "compiled:<fn>" — an
+	// export the addon's wasm module declares, or a Go export of a compiled-in
+	// module (runtime/compiled). Required (and only allowed) when Tier is 3. The
 	// invocation is host-wired (dynamic.HookRegistry.SetFormulaInvoker); when no
 	// invoker is configured the formula is skipped, never a hard failure.
 	Handler string `json:"handler,omitempty"`

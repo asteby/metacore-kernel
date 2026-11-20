@@ -236,3 +236,23 @@ func TestIsBeforeEvent(t *testing.T) {
 		}
 	}
 }
+
+// A compiled hook target routes to its own dispatcher; without one a
+// before_* hook vetoes (fail closed) instead of passing silently.
+func TestHookRunner_Run_CompiledTarget(t *testing.T) {
+	m := newManifestWithHooks(map[string][]manifest.HookDef{
+		HookEventBeforeCreate: {{Target: manifest.HookTarget{Type: HookTargetCompiled, Function: "OnBefore"}}},
+	})
+	runner := NewHookRunner(nil)
+	if err := runner.Run(context.Background(), m.Key, uuid.New(), HookEventBeforeCreate, m, nil); !errors.Is(err, ErrNoDispatcher) {
+		t.Fatalf("want ErrNoDispatcher without executor, got %v", err)
+	}
+	rec := &recordingDispatcher{}
+	runner.Register(HookTargetCompiled, rec)
+	if err := runner.Run(context.Background(), m.Key, uuid.New(), HookEventBeforeCreate, m, nil); err != nil {
+		t.Fatal(err)
+	}
+	if calls := rec.snapshot(); len(calls) != 1 || calls[0].Target.Function != "OnBefore" {
+		t.Fatalf("calls = %+v", calls)
+	}
+}

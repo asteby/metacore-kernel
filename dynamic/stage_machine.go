@@ -321,11 +321,11 @@ func (s *Service) runTransitionHooks(ctx context.Context, model string, user mod
 			log.Printf("dynamic: no dispatcher for stage hook %q on %s.%s→%s, skipping", h.Do, model, from, to)
 			continue
 		}
-		// Build the dispatch request. For wasm the target is the export name; the
+		// Build the dispatch request. For wasm and compiled the target is the export name; the
 		// other dispatchers ignore Export and resolve their target out-of-band
 		// (the webhook key / compiled fn name travels as the ActionKey).
 		trig := &manifest.ActionTrigger{Type: prefix}
-		if prefix == "wasm" {
+		if prefix == "wasm" || prefix == "compiled" {
 			trig.Export = target
 		}
 		req := ActionRequest{
