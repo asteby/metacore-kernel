@@ -71,6 +71,7 @@ type installTxn struct {
 	orgID    uuid.UUID
 	b        *bundle.Bundle
 	fresh    bool // no installation row existed before this Install
+	mode     trustMode // how the bundle was authenticated (Source of a failure row)
 	prev     *Installation
 	prevLC   lifecycle.Addon
 	prevOK   bool
@@ -156,7 +157,7 @@ func (i *Installer) recordInstallFailure(t *installTxn, cause error) {
 			AddonKey:       key,
 			Version:        t.b.Manifest.Version,
 			Status:         "failed",
-			Source:         sourceOf(t.b.Manifest),
+			Source:         sourceFor(t.b, t.mode),
 		}
 		if err := i.DB.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "organization_id"}, {Name: "addon_key"}},

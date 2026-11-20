@@ -742,3 +742,29 @@ has no persisted row and is not gated; `row_conditions` cannot be combined with
 `append_only`. `Condition.Row()`, `RecordFieldCondition.Row()` and
 `RowCondition.Eval` are the shared evaluators; a host's legacy path calls them
 instead of re-implementing the operators.
+
+## Builtin trust path (security review)
+
+A module compiled into the host ships its bundle embedded in the binary and has
+no hub signature. The signed paths (`Installer.Install`/`Upgrade`) are NOT
+weakened for it. A separate, narrow path exists:
+
+1. At boot the host computes `installer.BuiltinDigest(rawBundleBytes)` from the
+   embedded bytes and registers it with `Installer.TrustBuiltin(key, version,
+   digest)`.
+2. It installs/upgrades with `InstallBuiltin` / `UpgradeBuiltin`. The bundle is
+   admitted only if `sha256(bundle.Raw)` equals the registered digest AND `Raw`
+   re-reads to the same key, version and manifest bytes as the struct (a
+   hand-built `*bundle.Bundle` cannot pair trusted bytes with another manifest).
+3. Only the signature and hub-revocation checks are skipped; manifest
+   validation, runtime/capability checks, the compiled-handler gate, migrations
+   and compensation are the same code. The row gets `Source = "builtin"`.
+
+Guarantees: an empty registry admits nothing; no env var or flag enables it;
+`Install`/`Upgrade` never consult the registry (a marketplace bundle cannot be
+admitted by a digest); a version not registered, a different digest or a
+tampered byte is `ErrBuiltinNotTrusted`; neither path takes over the other's
+installation (`ErrBuiltinSourceMismatch`); a digest cannot be rebound. A
+`Source = "builtin"` row is only upgraded by `UpgradeBuiltin`, so each release of
+the host binary registers the digest of the bundle it embeds and reconciles
+installations (idempotent: same version is `ErrSameVersionUpgrade`).
