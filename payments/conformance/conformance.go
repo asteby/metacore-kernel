@@ -175,11 +175,17 @@ type Supports struct {
 	// pays, so a pending payment cannot even be named for a refund (RF-05).
 	// The text is the reason shown in the report.
 	NoRefBeforePay string
+	// UnsupportedCurrencies are currencies the provider cannot charge at all
+	// (it answers the typed unsupported_currency error). Without the
+	// declaration, refusing a currency is a failure; with it, the refusal must
+	// be consistent (every well-quantized amount of that currency), or the case
+	// fails.
+	UnsupportedCurrencies []string
 }
 
 // UnsupportedCurrencyCode is the typed error (capability.NewCodedError) a
 // provider answers when it cannot charge a currency at all. MON-03 (JPY) and
-// MON-06 (KWD) are then not_applicable for it.
+// MON-06 (KWD) are then not_applicable for it, if it declared the currency.
 const UnsupportedCurrencyCode = "unsupported_currency"
 
 // Options tune a run. The zero value is the strict, complete run.
@@ -259,6 +265,8 @@ type Report struct {
 	// Only is the case filter of a partial run (empty = the whole suite).
 	Only    []string `json:"only,omitempty"`
 	Waivers []Waiver `json:"waivers,omitempty"`
+	// Limits are the not_applicable cases with the provider's declared reason.
+	Limits []Waiver `json:"limits,omitempty"`
 	// Aborted is why no case ran (invalid options, not a sandbox, ...).
 	Aborted string       `json:"aborted,omitempty"`
 	Cases   []CaseResult `json:"cases"`
@@ -292,7 +300,8 @@ func (r Report) Partial() bool { return len(r.Only) > 0 }
 
 // Verdict: "aborted", "partial" (Only), "fails", "conforms_lenient" (no
 // failure but some case was skipped and Lenient tolerated it),
-// "conforms_with_waivers" or "conforms".
+// "conforms_with_waivers", "conforms_with_limits" (some cases not_applicable
+// by the provider's declaration, listed in Limits) or "conforms".
 func (r Report) Verdict() string {
 	t := r.Counts()
 	switch {
@@ -306,17 +315,19 @@ func (r Report) Verdict() string {
 		return "conforms_lenient"
 	case len(r.Waivers) > 0:
 		return "conforms_with_waivers"
+	case t.NotApplicable > 0:
+		return "conforms_with_limits"
 	}
 	return "conforms"
 }
 
 // Conforms reports whether the provider conforms to CONF-PAYMENTS@1: the
-// verdict is conforms or conforms_with_waivers (a complete run, nothing
+// verdict is conforms, conforms_with_limits or conforms_with_waivers (a complete run, nothing
 // failed, nothing skipped; waivers are listed in Waivers: trace them).
 // conforms_lenient is NOT conformance: some case could not run.
 func (r Report) Conforms() bool {
 	v := r.Verdict()
-	return v == "conforms" || v == "conforms_with_waivers"
+	return v == "conforms" || v == "conforms_with_waivers" || v == "conforms_with_limits"
 }
 
 // String is a human-readable table.
@@ -427,6 +438,11 @@ func Run(ctx context.Context, t Target, opts Options) Report {
 		}
 		rep.Cases = append(rep.Cases, runCase(ctx, t, opts, c))
 	}
+	for _, c := range rep.Cases {
+		if c.Result == NotApplicable {
+			rep.Limits = append(rep.Limits, Waiver{c.ID, c.Detail})
+		}
+	}
 	return rep
 }
 
@@ -491,9 +507,24 @@ func runCase(ctx context.Context, t Target, opts Options, c Case) (res CaseResul
 // aborted and, unless Lenient, skipped).
 func RunT(t *testing.T, target Target, opts Options) Report {
 	t.Helper()
+	return RunTB(t, target, opts)
+}
+
+// Reporter is the part of *testing.T that RunTB uses (tests may fake it).
+type Reporter interface {
+	Helper()
+	Errorf(format string, args ...any)
+	Fatalf(format string, args ...any)
+	Logf(format string, args ...any)
+	Run(name string, f func(*testing.T)) bool
+}
+
+// RunTB is RunT over a Reporter.
+func RunTB(t Reporter, target Target, opts Options) Report {
+	t.Helper()
 	rep := Run(context.Background(), target, opts)
 	if rep.Aborted != "" {
-		t.Fatalf("CONF-PAYMENTS aborted: %s", rep.Aborted)
+		t.Fatalf("CONF-PAYMENTS aborted, nothing was certified: %s", rep.Aborted)
 	}
 	for _, c := range rep.Cases {
 		c := c
@@ -514,8 +545,16 @@ func RunT(t *testing.T, target Target, opts Options) Report {
 		})
 	}
 	if rep.Partial() {
-		t.Log("PARTIAL run (Options.Only): this is not a conformance result")
+		t.Errorf("PARTIAL run (Options.Only %v): not a conformance result, the test fails on purpose; filter with `go test -run` instead", rep.Only)
 	}
-	t.Log("\n" + rep.String())
+	switch rep.Verdict() {
+	case "conforms_lenient":
+		t.Logf("NOT CERTIFIED: Lenient tolerated %d skipped case(s); verdict conforms_lenient is not conformance", rep.Counts().Skip)
+	case "fails":
+		if rep.Counts().Fail == 0 && !rep.Lenient {
+			t.Errorf("verdict fails: %d skipped / no case passed", rep.Counts().Skip)
+		}
+	}
+	t.Logf("\n%s", rep.String())
 	return rep
 }

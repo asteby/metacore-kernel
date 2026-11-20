@@ -3,6 +3,7 @@ package conformance_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -220,30 +221,119 @@ func TestCoreCasesCannotBeWaivedAndWaiversAreCapped(t *testing.T) {
 	}
 }
 
-// Declared limits are not_applicable: never a failure, never a waiver.
+func caseResult(r conformance.Report, id string) string {
+	for _, c := range r.Cases {
+		if c.ID == id {
+			return c.Result
+		}
+	}
+	return ""
+}
+
+// Declared limits are not_applicable: never a failure, never a waiver, but they
+// count in the verdict and are listed with their reason.
 func TestDeclaredLimitsAreNotApplicable(t *testing.T) {
 	tg := refsim.New(refsim.NoExoticCurrencies, refsim.NoRefBeforePay).Target("limits")
 	tg.Supports.NoRefBeforePay = "payment id exists only after the buyer pays"
+	tg.Supports.UnsupportedCurrencies = []string{"JPY", "KWD"}
 	rep := conformance.Run(context.Background(), tg, conformance.Options{})
-	if !rep.Conforms() || rep.Verdict() != "conforms" || rep.Counts().NotApplicable != 3 {
-		t.Fatalf("want conforms with MON-03, MON-06, RF-05 not applicable:\n%s", rep)
+	if !rep.Conforms() || rep.Verdict() != "conforms_with_limits" || rep.Counts().NotApplicable != 3 || len(rep.Limits) != 3 {
+		t.Fatalf("want conforms_with_limits with MON-03, MON-06, RF-05 listed:\n%s", rep)
 	}
-	for _, c := range rep.Cases {
-		if c.Result == conformance.NotApplicable && c.Detail == "" {
-			t.Errorf("%s: not_applicable without a reason", c.ID)
+	for _, l := range rep.Limits {
+		if l.Reason == "" {
+			t.Errorf("%s: limit without a reason", l.ID)
 		}
 	}
-	// without the declaration the missing reference is a skip, not silence
-	tg.Supports = conformance.Supports{}
-	if r := conformance.Run(context.Background(), tg, conformance.Options{}); r.Conforms() {
+	raw, _ := rep.JSON()
+	if !strings.Contains(string(raw), `"limits"`) {
+		t.Fatalf("limits missing from the JSON: %s", raw)
+	}
+	if got := caseResult(rep, "WH-08"); got != conformance.Pass {
+		t.Fatalf("a MercadoPago-like provider (no reference before pay) must pass WH-08, got %s:\n%s", got, rep)
+	}
+	// without the reference declaration the missing reference is a skip
+	nodecl := tg
+	nodecl.Supports.NoRefBeforePay = ""
+	if r := conformance.Run(context.Background(), nodecl, conformance.Options{}); r.Conforms() {
 		t.Fatalf("undeclared missing reference must not conform:\n%s", r)
+	}
+	// without the currency declaration the refusal is a failure
+	nocur := tg
+	nocur.Supports.UnsupportedCurrencies = nil
+	r := conformance.Run(context.Background(), nocur, conformance.Options{})
+	if r.Conforms() || caseResult(r, "MON-03") != conformance.Fail || caseResult(r, "MON-06") != conformance.Fail {
+		t.Fatalf("undeclared currency refusal must fail MON-03 and MON-06:\n%s", r)
 	}
 }
 
-// hint+reread providers do not verify signatures but answer from their own
-// records: an altered or unsigned notification may be answered only with the
-// genuine state. A signature-less provider that cross-checks against its
-// records conforms in hint mode and fails in signed mode.
+// A currency refusal that depends on the amount is a bug, not a declared limit.
+func TestInconsistentCurrencyRefusalFails(t *testing.T) {
+	tg := refsim.New(refsim.QuirkUnsupportedCurrencyByAmount).Target("sneaky")
+	tg.Supports.UnsupportedCurrencies = []string{"JPY", "KWD"}
+	r := conformance.Run(context.Background(), tg, conformance.Options{})
+	if r.Conforms() || caseResult(r, "MON-06") != conformance.Fail || caseResult(r, "MON-03") != conformance.Fail {
+		t.Fatalf("%s", r)
+	}
+}
+
+// A provider that believes a notification about a payment it does not hold
+// fails WH-08 even when the body names no session (no reference before pay).
+func TestWH08ForgedReference(t *testing.T) {
+	bad := refsim.New(refsim.NoRefBeforePay, refsim.QuirkNoSignatureCheck, refsim.QuirkNoTimestampCheck, refsim.QuirkAcceptUnknownRef).Target("bad")
+	bad.Supports.NoRefBeforePay = "by design"
+	r := conformance.Run(context.Background(), bad, conformance.Options{})
+	if caseResult(r, "WH-08") != conformance.Fail {
+		t.Fatalf("%s", r)
+	}
+}
+
+type fakeT struct {
+	errs, fatals, logs []string
+}
+
+type stop struct{}
+
+func (f *fakeT) Helper()                           {}
+func (f *fakeT) Errorf(m string, a ...any)         { f.errs = append(f.errs, fmt.Sprintf(m, a...)) }
+func (f *fakeT) Logf(m string, a ...any)           { f.logs = append(f.logs, fmt.Sprintf(m, a...)) }
+func (f *fakeT) Run(string, func(*testing.T)) bool { return true }
+func (f *fakeT) Fatalf(m string, a ...any) {
+	f.fatals = append(f.fatals, fmt.Sprintf(m, a...))
+	panic(stop{})
+}
+
+func runFake(target conformance.Target, o conformance.Options) (f *fakeT) {
+	f = &fakeT{}
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(stop); !ok {
+				panic(r)
+			}
+		}
+	}()
+	conformance.RunTB(f, target, o)
+	return f
+}
+
+// RunT never leaves a go test green on a partial or aborted run.
+func TestRunTFailsPartialAndAborted(t *testing.T) {
+	broken := refsim.New(refsim.QuirkNoSignatureCheck).Target("broken")
+	if f := runFake(broken, conformance.Options{Only: []string{"SES"}}); len(f.errs) == 0 || !strings.Contains(f.errs[0], "PARTIAL") {
+		t.Fatalf("a partial run must fail the test: %+v", f)
+	}
+	live := refsim.New(refsim.QuirkLiveMode).Target("live")
+	if f := runFake(live, conformance.Options{}); len(f.fatals) == 0 || !strings.Contains(f.fatals[0], "aborted") {
+		t.Fatalf("an aborted run must fail the test: %+v", f)
+	}
+	lim := refsim.New().Target("lenient")
+	lim.Sandbox = limited{lim.Sandbox}
+	f := runFake(lim, conformance.Options{Lenient: true})
+	if len(f.errs) != 0 || !strings.Contains(strings.Join(f.logs, "\n"), "NOT CERTIFIED") {
+		t.Fatalf("lenient must be green but say it is not certified: %+v", f)
+	}
+}
+
 func TestHintRereadMode(t *testing.T) {
 	hint := conformance.Options{WebhookMode: conformance.WebhookHintReread}
 	// a real hint+reread provider conforms in hint mode, fails in signed mode

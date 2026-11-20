@@ -73,9 +73,16 @@ What the provider supplies:
 - Not applicable: a case a provider cannot have by design is `not_applicable`
   with the declared reason, never a failure or a waiver. Declared by
   `Target.Supports.NoRefBeforePay` (no provider reference before the buyer
-  pays: RF-05) or by the typed error `unsupported_currency`
-  (`conformance.UnsupportedCurrencyCode`) when the session asks for JPY / KWD
-  (MON-03, MON-06).
+  pays: RF-05) or, for MON-03 / MON-06, `Target.Supports.UnsupportedCurrencies`
+  plus the typed error `unsupported_currency`
+  (`conformance.UnsupportedCurrencyCode`). The currency refusal is only a limit
+  if declared AND consistent (every well-quantized amount, e.g. `10.000` KWD,
+  `1500` JPY, is refused the same way); an undeclared or amount-dependent
+  refusal fails the case. Not applicable cases give the verdict
+  `conforms_with_limits` and are listed with their reason in `Report.Limits`
+  (JSON `limits`).
+- `RunT` fails the go test on a partial (`Only`) run and on an aborted run, and
+  with `Lenient` logs `NOT CERTIFIED`: a green test is a conformance claim.
 - `WebhookMode: WebhookHintReread` is for providers that do not verify a
   signature but answer from their own records (MercadoPago style): WH-02,
   WH-03 and WH-05 accept an altered / unsigned / stale notification only when

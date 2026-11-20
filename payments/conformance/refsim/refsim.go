@@ -41,38 +41,41 @@ const (
 	// NoExoticCurrencies is NOT a defect: JPY and KWD answer the typed
 	// unsupported_currency error (declared limit of the provider).
 	NoExoticCurrencies Quirk = "no_exotic_currencies"
-	// NoRefBeforePay is NOT a defect: no provider_ref exists until paid.
+	// NoRefBeforePay is NOT a defect: no provider_ref exists until paid, and
+	// the notification body names only the payment (MercadoPago style).
 	NoRefBeforePay Quirk = "no_ref_before_pay"
 
-	QuirkSigHeaderOnly           Quirk = "signature_header_only"     // requires the signature header, never verifies the HMAC
-	QuirkNoSignatureCheck        Quirk = "no_signature_check"        // accepts any webhook
-	QuirkNoTimestampCheck        Quirk = "no_timestamp_check"        // accepts stale (replayed) webhooks
-	QuirkNoSessionIdempotency    Quirk = "no_session_idempotency"    // a retry creates another session
-	QuirkDoubleSessionAfterLost  Quirk = "double_session_after_lost" // after a lost response the retry creates a 2nd session, then is idempotent
-	QuirkKeyReuseMutatesAmount   Quirk = "key_reuse_mutates_amount"  // same key, other amount: same session, new amount
-	QuirkAcceptSubCents          Quirk = "accept_sub_cents"          // 10.005 MXN is money
-	QuirkAcceptZero              Quirk = "accept_zero"               // 0 / negative amounts pass
-	QuirkTwoDecimalsOnly         Quirk = "two_decimals_only"         // every currency has 2 decimals
-	QuirkFloatAmounts            Quirk = "float_amounts"             // amounts go through float64
-	QuirkAcceptLowercaseCcy      Quirk = "accept_lowercase_currency" // "mxn" is accepted
-	QuirkRefundCurrencyUnchecked Quirk = "refund_currency_unchecked"
-	QuirkEchoSessionAmount       Quirk = "echo_session_amount"      // reports the session amount, not what was charged
-	QuirkAssumeFailedOnLost      Quirk = "assume_failed_on_lost"    // timeout turned into a failed session
-	QuirkNotFoundOnOutage        Quirk = "not_found_on_outage"      // outage reported as not_found
-	QuirkPaidOnOutage            Quirk = "paid_on_outage"           // outage assumed paid
-	QuirkNoRecoveryAfterOutage   Quirk = "no_recovery_after_outage" // status stays broken after the outage
-	QuirkNoRefundIdempotency     Quirk = "no_refund_idempotency"    // retry refunds twice
-	QuirkDoubleRefundAfterLost   Quirk = "double_refund_after_lost" // after a lost response the retry refunds again
-	QuirkNoOverRefundCheck       Quirk = "no_over_refund_check"     // refunds beyond the capture
-	QuirkPendingRefundsIgnored   Quirk = "pending_refunds_ignored"  // pending refunds do not reserve the remainder
-	QuirkRefundPendingForever    Quirk = "refund_pending_forever"   // refund answers pending and never settles
-	QuirkFloatRefundTotals       Quirk = "float_refund_totals"      // sums refunds as float64
-	QuirkFreshEventIDOnReplay    Quirk = "fresh_event_id_replay"    // replay gets a new event id
-	QuirkLateWebhookRegresses    Quirk = "late_webhook_regresses"   // a late pending moves paid back to pending
-	QuirkNoAlsoCaptured          Quirk = "no_also_captured"         // double charges are not flagged
-	QuirkLiveMode                Quirk = "live_mode"                // talks to production (session test_mode=false)
-	QuirkLiveStatus              Quirk = "live_status"              // status/confirm say test_mode=false, session says true
-	QuirkRefundUncaptured        Quirk = "refund_uncaptured"        // refunds a pending payment
+	QuirkUnsupportedCurrencyByAmount Quirk = "unsupported_currency_by_amount" // KWD / JPY refused only for some amounts
+	QuirkAcceptUnknownRef            Quirk = "accept_unknown_ref"             // believes a notification about a payment it does not hold
+	QuirkSigHeaderOnly               Quirk = "signature_header_only"          // requires the signature header, never verifies the HMAC
+	QuirkNoSignatureCheck            Quirk = "no_signature_check"             // accepts any webhook
+	QuirkNoTimestampCheck            Quirk = "no_timestamp_check"             // accepts stale (replayed) webhooks
+	QuirkNoSessionIdempotency        Quirk = "no_session_idempotency"         // a retry creates another session
+	QuirkDoubleSessionAfterLost      Quirk = "double_session_after_lost"      // after a lost response the retry creates a 2nd session, then is idempotent
+	QuirkKeyReuseMutatesAmount       Quirk = "key_reuse_mutates_amount"       // same key, other amount: same session, new amount
+	QuirkAcceptSubCents              Quirk = "accept_sub_cents"               // 10.005 MXN is money
+	QuirkAcceptZero                  Quirk = "accept_zero"                    // 0 / negative amounts pass
+	QuirkTwoDecimalsOnly             Quirk = "two_decimals_only"              // every currency has 2 decimals
+	QuirkFloatAmounts                Quirk = "float_amounts"                  // amounts go through float64
+	QuirkAcceptLowercaseCcy          Quirk = "accept_lowercase_currency"      // "mxn" is accepted
+	QuirkRefundCurrencyUnchecked     Quirk = "refund_currency_unchecked"
+	QuirkEchoSessionAmount           Quirk = "echo_session_amount"      // reports the session amount, not what was charged
+	QuirkAssumeFailedOnLost          Quirk = "assume_failed_on_lost"    // timeout turned into a failed session
+	QuirkNotFoundOnOutage            Quirk = "not_found_on_outage"      // outage reported as not_found
+	QuirkPaidOnOutage                Quirk = "paid_on_outage"           // outage assumed paid
+	QuirkNoRecoveryAfterOutage       Quirk = "no_recovery_after_outage" // status stays broken after the outage
+	QuirkNoRefundIdempotency         Quirk = "no_refund_idempotency"    // retry refunds twice
+	QuirkDoubleRefundAfterLost       Quirk = "double_refund_after_lost" // after a lost response the retry refunds again
+	QuirkNoOverRefundCheck           Quirk = "no_over_refund_check"     // refunds beyond the capture
+	QuirkPendingRefundsIgnored       Quirk = "pending_refunds_ignored"  // pending refunds do not reserve the remainder
+	QuirkRefundPendingForever        Quirk = "refund_pending_forever"   // refund answers pending and never settles
+	QuirkFloatRefundTotals           Quirk = "float_refund_totals"      // sums refunds as float64
+	QuirkFreshEventIDOnReplay        Quirk = "fresh_event_id_replay"    // replay gets a new event id
+	QuirkLateWebhookRegresses        Quirk = "late_webhook_regresses"   // a late pending moves paid back to pending
+	QuirkNoAlsoCaptured              Quirk = "no_also_captured"         // double charges are not flagged
+	QuirkLiveMode                    Quirk = "live_mode"                // talks to production (session test_mode=false)
+	QuirkLiveStatus                  Quirk = "live_status"              // status/confirm say test_mode=false, session says true
+	QuirkRefundUncaptured            Quirk = "refund_uncaptured"        // refunds a pending payment
 )
 
 // tolerance of the webhook timestamp.
@@ -168,6 +171,10 @@ func (s *Sim) checkMoney(amount, currency string) (payments.Amount, error) {
 		return a, coded("invalid_input", err.Error())
 	}
 	if s.quirks[NoExoticCurrencies] && (currency == "JPY" || currency == "KWD") {
+		return a, coded(conformance.UnsupportedCurrencyCode, currency)
+	}
+	if s.quirks[QuirkUnsupportedCurrencyByAmount] &&
+		((currency == "KWD" && strings.HasSuffix(amount, "005")) || (currency == "JPY" && amount == "1500")) {
 		return a, coded(conformance.UnsupportedCurrencyCode, currency)
 	}
 	ccyOK := capability.ValidCurrency(currency)
@@ -296,6 +303,13 @@ func (s *Sim) doConfirm(in map[string]any) (map[string]any, error) {
 		return nil, coded("invalid_input", "body")
 	}
 	x := s.byID[h.SessionID]
+	if x == nil && h.ProviderRef != "" {
+		x = s.byRef[h.ProviderRef]
+	}
+	if x == nil && s.quirks[QuirkAcceptUnknownRef] {
+		return map[string]any{"order_ref": h.OrderRef, "status": h.Status, "amount": h.Amount, "currency": h.Currency,
+			"provider_ref": h.ProviderRef, "event_id": h.EventID, "kind": "payment", "test_mode": true}, nil
+	}
 	if x == nil {
 		return nil, coded("unknown_session", "the notification is about no known session")
 	}
@@ -323,8 +337,8 @@ func (s *Sim) doConfirm(in map[string]any) (map[string]any, error) {
 		amount = x.amount
 	}
 	out := map[string]any{
-		"order_ref": h.OrderRef, "status": h.Status, "amount": s.money(amount), "currency": h.Currency,
-		"provider_ref": h.ProviderRef, "event_id": ev, "kind": "payment", "session_id": h.SessionID,
+		"order_ref": x.order, "status": h.Status, "amount": s.money(amount), "currency": h.Currency,
+		"provider_ref": h.ProviderRef, "event_id": ev, "kind": "payment", "session_id": x.id,
 		"test_mode": s.testMode(false),
 	}
 	if !s.quirks[QuirkNoAlsoCaptured] {
@@ -496,8 +510,12 @@ func (s *Sim) refundOut(x *session, r *refund) map[string]any {
 }
 
 func (s *Sim) signedHook(x *session, status payments.Status, amount string, at time.Time) conformance.Webhook {
-	b, _ := json.Marshal(hook{EventID: s.id("evt"), OrderRef: x.order, SessionID: x.id, ProviderRef: x.ref,
-		Status: string(status), Amount: amount, Currency: x.currency})
+	h := hook{EventID: s.id("evt"), OrderRef: x.order, SessionID: x.id, ProviderRef: x.ref,
+		Status: string(status), Amount: amount, Currency: x.currency}
+	if s.quirks[NoRefBeforePay] {
+		h.SessionID, h.OrderRef = "", "" // the notification only names the payment
+	}
+	b, _ := json.Marshal(h)
 	body := string(b)
 	ts := strconv.FormatInt(at.Unix(), 10)
 	return conformance.Webhook{RawBody: body, Headers: map[string]string{"x-signature": s.sign(ts, body), "x-timestamp": ts}}

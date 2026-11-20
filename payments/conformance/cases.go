@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -166,17 +167,34 @@ func caseMoneyMalformed(e *env) error {
 	return nil
 }
 
-// currencyNA turns the typed unsupported_currency answer into not_applicable.
-func (e *env) currencyNA(amount, currency string) error {
+// currencyNA handles a provider that cannot charge a currency at all. The
+// typed unsupported_currency answer makes the case not_applicable only if the
+// provider declared the currency in Target.Supports.UnsupportedCurrencies AND
+// refuses it consistently: the well-quantized amounts in probes are refused
+// with the same code too. Otherwise the case fails (a currency refusal that
+// depends on the amount is a bug, not a limit).
+func (e *env) currencyNA(amount, currency string, probes ...string) error {
 	_, err := e.session(e.newOrder(amount, currency))
-	if codeOf(err) == UnsupportedCurrencyCode {
-		return naf("the provider declares %s unsupported (%s)", currency, UnsupportedCurrencyCode)
+	if codeOf(err) != UnsupportedCurrencyCode {
+		return nil // accepted, or refused for another reason: the case judges it
 	}
-	return nil
+	declared := false
+	for _, c := range e.t.Supports.UnsupportedCurrencies {
+		declared = declared || c == currency
+	}
+	if !declared {
+		return failf("%s was refused as %s but is not declared in Target.Supports.UnsupportedCurrencies", currency, UnsupportedCurrencyCode)
+	}
+	for _, p := range append([]string{amount}, probes...) {
+		if _, err := e.session(e.newOrder(p, currency)); codeOf(err) != UnsupportedCurrencyCode {
+			return failf("%s is declared unsupported but %s %s was not refused as %s (got %v): the refusal must not depend on the amount", currency, p, currency, UnsupportedCurrencyCode, err)
+		}
+	}
+	return naf("the provider declares %s unsupported (%s)", currency, UnsupportedCurrencyCode)
 }
 
 func caseMoneyZeroDecimal(e *env) error {
-	if err := e.currencyNA("1500", "JPY"); err != nil {
+	if err := e.currencyNA("1500", "JPY", "1", "2500"); err != nil {
 		return err
 	}
 	p, err := e.pay("1500", "JPY")
@@ -274,7 +292,7 @@ func refundSettled(e *env, ref string) error {
 }
 
 func caseMoneyThreeDecimals(e *env) error {
-	if err := e.currencyNA("10.005", "KWD"); err != nil {
+	if err := e.currencyNA("10.005", "KWD", "10.000", "10.00", "1.500"); err != nil {
 		return err
 	}
 	p, err := e.pay("10.005", "KWD")
@@ -577,9 +595,12 @@ func caseWebhookLatePending(e *env) error {
 	return nil
 }
 
-// caseWebhookForgedPaid builds, from a real paid notification of session A,
-// an unsigned one that says paid for session B (still pending). It must be
-// rejected, or answered with B's genuine state: B must read pending after.
+// caseWebhookForgedPaid builds an unsigned notification that says paid for a
+// session that is not paid: from the real paid notification of session A it
+// points the ids at session B (still pending) or, when the provider's body
+// carries no id of A that B could replace (no reference before the buyer pays),
+// at a reference that does not exist. It must be rejected, or answered with the
+// genuine state: nothing may end up captured because of it.
 func caseWebhookForgedPaid(e *env) error {
 	a, err := e.session(e.newOrder("90.00", "MXN"))
 	if err != nil {
@@ -594,18 +615,25 @@ func caseWebhookForgedPaid(e *env) error {
 	if err != nil {
 		return failf("sandbox settle: %v", err)
 	}
-	// the real shape of a paid notification, pointed at B
-	body := strings.ReplaceAll(w.RawBody, a.SessionID, b.SessionID)
-	body = strings.ReplaceAll(body, orderOf(e, a), bo.OrderRef)
-	if a.ProviderRef != "" && b.ProviderRef != "" {
-		body = strings.ReplaceAll(body, a.ProviderRef, b.ProviderRef)
+	body := w.RawBody
+	replace := func(from, to string) {
+		if from != "" && to != "" {
+			body = strings.ReplaceAll(body, from, to)
+		}
+	}
+	replace(a.SessionID, b.SessionID)
+	replace(orderOf(e, a), bo.OrderRef)
+	replace(a.ProviderRef, b.ProviderRef)
+	if body == w.RawBody {
+		// nothing of A to repoint at B: forge every numeric reference
+		body = digitRuns.ReplaceAllString(w.RawBody, "900000000017")
 	}
 	if body == w.RawBody {
-		return failf("suite could not point the notification at another session")
+		body += " "
 	}
 	forged := Webhook{RawBody: body, Query: w.Query} // no signature
 	if o, err := e.confirm(forged); err == nil && o.Status.Captured() {
-		return failf("an unsigned notification made session %s %s", b.SessionID, o.Status)
+		return failf("an unsigned notification for a payment that was not made came back %s (%s)", o.Status, o.ProviderRef)
 	}
 	st, err := e.status(map[string]any{"session_id": b.SessionID})
 	if err == nil && st.Status.Captured() {
@@ -613,6 +641,8 @@ func caseWebhookForgedPaid(e *env) error {
 	}
 	return nil
 }
+
+var digitRuns = regexp.MustCompile(`[0-9]+`)
 
 // orderOf is the order_ref of session s as the provider reports it.
 func orderOf(e *env, s sessionOut) string {
