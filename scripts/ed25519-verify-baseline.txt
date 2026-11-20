@@ -1,0 +1,2 @@
+# Transitional: kernel-internal site still to migrate to signedenvelope.
+hub/revocations.go
