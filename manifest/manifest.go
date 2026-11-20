@@ -66,7 +66,12 @@ type Manifest struct {
 	// see HostCapabilityProfile.EvaluateCompatibility.
 	HostCapabilities []string `json:"host_capabilities,omitempty"`
 	Requires         []Module `json:"requires,omitempty"`
-	Models           []Module `json:"models,omitempty"`
+	// AddonRequires are the peer-addon dependencies projected from v3
+	// compatibility.requires (every key that is not the reserved kernel / sdk /
+	// runtime range). The installer resolves them (installer.CheckInstallable,
+	// ResolveOrder); a key ending in "?" or Optional=true is a soft dependency.
+	AddonRequires []AddonRequirement `json:"addon_requires,omitempty"`
+	Models        []Module           `json:"models,omitempty"`
 	// Provides lists other addon keys this package satisfies for install /
 	// marketplace coverage (e.g. full "hr" provides "hr_lite"). Empty = none.
 	Provides []string `json:"provides,omitempty"`
@@ -2155,4 +2160,13 @@ type CrossRuleDef struct {
 	// Enforce: "" (default: create + Ref change) or "always" (every create,
 	// update and delete; ref_state only). See v3.CrossRule.Enforce.
 	Enforce string `json:"enforce,omitempty"`
+}
+
+// AddonRequirement is one peer-addon dependency of a manifest: addon Key must
+// be installed at a version inside Range (a semver constraint; empty = any).
+// Optional dependencies never block an install, upgrade or uninstall.
+type AddonRequirement struct {
+	Key      string `json:"key"`
+	Range    string `json:"range,omitempty"`
+	Optional bool   `json:"optional,omitempty"`
 }

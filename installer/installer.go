@@ -223,6 +223,13 @@ type Installer struct {
 	// "metacore-kernel" range it does not satisfy is refused on install and
 	// upgrade (manifest.CheckRuntime).
 	RuntimeVersion string
+	// EnforceAddonRequires sets how unmet peer-addon requires
+	// (compatibility.requires naming another addon) are treated on install,
+	// upgrade and uninstall: RequiresOff, RequiresWarn (default when empty:
+	// logs "installer.requires_unmet" and proceeds) or RequiresEnforce (typed
+	// errors ErrMissingDependency / ErrIncompatibleVersion / ErrHasDependents).
+	// Hosts read it from config with ParseRequiresMode.
+	EnforceAddonRequires RequiresMode
 	// HostCapabilities, when non-nil, is the set of named capabilities this
 	// host implements (e.g. "wasm-runtime", "ui.pages", "ui.views.map"). An
 	// addon that requires one it lacks — declared in host_capabilities or
@@ -662,6 +669,9 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (inst *Installati
 		return nil, nil, err
 	}
 	if err := b.Manifest.CheckRuntime(i.RuntimeVersion); err != nil {
+		return nil, nil, err
+	}
+	if err := i.checkRequires("install", orgID, b.Manifest); err != nil {
 		return nil, nil, err
 	}
 	if err := i.checkHostCapabilities(&b.Manifest); err != nil {
@@ -1215,7 +1225,17 @@ func (i *Installer) Disable(orgID uuid.UUID, addonKey string) (err error) {
 // For schema-per-tenant addons the per-org schema is always dropped (the
 // only way to reclaim storage); for shared addons the global schema is only
 // dropped when no org still has the addon installed.
-func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool) (err error) {
+func (i *Installer) Uninstall(orgID uuid.UUID, addonKey string, dropSchema bool) error {
+	// Dependents policy (EnforceAddonRequires): never a silent cascade — use
+	// UninstallWithOptions{Cascade: true} to remove dependents explicitly.
+	if err := i.checkUninstallRequires(orgID, addonKey); err != nil {
+		return err
+	}
+	return i.uninstallAddon(orgID, addonKey, dropSchema)
+}
+
+// uninstallAddon is the unconditional removal (no dependents check).
+func (i *Installer) uninstallAddon(orgID uuid.UUID, addonKey string, dropSchema bool) (err error) {
 	// Bumped once before the uninstall is announced (announce) and once more
 	// here, after a possible DROP SCHEMA has run.
 	defer func() {
@@ -1395,6 +1415,9 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 		return nil, vfail(err)
 	}
 	if err := newBundle.Manifest.CheckRuntime(i.RuntimeVersion); err != nil {
+		return nil, vfail(err)
+	}
+	if err := i.checkRequires("upgrade", orgID, newBundle.Manifest); err != nil {
 		return nil, vfail(err)
 	}
 	if err := i.checkHostCapabilities(&newBundle.Manifest); err != nil {
