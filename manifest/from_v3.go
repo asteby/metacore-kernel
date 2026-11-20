@@ -1509,6 +1509,8 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 			// Scan opts the field into camera barcode scan-to-fill (text/number
 			// input or dynamic_select reference). Forwarded to modelbase.FieldDef.
 			Scan: f.Scan,
+			// Searchable forces/disables the searchable select combobox (nil = auto).
+			Searchable: f.Searchable,
 			// Upload-field properties (type:"upload") — forwarded so the host's
 			// upload widget gets the accept allow-list, byte cap and storage prefix.
 			Accept:      f.Accept,

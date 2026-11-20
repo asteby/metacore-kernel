@@ -2687,6 +2687,12 @@ type ActionField struct {
 	// modelbase.FieldDef.Scan. Country/business-agnostic UI metadata. Optional.
 	Scan bool `json:"scan,omitempty"`
 
+	// Searchable forces (true) or disables (false) the searchable combobox for a
+	// select action field. Omitted = auto: the SDK/host switch to the combobox
+	// when the field has more than modelbase.SearchableSelectThreshold options.
+	// The host projects it onto modelbase.FieldDef.Searchable. Pure UI metadata.
+	Searchable *bool `json:"searchable,omitempty"`
+
 	// VisibleWhen declares CONDITIONAL VISIBILITY for this action field: the SDK
 	// renders it only when a SIBLING field's current value matches the predicate
 	// (see VisibleWhen). The host projects it onto modelbase.FieldDef.VisibleWhen

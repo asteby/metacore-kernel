@@ -274,6 +274,16 @@ func moneyColumn(n string) bool {
 // modelbase.OptionDef list the SDK reads. The optional icon/color/image visuals
 // ride across verbatim so a status/brand select renders richly. Returns nil for
 // an empty list so the omitempty json tag drops the field for plain columns.
+// searchableForSelect derives FieldDef.Searchable for a derived form field:
+// only a static "select" with more than modelbase.SearchableSelectThreshold
+// options is flagged; everything else keeps nil so the payload is unchanged.
+func searchableForSelect(ftype string, n int) *bool {
+	if ftype != "select" {
+		return nil
+	}
+	return modelbase.SearchableFor(nil, n)
+}
+
 func toOptionDefs(in []manifest.Option) []modelbase.OptionDef {
 	if len(in) == 0 {
 		return nil
@@ -490,6 +500,9 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 			// Scan carries the camera scan-to-fill opt-in onto the served form
 			// field (e.g. a product SKU input gets a barcode scan button).
 			Scan: c.Scan,
+			// Searchable: a static select over the threshold is served as a
+			// searchable combobox; short lists stay nil (flat select).
+			Searchable: searchableForSelect(ftype, len(c.Options)),
 			// Readonly marks a system-generated field: the SDK hides it from the
 			// create form and disables it in edit (the value is written
 			// server-side, e.g. by an addon's outbound sync). A Protected column

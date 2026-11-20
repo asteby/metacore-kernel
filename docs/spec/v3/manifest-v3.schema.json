@@ -4074,6 +4074,10 @@
           "type": "boolean",
           "description": "Opts this action field into CAMERA BARCODE SCANNING: the SDK shows a camera button that scans a barcode to FILL the field fast — a text/number input (e.g. a SKU) or a dynamic_select reference (scan feeds the picker's search). The host projects it onto FieldDef.scan. Country/business-agnostic UI metadata; defaults false."
         },
+        "searchable": {
+          "type": "boolean",
+          "description": "Forces (true) or disables (false) the SEARCHABLE combobox for a select action field (type-to-filter, case/accent insensitive, by label, value and option description). Omit for auto: the SDK switches to the combobox when the field has more than 8 options. The host projects it onto FieldDef.searchable. Pure UI metadata; unrelated to the column-level searchable (search index)."
+        },
         "options_source": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
