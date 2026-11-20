@@ -3,6 +3,8 @@ package wasm
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/asteby/metacore-kernel/dynamic"
 	"github.com/google/uuid"
@@ -23,6 +25,34 @@ type StagePolicyFn func(ctx context.Context, w dynamic.WasmStageWrite) error
 func (h *Host) WithStagePolicy(fn StagePolicyFn) *Host {
 	h.stagePolicy = fn
 	return h
+}
+
+// WithTableModel injects the canonical ModelKey of a logical table ("" when the
+// table is unknown). When set, data_mutate / data_batch DERIVE the model from
+// the table instead of trusting the guest: a request whose `model` does not
+// match its table is refused `invalid_request`, and the stage machine, the
+// transition policy, stage_authority and the approval replay all use the
+// canonical model. Without it the guest-supplied `model` still selects the
+// machine (legacy) — wire it before turning WasmStagePolicy to enforce.
+func (h *Host) WithTableModel(fn func(logicalTable string) string) *Host {
+	h.tableModel = fn
+	return h
+}
+
+// canonicalizeModel enforces table<->model consistency (see WithTableModel).
+func canonicalizeModel(inv *invocation, req *dataMutateRequest) error {
+	if inv == nil || inv.tableModel == nil || req == nil {
+		return nil
+	}
+	canon := inv.tableModel(req.Table)
+	if canon == "" {
+		return nil
+	}
+	if !strings.EqualFold(canon, req.Model) {
+		return fmt.Errorf("model %q does not belong to table %q (model of that table: %q)", req.Model, req.Table, canon)
+	}
+	req.Model = canon
+	return nil
 }
 
 // stagePolicy binds one invocation's gate to the mutation being applied. A nil

@@ -121,6 +121,9 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 	prepared := make([]preparedMutation, len(req.Mutations))
 	for i := range req.Mutations {
 		m := req.Mutations[i]
+		if err := canonicalizeModel(inv, &m); err != nil {
+			return fail("invalid_request", fmt.Sprintf("mutations[%d]: %s", i, err.Error()))
+		}
 		mExts := extensionsFor(inv, m.Table, m.Model)
 		if err := explodeExtensionObjects(mExts, m.Data); err != nil {
 			return fail("invalid_request", fmt.Sprintf("mutations[%d]: %s", i, err.Error()))
@@ -262,7 +265,7 @@ func executeDataBatch(ctx context.Context, inv *invocation, reqJSON []byte) []by
 			Before:        res.before,
 			After:         res.after,
 		}
-		if err := inv.bus.Publish(ctx, "kernel", event, orgID, payload); err != nil && inv.logger != nil {
+		if err := inv.bus.Publish(dynamic.WithoutStageAuthority(ctx), "kernel", event, orgID, payload); err != nil && inv.logger != nil {
 			inv.logger.Printf("metacore.wasm data_batch publish_error addon=%s event=%s err=%v",
 				eventAddon, event, err)
 		}

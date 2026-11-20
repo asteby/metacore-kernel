@@ -389,6 +389,7 @@ type ApprovalReplay struct {
 	Kind          string
 	Model         string // the model name as originally invoked (table or ModelKey)
 	ModelKey      string // the canonical ModelKey
+	RecordID      string // the record the approval was raised for
 	ConstraintKey string // kind=constraint: the ErrorKey to skip
 	ActionKey     string // kind=action: the action whose approval gate to skip
 }
@@ -875,6 +876,7 @@ func (s *Service) ApproveRequest(ctx context.Context, actor modelbase.AuthUser, 
 		Kind:          req.Kind,
 		Model:         payloadString(req, "model"),
 		ModelKey:      req.ModelKey,
+		RecordID:      req.RecordID,
 		ConstraintKey: req.ConstraintKey,
 		ActionKey:     req.ActionKey,
 	})

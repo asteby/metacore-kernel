@@ -309,3 +309,73 @@ func dynamicApprover(t *testing.T, svc *dynamic.Service, org uuid.UUID, role str
 	t.Helper()
 	return dynamic.NewSystemCaller(org)
 }
+
+// Un guest no elige la maquina con un `model` falso: con WithTableModel el
+// modelo sale de la TABLA y un model que no corresponde es invalid_request.
+func TestStagePolicy_ModelMustMatchTable(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+	org, row := uuid.New(), uuid.NewString()
+	svc := policySvc(t, dynamic.WasmStagePolicyEnforce, nil)
+	inv := policyInv(t, svc, gdb, org)
+	// "Permissive" has no machine: without the check this write would skip it.
+	inv.tableModel = func(tbl string) string {
+		if tbl == "orders" {
+			return "Order"
+		}
+		return ""
+	}
+	out := executeDataMutate(context.Background(), inv, []byte(fmt.Sprintf(
+		`{"op":"update","table":"orders","model":"Permissive","id":%q,"data":{"status":"void"}}`, row)))
+	if ok, e := rawEnv(t, out); ok || e["code"] != "invalid_request" {
+		t.Fatalf("fake model: %s", out)
+	}
+	outB := executeDataBatch(context.Background(), inv, []byte(fmt.Sprintf(
+		`{"mutations":[{"op":"update","table":"orders","model":"Permissive","id":%q,"data":{"status":"void"}}]}`, row)))
+	if ok, e := rawEnv(t, outB); ok || e["code"] != "invalid_request" {
+		t.Fatalf("fake model in batch: %s", outB)
+	}
+	// the right model (any case) still reaches the gate and is parked.
+	seller := uuid.NewString()
+	expectRow(mock, org, row, "posted")
+	mock.ExpectRollback()
+	ctx := dynamic.WithActorID(context.Background(), seller)
+	out = executeDataMutate(ctx, inv, []byte(fmt.Sprintf(
+		`{"op":"update","table":"orders","model":"order","id":%q,"data":{"status":"void"}}`, row)))
+	if ok, e := rawEnv(t, out); ok || e["code"] != "approval_required" {
+		t.Fatalf("canonical model: %s", out)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// La autoridad de la accion no la hereda un suscriptor del evento que causa:
+// el ctx que publica data_mutate ya no la lleva.
+func TestStagePolicy_ActionAuthorityNotInheritedBySubscribers(t *testing.T) {
+	gdb, mock, cleanup := newMockGorm(t)
+	defer cleanup()
+	org, row := uuid.New(), uuid.NewString()
+	svc := policySvc(t, dynamic.WasmStagePolicyEnforce, nil)
+	inv := policyInv(t, svc, gdb, org)
+	var sawAuthority, called bool
+	if err := inv.bus.Subscribe("other-addon", "*", func(ctx context.Context, _ uuid.UUID, _ any) error {
+		called = true
+		sawAuthority = dynamic.HasStageAuthority(ctx)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	expectRow(mock, org, row, "posted")
+	mock.ExpectQuery(`UPDATE "orders" .* RETURNING \*`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "status", "note"}).AddRow(row, "posted", "m"))
+	mock.ExpectCommit()
+	ctx := dynamic.WithActionStageAuthority(context.Background(), "Order", "cancel_sale",
+		&manifest.StageAuthorityDef{Transitions: []string{"posted->void"}})
+	if ok, e := rawEnv(t, executeDataMutate(ctx, inv, mutateJSON("update", row, `{"note":"m"}`))); !ok {
+		t.Fatalf("write: %v", e)
+	}
+	if !called || sawAuthority {
+		t.Fatalf("subscriber called=%v inherited authority=%v", called, sawAuthority)
+	}
+}

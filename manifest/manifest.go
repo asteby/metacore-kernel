@@ -2172,8 +2172,8 @@ type CrossRuleDef struct {
 type AddonRequirement struct {
 	Key      string `json:"key"`
 	Range    string `json:"range,omitempty"`
+	Optional bool   `json:"optional,omitempty"`
 }
-
 
 // StageAuthorityDef is the runtime projection of v3 StageAuthority.
 type StageAuthorityDef struct {

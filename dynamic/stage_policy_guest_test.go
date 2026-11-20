@@ -193,7 +193,7 @@ func TestWasmStagePolicy_ActionStageAuthority(t *testing.T) {
 	f := enforcing(setupPolicyFixture(t, false))
 	mgr := f.user("manager")
 	auth := &manifest.StageAuthorityDef{Transitions: []string{"delivered->confirmed", "draft->confirmed"}}
-	ctx := withActionStageAuthority(context.Background(), "test_orders", "reopen_sale", auth)
+	ctx := WithActionStageAuthority(context.Background(), "test_orders", "reopen_sale", auth)
 
 	deliv := f.order(t, mgr, "delivered", "AU1")
 	if err := f.svc.EnforceWasmStageWrite(ctx, wasmWrite(f, deliv, "update", map[string]any{"status": "confirmed"})); err != nil {
@@ -211,7 +211,7 @@ func TestWasmStagePolicy_ActionStageAuthority(t *testing.T) {
 		t.Fatalf("undeclared transition: %v", err)
 	}
 	// Otro modelo con el mismo nombre de transicion tampoco.
-	other := withActionStageAuthority(context.Background(), "invoices", "reopen_sale", auth)
+	other := WithActionStageAuthority(context.Background(), "invoices", "reopen_sale", auth)
 	if err := f.svc.EnforceWasmStageWrite(other, wasmWrite(f, deliv, "update", map[string]any{"status": "confirmed"})); err == nil {
 		t.Fatal("authority of another model must not apply")
 	}
@@ -298,5 +298,38 @@ func TestWasmStagePolicy_ExecActionCarriesStageAuthority(t *testing.T) {
 	var ar *ApprovalRequiredError
 	if !errors.As(got, &ar) {
 		t.Fatalf("action without stage_authority must park: %v", got)
+	}
+}
+
+// El replay aprobado vale para UN registro: otro registro no hereda el bypass.
+func TestWasmStagePolicy_ReplayMarkerScopedToRecord(t *testing.T) {
+	f := enforcing(setupPolicyFixture(t, false))
+	mgr, agent := f.user("manager"), f.user("agent")
+	a := f.order(t, mgr, "delivered", "RP1")
+	b := f.order(t, mgr, "delivered", "RP2")
+	ctx := WithApprovalReplay(asActor(agent), ApprovalReplay{
+		Kind: ApprovalKindConstraint, ConstraintKey: transitionKey("delivered", "confirmed"),
+		Model: "test_orders", RecordID: a.String(),
+	})
+	if err := f.svc.EnforceWasmStageWrite(ctx, wasmWrite(f, a, "update", map[string]any{"status": "confirmed"})); err != nil {
+		t.Fatalf("approved record: %v", err)
+	}
+	var ar *ApprovalRequiredError
+	if err := f.svc.EnforceWasmStageWrite(ctx, wasmWrite(f, b, "update", map[string]any{"status": "confirmed"})); !errors.As(err, &ar) {
+		t.Fatalf("other record must park, got %v", err)
+	}
+}
+
+func TestWasmStagePolicy_WithoutStageAuthority(t *testing.T) {
+	f := enforcing(setupPolicyFixture(t, false))
+	auth := &manifest.StageAuthorityDef{Transitions: []string{"delivered->confirmed"}}
+	ctx := WithActionStageAuthority(context.Background(), "test_orders", "k", auth)
+	if !HasStageAuthority(ctx) || HasStageAuthority(WithoutStageAuthority(ctx)) {
+		t.Fatal("WithoutStageAuthority must drop the authority")
+	}
+	id := f.order(t, f.user("manager"), "delivered", "WS1")
+	var ar *ApprovalRequiredError
+	if err := f.svc.EnforceWasmStageWrite(WithoutStageAuthority(ctx), wasmWrite(f, id, "update", map[string]any{"status": "confirmed"})); !errors.As(err, &ar) {
+		t.Fatalf("stripped ctx must park: %v", err)
 	}
 }

@@ -1888,7 +1888,9 @@ the request is pending reuses it.
 `stage_authority: {authority: "action_permission", transitions: ["posted->void"]}`.
 While that action runs (set by `ExecAction`, never by the guest), exactly those
 transitions skip `roles` and `approval`; `guard`, `requires_fields` and `locked`
-still apply. It is invalid together with `ingest` and each pair must be a
+still apply. The authority is dropped from the context handed to event
+subscribers. With `Host.WithTableModel` the model is derived from the table and
+a mismatching `model` is `invalid_request`. It is invalid together with `ingest` and each pair must be a
 declared transition of the action's target model.
 
 ### 14.12 Extension columns (v1.13)

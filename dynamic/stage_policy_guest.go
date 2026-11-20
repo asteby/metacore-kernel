@@ -74,18 +74,39 @@ type actionStageAuthority struct {
 
 type actionStageAuthorityKey struct{}
 
-func withActionStageAuthority(ctx context.Context, model, key string, def *manifest.StageAuthorityDef) context.Context {
+// HasStageAuthority reports whether ctx still carries an action's stage authority.
+func HasStageAuthority(ctx context.Context) bool {
+	a, ok := ctx.Value(actionStageAuthorityKey{}).(actionStageAuthority)
+	return ok && a.def != nil
+}
+
+// WithActionStageAuthority is what ExecAction applies for an action that
+// declares stage_authority; hosts that dispatch actions themselves call it with
+// the action's ActionDef.StageAuthority so the wasm gate sees the same authority.
+func WithActionStageAuthority(ctx context.Context, model, key string, def *manifest.StageAuthorityDef) context.Context {
 	if def == nil || len(def.Transitions) == 0 {
 		return ctx
 	}
 	return context.WithValue(ctx, actionStageAuthorityKey{}, actionStageAuthority{model: model, key: key, def: def})
 }
 
+// WithoutStageAuthority returns ctx without the stage authority of the running
+// action. The wasm runtime applies it to every ctx it hands to OTHER code
+// (event bus subscribers run synchronously with the publisher's ctx): the
+// authority of cancel_sale must not be inherited by whichever handler reacts to
+// the sales_order.updated event it causes.
+func WithoutStageAuthority(ctx context.Context) context.Context {
+	if _, ok := ctx.Value(actionStageAuthorityKey{}).(actionStageAuthority); !ok {
+		return ctx
+	}
+	return context.WithValue(ctx, actionStageAuthorityKey{}, actionStageAuthority{})
+}
+
 // coversTransition reports whether the running action is the authority for
 // from -> to on `model`.
 func coversTransition(ctx context.Context, model, from, to string) bool {
 	a, has := ctx.Value(actionStageAuthorityKey{}).(actionStageAuthority)
-	if !has || !a.def.Covers(from, to) {
+	if !has || a.def == nil || !a.def.Covers(from, to) {
 		return false
 	}
 	return strings.EqualFold(a.model, model)
@@ -231,8 +252,15 @@ func (s *Service) evalWasmStageWrite(ctx context.Context, model string, w WasmSt
 	// Authority: an approved replay of THIS move, or the running action being
 	// its declared authority, stands in for roles and approval. Nothing else.
 	authority := coversTransition(ctx, model, from, to)
+	// The replay marker authorizes ONE record: a handler that runs under the
+	// ctx of an approved replay cannot reuse it on another row.
 	if r, ok := ApprovalReplayFromContext(ctx); ok && r.skipsConstraint(model, transitionKey(from, to)) {
-		authority = true
+		if r.RecordID != "" && r.RecordID == w.RecordID {
+			authority = true
+		} else {
+			// Marker of ANOTHER record: transitionApproval must not honour it.
+			ctx = WithApprovalReplay(ctx, ApprovalReplay{})
+		}
 	}
 
 	var roles []string

@@ -143,6 +143,9 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		inv.logger.Printf("metacore.wasm data_mutate WARN host_stamped_ignored addon=%s table=%s col=organization_id reason=matches_invocation_org",
 			addonKey, req.Table)
 	}
+	if err := canonicalizeModel(inv, &req); err != nil {
+		return fail("invalid_request", err.Error())
+	}
 	exts := extensionsFor(inv, req.Table, req.Model)
 	if err := explodeExtensionObjects(exts, req.Data); err != nil {
 		return fail("invalid_request", err.Error())
@@ -320,7 +323,7 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		Before:        before,
 		After:         after,
 	}
-	if err := inv.bus.Publish(ctx, "kernel", event, orgID, payload); err != nil && inv.logger != nil {
+	if err := inv.bus.Publish(dynamic.WithoutStageAuthority(ctx), "kernel", event, orgID, payload); err != nil && inv.logger != nil {
 		inv.logger.Printf("metacore.wasm data_mutate publish_error addon=%s event=%s err=%v",
 			eventAddon, event, err)
 	}
