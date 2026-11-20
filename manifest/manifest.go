@@ -1247,6 +1247,9 @@ type HookDef struct {
 //	Type = "wasm"    — invoke the exported function `Function` on the
 //	                   addon's compiled wasm module. The function MUST
 //	                   appear in Backend.Exports.
+//	Type = "compiled" — invoke the Go export `Function` of a compiled-in module
+//	                   (Host.LoadNative); same seam as "wasm", but no wasm
+//	                   backend and no Backend.Exports entry is required.
 //	Type = "webhook" — POST the event payload to URL (HMAC-signed via
 //	                   the host's webhook dispatcher).
 //	Type = "prompt"  — reserved for a future LLM dispatcher; validates
@@ -1585,7 +1588,7 @@ type Formula struct {
 	// default); 3 = a wasm handler (Handler) computes the value. See
 	// manifest/v3.Formula.
 	Tier int `json:"tier,omitempty"`
-	// Handler is the Tier-3 backend, "wasm:<export>". Set only when Tier is 3.
+	// Handler is the Tier-3 backend, "wasm:<export>" or "compiled:<fn>". Set only when Tier is 3.
 	Handler string `json:"handler,omitempty"`
 }
 

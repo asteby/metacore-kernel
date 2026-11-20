@@ -62,9 +62,12 @@ const (
 // dispatcher is registered (callers can wire a custom one through
 // HookRunner.Dispatchers).
 const (
-	HookTargetWasm    = "wasm"
-	HookTargetWebhook = "webhook"
-	HookTargetPrompt  = "prompt"
+	HookTargetWasm = "wasm"
+	// HookTargetCompiled is a Go export of a compiled-in module (Host.LoadNative);
+	// the same executor as wasm (runtime/compiled.Dispatcher.Hook).
+	HookTargetCompiled = "compiled"
+	HookTargetWebhook  = "webhook"
+	HookTargetPrompt   = "prompt"
 )
 
 // LifecycleHookEvents is the closed set of `install`-family events. The

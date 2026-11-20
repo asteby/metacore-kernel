@@ -1794,21 +1794,37 @@ func deriveBackend(m *v3.Manifest) *BackendSpec {
 		seen[fn] = struct{}{}
 		exports = append(exports, fn)
 	}
+	// compiledFns are the Go exports of a compiled-in module (handler.type
+	// "compiled"). They never create a wasm backend on their own (a pure compiled
+	// module has none); when the manifest ALSO declares wasm handlers they join
+	// the whitelist, so the legacy export cross-check does not reject them.
+	var compiledFns []string
+	addCompiled := func(fn string) {
+		if fn != "" {
+			compiledFns = append(compiledFns, fn)
+		}
+	}
 
 	if m.Contributions != nil {
 		for _, a := range m.Contributions.Actions {
 			if a.Handler.Type == "wasm" {
 				add(a.Handler.Function)
+			} else if a.Handler.Type == "compiled" {
+				addCompiled(a.Handler.Function)
 			}
 		}
 		for _, s := range m.Contributions.Subscriptions {
 			if s.Handler.Type == "wasm" {
 				add(s.Handler.Function)
+			} else if s.Handler.Type == "compiled" {
+				addCompiled(s.Handler.Function)
 			}
 		}
 		for _, t := range m.Contributions.Tools {
 			if t.Handler.Type == "wasm" {
 				add(t.Handler.Function)
+			} else if t.Handler.Type == "compiled" {
+				addCompiled(t.Handler.Function)
 			}
 		}
 	}
@@ -1819,6 +1835,8 @@ func deriveBackend(m *v3.Manifest) *BackendSpec {
 	for _, pc := range m.ProvidesCapabilities {
 		if pc.Handler.Type == "wasm" {
 			add(pc.Handler.Function)
+		} else if pc.Handler.Type == "compiled" {
+			addCompiled(pc.Handler.Function)
 		}
 	}
 
@@ -1848,8 +1866,12 @@ func deriveBackend(m *v3.Manifest) *BackendSpec {
 	// contributions.actions loop), so there is nothing to add for those.
 	for _, d := range m.EdgeDevices {
 		for _, ev := range d.Events {
-			if prefix, fn, found := strings.Cut(ev.Do, ":"); found && prefix == "wasm" {
-				add(fn)
+			if prefix, fn, found := strings.Cut(ev.Do, ":"); found && (prefix == "wasm" || prefix == "compiled") {
+				if prefix == "compiled" {
+					addCompiled(fn)
+				} else {
+					add(fn)
+				}
 			}
 		}
 	}
@@ -1871,8 +1893,12 @@ func deriveBackend(m *v3.Manifest) *BackendSpec {
 	// subscription handler that keeps the projection current), and `add` is
 	// idempotent, so this only matters for a dedicated backfill-only export.
 	for _, b := range m.Backfills {
-		if prefix, fn, found := strings.Cut(b.Do, ":"); found && prefix == "wasm" {
-			add(fn)
+		if prefix, fn, found := strings.Cut(b.Do, ":"); found && (prefix == "wasm" || prefix == "compiled") {
+			if prefix == "compiled" {
+				addCompiled(fn)
+			} else {
+				add(fn)
+			}
 		}
 	}
 
@@ -1886,8 +1912,12 @@ func deriveBackend(m *v3.Manifest) *BackendSpec {
 			if f.Tier != 3 {
 				continue
 			}
-			if prefix, fn, found := strings.Cut(f.Handler, ":"); found && prefix == "wasm" {
-				add(fn)
+			if prefix, fn, found := strings.Cut(f.Handler, ":"); found && (prefix == "wasm" || prefix == "compiled") {
+				if prefix == "compiled" {
+					addCompiled(fn)
+				} else {
+					add(fn)
+				}
 			}
 		}
 	}
@@ -1910,6 +1940,11 @@ func deriveBackend(m *v3.Manifest) *BackendSpec {
 		}
 	}
 
+	if len(exports) > 0 {
+		for _, fn := range compiledFns {
+			add(fn)
+		}
+	}
 	if len(exports) == 0 {
 		return nil
 	}

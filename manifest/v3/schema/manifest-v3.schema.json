@@ -6054,8 +6054,8 @@
         },
         "handler": {
           "type": "string",
-          "pattern": "^wasm:[A-Za-z_][A-Za-z0-9_]*$",
-          "description": "Tier-3 backend, 'wasm:<export>' — an export of the addon's wasm module invoked with the merged row as payload; its returned value is written into target. Required (and only allowed) when tier is 3."
+          "pattern": "^(wasm|compiled):[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Tier-3 backend, 'wasm:<export>' or 'compiled:<fn>' — an export of the addon (wasm module or compiled-in Go export) invoked with the merged row as payload; its returned value is written into target. Required (and only allowed) when tier is 3."
         }
       }
     },

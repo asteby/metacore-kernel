@@ -280,9 +280,15 @@ func applyFormulas(ctx context.Context, invoke FormulaInvoker, b formulaBinding,
 	}
 	for _, f := range b.formulas {
 		if f.Tier == 3 {
-			// Tier-3: a wasm handler computes the value from the merged row.
-			// No invoker configured -> skipped (declarative-only deployment).
+			// Tier-3: a wasm or compiled handler computes the value from the merged
+			// row. No invoker configured -> a wasm formula is skipped
+			// (declarative-only deployment), but a compiled one FAILS CLOSED: a
+			// declared compiled-in handler that nothing can run must not silently
+			// leave the target as the client sent it.
 			if invoke == nil {
+				if strings.HasPrefix(f.Handler, "compiled:") {
+					return fmt.Errorf("formula %q handler %q: no compiled executor wired", f.Target, f.Handler)
+				}
 				continue
 			}
 			row := make(map[string]any, len(existing)+len(input))

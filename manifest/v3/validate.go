@@ -1693,8 +1693,8 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 				if strings.TrimSpace(f.Expr) != "" {
 					errs = append(errs, fmt.Sprintf("%s.expr must be empty when tier is 3 (the handler replaces it)", where))
 				}
-				if !strings.HasPrefix(f.Handler, "wasm:") || len(f.Handler) <= len("wasm:") {
-					errs = append(errs, fmt.Sprintf("%s.handler %q must be \"wasm:<export>\" when tier is 3", where, f.Handler))
+				if !ValidFormulaHandler(f.Handler) {
+					errs = append(errs, fmt.Sprintf("%s.handler %q must be \"wasm:<export>\" or \"compiled:<fn>\" when tier is 3", where, f.Handler))
 				}
 			default:
 				errs = append(errs, fmt.Sprintf("%s.tier %d is not one of 2|3", where, f.Tier))
@@ -2874,4 +2874,24 @@ func ValidateSequenceShape(scope, scopeColumn, period, assignOn, format string, 
 		}
 	}
 	return errs
+}
+
+// ValidFormulaHandler reports whether h is a Tier-3 formula handler reference:
+// "wasm:<export>" or "compiled:<fn>" (a Go export of a compiled-in module,
+// dispatched through the same seam). The symbol alphabet matches the JSON
+// schema pattern.
+func ValidFormulaHandler(h string) bool {
+	prefix, sym, found := strings.Cut(h, ":")
+	if !found || (prefix != "wasm" && prefix != "compiled") || sym == "" {
+		return false
+	}
+	for i, r := range sym {
+		switch {
+		case r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return true
 }
