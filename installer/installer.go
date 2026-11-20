@@ -50,6 +50,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -286,6 +287,12 @@ type Installer struct {
 	// AllowUnsigned opts out of signature verification entirely. Tied to the
 	// ALLOW_UNSIGNED_BUNDLES env var by New(). DO NOT enable in production.
 	AllowUnsigned bool
+
+	// builtinDigests is the exact-digest trust registry of the builtin path
+	// (builtin.go). Empty = the builtin path admits nothing. Unexported and
+	// filled only by TrustBuiltin from bytes embedded in the host binary.
+	builtinMu      sync.RWMutex
+	builtinDigests map[string]string
 
 	// schemaApplier runs the dynamic schema / migration steps an Upgrade
 	// performs (EnsureSchema → Apply → CreateTable/SyncSchema). Production
@@ -647,7 +654,18 @@ func envFlag(name string) bool {
 //     logged and do NOT roll back the install.
 //
 // Returns the per-installation secret (caller shares only with the addon).
-func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (inst *Installation, secret []byte, err error) {
+func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (*Installation, []byte, error) {
+	return i.install(orgID, b, trustSigned)
+}
+
+// InstallBuiltin installs a bundle embedded in the host binary, authenticated by
+// the exact digest the host registered with TrustBuiltin instead of a hub
+// signature (see builtin.go). Everything else is Install. SECURITY-SENSITIVE.
+func (i *Installer) InstallBuiltin(orgID uuid.UUID, b *bundle.Bundle) (*Installation, []byte, error) {
+	return i.install(orgID, b, trustBuiltin)
+}
+
+func (i *Installer) install(orgID uuid.UUID, b *bundle.Bundle, mode trustMode) (inst *Installation, secret []byte, err error) {
 	// Whatever happened, migrations or lifecycle hooks may have touched the
 	// schema and the registries: flush every derived cache (see
 	// cachecoherence) so nothing keeps serving the world before this install.
@@ -658,10 +676,9 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (inst *Installati
 			i.coherenceBump("addon.install.failed", orgID, b.Manifest.Key)
 		}
 	}()
-	if err := i.verifySignature(b); err != nil {
-		return nil, nil, err
-	}
-	if err := i.checkNotRevoked(context.Background(), b.Manifest.Key, b.Manifest.Version, true); err != nil {
+	if err := i.verifyTrust(b, mode, func() error {
+		return i.checkNotRevoked(context.Background(), b.Manifest.Key, b.Manifest.Version, true)
+	}); err != nil {
 		return nil, nil, err
 	}
 	warnings, err := b.Manifest.ValidateAdvisory(i.KernelVersion)
@@ -710,6 +727,10 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (inst *Installati
 		return nil, nil, err
 	}
 	t := i.beginInstallTxn(orgID, b)
+	t.mode = mode
+	if err := checkSourceTrust(t.prev, mode); err != nil {
+		return nil, nil, err
+	}
 	inst, secret, err = i.installSteps(orgID, b, t)
 	if err != nil {
 		if rbErr := t.rollback(err); rbErr != nil {
@@ -849,7 +870,7 @@ func (i *Installer) installSteps(orgID uuid.UUID, b *bundle.Bundle, t *installTx
 		AddonKey:       b.Manifest.Key,
 		Version:        b.Manifest.Version,
 		Status:         "enabled",
-		Source:         sourceOf(b.Manifest),
+		Source:         sourceFor(b, t.mode),
 		SecretHash:     hashSecret(secret),
 		Settings:       defaultSettings(b.Manifest),
 		ManifestHash:   newHash,
@@ -1384,7 +1405,18 @@ func (i *Installer) uninstallAddon(orgID uuid.UUID, addonKey string, dropSchema 
 // Upgrade does NOT change the per-installation secret. Rotation is an
 // orthogonal concern — call RotateSecret if the new bundle introduces new
 // signed-webhook endpoints that need a fresh key.
-func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bundle.Bundle) (inst *Installation, err error) {
+func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bundle.Bundle) (*Installation, error) {
+	return i.upgrade(ctx, orgID, newBundle, trustSigned)
+}
+
+// UpgradeBuiltin is Upgrade for a builtin installation (Source=builtin): the new
+// bundle must be the embedded one whose digest the host registered with
+// TrustBuiltin. SECURITY-SENSITIVE; see builtin.go.
+func (i *Installer) UpgradeBuiltin(ctx context.Context, orgID uuid.UUID, newBundle *bundle.Bundle) (*Installation, error) {
+	return i.upgrade(ctx, orgID, newBundle, trustBuiltin)
+}
+
+func (i *Installer) upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bundle.Bundle, mode trustMode) (inst *Installation, err error) {
 	// Migrations run before the version row is committed, so even a failed
 	// upgrade may have changed the schema: always flush. The exception is
 	// ErrSameVersionUpgrade: it is rejected before any DB or schema work, so it
@@ -1400,10 +1432,9 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	if newBundle == nil {
 		return nil, fmt.Errorf("installer.Upgrade: bundle is required")
 	}
-	if err := i.verifySignature(newBundle); err != nil {
-		return nil, err
-	}
-	if err := i.checkNotRevoked(ctx, newBundle.Manifest.Key, newBundle.Manifest.Version, true); err != nil {
+	if err := i.verifyTrust(newBundle, mode, func() error {
+		return i.checkNotRevoked(ctx, newBundle.Manifest.Key, newBundle.Manifest.Version, true)
+	}); err != nil {
 		return nil, err
 	}
 	// Validation / schema failures are typed (*UpgradeError) with the phase;
@@ -1452,6 +1483,9 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	}
 	if err != nil {
 		return nil, fmt.Errorf("installer.Upgrade: lookup installation: %w", err)
+	}
+	if err := checkSourceTrust(&existing, mode); err != nil {
+		return nil, err
 	}
 	fromVersion := existing.Version
 	toVersion := newBundle.Manifest.Version
