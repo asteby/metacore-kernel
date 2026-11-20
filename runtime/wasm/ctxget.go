@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/asteby/metacore-kernel/dynamic"
+	"github.com/asteby/metacore-kernel/orgconfig"
 	"github.com/google/uuid"
 )
 
@@ -33,16 +34,9 @@ type HostContextScopes struct {
 }
 
 // OrgConfig is the closed, allow-listed slice of the organization the guest may
-// read. It is NOT a view of the `organizations` row: no secrets, no billing, no
-// arbitrary columns. Pointers distinguish "unset" (null) from a real zero — a
-// tax_rate of 0 is a legitimate exempt org, an absent one is "not configured".
-type OrgConfig struct {
-	CurrencyCode string   `json:"currency_code"`
-	TaxRate      *float64 `json:"tax_rate"`
-	TaxIncluded  *bool    `json:"tax_included"`
-	Locale       string   `json:"locale"`
-	Timezone     string   `json:"timezone"`
-}
+// read. It is an alias of orgconfig.Config so the wasm ctx_get path and native
+// handlers share ONE type (see package orgconfig).
+type OrgConfig = orgconfig.Config
 
 // HostContext is what the embedder's provider returns for the acting
 // (org, user). Fields outside the requested HostContextScopes may be left zero.
@@ -198,4 +192,24 @@ func ctxGetErr(addonKey, code, message string, orgID uuid.UUID, start time.Time)
 		"meta":    ctxGetMeta(addonKey, orgID, start),
 	})
 	return b
+}
+
+// OrgConfigProvider adapts the host's ContextProviderFn (the SAME port that
+// feeds ctx_get) into an orgconfig.Provider for native handlers, so there is a
+// single source of truth for the org config. Only the org_config slice is
+// requested; the acting user is not needed (system-style lookup).
+func OrgConfigProvider(f ContextProviderFn) orgconfig.Provider {
+	if f == nil {
+		return nil
+	}
+	return func(ctx context.Context, orgID uuid.UUID) (orgconfig.Config, error) {
+		hc, err := f(ctx, orgID, uuid.Nil, HostContextScopes{OrgConfig: true})
+		if err != nil {
+			return orgconfig.Config{}, err
+		}
+		if hc == nil {
+			return orgconfig.Config{}, nil
+		}
+		return hc.Org, nil
+	}
 }

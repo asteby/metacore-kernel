@@ -14,7 +14,10 @@
 package bridge
 
 import (
+	"context"
+
 	"github.com/asteby/metacore-kernel/manifest"
+	"github.com/asteby/metacore-kernel/orgconfig"
 	"github.com/google/uuid"
 )
 
@@ -27,6 +30,18 @@ type ActionContext struct {
 	UserID    uuid.UUID
 	Locale    string
 	RequestID string
+}
+
+// OrgConfig returns the acting organization's config (currency, tax, locale,
+// timezone) from the host-wired provider (orgconfig.WithProvider on ctx), the
+// same source as wasm ctx_get. The org is c.OrgID, never request input.
+// Returns orgconfig.ErrUnavailable when the host did not wire it; empty
+// fields mean "not configured" (no regional default).
+func (c *ActionContext) OrgConfig(ctx context.Context) (orgconfig.Config, error) {
+	if c == nil {
+		return orgconfig.Config{}, orgconfig.ErrNoOrg
+	}
+	return orgconfig.Resolve(ctx, c.OrgID)
 }
 
 // ActionInterceptor is the function signature the bridge registers for each
