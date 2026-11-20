@@ -185,7 +185,7 @@ func (h *Host) flushEmits(ctx context.Context, tx *gorm.DB, buf *emitBuffer, add
 	if !isTx(tx) {
 		tx = nil
 	}
-	pub.Publish(context.WithoutCancel(ctx), tx, evs)
+	pub.Publish(dynamic.WithoutStageAuthority(context.WithoutCancel(ctx)), tx, evs)
 }
 
 // WithEventPublisher replaces the durable publisher that commits a successful

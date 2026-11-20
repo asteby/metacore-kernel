@@ -119,6 +119,10 @@ type Host struct {
 	// ModelKey (Host.WithStageMachine). data_mutate and data_batch refuse a
 	// write that is not a declared transition. nil = no machine on this tier.
 	stageMachine StageMachineFn
+	// stagePolicy: see Host.WithStagePolicy.
+	stagePolicy StagePolicyFn
+	// tableModel: see Host.WithTableModel.
+	tableModel func(logicalTable string) string
 	// extensions resolves 1:1 extension tables (Host.WithExtensions) so
 	// data_mutate / data_query can read and write "<Ext>.<column>".
 	extensions ExtensionFn
@@ -866,6 +870,8 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		mutationCompute:   h.mutationCompute,
 		appendOnly:        h.appendOnly,
 		stageMachine:      h.stageMachine,
+		stagePolicy:       h.stagePolicy,
+		tableModel:        h.tableModel,
 		extensions:        h.extensions,
 		approvalRequester: h.approvalRequester,
 		approvalConsumer:  h.approvalConsumer,

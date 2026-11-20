@@ -50,6 +50,12 @@ func withApprovalDetail(env []byte, gErr error) []byte {
 		"expires_hours":   pol.ExpiresHours,
 	}
 	errBody["context"] = ce.ViolationMap()
+	// A stage-transition approval is already PARKED (K3b): hand the guest the
+	// request id so it can tell the user which request is waiting.
+	var ar *dynamic.ApprovalRequiredError
+	if errors.As(gErr, &ar) && ar.Request != nil {
+		errBody["approval_request_id"] = ar.Request.ID.String()
+	}
 	out, err := json.Marshal(doc)
 	if err != nil {
 		return env

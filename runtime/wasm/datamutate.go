@@ -143,6 +143,9 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		inv.logger.Printf("metacore.wasm data_mutate WARN host_stamped_ignored addon=%s table=%s col=organization_id reason=matches_invocation_org",
 			addonKey, req.Table)
 	}
+	if err := canonicalizeModel(inv, &req); err != nil {
+		return fail("invalid_request", err.Error())
+	}
 	exts := extensionsFor(inv, req.Table, req.Model)
 	if err := explodeExtensionObjects(exts, req.Data); err != nil {
 		return fail("invalid_request", err.Error())
@@ -240,12 +243,12 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		rollback()
 		return fail(code, eErr.Error())
 	}
-	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now, dynamic.ActorIDFromContext(ctx), dynamic.BranchIDFromContext(ctx), stageFor(inv, req.Table, req.Model), exts, updateStampFor(execCtx, inv, work, orgID, &req))
+	res, code, mErr := applyMutation(work, &req, data, inc, orgID, tbl, now, dynamic.ActorIDFromContext(ctx), dynamic.BranchIDFromContext(ctx), stageFor(inv, req.Table, req.Model), stagePolicyFor(execCtx, inv, addonKey, orgID, &req), exts, updateStampFor(execCtx, inv, work, orgID, &req))
 	if mErr != nil {
 		rollback()
 		// A write to an absent table/column is `source_unavailable`, never a
 		// silent no-op (DISENO-DEGRADACION §B.1); every other failure is as before.
-		return dataMutateFailDB(inv, addonKey, code, req.Table, mErr, orgID, start, dynamic.CorrelationIDFromContext(ctx), false, "", fail)
+		return withApprovalDetail(dataMutateFailDB(inv, addonKey, code, req.Table, mErr, orgID, start, dynamic.CorrelationIDFromContext(ctx), false, "", fail), mErr)
 	}
 	action, rowID, before, after := res.action, res.rowID, res.before, res.after
 
@@ -320,7 +323,7 @@ func executeDataMutate(ctx context.Context, inv *invocation, reqJSON []byte) []b
 		Before:        before,
 		After:         after,
 	}
-	if err := inv.bus.Publish(ctx, "kernel", event, orgID, payload); err != nil && inv.logger != nil {
+	if err := inv.bus.Publish(dynamic.WithoutStageAuthority(ctx), "kernel", event, orgID, payload); err != nil && inv.logger != nil {
 		inv.logger.Printf("metacore.wasm data_mutate publish_error addon=%s event=%s err=%v",
 			eventAddon, event, err)
 	}
@@ -391,7 +394,7 @@ func stageFor(inv *invocation, table, model string) *dynamic.StageMachine {
 	return inv.stageMachine(table, model)
 }
 
-func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]any, orgID uuid.UUID, tbl string, now time.Time, actorID, branchID string, stage *dynamic.StageMachine, exts []dynamic.ExtensionTable, updStamp func(before, data, inc map[string]any) (string, error)) (*mutationResult, string, error) {
+func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]any, orgID uuid.UUID, tbl string, now time.Time, actorID, branchID string, stage *dynamic.StageMachine, stagePol stagePolicyFn, exts []dynamic.ExtensionTable, updStamp func(before, data, inc map[string]any) (string, error)) (*mutationResult, string, error) {
 	out := &mutationResult{rowID: req.ID}
 	// "<Ext>.<col>" leaves the owner INSERT/UPDATE and is written to the
 	// extension table after the owner row exists. Validation already proved
@@ -532,6 +535,11 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 		if err := dynamic.GateWrite(stage, before, data, inc); err != nil {
 			return nil, "invalid_transition", err
 		}
+		// K3b: roles / approval / guard / requires_fields / locked stage, the
+		// same policy Service.Update applies (Config.WasmStagePolicy).
+		if err := stagePol.check("update", req.ID, before, data, inc); err != nil {
+			return nil, stagePolicyCode(err), err
+		}
 		sets := make([]string, 0, len(data)+len(inc)+1)
 		args := make([]any, 0, len(data)+len(inc)+3)
 		n := 0
@@ -594,6 +602,9 @@ func applyMutation(work *gorm.DB, req *dataMutateRequest, data, inc map[string]a
 				fmt.Errorf("row %s not found in %s for this organization", out.rowID, req.Table)
 		}
 		out.before = before
+		if err := stagePol.check("delete", req.ID, before, nil, nil); err != nil {
+			return nil, stagePolicyCode(err), err
+		}
 		// Soft delete when the table carries a deleted_at column — detected
 		// from the snapshot's column set, so no information_schema round-trip.
 		if deletedAt, soft := before["deleted_at"]; soft {

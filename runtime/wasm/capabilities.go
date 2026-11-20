@@ -138,6 +138,12 @@ type invocation struct {
 	// (Host.WithStageMachine). nil = data_mutate / data_batch do not gate
 	// stage moves.
 	stageMachine StageMachineFn
+	// stagePolicy is the embedder-injected per-transition policy gate
+	// (Host.WithStagePolicy). nil = data_mutate / data_batch apply only the
+	// from -> to whitelist.
+	stagePolicy StagePolicyFn
+	// tableModel: see Host.WithTableModel.
+	tableModel func(logicalTable string) string
 	// extensions resolves 1:1 extension tables (Host.WithExtensions).
 	extensions ExtensionFn
 	// approvalRequester is the embedder-injected dynamic.Service.RequestApproval
@@ -463,7 +469,7 @@ func registerHostModule(ctx context.Context, h *Host, rt wazero.Runtime) error {
 			}
 			if inv.emits == nil {
 				// Hand-built invocation (tests): legacy immediate publish.
-				subscribers, err := inv.bus.PublishWithCount(ctx, inv.addonKey, eventName, inv.orgID, payload)
+				subscribers, err := inv.bus.PublishWithCount(dynamic.WithoutStageAuthority(ctx), inv.addonKey, eventName, inv.orgID, payload)
 				if err != nil {
 					code := "forbidden"
 					if errors.Is(err, events.ErrDurableDelivery) {
