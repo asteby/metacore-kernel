@@ -92,18 +92,26 @@ type Purpose string  // PurposeGrant, Lease, Release, Revocations, State, Bundle
                      // Order, Bootstrap, BrandPack, HubControl, Enter, EdgeUpdate
 type Key struct { ID string; Public ed25519.PublicKey; Purposes []Purpose
                   NotBefore, NotAfter *time.Time; Revoked bool }
-func NewKeySet(keys ...Key) (*KeySet, error)      // fail closed: sizes, dup ids, purposes required
+func NewKeySet(keys ...Key) (*KeySet, error)      // fail closed; deep copy, immutable afterwards
 func ParseHexKeys(csv string, purposes ...Purpose) ([]Key, error)
 
-type Verifier struct { Keys *KeySet; Policy Policy; Now func() time.Time }
+func NewVerifier(keys *KeySet, p Policy) (*Verifier, error)   // Leeway < 0 is ErrInvalidConfig
+func (v *Verifier) SetKeys(ks *KeySet)   // atomic swap (atomic.Pointer): hot revocation / rotation
 type Policy struct { RequireNative bool; Window WindowFunc; Leeway time.Duration }
+                  // Leeway widens the payload window AND the key validity windows
 
 func (v *Verifier) Open(want Purpose, token string) (*Result, error)
-    // "asteby1." envelope, or the legacy "b64(claims).b64(sig)" token (unless RequireNative)
+    // "asteby1." envelope, or the legacy "b64(claims).b64(sig)" token (unless RequireNative).
+    // On ErrExpired / ErrNotYetValid it returns the AUTHENTICATED *Result together
+    // with the error, so grace periods are computed from verified data. Every
+    // other error returns a nil Result.
 func (v *Verifier) VerifyLegacy(p Purpose, s Scheme, input, sig []byte) (*Result, error)
 func VerifyDetached(pub ed25519.PublicKey, msg, sig []byte) error   // PoP with a per-device key
 func Seal(priv, kid, p, payload) (string, error)                    // wraps sigv2.Seal
-func UnixWindow(nbfField, expField string) WindowFunc
+func RFC3339Window(nbf, exp string, required bool) WindowFunc // what the deployed licences use
+func UnixWindow(nbf, exp string, required bool) WindowFunc    // integer unix seconds
+    // required=true: a named field that is absent, null or the zero time is ErrMalformed,
+    // never "unbounded" (a stripped exp must not become a licence that never expires)
 
 // Schemes reproduce the deployed bare-signature formats byte for byte:
 SchemeMessage            // sig over input as is (token claims, a digest passed in)
@@ -118,7 +126,12 @@ Errors (`errors.Is`): `ErrMalformed`, `ErrBadSignature`, `ErrUnknownKey`,
 `ErrUnsupportedAlg`, `ErrExpired`, `ErrNotYetValid`, `ErrNoKeys`,
 `ErrInvalidConfig`.
 
-Security properties (all tested, see `signedenvelope_test.go`):
+Window shapes actually deployed: hub `InstanceClaims` (`iat`/`exp`) and ops
+`applicense.Payload` (`issued_at`/`expires_at`) are Go `time.Time`, i.e. RFC3339
+strings, NOT unix seconds. Use `RFC3339Window(..., true)` for both; `UnixWindow`
+on those payloads fails closed with `ErrMalformed` (tested).
+
+Security properties (all tested, see `signedenvelope_test.go` and `real_vectors_test.go`):
 
 * Cross-purpose replay: a native token sealed for `grant` opened as `bundle`
   fails with `ErrWrongPurpose` BEFORE any key lookup; rewriting `dom` in the
@@ -130,10 +143,24 @@ Security properties (all tested, see `signedenvelope_test.go`):
   set, key with no declared purposes: all rejected.
 * Rotation: several live keys per purpose; any may verify.
 * Golden vectors with a fixed seed pin the deployed formats (raw digest, hex
-  digest, order prefix, brand pack, legacy token, native envelope). If a vector
-  fails, a deployed format changed.
+  digest, order prefix, legacy token, native envelope). If a vector fails, a
+  deployed format changed.
+* Vectors derived from the real issuers (`real_vectors_test.go`): instance
+  licence (hub `IssueInstanceLicenseOpts`, oracle `licensing.Verify`), ops
+  application licence (RFC3339 `issued_at`/`expires_at`), bundle raw digest
+  (oracle `security.VerifyBundle`), ops hex directory digest
+  (`ComputeBundleDigest`), release (appliance raw digest, asteby-update hex,
+  edge `SigningMessage`), order, bootstrap (hub signs domain + `\n` + the
+  base64 STRING of the document), brand pack (`metacore-brand-pack/v1\n`).
+* Concurrency: `SetKeys` swaps the set while verifications run (`-race`); a
+  revocation takes effect on the next call.
 * Downgrade: `Policy.RequireNative` refuses legacy formats; use one Verifier per
   purpose and flip it when the issuer emits `asteby1.`.
+
+A legacy token verifies under ANY purpose whose keys include the signer (tested
+in `TestLegacyTokenCrossPurposeSharedKey`: a licence token opens as an enter
+token when one key is declared for both). Only distinct keys per purpose or
+`RequireNative` close that.
 
 Caveat: legacy schemes cannot have domain separation. Bundle and release
 signatures made with ONE key are interchangeable whenever the digest matches.
@@ -141,6 +168,30 @@ The migration therefore also asks for DISTINCT keys per purpose (ops 1/3 vs
 2/6/7/9) before the native envelope is enforced.
 
 ## 3. Migration plan (phase 2, ops and hub; one PR per repo)
+
+### BLOCKING PRECONDITION: distinct keys per purpose
+
+Today ONE key (`MARKETPLACE_PUBKEY`) signs the bundle counter-signature, the
+appliance self-update, the hex digests of ops 2/3/9 and the revocation lists:
+zero separation, and the legacy formats cannot add any. Scoping keys by purpose
+in the `KeySet` only has meaning if the keys are different. Therefore NO row
+below may be merged to ops or hub until:
+
+1. Distinct signing keys exist for at least: bundle, release (appliance +
+   asteby-update + edge), order, revocations, grant/lease, bootstrap/control.
+2. Rollout order (each step is independently safe):
+   a. Hub issues the new per-purpose keys and publishes the public halves.
+   b. Instances learn the new public keys WITHOUT dropping the old one (the
+      `KeySet` carries both, the old key declared for its legacy purposes).
+   c. The hub starts signing NEW artifacts with the per-purpose key; already
+      issued licences/bundles keep verifying with the old key.
+   d. Migrate the call sites below (drop-in, no format change).
+   e. When no live artifact depends on the old key: revoke it
+      (`Key.Revoked` / `SetKeys`) and set `RequireNative` per purpose once the
+      issuer emits `asteby1.`.
+3. Until step 1 is done the migration still centralises code and error types,
+   but it does NOT deliver purpose separation for the shared-key formats; do not
+   claim it does.
 
 Order: kernel releases this package, ops/hub bump, then per row. No signing
 side changes in step 1: every row is a drop-in replacement of the verify call.
@@ -155,9 +206,9 @@ side changes in step 1: every row is a drop-in replacement of the verify call.
 | 4 edge update manifest | `VerifyLegacy(PurposeEdgeUpdate, SchemeMessage, SigningMessage(...), sig)` | message already domain-prefixed |
 | 5 devauth | `VerifyDetached(pub, msg, sig)` | per-device key |
 | 6, 7 bundle counter-sig | `VerifyLegacy(PurposeBundle, SchemeMessage, sum[:], sig)` | |
-| 8 bootstrap | `VerifyLegacy(PurposeBootstrap, SchemePrefixed("asteby/act-bootstrap/v1\n"), doc, sig)` | |
-| 10 applicense | `Open(PurposeGrant, token)` + `UnixWindow` | accepts legacy and `asteby1.` |
-| 11 brandpack | `VerifyLegacy(PurposeBrandPack, SchemePrefixedSHA256(Domain), pack, sig)` | |
+| 8 bootstrap | `VerifyLegacy(PurposeBootstrap, SchemePrefixed("asteby/act-bootstrap/v1\n"), []byte(docB64), sig)` | input is the base64 STRING the hub signed, not the decoded document (tested) |
+| 10 applicense | `Open(PurposeGrant, token)` + `RFC3339Window("issued_at","expires_at", true)` | payload fields are `time.Time`; on `ErrExpired` the Result carries the payload for the grace computation |
+| 11 brandpack | `VerifyLegacy(PurposeBrandPack, SchemePrefixedSHA256("metacore-brand-pack/v1\n"), pack, sig)` | domain per `brandpack.go:35` |
 | 12 hubdir command | `VerifyLegacy(PurposeHubControl, SchemeMessage, sha256(body+"\n"+ts), sig)` | |
 | 13 enter token | `Open(PurposeEnter, token)` | |
 | 14 hubordersclient | `VerifyLegacy(PurposeOrder, SchemePrefixed("asteby-order-v1\x00"), raw, sig)` | |
@@ -169,9 +220,9 @@ side changes in step 1: every row is a drop-in replacement of the verify call.
 | 1, 3, 4 PoP | `VerifyDetached` | |
 | 2 bootstrap | `VerifyLegacy(PurposeBootstrap, SchemePrefixed(...))` | |
 | 5 orders_sign | `VerifyLegacy(PurposeOrder, SchemePrefixed(...))` | |
-| 6, 9 licences | `Open(PurposeGrant)` | |
+| 6, 9 licences | `Open(PurposeGrant)` + `RFC3339Window` on the claim fields | check the claim field names/shape per issuer before enabling the window |
 | 7 `license/envelope.go` | delete the copy, use `Open(PurposeGrant/Lease)` | removes the duplicated sigv2 |
-| 8 instancelicense | `Open(PurposeGrant)` without `Window` | signature OK but possibly expired: `ErrExpired` is reported only when a Window is configured |
+| 8 instancelicense | `Open(PurposeLease)`, with `RFC3339Window("iat","exp",true)` only if the caller wants expiry; without Window it is a pure signature check | the hub seals instance licences with `DomLease` (`instancelicense.go:395`), NOT Grant. SEMANTIC CHANGE: `InstanceTokenSignatureOK` today accepts only the legacy two-part token; `Open` also accepts `asteby1.` tokens. If a caller must stay legacy-only, keep a check on `Result.Legacy` |
 | 10 revocations | `VerifyLegacy(PurposeRevocations, SchemeMessage, canonicalPayload, sig)` | then sigv2 `DomRevocations` + Tracker |
 | 11, 12 signer | `VerifyDetached` | developer key |
 
@@ -191,18 +242,26 @@ side changes in step 1: every row is a drop-in replacement of the verify call.
 
 ## 4. CI gate
 
-`scripts/check-ed25519-verify.sh` fails when `ed25519.Verify(` appears in
-non-test Go code outside `security/` and `licensing/sigv2/`. It supports a
-shrink-only baseline (`scripts/ed25519-verify-baseline.txt`; stale entries also
-fail). Proposed wiring:
+`scripts/ed25519gate` (Go, parses with `go/ast`; wrapper
+`scripts/check-ed25519-verify.sh [base-ref]`) fails when non-test Go code uses
+Ed25519 verification outside the vetted files. It catches:
+`ed25519.Verify(`, `ed25519.VerifyWithOptions(`, aliased imports
+(`import e "crypto/ed25519"`), dot-imports, and function values
+(`f := ed25519.Verify`); comments never trigger it. It also covers
+`golang.org/x/crypto/ed25519` and circl.
 
-```yaml
-# kernel .github/workflows/ci.yml
-- name: ed25519.Verify gate
-  run: scripts/check-ed25519-verify.sh --baseline scripts/ed25519-verify-baseline.txt
-# ops and hub (copy the script, or fetch it from the kernel release):
-- run: scripts/check-ed25519-verify.sh --allow '^$' --baseline scripts/ed25519-verify-baseline.txt
-```
-
-Ops/hub baselines start with the sites in section 1 and lose a line per
-migrated row; the gate is switched to no baseline when the list is empty.
+* `scripts/ed25519-verify-allowed.txt`: permanent ledger, explicit files with an
+  EXACT use count (`path count`). Whole directories are not exempt: a new call
+  inside `security/` fails until the ledger is edited in a reviewed change.
+* `scripts/ed25519-verify-baseline.txt`: transitional debt, exact counts, and
+  with `-base origin/main` it may only lose files or lower counts versus the
+  base branch (shrink-only is enforced, not promised).
+* Wired in kernel `.github/workflows/ci.yml` (step before `go vet`, fetching
+  `origin/main` as the base).
+* Ops and hub: copy `scripts/ed25519gate` (or `go run` it from the kernel
+  module) with an empty allowed ledger and a baseline listing their sites with
+  counts (section 1); each migrated row lowers a count.
+* CODEOWNERS: this repo has no CODEOWNERS file today. When one is added it MUST
+  cover `scripts/ed25519-verify-*.txt`, `scripts/ed25519gate/`,
+  `security/` and `licensing/sigv2/`, owned by whoever reviews crypto changes,
+  so loosening a ledger needs their approval.

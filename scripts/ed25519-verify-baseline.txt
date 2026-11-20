@@ -1,2 +1,3 @@
-# Transitional: kernel-internal site still to migrate to signedenvelope.
-hub/revocations.go
+# Transitional ledger (shrink only; CI compares it with origin/main).
+# Kernel-internal site still to migrate to security/signedenvelope.
+hub/revocations.go 1

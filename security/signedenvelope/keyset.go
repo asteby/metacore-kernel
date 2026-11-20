@@ -61,7 +61,17 @@ type Key struct {
 	Revoked bool
 }
 
-// KeySet is an immutable collection of keys. Build it with NewKeySet.
+func copyTime(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	c := *t
+	return &c
+}
+
+// KeySet is an immutable collection of keys. Build it with NewKeySet; to
+// change keys at runtime (revocation, rotation) build a new set and swap it
+// into the Verifier with SetKeys.
 type KeySet struct {
 	byID  map[string]Key
 	order []string // insertion order, deterministic iteration
@@ -91,8 +101,12 @@ func NewKeySet(keys ...Key) (*KeySet, error) {
 		if k.NotBefore != nil && k.NotAfter != nil && !k.NotAfter.After(*k.NotBefore) {
 			return nil, fmt.Errorf("%w: key %q has an empty validity window", ErrInvalidConfig, k.ID)
 		}
+		// Deep copy: the caller keeps no alias into the set (public key bytes,
+		// purposes, and the validity pointers), so the set is immutable.
 		k.Public = append(ed25519.PublicKey(nil), k.Public...)
 		k.Purposes = append([]Purpose(nil), k.Purposes...)
+		k.NotBefore = copyTime(k.NotBefore)
+		k.NotAfter = copyTime(k.NotAfter)
 		ks.byID[k.ID] = k
 		ks.order = append(ks.order, k.ID)
 	}
@@ -128,22 +142,31 @@ func (k Key) allows(p Purpose) bool {
 	return false
 }
 
-func (k Key) activeAt(now time.Time) bool {
+// activeAt reports validity at now, widened by leeway on both sides (clock
+// skew). A revoked key is never active, whatever the leeway.
+func (k Key) activeAt(now time.Time, leeway time.Duration) bool {
 	if k.Revoked {
 		return false
 	}
-	if k.NotBefore != nil && now.Before(*k.NotBefore) {
+	if k.NotBefore != nil && now.Add(leeway).Before(*k.NotBefore) {
 		return false
 	}
-	if k.NotAfter != nil && !now.Before(*k.NotAfter) {
+	if k.NotAfter != nil && !now.Add(-leeway).Before(*k.NotAfter) {
 		return false
 	}
 	return true
 }
 
+// ring adapts a KeySet to sigv2.Keyring for one verification (fixed leeway).
+type ring struct {
+	ks     *KeySet
+	leeway time.Duration
+}
+
 // Resolve implements sigv2.Keyring so the native envelope verifier can use the
-// set directly. dom is the purpose the envelope claims.
-func (ks *KeySet) Resolve(kid, dom string, now time.Time) (ed25519.PublicKey, error) {
+// set. dom is the purpose the envelope claims.
+func (r ring) Resolve(kid, dom string, now time.Time) (ed25519.PublicKey, error) {
+	ks := r.ks
 	k, ok := ks.byID[kid]
 	if !ok {
 		return nil, fmt.Errorf("%w %q", ErrUnknownKey, kid)
@@ -151,7 +174,7 @@ func (ks *KeySet) Resolve(kid, dom string, now time.Time) (ed25519.PublicKey, er
 	if !k.allows(Purpose(dom)) {
 		return nil, fmt.Errorf("%w (%s)", ErrKeyPurpose, dom)
 	}
-	if !k.activeAt(now) {
+	if !k.activeAt(now, r.leeway) {
 		return nil, fmt.Errorf("%w (%s)", ErrKeyNotActive, kid)
 	}
 	return k.Public, nil
@@ -159,7 +182,7 @@ func (ks *KeySet) Resolve(kid, dom string, now time.Time) (ed25519.PublicKey, er
 
 // candidates returns the keys usable for purpose at now, in insertion order,
 // plus the reason none qualified (for precise errors).
-func (ks *KeySet) candidates(p Purpose, now time.Time) ([]Key, error) {
+func (ks *KeySet) candidates(p Purpose, now time.Time, leeway time.Duration) ([]Key, error) {
 	var out []Key
 	sawPurpose, sawActive := false, false
 	for _, id := range ks.order {
@@ -168,7 +191,7 @@ func (ks *KeySet) candidates(p Purpose, now time.Time) ([]Key, error) {
 			continue
 		}
 		sawPurpose = true
-		if !k.activeAt(now) {
+		if !k.activeAt(now, leeway) {
 			continue
 		}
 		sawActive = true

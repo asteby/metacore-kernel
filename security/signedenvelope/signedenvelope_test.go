@@ -18,7 +18,6 @@ const (
 	gRaw    = "30bd424515fb972995b1fc57e07bf0b45ec81a8ae62c3735e1168a946e2e6a6033b49e01a08085a9cc6b272dfd800d4c2a6066e67c50f480ccde354d27be830f"
 	gHex    = "59254a93ff8aba1679e520a81aad2d42ce67be023565654fee772280fabf486ea6a798b06c898d8514778409dfe0e0be18d3c6b6a4bf23383b0e9bb2a8209e04"
 	gOrder  = "cc25d4986231bd14bd0314a35c2023871fd85f0f53759c2ee6dc9106a1e85180841019ad588bd79f4acee457394832a0dda42028a32b73074693ebaf3ada9c02"
-	gBrand  = "f74318960fce50336d44ce762b03ad187bb0c9457bcf19832f15e5a0f8f6bd7cc8ff93a1f78166080c66c310ad01f9e603fbc0ad2050efaa849a31c0fe1cf103"
 	gTok2   = "eyJ2IjoxLCJleHAiOjIwMDAwMDAwMDB9.oOWyOLhKd53Q0CFZVr7XoF8hdLXyKZaiOfsluwKb6YZ52thos-fqwVIdrOBZhAGaNDubDqU3TyYr73GIjXLEDw"
 	gNative = "asteby1.eyJraWQiOiJrMSIsImRvbSI6ImFzdGVieS9ncmFudC92MiIsImFsZyI6IkVkMjU1MTkifQ.eyJ2IjoxLCJleHAiOjIwMDAwMDAwMDB9.6f-8Wf1Qao-vJEu_dFMh1J2shZnqSSw4GYi9GflQAl_DF_xVaRdDQT3NoV9g-KZ4LEhzYPdU7HDgNSOtEnxGCA"
 	gClaims = `{"v":1,"exp":2000000000}`
@@ -49,7 +48,12 @@ func goldenKey(t *testing.T, id string, purposes ...Purpose) Key {
 }
 
 func ver(t *testing.T, p Policy, ks ...Key) *Verifier {
-	return &Verifier{Keys: keySet(t, ks...), Policy: p, Now: func() time.Time { return now }}
+	t.Helper()
+	v, err := NewVerifier(keySet(t, ks...), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v.WithClock(func() time.Time { return now })
 }
 
 func TestGoldenNative(t *testing.T) {
@@ -63,7 +67,7 @@ func TestGoldenNative(t *testing.T) {
 func TestGoldenLegacySchemes(t *testing.T) {
 	content := []byte("golden-bundle-bytes")
 	digest := sha256.Sum256(content)
-	v := ver(t, Policy{}, goldenKey(t, "m", PurposeBundle, PurposeOrder, PurposeBrandPack))
+	v := ver(t, Policy{}, goldenKey(t, "m", PurposeBundle, PurposeOrder))
 	cases := []struct {
 		name  string
 		p     Purpose
@@ -76,7 +80,6 @@ func TestGoldenLegacySchemes(t *testing.T) {
 		{"digest hex over content", PurposeBundle, SchemeSHA256Hex, content, gHex},
 		{"digest hex given string", PurposeBundle, SchemeMessage, []byte(hex.EncodeToString(digest[:])), gHex},
 		{"order prefix", PurposeOrder, SchemePrefixed("asteby-order-v1\x00"), []byte(`{"o":1}`), gOrder},
-		{"brand prefixed hash", PurposeBrandPack, SchemePrefixedSHA256("asteby-brand-v1\x00"), []byte("pack"), gBrand},
 	}
 	for _, c := range cases {
 		r, err := v.VerifyLegacy(c.p, c.s, c.in, mustHex(t, c.sigHx))
@@ -213,18 +216,19 @@ func TestDowngradeProtection(t *testing.T) {
 }
 
 func TestPayloadWindow(t *testing.T) {
-	p := Policy{Window: UnixWindow("nbf", "exp")}
+	p := Policy{Window: UnixWindow("nbf", "exp", false)}
 	k := goldenKey(t, "k1", PurposeGrant)
 	// gClaims expires 2033: valid in 2026.
 	if r, err := ver(t, p, k).Open(PurposeGrant, gNative); err != nil || r.Window.Expires == nil {
 		t.Fatalf("valid window: %+v %v", r, err)
 	}
-	late := ver(t, p, k)
-	late.Now = func() time.Time { return time.Unix(2000000000, 0) }
-	if _, err := late.Open(PurposeGrant, gNative); !errors.Is(err, ErrExpired) {
-		t.Fatalf("expired: %v", err)
+	late := ver(t, p, k).WithClock(func() time.Time { return time.Unix(2000000000, 0) })
+	r, err := late.Open(PurposeGrant, gNative)
+	if !errors.Is(err, ErrExpired) || r == nil || string(r.Payload) != gClaims {
+		t.Fatalf("expired must return the authenticated payload: %+v %v", r, err)
 	}
-	late.Policy.Leeway = time.Minute
+	p.Leeway = time.Minute
+	late = ver(t, p, k).WithClock(func() time.Time { return time.Unix(2000000000, 0) })
 	if _, err := late.Open(PurposeGrant, gNative); err != nil {
 		t.Fatalf("leeway: %v", err)
 	}
@@ -266,7 +270,7 @@ func TestKeySetValidation(t *testing.T) {
 		t.Errorf("duplicate id accepted")
 	}
 	// Empty set fails closed.
-	v := &Verifier{Keys: keySet(t), Now: func() time.Time { return now }}
+	v := ver(t, Policy{})
 	if _, err := v.Open(PurposeGrant, gNative); err == nil {
 		t.Error("empty key set verified")
 	}
@@ -276,7 +280,8 @@ func TestKeySetValidation(t *testing.T) {
 	// Derived id round trip.
 	ks := keySet(t, Key{Public: pub, Purposes: []Purpose{PurposeGrant}})
 	tok, _ := Seal(goldenPriv(), ks.order[0], PurposeGrant, []byte(`{}`))
-	if _, err := (&Verifier{Keys: ks, Now: func() time.Time { return now }}).Open(PurposeGrant, tok); err != nil {
+	dv, _ := NewVerifier(ks, Policy{})
+	if _, err := dv.WithClock(func() time.Time { return now }).Open(PurposeGrant, tok); err != nil {
 		t.Errorf("derived kid: %v", err)
 	}
 }
