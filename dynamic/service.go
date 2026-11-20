@@ -389,6 +389,13 @@ type Config struct {
 	// the single modelbase.AuthUser.GetRole() is used.
 	ActorRolesResolver ActorRolesResolver
 
+	// SettingResolver answers whether an addon's boolean setting is true for an
+	// org; it gates the rules that declare contributions.rules[].enabled_setting
+	// (opt-in per organization). nil = those rules never run (OFF by default),
+	// as does a resolver error or a false value. Memoized per write; hosts
+	// should cache the org's installation settings.
+	SettingResolver SettingResolver
+
 	// AccessPolicyResolver returns the declarative access policy of a model
 	// the host knows outside the Go registry (addon models). ok=false defers
 	// to modelbase.AccessPolicyFor: a policy registered with
@@ -528,6 +535,7 @@ type Service struct {
 	// Approvals primitive state (approvals.go): who may decide, who a replay
 	// runs as, the per-op replay backends and the background expirer.
 	actorRolesResolver        ActorRolesResolver
+	settingResolver           SettingResolver
 	approvalRequesterResolver ApprovalRequesterResolver
 	approvalPINVerifier       ApprovalPINVerifier
 	pinThrottles              map[string]*pinThrottle
@@ -628,6 +636,7 @@ func New(cfg Config) *Service {
 		modelForModelKey:  cfg.ModelForModelKey,
 
 		actorRolesResolver:        cfg.ActorRolesResolver,
+		settingResolver:           cfg.SettingResolver,
 		approvalRequesterResolver: cfg.ApprovalRequesterResolver,
 		approvalPINVerifier:       cfg.ApprovalPINVerifier,
 	}
@@ -1132,6 +1141,7 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	// ApprovalRequest instead (nothing is inserted either) and answers
 	// *ApprovalRequiredError; the replay skips exactly that guard.
 	if mc := s.resolveConstraints(ctx, model); mc != nil {
+		mc = ResolveEnabledGuards(ctx, user.GetOrganizationID(), mc, s.settingResolver)
 		if err := evalConstraintsCtx(ctx, model, mc, input); err != nil {
 			var ce *ConstraintError
 			if errors.As(err, &ce) && ce.RequestsApproval() {
@@ -1358,6 +1368,7 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 	// increment-then-check guard is then race-free). When there is no row
 	// locking, execDB stays s.db and the legacy per-statement flow is unchanged.
 	mc := s.resolveConstraints(ctx, model)
+	mc = ResolveEnabledGuards(ctx, user.GetOrganizationID(), mc, s.settingResolver)
 	hasRules := mc != nil && len(mc.Rules) > 0
 	lockRows := mc.locksRows()
 

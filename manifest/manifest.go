@@ -1634,6 +1634,12 @@ type ConstraintDef struct {
 	// the write is flagged when Expr is TRUE. Constraints leave it false (Expr
 	// states what must hold).
 	Invert bool `json:"invert,omitempty"`
+	// EnabledSetting (+ AddonKey, the owning addon) makes the guard opt-in per
+	// org: it is evaluated only while the addon's boolean setting of that key
+	// is true for the org, resolved through dynamic.Config.SettingResolver.
+	// Projected from contributions.rules[].enabled_setting. Empty = always on.
+	EnabledSetting string `json:"enabledSetting,omitempty"`
+	AddonKey       string `json:"addonKey,omitempty"`
 }
 
 // RequestsApproval reports whether a false predicate must open an approval

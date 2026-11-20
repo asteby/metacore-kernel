@@ -384,6 +384,31 @@ Column-level checks run for models the addon owns; for extended models they are
 deferred to the host at serve time (their columns live in another manifest).
 
 
+## Opt-in rules: `rules[].enabled_setting`
+
+A `contributions.rules[]` guard (`then.kind: request_approval`) can be made
+opt-in per organization. `enabled_setting` names a **boolean, org-scoped**
+entry of the addon's own `settings[]`; the rule is evaluated only while that
+setting is `true` for the acting org.
+
+```json
+"settings": [{"key": "enforce_price_floor", "type": "boolean"}],
+"contributions": {"rules": [{
+  "key": "price_floor", "model": "Product", "when": "price < cost",
+  "enabled_setting": "enforce_price_floor",
+  "then": {"kind": "request_approval", "message": "pricing.below_floor",
+           "approval": {"roles": ["manager"]}}
+}]}
+```
+
+Semantics: **off by default**. A false/missing setting, a host without a
+`SettingResolver`, or a resolver error all skip the rule (fail closed toward
+off; the failure is logged). Omitting the field keeps today's always-on
+behaviour. Validation rejects an unknown key, a non-boolean or branch/market
+scoped setting, and use with `flag`/`notify` rules. The host wires
+`dynamic.Config.SettingResolver(ctx, orgID, addonKey, key)`; it runs at most
+once per (addon, key) per write, so hosts should cache the org's settings.
+
 ## Capability contracts
 
 A consumer that needs "send a WhatsApp message" should not care whether the org

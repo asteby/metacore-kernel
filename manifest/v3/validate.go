@@ -565,6 +565,26 @@ func validateRules(m *Manifest, colsByModel map[string]map[string]struct{}) []st
 		} else if r.Then.Approval != nil {
 			errs = append(errs, fmt.Sprintf("%s.then.approval is only valid when then.kind is request_approval", where))
 		}
+		if r.EnabledSetting != "" {
+			if r.Then.Kind != "request_approval" {
+				errs = append(errs, fmt.Sprintf("%s.enabled_setting is only supported with then.kind request_approval (the pre-write guard)", where))
+			}
+			var found *Setting
+			for si := range m.Settings {
+				if m.Settings[si].Key == r.EnabledSetting {
+					found = &m.Settings[si]
+					break
+				}
+			}
+			switch {
+			case found == nil:
+				errs = append(errs, fmt.Sprintf("%s.enabled_setting %q is not a key of this addon's settings[]", where, r.EnabledSetting))
+			case found.Type != "boolean":
+				errs = append(errs, fmt.Sprintf("%s.enabled_setting %q must reference a boolean setting (is %q)", where, r.EnabledSetting, found.Type))
+			case found.Scope != "" && found.Scope != "org":
+				errs = append(errs, fmt.Sprintf("%s.enabled_setting %q must reference an org-scoped setting (scope %q)", where, r.EnabledSetting, found.Scope))
+			}
+		}
 		if r.Then.Severity != "" {
 			if _, ok := ruleSeverities[r.Then.Severity]; !ok {
 				errs = append(errs, fmt.Sprintf("%s.then.severity %q is not one of info|warning|error", where, r.Then.Severity))

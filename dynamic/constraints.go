@@ -6,6 +6,8 @@ import (
 	"log"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/manifest/computeexpr"
 )
@@ -58,9 +60,74 @@ func (s *Service) resolveConstraints(ctx context.Context, model string) *ModelCo
 	return mc
 }
 
+// SettingResolver answers whether the boolean setting `key` of addon `addonKey`
+// is true for the organization (Config.SettingResolver). Hosts typically read
+// the org's installation settings (cache them: it runs at most once per
+// distinct (addon, key) per write). An error is treated as "off".
+type SettingResolver func(ctx context.Context, orgID uuid.UUID, addonKey, key string) (bool, error)
+
+// ResolveEnabledGuards returns mc with its opt-in guards (ConstraintDef
+// .EnabledSetting, from contributions.rules[].enabled_setting) resolved for
+// the org: a guard whose setting is true is kept (as a normal guard), every
+// other one is dropped. Semantics are OFF by default: a false/missing setting,
+// a nil resolver, a nil org or a resolver error all drop the guard. When mc
+// has no opt-in guards it is returned as is (zero cost, identical behaviour).
+// The input is never mutated. Embedders that enforce guards outside Service
+// (wasm WithMutationGuard) call this before EvalRowConstraints.
+func ResolveEnabledGuards(ctx context.Context, orgID uuid.UUID, mc *ModelConstraints, resolve SettingResolver) *ModelConstraints {
+	if mc == nil {
+		return nil
+	}
+	has := false
+	for _, c := range mc.Constraints {
+		if c.EnabledSetting != "" {
+			has = true
+			break
+		}
+	}
+	if !has {
+		return mc
+	}
+	out := *mc
+	out.Constraints = make([]manifest.ConstraintDef, 0, len(mc.Constraints))
+	memo := map[string]bool{}
+	for _, c := range mc.Constraints {
+		if c.EnabledSetting == "" {
+			out.Constraints = append(out.Constraints, c)
+			continue
+		}
+		mk := c.AddonKey + "\x00" + c.EnabledSetting
+		on, seen := memo[mk]
+		if !seen {
+			if resolve != nil && orgID != uuid.Nil {
+				v, err := resolve(ctx, orgID, c.AddonKey, c.EnabledSetting)
+				on = err == nil && v
+				if err != nil {
+					log.Printf("dynamic: enabled_setting.resolve_failed addon=%s setting=%s err=%v (guard %s stays OFF)", c.AddonKey, c.EnabledSetting, err, c.ErrorKey)
+				}
+			}
+			memo[mk] = on
+		}
+		if on {
+			c.EnabledSetting = "" // resolved: now a plain guard
+			out.Constraints = append(out.Constraints, c)
+		}
+	}
+	return &out
+}
+
+// EvalRowConstraintsFor is EvalRowConstraints for an org-aware embedder: it
+// resolves the opt-in guards for orgID first (see ResolveEnabledGuards).
+func EvalRowConstraintsFor(ctx context.Context, orgID uuid.UUID, mc *ModelConstraints, row map[string]any, resolve SettingResolver) error {
+	return EvalRowConstraints(ResolveEnabledGuards(ctx, orgID, mc, resolve), row)
+}
+
 // EvalRowConstraints is the exported form of evalConstraints for embedders
 // that enforce declarative guards on writes that bypass Service (the wasm
 // data_mutate/data_batch imports route through it via Host.WithMutationGuard).
+//
+// Opt-in guards (EnabledSetting) that were not resolved through
+// ResolveEnabledGuards / EvalRowConstraintsFor are skipped (OFF).
 func EvalRowConstraints(mc *ModelConstraints, row map[string]any) error {
 	if mc == nil {
 		return nil
@@ -126,6 +193,11 @@ func evalConstraintsCore(mc *ModelConstraints, row map[string]any, skipKey strin
 	}
 	var pending *ConstraintError
 	for _, c := range mc.Constraints {
+		// An opt-in guard (rules[].enabled_setting) that was not resolved to
+		// "on" by ResolveEnabledGuards is OFF: fail closed toward off.
+		if c.EnabledSetting != "" {
+			continue
+		}
 		if skipKey != "" && c.ErrorKey == skipKey && c.RequestsApproval() {
 			continue
 		}

@@ -980,3 +980,10 @@ func hostErrorMessageKey(code string) string {
 // compile-time assurance that we only ever bind the runtime kind wazero
 // provides (defends against accidental interface drift).
 var _ wazero.Runtime = (wazero.Runtime)(nil)
+
+// OrgIDFromContext returns the tenant tagged by WithOrgID (uuid.Nil if none).
+// The data_mutate / data_batch imports tag the context handed to
+// WithMutationGuard with the invocation's org, so a guard can resolve
+// per-org opt-in rules: dynamic.EvalRowConstraintsFor(ctx,
+// wasm.OrgIDFromContext(ctx), mc, row, resolver).
+func OrgIDFromContext(ctx context.Context) uuid.UUID { return orgIDFrom(ctx) }
