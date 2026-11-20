@@ -131,3 +131,27 @@ reusable.
   fields yet — add them with a host migration when adopting).
 * **Addons:** no need to declare these columns; migrations can assume them.
   Do not write them from handlers — they are host-stamped.
+
+## Showing a managed column in tables
+
+`id`, `created_at` and `updated_at` are owned by the kernel (it injects and
+stamps them on every model), so declaring one in a v3 model only documents the
+physical shape: **it is not a table column by default** (unchanged). To show it
+(a "Created" or "Last modified" column in the list), declare it with
+`show_in_table: true`:
+
+```json
+{ "name": "created_at", "type": "timestamptz", "show_in_table": true,
+  "label": "models.invoice.created_at", "display": "date" }
+```
+
+The table metadata (`dynamic.DeriveTableColumns`) then appends it, sortable,
+after the declared columns; `label`, `display`/`cell_style`, `tooltip`,
+`description`, `visibility` and `read_permission` are honoured. It is carried in
+`ModelDefinition.DisplayColumns`, never in `Columns`, so DDL (`CreateTable`),
+validation and the create/edit form never see it. `show_in_table` is rejected on
+any other column (an ordinary column already shows unless `visibility` hides it)
+and together with `visibility: modal|list`. The other audit columns
+(`created_by_id`, `updated_by_id`) are ordinary declared columns and follow the
+usual `visibility` rule; `deleted_at` and `organization_id` map to the
+`soft_delete` / `org_scoped` flags and are not displayable.

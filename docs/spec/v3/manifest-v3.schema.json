@@ -1598,6 +1598,10 @@
           "type": "boolean",
           "description": "Index this column (btree) and offer it as a list filter/facet. Scalar column types only."
         },
+        "show_in_table": {
+          "type": "boolean",
+          "description": "Show a KERNEL-MANAGED column (id, created_at, updated_at) in the list table. The kernel injects and stamps those columns on every model, so declaring one only documents the physical shape and it is NOT shown by default; show_in_table: true opts it in (a sortable table column after the declared ones; label, type, cell_style and visibility are honoured; the form and the DDL never get it). Only valid on id/created_at/updated_at and not with visibility modal or list. Absent = unchanged behaviour."
+        },
         "visibility": {
           "type": "string",
           "enum": ["all", "table", "modal", "list"],

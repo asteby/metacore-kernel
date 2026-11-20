@@ -1321,6 +1321,17 @@ type Column struct {
 	// it. Empty = the implicit General block. Optional.
 	Section string `json:"section,omitempty"`
 
+	// ShowInTable shows a KERNEL-MANAGED column in the list table. The kernel owns
+	// id, created_at and updated_at (it injects and stamps them on every model),
+	// so by default a declaration of one only documents the physical shape and
+	// the column is NOT shown. `show_in_table: true` on one of those three opts it in:
+	// the table gets a sortable column after the declared ones (label/type/
+	// cell_style/visibility honoured; the form never gets it, nor does the DDL).
+	// It is only valid on those columns (every other column already shows unless
+	// `visibility` hides it) and not with visibility "modal" or "list". Absent =
+	// unchanged behaviour.
+	ShowInTable bool `json:"show_in_table,omitempty"`
+
 	// Visibility scopes where the column is rendered, with the same closed set
 	// as the host ColumnDef.Visibility:
 	//   ""/"all" — everywhere (default);
