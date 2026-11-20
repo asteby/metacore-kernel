@@ -14,7 +14,7 @@
 // What it checks (case ids are stable; see Suite):
 //
 //	SES  session: contract-shaped output, sandbox only (test_mode), idempotent
-//	     on idempotency_key, never "paid" at creation
+//	     on idempotency_key (counted on the provider side), never "paid" at creation
 //	MON  money: decimal strings, quantized to the currency (centavos), zero
 //	     decimal currencies, exact sums (0.10 + 0.20 = 0.30)
 //	WH   webhook: valid signature accepted, tampered / unsigned rejected,
@@ -34,9 +34,12 @@ package conformance
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -95,28 +98,64 @@ const (
 	FaultProviderDown Fault = "provider_down"
 )
 
-// ErrFaultUnsupported is returned by Sandbox.Inject when the sandbox cannot
-// inject that fault. The dependent cases are reported as skipped, and fail
-// under Options.Strict.
-var ErrFaultUnsupported = errors.New("conformance: fault not supported by this sandbox")
+// ErrUnsupported is returned by a Sandbox method it cannot implement (a fault
+// it cannot inject, effects it cannot count, aging a webhook). The dependent
+// cases are skipped, and a skip fails the run unless Options.Lenient.
+var ErrUnsupported = errors.New("conformance: not supported by this sandbox")
+
+// SettleSpec says how the buyer finishes a session.
+type SettleSpec struct {
+	SessionID string
+	// Status is paid, failed, expired or cancelled; pending asks for a LATE
+	// notification that says the payment is still pending (sent after paid).
+	Status payments.Status
+	// Amount and Currency are what was REALLY charged; empty means the
+	// session's. A provider must report this, not echo the session.
+	Amount   string
+	Currency string
+}
+
+// Effects are the remote effects the sandbox counts for one order_ref: the
+// ground truth that a retry did not create a second session or refund.
+type Effects struct {
+	Sessions int
+	Refunds  int
+}
 
 // Sandbox drives the provider's sandbox / simulator from the side of the
 // "outside world" (the buyer, the provider's notification system, the
-// network). It must only ever talk to a sandbox: the suite also requires the
-// provider to report test_mode=true.
+// network). It must only ever talk to a sandbox: the run aborts (preflight,
+// not waivable) when the provider does not report test_mode=true.
 type Sandbox interface {
-	// Settle makes the buyer finish session sessionID with status (paid,
-	// failed, expired or cancelled) and returns the SIGNED notification the
-	// provider would send. The status is also what the provider API reports
-	// from then on.
-	Settle(ctx context.Context, sessionID string, status payments.Status) (Webhook, error)
-	// Forge returns w with its content altered (the amount raised) but the
-	// original signature: a provider must reject it.
-	Forge(w Webhook) Webhook
+	// Settle makes the buyer finish the session and returns the SIGNED
+	// notification the provider would send. The status is also what the
+	// provider API reports from then on (a late pending never regresses it).
+	Settle(ctx context.Context, spec SettleSpec) (Webhook, error)
+	// Age returns w re-issued as if it had been sent `by` ago (valid
+	// signature, old timestamp). ErrUnsupported when the provider has no
+	// replay window to test.
+	Age(ctx context.Context, w Webhook, by time.Duration) (Webhook, error)
+	// Effects counts, on the provider side, the sessions and refunds that
+	// really exist for orderRef. ErrUnsupported when it cannot.
+	Effects(ctx context.Context, orderRef string) (Effects, error)
 	// Inject arms fault for the next matching call and returns the function
-	// that disarms it. ErrFaultUnsupported when not available.
+	// that disarms it. ErrUnsupported when not available.
 	Inject(ctx context.Context, f Fault) (restore func(), err error)
 }
+
+// WebhookMode is how the provider authenticates notifications.
+type WebhookMode string
+
+const (
+	// WebhookSigned (default): the notification carries a signature; altered,
+	// unsigned and stale ones must be rejected.
+	WebhookSigned WebhookMode = "signed"
+	// WebhookHintReread: the provider does not verify a signature but treats
+	// the notification as a hint and re-reads the payment from its API
+	// (MercadoPago style). An altered or unsigned notification may be
+	// accepted only if the answer is exactly the genuine payment's.
+	WebhookHintReread WebhookMode = "hint_reread"
+)
 
 // Target is the provider under test.
 type Target struct {
@@ -126,30 +165,40 @@ type Target struct {
 	Sandbox Sandbox
 }
 
-// Options tune a run.
+// Options tune a run. The zero value is the strict, complete run.
 type Options struct {
 	// Only restricts the run to case ids with one of these prefixes
-	// ("SES", "WH-02").
+	// ("SES", "WH-02"). A restricted run is partial: Conforms() is false and
+	// the report says so.
 	Only []string
-	// Waive maps a case id to the reason the provider is exempt (a provider
-	// without refunds waives RF-*). Waived cases are reported as skipped and
-	// never fail Strict; the reason is part of the report.
+	// Waive exempts case ids (they must exist) for a written, non-blank
+	// reason. Waived cases are reported as "waived" with the reason, and the
+	// list travels in Report.Waivers; they do not fail the run. The preflight
+	// (sandbox only) and the per-call test_mode / x_environment checks cannot
+	// be waived.
 	Waive map[string]string
-	// Strict makes a skipped (unsupported fault) case a failure. Use it in the
-	// CI of providers that are expected to be fully testable.
-	Strict bool
+	// Lenient lets skipped cases (a sandbox that cannot inject a fault or
+	// count effects, an asynchronous refund that never settled) pass. The
+	// default is strict: a skip fails the run.
+	Lenient bool
+	// WebhookMode defaults to WebhookSigned.
+	WebhookMode WebhookMode
 	// Timeout bounds each provider call (default 10s).
 	Timeout time.Duration
+	// PollTimeout bounds the wait for an asynchronous state (a pending refund)
+	// to settle (default 3s).
+	PollTimeout time.Duration
 	// RunID makes order refs and idempotency keys unique per run (default:
-	// the clock). Set it to reproduce a run.
+	// random).
 	RunID string
 }
 
 // Result states.
 const (
-	Pass = "pass"
-	Fail = "fail"
-	Skip = "skip"
+	Pass   = "pass"
+	Fail   = "fail"
+	Skip   = "skip"
+	Waived = "waived"
 )
 
 // CaseResult is the outcome of one case.
@@ -160,23 +209,37 @@ type CaseResult struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-// Report is the result of a run; it marshals to the JSON a CI can archive.
-type Report struct {
-	Suite    string       `json:"suite"`
-	Provider string       `json:"provider"`
-	RunID    string       `json:"run_id"`
-	Strict   bool         `json:"strict,omitempty"`
-	Cases    []CaseResult `json:"cases"`
+// Waiver is an exemption applied to a run.
+type Waiver struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
 }
 
-// Counts returns the number of passed, failed and skipped cases.
-func (r Report) Counts() (pass, fail, skip int) {
+// Report is the result of a run; it marshals to the JSON a CI can archive.
+type Report struct {
+	Suite       string      `json:"suite"`
+	Provider    string      `json:"provider"`
+	RunID       string      `json:"run_id"`
+	WebhookMode WebhookMode `json:"webhook_mode"`
+	Lenient     bool        `json:"lenient,omitempty"`
+	// Only is the case filter of a partial run (empty = the whole suite).
+	Only    []string `json:"only,omitempty"`
+	Waivers []Waiver `json:"waivers,omitempty"`
+	// Aborted is why no case ran (invalid options, not a sandbox, ...).
+	Aborted string       `json:"aborted,omitempty"`
+	Cases   []CaseResult `json:"cases"`
+}
+
+// Counts returns the number of passed, failed, skipped and waived cases.
+func (r Report) Counts() (pass, fail, skip, waived int) {
 	for _, c := range r.Cases {
 		switch c.Result {
 		case Pass:
 			pass++
 		case Fail:
 			fail++
+		case Waived:
+			waived++
 		default:
 			skip++
 		}
@@ -184,20 +247,45 @@ func (r Report) Counts() (pass, fail, skip int) {
 	return
 }
 
-// Conforms reports whether no case failed (and, under Strict, none skipped
-// for lack of sandbox support) and at least one case passed.
+// Partial reports whether the run was restricted with Options.Only.
+func (r Report) Partial() bool { return len(r.Only) > 0 }
+
+// Conforms reports whether the provider conforms to CONF-PAYMENTS@1: the run
+// was complete (not Only, not aborted), no case failed, none was skipped
+// (unless Lenient) and at least one passed. Waived cases do not fail it but
+// are listed in Waivers: trace them.
 func (r Report) Conforms() bool {
-	p, f, s := r.Counts()
-	return f == 0 && p > 0 && (!r.Strict || s == 0)
+	p, f, s, _ := r.Counts()
+	return r.Aborted == "" && !r.Partial() && f == 0 && p > 0 && (r.Lenient || s == 0)
+}
+
+// Verdict is Conforms spelled out: "conforms", "conforms_with_waivers",
+// "partial" (Only), "aborted" or "fails".
+func (r Report) Verdict() string {
+	switch {
+	case r.Aborted != "":
+		return "aborted"
+	case r.Partial():
+		return "partial"
+	case !r.Conforms():
+		return "fails"
+	case len(r.Waivers) > 0:
+		return "conforms_with_waivers"
+	}
+	return "conforms"
 }
 
 // String is a human-readable table.
 func (r Report) String() string {
 	var b strings.Builder
-	p, f, s := r.Counts()
-	fmt.Fprintf(&b, "%s provider=%s run=%s: %d passed, %d failed, %d skipped\n", r.Suite, r.Provider, r.RunID, p, f, s)
+	p, f, s, w := r.Counts()
+	fmt.Fprintf(&b, "%s provider=%s run=%s mode=%s: %s (%d passed, %d failed, %d skipped, %d waived)\n",
+		r.Suite, r.Provider, r.RunID, r.WebhookMode, r.Verdict(), p, f, s, w)
+	if r.Aborted != "" {
+		fmt.Fprintf(&b, "  ABORTED %s\n", r.Aborted)
+	}
 	for _, c := range r.Cases {
-		fmt.Fprintf(&b, "  %-4s %-8s %s", strings.ToUpper(c.Result), c.ID, c.Title)
+		fmt.Fprintf(&b, "  %-6s %-8s %s", strings.ToUpper(c.Result), c.ID, c.Title)
 		if c.Detail != "" {
 			fmt.Fprintf(&b, " -- %s", c.Detail)
 		}
@@ -224,26 +312,84 @@ func Cases() []Case {
 }
 
 // Run executes the suite against t and returns the report. It never panics on
-// a misbehaving provider: a panic in a call is a failed case.
+// a misbehaving provider: a panic in a call is a failed case. Before any case
+// it runs the preflight (the provider must be a sandbox); neither Only nor
+// Waive can skip it.
 func Run(ctx context.Context, t Target, opts Options) Report {
 	if opts.Timeout <= 0 {
 		opts.Timeout = 10 * time.Second
 	}
-	if opts.RunID == "" {
-		opts.RunID = fmt.Sprintf("%x", time.Now().UnixNano()/1e6)
+	if opts.PollTimeout <= 0 {
+		opts.PollTimeout = 3 * time.Second
 	}
-	rep := Report{Suite: Suite, Provider: t.Name, RunID: opts.RunID, Strict: opts.Strict}
+	if opts.WebhookMode == "" {
+		opts.WebhookMode = WebhookSigned
+	}
+	if opts.RunID == "" {
+		var b [6]byte
+		_, _ = rand.Read(b[:])
+		opts.RunID = hex.EncodeToString(b[:])
+	}
+	rep := Report{Suite: Suite, Provider: t.Name, RunID: opts.RunID, WebhookMode: opts.WebhookMode,
+		Lenient: opts.Lenient, Only: opts.Only}
+	abort := func(format string, a ...any) Report { rep.Aborted = fmt.Sprintf(format, a...); return rep }
+	if t.Invoke == nil || t.Sandbox == nil {
+		return abort("target needs Invoke and Sandbox")
+	}
+	if opts.WebhookMode != WebhookSigned && opts.WebhookMode != WebhookHintReread {
+		return abort("unknown WebhookMode %q", opts.WebhookMode)
+	}
+	known := map[string]bool{}
+	for _, c := range allCases {
+		known[c.ID] = true
+	}
+	for id, reason := range opts.Waive {
+		if !known[id] {
+			return abort("waiver for unknown case %q", id)
+		}
+		if strings.TrimSpace(reason) == "" {
+			return abort("waiver of %s has no reason", id)
+		}
+		rep.Waivers = append(rep.Waivers, Waiver{id, reason})
+	}
+	sort.Slice(rep.Waivers, func(i, j int) bool { return rep.Waivers[i].ID < rep.Waivers[j].ID })
+	if len(opts.Only) > 0 {
+		any := false
+		for _, c := range allCases {
+			any = any || selected(c.ID, opts.Only)
+		}
+		if !any {
+			return abort("Only %v matches no case", opts.Only)
+		}
+	}
+	if err := preflight(ctx, t, opts); err != nil {
+		return abort("preflight: %v", err)
+	}
 	for _, c := range allCases {
 		if !selected(c.ID, opts.Only) {
 			continue
 		}
 		if reason, ok := opts.Waive[c.ID]; ok {
-			rep.Cases = append(rep.Cases, CaseResult{c.ID, c.Title, Skip, "waived: " + reason})
+			rep.Cases = append(rep.Cases, CaseResult{c.ID, c.Title, Waived, reason})
 			continue
 		}
 		rep.Cases = append(rep.Cases, runCase(ctx, t, opts, c))
 	}
 	return rep
+}
+
+// preflight refuses to run against anything that does not say it is a sandbox.
+func preflight(ctx context.Context, t Target, opts Options) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	e := &env{ctx: ctx, t: t, opts: opts, id: "pre"}
+	if _, err := e.session(e.newOrder("1.00", "MXN")); err != nil {
+		return fmt.Errorf("the provider must answer a session with test_mode=true: %w", err)
+	}
+	return nil
 }
 
 func selected(id string, only []string) bool {
@@ -273,9 +419,6 @@ func runCase(ctx context.Context, t Target, opts Options, c Case) (res CaseResul
 		res.Result = Pass
 	case errors.Is(err, errSkip):
 		res.Result, res.Detail = Skip, err.Error()
-		if opts.Strict {
-			res.Result = Fail
-		}
 	default:
 		res.Result, res.Detail = Fail, err.Error()
 	}
@@ -287,11 +430,17 @@ func runCase(ctx context.Context, t Target, opts Options, c Case) (res CaseResul
 //
 //	func TestConformancePayments(t *testing.T) {
 //	    conformance.RunT(t, conformance.Target{Name: "acme", Invoke: invoke, Sandbox: sb},
-//	        conformance.Options{Strict: true})
+//	        conformance.Options{})
 //	}
+//
+// RunT fails the test when the report does not conform (including partial,
+// aborted and, unless Lenient, skipped).
 func RunT(t *testing.T, target Target, opts Options) Report {
 	t.Helper()
 	rep := Run(context.Background(), target, opts)
+	if rep.Aborted != "" {
+		t.Fatalf("CONF-PAYMENTS aborted: %s", rep.Aborted)
+	}
 	for _, c := range rep.Cases {
 		c := c
 		t.Run(c.ID, func(t *testing.T) {
@@ -299,9 +448,17 @@ func RunT(t *testing.T, target Target, opts Options) Report {
 			case Fail:
 				t.Errorf("%s: %s", c.Title, c.Detail)
 			case Skip:
-				t.Skipf("%s: %s", c.Title, c.Detail)
+				if rep.Lenient {
+					t.Skipf("%s: %s", c.Title, c.Detail)
+				}
+				t.Errorf("skipped (strict): %s: %s", c.Title, c.Detail)
+			case Waived:
+				t.Skipf("waived: %s", c.Detail)
 			}
 		})
+	}
+	if rep.Partial() {
+		t.Log("PARTIAL run (Options.Only): this is not a conformance result")
 	}
 	t.Log("\n" + rep.String())
 	return rep

@@ -2,6 +2,8 @@ package conformance
 
 import (
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/asteby/metacore-kernel/capability"
 	"github.com/asteby/metacore-kernel/payments"
@@ -10,42 +12,54 @@ import (
 var allCases = []Case{
 	// ------------------------------------------------------------- session
 	{"SES-01", "session output follows the contract and is not paid at creation", caseSession},
-	{"SES-02", "same idempotency_key returns the same session (no duplicate charge)", caseSessionIdempotent},
-	{"SES-03", "same key with another amount never yields a different session", caseSessionKeyConflict},
+	{"SES-02", "same idempotency_key returns the same session and creates exactly one remote session", caseSessionIdempotent},
+	{"SES-03", "same key with another amount: typed idempotency conflict, or the identical session with its amount intact", caseSessionKeyConflict},
 	{"SES-04", "distinct orders get distinct sessions", caseSessionDistinct},
 	{"SES-05", "the sandbox says so: session test_mode is true", caseSessionTestMode},
 	// --------------------------------------------------------------- money
 	{"MON-01", "an amount with more decimals than its currency is rejected", caseMoneyNotQuantized},
 	{"MON-02", "malformed, zero and negative amounts are rejected", caseMoneyMalformed},
 	{"MON-03", "zero-decimal currency (JPY) round-trips whole units", caseMoneyZeroDecimal},
-	{"MON-04", "captured amount and currency equal the session's, exactly and quantized", caseMoneyEcho},
+	{"MON-04", "the provider reports what was really charged (19.50 on a 19.99 session), so the mismatch is detectable", caseMoneyReportsCharged},
 	{"MON-05", "refund totals are exact decimals (0.10 + 0.20 = 0.30, no float drift)", caseMoneyExactSum},
+	{"MON-06", "three-decimal currencies (KWD): 10.005 accepted, 10.0005 rejected", caseMoneyThreeDecimals},
+	{"MON-07", "amounts beyond float64 / int64 precision are exact or rejected, never rounded", caseMoneyBig},
+	{"MON-08", "invalid or lower-case currency is rejected", caseMoneyBadCurrency},
+	{"MON-09", "a refund in another currency is rejected", caseMoneyRefundCurrency},
 	// ------------------------------------------------------------- webhook
 	{"WH-01", "a validly signed webhook confirms the payment", caseWebhookValid},
-	{"WH-02", "a webhook altered after signing is rejected", caseWebhookTampered},
-	{"WH-03", "an unsigned webhook is rejected", caseWebhookUnsigned},
+	{"WH-02", "a webhook altered after signing is rejected (or re-read to the genuine state)", caseWebhookTampered},
+	{"WH-03", "a webhook without signature headers is rejected (or re-read to the genuine state)", caseWebhookUnsigned},
 	{"WH-04", "a replayed webhook has the same dedupe id and is ignored by the ledger rule", caseWebhookReplay},
+	{"WH-05", "a correctly signed but stale webhook (old timestamp) is rejected", caseWebhookStale},
+	{"WH-06", "a late pending notification after paid never regresses the payment", caseWebhookLatePending},
+	{"WH-07", "a second captured payment of the same order_ref is refused or flagged in also_captured", caseDoubleCharge},
 	// -------------------------------------------------------------- status
-	{"ST-01", "status re-read agrees with the confirmed webhook (provider is the truth)", caseStatusAgrees},
+	{"ST-01", "status re-read agrees with what was charged (provider is the truth)", caseStatusAgrees},
 	{"ST-02", "an unknown reference is an error, never an invented payment", caseStatusUnknown},
 	{"ST-03", "failed and expired are reported as final states, valid from pending", caseStatusFinal},
 	// -------------------------------------------------------------- refund
 	{"RF-01", "partial refund: contract output, exact amount, payment partially_refunded", caseRefundPartial},
-	{"RF-02", "refund is idempotent on its key (never refunds twice)", caseRefundIdempotent},
+	{"RF-02", "refund is idempotent on its key and creates exactly one remote refund", caseRefundIdempotent},
 	{"RF-03", "refunding more than the captured amount is rejected", caseRefundOver},
 	{"RF-04", "full refund moves the payment to refunded", caseRefundFull},
 	{"RF-05", "a payment that was not captured cannot be refunded", caseRefundUncaptured},
+	{"RF-06", "pending refunds count against what is left to refund", caseRefundPendingAccumulates},
+	{"RF-07", "concurrent refunds never exceed the captured amount", caseRefundConcurrent},
 	// -------------------------------------------------------- indeterminate
-	{"IND-01", "lost session response is an indeterminate error; retry with the same key resolves it", caseIndSession},
-	{"IND-02", "lost refund response is an indeterminate error; retry refunds exactly once", caseIndRefund},
-	{"IND-03", "provider outage on status is an error, never paid / failed / not_found", caseIndStatusDown},
+	{"IND-01", "lost session response is an indeterminate error; the retry leaves exactly one session", caseIndSession},
+	{"IND-02", "lost refund response is an indeterminate error; the retry leaves exactly one refund", caseIndRefund},
+	{"IND-03", "provider outage on status is an error, never paid / failed / not_found; recovers to paid", caseIndStatusDown},
 }
+
+// rejected: the provider answered "no" (typed or plain error), not "I do not
+// know" (a timeout says nothing about acceptance).
+func rejected(err error) bool { return err != nil && !indeterminate(err) }
 
 // ------------------------------------------------------------------ session
 
 func caseSession(e *env) error {
-	o := e.newOrder("149.90", "MXN")
-	s, err := e.session(o)
+	s, err := e.session(e.newOrder("149.90", "MXN"))
 	if err != nil {
 		return err
 	}
@@ -71,6 +85,13 @@ func caseSessionIdempotent(e *env) error {
 	if a.SessionID != b.SessionID {
 		return failf("same idempotency_key created two sessions: %q and %q", a.SessionID, b.SessionID)
 	}
+	ef, err := e.effects(o.OrderRef)
+	if err != nil {
+		return err
+	}
+	if ef.Sessions != 1 {
+		return failf("the provider holds %d sessions for the order after two calls with one key, want 1", ef.Sessions)
+	}
 	return nil
 }
 
@@ -84,10 +105,18 @@ func caseSessionKeyConflict(e *env) error {
 	o2.Amount = "75.00"
 	b, err := e.session(o2)
 	if err != nil {
-		return nil // rejecting the reuse of a key is the strict, correct answer
+		c := codeOf(err)
+		if !strings.Contains(c, "idempot") && !strings.Contains(c, "conflict") {
+			return failf("reusing a key with another amount must fail with a typed idempotency conflict (code like idempotency_conflict), got: %v", err)
+		}
+		return nil
 	}
-	if a.SessionID != b.SessionID {
+	if b.SessionID != a.SessionID {
 		return failf("same key with another amount created a new session %q", b.SessionID)
+	}
+	st, err := e.status(map[string]any{"session_id": a.SessionID})
+	if err == nil && !sameMoney(st.Amount, "50.00") {
+		return failf("reusing the key rewrote the session amount to %s", st.Amount)
 	}
 	return nil
 }
@@ -108,23 +137,18 @@ func caseSessionDistinct(e *env) error {
 }
 
 func caseSessionTestMode(e *env) error {
-	s, err := e.session(e.newOrder("10.00", "MXN"))
-	if err != nil {
-		return err
-	}
-	if s.TestMode == nil || !*s.TestMode {
-		return failf("session did not report test_mode=true: the suite refuses to certify against a non-sandbox")
-	}
-	return nil
+	// e.session already enforces test_mode=true on every session of the run.
+	_, err := e.session(e.newOrder("10.00", "MXN"))
+	return err
 }
 
 // -------------------------------------------------------------------- money
 
 func caseMoneyNotQuantized(e *env) error {
-	for _, c := range [][2]string{{"10.005", "MXN"}, {"10.50", "JPY"}} {
+	for _, c := range [][2]string{{"10.005", "MXN"}, {"10.50", "JPY"}, {"10.0005", "KWD"}} {
 		o := e.newOrder(c[0], c[1])
-		if _, err := e.callRaw(capability.CommercePaymentsSession, o.sessionInput()); err == nil {
-			return failf("%s %s accepted: it has more decimals than the currency", c[0], c[1])
+		if _, err := e.callRaw(capability.CommercePaymentsSession, o.sessionInput()); !rejected(err) {
+			return failf("%s %s: want a rejection, got %v (more decimals than the currency)", c[0], c[1], err)
 		}
 	}
 	return nil
@@ -133,8 +157,8 @@ func caseMoneyNotQuantized(e *env) error {
 func caseMoneyMalformed(e *env) error {
 	for _, a := range []string{"0", "0.00", "-5.00", "1e3", "1,000.00", "10.5.0", ".5", "abc", ""} {
 		o := e.newOrder(a, "MXN")
-		if _, err := e.callRaw(capability.CommercePaymentsSession, o.sessionInput()); err == nil {
-			return failf("amount %q accepted", a)
+		if _, err := e.callRaw(capability.CommercePaymentsSession, o.sessionInput()); !rejected(err) {
+			return failf("amount %q: want a rejection, got %v", a, err)
 		}
 	}
 	return nil
@@ -154,28 +178,40 @@ func caseMoneyZeroDecimal(e *env) error {
 	return nil
 }
 
-func caseMoneyEcho(e *env) error {
-	p, err := e.pay("19.99", "MXN")
-	if err != nil {
-		return err
-	}
-	return checkEcho(p.Outcome, p.Order)
-}
-
-func checkEcho(o payments.Outcome, ord order) error {
+func checkOutcomeMoney(o payments.Outcome, ord order, want string) error {
 	if o.Currency != ord.Currency {
 		return failf("currency %q, want %q", o.Currency, ord.Currency)
 	}
 	if _, err := payments.ParseMoney(o.Amount, o.Currency); err != nil {
 		return failf("amount %q is not valid money: %v", o.Amount, err)
 	}
-	if !sameMoney(o.Amount, ord.Amount) {
-		return failf("amount %q, want %q", o.Amount, ord.Amount)
+	if !sameMoney(o.Amount, want) {
+		return failf("amount %q, want %q", o.Amount, want)
 	}
 	if o.OrderRef != ord.OrderRef {
 		return failf("order_ref %q, want %q", o.OrderRef, ord.OrderRef)
 	}
 	return nil
+}
+
+func caseMoneyReportsCharged(e *env) error {
+	o := e.newOrder("19.99", "MXN")
+	p, err := e.payCharged(o, "19.50")
+	if err != nil {
+		return err
+	}
+	if err := checkOutcomeMoney(p.Outcome, o, "19.50"); err != nil {
+		return failf("confirm: %v (the provider echoed the session instead of what was charged)", err)
+	}
+	stored := payments.Payment{Status: payments.StatusPending, Amount: o.Amount, Currency: o.Currency}
+	if ob := payments.ObserveOutcome(stored, p.Outcome); ob.Decision != payments.Anomaly || ob.Reason != payments.ReasonAmountMismatch {
+		return failf("the ledger must flag the mismatch as anomaly amount_mismatch, got %s %s", ob.Decision, ob.Reason)
+	}
+	st, err := e.status(map[string]any{"provider_ref": p.Outcome.ProviderRef})
+	if err != nil {
+		return err
+	}
+	return checkOutcomeMoney(st, o, "19.50")
 }
 
 func caseMoneyExactSum(e *env) error {
@@ -191,16 +227,95 @@ func caseMoneyExactSum(e *env) error {
 		if !sameMoney(r.Amount, amt) {
 			return failf("refund amount %q, want %q", r.Amount, amt)
 		}
+		if r.Status == "pending" {
+			if err := e.eventually(func() error { return refundSettled(e, p.Outcome.ProviderRef) }); err != nil {
+				return skipf("refund still pending: %v", err)
+			}
+		}
 	}
-	o, err := e.status(map[string]any{"provider_ref": p.Outcome.ProviderRef})
+	return e.eventually(func() error {
+		o, err := e.status(map[string]any{"provider_ref": p.Outcome.ProviderRef})
+		if err != nil {
+			return err
+		}
+		if _, err := payments.ParseMoney(o.AmountRefunded, "MXN"); err != nil {
+			return failf("amount_refunded %q is not valid money: %v", o.AmountRefunded, err)
+		}
+		if !sameMoney(o.AmountRefunded, "0.30") || o.Status != payments.StatusRefunded {
+			return failf("after 0.10 + 0.20 of 0.30: status %s amount_refunded %q, want refunded 0.30", o.Status, o.AmountRefunded)
+		}
+		return nil
+	})
+}
+
+func refundSettled(e *env, ref string) error {
+	o, err := e.status(map[string]any{"provider_ref": ref})
 	if err != nil {
 		return err
 	}
-	if _, err := payments.ParseMoney(o.AmountRefunded, "MXN"); err != nil {
-		return failf("amount_refunded %q is not valid money: %v", o.AmountRefunded, err)
+	if o.AmountRefunded == "" {
+		return failf("no amount_refunded yet")
 	}
-	if !sameMoney(o.AmountRefunded, "0.30") || o.Status != payments.StatusRefunded {
-		return failf("after 0.10 + 0.20 of 0.30: status %s amount_refunded %q, want refunded 0.30", o.Status, o.AmountRefunded)
+	return nil
+}
+
+func caseMoneyThreeDecimals(e *env) error {
+	p, err := e.pay("10.005", "KWD")
+	if err != nil {
+		return failf("KWD has 3 decimals, 10.005 is valid money: %v", err)
+	}
+	if !sameMoney(p.Outcome.Amount, "10.005") || p.Outcome.Currency != "KWD" {
+		return failf("KWD 10.005 came back as %s %s", p.Outcome.Currency, p.Outcome.Amount)
+	}
+	o := e.newOrder("10.0005", "KWD")
+	if _, err := e.callRaw(capability.CommercePaymentsSession, o.sessionInput()); !rejected(err) {
+		return failf("KWD 10.0005 must be rejected, got %v", err)
+	}
+	return nil
+}
+
+func caseMoneyBig(e *env) error {
+	for _, amt := range []string{"9007199254740993.01", "99999999999999999999.99"} {
+		o := e.newOrder(amt, "MXN")
+		s, err := e.session(o)
+		if err != nil {
+			if rejected(err) {
+				continue // a documented ceiling is fine; silently rounding is not
+			}
+			return err
+		}
+		w, err := e.t.Sandbox.Settle(e.ctx, SettleSpec{SessionID: s.SessionID, Status: payments.StatusPaid})
+		if err != nil {
+			return failf("sandbox settle: %v", err)
+		}
+		out, err := e.confirm(w)
+		if err != nil {
+			return failf("confirm: %v", err)
+		}
+		if !sameMoney(out.Amount, amt) {
+			return failf("%s MXN came back as %s: precision lost (float64 / int64 somewhere)", amt, out.Amount)
+		}
+	}
+	return nil
+}
+
+func caseMoneyBadCurrency(e *env) error {
+	for _, c := range []string{"mxn", "Mxn", "MX", "MEXICO", "M1N", ""} {
+		o := e.newOrder("10.00", c)
+		if _, err := e.callRaw(capability.CommercePaymentsSession, o.sessionInput()); !rejected(err) {
+			return failf("currency %q: want a rejection, got %v", c, err)
+		}
+	}
+	return nil
+}
+
+func caseMoneyRefundCurrency(e *env) error {
+	p, err := e.pay("10.00", "MXN")
+	if err != nil {
+		return err
+	}
+	if _, err := e.refund(p.Outcome.ProviderRef, "1.00", "USD", e.next("rkey")); !rejected(err) {
+		return failf("a USD refund of a MXN payment: want a rejection, got %v", err)
 	}
 	return nil
 }
@@ -216,7 +331,7 @@ func caseWebhookValid(e *env) error {
 	if o.Status != payments.StatusPaid {
 		return failf("status %s, want paid", o.Status)
 	}
-	if err := checkEcho(o, p.Order); err != nil {
+	if err := checkOutcomeMoney(o, p.Order, p.Order.Amount); err != nil {
 		return err
 	}
 	stored := payments.Payment{Status: payments.StatusPending, Amount: p.Order.Amount, Currency: p.Order.Currency}
@@ -226,39 +341,78 @@ func caseWebhookValid(e *env) error {
 	return nil
 }
 
+// tamper alters the body itself (the suite never trusts the sandbox author to
+// forge it). Signed mode: one digit, enough to break any signature. Hint mode:
+// every digit (ids, amounts), so a provider that believes the body instead of
+// re-reading its own records returns a different payment.
+func tamper(body string, all bool) string {
+	b := []byte(body)
+	changed := false
+	for i, c := range b {
+		if c >= '0' && c <= '9' {
+			b[i] = '0' + (c-'0'+1)%10
+			changed = true
+			if !all {
+				break
+			}
+		}
+	}
+	if !changed {
+		return body + " "
+	}
+	return string(b)
+}
+
+func sameOutcome(a, b payments.Outcome) bool {
+	return a.Status == b.Status && a.Currency == b.Currency && a.ProviderRef == b.ProviderRef &&
+		a.OrderRef == b.OrderRef && sameMoney(a.Amount, b.Amount)
+}
+
+// untrusted sends a notification that must not be believed: signed mode
+// rejects it; hint+reread mode may answer, but only the genuine payment.
+func (e *env) untrusted(what string, genuine payments.Outcome, w Webhook) error {
+	o, err := e.confirm(w)
+	if err != nil {
+		return nil
+	}
+	if e.opts.WebhookMode == WebhookHintReread && sameOutcome(o, genuine) {
+		return nil
+	}
+	return failf("%s was accepted as %s %s %s", what, o.Status, o.Amount, o.Currency)
+}
+
+func (e *env) genuine() (paid, error) {
+	s, err := e.session(e.newOrder("100.00", "MXN"))
+	if err != nil {
+		return paid{}, err
+	}
+	p := paid{Session: s}
+	if p.Webhook, err = e.t.Sandbox.Settle(e.ctx, SettleSpec{SessionID: s.SessionID, Status: payments.StatusPaid}); err != nil {
+		return p, failf("sandbox settle: %v", err)
+	}
+	if p.Outcome, err = e.confirm(p.Webhook); err != nil {
+		return p, failf("confirm of the genuine webhook: %v", err)
+	}
+	return p, nil
+}
+
 func caseWebhookTampered(e *env) error {
-	q := e.newOrder("100.00", "MXN")
-	s, err := e.session(q)
+	p, err := e.genuine()
 	if err != nil {
 		return err
 	}
-	w, err := e.t.Sandbox.Settle(e.ctx, s.SessionID, payments.StatusPaid)
-	if err != nil {
-		return failf("sandbox settle: %v", err)
-	}
-	forged := e.t.Sandbox.Forge(w)
-	if forged.RawBody == w.RawBody {
-		return failf("sandbox Forge did not change the body (sandbox bug)")
-	}
-	if o, err := e.confirm(forged); err == nil {
-		return failf("an altered webhook was accepted as %s %s %s", o.Status, o.Amount, o.Currency)
-	}
-	return nil
+	w := p.Webhook
+	w.RawBody = tamper(w.RawBody, e.opts.WebhookMode == WebhookHintReread)
+	return e.untrusted("a webhook altered after signing", p.Outcome, w)
 }
 
 func caseWebhookUnsigned(e *env) error {
-	s, err := e.session(e.newOrder("100.00", "MXN"))
+	p, err := e.genuine()
 	if err != nil {
 		return err
 	}
-	w, err := e.t.Sandbox.Settle(e.ctx, s.SessionID, payments.StatusPaid)
-	if err != nil {
-		return failf("sandbox settle: %v", err)
-	}
-	if o, err := e.confirm(Webhook{RawBody: w.RawBody}); err == nil {
-		return failf("a webhook with no signature headers was accepted as %s", o.Status)
-	}
-	return nil
+	w := Webhook{RawBody: p.Webhook.RawBody, Query: p.Webhook.Query} // headers gone, query kept
+	return e.untrusted("a webhook with no signature headers", p.Outcome, w)
 }
 
 func caseWebhookReplay(e *env) error {
@@ -283,26 +437,102 @@ func caseWebhookReplay(e *env) error {
 	return nil
 }
 
+func caseWebhookStale(e *env) error {
+	p, err := e.genuine()
+	if err != nil {
+		return err
+	}
+	old, err := e.t.Sandbox.Age(e.ctx, p.Webhook, time.Hour)
+	if err != nil {
+		if errorsIsUnsupported(err) {
+			return skipf("sandbox cannot re-issue a webhook with an old timestamp")
+		}
+		return failf("sandbox age: %v", err)
+	}
+	return e.untrusted("a validly signed webhook one hour old", p.Outcome, old)
+}
+
+func caseWebhookLatePending(e *env) error {
+	p, err := e.pay("55.00", "MXN")
+	if err != nil {
+		return err
+	}
+	w, err := e.t.Sandbox.Settle(e.ctx, SettleSpec{SessionID: p.Session.SessionID, Status: payments.StatusPending})
+	if err != nil {
+		if errorsIsUnsupported(err) {
+			return skipf("sandbox cannot emit a late pending notification")
+		}
+		return failf("sandbox settle pending: %v", err)
+	}
+	if o, err := e.confirm(w); err == nil {
+		stored := payments.Payment{Status: payments.StatusPaid, Amount: p.Order.Amount, Currency: p.Order.Currency, ProviderRef: p.Outcome.ProviderRef}
+		if ob := payments.ObserveOutcome(stored, o); ob.Decision != payments.Ignore {
+			return failf("a late %s after paid: the ledger would %s (%s)", o.Status, ob.Decision, ob.Reason)
+		}
+	}
+	st, err := e.status(map[string]any{"provider_ref": p.Outcome.ProviderRef})
+	if err != nil {
+		return err
+	}
+	if st.Status != payments.StatusPaid {
+		return failf("after a late pending notification the payment reads %s, want paid", st.Status)
+	}
+	return nil
+}
+
+func caseDoubleCharge(e *env) error {
+	p, err := e.pay("70.00", "MXN")
+	if err != nil {
+		return err
+	}
+	second := order{OrderRef: p.Order.OrderRef, Key: e.next("key"), Amount: p.Order.Amount, Currency: p.Order.Currency}
+	s, err := e.session(second)
+	if err != nil {
+		if rejected(err) {
+			return nil // refusing a second session of a paid order is the best answer
+		}
+		return err
+	}
+	w, err := e.t.Sandbox.Settle(e.ctx, SettleSpec{SessionID: s.SessionID, Status: payments.StatusPaid})
+	if err != nil {
+		return failf("sandbox settle: %v", err)
+	}
+	x, err := e.confirmX(w)
+	if err != nil {
+		return nil // refusing to confirm the duplicate is also an answer
+	}
+	for _, r := range x.AlsoCaptured {
+		if r == p.Outcome.ProviderRef {
+			return nil
+		}
+	}
+	return failf("a second payment of the same order was captured and not flagged: also_captured=%v, want %q", x.AlsoCaptured, p.Outcome.ProviderRef)
+}
+
 // ------------------------------------------------------------------- status
 
 func caseStatusAgrees(e *env) error {
-	p, err := e.pay("42.00", "MXN")
+	o := e.newOrder("42.00", "MXN")
+	p, err := e.payCharged(o, "41.00")
 	if err != nil {
 		return err
 	}
 	for _, in := range []map[string]any{
 		{"provider_ref": p.Outcome.ProviderRef},
-		{"order_ref": p.Order.OrderRef},
+		{"order_ref": o.OrderRef},
 	} {
-		o, err := e.status(in)
+		st, err := e.status(in)
 		if err != nil {
 			return failf("status %v: %v", in, err)
 		}
-		if o.Status != payments.StatusPaid || !sameMoney(o.Amount, p.Order.Amount) || o.Currency != p.Order.Currency {
-			return failf("status %v: %s %s %s, webhook said paid %s %s", in, o.Status, o.Amount, o.Currency, p.Order.Amount, p.Order.Currency)
+		if st.Status != payments.StatusPaid {
+			return failf("status %v: %s, webhook said paid", in, st.Status)
 		}
-		if o.ProviderRef != p.Outcome.ProviderRef {
-			return failf("status %v answers another payment: %q vs %q", in, o.ProviderRef, p.Outcome.ProviderRef)
+		if err := checkOutcomeMoney(st, o, "41.00"); err != nil {
+			return failf("status %v: %v", in, err)
+		}
+		if st.ProviderRef != p.Outcome.ProviderRef {
+			return failf("status %v answers another payment: %q vs %q", in, st.ProviderRef, p.Outcome.ProviderRef)
 		}
 	}
 	return nil
@@ -313,6 +543,9 @@ func caseStatusUnknown(e *env) error {
 	if err == nil {
 		return failf("an unknown provider_ref answered %s", o.Status)
 	}
+	if indeterminate(err) {
+		return failf("an unknown reference must be rejected, got an indeterminate error: %v", err)
+	}
 	return nil
 }
 
@@ -322,7 +555,7 @@ func caseStatusFinal(e *env) error {
 		if err != nil {
 			return err
 		}
-		w, err := e.t.Sandbox.Settle(e.ctx, s.SessionID, st)
+		w, err := e.t.Sandbox.Settle(e.ctx, SettleSpec{SessionID: s.SessionID, Status: st})
 		if err != nil {
 			if st == payments.StatusFailed {
 				return failf("sandbox settle %s: %v", st, err)
@@ -365,12 +598,30 @@ func refundedOK(e *env, ref, want string, st payments.Status) error {
 	return nil
 }
 
+// awaitRefund resolves a refund answer into a verdict: the payment must end
+// reflecting it. A refund that stays pending is inconclusive (skip, which
+// fails a strict run), never a pass.
+func (e *env) awaitRefund(r refundOut, ref, want string, st payments.Status) error {
+	switch r.Status {
+	case "failed":
+		return failf("the refund failed")
+	case "manual_required":
+		return skipf("refund needs manual settlement")
+	}
+	err := e.eventually(func() error { return refundedOK(e, ref, want, st) })
+	if err != nil && r.Status == "pending" {
+		return skipf("refund still pending after %s: %v", e.opts.PollTimeout, err)
+	}
+	return err
+}
+
 func caseRefundPartial(e *env) error {
 	p, err := e.pay("20.00", "MXN")
 	if err != nil {
 		return err
 	}
-	r, err := e.refund(p.Outcome.ProviderRef, "5.00", "MXN", e.next("rkey"))
+	ref := p.Outcome.ProviderRef
+	r, err := e.refund(ref, "5.00", "MXN", e.next("rkey"))
 	if err != nil {
 		return err
 	}
@@ -380,14 +631,11 @@ func caseRefundPartial(e *env) error {
 	if !validRefundStatus(r.Status) {
 		return failf("refund status %q", r.Status)
 	}
-	if r.Status != "succeeded" {
-		return nil // pending / manual: the payment need not reflect it yet
-	}
-	if err := refundedOK(e, p.Outcome.ProviderRef, "5.00", payments.StatusPartiallyRefunded); err != nil {
+	if err := e.awaitRefund(r, ref, "5.00", payments.StatusPartiallyRefunded); err != nil {
 		return err
 	}
-	o, _ := e.status(map[string]any{"provider_ref": p.Outcome.ProviderRef})
-	stored := payments.Payment{Status: payments.StatusPaid, Amount: "20.00", Currency: "MXN", ProviderRef: p.Outcome.ProviderRef}
+	o, _ := e.status(map[string]any{"provider_ref": ref})
+	stored := payments.Payment{Status: payments.StatusPaid, Amount: "20.00", Currency: "MXN", ProviderRef: ref}
 	if ob := payments.ObserveOutcome(stored, o); ob.Decision != payments.Apply {
 		return failf("the ledger would not apply the refunded state: %s %s", ob.Decision, ob.Reason)
 	}
@@ -408,12 +656,13 @@ func caseRefundIdempotent(e *env) error {
 	if err != nil {
 		return err
 	}
+	ref := p.Outcome.ProviderRef
 	key := e.next("rkey")
-	a, err := e.refund(p.Outcome.ProviderRef, "5.00", "MXN", key)
+	a, err := e.refund(ref, "5.00", "MXN", key)
 	if err != nil {
 		return err
 	}
-	b, err := e.refund(p.Outcome.ProviderRef, "5.00", "MXN", key)
+	b, err := e.refund(ref, "5.00", "MXN", key)
 	if err != nil {
 		return failf("retry with the same key failed: %v", err)
 	}
@@ -421,11 +670,18 @@ func caseRefundIdempotent(e *env) error {
 		return failf("same key created two refunds: %q and %q", a.RefundID, b.RefundID)
 	}
 	// the same key with another amount must not refund again either
-	if c, err := e.refund(p.Outcome.ProviderRef, "7.00", "MXN", key); err == nil && c.RefundID != a.RefundID {
+	if c, err := e.refund(ref, "7.00", "MXN", key); err == nil && c.RefundID != a.RefundID {
 		return failf("same key with another amount created refund %q", c.RefundID)
 	}
-	if a.Status == "succeeded" {
-		return refundedOK(e, p.Outcome.ProviderRef, "5.00", payments.StatusPartiallyRefunded)
+	if err := e.awaitRefund(a, ref, "5.00", payments.StatusPartiallyRefunded); err != nil {
+		return err
+	}
+	ef, err := e.effects(p.Order.OrderRef)
+	if err != nil {
+		return err
+	}
+	if ef.Refunds != 1 {
+		return failf("the provider holds %d refunds after retries with one key, want 1", ef.Refunds)
 	}
 	return nil
 }
@@ -436,18 +692,18 @@ func caseRefundOver(e *env) error {
 		return err
 	}
 	ref := p.Outcome.ProviderRef
-	if _, err := e.refund(ref, "10.01", "MXN", e.next("rkey")); err == nil {
-		return failf("refund of 10.01 on a payment of 10.00 accepted")
+	if _, err := e.refund(ref, "10.01", "MXN", e.next("rkey")); !rejected(err) {
+		return failf("refund of 10.01 on a payment of 10.00: want a rejection, got %v", err)
 	}
 	r, err := e.refund(ref, "10.00", "MXN", e.next("rkey"))
 	if err != nil {
 		return failf("full refund after a rejected over-refund: %v", err)
 	}
-	if r.Status != "succeeded" {
-		return nil
+	if err := e.awaitRefund(r, ref, "10.00", payments.StatusRefunded); err != nil {
+		return err
 	}
-	if _, err := e.refund(ref, "0.01", "MXN", e.next("rkey")); err == nil {
-		return failf("a refund on a fully refunded payment was accepted")
+	if _, err := e.refund(ref, "0.01", "MXN", e.next("rkey")); !rejected(err) {
+		return failf("a refund on a fully refunded payment: want a rejection, got %v", err)
 	}
 	return nil
 }
@@ -461,15 +717,11 @@ func caseRefundFull(e *env) error {
 	if err != nil {
 		return err
 	}
-	if r.Status != "succeeded" {
-		return skipf("provider settles refunds asynchronously (%s)", r.Status)
-	}
-	return refundedOK(e, p.Outcome.ProviderRef, "12.34", payments.StatusRefunded)
+	return e.awaitRefund(r, p.Outcome.ProviderRef, "12.34", payments.StatusRefunded)
 }
 
 func caseRefundUncaptured(e *env) error {
-	o := e.newOrder("10.00", "MXN")
-	s, err := e.session(o)
+	s, err := e.session(e.newOrder("10.00", "MXN"))
 	if err != nil {
 		return err
 	}
@@ -482,17 +734,86 @@ func caseRefundUncaptured(e *env) error {
 	if ref == "" {
 		return skipf("the provider holds no payment reference before the buyer pays")
 	}
-	if _, err := e.refund(ref, "1.00", "MXN", e.next("rkey")); err == nil {
-		return failf("a payment still pending was refunded")
+	if _, err := e.refund(ref, "1.00", "MXN", e.next("rkey")); !rejected(err) {
+		return failf("a payment still pending: want the refund rejected, got %v", err)
 	}
 	return nil
+}
+
+func caseRefundPendingAccumulates(e *env) error {
+	p, err := e.pay("10.00", "MXN")
+	if err != nil {
+		return err
+	}
+	ref := p.Outcome.ProviderRef
+	r, err := e.refund(ref, "6.00", "MXN", e.next("rkey"))
+	if err != nil {
+		return err
+	}
+	if r.Status == "failed" {
+		return failf("the first refund failed")
+	}
+	// whether the first refund is pending or succeeded, 6.00 + 6.00 > 10.00
+	if r2, err := e.refund(ref, "6.00", "MXN", e.next("rkey")); err == nil {
+		return failf("a second refund of 6.00 on 10.00 was accepted (%s): pending refunds do not count against the remainder", r2.Status)
+	} else if indeterminate(err) {
+		return failf("want a rejection, got: %v", err)
+	}
+	return nil
+}
+
+func caseRefundConcurrent(e *env) error {
+	p, err := e.pay("10.00", "MXN")
+	if err != nil {
+		return err
+	}
+	ref := p.Outcome.ProviderRef
+	const n = 6
+	keys := make([]string, n)
+	for i := range keys {
+		keys[i] = e.next("rkey")
+	}
+	var wg sync.WaitGroup
+	okc := make([]bool, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			r, err := e.refund(ref, "4.00", "MXN", keys[i])
+			okc[i] = err == nil && r.Status != "failed"
+		}(i)
+	}
+	wg.Wait()
+	ok := 0
+	for _, b := range okc {
+		if b {
+			ok++
+		}
+	}
+	if ok > 2 {
+		return failf("%d concurrent refunds of 4.00 were accepted on a payment of 10.00", ok)
+	}
+	return e.eventually(func() error {
+		o, err := e.status(map[string]any{"provider_ref": ref})
+		if err != nil {
+			return err
+		}
+		got, err := payments.ParseAmount(o.AmountRefunded)
+		if o.AmountRefunded != "" && err != nil {
+			return failf("amount_refunded %q", o.AmountRefunded)
+		}
+		if got.Cmp(payments.MustAmount("10.00")) > 0 {
+			return failf("amount_refunded %s exceeds the captured 10.00", o.AmountRefunded)
+		}
+		return nil
+	})
 }
 
 // ------------------------------------------------------------ indeterminate
 
 func caseIndSession(e *env) error {
 	o := e.newOrder("60.00", "MXN")
-	if err := e.inject(FaultSessionLostResponse); err != nil {
+	if _, err := e.inject(FaultSessionLostResponse); err != nil {
 		return err
 	}
 	if s, err := e.session(o); err == nil {
@@ -511,6 +832,13 @@ func caseIndSession(e *env) error {
 	if st, err := e.status(map[string]any{"session_id": a.SessionID}); err == nil && !st.Status.Open() {
 		return failf("a session whose payment is unknown reads %s; it must stay open (pending)", st.Status)
 	}
+	ef, err := e.effects(o.OrderRef)
+	if err != nil {
+		return err
+	}
+	if ef.Sessions != 1 {
+		return failf("after the lost response and the retry the provider holds %d sessions for the order, want exactly 1 (a double charge risk)", ef.Sessions)
+	}
 	return nil
 }
 
@@ -519,23 +847,31 @@ func caseIndRefund(e *env) error {
 	if err != nil {
 		return err
 	}
+	ref := p.Outcome.ProviderRef
 	key := e.next("rkey")
-	if err := e.inject(FaultRefundLostResponse); err != nil {
+	if _, err := e.inject(FaultRefundLostResponse); err != nil {
 		return err
 	}
-	if _, err := e.refund(p.Outcome.ProviderRef, "5.00", "MXN", key); err == nil {
+	if _, err := e.refund(ref, "5.00", "MXN", key); err == nil {
 		return failf("a lost refund response was masked as an answer")
 	} else if !indeterminate(err) {
 		return failf("a lost refund response must be indeterminate, got: %v", err)
 	}
-	r, err := e.refund(p.Outcome.ProviderRef, "5.00", "MXN", key)
+	r, err := e.refund(ref, "5.00", "MXN", key)
 	if err != nil {
 		return failf("retry with the same key: %v", err)
 	}
-	if r.Status != "succeeded" {
-		return nil
+	if err := e.awaitRefund(r, ref, "5.00", payments.StatusPartiallyRefunded); err != nil { // once, not twice
+		return err
 	}
-	return refundedOK(e, p.Outcome.ProviderRef, "5.00", payments.StatusPartiallyRefunded) // once, not twice
+	ef, err := e.effects(p.Order.OrderRef)
+	if err != nil {
+		return err
+	}
+	if ef.Refunds != 1 {
+		return failf("after the lost response and the retry the provider holds %d refunds, want exactly 1", ef.Refunds)
+	}
+	return nil
 }
 
 func caseIndStatusDown(e *env) error {
@@ -543,7 +879,8 @@ func caseIndStatusDown(e *env) error {
 	if err != nil {
 		return err
 	}
-	if err := e.inject(FaultProviderDown); err != nil {
+	restore, err := e.inject(FaultProviderDown)
+	if err != nil {
 		return err
 	}
 	o, err := e.status(map[string]any{"provider_ref": p.Outcome.ProviderRef})
@@ -553,5 +890,15 @@ func caseIndStatusDown(e *env) error {
 	if codeOf(err) == capability.PaymentsStatusNotFound {
 		return failf("an outage was reported as not_found, which is authoritative: the consumer may release the attempt")
 	}
-	return nil
+	restore()
+	return e.eventually(func() error {
+		o, err := e.status(map[string]any{"provider_ref": p.Outcome.ProviderRef})
+		if err != nil {
+			return failf("after the outage: %v", err)
+		}
+		if o.Status != payments.StatusPaid {
+			return failf("after the outage the payment reads %s, want paid", o.Status)
+		}
+		return nil
+	})
 }

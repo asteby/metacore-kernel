@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/asteby/metacore-kernel/capability"
 	"github.com/asteby/metacore-kernel/payments"
@@ -110,25 +111,46 @@ func (e *env) session(o order) (sessionOut, error) {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return s, err
 	}
+	if s.TestMode == nil || !*s.TestMode {
+		return s, failf("session did not report test_mode=true: the suite only runs against a sandbox")
+	}
 	return s, nil
 }
 
-func decodeOutcome(as string, raw json.RawMessage) (payments.Outcome, error) {
-	// status has no Output schema of its own: it answers the confirm output.
-	if err := outputOK(capability.CommercePaymentsConfirm, raw); err != nil {
-		return payments.Outcome{}, fmt.Errorf("(%s) %w", as, err)
-	}
-	var o payments.Outcome
-	if err := json.Unmarshal(raw, &o); err != nil {
-		return o, err
-	}
-	if !o.Status.Valid() {
-		return o, failf("%s: status %q is not in the normalized vocabulary", as, o.Status)
-	}
-	return o, nil
+type outcomeX struct {
+	payments.Outcome
+	AlsoCaptured []string
 }
 
-func (e *env) confirm(w Webhook) (payments.Outcome, error) {
+func decodeOutcome(as string, raw json.RawMessage) (outcomeX, error) {
+	var x outcomeX
+	// status has no Output schema of its own: it answers the confirm output.
+	if err := outputOK(capability.CommercePaymentsConfirm, raw); err != nil {
+		return x, fmt.Errorf("(%s) %w", as, err)
+	}
+	if err := json.Unmarshal(raw, &x.Outcome); err != nil {
+		return x, err
+	}
+	var extra struct {
+		TestMode     *bool    `json:"test_mode"`
+		XEnvironment string   `json:"x_environment"`
+		AlsoCaptured []string `json:"also_captured"`
+	}
+	_ = json.Unmarshal(raw, &extra)
+	x.AlsoCaptured = extra.AlsoCaptured
+	if !x.Status.Valid() {
+		return x, failf("%s: status %q is not in the normalized vocabulary", as, x.Status)
+	}
+	if extra.TestMode != nil && !*extra.TestMode {
+		return x, failf("%s reports test_mode=false: not a sandbox", as)
+	}
+	if env := strings.ToLower(extra.XEnvironment); env != "" && env != "sandbox" && env != "test" {
+		return x, failf("%s reports x_environment=%q: not a sandbox", as, extra.XEnvironment)
+	}
+	return x, nil
+}
+
+func (e *env) confirmX(w Webhook) (outcomeX, error) {
 	in := map[string]any{"raw_body": w.RawBody}
 	var payload any = w.RawBody
 	var decoded any
@@ -150,9 +172,14 @@ func (e *env) confirm(w Webhook) (payments.Outcome, error) {
 	}
 	raw, err := e.call(capability.CommercePaymentsConfirm, in)
 	if err != nil {
-		return payments.Outcome{}, err
+		return outcomeX{}, err
 	}
 	return decodeOutcome("confirm", raw)
+}
+
+func (e *env) confirm(w Webhook) (payments.Outcome, error) {
+	x, err := e.confirmX(w)
+	return x.Outcome, err
 }
 
 func (e *env) status(in map[string]any) (payments.Outcome, error) {
@@ -160,7 +187,8 @@ func (e *env) status(in map[string]any) (payments.Outcome, error) {
 	if err != nil {
 		return payments.Outcome{}, err
 	}
-	return decodeOutcome("status", raw)
+	x, err := decodeOutcome("status", raw)
+	return x.Outcome, err
 }
 
 type refundOut struct {
@@ -195,14 +223,21 @@ type paid struct {
 	Outcome payments.Outcome
 }
 
-// pay creates a session, settles it as paid and confirms the webhook.
+// pay creates a session, settles it as paid for the session's amount and
+// confirms the webhook.
 func (e *env) pay(amount, currency string) (paid, error) {
-	p := paid{Order: e.newOrder(amount, currency)}
+	return e.payCharged(e.newOrder(amount, currency), "")
+}
+
+// payCharged settles the session of o as paid for `charged` (empty: the
+// session's amount) and confirms the webhook.
+func (e *env) payCharged(o order, charged string) (paid, error) {
+	p := paid{Order: o}
 	var err error
 	if p.Session, err = e.session(p.Order); err != nil {
 		return p, failf("session: %v", err)
 	}
-	if p.Webhook, err = e.t.Sandbox.Settle(e.ctx, p.Session.SessionID, payments.StatusPaid); err != nil {
+	if p.Webhook, err = e.t.Sandbox.Settle(e.ctx, SettleSpec{SessionID: p.Session.SessionID, Status: payments.StatusPaid, Amount: charged}); err != nil {
 		return p, failf("sandbox settle: %v", err)
 	}
 	if p.Outcome, err = e.confirm(p.Webhook); err != nil {
@@ -214,22 +249,48 @@ func (e *env) pay(amount, currency string) (paid, error) {
 	return p, nil
 }
 
-func (e *env) inject(f Fault) error {
-	restore, err := e.t.Sandbox.Inject(e.ctx, f)
-	if errors.Is(err, ErrFaultUnsupported) {
-		return skipf("sandbox cannot inject %s", f)
+// eventually polls fn until it returns nil or PollTimeout passes.
+func (e *env) eventually(fn func() error) error {
+	deadline := time.Now().Add(e.opts.PollTimeout)
+	for {
+		err := fn()
+		if err == nil || time.Now().After(deadline) || e.ctx.Err() != nil {
+			return err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// effects counts the remote effects for an order, or skips the case.
+func (e *env) effects(orderRef string) (Effects, error) {
+	ef, err := e.t.Sandbox.Effects(e.ctx, orderRef)
+	if errors.Is(err, ErrUnsupported) {
+		return ef, skipf("sandbox cannot count remote effects (needed to prove a retry did not duplicate)")
 	}
 	if err != nil {
-		return failf("inject %s: %v", f, err)
+		return ef, failf("sandbox effects: %v", err)
+	}
+	return ef, nil
+}
+
+func (e *env) inject(f Fault) (func(), error) {
+	restore, err := e.t.Sandbox.Inject(e.ctx, f)
+	if errors.Is(err, ErrUnsupported) {
+		return nil, skipf("sandbox cannot inject %s", f)
+	}
+	if err != nil {
+		return nil, failf("inject %s: %v", f, err)
 	}
 	e.restores = append(e.restores, restore)
-	return nil
+	return restore, nil
 }
 
 // indeterminate: the error says the outcome is unknown.
 func indeterminate(err error) bool {
 	return errors.Is(err, capability.ErrIndeterminate) || errors.Is(err, capability.ErrTimeout) || errors.Is(err, context.DeadlineExceeded)
 }
+
+func errorsIsUnsupported(err error) bool { return errors.Is(err, ErrUnsupported) }
 
 func codeOf(err error) string {
 	var c *capability.CodedError
