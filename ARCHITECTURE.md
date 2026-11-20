@@ -224,6 +224,7 @@ metacore-kernel/
 ├── metrics/         # Prometheus metrics helpers
 ├── migrations/      # GORM migration helpers
 ├── runtime/wasm/    # WASM addon runtime (wazero)
+├── runtime/compiled/ # one fail-closed executor of compiled/wasm handler refs for every tier (actions, schedules, webhooks, api routes, hooks, formulas)
 ├── runtime/apiroute/ # addon HTTP API routes: router, envelopes, gateway (+ optional Fiber adapter)
 └── runtime/flow/    # generic workflow DAG engine (pluggable nodes, optional persistence)
 ```

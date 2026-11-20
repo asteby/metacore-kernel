@@ -1546,6 +1546,14 @@
             "inventory.product.view_cost"
           ]
         },
+        "write_permission": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_:]*)+$",
+          "description": "SERVER-ENFORCED write gate per caller: only callers holding this permission may CHANGE the column through the generic create/update; anyone else gets 403 (code 'column_write_denied'). A value the caller echoes back unchanged (an edit form posts every field) is dropped instead of failing the save. Reads are unaffected (use read_permission to hide it) and declared actions write through their own path. Use it for a discount, a price override or an approval flag that some roles may see but not edit. Unlike 'protected' (nobody via generic writes) this admits the holders of the permission. Dotted permission key (same shape as rbac.permissions[].key); a key under this addon's own prefix must be declared in rbac.permissions.",
+          "examples": [
+            "billing.invoice.set_discount"
+          ]
+        },
         "reject_deleted_ref": {
           "type": "boolean",
           "description": "On a column with a 'ref': a CREATE fails when the referenced row exists but is soft-deleted (deleted_at set), on the generic create (422 not_found) and on the wasm data_mutate/data_batch create path when the host wires the create check (invalid_reference). Opt-in for NEW documents that must reference live catalog rows (a sale line's product); leave it unset on documents that legitimately point at history (a return or credit-note line). Updates are never affected. Defaults false."

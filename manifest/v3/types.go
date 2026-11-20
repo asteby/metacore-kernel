@@ -1387,6 +1387,17 @@ type Column struct {
 	// Empty = readable by whoever may read the record (backward compatible).
 	ReadPermission string `json:"read_permission,omitempty"`
 
+	// WritePermission makes the column writable only by callers holding this
+	// permission (e.g. "billing.invoice.set_discount"). The dynamic create/update
+	// REJECTS a changed value from a caller without it with 403 (code
+	// "column_write_denied"); a value the caller merely echoes back unchanged
+	// (an edit form posts every field) is dropped instead of failing the save.
+	// Reads are unaffected (use read_permission to hide a column). Declared actions
+	// write through their own path and are not gated. Same dotted key shape as
+	// read_permission; a key under this addon's own prefix must be declared in
+	// rbac.permissions. Empty = writable by whoever may write the record.
+	WritePermission string `json:"write_permission,omitempty"`
+
 	// RejectDeletedRef, on a column with a Ref, makes a CREATE fail when the
 	// referenced row exists but is soft-deleted (deleted_at set): a NEW sale
 	// line must not point at a product removed from the catalog (QA 7Leguas

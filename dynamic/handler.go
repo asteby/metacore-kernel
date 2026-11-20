@@ -585,6 +585,18 @@ func (h *Handler) handleError(c fiber.Ctx, err error) error {
 			"column":  cre.Column,
 		}))
 	}
+	// Write to a column the caller may not change (WritePermission): 403 with a
+	// machine-readable code and the column.
+	var cwe *ColumnWriteDeniedError
+	if errors.As(err, &cwe) {
+		return c.Status(fiber.StatusForbidden).JSON(withCorrelation(c, fiber.Map{
+			"success": false,
+			"message": cwe.Error(),
+			"code":    "column_write_denied",
+			"model":   cwe.Model,
+			"column":  cwe.Column,
+		}))
+	}
 	// Second create on a singleton model: 409 with the existing row id.
 	var se *SingletonExistsError
 	if errors.As(err, &se) {

@@ -1056,6 +1056,17 @@ func validateColumnExtensions(col ColumnDef) error {
 	if col.ReadPermission != "" && !v3.PermissionKeyRe.MatchString(col.ReadPermission) {
 		return fmt.Errorf("read_permission %q must match %s", col.ReadPermission, v3.PermissionKeyRe)
 	}
+	if col.WritePermission != "" {
+		if !v3.PermissionKeyRe.MatchString(col.WritePermission) {
+			return fmt.Errorf("write_permission %q must match %s", col.WritePermission, v3.PermissionKeyRe)
+		}
+		if col.Protected {
+			return fmt.Errorf("write_permission conflicts with protected")
+		}
+		if col.Generated != "" {
+			return fmt.Errorf("write_permission is meaningless on a generated column")
+		}
+	}
 	if col.Validation != nil {
 		if err := col.Validation.validate(); err != nil {
 			return fmt.Errorf("validation: %w", err)

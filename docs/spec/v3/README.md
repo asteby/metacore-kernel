@@ -658,3 +658,51 @@ never see a `ref`. References to another addon are expanded only when the host
 passes that addon's (already expanded) catalog as `foreign`; the validator
 checks the addon is required and substitutes a placeholder. The host MUST
 expand when it serves the catalog and pages. Expansion is idempotent.
+
+## Native (compiled) modules and one core
+
+An addon and a module compiled into the host binary declare their contributions
+with the SAME manifest; only the handler's packaging differs. A handler is
+`{type: "wasm"|"compiled", function: "X"}`; both project to the same trigger.
+The host registers the Go exports of a compiled module with
+`wasm.Host.LoadNative(addonKey, map[string]NativeFunc)` and the export is
+dispatched through the same `Host.Invoke*` seam, with the same tenant scope,
+capability policy and write guards, because `NativeCall` calls the same
+`execute*` functions the wasm imports call.
+
+`runtime/compiled.Dispatcher` is the single executor every tier reuses, so the
+host wires it once:
+
+| Tier | `do` / handler | Adapter |
+|---|---|---|
+| actions, `on_transition compiled:<fn>` | `handler`, `do` | `Dispatcher.Actions(owner)` as `dynamic.ActionDispatcher` for `wasm` and `compiled` |
+| schedules, inbound webhooks | `do: compiled:<fn>` | `Dispatcher.Schedule(addonOf)` (`schedule.Dispatcher`, `webhookin.ResultDispatcher`) |
+| `contributions.api` routes | `do: compiled:<fn>` | `Dispatcher.APIRoute()` |
+| lifecycle and CRUD hooks | `HookTarget{type: compiled}` | `Dispatcher.Hook()` registered under `lifecycle.HookTargetCompiled` |
+| Tier-3 formulas | `handler: compiled:<fn>` | `Dispatcher.Formula(owner, orgOf)` |
+| backfills | `do: compiled:<fn>` | `Dispatcher.Call(...)` |
+
+The executor fails closed: no invoker, addon not installed for the org (the
+`Resolver` says so), malformed symbol, unknown export or non-JSON output are
+errors, never a false OK. `{success:false}` is a decline: carried by actions,
+vetoing for `before_*`/lifecycle hooks, an error for schedules and webhooks.
+Because `Actions` is an ordinary `dynamic.ActionDispatcher`, `Service.ExecAction`
+applies idempotency, approvals, supervisor policy, mandatory reason and
+`requires_state` to compiled handlers exactly as to any other trigger. A host
+with its own legacy action path must delegate to `ExecAction` to get them.
+
+A pure compiled module derives no wasm `backend`; if the manifest also declares
+wasm handlers, the compiled symbols join `backend.exports`.
+
+## Column write permission
+
+`columns[].write_permission` (dotted permission key, like `read_permission`)
+restricts who may CHANGE a column through the generic create/update. A caller
+without it gets 403 `column_write_denied` for a changed value; an unchanged
+echo (an edit form re-posting every field) is dropped. Reads are unaffected,
+declared actions write through their own path, `protected` and `generated`
+columns cannot carry it. `dynamic.Service.ColumnWriteMask` lists the columns a
+caller cannot change so the host can serve them read-only. It is enforced in the
+field-validation pass, so it needs `Config.ValidationSchemaResolver` (as
+`protected` does) and uses the same permission decision as `read_permission`
+(`Config.ColumnReadChecker` or `Permissions`).

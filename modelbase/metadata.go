@@ -255,6 +255,10 @@ type ColumnDef struct {
 	// without it and rejects filters/sorts over it (dynamic.ReadMask); hosts
 	// can prune the served metadata with dynamic.ReadMask.TableMeta.
 	ReadPermission string `json:"readPermission,omitempty"`
+	// WritePermission, when set, is the permission a caller must hold to change
+	// this column (enforced by dynamic.Service Create/Update; see
+	// Service.ColumnWriteMask for the per-caller list a client renders read-only).
+	WritePermission string `json:"writePermission,omitempty"`
 	// Ref is the foreign-key target model the column points at (e.g.
 	// "customers", "addon_tickets.comments"). When populated, the SDK
 	// resolves the column's options against `/api/options/:Ref?field=id`
