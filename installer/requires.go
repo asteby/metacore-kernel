@@ -562,6 +562,17 @@ func (i *Installer) applyRequires(op string, orgID uuid.UUID, addonKey string, e
 	return nil
 }
 
+// lookupFailed handles a failure to read the installed set: enforce fails
+// closed, warn/off log and leave the operation exactly as it was before the
+// requires gate existed.
+func (i *Installer) lookupFailed(op string, orgID uuid.UUID, addonKey string, err error) error {
+	if i.requiresMode() == RequiresEnforce {
+		return fmt.Errorf("installer: resolve requires: %w", err)
+	}
+	slog.Warn("installer.requires_lookup_failed", "op", op, "org_id", orgID.String(), "addon_key", addonKey, "err", err.Error())
+	return nil
+}
+
 // checkRequires runs the install/upgrade gate. Install doubles as the
 // marketplace "Actualizar" path, so both use the upgrade matrix: the
 // candidate's own requires AND the ranges of installed dependents of it.
@@ -571,7 +582,7 @@ func (i *Installer) checkRequires(op string, orgID uuid.UUID, m manifest.Manifes
 	}
 	installed, err := i.installedAddons(orgID)
 	if err != nil {
-		return fmt.Errorf("installer: resolve requires: %w", err)
+		return i.lookupFailed(op, orgID, m.Key, err)
 	}
 	return i.applyRequires(op, orgID, m.Key, CheckUpgradable(installed, m))
 }
@@ -614,7 +625,7 @@ func (i *Installer) checkUninstallRequires(orgID uuid.UUID, addonKey string) err
 	}
 	installed, err := i.installedAddons(orgID)
 	if err != nil {
-		return fmt.Errorf("installer: resolve dependents: %w", err)
+		return i.lookupFailed("uninstall", orgID, addonKey, err)
 	}
 	return i.applyRequires("uninstall", orgID, addonKey, CheckUninstallable(installed, addonKey))
 }

@@ -671,9 +671,6 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (inst *Installati
 	if err := b.Manifest.CheckRuntime(i.RuntimeVersion); err != nil {
 		return nil, nil, err
 	}
-	if err := i.checkRequires("install", orgID, b.Manifest); err != nil {
-		return nil, nil, err
-	}
 	if err := i.checkHostCapabilities(&b.Manifest); err != nil {
 		return nil, nil, err
 	}
@@ -707,6 +704,11 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (inst *Installati
 		return nil, nil, fmt.Errorf("ensure installation unique index: %w", err)
 	}
 	ensureLastErrorColumn(i.DB)
+	// Peer-requires gate: after the installations table is guaranteed to exist
+	// (a fresh database has none before AutoMigrate) and before any side effect.
+	if err := i.checkRequires("install", orgID, b.Manifest); err != nil {
+		return nil, nil, err
+	}
 	t := i.beginInstallTxn(orgID, b)
 	inst, secret, err = i.installSteps(orgID, b, t)
 	if err != nil {
