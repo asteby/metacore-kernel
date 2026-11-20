@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/asteby/metacore-kernel/orgconfig"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -20,6 +21,21 @@ type ActionContext struct {
 	Action    string
 	Installed *Installation
 	Extras    map[string]any
+}
+
+// OrgConfig returns the acting organization's config from the host-wired
+// provider (orgconfig.WithProvider on Ctx), the same source as wasm ctx_get.
+// The org is c.OrgID, never request input. orgconfig.ErrUnavailable if the
+// host did not wire it; empty fields mean "not configured".
+func (c *ActionContext) OrgConfig() (orgconfig.Config, error) {
+	if c == nil {
+		return orgconfig.Config{}, orgconfig.ErrNoOrg
+	}
+	ctx := c.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return orgconfig.Resolve(ctx, c.OrgID)
 }
 
 // Installation is a lightweight view of an addon installation. The full model
