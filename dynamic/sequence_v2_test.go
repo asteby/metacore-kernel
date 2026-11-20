@@ -307,12 +307,12 @@ func TestSequencesV2_LongScopeIsHashed(t *testing.T) {
 	long := strings.Repeat("x", 90)
 	spec := manifest.SequenceDef{Scope: "column", ScopeColumn: "c", Period: "day", Format: "{seq}"}
 	at := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
-	a, err := resolvePartition(spec, "", map[string]any{"c": long}, at)
+	a, err := resolvePartition(spec, "", map[string]any{"c": long}, func() time.Time { return at })
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := resolvePartition(spec, "", map[string]any{"c": long}, at)
-	c, _ := resolvePartition(spec, "", map[string]any{"c": long + "y"}, at)
+	b, _ := resolvePartition(spec, "", map[string]any{"c": long}, func() time.Time { return at })
+	c, _ := resolvePartition(spec, "", map[string]any{"c": long + "y"}, func() time.Time { return at })
 	if len(a.value) > 64 || a.value != b.value || a.value == c.value {
 		t.Fatalf("hash partition: %q %q %q", a.value, b.value, c.value)
 	}
@@ -352,5 +352,59 @@ func TestSequencesV2_SequenceClockHook(t *testing.T) {
 	got, err := svc.NextSequence(context.Background(), newUser(uuid.New()), "test_products", "folio")
 	if err != nil || got != "20260310-01" {
 		t.Fatalf("org-calendar day: %q %v", got, err)
+	}
+}
+
+// El reloj del host (Config.SequenceClock) solo se consulta para secuencias con
+// period, y UNA vez por operacion aunque el modelo tenga varias.
+func TestSequencesV2_ClockLazyAndOncePerOperation(t *testing.T) {
+	calls := 0
+	count := func(svc *Service) {
+		svc.sequenceClock = func(context.Context, uuid.UUID) time.Time {
+			calls++
+			return time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC)
+		}
+	}
+	two := func(a, b manifest.SequenceDef) *ModelSequences {
+		a.Key, b.Key = "a", "b"
+		return &ModelSequences{
+			Sequences:      []manifest.SequenceDef{a, b},
+			ColumnBindings: map[string]string{"name": "a", "product_specs": "b"},
+		}
+	}
+	user := newUser(uuid.New())
+	ctx := context.Background()
+
+	// Sin period (aunque el formato lleve tokens de fecha, que sin period no
+	// se renderizan): 0 llamadas, en create y en sequence_next.
+	svc := sequenceService(t, setupTestDB(t), two(
+		manifest.SequenceDef{Format: "A-{seq:03}"},
+		manifest.SequenceDef{Format: "B-{yyyy}-{seq:03}"},
+	))
+	count(svc)
+	out, err := svc.Create(ctx, "test_products", user, map[string]any{"price": 1.0})
+	if err != nil || out["name"] != "A-001" || out["product_specs"] != "B-{yyyy}-001" {
+		t.Fatalf("no-period create: %v %v", out, err)
+	}
+	if _, err := svc.NextSequence(ctx, user, "test_products", "a"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("clock called %d times for period-less sequences, want 0", calls)
+	}
+
+	// Dos secuencias con period: 1 sola llamada por operacion.
+	calls = 0
+	svc = sequenceService(t, setupTestDB(t), two(
+		manifest.SequenceDef{Period: "year", Format: "A-{yyyy}-{seq:02}"},
+		manifest.SequenceDef{Period: "month", Format: "B-{yyyy}{mm}-{seq:02}"},
+	))
+	count(svc)
+	out, err = svc.Create(ctx, "test_products", user, map[string]any{"price": 1.0})
+	if err != nil || out["name"] != "A-2026-01" || out["product_specs"] != "B-202603-01" {
+		t.Fatalf("period create: %v %v", out, err)
+	}
+	if calls != 1 {
+		t.Fatalf("clock called %d times for 2 period sequences in one create, want 1", calls)
 	}
 }
