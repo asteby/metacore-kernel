@@ -193,13 +193,23 @@ type seqPartition struct {
 }
 
 // resolvePartition derives the partition of `spec` for one issuance at time
-// `at` (the period is cut on that clock; see Service.seqNow). `branch` is the
+// the clock `now` (called only when the sequence has a period; see Service.opClock). `branch` is the
 // branch id (user's or row's), `row` the record being numbered (read for
 // scope: column). An empty scope falls back to the org-wide partition, EXCEPT
 // when the format renders {scope}: a folio like "{scope}-001" must never be
 // issued, so that case is a 422 on the scope column.
-func resolvePartition(spec manifest.SequenceDef, branch string, row map[string]any, at time.Time) (seqPartition, error) {
-	p := seqPartition{at: at}
+func resolvePartition(spec manifest.SequenceDef, branch string, row map[string]any, now func() time.Time) (seqPartition, error) {
+	p := seqPartition{}
+	dated := spec.Period != "" && spec.Period != "none"
+	var at time.Time
+	if dated {
+		// The clock is consulted ONLY for a period-scoped sequence: a host's
+		// SequenceClock may hit the database (org timezone). Date tokens in the
+		// format ({yyyy} {yy} {mm} {dd}) render only with a period, so a
+		// period-less sequence never needs the instant.
+		at = now()
+		p.at = at
+	}
 	switch strings.ToLower(spec.Scope) {
 	case "branch":
 		p.scope = branch
@@ -232,9 +242,6 @@ func resolvePartition(spec manifest.SequenceDef, branch string, row map[string]a
 		sum := sha256.Sum256([]byte(p.value))
 		p.value = "h:" + hex.EncodeToString(sum[:])[:40]
 	}
-	if spec.Period == "" || spec.Period == "none" {
-		p.at = time.Time{}
-	}
 	return p, nil
 }
 
@@ -246,6 +253,22 @@ func (s *Service) seqNow(ctx context.Context, orgID uuid.UUID) time.Time {
 		return s.sequenceClock(ctx, orgID)
 	}
 	return sequenceNow()
+}
+
+// opClock returns the instant source of ONE operation (create, update or
+// sequence_next): the host clock runs at most once, lazily, however many
+// period-scoped sequences the model has; zero times if none needs it.
+func (s *Service) opClock(ctx context.Context, orgID uuid.UUID) func() time.Time {
+	var (
+		done bool
+		at   time.Time
+	)
+	return func() time.Time {
+		if !done {
+			at, done = s.seqNow(ctx, orgID), true
+		}
+		return at
+	}
 }
 
 func userBranch(user modelbase.AuthUser) string {
@@ -326,7 +349,7 @@ func (s *Service) NextSequenceScoped(ctx context.Context, user modelbase.AuthUse
 		}
 		row[spec.ScopeColumn] = scopeValue
 	}
-	part, err := resolvePartition(spec, userBranch(user), row, s.seqNow(ctx, orgID))
+	part, err := resolvePartition(spec, userBranch(user), row, s.opClock(ctx, orgID))
 	if err != nil {
 		return "", err
 	}
@@ -358,6 +381,7 @@ func (s *Service) StampSequences(ctx context.Context, tx *gorm.DB, orgID uuid.UU
 	if err := ensureSequenceTable(s.db); err != nil {
 		return err
 	}
+	now := s.opClock(ctx, orgID)
 	// Deterministic order: two bound columns must not race for numbers.
 	cols := make([]string, 0, len(ms.ColumnBindings))
 	for c := range ms.ColumnBindings {
@@ -382,7 +406,7 @@ func (s *Service) StampSequences(ctx context.Context, tx *gorm.DB, orgID uuid.UU
 		if id, err := uuid.Parse(fmt.Sprint(row["branch_id"])); err == nil && id != uuid.Nil {
 			branch = id.String()
 		}
-		part, err := resolvePartition(spec, branch, row, s.seqNow(ctx, orgID))
+		part, err := resolvePartition(spec, branch, row, now)
 		if err != nil {
 			return err
 		}
@@ -456,6 +480,7 @@ func (s *Service) assignSequences(ctx context.Context, db *gorm.DB, model string
 		return nil
 	}
 	orgID := orgIDFromUser(user)
+	now := s.opClock(ctx, orgID)
 	cols := make([]string, 0, len(ms.ColumnBindings))
 	for c := range ms.ColumnBindings {
 		cols = append(cols, c)
@@ -473,7 +498,7 @@ func (s *Service) assignSequences(ctx context.Context, db *gorm.DB, model string
 		if !assignsAtCreate(spec, s.createStageOf(ctx, model, input)) || spec.Gapless != gapless {
 			continue
 		}
-		if err := s.stampOne(ctx, db, ms, spec, model, orgID, user, col, input, input); err != nil {
+		if err := s.stampOne(ctx, db, ms, spec, model, orgID, user, col, input, input, now); err != nil {
 			return err
 		}
 	}
@@ -482,8 +507,8 @@ func (s *Service) assignSequences(ctx context.Context, db *gorm.DB, model string
 
 // stampOne issues one folio into dest[col]; `row` is the record the scope
 // column is read from.
-func (s *Service) stampOne(ctx context.Context, db *gorm.DB, ms *ModelSequences, spec manifest.SequenceDef, model string, orgID uuid.UUID, user modelbase.AuthUser, col string, row, dest map[string]any) error {
-	part, err := resolvePartition(spec, userBranch(user), row, s.seqNow(ctx, orgID))
+func (s *Service) stampOne(ctx context.Context, db *gorm.DB, ms *ModelSequences, spec manifest.SequenceDef, model string, orgID uuid.UUID, user modelbase.AuthUser, col string, row, dest map[string]any, now func() time.Time) error {
+	part, err := resolvePartition(spec, userBranch(user), row, now)
 	if err != nil {
 		return err
 	}
@@ -511,6 +536,7 @@ func (s *Service) assignTransitionSequences(ctx context.Context, db *gorm.DB, mo
 	if !ok {
 		return nil
 	}
+	now := s.opClock(ctx, orgIDFromUser(user))
 	cols := make([]string, 0, len(ms.ColumnBindings))
 	for c := range ms.ColumnBindings {
 		cols = append(cols, c)
@@ -524,7 +550,7 @@ func (s *Service) assignTransitionSequences(ctx context.Context, db *gorm.DB, mo
 		if v := merged[col]; v != nil && v != "" {
 			continue // already numbered (re-entering the stage keeps its folio)
 		}
-		if err := s.stampOne(ctx, db, ms, spec, model, orgIDFromUser(user), user, col, merged, input); err != nil {
+		if err := s.stampOne(ctx, db, ms, spec, model, orgIDFromUser(user), user, col, merged, input, now); err != nil {
 			return err
 		}
 		merged[col] = input[col]
