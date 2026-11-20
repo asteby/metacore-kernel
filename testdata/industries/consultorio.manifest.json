@@ -1,0 +1,55 @@
+{
+  "apiVersion": "asteby.com/v3", "kind": "Addon",
+  "metadata": {"key": "industry_consultorio", "name": "Industry gate: consultorio", "version": "1.0.0"},
+  "compatibility": {"requires": [{"key": "kernel", "version": ">=3.0.0 <4.0.0"}]},
+  "tenancy": {"isolation": "shared", "rls_column": "organization_id"},
+  "capabilities": [{"kind": "db:write", "target": "addon_industry_consultorio.*"}],
+  "models": [
+    {
+      "key": "Cita", "table": "ind_citas",
+      "stage_field": "status",
+      "stages": [
+        {"key": "solicitada", "order": 0},
+        {"key": "confirmada", "order": 1},
+        {"key": "atendida", "order": 2},
+        {"key": "cobrada", "order": 3, "is_final": true, "locked": true, "editable_when_locked": ["notas_pago"]},
+        {"key": "cancelada", "order": 4, "is_final": true, "locked": true}
+      ],
+      "transitions": [
+        {"from": "solicitada", "to": "confirmada", "roles": ["recepcion", "medico"]},
+        {"from": "confirmada", "to": "atendida", "roles": ["medico"], "requires_fields": ["consentimiento_firmado_at"]},
+        {"from": "atendida", "to": "cobrada", "roles": ["recepcion", "medico"], "guard": "honorario > 0"},
+        {"from": "solicitada", "to": "cancelada"},
+        {"from": "confirmada", "to": "cancelada"}
+      ],
+      "columns": [
+        {"name": "id", "type": "uuid"},
+        {"name": "organization_id", "type": "uuid", "not_null": true},
+        {"name": "status", "type": "text"},
+        {"name": "paciente_id", "type": "text"},
+        {"name": "consentimiento_firmado_at", "type": "text"},
+        {"name": "honorario", "type": "numeric"},
+        {"name": "descuento_honorario_pct", "type": "numeric"},
+        {"name": "notas_pago", "type": "text"}
+      ]
+    },
+    {
+      "key": "Expediente", "table": "ind_expedientes",
+      "sequences": [
+        {"key": "exp", "scope": "column", "scope_column": "paciente_id", "gapless": true, "format": "EXP-{seq:04}"}
+      ],
+      "columns": [
+        {"name": "id", "type": "uuid"},
+        {"name": "organization_id", "type": "uuid", "not_null": true},
+        {"name": "paciente_id", "type": "text"},
+        {"name": "nota", "type": "text"},
+        {"name": "folio", "type": "text", "sequence": "exp"}
+      ]
+    }
+  ],
+  "contributions": {"rules": [{
+    "key": "descuento_honorario", "model": "Cita", "when": "descuento_honorario_pct > 20",
+    "then": {"kind": "request_approval", "message": "consultorio.descuento_honorario",
+             "approval": {"roles": ["director"]}}
+  }]}
+}
