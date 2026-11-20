@@ -52,6 +52,12 @@ type Config struct {
 	// through the dynamic runtime. Writes are not covered by this flag.
 	RequireTenantScope bool
 
+	// SequenceClock returns the instant period-scoped sequences (period: year|
+	// month|day) are cut on for an organization. nil = UTC. Wire it to the
+	// org's timezone before using a period in a fiscal series: a UTC cut makes
+	// the folio's day/year roll over hours away from the business's midnight.
+	SequenceClock func(ctx context.Context, orgID uuid.UUID) time.Time
+
 	// LenientFilters keeps the legacy behaviour for ONE release: a list/aggregate
 	// filter on an unknown column, with an unsupported operator or a malformed
 	// value is dropped (and logged as `filter.dropped`) instead of answering
@@ -465,6 +471,7 @@ type Service struct {
 	requireTenant     bool
 	lenientFilters    bool
 	strictStageCreate bool
+	sequenceClock     func(ctx context.Context, orgID uuid.UUID) time.Time
 	tableNameResolver TableNameResolver
 	bus               Publisher
 	addonKeyForModel  func(ctx context.Context, model string) string
@@ -566,6 +573,7 @@ func New(cfg Config) *Service {
 		requireTenant:     cfg.RequireTenantScope,
 		lenientFilters:    cfg.LenientFilters,
 		strictStageCreate: cfg.StrictStageCreate,
+		sequenceClock:     cfg.SequenceClock,
 		hooks:             cfg.Hooks,
 		scope:             cfg.Scoper,
 		optsResolver:      cfg.OptionsConfigResolver,
@@ -1116,63 +1124,114 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 
 	// Folio sequences: stamp the next atomic value onto every sequence-bound
 	// column the caller left empty. Runs AFTER the guards so a rejected create
-	// never burns a folio; a failed INSERT below still can (the counter lives
-	// in its own autocommit statement) — the format is documented gap-tolerant.
+	// never burns a folio. A non-gapless sequence draws its number from its own
+	// autocommit statement (a failed INSERT below can skip one); a GAPLESS one is
+	// drawn inside the insert transaction below, so a failed insert releases it.
 	// An explicitly-supplied value wins (ETL imports keep historical numbers).
-	if err := s.assignSequences(ctx, model, user, input); err != nil {
+	if err := s.rejectExplicitGapless(ctx, model, user, input); err != nil {
+		return nil, err
+	}
+	gapless := s.hasGaplessCreateBinding(ctx, model, input)
+	if err := s.assignSequences(ctx, nil, model, user, input, false); err != nil {
 		return nil, err
 	}
 
-	if err := mapToStruct(input, instance); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	// insertRow runs the INSERT with its transactional companions (cross-record
+	// rules, grant redemption). outer != nil is an already-open transaction (the
+	// gapless path) the insert joins instead of opening its own.
+	insertRow := func(ictx context.Context, outer *gorm.DB) error {
+		run := func(fn func(tx *gorm.DB) error) error {
+			if outer != nil {
+				return fn(outer)
+			}
+			return s.db.WithContext(ictx).Transaction(fn)
+		}
+		// .Table pins the INTO so reflect-built addon models (no TableName()
+		// method) insert into the right table instead of GORM's pluralized guess.
+		//
+		// Cross-record rules need the write and their parent-row read/lock in ONE
+		// transaction (a payment must not slip past a concurrently-closed session
+		// or a concurrent payment's share of the order total). Models without
+		// rules keep the plain single-statement insert.
+		if mc := s.resolveConstraints(ictx, model); mc != nil && len(mc.Rules) > 0 {
+			row := toMap(instance)
+			if err := run(func(tx *gorm.DB) error {
+				if err := EvalCrossRecordRules(ictx, tx, mc.Rules, tableName, user.GetOrganizationID(), row, nil, s.parentTableFn(ictx)); err != nil {
+					return err
+				}
+				if err := pendingGrants.Redeem(ictx, tx, s.ConsumeApproval); err != nil {
+					return err
+				}
+				return s.writeDB(ictx, tx, tableName, instance, input).Create(instance).Error
+			}); err != nil {
+				err = uniqueIndexViolation(err, tableName, mc.Rules)
+				if errors.Is(err, ErrConstraintViolation) || errors.Is(err, ErrInvalidInput) || errors.Is(err, ErrApprovalConsume) {
+					return err
+				}
+				return fmt.Errorf("dynamic: create: %w", err)
+			}
+			return nil
+		}
+		if len(pendingGrants) > 0 {
+			// The redemption and the INSERT share one transaction: a failed INSERT
+			// leaves the grant unspent.
+			if err := run(func(tx *gorm.DB) error {
+				if err := pendingGrants.Redeem(ictx, tx, s.ConsumeApproval); err != nil {
+					return err
+				}
+				return s.writeDB(ictx, tx, tableName, instance, input).Create(instance).Error
+			}); err != nil {
+				if errors.Is(err, ErrApprovalConsume) {
+					return err
+				}
+				return fmt.Errorf("dynamic: create: %w", err)
+			}
+			return nil
+		}
+		db := s.db.WithContext(ictx)
+		if outer != nil {
+			db = outer
+		}
+		if err := s.writeDB(ictx, db, tableName, instance, input).Create(instance).Error; err != nil {
+			return fmt.Errorf("dynamic: create: %w", err)
+		}
+		return nil
 	}
 
-	// The Go model's own validation (modelbase.Validatable / WriteValidator)
-	// sees the fully built instance, after hooks, guards and sequences.
-	if err := validateModel(ctx, instance, "create"); err != nil {
-		return nil, err
+	prepare := func(pctx context.Context) error {
+		if err := mapToStruct(input, instance); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidInput, err)
+		}
+		// The Go model's own validation (modelbase.Validatable / WriteValidator)
+		// sees the fully built instance, after hooks, guards and sequences.
+		return validateModel(pctx, instance, "create")
 	}
 
-	// .Table pins the INTO so reflect-built addon models (no TableName()
-	// method) insert into the right table instead of GORM's pluralized guess.
-	//
-	// Cross-record rules need the write and their parent-row read/lock in ONE
-	// transaction (a payment must not slip past a concurrently-closed session
-	// or a concurrent payment's share of the order total). Models without
-	// rules keep the plain single-statement insert.
-	if mc := s.resolveConstraints(ctx, model); mc != nil && len(mc.Rules) > 0 {
-		row := toMap(instance)
-		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			if err := EvalCrossRecordRules(ctx, tx, mc.Rules, tableName, user.GetOrganizationID(), row, nil, s.parentTableFn(ctx)); err != nil {
-				return err
-			}
-			if err := pendingGrants.Redeem(ctx, tx, s.ConsumeApproval); err != nil {
-				return err
-			}
-			return s.writeDB(ctx, tx, tableName, instance, input).Create(instance).Error
-		}); err != nil {
-			err = uniqueIndexViolation(err, tableName, mc.Rules)
-			if errors.Is(err, ErrConstraintViolation) || errors.Is(err, ErrInvalidInput) || errors.Is(err, ErrApprovalConsume) {
-				return nil, err
-			}
-			return nil, fmt.Errorf("dynamic: create: %w", err)
+	if gapless {
+		// The counter table is DDL'd on the service handle, never inside the
+		// insert transaction.
+		if err := ensureSequenceTable(s.db); err != nil {
+			return nil, err
 		}
-	} else if len(pendingGrants) > 0 {
-		// The redemption and the INSERT share one transaction: a failed INSERT
-		// leaves the grant unspent.
 		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			if err := pendingGrants.Redeem(ctx, tx, s.ConsumeApproval); err != nil {
+			tctx := withTxHandle(ctx, tx)
+			if err := s.assignSequences(tctx, tx, model, user, input, true); err != nil {
 				return err
 			}
-			return s.writeDB(ctx, tx, tableName, instance, input).Create(instance).Error
-		}); err != nil {
-			if errors.Is(err, ErrApprovalConsume) {
-				return nil, err
+			if err := prepare(tctx); err != nil {
+				return err
 			}
-			return nil, fmt.Errorf("dynamic: create: %w", err)
+			return insertRow(tctx, tx)
+		}); err != nil {
+			return nil, err
 		}
-	} else if err := s.writeDB(ctx, s.db.WithContext(ctx), tableName, instance, input).Create(instance).Error; err != nil {
-		return nil, fmt.Errorf("dynamic: create: %w", err)
+	} else {
+		if err := prepare(ctx); err != nil {
+			return nil, err
+		}
+		if err := insertRow(ctx, nil); err != nil {
+			return nil, err
+		}
 	}
 
 	after := toMap(instance)
@@ -1285,6 +1344,9 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 
 	sm := s.resolveStageMachine(ctx, model)
 	var before, after map[string]any
+	// A model with a sequence issued on entering a stage updates in a
+	// transaction: the number commits (or rolls back) with the stage move.
+	seqTx := sm != nil && s.hasTransitionSequences(ctx, model)
 
 	exts := s.resolveExtensions(ctx, model)
 	extIn := splitExtensionInput(exts, input)
@@ -1321,7 +1383,7 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 		// (queryDB). The shadow is local to core: what runs after the commit
 		// keeps the plain ctx. Plain Update/Delete never take this branch.
 		ctx := ctx
-		if inTx && o.needsTx() {
+		if inTx && (o.needsTx() || seqTx) {
 			ctx = withTxHandle(ctx, execDB)
 		}
 		if g := o.writeGuard(); g != nil {
@@ -1403,6 +1465,11 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 				if ce := transitionApproval(ctx, model, sm, fromStage, toStage, merged); ce != nil {
 					pendingCE, pendingBefore = ce, before
 					return errApprovalPending
+				}
+				if inTx && seqTx {
+					if err := s.assignTransitionSequences(ctx, execDB, model, user, toStage, merged, input); err != nil {
+						return err
+					}
 				}
 				if ApplyTransitionSets(sm, fromStage, toStage, merged) {
 					for _, h := range sm.MatchingHooks(fromStage, toStage) {
@@ -1563,7 +1630,14 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 	}
 
 	var coreErr error
-	if lockRows || hasRules || o.needsTx() {
+	if seqTx {
+		// The counter table is DDL'd on the service handle, never inside the
+		// update transaction.
+		if err := ensureSequenceTable(s.db); err != nil {
+			return nil, err
+		}
+	}
+	if lockRows || hasRules || o.needsTx() || seqTx {
 		coreErr = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			if err := core(tx, true); err != nil {
 				return err

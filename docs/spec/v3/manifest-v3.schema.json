@@ -1915,9 +1915,33 @@
           "type": "string",
           "enum": [
             "org",
-            "branch"
+            "branch",
+            "column"
           ],
-          "description": "Counter partitioning: 'org' (one series per organization, the default) or 'branch' (one series per branch). Omit for org."
+          "description": "Counter partitioning: 'org' (one series per organization, the default), 'branch' (one series per branch) or 'column' (one series per value of scope_column). Omit for org."
+        },
+        "scope_column": {
+          "type": "string",
+          "description": "Model column whose value partitions the counter. Required with scope 'column', forbidden otherwise."
+        },
+        "period": {
+          "type": "string",
+          "enum": [
+            "none",
+            "year",
+            "month",
+            "day"
+          ],
+          "description": "Restarts the counter every calendar period (UTC). Pair with the {yyyy}/{yy}/{mm}/{dd} format tokens."
+        },
+        "gapless": {
+          "type": "boolean",
+          "description": "Gap-free numbering: the counter increments inside the transaction that inserts the numbered row, so a failed insert releases the number. Consumed only by bound columns; the sequence_next import refuses it."
+        },
+        "assign_on": {
+          "type": "string",
+          "pattern": "^(create|transition:[A-Za-z0-9_.-]+)$",
+          "description": "When the bound columns are stamped: 'create' (default) or 'transition:<stage>' (when the record enters that stage)."
         },
         "format": {
           "type": "string",

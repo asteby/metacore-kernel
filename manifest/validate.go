@@ -1757,8 +1757,21 @@ func validateSequences(md ModelDefinition) error {
 			return fmt.Errorf("%s: key %q duplicated on the model", where, sq.Key)
 		}
 		keys[sq.Key] = struct{}{}
-		if sq.Scope != "" && sq.Scope != "org" && sq.Scope != "branch" {
-			return fmt.Errorf(`%s: scope %q is not one of ""|"org"|"branch"`, where, sq.Scope)
+		if sq.Scope != "" && sq.Scope != "org" && sq.Scope != "branch" && sq.Scope != "column" {
+			return fmt.Errorf(`%s: scope %q is not one of ""|"org"|"branch"|"column"`, where, sq.Scope)
+		}
+		{
+			cols := make(map[string]struct{}, len(md.Columns))
+			for _, c := range md.Columns {
+				cols[c.Name] = struct{}{}
+			}
+			stages := make(map[string]struct{}, len(md.Stages))
+			for _, st := range md.Stages {
+				stages[st.Key] = struct{}{}
+			}
+			if msgs := v3.ValidateSequenceShape(sq.Scope, sq.ScopeColumn, sq.Period, sq.AssignOn, sq.Format, cols, stages); len(msgs) > 0 {
+				return fmt.Errorf("%s.%s", where, msgs[0])
+			}
 		}
 		if strings.TrimSpace(sq.Format) == "" {
 			return fmt.Errorf("%s: format required", where)

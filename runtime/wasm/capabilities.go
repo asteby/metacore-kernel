@@ -99,6 +99,9 @@ type invocation struct {
 	// sequenceNext is the embedder-injected folio-sequence backend the
 	// sequence_next import calls (Host.WithSequenceNext). nil = unavailable.
 	sequenceNext func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)
+	// sequenceScoped is the v2 backend (Host.WithSequenceNextScoped) that takes
+	// the scope_value of a `scope: column` sequence. Preferred when set.
+	sequenceScoped func(ctx context.Context, orgID uuid.UUID, model, key, scopeValue string) (string, error)
 	// sequenceStamp is the embedder-injected declarative-folio stamper
 	// (Host.WithSequenceStamp) data_mutate / data_batch run on every create,
 	// inside the transaction. nil = creates are not auto-stamped.

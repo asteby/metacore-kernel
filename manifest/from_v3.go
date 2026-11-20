@@ -957,7 +957,10 @@ func mapModelSequences(in []v3.Sequence) []SequenceDef {
 	}
 	out := make([]SequenceDef, 0, len(in))
 	for _, s := range in {
-		out = append(out, SequenceDef{Key: s.Key, Scope: s.Scope, Format: s.Format})
+		out = append(out, SequenceDef{
+			Key: s.Key, Scope: s.Scope, ScopeColumn: s.ScopeColumn, Period: s.Period,
+			Gapless: s.Gapless, AssignOn: s.AssignOn, Format: s.Format,
+		})
 	}
 	return out
 }

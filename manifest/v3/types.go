@@ -1520,12 +1520,38 @@ type Sequence struct {
 	// import addresses it by (model, key).
 	Key string `json:"key"`
 	// Scope selects the counter's partitioning: "org" (one counter per
-	// organization, the default) or "branch" (one counter per branch, so each
-	// branch has its own folio series). Empty = "org".
+	// organization, the default), "branch" (one counter per branch, so each
+	// branch has its own folio series) or "column" (one counter per distinct
+	// value of ScopeColumn: a fiscal series per issuer, a file number per
+	// clinic). Empty = "org".
 	Scope string `json:"scope,omitempty"`
+	// ScopeColumn names the model column whose value partitions the counter.
+	// Required when Scope is "column", forbidden otherwise. The column must be
+	// declared on the model; an empty value on create falls back to the org-wide
+	// partition.
+	ScopeColumn string `json:"scope_column,omitempty"`
+	// Period restarts the counter: "none" (default, never), "year", "month" or
+	// "day" (UTC calendar). A daily order ticket, a yearly file number. The
+	// matching {yyyy}/{yy}/{mm}/{dd} format tokens render the period.
+	Period string `json:"period,omitempty"`
+	// Gapless makes the numbering gap-free: the counter increments INSIDE the
+	// transaction that inserts the numbered row, so a failed insert releases the
+	// number (the default autocommit counter may skip one). Concurrent creates
+	// of the same partition serialize on the counter row. A gapless sequence is
+	// consumed only by its bound columns (create / transition); the standalone
+	// `sequence_next` import refuses it, since a guest failure after the call
+	// would burn the number.
+	Gapless bool `json:"gapless,omitempty"`
+	// AssignOn selects when the bound columns are stamped: "create" (default)
+	// or "transition:<stage>" — the number is issued when the record enters that
+	// stage of the model's stage machine (a fiscal folio at "issued", not at
+	// "draft"). Drafts then carry no number and cannot burn one.
+	AssignOn string `json:"assign_on,omitempty"`
 	// Format is the template rendered around the numeric value. It MUST contain
 	// exactly one `{seq}` or zero-padded `{seq:0N}` placeholder (e.g. "A-{seq:06}"
-	// → "A-000042"). Any other text is emitted verbatim.
+	// → "A-000042"). Optional tokens: {yyyy} {yy} {mm} {dd} (the period's date,
+	// need a matching Period) and {scope} (the ScopeColumn value, or the branch
+	// id). Any other text is emitted verbatim.
 	Format string `json:"format"`
 }
 

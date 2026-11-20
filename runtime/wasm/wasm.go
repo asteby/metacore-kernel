@@ -103,6 +103,7 @@ type Host struct {
 	modelOwner      func(model string) string
 	execSchema      func(addonKey string) string
 	sequenceNext    func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)
+	sequenceScoped  func(ctx context.Context, orgID uuid.UUID, model, key, scopeValue string) (string, error)
 	routingTable    RoutingTableFn
 	sequenceStamp   SequenceStampFn
 	createCheck     CreateCheckFn
@@ -328,6 +329,17 @@ func (h *Host) WithModelOwner(r func(model string) string) *Host {
 // `sequence_unavailable` envelope. See docs/wasm-abi.md § 17.
 func (h *Host) WithSequenceNext(f func(ctx context.Context, orgID uuid.UUID, model, key string) (string, error)) *Host {
 	h.sequenceNext = f
+	return h
+}
+
+// WithSequenceNextScoped is WithSequenceNext for sequences v2 (ABI 1.21): the
+// request may carry `scope_value`, the partition of a `scope: column` sequence
+// (issuer, clinic). Wire it to dynamic.Service.NextSequenceScoped; when set it
+// takes precedence over WithSequenceNext. With only the legacy backend wired, a
+// request that carries a scope_value is refused (`scope_unsupported`) rather
+// than silently drawn from the wrong series. See docs/wasm-abi.md § 17.
+func (h *Host) WithSequenceNextScoped(f func(ctx context.Context, orgID uuid.UUID, model, key, scopeValue string) (string, error)) *Host {
+	h.sequenceScoped = f
 	return h
 }
 
@@ -843,6 +855,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 		modelOwner:        h.modelOwner,
 		execSchema:        h.execSchema,
 		sequenceNext:      h.sequenceNext,
+		sequenceScoped:    h.sequenceScoped,
 		routingTable:      h.routingTable,
 		sequenceStamp:     h.sequenceStamp,
 		createCheck:       h.createCheck,

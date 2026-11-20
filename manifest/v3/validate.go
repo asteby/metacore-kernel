@@ -1746,8 +1746,15 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 			} else {
 				seqKeys[sq.Key] = struct{}{}
 			}
-			if sq.Scope != "" && sq.Scope != "org" && sq.Scope != "branch" {
-				errs = append(errs, fmt.Sprintf("%s.scope %q is not one of \"\"|\"org\"|\"branch\"", where, sq.Scope))
+			if sq.Scope != "" && sq.Scope != "org" && sq.Scope != "branch" && sq.Scope != "column" {
+				errs = append(errs, fmt.Sprintf("%s.scope %q is not one of \"\"|\"org\"|\"branch\"|\"column\"", where, sq.Scope))
+			}
+			stageSet := map[string]struct{}{}
+			for _, st := range mod.Stages {
+				stageSet[st.Key] = struct{}{}
+			}
+			for _, msg := range ValidateSequenceShape(sq.Scope, sq.ScopeColumn, sq.Period, sq.AssignOn, sq.Format, ownCols, stageSet) {
+				errs = append(errs, fmt.Sprintf("%s.%s", where, msg))
 			}
 			if err := validateSequenceFormat(sq.Format); err != nil {
 				errs = append(errs, fmt.Sprintf("%s.format %q: %v", where, sq.Format, err))
@@ -2731,4 +2738,63 @@ func finalStageExits(mod Model) []string {
 		}
 	}
 	return out
+}
+
+// sequenceTokenRe matches every `{token}` of a folio format; the allowed set is
+// seq (handled separately), the period date tokens and scope.
+var sequenceTokenRe = regexp.MustCompile(`\{([a-z]+)(?::0\d+)?\}`)
+
+// ValidateSequenceShape checks the P4 (sequences v2) fields of one sequence:
+// scope/scope_column agreement, period enum, assign_on shape and stage, and the
+// format tokens against period/scope. Messages are prefixed with the field
+// name. Shared by the v3 and legacy validators (via the manifest package).
+func ValidateSequenceShape(scope, scopeColumn, period, assignOn, format string, cols, stages map[string]struct{}) []string {
+	var errs []string
+	if scope == "column" {
+		if scopeColumn == "" {
+			errs = append(errs, "scope_column is required when scope is \"column\"")
+		} else if _, ok := cols[scopeColumn]; !ok {
+			errs = append(errs, fmt.Sprintf("scope_column %q is not a declared column on the model", scopeColumn))
+		}
+	} else if scopeColumn != "" {
+		errs = append(errs, "scope_column is only valid with scope \"column\"")
+	}
+	rank := map[string]int{"": 0, "none": 0, "year": 1, "month": 2, "day": 3}
+	pr, ok := rank[period]
+	if !ok {
+		errs = append(errs, fmt.Sprintf("period %q is not one of none|year|month|day", period))
+	}
+	if assignOn != "" && assignOn != "create" {
+		stage, found := strings.CutPrefix(assignOn, "transition:")
+		switch {
+		case !found || stage == "":
+			errs = append(errs, fmt.Sprintf("assign_on %q is not \"create\" or \"transition:<stage>\"", assignOn))
+		default:
+			if _, ok := stages[stage]; !ok {
+				errs = append(errs, fmt.Sprintf("assign_on %q names a stage the model does not declare", assignOn))
+			}
+		}
+	}
+	for _, m := range sequenceTokenRe.FindAllStringSubmatch(format, -1) {
+		switch m[1] {
+		case "seq":
+		case "yyyy", "yy":
+			if ok && pr < 1 {
+				errs = append(errs, fmt.Sprintf("format token {%s} needs period year|month|day", m[1]))
+			}
+		case "mm":
+			if ok && pr < 2 {
+				errs = append(errs, "format token {mm} needs period month|day")
+			}
+		case "dd":
+			if ok && pr < 3 {
+				errs = append(errs, "format token {dd} needs period day")
+			}
+		case "scope":
+			if scope != "column" && scope != "branch" {
+				errs = append(errs, "format token {scope} needs scope column|branch")
+			}
+		}
+	}
+	return errs
 }
