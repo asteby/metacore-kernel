@@ -99,6 +99,10 @@ func FromV3(m *v3.Manifest) Manifest {
 	// Key "kernel" → Manifest.Kernel; keys sdk / metacore-sdk /
 	// @asteby/metacore-sdk → Manifest.SDK. First match per field wins.
 	for _, r := range m.Compatibility.Requires {
+		if peer, ok := peerRequirement(r); ok {
+			out.AddonRequires = append(out.AddonRequires, peer)
+			continue
+		}
 		if r.Key == kernelRequirementKey && out.Kernel == "" {
 			out.Kernel = r.Version
 			continue
@@ -2080,4 +2084,20 @@ func attachRuleGuards(defs []ModelDefinition, m *v3.Manifest) {
 			})
 		}
 	}
+}
+
+// peerRequirement projects a compatibility.requires entry that names a peer
+// addon (not the reserved kernel / sdk / runtime ranges). A trailing "?" on
+// the key ("mercadopago?") marks it optional, same as Optional=true.
+func peerRequirement(r v3.Requirement) (AddonRequirement, bool) {
+	key := strings.TrimSpace(r.Key)
+	optional := r.Optional
+	if strings.HasSuffix(key, "?") {
+		key = strings.TrimSpace(strings.TrimSuffix(key, "?"))
+		optional = true
+	}
+	if key == "" || IsReservedRequirementKey(key) {
+		return AddonRequirement{}, false
+	}
+	return AddonRequirement{Key: key, Range: strings.TrimSpace(r.Version), Optional: optional}, true
 }
