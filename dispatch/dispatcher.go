@@ -358,6 +358,24 @@ func (d *Dispatcher) notify(id, eventName string, sub Subscription, status strin
 // hid production create failures (empty last_error, no work order).
 func (d *Dispatcher) invoke(ctx context.Context, orgID uuid.UUID, payload []byte, sub Subscription) error {
 	switch strings.ToLower(sub.HandlerType) {
+	case handlerTypeCompiled:
+		// A registered in-process CompiledHandler wins. Otherwise the symbol is
+		// resolved through the same invoker as a wasm export: a native module's
+		// Go export (Host.LoadNative) is dispatched by that very seam, so the
+		// declarative subscription of a compiled-in module needs no second
+		// registry. With neither wired the delivery dead-letters as before.
+		if d.opts.compiled != nil {
+			if h, ok := d.opts.compiled.Lookup(sub.Function); ok {
+				return h.Handle(ctx, orgID, payload)
+			}
+		}
+		if d.invoker == nil {
+			if d.opts.compiled == nil {
+				return ErrNoCompiledRegistry
+			}
+			return fmt.Errorf("compiled handler %q not registered", sub.Function)
+		}
+		fallthrough
 	case handlerTypeWasm:
 		if d.invoker == nil {
 			return errors.New("wasm subscription but no WasmInvoker wired")
@@ -390,15 +408,6 @@ func (d *Dispatcher) invoke(ctx context.Context, orgID uuid.UUID, payload []byte
 			return newGuestFailure("native: "+msg, out)
 		}
 		return nil
-	case handlerTypeCompiled:
-		if d.opts.compiled == nil {
-			return ErrNoCompiledRegistry
-		}
-		h, ok := d.opts.compiled.Lookup(sub.Function)
-		if !ok {
-			return fmt.Errorf("compiled handler %q not registered", sub.Function)
-		}
-		return h.Handle(ctx, orgID, payload)
 	default:
 		// "webhook" or unknown tier — terminal, not retryable. Surface as an
 		// error so the delivery dead-letters with a clear reason.

@@ -1625,7 +1625,12 @@ func mapSubscriptions(m *v3.Manifest) []SubscriptionDef {
 // connector semantics.
 func handlerToTrigger(h v3.Handler) *ActionTrigger {
 	switch h.Type {
-	case "wasm":
+	case "wasm", "compiled":
+		// "compiled" shares the wasm dispatch seam: the host resolves the symbol
+		// through Host.Invoke*, where a Go export registered with Host.LoadNative
+		// (runtime/wasm/native.go) answers it exactly like a wasm export. One
+		// projection, so actions, tools and subscriptions of a native module reach
+		// the same tiers as an addon guest.
 		return &ActionTrigger{Type: "wasm", Export: h.Function}
 	case "webhook":
 		return &ActionTrigger{

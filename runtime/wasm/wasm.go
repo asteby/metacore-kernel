@@ -142,6 +142,9 @@ type Host struct {
 	emitPolicy       EmitPolicyFunc
 	logger           *log.Logger
 	compiled         sync.Map // addonKey -> *compiledEntry
+	// natives holds in-process Go implementations of an addon's exports (see
+	// native.go). Same dispatch seam as a wasm module, same host imports.
+	natives sync.Map // addonKey -> *nativeEntry
 	// modules holds one *instPool per instanceKey(addonKey, installation).
 	// The pool's admission semaphore also single-flights instantiation: every
 	// instance gets a unique wazero module name, so concurrent cold starts no
@@ -753,6 +756,11 @@ func (h *Host) invokeImpl(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 	ctx, finishDiag := h.beginDiag(ctx, orgID, addonKey, funcName, settings)
 	defer func() { finishDiag(&out, &err, recover()) }()
 
+	// A Go export of this addon wins over a wasm export of the same name.
+	if nfn, isNative := h.nativeFn(addonKey, funcName); isNative {
+		return h.invokeNative(ctx, nfn, tx, orgID, installation, addonKey, funcName, payload, settings)
+	}
+
 	ce, ok := h.compiled.Load(addonKey)
 	if !ok {
 		return nil, &AddonNotLoadedError{AddonKey: addonKey}
@@ -841,52 +849,7 @@ func (h *Host) invokeOnce(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, ins
 	defer cancel()
 	// Stash settings + caller id on the ctx so the host module imports
 	// (env_get, http_fetch, log) can read them without global state.
-	callCtx = withInvocation(callCtx, &invocation{
-		deadline:          deadline,
-		addonKey:          addonKey,
-		installation:      installation,
-		settings:          settings,
-		caps:              h.capsFor(addonKey),
-		bus:               h.bus,
-		emits:             emitBufferFrom(ctx),
-		orgID:             orgID,
-		db:                h.db,
-		tx:                tx,
-		enforcer:          h.enforcer,
-		resolveTable:      h.tableResolver,
-		entityMode:        h.entityMode,
-		sourceOwners:      h.sourceOwners,
-		modelOwner:        h.modelOwner,
-		execSchema:        h.execSchema,
-		sequenceNext:      h.sequenceNext,
-		sequenceScoped:    h.sequenceScoped,
-		routingTable:      h.routingTable,
-		sequenceStamp:     h.sequenceStamp,
-		createCheck:       h.createCheck,
-		createStamp:       h.createStamp,
-		updateStamp:       h.updateStamp,
-		ctxProvider:       h.ctxProvider,
-		mutationGuard:     h.mutationGuard,
-		mutationCompute:   h.mutationCompute,
-		appendOnly:        h.appendOnly,
-		stageMachine:      h.stageMachine,
-		stagePolicy:       h.stagePolicy,
-		tableModel:        h.tableModel,
-		extensions:        h.extensions,
-		approvalRequester: h.approvalRequester,
-		approvalConsumer:  h.approvalConsumer,
-		connectors:        h.connectors,
-		capQuerier:        h.capQuerier,
-		dnsResolver:       h.dnsResolver,
-		dnsAuthorize:      h.dnsAuthorize,
-		dnsLimits:         h.dnsLimits,
-		edgeCommander:     h.edgeCommander,
-		edgeLimits:        h.edgeLimits,
-		emitPolicy:        h.emitPolicy,
-		metrics:           h.metrics,
-		logger:            h.logger,
-		bag:               diagBagFrom(ctx),
-	})
+	callCtx = withInvocation(callCtx, h.newInvocation(ctx, tx, orgID, installation, addonKey, settings, deadline))
 
 	if mod.inst.IsClosed() {
 		return nil, fmt.Errorf("wasm: module closed")
@@ -965,6 +928,9 @@ func isClosedModuleErr(err error) bool {
 // readiness check.
 func (h *Host) IsCompiled(addonKey string) bool {
 	_, ok := h.compiled.Load(addonKey)
+	if !ok {
+		_, ok = h.natives.Load(addonKey)
+	}
 	return ok
 }
 
@@ -975,6 +941,12 @@ func (h *Host) CompiledKeys() []string {
 	var keys []string
 	h.compiled.Range(func(k, _ any) bool {
 		if s, ok := k.(string); ok {
+			keys = append(keys, s)
+		}
+		return true
+	})
+	h.natives.Range(func(k, _ any) bool {
+		if s, ok := k.(string); ok && !containsString(keys, s) {
 			keys = append(keys, s)
 		}
 		return true
@@ -1029,3 +1001,56 @@ func (e *AddonNotLoadedError) Error() string {
 
 // NotReady marks the error as transient-until-loaded (dispatch.NotReadyError).
 func (e *AddonNotLoadedError) NotReady() bool { return true }
+
+// newInvocation builds the per-call context every host import reads. It is the
+// single place that stamps the invocation with the host's wired backends, so a
+// wasm guest (invokeOnce) and a native Go handler (invokeNative) see exactly
+// the same tenant scope, capability policy, guards and stamps.
+func (h *Host) newInvocation(ctx context.Context, tx *gorm.DB, orgID, installation uuid.UUID, addonKey string, settings map[string]string, deadline *guestDeadline) *invocation {
+	return &invocation{
+		deadline:          deadline,
+		addonKey:          addonKey,
+		installation:      installation,
+		settings:          settings,
+		caps:              h.capsFor(addonKey),
+		bus:               h.bus,
+		emits:             emitBufferFrom(ctx),
+		orgID:             orgID,
+		db:                h.db,
+		tx:                tx,
+		enforcer:          h.enforcer,
+		resolveTable:      h.tableResolver,
+		entityMode:        h.entityMode,
+		sourceOwners:      h.sourceOwners,
+		modelOwner:        h.modelOwner,
+		execSchema:        h.execSchema,
+		sequenceNext:      h.sequenceNext,
+		sequenceScoped:    h.sequenceScoped,
+		routingTable:      h.routingTable,
+		sequenceStamp:     h.sequenceStamp,
+		createCheck:       h.createCheck,
+		createStamp:       h.createStamp,
+		updateStamp:       h.updateStamp,
+		ctxProvider:       h.ctxProvider,
+		mutationGuard:     h.mutationGuard,
+		mutationCompute:   h.mutationCompute,
+		appendOnly:        h.appendOnly,
+		stageMachine:      h.stageMachine,
+		stagePolicy:       h.stagePolicy,
+		tableModel:        h.tableModel,
+		extensions:        h.extensions,
+		approvalRequester: h.approvalRequester,
+		approvalConsumer:  h.approvalConsumer,
+		connectors:        h.connectors,
+		capQuerier:        h.capQuerier,
+		dnsResolver:       h.dnsResolver,
+		dnsAuthorize:      h.dnsAuthorize,
+		dnsLimits:         h.dnsLimits,
+		edgeCommander:     h.edgeCommander,
+		edgeLimits:        h.edgeLimits,
+		emitPolicy:        h.emitPolicy,
+		metrics:           h.metrics,
+		logger:            h.logger,
+		bag:               diagBagFrom(ctx),
+	}
+}
