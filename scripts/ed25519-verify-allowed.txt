@@ -1,0 +1,6 @@
+# Permanent ledger: files allowed to call ed25519 verification, with the exact
+# number of uses. Any change needs a CODEOWNERS-reviewed edit of this file.
+security/signature.go 1
+security/signedenvelope/verify.go 2
+licensing/sigv2/envelope.go 2
+licensing/sigv2/keyset.go 1
