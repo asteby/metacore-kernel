@@ -154,10 +154,12 @@ func TestValidate_OptionFitment_OnActionField(t *testing.T) {
 	if errs := validateActionFieldPickerMeta("w", f, nil); len(errs) == 0 {
 		t.Errorf("missing target_model must be rejected on an action field")
 	}
+	field["option_fitment"].(im)["target_model"] = "TargetSpec"
 	delete(field, "ref")
+	var g ActionField // fresh value: Unmarshal into a used one would keep the old ref
 	b, _ = json.Marshal(field)
-	_ = json.Unmarshal(b, &f)
-	if errs := validateActionFieldPickerMeta("w", f, nil); len(errs) == 0 {
+	_ = json.Unmarshal(b, &g)
+	if errs := validateActionFieldPickerMeta("w", g, nil); len(errs) == 0 {
 		t.Errorf("a non-picker action field must be rejected")
 	}
 }
@@ -179,5 +181,24 @@ func TestOptionFitmentRoundTrip(t *testing.T) {
 	_ = json.Unmarshal([]byte(`{"name":"x","type":"text"}`), &none)
 	if b, _ := json.Marshal(none); strings.Contains(string(b), "option_fitment") {
 		t.Errorf("absent field must not be emitted: %s", b)
+	}
+}
+
+// The Go validator must reject a bad mode on its own (the JSON schema enum is a
+// second line of defense, not the only one: hosts call the Go checks directly).
+func TestValidateOptionFitmentShape_Mode(t *testing.T) {
+	ok := OptionFitment{SubjectField: "s", SubjectModel: "S", TargetModel: "T"}
+	for _, mode := range []string{"", "flag", "filter"} {
+		ok.Mode = mode
+		if errs := validateOptionFitmentShape("w", &ok); len(errs) != 0 {
+			t.Errorf("mode %q rejected: %v", mode, errs)
+		}
+	}
+	ok.Mode = "hide"
+	if errs := validateOptionFitmentShape("w", &ok); len(errs) == 0 || !strings.Contains(errs[0], "mode") {
+		t.Errorf("mode hide must be rejected by the Go validator, got %v", errs)
+	}
+	if errs := validateOptionFitmentShape("w", nil); errs != nil {
+		t.Errorf("nil declaration must validate, got %v", errs)
 	}
 }
