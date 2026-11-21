@@ -114,6 +114,8 @@ func DeriveTableColumns(def manifest.ModelDefinition) []modelbase.ColumnDef {
 			// OptionFilter hides ineligible options of the relation picker; the
 			// SDK evaluates it over the extra columns /options returns.
 			OptionFilter: toOptionFilter(c.OptionFilter),
+			// OptionFitment flags / hides the options that do not fit a subject.
+			OptionFitment: toOptionFitment(c.OptionFitment),
 			// ReadPermission rides through: the dynamic runtime strips the
 			// column from the reads of a caller lacking the permission.
 			ReadPermission: c.ReadPermission,
@@ -340,6 +342,20 @@ func toFieldOptionsConfig(in *manifest.DynamicOptionsDef) *modelbase.FieldOption
 	}
 }
 
+// toOptionFitment projects the manifest option_fitment onto the served
+// modelbase.OptionFitment. Nil stays nil (the picker lists every option as-is).
+func toOptionFitment(in *v3.OptionFitment) *modelbase.OptionFitment {
+	if in == nil {
+		return nil
+	}
+	return &modelbase.OptionFitment{
+		SubjectField: in.SubjectField,
+		SubjectModel: in.SubjectModel,
+		TargetModel:  in.TargetModel,
+		Mode:         in.Mode,
+	}
+}
+
 // toOptionFilter projects the manifest option_filter onto the served
 // modelbase.OptionFilter. Empty stays nil (the picker lists every option).
 func toOptionFilter(in v3.OptionFilter) modelbase.OptionFilter {
@@ -521,6 +537,8 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 			Validation: toModelbaseValidation(c.Validation),
 			// OptionFilter hides ineligible options of the relation picker.
 			OptionFilter: toOptionFilter(c.OptionFilter),
+			// OptionFitment flags / hides the options that do not fit a subject.
+			OptionFitment: toOptionFitment(c.OptionFitment),
 		})
 	}
 	return out

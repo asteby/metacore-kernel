@@ -1561,6 +1561,9 @@
         "option_filter": {
           "$ref": "#/$defs/OptionFilter"
         },
+        "option_fitment": {
+          "$ref": "#/$defs/OptionFitment"
+        },
         "depends_on": {
           "type": "string",
           "description": "Name of a SIBLING column whose current value supplies the cascade filter_value for this column's dependent picker (used with the 'options' object form). The host projects it onto ColumnDef.depends_on so the SDK re-fetches the options when the depended-on field changes. Empty = no cascade. Pure UI metadata."
@@ -4392,6 +4395,18 @@
         "not_equals": {"type": ["string", "number", "boolean"], "description": "Hide options whose value equals this."},
         "in": {"type": "array", "minItems": 1, "items": {"type": ["string", "number", "boolean"]}, "description": "Keep only options whose value is one of these."},
         "not_in": {"type": "array", "minItems": 1, "items": {"type": ["string", "number", "boolean"]}, "description": "Hide options whose value is one of these."}
+      }
+    },
+    "OptionFitment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject_field", "subject_model", "target_model"],
+      "description": "Declares that a picker column's options are checked for FIT against a subject chosen in another field of the same form (the header of a document, a sibling field), using the fitment rules the organization keeps as records. Generic compatibility: a subject (vehicle, device, machine) accepts targets (size, consumable, part). The kernel only validates and carries it; the SDK resolves it. Pure UI metadata; ignored by the DDL plane. Needs a picker column (ref or options object).",
+      "properties": {
+        "subject_field": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$", "description": "Field holding the subject's id, resolved like depends_on (the row first, then the header form)."},
+        "subject_model": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$", "description": "Model of the subject, whose row supplies the attributes the rules compare."},
+        "target_model": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$", "description": "The rules' target model: which rules apply and which attribute group of the option's row is compared."},
+        "mode": {"type": "string", "enum": ["flag", "filter"], "description": "flag (default) marks non-fitting options; filter hides them. A subject with no rules for the target never flags or hides anything."}
       }
     },
     "OptionFilter": {

@@ -1280,6 +1280,12 @@ type Column struct {
 	// the extra columns /options returns, so list them in the options object's
 	// extra_columns. Pure UI metadata; the DDL plane ignores it. Optional.
 	OptionFilter OptionFilter `json:"option_filter,omitempty"`
+	// OptionFitment declares that this picker's options are checked for FIT
+	// against a subject chosen elsewhere in the same form (see OptionFitment):
+	// the SDK flags or hides the options whose attributes the organization's
+	// fitment rules do not accept for that subject. Pure UI metadata; the
+	// DDL/install plane ignores it. Optional.
+	OptionFitment *OptionFitment `json:"option_fitment,omitempty"`
 	// OptionsSource declares a DYNAMIC select for the column: instead of a
 	// hardcoded Options list, it names a PROVIDER key (e.g.
 	// "registered_models", "installed_addons") the HOST registers and resolves
@@ -2860,6 +2866,40 @@ type DynamicOptions struct {
 	// invoices). Names are lowercase snake_case identifiers; each must be a
 	// column of Source when Source is an own model. Optional.
 	ExtraColumns []string `json:"extra_columns,omitempty"`
+}
+
+// Fitment modes of OptionFitment.
+const (
+	// OptionFitmentFlag keeps every option and marks the ones that do not fit.
+	OptionFitmentFlag = "flag"
+	// OptionFitmentFilter hides the options that do not fit.
+	OptionFitmentFilter = "filter"
+)
+
+// OptionFitment declares, on a column's relation / dynamic picker, that the
+// candidates must fit a SUBJECT picked in another field of the same form (the
+// header of a document, a sibling field). It is generic compatibility data, not
+// a domain concept: a subject (a vehicle, a device, a machine) accepts targets
+// (a size, a consumable, a part) according to fitment rules the organization
+// keeps as records. The kernel only validates and carries the declaration; the
+// SDK resolves it (rules + the subject row + the options' attributes), so no
+// host code is involved.
+//
+//	SubjectField — field holding the subject's id: resolved like depends_on
+//	               (the row first, then the header form). Required.
+//	SubjectModel — model of the subject, whose row supplies the attributes the
+//	               rules compare. Required.
+//	TargetModel  — the rules' target model: names which rules apply and which
+//	               extension/attribute group of the option's row is compared.
+//	               Required.
+//	Mode         — "flag" (default: mark non-fitting options) or "filter" (hide
+//	               them). A subject with no rules for the target never flags or
+//	               hides anything: no data is not a mismatch.
+type OptionFitment struct {
+	SubjectField string `json:"subject_field"`
+	SubjectModel string `json:"subject_model"`
+	TargetModel  string `json:"target_model"`
+	Mode         string `json:"mode,omitempty"`
 }
 
 // OptionFilterRule hides options of a relation / dynamic picker. The SDK

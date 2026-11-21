@@ -1874,6 +1874,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 				errs = append(errs, fmt.Sprintf("%s.write_permission is meaningless on a generated column (never writable)", cwhere))
 			}
 			errs = append(errs, validateOptionFilter(cwhere, c.OptionFilter)...)
+			errs = append(errs, validateOptionFitment(cwhere, c)...)
 			errs = append(errs, validateExtraColumns(cwhere, c.Options.Dynamic, colsByModel[c.Options.Dynamic.sourceOrEmpty()])...)
 			if c.Options.Len() == 0 {
 				continue

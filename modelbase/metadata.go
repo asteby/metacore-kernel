@@ -331,6 +331,10 @@ type ColumnDef struct {
 	// client-side over the extra columns the options endpoint returns, so the
 	// column's OptionsConfig must list them in ExtraColumns. Pure UI metadata.
 	OptionFilter OptionFilter `json:"option_filter,omitempty"`
+	// OptionFitment flags or hides the options of this picker that the
+	// organization's fitment rules do not accept for a subject chosen in another
+	// field of the form. Mirrors manifest/v3 Column.option_fitment. Pure UI metadata.
+	OptionFitment *OptionFitment `json:"option_fitment,omitempty"`
 }
 
 // VisibleWhen is a single-sibling conditional-visibility predicate the SDK
@@ -537,6 +541,8 @@ type FieldDef struct {
 	// OptionFilter hides options of this field's relation / dynamic picker (see
 	// ColumnDef.OptionFilter). Mirrors manifest/v3 ActionField.option_filter.
 	OptionFilter OptionFilter `json:"option_filter,omitempty"`
+	// OptionFitment mirrors ColumnDef.OptionFitment on the served form field.
+	OptionFitment *OptionFitment `json:"option_fitment,omitempty"`
 
 	// DefaultFromRecord seeds the field from a column of the record the action
 	// was opened on (string), or the first non-empty of a list of columns.
@@ -565,6 +571,18 @@ type FieldBalanceRule struct {
 	CreditColumn   string `json:"credit_column"`
 	Message        string `json:"message,omitempty"`
 	RequireNonzero *bool  `json:"require_nonzero,omitempty"`
+}
+
+// OptionFitment is the served form of manifest/v3 OptionFitment: the picker's
+// options are checked for fit against a subject picked in another field of the
+// form (SubjectField, an id of SubjectModel) using the fitment rules whose
+// target is TargetModel. Mode is "flag" (default) or "filter". The SDK resolves
+// it; the kernel only carries it.
+type OptionFitment struct {
+	SubjectField string `json:"subject_field"`
+	SubjectModel string `json:"subject_model"`
+	TargetModel  string `json:"target_model"`
+	Mode         string `json:"mode,omitempty"`
 }
 
 // ActionDef is the UI metadata for a frontend action button. The backend

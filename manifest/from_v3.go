@@ -646,6 +646,8 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				DependsOn: c.DependsOn,
 				// OptionFilter hides ineligible options of this picker (SDK-side).
 				OptionFilter: c.OptionFilter,
+				// OptionFitment flags / hides options that do not fit a subject (SDK-side).
+				OptionFitment: c.OptionFitment,
 				// Scan opts the column's form input into camera barcode scanning;
 				// rides ColumnDef.Scan so DeriveFormFields carries it onto the
 				// served FieldDef and the SDK shows a scan-to-fill button.
