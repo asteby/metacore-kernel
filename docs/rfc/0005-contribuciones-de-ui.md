@@ -145,7 +145,7 @@ Bloque nuevo `ui`, opcional. Un manifiesto sin `ui` se sirve **idéntico** (prue
         "reads": ["values", "mode", "recordId"],
         "writes": ["name", "tax_id", "postal_code", "fiscal_data.*"],
         "emits": ["record.select", "record.edit"],
-        "network": "none",
+        "network": "none",                     // none | org | hosts (+ "hosts": [...])
         "offline": true
       }
     ]
@@ -316,7 +316,26 @@ Lo propio: **lentes con clase de datos y redacción automática**, **propuestas 
 | 5 | Operación: canario, autocuración, Explain en admin, precacheo offline, sandbox de marketplace | OPS, SDK | alto |
 | 6 | DX: tipos generados, playground, pruebas de contrato generadas, scaffolding | SDK | bajo |
 
-## 15. Decisiones para el dueño
+## 15. Estado y lo aprendido al implementar (2026-11-20)
+
+| Pieza | Dónde | Estado |
+|---|---|---|
+| `loom` del SDK: Seam, Graft, Part, Lens, Proposal, `applyOverlays`, inspector; seams `record.dialog.header` y `record.form.section`; intenciones en `CustomerPicker` | SDK #1557 | publicado en `@asteby/metacore-runtime-react@53.29.0` |
+| Bloque `ui` (Go + esquema en sus 2 copias + validación) y paquete puro `loom.Resolve` | kernel #675 | mergeado |
+| Lector de constancia como Part `fiscal_mexico.csf-import` + injerto en el modal estándar; borrados `PosCustomerPicker` y `CustomerRecordDialog` | 7leguas `feat/loom-csf-graft` (local) | verificado con Playwright y PDF sintético: rellena, deshace, el PDF no sale del navegador y no hay escrituras |
+| `GET /api/ui/grafts` y `LoomProvider` en el shell de OPS | OPS | pendiente: OPS está en kernel v0.295 y `loom` llega en una versión posterior |
+
+Ajustes al diseño que salieron de implementar:
+
+1. **El tipo Go es `UIBlock`** (no `UI`): `manifest/v3/ui.go` ya nombra «superficies de UI» (páginas, vistas, paneles). El campo del manifiesto sigue siendo `ui`.
+2. **`network` es texto + `hosts`** (`none|org|hosts`), no una unión texto/array: esquema más simple y validable.
+3. **`apply: "auto"` existe y hace falta.** El lector de constancia ya tiene su propio paso de revisión campo a campo; pedir un segundo diff habría cambiado el flujo que conoce el personal. Regla propuesta: `auto` solo si el Part tiene revisión propia, y siempre con «Deshacer».
+4. **Dos intenciones estándar del formulario**: `record.select` (el RFC ya existe: usar ese cliente) y `record.edit` (abrir su edición con el parche como propuesta). Las atiende quien abrió el diálogo (`useRecordPickerDialog`); sin anfitrión que las atienda, el injerto cae a proponer el parche.
+5. **Las lentes se copian antes de congelarlas**: congelar en sitio rompía el estado del formulario del anfitrión.
+6. **El servidor no evaluaba `contributions.slots[].permission`/`condition`**: `loom.Resolve` los aplica al proyectar los slots heredados como injertos `legacy`.
+7. Un injerto registrado en proceso sigue siendo necesario mientras el host no sirve `/api/ui/grafts` (el POS de 7 Leguas declara el suyo con `registerGraft`); con `LoomProvider serverAuthoritative` solo se montan los ids servidos.
+
+## 16. Decisiones para el dueño
 
 1. Nombre **Loom** y vocabulario (Part/Seam/Graft/Lens/Proposal/Overlay) para API pública.
 2. ¿`apply: auto` de propuestas permitido por preset, o siempre revisión humana en campos `pii.fiscal`?
