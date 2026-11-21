@@ -58,7 +58,7 @@ nativo declara sus estados con `stage_field`/`stages`/`transitions` y obtiene to
    al instalar); el instalador lo crea `NOT VALID` y valida en una fase aparte.
 2. **Permiso por transición** (IMPLEMENTADO: `transitions[].permission`, una capacidad que sustituye al gate de `roles` para esa jugada; requires_fields, guard y approval siguen aplicando; la ruta wasm/guest sigue usando `stage_authority`): hoy se autoriza por `roles` o por la acción que mueve
    (`stage_authority`). Un permiso nombrado permitiría delegar una transición concreta sin crear un rol.
-3. **Eventos de transición por el outbox**: `on_transition` ya despacha; falta que el evento canónico
+3. **Eventos de transición por el outbox** (IMPLEMENTADO, opt-in con `dynamic.Config.EmitTransitionEvents`: acción canónica `transitioned` con `stage_from`/`stage_to`, por el mismo outbox persist-first + relay que created/updated/deleted): `on_transition` ya despacha; falta que el evento canónico
    `<addon>.<model>.<action>` salga por el outbox transaccional (ver §3) en vez de post-commit sin respaldo.
 
 ## 3. Outbox para eventos de módulos nativos

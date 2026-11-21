@@ -178,6 +178,12 @@ type Config struct {
 	// install time. Nil = no aliases (the historical behaviour).
 	ModelAliases modelalias.Resolver
 
+	// EmitTransitionEvents publishes a "<addon>.<Model>.transitioned" canonical
+	// event (with stage_from / stage_to) after every committed Update that moves a
+	// stage machine, through the same transactional outbox as created/updated/
+	// deleted. Off by default so existing subscribers see no new event names.
+	EmitTransitionEvents bool
+
 	// TableNameResolver returns the database table for a model name. It exists
 	// for hosts whose dynamic (addon) models are reflect-built structs that
 	// CANNOT carry a Go TableName() method — so neither the modelbase.ModelDefiner
@@ -511,6 +517,7 @@ type Service struct {
 	listSearchClause  SearchMatchClause // explicit-only; threaded into List's builder search
 	modelResolver     ModelResolver
 	slugAliases       modelalias.Resolver
+	emitTransitions   bool
 	requirePerms      bool
 	updateDeny        map[string][]string
 	requireTenant     bool
@@ -633,6 +640,7 @@ func New(cfg Config) *Service {
 		listSearchClause:  explicitSearchClause,
 		modelResolver:     cfg.ModelResolver,
 		slugAliases:       cfg.ModelAliases,
+		emitTransitions:   cfg.EmitTransitionEvents,
 		tableNameResolver: cfg.TableNameResolver,
 		bus:               cfg.Bus,
 		addonKeyForModel:  cfg.AddonKeyForModel,
@@ -1412,6 +1420,10 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 
 	sm := s.resolveStageMachine(ctx, model)
 	var before, after map[string]any
+	// movedFrom/movedTo/moved record the stage move for the post-commit
+	// "transitioned" event; set inside core once the move is validated.
+	var movedFrom, movedTo string
+	var moved bool
 	// A model with a sequence issued on entering a stage updates in a
 	// transaction: the number commits (or rolls back) with the stage move.
 	seqTx := sm != nil && s.hasTransitionSequences(ctx, model)
@@ -1510,6 +1522,7 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 			if err != nil {
 				return err
 			}
+			movedFrom, movedTo, moved = fromStage, toStage, stageChanged
 			// Declarative `set`: when the move fires hooks that stamp fields on the
 			// row itself, apply them into `input` BEFORE we persist so they ride the
 			// same Save and surface in the canonical event (subscribers see them). We
@@ -1789,6 +1802,11 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 	}
 
 	s.publishCanonical(ctx, model, "updated", user, id.String(), before, after)
+	if moved && s.emitTransitions {
+		s.publishCanonicalWith(ctx, model, "transitioned", user, id.String(), before, after, func(ev *CanonicalEvent) {
+			ev.StageFrom, ev.StageTo = movedFrom, movedTo
+		})
+	}
 
 	// After-hooks fire post-commit against the standalone handle (the tx, if any,
 	// is already committed here).
