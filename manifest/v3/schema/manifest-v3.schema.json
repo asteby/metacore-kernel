@@ -2735,7 +2735,7 @@
         },
         "kind": {
           "type": "string",
-          "description": "Optional semantic kind (e.g. 'cfdi_invoice'). The host sends it as doc_kind to the documents.enrich capability so a region pack can enrich the record before the template is hydrated.",
+          "description": "Optional semantic kind (e.g. 'invoice', 'credit_note'). The host sends it as doc_kind to the documents.enrich capability so a region pack can enrich the record before the template is hydrated.",
           "pattern": "^[a-z][a-z0-9_]*$"
         }
       }

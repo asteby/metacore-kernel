@@ -8,7 +8,7 @@ import (
 
 func docWithKind(kind string) []interface{} {
 	return []interface{}{map[string]interface{}{
-		"key": "invoice_cfdi", "model": "Order", "template": "templates/cfdi.html", "paper": "letter",
+		"key": "invoice_print", "model": "Order", "template": "templates/invoice.html", "paper": "letter",
 		"kind": kind,
 	}}
 }
@@ -17,13 +17,13 @@ func docWithKind(kind string) []interface{} {
 // schema and the Go validator; anything else is rejected by both (dual
 // validation), and a manifest without kind is unchanged.
 func TestDocuments_KindValid(t *testing.T) {
-	if err := Validate(mustJSON(t, withDocuments(docWithKind("cfdi_invoice")))); err != nil {
+	if err := Validate(mustJSON(t, withDocuments(docWithKind("invoice")))); err != nil {
 		t.Fatalf("valid kind rejected: %v", err)
 	}
 }
 
 func TestDocuments_KindInvalidRejected(t *testing.T) {
-	for _, k := range []string{"CFDI", "cfdi-invoice", "1cfdi", "cfdi invoice"} {
+	for _, k := range []string{"INVOICE", "invoice-print", "1invoice", "invoice print"} {
 		err := Validate(mustJSON(t, withDocuments(docWithKind(k))))
 		if err == nil {
 			t.Fatalf("kind %q must be rejected", k)

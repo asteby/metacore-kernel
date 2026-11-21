@@ -97,10 +97,10 @@ func TestHostValidate_RejectsDocumentUnknownModel(t *testing.T) {
 
 func TestMapDocumentsProjectsKind(t *testing.T) {
 	got := manifest.FromV3(&v3.Manifest{Contributions: &v3.Contributions{Documents: []v3.DocumentDef{
-		{Key: "invoice_cfdi", Model: "Invoice", Template: "t.html", Paper: "letter", Kind: "cfdi_invoice"},
+		{Key: "invoice_print", Model: "Invoice", Template: "t.html", Paper: "letter", Kind: "invoice"},
 		{Key: "plain", Model: "Invoice", Template: "p.html", Paper: "A4"},
 	}}}).Documents
-	if len(got) != 2 || got[0].Kind != "cfdi_invoice" || got[1].Kind != "" {
+	if len(got) != 2 || got[0].Kind != "invoice" || got[1].Kind != "" {
 		t.Fatalf("kind not projected: %+v", got)
 	}
 }

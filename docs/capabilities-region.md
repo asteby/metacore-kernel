@@ -67,21 +67,21 @@ errores `invalid_input`, `not_applicable`.
 
 El host (ops) carga el registro y sus hijos, pregunta al proveedor por
 `doc_kind` (el `DocumentDef.kind` del manifest), mezcla la respuesta y
-hidrata la plantilla. El host no trae código de ningún país: `region_mx` provee
-`cfdi_invoice`, `cfdi_credit_note` y `cfdi_payment_complement`. Sin proveedor,
+hidrata la plantilla. El host no trae código de ningún país: lo provee el
+paquete de región o fiscal del país. Sin proveedor,
 o con `not_applicable`, se imprime el documento genérico.
 
 Entrada:
 
 | Campo | Tipo | Req. | Notas |
 |---|---|---|---|
-| `doc_kind` | string | sí | `DocumentDef.kind` (snake_case); un proveedor que no lo conoce responde `not_applicable` |
+| `doc_kind` | string | sí | `DocumentDef.kind` (snake_case, p. ej. `invoice`, `credit_note`); un proveedor que no lo conoce responde `not_applicable` |
 | `model` | string | sí | modelo del registro que se imprime |
 | `document_key` | string |  | `DocumentDef.key` |
 | `record` | object | sí | el registro como lo cargó el host (columna → valor) |
 | `children` | object |  | relaciones hijas precargadas: nombre → arreglo de filas |
 | `branding` | object |  | campos de marca de la org (string → string) |
-| `locale` | string |  | etiqueta BCP 47 (es, es-MX, en) |
+| `locale` | string |  | etiqueta BCP 47 (en, es, pt-BR) |
 
 Salida (cerrada, todo opcional):
 

@@ -22,7 +22,7 @@ func TestDocumentsEnrichContract(t *testing.T) {
 		t.Fatal("missing doc_kind/record must be rejected")
 	}
 	ok1 := map[string]any{
-		"doc_kind": "cfdi_invoice", "model": "Invoice",
+		"doc_kind": "invoice", "model": "Invoice",
 		"record":   map[string]any{"total": "10.00"},
 		"children": map[string]any{"line_items": []any{map[string]any{"qty": 1}}},
 	}
