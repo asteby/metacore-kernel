@@ -9,6 +9,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `manifest/v3` (**`models[].import` en el schema**; aditivo, un manifest sin el campo se valida IDENTICO): el schema de `Model` declara `import` (`ImportSpec`: `columns[]`, `max_rows`, `sheet_name`, `instructions[]`; `ImportColumn`: `key`, `header`, `aliases`, `required`, `type`, `example`, `hint`, `generator`, `transform`), en sus 2 copias, alineado con el struct Go que ya existia pero que ningun manifest podia usar (bug B1 de la auditoria; se borra su entrada de `knownParityGaps`). Pruebas: `manifest/v3/import_spec_validate_test.go`, `TestGoSchemaParity`.
+
 - `manifest/v3`, `loom` (**Loom: `needs.device`**; aditivo, un manifest sin el campo se sirve IDENTICO): `ui.exposes[].needs.device` y `ui.contributions[].device` declaran los dispositivos del navegador que usa la Part (`camera`, `microphone`, `geolocation`; esquema en sus 2 copias, sin repetidos). `loom.Resolve` los sirve en `PartRef.device` y `Graft.device`; el SDK solo deja pedir los declarados. Pruebas: `manifest/v3/loom_test.go`, `loom/resolve_test.go`.
 
 - `manifest/v3`, `loom` (**Loom: `ui.exposes[].needs.records.find`**; aditivo): busquedas de solo lectura MEDIADAS por el anfitrion para una Part sin red (p. ej. el lector de constancia comprueba si el RFC ya existe). El anfitrion las ejecuta con los permisos del usuario: campo exacto, resultados acotados, sin listados; los datos son clase `pii`. `loom.Resolve` lo sirve en `PartRef.records_find`. Esquema JSON en sus 2 copias. Pruebas: `loom/resolve_test.go`, `manifest/v3/loom_test.go`.
