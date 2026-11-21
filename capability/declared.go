@@ -13,12 +13,18 @@ import (
 //
 // Two sources make a key KNOWN:
 //   - the kernel's own Contracts (field-checked, registered by this package and
-//     by hosts through Register), and
+//     by hosts through Register): process-wide and read-only for consumers, and
 //   - the contracts DECLARED by installed addons with metadata.role "contract"
-//     (manifest contracts[]): RegisterDeclared records "<contract>.<operation>"
-//     keys with the contract's semver.
+//     (manifest contracts[]), held in a Registry INSTANCE.
 //
-// A key outside both is unknown. Release 1 (this one) only WARNS about it
+// There is deliberately NO package-level state for declared contracts: what an
+// installation declares (and at which version) is a property of that
+// organization's installs, so the host owns one Registry per organization (or
+// per installation) and passes it to the validators. A process-wide map would
+// let one tenant's upgrade, or one private addon, change the answer for
+// everybody.
+//
+// A key outside both sources is unknown. Release 1 only WARNS about it
 // (manifest rule capability_key_unknown); a later release turns the warning
 // into an error. Declared contracts are not field-checked: their input/output
 // live in schema files owned by the addon, so they are kept apart from
@@ -70,16 +76,26 @@ type declaredEntry struct {
 	d     Declared
 }
 
-var (
-	declMu   sync.RWMutex
-	declared = map[string]declaredEntry{} // contract key -> entry
-)
+// Registry holds the contracts declared by the addons installed in ONE scope
+// (an organization or an installation; the host decides). The zero value is not
+// usable: build it with NewRegistry. All methods are safe for concurrent use
+// and a nil *Registry behaves as an empty one for reads.
+type Registry struct {
+	mu       sync.RWMutex
+	declared map[string]declaredEntry // contract key -> entry
+}
 
-// RegisterDeclared records the contracts an installed addon owns. It rejects a
-// malformed key or version, a duplicate operation, and a contract key already
-// owned by ANOTHER addon; re-registering the same owner replaces its previous
-// declaration (an upgrade). All-or-nothing: on error nothing is recorded.
-func RegisterDeclared(owner string, ds ...Declared) error {
+// NewRegistry returns an empty Registry.
+func NewRegistry() *Registry {
+	return &Registry{declared: map[string]declaredEntry{}}
+}
+
+// Register records the contracts an installed addon owns. It rejects a
+// malformed key or version, a duplicate operation, a collision with a kernel
+// contract, and a contract key already owned by ANOTHER addon of this registry;
+// re-registering the same owner replaces its previous declaration (an upgrade).
+// All-or-nothing: on error nothing is recorded.
+func (r *Registry) Register(owner string, ds ...Declared) error {
 	owner = strings.TrimSpace(owner)
 	if owner == "" {
 		return fmt.Errorf("capability: declared contracts need an owner addon key")
@@ -108,50 +124,94 @@ func RegisterDeclared(owner string, ds ...Declared) error {
 			}
 		}
 	}
-	declMu.Lock()
-	defer declMu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	seen := map[string]bool{}
 	for _, d := range ds {
 		if seen[d.Key] {
 			return fmt.Errorf("capability: contract %q declared twice by %q", d.Key, owner)
 		}
 		seen[d.Key] = true
-		if prev, ok := declared[d.Key]; ok && prev.owner != owner {
+		if prev, ok := r.declared[d.Key]; ok && prev.owner != owner {
 			return fmt.Errorf("capability: contract %q is already owned by addon %q", d.Key, prev.owner)
 		}
 	}
 	// Replace the owner's previous declaration wholesale.
-	for k, e := range declared {
+	for k, e := range r.declared {
 		if e.owner == owner {
-			delete(declared, k)
+			delete(r.declared, k)
 		}
 	}
 	for _, d := range ds {
-		declared[d.Key] = declaredEntry{owner: owner, d: d}
+		r.declared[d.Key] = declaredEntry{owner: owner, d: d}
 	}
 	return nil
 }
 
-// UnregisterDeclared forgets every contract owned by the addon. A host calls it
-// when the last installation of the addon is gone; leaving a stale entry only
-// keeps a key known (it never breaks a manifest).
-func UnregisterDeclared(owner string) {
-	declMu.Lock()
-	defer declMu.Unlock()
-	for k, e := range declared {
+// Unregister forgets every contract owned by the addon.
+func (r *Registry) Unregister(owner string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for k, e := range r.declared {
 		if e.owner == owner {
-			delete(declared, k)
+			delete(r.declared, k)
 		}
 	}
 }
 
-// LookupDeclared returns the addon-declared contract with that key and its
-// owner addon.
-func LookupDeclared(contractKey string) (d Declared, owner string, ok bool) {
-	declMu.RLock()
-	defer declMu.RUnlock()
-	e, ok := declared[contractKey]
+// Lookup returns the declared contract with that key and its owner addon.
+func (r *Registry) Lookup(contractKey string) (d Declared, owner string, ok bool) {
+	if r == nil {
+		return Declared{}, "", false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	e, ok := r.declared[contractKey]
 	return e.d, e.owner, ok
+}
+
+// InstalledContracts is what one installed addon declares: the input of
+// Rehydrate.
+type InstalledContracts struct {
+	Owner     string
+	Contracts []Declared
+}
+
+// RehydrateReport is the outcome of Rehydrate.
+type RehydrateReport struct {
+	// Registered lists the owners whose contracts were recorded.
+	Registered []string
+	// Failed maps an owner to why its contracts were refused.
+	Failed map[string]error
+}
+
+// Rehydrate rebuilds the registry from what the installations persist. The
+// registry is memory: after a restart it is empty, and every declared key would
+// be unknown again (and every implements[].version check would be skipped). A
+// host calls Rehydrate at boot, per scope, with the installed addons' declared
+// contracts. It REPLACES the registry content (a clean slate, so it is the
+// same for a fresh instance and for a re-run), applies owners in the order
+// given (the first owner of a contract key wins, the rest are reported) and
+// never aborts: a failing owner is reported, the others still register.
+func (r *Registry) Rehydrate(installed []InstalledContracts) RehydrateReport {
+	rep := RehydrateReport{Failed: map[string]error{}}
+	r.mu.Lock()
+	r.declared = map[string]declaredEntry{}
+	r.mu.Unlock()
+	for _, in := range installed {
+		if len(in.Contracts) == 0 {
+			continue
+		}
+		if err := r.Register(in.Owner, in.Contracts...); err != nil {
+			rep.Failed[in.Owner] = err
+			continue
+		}
+		rep.Registered = append(rep.Registered, in.Owner)
+	}
+	return rep
 }
 
 // KeyInfo describes a known capability key.
@@ -166,19 +226,31 @@ type KeyInfo struct {
 	Source string
 }
 
-// Known reports whether key is in the closed registry: a kernel contract, a
-// declared contract key, or a declared "<contract>.<operation>" key.
-func Known(key string) (KeyInfo, bool) {
+// KnownBuiltin reports whether key is one of the kernel's own contracts. It is
+// process-wide and read-only for consumers.
+func KnownBuiltin(key string) (KeyInfo, bool) {
 	if c, ok := Lookup(key); ok {
 		return KeyInfo{Key: key, Contract: c.Key, Version: c.Semver(), Source: "kernel"}, true
 	}
-	declMu.RLock()
-	defer declMu.RUnlock()
-	if e, ok := declared[key]; ok {
+	return KeyInfo{}, false
+}
+
+// Known reports whether key is in the closed registry of THIS scope: a kernel
+// contract, a declared contract key, or a declared "<contract>.<operation>".
+func (r *Registry) Known(key string) (KeyInfo, bool) {
+	if info, ok := KnownBuiltin(key); ok {
+		return info, true
+	}
+	if r == nil {
+		return KeyInfo{}, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if e, ok := r.declared[key]; ok {
 		return KeyInfo{Key: key, Contract: key, Version: e.d.Version, Source: "addon:" + e.owner}, true
 	}
 	if i := strings.LastIndex(key, "."); i > 0 {
-		if e, ok := declared[key[:i]]; ok {
+		if e, ok := r.declared[key[:i]]; ok {
 			for _, op := range e.d.Operations {
 				if op.Key == key[i+1:] {
 					return KeyInfo{Key: key, Contract: e.d.Key, Version: e.d.Version, Source: "addon:" + e.owner}, true
@@ -189,12 +261,30 @@ func Known(key string) (KeyInfo, bool) {
 	return KeyInfo{}, false
 }
 
-// DeclaredKeys lists every key the declared registry makes known, sorted.
-func DeclaredKeys() []string {
-	declMu.RLock()
-	defer declMu.RUnlock()
+// KnownCapability implements the manifest validators' CapabilityCatalog.
+func (r *Registry) KnownCapability(key string) bool { _, ok := r.Known(key); return ok }
+
+// ContractVersion implements the manifest validators' ContractVersioned: the
+// version of a declared contract (a kernel contract answers its Semver).
+func (r *Registry) ContractVersion(contractKey string) (string, bool) {
+	if c, ok := Lookup(contractKey); ok {
+		return c.Semver(), true
+	}
+	if d, _, ok := r.Lookup(contractKey); ok {
+		return d.Version, true
+	}
+	return "", false
+}
+
+// Keys lists every key the registry's declared contracts make known, sorted.
+func (r *Registry) Keys() []string {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var out []string
-	for _, e := range declared {
+	for _, e := range r.declared {
 		out = append(out, e.d.Key)
 		for _, op := range e.d.Operations {
 			out = append(out, e.d.Key+"."+op.Key)
@@ -205,7 +295,9 @@ func DeclaredKeys() []string {
 }
 
 // Satisfies reports whether a contract version satisfies a semver range
-// ("^1.2", ">=1.0.0 <2"). An invalid version or range is an error.
+// ("^1.2", ">=1.0.0 <2"). An invalid version or range is an error. Semver
+// rules apply: a PRERELEASE ("1.1.0-beta") does not satisfy "^1.0" (a range
+// matches a prerelease only when the range itself names one).
 func Satisfies(version, constraint string) (bool, error) {
 	c, err := semver.NewConstraint(constraint)
 	if err != nil {

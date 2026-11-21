@@ -4,69 +4,62 @@ import (
 	"log/slog"
 	"sort"
 
+	"github.com/asteby/metacore-kernel/capability"
 	"github.com/asteby/metacore-kernel/lifecycle"
 	"github.com/asteby/metacore-kernel/manifest"
+	"github.com/google/uuid"
 )
 
-// Capability-contract registry wiring (X-R2). The registry of contracts
-// declared by addons (capability.RegisterDeclared) is process memory, so it is
-// fed from two places: Install / Upgrade (below) and a host's boot, through
-// RehydrateDeclaredContracts, so a restart does not turn every declared key
-// back into an unknown one.
+// Capability-contract registry wiring (X-R2). The declared-contract registry is
+// a capability.Registry INSTANCE per scope (the host picks organization or
+// installation) and is memory: it is fed by Install / Upgrade (through
+// Installer.ContractRegistry) and rebuilt at boot with
+// Registry.Rehydrate(Installer.InstalledContracts(org)), so a restart does not
+// turn every declared key back into an unknown one.
 
-// registerDeclaredContracts records the contracts of an installed addon with
-// role "contract". It never fails an install or an upgrade: a conflict (another
-// addon already owns the contract key) is logged. Uninstall does not
-// unregister: other organizations may still run the addon, and a stale entry
-// only keeps a key known (warnDanglingContracts makes the removal visible).
-func registerDeclaredContracts(m *manifest.Manifest) {
-	if err := m.RegisterDeclaredContracts(); err != nil {
-		slog.Warn("installer.contracts_register_failed", "addon", m.Key, "version", m.Version, "error", err)
+// registerDeclaredContracts records the contracts of an addon that was just
+// installed or upgraded in the org's registry. It never fails an install or an
+// upgrade: a conflict (another addon of that scope already owns the contract
+// key) is logged. Uninstall does not unregister: a stale entry only keeps a key
+// known, and warnDanglingContracts makes the removal visible.
+func (i *Installer) registerDeclaredContracts(orgID uuid.UUID, m *manifest.Manifest) {
+	if i == nil || i.ContractRegistry == nil || len(m.Contracts) == 0 {
+		return
+	}
+	if err := m.RegisterDeclaredContracts(i.ContractRegistry(orgID)); err != nil {
+		slog.Warn("installer.contracts_register_failed", "addon", m.Key, "version", m.Version, "org_id", orgID.String(), "error", err)
 	}
 }
 
-// RehydrateReport is the outcome of RehydrateDeclaredContracts.
-type RehydrateReport struct {
-	// Registered lists the addon keys whose contracts were recorded.
-	Registered []string
-	// Failed maps an addon key to why its contracts were refused (logged too).
-	Failed map[string]error
-}
-
-// RehydrateDeclaredContracts re-registers the contracts of every addon in the
-// installer's lifecycle registry. A host calls it at boot, after it rehydrates
-// the registry from the addons installed in its database (the same pass that
-// loads their manifests). Safe to call repeatedly: the same owner replaces its
-// own declaration. A failing addon is logged and reported, never fatal.
-func (i *Installer) RehydrateDeclaredContracts() RehydrateReport {
-	rep := RehydrateReport{Failed: map[string]error{}}
-	if i == nil || i.Lifecycles == nil {
-		return rep
+// InstalledContracts lists, for one organization, the contracts declared by the
+// addons it has installed: the persisted installation rows joined with the
+// manifests the host loaded into Lifecycles. It is the input of
+// capability.Registry.Rehydrate at boot, ordered by installation time so the
+// first installed owner of a contract key keeps it.
+func (i *Installer) InstalledContracts(orgID uuid.UUID) ([]capability.InstalledContracts, error) {
+	var rows []Installation
+	if err := i.DB.Where("organization_id = ?", orgID).Order("installed_at ASC, addon_key ASC").Find(&rows).Error; err != nil {
+		return nil, err
 	}
-	all := i.Lifecycles.All()
-	keys := make([]string, 0, len(all))
-	for k := range all {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		m := all[k].Manifest()
-		if len(m.Contracts) == 0 {
+	var out []capability.InstalledContracts
+	for _, r := range rows {
+		lc, ok := i.Lifecycles.Get(r.AddonKey)
+		if !ok {
 			continue
 		}
-		if err := m.RegisterDeclaredContracts(); err != nil {
-			rep.Failed[k] = err
-			slog.Warn("installer.contracts_register_failed", "addon", m.Key, "version", m.Version, "error", err, "phase", "rehydrate")
+		m := lc.Manifest()
+		ds := (&m).DeclaredContracts()
+		if len(ds) == 0 {
 			continue
 		}
-		rep.Registered = append(rep.Registered, k)
+		out = append(out, capability.InstalledContracts{Owner: r.AddonKey, Contracts: ds})
 	}
-	return rep
+	return out, nil
 }
 
 // warnDanglingContracts logs, before an addon that owns contracts is removed,
-// which still-loaded addons implement or extend one of them: their capability
-// keys would otherwise dangle without a trace. Only a warning: removal goes on.
+// which still-loaded addons implement one of them: their capability keys would
+// otherwise dangle without a trace. Only a warning: removal goes on.
 func warnDanglingContracts(reg *lifecycle.Registry, m manifest.Manifest) {
 	if reg == nil || len(m.Contracts) == 0 {
 		return

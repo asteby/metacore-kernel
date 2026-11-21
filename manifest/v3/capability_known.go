@@ -18,16 +18,19 @@ const (
 	RuleCapabilityKeyUnknown = "capability_key_unknown"
 )
 
-// CapabilityCatalog lets a host that knows more declared contracts than the
-// process registry (the hub, from its catalog) extend what counts as known.
-// Optional: nil falls back to the kernel registry alone.
+// CapabilityCatalog is the host's view of the keys declared in the scope being
+// validated (an organization's capability.Registry implements it; the hub can
+// serve its catalog). Optional: nil leaves only the kernel's own contracts and
+// the manifest's own contracts[] as known. There is no process-wide registry of
+// declared contracts: the answer depends on what THIS scope has installed.
 type CapabilityCatalog interface {
 	KnownCapability(key string) bool
 }
 
 // ContractVersioned is an OPTIONAL extension of RoleCatalog (checked by type
 // assertion so the published RoleCatalog interface stays unchanged): it serves
-// the version of a contract so implements[].version can be checked.
+// the version of a contract so implements[].version can be checked. A
+// capability.Registry implements it.
 type ContractVersioned interface {
 	ContractVersion(contractKey string) (version string, ok bool)
 }
@@ -83,8 +86,9 @@ func (m *Manifest) CapabilityUses() []CapabilityUse {
 }
 
 // UnknownCapabilityWarnings returns one warning per use whose key is not
-// known. declaredHere are the contracts the same manifest declares; cat is the
-// optional host catalog (nil-safe, typed nil included).
+// known: not a kernel contract, not declared by this manifest (declaredHere)
+// and not known to the host's catalog cat (optional; nil-safe, typed nil
+// included).
 func UnknownCapabilityWarnings(uses []CapabilityUse, declaredHere []capability.Declared, cat CapabilityCatalog) []string {
 	here := map[string]bool{}
 	for _, d := range declaredHere {
@@ -101,7 +105,7 @@ func UnknownCapabilityWarnings(uses []CapabilityUse, declaredHere []capability.D
 		if u.Key == "" || here[u.Key] {
 			continue
 		}
-		if _, ok := capability.Known(u.Key); ok {
+		if _, ok := capability.KnownBuiltin(u.Key); ok {
 			continue
 		}
 		if cat != nil && cat.KnownCapability(u.Key) {

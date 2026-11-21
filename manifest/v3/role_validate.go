@@ -23,6 +23,9 @@ const (
 	// RuleRoleInferred: a role rule is violated by a manifest whose role is
 	// only inferred. Warning-only until the role is declared.
 	RuleRoleInferred = "role_inferred"
+	// RuleImplementsVersionUnchecked: implements[].version could not be checked
+	// because no catalog served the contract's version. Warning-only.
+	RuleImplementsVersionUnchecked = "implements_version_unchecked"
 	// RuleRoleProviderForeignWrite: a provider holds db:write outside its own
 	// namespace and no catalog was supplied to check the contract's
 	// writable_models. Warning-only.
@@ -338,22 +341,23 @@ func checkImplements(f RoleFacts, cat RoleCatalog, declared bool, errs, warns []
 					warns = append(warns, fmt.Sprintf("[%s] %s", RuleRoleInferred, msg))
 				}
 			}
+		} else {
+			warns = append(warns, fmt.Sprintf("[%s] %s: the version of the implemented contract is unknown here (no catalog serves it), so %q was not checked", RuleImplementsVersionUnchecked, w, im.Version))
 		}
 	}
 	return errs, warns
 }
 
-// contractVersion finds the version of an implemented contract: the catalog
-// first (optional ContractVersioned), then the process registry of contracts
-// declared by installed addons.
+// contractVersion finds the version of an implemented contract. It comes ONLY
+// from the host's catalog (optional ContractVersioned on the RoleCatalog): what
+// an organization has installed is that organization's fact, so the kernel keeps
+// no process-wide fallback that another tenant's upgrade could change.
 func contractVersion(key string, cat RoleCatalog) (string, bool) {
-	if cv, ok := cat.(ContractVersioned); ok && !isNilValue(cat) {
-		if v, found := cv.ContractVersion(key); found {
-			return v, true
-		}
+	if isNilValue(cat) {
+		return "", false
 	}
-	if d, _, ok := capability.LookupDeclared(key); ok {
-		return d.Version, true
+	if cv, ok := cat.(ContractVersioned); ok {
+		return cv.ContractVersion(key)
 	}
 	return "", false
 }

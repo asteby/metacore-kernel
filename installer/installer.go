@@ -54,6 +54,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/asteby/metacore-kernel/bundle"
+	"github.com/asteby/metacore-kernel/capability"
 	"github.com/asteby/metacore-kernel/cachecoherence"
 	"github.com/asteby/metacore-kernel/database/staleplan"
 	"github.com/asteby/metacore-kernel/dynamic"
@@ -218,6 +219,13 @@ type Installer struct {
 	// below is a no-op), and must not write to the installation row. Optional: nil keeps the previous behaviour. See WithRowLockHook.
 	RowLockHook   func(tx *gorm.DB, existing *Installation) error
 	KernelVersion string
+	// ContractRegistry, when set, returns the registry of declared capability
+	// contracts of an organization (or installation: the host decides the
+	// scope). Install and Upgrade record the addon's contracts[] in it AFTER the
+	// change is committed; the host rehydrates it at boot with
+	// Registry.Rehydrate(InstalledContracts(org)). nil = no registry wiring
+	// (the pre-existing behaviour). Registering never fails an install.
+	ContractRegistry func(orgID uuid.UUID) *capability.Registry
 	// RuntimeVersion is the host's metacore-kernel release (default
 	// manifest.HostRuntimeVersion()). An addon whose compatibility.requires
 	// "metacore-kernel" range it does not satisfy is refused on install and
@@ -718,6 +726,9 @@ func (i *Installer) Install(orgID uuid.UUID, b *bundle.Bundle) (inst *Installati
 		return nil, nil, err
 	}
 	t.commit()
+	// Only after the install is committed: a failed or rolled-back install never
+	// leaves its contract keys registered.
+	i.registerDeclaredContracts(orgID, &b.Manifest)
 	return inst, secret, nil
 }
 
@@ -1005,7 +1016,6 @@ func (i *Installer) installSteps(orgID uuid.UUID, b *bundle.Bundle, t *installTx
 		action = ChangeActionUpgrade
 	}
 	assetPaths, contentHash := frontendAssetDigest(b)
-	registerDeclaredContracts(&b.Manifest)
 	i.announce(context.Background(), "addon.install", ManifestChangeEvent{
 		OrgID:       orgID,
 		AddonKey:    b.Manifest.Key,
@@ -1616,8 +1626,8 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 			"err", err.Error())
 	}
 
+	i.registerDeclaredContracts(orgID, &newBundle.Manifest)
 	upgradeAssets, upgradeHash := frontendAssetDigest(newBundle)
-	registerDeclaredContracts(&newBundle.Manifest)
 	i.announce(ctx, "addon.upgrade", ManifestChangeEvent{
 		OrgID:       orgID,
 		AddonKey:    newBundle.Manifest.Key,

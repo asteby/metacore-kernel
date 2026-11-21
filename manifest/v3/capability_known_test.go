@@ -69,19 +69,25 @@ func TestCapabilityKeys_RegistryAndCatalogMakeKeysKnown(t *testing.T) {
 	d := provDoc("acme_pay", "acme.document.issue")
 	warns, _ := validateRole(t, d, Options{Strict: true})
 	if len(warnsContaining(warns, RuleCapabilityKeyUnknown)) != 1 {
-		t.Fatalf("unknown before registering: %v", warns)
+		t.Fatalf("unknown without a catalog: %v", warns)
 	}
-	// An installed contract addon registers its contract.
-	if err := capability.RegisterDeclared("acme_core", capability.Declared{Key: "acme.document", Version: "1.0.0", Operations: []capability.DeclaredOperation{{Key: "issue"}}}); err != nil {
+	// The scope's registry (an organization's installs) makes it known.
+	reg := capability.NewRegistry()
+	if err := reg.Register("acme_core", capability.Declared{Key: "acme.document", Version: "1.0.0", Operations: []capability.DeclaredOperation{{Key: "issue"}}}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { capability.UnregisterDeclared("acme_core") })
-	warns, _ = validateRole(t, d, Options{Strict: true})
+	warns, _ = validateRole(t, d, Options{Strict: true, CapabilityCatalog: reg})
 	if len(warnsContaining(warns, RuleCapabilityKeyUnknown)) != 0 {
-		t.Fatalf("known after RegisterDeclared: %v", warns)
+		t.Fatalf("known through the registry: %v", warns)
 	}
-	// A host catalog extends it; a typed nil catalog is ignored without panic.
-	capability.UnregisterDeclared("acme_core")
+	// ...and ONLY for that scope: another organization's registry does not know it,
+	// and there is no process-wide fallback.
+	other := capability.NewRegistry()
+	warns, _ = validateRole(t, d, Options{Strict: true, CapabilityCatalog: other})
+	if len(warnsContaining(warns, RuleCapabilityKeyUnknown)) != 1 {
+		t.Fatalf("a registry of another scope must not make the key known: %v", warns)
+	}
+	// A host catalog works the same; a typed nil catalog is ignored without panic.
 	warns, _ = validateRole(t, d, Options{Strict: true, CapabilityCatalog: hostKeys{"acme.document.issue": true}})
 	if len(warnsContaining(warns, RuleCapabilityKeyUnknown)) != 0 {
 		t.Fatalf("known through the catalog: %v", warns)
@@ -90,6 +96,11 @@ func TestCapabilityKeys_RegistryAndCatalogMakeKeysKnown(t *testing.T) {
 	warns, _ = validateRole(t, d, Options{Strict: true, CapabilityCatalog: nilCat})
 	if len(warnsContaining(warns, RuleCapabilityKeyUnknown)) != 1 {
 		t.Fatalf("typed nil catalog must behave as none: %v", warns)
+	}
+	var nilReg *capability.Registry
+	warns, _ = validateRole(t, d, Options{Strict: true, CapabilityCatalog: nilReg})
+	if len(warnsContaining(warns, RuleCapabilityKeyUnknown)) != 1 {
+		t.Fatalf("a nil *Registry must behave as an empty one: %v", warns)
 	}
 }
 
@@ -113,45 +124,79 @@ func TestCapabilityKeys_RuleIsWarnOnlyWindow(t *testing.T) {
 	t.Error("capability_key_unknown must be in legacyTolerated")
 }
 
-type versionedCat struct {
+// registryCat adapts one scope's Registry to the validators' RoleCatalog (what
+// a host does): the version comes from that scope alone.
+type registryCat struct {
 	fakeCat
-	versions map[string]string
+	reg *capability.Registry
 }
 
-func (c versionedCat) ContractVersion(k string) (string, bool) { v, ok := c.versions[k]; return v, ok }
+func (c registryCat) ContractVersion(k string) (string, bool) { return c.reg.ContractVersion(k) }
 
-// implements[].version is checked against the contract's version when a
-// catalog or the registry knows it: an error for a declared provider, a
-// warning for an inferred one.
-func TestImplementsVersionCompatibility(t *testing.T) {
-	cat := versionedCat{
-		fakeCat:  fakeCat{contracts: map[string][]string{"acme.document": {"doc_records"}}},
-		versions: map[string]string{"acme.document": "2.0.0"},
+func scopeWith(t *testing.T, version string) registryCat {
+	t.Helper()
+	reg := capability.NewRegistry()
+	if err := reg.Register("acme_core", capability.Declared{Key: "acme.document", Version: version}); err != nil {
+		t.Fatal(err)
 	}
+	return registryCat{fakeCat: fakeCat{contracts: map[string][]string{"acme.document": {"doc_records"}}}, reg: reg}
+}
+
+// implements[].version is checked against the version the HOST's scope serves:
+// an error for a declared provider, a warning for an inferred one. Two
+// organizations with different installed versions get different answers, and
+// the kernel keeps no process-wide fallback (one tenant's upgrade to 2.0.0 must
+// never reject another tenant's provider of ^1.0).
+func TestImplementsVersionCompatibility_PerScope(t *testing.T) {
 	declaredProv := roleDoc("acme_pay", "provider", asProvider) // implements ^1.0
-	if _, err := validateRole(t, declaredProv, Options{Strict: true, RoleCatalog: cat}); err == nil || !strings.Contains(err.Error(), "is not satisfied by contract version 2.0.0") {
-		t.Fatalf("declared provider: want version error, got %v", err)
+	orgA, orgB := scopeWith(t, "2.0.0"), scopeWith(t, "1.4.0")
+
+	if _, err := validateRole(t, declaredProv, Options{Strict: true, RoleCatalog: orgA}); err == nil || !strings.Contains(err.Error(), "is not satisfied by contract version 2.0.0") {
+		t.Fatalf("org A: want version error, got %v", err)
+	}
+	if _, err := validateRole(t, declaredProv, Options{Strict: true, RoleCatalog: orgB}); err != nil {
+		t.Fatalf("org B (1.4.0) must still accept ^1.0: %v", err)
 	}
 	inferred := roleDoc("acme_pay", "", asProvider)
-	warns, err := validateRole(t, inferred, Options{Strict: true, RoleCatalog: cat})
+	warns, err := validateRole(t, inferred, Options{Strict: true, RoleCatalog: orgA})
 	if err != nil || len(warnsContaining(warns, "is not satisfied by contract version 2.0.0")) != 1 {
 		t.Fatalf("inferred provider: want a warning, got warns=%v err=%v", warns, err)
 	}
-	cat.versions["acme.document"] = "1.4.0"
-	if _, err := validateRole(t, declaredProv, Options{Strict: true, RoleCatalog: cat}); err != nil {
-		t.Fatalf("a satisfied range must pass: %v", err)
-	}
-	// Without catalog, the process registry of declared contracts supplies it.
-	if err := capability.RegisterDeclared("acme_core", capability.Declared{Key: "acme.document", Version: "2.0.0"}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { capability.UnregisterDeclared("acme_core") })
-	if _, err := validateRole(t, declaredProv, Options{Strict: true}); err == nil || !strings.Contains(err.Error(), "not satisfied") {
-		t.Fatalf("registry version must be checked without a catalog: %v", err)
-	}
-	// A catalog that does not serve versions (the published RoleCatalog only) checks nothing.
-	capability.UnregisterDeclared("acme_core")
-	if _, err := validateRole(t, declaredProv, Options{Strict: true, RoleCatalog: fakeCat{contracts: map[string][]string{"acme.document": {}}}}); err != nil {
-		t.Fatalf("no version source, no check: %v", err)
+	// A prerelease does not satisfy ^1.0.
+	if _, err := validateRole(t, declaredProv, Options{Strict: true, RoleCatalog: scopeWith(t, "1.1.0-beta")}); err == nil {
+		t.Fatal("1.1.0-beta must not satisfy ^1.0")
 	}
 }
+
+// With no source for the contract's version the check is SKIPPED, loudly: a
+// warning, never an error and never a silent pass.
+func TestImplementsVersionUnchecked_WarnsWithoutVersionSource(t *testing.T) {
+	prov := roleDoc("acme_pay", "provider", asProvider)
+	cases := map[string]Options{
+		"no catalog":                 {Strict: true},
+		"catalog without versions":   {Strict: true, RoleCatalog: fakeCat{contracts: map[string][]string{"acme.document": {}}}},
+		"catalog unaware of version": {Strict: true, RoleCatalog: registryCat{fakeCat: fakeCat{contracts: map[string][]string{"acme.document": {}}}, reg: capability.NewRegistry()}},
+	}
+	for name, o := range cases {
+		warns, err := validateRole(t, prov, o)
+		if err != nil {
+			t.Errorf("%s: must not error: %v", name, err)
+		}
+		if len(warnsContaining(warns, "["+RuleImplementsVersionUnchecked+"]")) != 1 {
+			t.Errorf("%s: want implements_version_unchecked, got %v", name, warns)
+		}
+	}
+	var nilCat *fakeCatPtr
+	warns, err := validateRole(t, prov, Options{Strict: true, RoleCatalog: nilCat})
+	if err != nil || len(warnsContaining(warns, RuleImplementsVersionUnchecked)) != 1 {
+		t.Errorf("typed nil catalog: warns=%v err=%v", warns, err)
+	}
+	if _, ok := warnOnlyWindow[RuleImplementsVersionUnchecked]; !ok {
+		t.Error("implements_version_unchecked must be warn-only")
+	}
+}
+
+type fakeCatPtr struct{}
+
+func (*fakeCatPtr) RoleOf(string) (string, bool)           { panic("typed nil catalog consulted") }
+func (*fakeCatPtr) WritableTables(string) ([]string, bool) { panic("typed nil catalog consulted") }

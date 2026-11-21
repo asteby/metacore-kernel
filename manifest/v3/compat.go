@@ -97,6 +97,7 @@ var legacyTolerated = []string{
 	RuleRoleInferred,
 	RuleRoleProviderForeignWrite,
 	RuleCapabilityKeyUnknown,
+	RuleImplementsVersionUnchecked,
 }
 
 // warnOnlyWindow marks the legacyTolerated rules that are reported as warnings
@@ -113,6 +114,7 @@ var warnOnlyWindow = map[string]struct{}{
 	RuleRoleInferred:                {},
 	RuleRoleProviderForeignWrite:    {},
 	RuleCapabilityKeyUnknown:        {},
+	RuleImplementsVersionUnchecked:  {},
 }
 
 // LegacyTolerated returns the rule ids currently inside their compatibility

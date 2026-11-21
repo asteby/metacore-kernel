@@ -2358,13 +2358,13 @@ func (m *Manifest) UnknownCapabilityWarnings(cat v3.CapabilityCatalog) []string 
 	return v3.UnknownCapabilityWarnings(m.CapabilityUses(), m.DeclaredContracts(), cat)
 }
 
-// RegisterDeclaredContracts records the contracts this addon owns in the
-// process registry of capability keys (capability.RegisterDeclared). A manifest
-// without contracts[] is a no-op.
-func (m *Manifest) RegisterDeclaredContracts() error {
+// RegisterDeclaredContracts records the contracts this addon owns in reg, the
+// registry of ONE scope (an organization's installs). A manifest without
+// contracts[] is a no-op, and so is a nil reg.
+func (m *Manifest) RegisterDeclaredContracts(reg *capability.Registry) error {
 	ds := m.DeclaredContracts()
-	if len(ds) == 0 {
+	if len(ds) == 0 || reg == nil {
 		return nil
 	}
-	return capability.RegisterDeclared(m.Key, ds...)
+	return reg.Register(m.Key, ds...)
 }
