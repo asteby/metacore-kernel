@@ -438,9 +438,16 @@ var _ = sql.ErrNoRows
 // migration, which surfaces here as the Postgres error.
 func createView(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, def manifest.ModelDefinition) error {
 	schema := SchemaName(addonKey, orgID, iso)
-	stmt := fmt.Sprintf(`CREATE OR REPLACE VIEW %q.%q AS %s`, schema, def.TableName, def.View)
+	stmt := viewDDL(schema, def)
 	if err := db.Exec(stmt).Error; err != nil {
 		return fmt.Errorf("create view %s.%s: %w", schema, def.TableName, err)
 	}
 	return nil
+}
+
+// viewDDL is the CREATE OR REPLACE VIEW statement of a view-backed model; shared
+// by CreateTable and ToDDL so a host that executes the statements itself gets
+// the same text.
+func viewDDL(schema string, def manifest.ModelDefinition) string {
+	return fmt.Sprintf(`CREATE OR REPLACE VIEW %q.%q AS %s`, schema, def.TableName, def.View)
 }

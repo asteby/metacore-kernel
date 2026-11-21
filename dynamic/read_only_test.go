@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/metadata"
 	"github.com/asteby/metacore-kernel/modelbase"
 )
@@ -42,5 +43,13 @@ func TestReadOnly_RefusesWrites(t *testing.T) {
 	}
 	if _, err := svc.Get(ctx, "test_products", user, id); err != nil {
 		t.Fatalf("read must work: %v", err)
+	}
+}
+
+func TestToDDL_ViewModelEmitsOnlyTheView(t *testing.T) {
+	def := manifest.ModelDefinition{TableName: "v_totals", ModelKey: "VTotals", OrgScoped: true, View: "SELECT 1 AS id"}
+	stmts, err := ToDDL(def, SingleSchemaDDLOptions("public"))
+	if err != nil || len(stmts) != 1 || stmts[0] != `CREATE OR REPLACE VIEW "public"."v_totals" AS SELECT 1 AS id` {
+		t.Fatalf("stmts=%v err=%v", stmts, err)
 	}
 }
