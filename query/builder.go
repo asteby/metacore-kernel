@@ -222,8 +222,12 @@ func buildAllowed(b *Builder, meta *modelbase.TableMetadata) {
 	// this, `created_at` was not in `allowed`, defaultSort found no timestamp
 	// column, and the list came back in heap order (the sales-orders "not
 	// newest first" report). They are also legitimately sortable by the user.
-	for _, fw := range []string{"id", "created_at", "updated_at"} {
-		b.allowed[fw] = struct{}{}
+	// A read-only (view-backed) model carries exactly the columns it declares:
+	// whitelisting created_at/updated_at would ORDER BY a column the view lacks.
+	if !meta.ReadOnly {
+		for _, fw := range []string{"id", "created_at", "updated_at"} {
+			b.allowed[fw] = struct{}{}
+		}
 	}
 	for _, s := range meta.SearchColumns {
 		if _, ok := b.allowed[s]; !ok {
@@ -525,6 +529,10 @@ func (b *Builder) defaultSort() (string, string) {
 		if _, ok := b.allowed[cand]; ok {
 			return cand, "desc"
 		}
+	}
+	// No timestamp (a view): a stable key keeps pagination deterministic.
+	if _, ok := b.allowed["id"]; ok {
+		return "id", "asc"
 	}
 	return "", ""
 }
