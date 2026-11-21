@@ -18,6 +18,11 @@ type Options struct {
 	// UPGRADING an already-published bundle (ops, installer): tolerated rules
 	// then come back as warnings.
 	Strict bool
+	// RoleCatalog, when set, completes the role rules that need other addons
+	// (R-A: only an extension may require a provider; R-B against a contract's
+	// writable_models; unknown implemented contracts). The hub and ops pass
+	// theirs. nil skips those checks and never panics.
+	RoleCatalog RoleCatalog
 }
 
 // Rule ids of the legacy-tolerated rules. Warnings are prefixed "[id] ".
@@ -85,6 +90,8 @@ var legacyTolerated = []string{
 	RulePrivateExplicitCapabilities,
 	RuleEventEmitCapability,
 	RuleRoleMissing,
+	RuleRoleInferred,
+	RuleRoleProviderForeignWrite,
 }
 
 // warnOnlyWindow marks the legacyTolerated rules that are reported as warnings
@@ -98,6 +105,8 @@ var warnOnlyWindow = map[string]struct{}{
 	RulePrivateExplicitCapabilities: {},
 	RuleEventEmitCapability:         {},
 	RuleRoleMissing:                 {},
+	RuleRoleInferred:                {},
+	RuleRoleProviderForeignWrite:    {},
 }
 
 // LegacyTolerated returns the rule ids currently inside their compatibility
