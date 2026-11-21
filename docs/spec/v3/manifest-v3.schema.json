@@ -69,6 +69,9 @@
     "extension_points": {
       "$ref": "#/$defs/ExtensionPoints"
     },
+    "ui": {
+      "$ref": "#/$defs/UI"
+    },
     "events": {
       "$ref": "#/$defs/EventsDecl"
     },
@@ -4633,6 +4636,301 @@
           "type": "string",
           "description": "Author note; ignored by the runtime."
         }
+      }
+    },
+    "UI": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Loom (RFC 0005): exposed Parts, published Seams and grafts (Part -> Seam). Optional and additive.",
+      "properties": {
+        "exposes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UIPart"
+          }
+        },
+        "seams": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UISeam"
+          }
+        },
+        "contributions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UIGraft"
+          }
+        }
+      }
+    },
+    "UIPart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "expose"
+      ],
+      "description": "A component the addon exposes with a contract.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9][a-z0-9_-]*)+$"
+        },
+        "version": {
+          "type": "string"
+        },
+        "expose": {
+          "type": "string",
+          "minLength": 1
+        },
+        "props_schema": {
+          "type": "string"
+        },
+        "needs": {
+          "$ref": "#/$defs/UINeeds"
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "UINeeds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "network": {
+          "type": "string",
+          "enum": [
+            "none",
+            "org",
+            "hosts"
+          ]
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "offline": {
+          "type": "boolean"
+        }
+      }
+    },
+    "UISeam": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version"
+      ],
+      "description": "A typed extension point this addon owns (generalizes extension_points.slot_kinds).",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9][a-z0-9_-]*)+$"
+        },
+        "version": {
+          "type": "string"
+        },
+        "lenses": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "money",
+              "pii",
+              "pii.fiscal",
+              "secret"
+            ]
+          }
+        },
+        "writable": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "intents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cardinality": {
+          "type": "string",
+          "enum": [
+            "one",
+            "many"
+          ]
+        },
+        "deprecated": {
+          "$ref": "#/$defs/UIDeprecated"
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "UIDeprecated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "since"
+      ],
+      "properties": {
+        "since": {
+          "type": "string"
+        },
+        "removal": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "UIGraft": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "part",
+        "seam"
+      ],
+      "description": "Mounts a Part on a Seam with order, conditions, lenses read and fields it may propose.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9][a-z0-9_-]*)+$"
+        },
+        "part": {
+          "type": "string",
+          "minLength": 1
+        },
+        "seam": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requires": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "view",
+            "action",
+            "transform",
+            "source"
+          ]
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "contribute",
+            "wrap",
+            "replace"
+          ]
+        },
+        "order": {
+          "type": "integer"
+        },
+        "when": {
+          "$ref": "#/$defs/UIWhen"
+        },
+        "reads": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "writes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "emits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "network": {
+          "type": "string",
+          "enum": [
+            "none",
+            "org",
+            "hosts"
+          ]
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "offline": {
+          "type": "boolean"
+        },
+        "props": {
+          "type": "object"
+        }
+      }
+    },
+    "UIWhen": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "permission": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "any_permission": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "flag": {
+          "type": "string"
+        },
+        "setting": {
+          "$ref": "#/$defs/UISettingWhen"
+        },
+        "condition": {
+          "$ref": "#/$defs/Condition"
+        }
+      }
+    },
+    "UISettingWhen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "equals": {}
       }
     },
     "ExtensionPoints": {

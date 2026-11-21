@@ -41,6 +41,9 @@ type Manifest struct {
 	Runtime         *Runtime         `json:"runtime,omitempty"`
 	Contributions   *Contributions   `json:"contributions,omitempty"`
 	ExtensionPoints *ExtensionPoints `json:"extension_points,omitempty"`
+	// UI is the Loom block (RFC 0005): exposed Parts, published Seams and
+	// grafts. Optional; see ui.go.
+	UI *UIBlock `json:"ui,omitempty"`
 	// Events declares the event catalog (RFC 0003): what this addon emits and
 	// consumes. Optional; see event_catalog.go.
 	Events        *EventsDecl    `json:"events,omitempty"`
