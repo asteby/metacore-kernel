@@ -1309,7 +1309,10 @@ type ModelDefinition struct {
 	// Aliases carries v3 Model.aliases: extra slugs that resolve to this model
 	// (see the modelalias package). Empty = key and table only.
 	Aliases []string `json:"aliases,omitempty"`
-	Extends    string      `json:"extends,omitempty"`
+	Extends string   `json:"extends,omitempty"`
+	// Scope carries v3 Model.scope (merchant | market | shared | group): the organizational boundary the model lives behind
+	// (RFC 0006). Empty = undeclared. The host's data scope reads it; the kernel only validated it.
+	Scope      string      `json:"scope,omitempty"`
 	OrgScoped  bool        `json:"org_scoped,omitempty"`
 	SoftDelete bool        `json:"soft_delete,omitempty"`
 	Columns    []ColumnDef `json:"columns"`
@@ -1350,9 +1353,9 @@ type ModelDefinition struct {
 	// dynamic engine reads them to derive the `status` display of StageField, to
 	// validate stage moves on Update, and to fire OnTransition hooks. Empty
 	// StageField/Stages = no stage machine (the legacy, unrestricted behaviour).
-	StageField   string              `json:"stageField,omitempty"`
+	StageField string `json:"stageField,omitempty"`
 	// StageCheck carries v3 Model.stage_check (see there).
-	StageCheck bool `json:"stageCheck,omitempty"`
+	StageCheck   bool                `json:"stageCheck,omitempty"`
 	Stages       []StageDef          `json:"stages,omitempty"`
 	Transitions  []TransitionDef     `json:"transitions,omitempty"`
 	OnTransition []TransitionHookDef `json:"onTransition,omitempty"`
@@ -1566,10 +1569,10 @@ type StageDef struct {
 // TransitionDef is the host/runtime projection of a v3 Transition: one allowed
 // (from → to) stage move plus its optional policy (see manifest/v3.Transition).
 type TransitionDef struct {
-	From           string         `json:"from"`
-	To             string         `json:"to"`
-	Guard          string         `json:"guard,omitempty"`
-	Roles          []string       `json:"roles,omitempty"`
+	From  string   `json:"from"`
+	To    string   `json:"to"`
+	Guard string   `json:"guard,omitempty"`
+	Roles []string `json:"roles,omitempty"`
 	// Permission is a capability that also authorizes the move (v3 Transition.permission).
 	Permission     string         `json:"permission,omitempty"`
 	RequiresFields []string       `json:"requiresFields,omitempty"`

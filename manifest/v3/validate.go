@@ -14,8 +14,8 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/asteby/metacore-kernel/manifest/computeexpr"
-	"github.com/asteby/metacore-kernel/modelalias"
 	"github.com/asteby/metacore-kernel/manifest/rulesexpr"
+	"github.com/asteby/metacore-kernel/modelalias"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -1971,6 +1971,8 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	errs = append(errs, validateSearchKeys(&m)...)
 	errs = append(errs, validateDerivedReadPermissions(&m)...)
 	errs = append(errs, validateAttributeClasses(&m)...)
+	// Declared organizational scope (scope_validate.go, RFC 0006).
+	errs = append(errs, validateScope(&m)...)
 
 	modelByKey := make(map[string]Model, len(m.Models))
 	for _, mod := range m.Models {

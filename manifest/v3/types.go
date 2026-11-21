@@ -709,14 +709,14 @@ type Capability struct {
 
 // Model is a data model the addon owns.
 type Model struct {
-	Key         string       `json:"key"`
-	Table       string       `json:"table"`
-	Label       string       `json:"label,omitempty"`
+	Key   string `json:"key"`
+	Table string `json:"table"`
+	Label string `json:"label,omitempty"`
 	// Aliases are extra slugs that resolve to this model next to Key and Table
 	// (RFC 0004): /metadata, /data and /options accept them, matching ignores
 	// case and separators ("order-items" == "order_items" == "OrderItems").
 	// They never change permissions: the canonical model's apply.
-	Aliases []string `json:"aliases,omitempty"`
+	Aliases     []string     `json:"aliases,omitempty"`
 	Columns     []Column     `json:"columns"`
 	Indices     []Index      `json:"indices,omitempty"`
 	ForeignKeys []ForeignKey `json:"foreign_keys,omitempty"`
@@ -737,6 +737,11 @@ type Model struct {
 	// kernel and dropped with this addon's schema on uninstall. Empty = an
 	// ordinary model. See CONTRACT-item-master.md §3.1.
 	Extends string `json:"extends,omitempty"`
+
+	// Scope declares which organizational boundary this model lives behind (RFC 0006): merchant (belongs to one merchant, via its
+	// branch), market (shared master, visible per its markets column), shared (organization-wide master) or group (group view only).
+	// Empty = undeclared (nothing changes). The kernel only validates coherence (see ScopeKind); the host enforces it.
+	Scope ScopeKind `json:"scope,omitempty"`
 
 	// SearchKeys declares normalized search keys composed from this model's
 	// columns, e.g. a tire size "{section_width_mm}/{aspect_ratio}R{rim_diameter_in}".
@@ -1000,15 +1005,15 @@ type Stage struct {
 //   - SLA: how long a record may sit in the destination stage; informational
 //     metadata projected to hosts (the kernel does not enforce the breach).
 type Transition struct {
-	From           string          `json:"from"`
-	To             string          `json:"to"`
-	Guard          string          `json:"guard,omitempty"`
-	Roles          []string        `json:"roles,omitempty"`
+	From  string   `json:"from"`
+	To    string   `json:"to"`
+	Guard string   `json:"guard,omitempty"`
+	Roles []string `json:"roles,omitempty"`
 	// Permission names a capability ("orders.confirm") that also authorizes this
 	// move: a user who holds it may make the transition without holding one of
 	// Roles, so a single transition can be delegated without creating a role.
 	// With both set, either is enough. Empty = only Roles (or nothing) gates it.
-	Permission string `json:"permission,omitempty"`
+	Permission     string          `json:"permission,omitempty"`
 	RequiresFields []string        `json:"requires_fields,omitempty"`
 	Approval       *ApprovalPolicy `json:"approval,omitempty"`
 	Reopen         bool            `json:"reopen,omitempty"`
