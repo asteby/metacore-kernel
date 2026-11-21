@@ -1005,6 +1005,7 @@ func (i *Installer) installSteps(orgID uuid.UUID, b *bundle.Bundle, t *installTx
 		action = ChangeActionUpgrade
 	}
 	assetPaths, contentHash := frontendAssetDigest(b)
+	registerDeclaredContracts(&b.Manifest)
 	i.announce(context.Background(), "addon.install", ManifestChangeEvent{
 		OrgID:       orgID,
 		AddonKey:    b.Manifest.Key,
@@ -1613,6 +1614,7 @@ func (i *Installer) Upgrade(ctx context.Context, orgID uuid.UUID, newBundle *bun
 	}
 
 	upgradeAssets, upgradeHash := frontendAssetDigest(newBundle)
+	registerDeclaredContracts(&newBundle.Manifest)
 	i.announce(ctx, "addon.upgrade", ManifestChangeEvent{
 		OrgID:       orgID,
 		AddonKey:    newBundle.Manifest.Key,
@@ -2010,4 +2012,16 @@ func ensureAuditInPrimarySchema(db *gorm.DB, migrationSchema func(addonKey strin
 		}
 	}
 	return nil
+}
+
+// registerDeclaredContracts records the contracts of an installed addon with
+// role "contract" in the process registry of capability keys (X-R2), so a
+// consumer's or provider's key resolves as known. It never fails an install or
+// an upgrade: a conflict (another addon already owns the contract key) is
+// logged. Uninstall does not unregister: other organizations may still run the
+// addon, and a stale entry only keeps a key known.
+func registerDeclaredContracts(m *manifest.Manifest) {
+	if err := m.RegisterDeclaredContracts(); err != nil {
+		slog.Warn("installer.contracts_register_failed", "addon", m.Key, "version", m.Version, "error", err)
+	}
 }

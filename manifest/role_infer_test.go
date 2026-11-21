@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/asteby/metacore-kernel/capability"
 	v3 "github.com/asteby/metacore-kernel/manifest/v3"
 )
 
@@ -83,5 +84,32 @@ func TestLegacyValidator_InferredRoleWarns(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(warns, "\n"), "role_missing") {
 		t.Fatalf("want role_missing warning, got %v", warns)
+	}
+}
+
+// The host manifest warns about unknown capability keys the same way the v3
+// validator does, and registers its own contracts for the registry.
+func TestLegacyManifest_ClosedRegistry(t *testing.T) {
+	m := legacyFromV3(t, doc("acme_pay", "", func(d map[string]any) {
+		d["provides_capabilities"] = []any{rm("key", "acme.document.issue", "handler", rm("type", "wasm", "function", "do_it"))}
+	}))
+	warns, err := m.ValidateAdvisory("3.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(warns, "\n"), "capability_key_unknown") {
+		t.Fatalf("want capability_key_unknown, got %v", warns)
+	}
+	owner := legacyFromV3(t, doc("acme_core", "contract", func(d map[string]any) {
+		d["models"] = []any{rm("key", "Doc", "table", "doc_records", "columns", []any{rm("name", "id", "type", "uuid"), rm("name", "organization_id", "type", "uuid", "not_null", true)})}
+		d["contracts"] = []any{rm("key", "acme.document", "version", "1.0.0", "operations", []any{rm("key", "issue", "kind", "action")})}
+	}))
+	if err := owner.RegisterDeclaredContracts(); err != nil {
+		t.Fatal(err)
+	}
+	defer capability.UnregisterDeclared("acme_core")
+	warns, _ = m.ValidateAdvisory("3.1.0")
+	if strings.Contains(strings.Join(warns, "\n"), "capability_key_unknown") {
+		t.Fatalf("the key is known once the owner registered: %v", warns)
 	}
 }
