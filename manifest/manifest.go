@@ -174,6 +174,18 @@ type Manifest struct {
 	// bundles) already owns the "i18n" JSON key.
 	MetadataI18n map[string]MetadataLocale `json:"metadata_i18n,omitempty"`
 
+	// Role is v3 metadata.role (base + successors pattern); Deprecated is
+	// metadata.deprecated. Contracts / Implements / ExtendsAddon / Replaces are
+	// the root v3 blocks of the same names, carried verbatim so the legacy
+	// validator and hosts apply the same role rules (v3.CheckRoles). All
+	// optional: empty for an addon that declares none.
+	Role         string          `json:"role,omitempty"`
+	Deprecated   *v3.Deprecation `json:"deprecated,omitempty"`
+	Contracts    []v3.Contract   `json:"contracts,omitempty"`
+	Implements   []v3.Implements `json:"implements,omitempty"`
+	ExtendsAddon *v3.ExtendsAddon `json:"extends_addon,omitempty"`
+	Replaces     []string        `json:"replaces,omitempty"`
+
 	// Connectors / Schedules / Webhooks are the host projection of the v3
 	// pipeline-runtime primitives (see manifest/v3.Connector/Schedule/
 	// InboundWebhook). Connectors enumerate the per-org credential providers the

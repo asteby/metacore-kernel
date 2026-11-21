@@ -141,6 +141,25 @@ type Manifest struct {
 	// addon provides no capability (the default).
 	ProvidesCapabilities []ProvidedCapability `json:"provides_capabilities,omitempty"`
 
+	// Contracts are the versioned contracts this addon OWNS (role "contract"):
+	// operations, events, states, settings and selection policy that providers
+	// implement. Empty = the addon owns no contract (the default).
+	Contracts []Contract `json:"contracts,omitempty"`
+
+	// Implements lists the contracts (owned by another addon) this addon
+	// implements (roles "provider" and "extension"). Empty = none.
+	Implements []Implements `json:"implements,omitempty"`
+
+	// ExtendsAddon names the provider or contract addon an "extension" addon
+	// complements. It cannot exist without it, so its key must also be in
+	// compatibility.requires.
+	ExtendsAddon *ExtendsAddon `json:"extends_addon,omitempty"`
+
+	// Replaces lists addon keys this addon supersedes (a rename or split):
+	// the installer can migrate an installation of the old key. Informative
+	// for validation; never a dependency.
+	Replaces []string `json:"replaces,omitempty"`
+
 	// OptionMetrics CONTRIBUTES computed values to the options of a model (own
 	// or another addon's), e.g. inventory's "stock_available" for
 	// products.Product. A target's option_display references them by key in
@@ -632,7 +651,46 @@ type Metadata struct {
 	// (e.g. the company a private preset belongs to). The marketplace remains
 	// the authority on ownership.
 	Owner string `json:"owner,omitempty"`
+	// Role places the addon in the base + successors pattern (see the Role*
+	// constants and role_validate.go). Empty = not declared: the host infers it
+	// (InferRole) and reports the warning-only rule role_missing; the
+	// role-dependent rules (R-A..R-D) are hard errors only for a DECLARED role.
+	Role string `json:"role,omitempty"`
+	// Deprecated marks the whole addon as superseded. Informative: catalogs
+	// show it and point to ReplacedBy; nothing is blocked.
+	Deprecated *Deprecation `json:"deprecated,omitempty"`
 }
+
+// Deprecation is the end-of-life notice of an addon, a contract or one
+// contract operation (plan §4A.4: deprecated{since, replacement, sunset}). The
+// hub warns and fleet telemetry counts the calls; nothing is blocked by the
+// kernel. The field names are part of the frozen contract.
+type Deprecation struct {
+	// Since is the version (semver) from which it is deprecated.
+	Since string `json:"since,omitempty"`
+	// Replacement names the successor: an addon key, a contract key, or an
+	// operation key, according to what is deprecated.
+	Replacement string `json:"replacement,omitempty"`
+	// Sunset is the date (YYYY-MM-DD) after which it may stop being served.
+	Sunset string `json:"sunset,omitempty"`
+}
+
+// Addon roles (metadata.role). Taxonomy of the base + successors pattern: a
+// contract addon owns a versioned contract and the canonical data; providers
+// implement it; extensions complement a provider or contract.
+const (
+	RoleFoundation   = "foundation"
+	RoleContract     = "contract"
+	RoleProvider     = "provider"
+	RoleExtension    = "extension"
+	RoleLocalization = "localization"
+	RoleVertical     = "vertical"
+	RoleApp          = "app"
+	RolePreset       = "preset"
+)
+
+// Roles lists every valid metadata.role value.
+var Roles = []string{RoleFoundation, RoleContract, RoleProvider, RoleExtension, RoleLocalization, RoleVertical, RoleApp, RolePreset}
 
 // Metadata visibility values.
 const (
@@ -3953,4 +4011,142 @@ type ModelView struct {
 	// view body verbatim, so it must come from the manifest author, never from
 	// request data.
 	SQL string `json:"sql"`
+}
+
+// Contract is a versioned capability contract owned by a "contract" addon.
+type Contract struct {
+	// Key is "<family>.<name>" in lower snake case, e.g. "acme.document". The
+	// FAMILY of a contract is its first segment (Family()): there is no
+	// separate field, so the two can never disagree. The owning addon is
+	// conventionally "<family>_core".
+	Key string `json:"key"`
+	// Version is the contract's semver. A minor is additive only.
+	Version string `json:"version"`
+	// Operations are the verbs a provider implements.
+	Operations []ContractOperation `json:"operations,omitempty"`
+	// Events the contract emits, each versioned.
+	Events []ContractEvent `json:"events,omitempty"`
+	// States binds the canonical record's stage machine to the contract.
+	States *ContractStates `json:"states,omitempty"`
+	// WritableModels are the owner's models a provider may write (R-B).
+	WritableModels []string `json:"writable_models,omitempty"`
+	// ProviderSettings are the per-provider settings the base renders.
+	ProviderSettings []ContractSetting `json:"provider_settings,omitempty"`
+	// Selection says how a provider is chosen at runtime.
+	Selection *ContractSelection `json:"selection,omitempty"`
+	// Health names the operation polled to report a provider's status.
+	Health *ContractHealth `json:"health,omitempty"`
+	// Conformance is the path of the contract's conformance vectors.
+	Conformance string `json:"conformance,omitempty"`
+	// Deprecated marks this contract version line as superseded.
+	Deprecated *Deprecation `json:"deprecated,omitempty"`
+}
+
+// Family is the first segment of the contract key ("acme" for "acme.document").
+func (c Contract) Family() string {
+	if i := strings.Index(c.Key, "."); i > 0 {
+		return c.Key[:i]
+	}
+	return c.Key
+}
+
+// Contract operation failover modes (plan §4A.3).
+const (
+	// FailoverNever: the effect is irreversible or the outcome can be
+	// indeterminate; the call stays pending and is reconciled, never retried on
+	// another provider.
+	FailoverNever = "never"
+	// FailoverAllowed: reads and idempotent calls without external effect.
+	FailoverAllowed = "allowed"
+	// FailoverBeforeEffect: the host may retry on another provider only when
+	// the failed provider provably did not receive the request.
+	FailoverBeforeEffect = "before_effect"
+)
+
+// ContractOperation is one verb of a contract.
+type ContractOperation struct {
+	Key string `json:"key"`
+	// Kind is "action" (changes state) or "query" (read-only).
+	Kind   string `json:"kind"`
+	Input  string `json:"input,omitempty"`
+	Output string `json:"output,omitempty"`
+	// Idempotent promises that repeating the call with the same key is safe.
+	Idempotent bool `json:"idempotent,omitempty"`
+	// TimeoutS is the per-call budget in seconds (0 = host default).
+	TimeoutS int `json:"timeout_s,omitempty"`
+	// Failover is "never", "allowed" or "before_effect" (FailoverNever,
+	// FailoverAllowed, FailoverBeforeEffect): whether and when the host may
+	// retry the operation on another provider after a failure. Empty = never.
+	Failover string `json:"failover,omitempty"`
+	// Errors is the closed set of error codes the operation may return.
+	Errors []string `json:"errors,omitempty"`
+	// Required false makes the operation optional for a provider (default true).
+	Required *bool `json:"required,omitempty"`
+	// Deprecated marks this operation as superseded.
+	Deprecated *Deprecation `json:"deprecated,omitempty"`
+}
+
+// ContractEvent is a versioned event of a contract.
+type ContractEvent struct {
+	Name    string `json:"name"`
+	Version int    `json:"version"`
+	// PayloadSchema is the path of the payload JSON schema. Optional on
+	// purpose: making it required later would break manifests, relaxing it
+	// never does; the conformance suite is what asks for it.
+	PayloadSchema string `json:"payload_schema,omitempty"`
+}
+
+// ContractStates binds a model's stage machine to a contract.
+type ContractStates struct {
+	Model string `json:"model"`
+	Field string `json:"field"`
+	// Indeterminate is the stage an unknown outcome stays in.
+	Indeterminate string `json:"indeterminate,omitempty"`
+}
+
+// ContractSetting is one provider setting declared by a contract.
+type ContractSetting struct {
+	Key     string   `json:"key"`
+	Type    string   `json:"type"`
+	Options []string `json:"options,omitempty"`
+	Default any      `json:"default,omitempty"`
+	// ConfirmTypedOn names the value that demands a typed confirmation.
+	ConfirmTypedOn string `json:"confirm_typed_on,omitempty"`
+}
+
+// ContractSelection is the runtime provider-selection policy.
+type ContractSelection struct {
+	// Cardinality is "one" (a single active provider) or "many".
+	Cardinality string `json:"cardinality,omitempty"`
+	// Scopes the binding may be set at: org|entity|branch|country|channel.
+	Scopes []string `json:"scopes,omitempty"`
+}
+
+// ContractHealth is the periodic provider health probe.
+type ContractHealth struct {
+	Operation string `json:"operation"`
+	// Every is a duration such as "5m".
+	Every string `json:"every,omitempty"`
+}
+
+// Implements declares that the addon implements a contract of another addon.
+type Implements struct {
+	// Contract is the contract key.
+	Contract string `json:"contract"`
+	// Version is a semver range the implemented contract must satisfy.
+	Version string `json:"version"`
+	// Scope lists the binding scopes (org|entity|branch|country|channel) at
+	// which this implementation can be selected; empty = any scope the
+	// contract's selection allows.
+	Scope []string `json:"scope,omitempty"`
+	// Countries scopes the implementation to ISO 3166-1 alpha-2 markets.
+	Countries []string `json:"countries,omitempty"`
+	// Operations lists the operations implemented (empty = all required).
+	Operations []string `json:"operations,omitempty"`
+}
+
+// ExtendsAddon names the addon an extension complements.
+type ExtendsAddon struct {
+	Key     string `json:"key"`
+	Version string `json:"version"`
 }

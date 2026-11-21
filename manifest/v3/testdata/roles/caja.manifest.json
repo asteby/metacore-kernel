@@ -1,0 +1,804 @@
+{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": {
+    "key": "caja",
+    "name": "Cash Desk",
+    "description": "Send POS sales to a cashier desk: sellers queue the order, the cashier collects it, and card terminal payments settle pending sales automatically.",
+    "version": "0.6.3",
+    "category": "foundation.commerce",
+    "icon": {
+      "type": "lucide",
+      "slug": "Vault",
+      "color": "#0EA5E9"
+    },
+    "author": "Asteby",
+    "license": "Apache-2.0",
+    "readme": "README.md",
+    "features": [
+      "Sellers send sales to the cashier queue instead of charging from the cart.",
+      "Charging from the cart stays available when a card terminal is registered.",
+      "Cashiers open their session and collect pending sales from one screen.",
+      "Mercado Pago and Point card payments settle the pending sale automatically, never twice.",
+      "Customer account payments made in cash are queued for the cashier to collect.",
+      "Reuses POS cash sessions and the drawer, so there is no second cash book."
+    ],
+    "i18n": {
+      "es": {
+        "name": "Caja",
+        "description": "Envía las ventas del punto de venta a una caja: el vendedor encola el pedido, el cajero lo cobra y los pagos con terminal de tarjeta liquidan las ventas pendientes solos.",
+        "features": [
+          "Los vendedores envían las ventas a la cola de caja en lugar de cobrar desde el carrito.",
+          "Cobrar desde el carrito sigue disponible cuando hay una terminal de tarjeta registrada.",
+          "Los cajeros abren su sesión y cobran las ventas pendientes desde una sola pantalla.",
+          "Los pagos con tarjeta de Mercado Pago y Point liquidan la venta pendiente solos, sin cobrar dos veces.",
+          "Los abonos de clientes pagados en efectivo se encolan para que el cajero los cobre.",
+          "Reutiliza las sesiones de caja y el cajón del punto de venta, así que no hay un segundo libro de caja."
+        ]
+      },
+      "en": {
+        "name": "Cash Desk",
+        "description": "Send POS sales to a cashier desk: sellers queue the order, the cashier collects it, and card terminal payments settle pending sales automatically.",
+        "features": [
+          "Sellers send sales to the cashier queue instead of charging from the cart.",
+          "Charging from the cart stays available when a card terminal is registered.",
+          "Cashiers open their session and collect pending sales from one screen.",
+          "Mercado Pago and Point card payments settle the pending sale automatically, never twice.",
+          "Customer account payments made in cash are queued for the cashier to collect.",
+          "Reuses POS cash sessions and the drawer, so there is no second cash book."
+        ]
+      }
+    }
+  },
+  "compatibility": {
+    "requires": [
+      {
+        "key": "kernel",
+        "version": ">=3.0.0 <4.0.0"
+      },
+      {
+        "key": "pos",
+        "version": ">=0.16.0",
+        "reason": "Sessions, cash registers, tenders and pending_payment queue."
+      },
+      {
+        "key": "customers",
+        "version": ">=0.1.0",
+        "reason": "SalesOrder queue and CxC Payment for collections."
+      },
+      {
+        "key": "mercadopago",
+        "version": ">=0.6.0",
+        "optional": true,
+        "reason": "Recommended: settle pending_payment when Mercado Pago / Point confirms. Without MP, cashier settles manually."
+      },
+      {
+        "key": "payment_terminals",
+        "version": ">=0.1.0",
+        "optional": true,
+        "reason": "Seller can_collect when a terminal is assigned."
+      },
+      {
+        "key": "workstations",
+        "version": ">=0.1.0",
+        "optional": true,
+        "reason": "Station-derived collection capabilities."
+      }
+    ],
+    "provides": [
+      "checkout.cashier_desk"
+    ]
+  },
+  "tenancy": {
+    "isolation": "shared",
+    "rls_column": "organization_id"
+  },
+  "capabilities": [
+    {
+      "kind": "db:write",
+      "target": "addon_caja.*",
+      "reason": "Persist CxC collection queue links."
+    },
+    {
+      "kind": "db:read",
+      "target": "addon_caja.*",
+      "reason": "Read collection queue."
+    },
+    {
+      "kind": "db:write",
+      "target": "pos_sale_payments",
+      "reason": "Create POSSalePayment when MP confirms a sale."
+    },
+    {
+      "kind": "db:write",
+      "target": "sales_orders",
+      "reason": "Settle pending_payment orders and enqueue AR collection orders."
+    },
+    {
+      "kind": "db:read",
+      "target": "sales_orders",
+      "reason": "Look up orders to settle."
+    },
+    {
+      "kind": "db:read",
+      "target": "pos_payment_methods",
+      "reason": "Pick card/wallet method for MP tenders."
+    },
+    {
+      "kind": "db:read",
+      "target": "pos_sale_payments",
+      "reason": "Idempotency on provider reference."
+    },
+    {
+      "kind": "event:subscribe",
+      "target": "mercadopago.payment_confirmed",
+      "reason": "Settle SalesOrder when an online MP payment is approved. Legacy fallback for one version (setting legacy_provider_events)."
+    },
+    {
+      "kind": "event:subscribe",
+      "target": "mercadopago.point_payment_approved",
+      "reason": "Settle SalesOrder when Point approves a card payment. Legacy fallback for one version (setting legacy_provider_events)."
+    },
+    {
+      "kind": "event:subscribe",
+      "target": "commerce.payments.confirmed",
+      "reason": "Payments standard: settle a pending sale when ANY payments provider confirms its payment (neutral event {provider, result}); the payment is re-read with commerce.payments.status pinned to that provider before recording the tender."
+    },
+    {
+      "kind": "capability:query",
+      "target": "commerce.payments.status",
+      "reason": "Re-read a confirmed payment from its provider (pinned): only that answer — status paid, amount and currency — records the tender."
+    },
+    {
+      "kind": "event:subscribe",
+      "target": "customers.SalesOrder.updated",
+      "reason": "Mark CajaCollection settled when the queued order leaves pending_payment."
+    },
+    {
+      "kind": "event:emit",
+      "target": "caja.order_settled",
+      "reason": "Notify downstream that caja settled a pending order via provider."
+    },
+    {
+      "kind": "event:emit",
+      "target": "caja.collection_queued",
+      "reason": "Notify that an AR abono was queued for the cashier."
+    },
+    {
+      "kind": "event:subscribe",
+      "target": "customers.Payment.created",
+      "reason": "Auto-route cash collections to the cashier queue."
+    },
+    {
+      "kind": "event:subscribe",
+      "target": "customers.Payment.updated",
+      "reason": "Re-evaluate routing when the payment method changes."
+    }
+  ],
+  "models": [
+    {
+      "key": "CajaSettings",
+      "table": "caja_settings",
+      "label": "caja.model.settings",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "primary_key": true,
+          "label": "caja.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "caja.field.organization_id"
+        },
+        {
+          "name": "force_separated",
+          "type": "boolean",
+          "not_null": true,
+          "default": true,
+          "label": "caja.field.force_separated",
+          "comment": "When true (default), POS cart is Enviar a caja; Cobrar only with Point terminal. Cashier settles Pendientes."
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "caja.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "caja.field.updated_at"
+        }
+      ],
+      "indices": [
+        {
+          "name": "caja_settings_org_uidx",
+          "columns": [
+            "organization_id"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "key": "CajaCollection",
+      "table": "caja_collections",
+      "label": "caja.model.collection",
+      "stage_field": "status",
+      "stages": [
+        {
+          "key": "queued",
+          "label": "caja.field.status_opt.queued",
+          "color": "amber",
+          "order": 0
+        },
+        {
+          "key": "settled",
+          "label": "caja.field.status_opt.settled",
+          "color": "green",
+          "order": 1,
+          "is_final": true
+        },
+        {
+          "key": "cancelled",
+          "label": "caja.field.status_opt.cancelled",
+          "color": "slate",
+          "order": 2,
+          "is_final": true
+        }
+      ],
+      "transitions": [
+        {
+          "from": "queued",
+          "to": "settled"
+        },
+        {
+          "from": "queued",
+          "to": "cancelled"
+        }
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "primary_key": true,
+          "label": "caja.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "caja.field.organization_id"
+        },
+        {
+          "name": "payment_id",
+          "type": "uuid",
+          "ref": "customers.Payment",
+          "label": "caja.field.payment_id"
+        },
+        {
+          "name": "sales_order_id",
+          "type": "uuid",
+          "not_null": true,
+          "ref": "customers.SalesOrder",
+          "label": "caja.field.sales_order_id"
+        },
+        {
+          "name": "amount",
+          "type": "numeric",
+          "not_null": true,
+          "default": 0,
+          "display": "currency",
+          "label": "caja.field.amount"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "not_null": true,
+          "default": "queued",
+          "options": [
+            {
+              "value": "queued",
+              "label": "caja.field.status_opt.queued"
+            },
+            {
+              "value": "settled",
+              "label": "caja.field.status_opt.settled"
+            },
+            {
+              "value": "cancelled",
+              "label": "caja.field.status_opt.cancelled"
+            }
+          ],
+          "display": "status",
+          "label": "caja.field.status"
+        },
+        {
+          "name": "notes",
+          "type": "text",
+          "label": "caja.field.notes"
+        },
+        {
+          "name": "settled_at",
+          "type": "timestamptz",
+          "label": "caja.field.settled_at"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "label": "caja.field.deleted_at"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "caja.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "caja.field.updated_at"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "key": "legacy_provider_events",
+      "type": "boolean",
+      "label": "caja.settings.legacy_provider_events",
+      "description": "caja.settings.legacy_provider_events_help",
+      "default": true,
+      "required": false
+    }
+  ],
+  "contributions": {
+    "agent_capabilities": [
+      {
+        "id": "caja.guide.cashier-desk",
+        "title": "Cobrar en caja / terminal de cajero",
+        "description": "Guía hacia la cola de pendientes y el terminal de cajero.",
+        "kind": "guide",
+        "risk": "none",
+        "permission": "caja.queue.read",
+        "route": "/addons/pos/cashier",
+        "guide": {
+          "id": "caja.cashier-desk",
+          "title": "Terminal de cajero",
+          "description": "Cómo liquidar ventas enviadas a caja.",
+          "intents": [
+            "como cobro en caja",
+            "terminal de cajero",
+            "pendientes de pago",
+            "enviar a caja",
+            "como liquido en caja"
+          ],
+          "steps": [
+            {
+              "id": "concept",
+              "kind": "concept",
+              "title": "Cola de caja",
+              "description": "Con el addon Caja, el vendedor envía a caja y el cajero liquida en el Terminal de cajero (sesión abierta + cola pending_payment)."
+            },
+            {
+              "id": "nav",
+              "target": "navigation./addons/pos/cashier",
+              "title": "Abre Terminal de cajero",
+              "description": "En el menú entra al escritorio de caja.",
+              "advanceOn": {
+                "event": "click"
+              }
+            },
+            {
+              "id": "desk",
+              "route": "/addons/pos/cashier",
+              "target": "navigation./addons/pos/cashier",
+              "title": "Atiende la cola",
+              "description": "Abre sesión si hace falta y cobra los pendientes de la cola."
+            }
+          ]
+        }
+      }
+    ],
+    "navigation": [
+      {
+        "title": "caja.nav.group",
+        "icon": "Landmark",
+        "target": "sidebar.operations",
+        "items": [
+          {
+            "title": "caja.nav.desk",
+            "icon": "Calculator",
+            "url": "addon://pos/cashier",
+            "permission": "caja.queue.read"
+          },
+          {
+            "title": "caja.nav.queue",
+            "icon": "Banknote",
+            "model": "SalesOrder",
+            "permission": "caja.queue.read",
+            "filter": {
+              "state": "pending_payment",
+              "credit_pending": "false"
+            }
+          },
+          {
+            "title": "caja.nav.collections",
+            "icon": "HandCoins",
+            "model": "CajaCollection",
+            "permission": "caja.queue.read",
+            "filter": {
+              "status": "queued"
+            }
+          },
+          {
+            "title": "caja.nav.refunds",
+            "icon": "Banknote",
+            "model": "RefundClaim",
+            "permission": "caja.session.read",
+            "filter": {
+              "state": "pending"
+            }
+          },
+          {
+            "title": "caja.nav.sessions",
+            "icon": "ClipboardList",
+            "model": "POSSession",
+            "permission": "caja.session.read"
+          },
+          {
+            "title": "caja.nav.registers",
+            "icon": "Wallet",
+            "model": "CashRegister",
+            "permission": "caja.settings.write"
+          },
+          {
+            "title": "caja.nav.movements",
+            "icon": "ArrowUpFromLine",
+            "model": "CashMovement",
+            "permission": "caja.settings.write"
+          }
+        ]
+      }
+    ],
+    "subscriptions": [
+      {
+        "event": "mercadopago.payment_confirmed",
+        "handler": {
+          "type": "wasm",
+          "function": "on_mp_payment_confirmed"
+        },
+        "comment": "Settle pending SalesOrder + POSSalePayment (idempotent on mp_payment_id reference). Legacy fallback while providers move to commerce.payments.confirmed; off with setting legacy_provider_events=false."
+      },
+      {
+        "event": "mercadopago.point_payment_approved",
+        "handler": {
+          "type": "wasm",
+          "function": "on_mp_point_approved"
+        },
+        "comment": "Settle from Point edge payload (sale_id / external_reference in payload). Legacy fallback while providers move to commerce.payments.confirmed; off with setting legacy_provider_events=false."
+      },
+      {
+        "event": "commerce.payments.confirmed",
+        "handler": {
+          "type": "wasm",
+          "function": "on_payment_confirmed"
+        },
+        "comment": "Payments standard: one listener for every provider. Trusts only the host-stamped emitter equal to the provider, re-reads commerce.payments.status pinned to it, settles through the same idempotent path as the legacy listeners (same sale + provider reference = already settled)."
+      },
+      {
+        "event": "customers.SalesOrder.updated",
+        "handler": {
+          "type": "wasm",
+          "function": "on_sales_order_updated"
+        },
+        "comment": "When a queued collection order leaves pending_payment, mark CajaCollection settled."
+      },
+      {
+        "event": "customers.Payment.created",
+        "handler": {
+          "type": "wasm",
+          "function": "on_payment_upsert"
+        },
+        "comment": "Auto-route: a CxC payment whose method settles to the drawer (POSPaymentMethod.settlement_channel=drawer) is queued for the cashier by itself. Replaces the manual queue_to_caja row action."
+      },
+      {
+        "event": "customers.Payment.updated",
+        "handler": {
+          "type": "wasm",
+          "function": "on_payment_upsert"
+        },
+        "comment": "Same routing when the method is corrected after the fact; idempotent on payment_id."
+      }
+    ]
+  },
+  "extension_points": {
+    "events": [
+      {
+        "name": "caja.order_settled",
+        "description": "Emitted when caja settles a pending order via a payment provider."
+      },
+      {
+        "name": "caja.collection_queued",
+        "description": "Emitted when an AR payment is queued for the cashier desk."
+      }
+    ]
+  },
+  "lifecycle": {
+    "install": "Install",
+    "uninstall": "Uninstall",
+    "enable": "Enable",
+    "disable": "Disable"
+  },
+  "i18n": {
+    "default_locale": "es-MX",
+    "bundles": [
+      {
+        "locale": "es-MX",
+        "path": "locales/es-MX.json"
+      },
+      {
+        "locale": "en-US",
+        "path": "locales/en-US.json"
+      }
+    ]
+  },
+  "rbac": {
+    "roles": [
+      {
+        "key": "cajero",
+        "label": "caja.role.cashier",
+        "description": "caja.role.cashier_desc",
+        "permissions": [
+          "salesorder.abort_sale",
+          "caja.queue.read",
+          "caja.queue.write",
+          "caja.session.read",
+          "pos.session.read",
+          "pos.session.write",
+          "pos.session.open_session",
+          "pos.session.reconcile_session",
+          "pos.session.close_session",
+          "refund_claims.settle",
+          "caja.return.settle",
+          "caja.layaway.collect"
+        ],
+        "icon": "Banknote",
+        "color": "#0d9488"
+      },
+      {
+        "key": "supervisor_caja",
+        "label": "caja.role.manager",
+        "description": "caja.role.manager_desc",
+        "permissions": [
+          "salesorder.abort_sale",
+          "caja.queue.read",
+          "caja.queue.write",
+          "caja.session.read",
+          "caja.settings.write",
+          "pos.session.read",
+          "pos.session.write",
+          "pos.session.open_session",
+          "pos.session.reconcile_session",
+          "pos.session.close_session",
+          "refund_claims.settle",
+          "caja.return.settle",
+          "caja.layaway.collect",
+          "salesorder.cancel_sale",
+          "salesorder.authorize_credit",
+          "salesorder.reject_credit"
+        ],
+        "icon": "Landmark",
+        "color": "#0f766e"
+      }
+    ],
+    "permissions": [
+      {
+        "key": "caja.queue.read",
+        "label": "caja.permission.queue.read",
+        "models": [
+          {
+            "model": "CajaCollection",
+            "actions": [
+              "index",
+              "show"
+            ]
+          },
+          {
+            "model": "customers.SalesOrder",
+            "actions": [
+              "index",
+              "show"
+            ]
+          },
+          {
+            "model": "customers.Customer",
+            "actions": [
+              "index",
+              "show"
+            ]
+          },
+          {
+            "model": "pos.POSSalePayment",
+            "actions": [
+              "index",
+              "show"
+            ]
+          },
+          {
+            "model": "customers.SalesOrderItem",
+            "actions": [
+              "index",
+              "show"
+            ]
+          },
+          {
+            "model": "customers.RefundTenderLine",
+            "actions": [
+              "index",
+              "show"
+            ]
+          },
+          {
+            "model": "CajaSettings",
+            "actions": [
+              "index",
+              "show"
+            ]
+          }
+        ]
+      },
+      {
+        "key": "caja.queue.write",
+        "label": "caja.permission.queue.write",
+        "models": [
+          {
+            "model": "CajaCollection",
+            "actions": [
+              "create",
+              "update"
+            ]
+          },
+          {
+            "model": "pos.POSSalePayment",
+            "actions": [
+              "create",
+              "update",
+              "checkout"
+            ]
+          },
+          {
+            "model": "customers.SalesOrder",
+            "actions": [
+              "pos_collect_payment",
+              "collect_payment",
+              "update"
+            ]
+          },
+          {
+            "model": "customers.Payment",
+            "actions": [
+              "create"
+            ]
+          },
+          {
+            "model": "customers.PaymentAllocation",
+            "actions": [
+              "create"
+            ]
+          }
+        ]
+      },
+      {
+        "key": "caja.session.read",
+        "label": "caja.permission.session.read",
+        "models": [
+          {
+            "model": "pos.POSSession",
+            "actions": [
+              "index",
+              "show"
+            ]
+          },
+          {
+            "model": "pos.CashRegister",
+            "actions": [
+              "index",
+              "show"
+            ]
+          }
+        ]
+      },
+      {
+        "key": "caja.settings.write",
+        "label": "caja.permission.settings.write",
+        "models": [
+          {
+            "model": "CajaSettings",
+            "actions": [
+              "index",
+              "show",
+              "create",
+              "update"
+            ]
+          },
+          {
+            "model": "pos.CashRegister",
+            "actions": [
+              "create",
+              "update"
+            ]
+          }
+        ]
+      },
+      {
+        "key": "refund_claims.settle",
+        "label": "caja.permission.refund_claims.settle",
+        "models": [
+          {
+            "model": "customers.RefundClaim",
+            "actions": [
+              "index",
+              "show",
+              "settle"
+            ]
+          }
+        ]
+      },
+      {
+        "key": "caja.return.settle",
+        "label": "caja.permission.return_settle",
+        "models": [
+          {
+            "model": "customers.SalesReturn",
+            "actions": [
+              "index",
+              "show",
+              "settle_method"
+            ]
+          },
+          {
+            "model": "customers.SalesReturnItem",
+            "actions": [
+              "index",
+              "show"
+            ]
+          }
+        ]
+      },
+      {
+        "key": "caja.layaway.collect",
+        "label": "caja.permission.layaway_collect",
+        "models": [
+          {
+            "model": "customers.SalesLayaway",
+            "actions": [
+              "index",
+              "show",
+              "add_layaway_payment"
+            ]
+          },
+          {
+            "model": "customers.SalesLayawayPayment",
+            "actions": [
+              "index",
+              "show",
+              "create"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

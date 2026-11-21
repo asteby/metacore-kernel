@@ -146,6 +146,25 @@
       }
     },
 
+    "contracts": {
+      "type": "array",
+      "description": "Versioned contracts this addon OWNS (role 'contract'): operations, events, states, provider settings and selection policy that providers implement.",
+      "items": { "$ref": "#/$defs/Contract" }
+    },
+    "implements": {
+      "type": "array",
+      "description": "Contracts owned by another addon that this addon implements (roles 'provider' and 'extension').",
+      "items": { "$ref": "#/$defs/Implements" }
+    },
+    "extends_addon": {
+      "$ref": "#/$defs/ExtendsAddon"
+    },
+    "replaces": {
+      "type": "array",
+      "description": "Addon keys this addon supersedes (rename or split). Informative: never a dependency.",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+    },
     "provides_capabilities": {
       "type": "array",
       "description": "Provider-neutral capability contracts this addon IMPLEMENTS (e.g. 'messaging.whatsapp.send'). Another addon's action/tool/subscription with handler.type 'capability' reaches this addon's handler without naming it or its connector; the host picks, per org, the installed provider (the org's default when several are).",
@@ -841,6 +860,14 @@
         "owner": {
           "type": "string",
           "description": "Informative slug of the account that owns a private bundle. The marketplace is the authority on ownership."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["foundation", "contract", "provider", "extension", "localization", "vertical", "app", "preset"],
+          "description": "Role in the base + successors pattern. Omit to let the host infer it (warning role_missing). Role-dependent rules are hard errors only for a declared role."
+        },
+        "deprecated": {
+          "$ref": "#/$defs/Deprecation"
         }
       },
       "examples": [
@@ -2000,6 +2027,122 @@
           "minLength": 1,
           "description": "Template rendered around the numeric value; MUST contain exactly one {seq} or zero-padded {seq:0N} placeholder, e.g. 'A-{seq:06}' → 'A-000042'."
         }
+      }
+    },
+    "Deprecation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "End-of-life notice of an addon, a contract or a contract operation: deprecated{since, replacement, sunset}.",
+      "properties": {
+        "since": { "type": "string", "description": "Version (semver) from which it is deprecated." },
+        "replacement": { "type": "string", "description": "Successor: an addon key, a contract key or an operation key, according to what is deprecated." },
+        "sunset": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "Date (YYYY-MM-DD) after which it may stop being served." }
+      }
+    },
+    "Contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "version"],
+      "description": "A versioned capability contract owned by a 'contract' addon.",
+      "properties": {
+        "key": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$", "description": "'<family>.<name>' in lower snake case. The family is the first segment (there is no separate field); the owning addon is conventionally '<family>_core'." },
+        "version": { "type": "string", "description": "Contract semver; a minor is additive only." },
+        "operations": { "type": "array", "items": { "$ref": "#/$defs/ContractOperation" } },
+        "events": { "type": "array", "items": { "$ref": "#/$defs/ContractEvent" } },
+        "states": { "$ref": "#/$defs/ContractStates" },
+        "writable_models": { "type": "array", "uniqueItems": true, "items": { "type": "string" }, "description": "Owner models a provider may write." },
+        "provider_settings": { "type": "array", "items": { "$ref": "#/$defs/ContractSetting" } },
+        "selection": { "$ref": "#/$defs/ContractSelection" },
+        "health": { "$ref": "#/$defs/ContractHealth" },
+        "conformance": { "type": "string" },
+        "deprecated": { "$ref": "#/$defs/Deprecation" }
+      }
+    },
+    "ContractOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "kind"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "kind": { "type": "string", "enum": ["action", "query"] },
+        "input": { "type": "string" },
+        "output": { "type": "string" },
+        "idempotent": { "type": "boolean" },
+        "timeout_s": { "type": "integer", "minimum": 0 },
+        "failover": { "type": "string", "enum": ["never", "allowed", "before_effect"], "description": "never: irreversible or indeterminate, stays pending; allowed: reads and idempotent calls without external effect; before_effect: retry on another provider only if the failed one provably did not receive the request. Empty = never." },
+        "errors": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "required": { "type": "boolean", "description": "false makes the operation optional for a provider (default true)." },
+        "deprecated": { "$ref": "#/$defs/Deprecation" }
+      }
+    },
+    "ContractEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "integer", "minimum": 1 },
+        "payload_schema": { "type": "string", "description": "Path of the payload JSON schema. Optional (relaxing later is compatible; requiring it later is not); the conformance suite asks for it." }
+      }
+    },
+    "ContractStates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "field"],
+      "properties": {
+        "model": { "type": "string" },
+        "field": { "type": "string" },
+        "indeterminate": { "type": "string", "description": "Stage an unknown outcome stays in." }
+      }
+    },
+    "ContractSetting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "type"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "type": { "type": "string", "enum": ["string", "number", "boolean", "enum", "secret"] },
+        "options": { "type": "array", "items": { "type": "string" } },
+        "default": {},
+        "confirm_typed_on": { "type": "string", "description": "Value that demands a typed confirmation." }
+      }
+    },
+    "ContractSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cardinality": { "type": "string", "enum": ["one", "many"] },
+        "scopes": { "type": "array", "uniqueItems": true, "items": { "type": "string", "enum": ["org", "entity", "branch", "country", "channel"] } }
+      }
+    },
+    "ContractHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation"],
+      "properties": {
+        "operation": { "type": "string" },
+        "every": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" }
+      }
+    },
+    "Implements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "version"],
+      "properties": {
+        "contract": { "type": "string" },
+        "version": { "type": "string", "description": "Semver range the implemented contract must satisfy." },
+        "scope": { "type": "array", "uniqueItems": true, "items": { "type": "string", "enum": ["org", "entity", "branch", "country", "channel"] }, "description": "Binding scopes at which this implementation can be selected; empty = any scope the contract's selection allows." },
+        "countries": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z]{2}$" } },
+        "operations": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+      }
+    },
+    "ExtendsAddon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "version"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "version": { "type": "string", "description": "Semver range of the extended addon." }
       }
     },
     "ImportSpec": {
