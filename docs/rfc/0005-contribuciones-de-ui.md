@@ -338,7 +338,7 @@ Ajustes al diseño que salieron de implementar:
 ## 16. Decisiones tomadas (2026-11-20)
 
 1. **Loom** y su vocabulario (Part, Seam, Graft, Lens, Proposal, Overlay) son API pública.
-2. **Regla de .** Una propuesta solo se aplica directa (, siempre con «Deshacer») si la Part declara su propio paso de revisión (; en el SDK ) **y** ningún campo del parche es de clase  (;  marca  y ). En cualquier otro caso el seam la baja a diff revisable, también para el parche que viaja en . El preset no puede saltarse la regla. Implementado y probado: SDK , kernel  (#685).
-3. **Marketplace** corre en iframe sandbox y **nunca** puede  ni .
-4. **** solo declarativo (bloques  + overlays), sin ESM.
-5. ****: en desuso desde la versión que publica la regla de  (aviso una vez por sesión); dos versiones menores con el aviso y después queda como **adaptador permanente** que proyecta cada prefill como Graft en  ( → ). Nadie tiene que migrar a la fuerza.
+2. **Regla de `apply`.** Una propuesta solo se aplica directa (`apply: "auto"`, siempre con «Deshacer») si la Part declara su propio paso de revisión (`ui.exposes[].self_review: true`; en el SDK `PartDef.selfReview`) **y** ningún campo del parche es de clase `secret` (`SeamContract.fieldClasses`; `DynamicRecordDialog` marca `password` y `data_class: secret`). En cualquier otro caso el seam la baja a diff revisable, también para el parche que viaja en `record.edit`. El preset no puede saltarse la regla. Implementado y probado: SDK `loom-apply-rule.test.tsx` (asteby/metacore-sdk#1562), kernel `self_review` (#685).
+3. **Marketplace** corre en iframe sandbox y **nunca** puede `wrap` ni `replace`.
+4. **`/display`** solo declarativo (bloques `genui` + overlays), sin ESM.
+5. **`registerRecordPrefill`**: en desuso desde la versión que publica la regla de `apply` (aviso una vez por sesión); dos versiones menores con el aviso y después queda como **adaptador permanente** que proyecta cada prefill como Graft en `record.dialog.header` (`applyValues` → `propose`). Nadie tiene que migrar a la fuerza.
