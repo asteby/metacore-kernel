@@ -365,3 +365,7 @@ Implementado: kernel #687 (v0.313.0), SDK `@asteby/metacore-runtime-react` (reco
 ## 18. Peso en el shell de los hosts federados (2026-11-21)
 
 El chunk compartido de federación no hace *tree-shaking*: todo lo que exporta el índice de `runtime-react` viaja en el shell. Medido en OPS: 856.2 KB (53.28) → 861.8 KB (Loom en el índice) → **837.3 KB** con el subpath `./loom` y envoltorios perezosos (`Seam`, `ProposalReview`, `SeamInspector`, y de paso los 7 componentes de `./setup`). Regla para el SDK: los componentes con UI que no pinta el shell se exportan en el índice como envoltorios perezosos; la implementación directa vive en su subpath. Los hosts federados importan del índice (un subpath no compartido duplicaría los registros de Loom).
+
+## 19. `needs.device` (2026-11-21)
+
+`ui.exposes[].needs.device` y `ui.contributions[].device`: `camera`, `microphone`, `geolocation` (kernel #689). El panel de admin los muestra como permisos de app ("usa la cámara"). En el SDK, `GraftDeviceContext` publica lo declarado y los primitivos que abren un dispositivo lo respetan: `BarcodeScanner` no pide `getUserMedia` dentro de un injerto sin `camera`. Es una barrera de los primitivos, no un aislamiento: una Part del mismo realm podría llamar al navegador directamente; para terceros la garantía es el iframe sandbox con su atributo `allow` (§9).
