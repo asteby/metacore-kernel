@@ -369,3 +369,12 @@ El chunk compartido de federación no hace *tree-shaking*: todo lo que exporta e
 ## 19. `needs.device` (2026-11-21)
 
 `ui.exposes[].needs.device` y `ui.contributions[].device`: `camera`, `microphone`, `geolocation` (kernel #689). El panel de admin los muestra como permisos de app ("usa la cámara"). En el SDK, `GraftDeviceContext` publica lo declarado y los primitivos que abren un dispositivo lo respetan: `BarcodeScanner` no pide `getUserMedia` dentro de un injerto sin `camera`. Es una barrera de los primitivos, no un aislamiento: una Part del mismo realm podría llamar al navegador directamente; para terceros la garantía es el iframe sandbox con su atributo `allow` (§9).
+
+## 20. Lo aprendido en la verificación en vivo del lector de constancia (2026-11-21)
+
+- **Intenciones con manejo por defecto.** Un anfitrión genérico (el «Crear» de la tabla) no atendía `record.select`/`record.edit` y el flujo del personal se perdía. `DynamicRecordDialog` las atiende por defecto: abre el existente (edición o ficha según permiso) o su edición con el parche como propuesta revisable, y se remonta sin restos del alta. El `onIntent` del anfitrión manda.
+- **La barra de «aplicados» depende del formulario,** no de la cola: se retira cuando esos valores ya no están (recarga, cambio de modo).
+- **La lista de injertos se invalida con el ciclo de vida del addon** (instalar, actualizar, desinstalar); una caché de minutos dejó activo un `device` retirado.
+- **Servir bundles en Windows:** fasthttp rechaza con 403 rutas con `:` (letra de unidad); el kernel envía el archivo validado por `SendStream` (#692).
+- **Errores 5xx sin datos:** un error puede reflejar el RFC o el correo del request. 5xx = mensaje genérico + `X-Correlation-Id`; el servidor registra el error con datos personales enmascarados; la consola del front no imprime cuerpos de error (OPS #2422, #2419).
+- **Verificar publicaciones contra el registro** (`curl https://registry.npmjs.org/...`), no con `npm view`/`npm stage list`, que pueden ir con caché.
