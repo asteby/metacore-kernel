@@ -39,6 +39,7 @@ func TestDocumentsEnrichOutputAdditiveAndClosed(t *testing.T) {
 	good, _ := json.Marshal(map[string]any{
 		"record":     map[string]any{"tipo_comprobante": "I - Ingreso"},
 		"children":   map[string]any{"payments": []any{}},
+		"branding":   map[string]any{"tax_id": "EKU9003173C9"},
 		"line_items": []any{map[string]any{"description": "x"}},
 	})
 	if errs := c.ValidateOutput(good); len(errs) != 0 {
@@ -51,6 +52,9 @@ func TestDocumentsEnrichOutputAdditiveAndClosed(t *testing.T) {
 	// Closed output: an unknown top-level key is refused.
 	if errs := c.ValidateOutput([]byte(`{"html":"<b>x</b>"}`)); len(errs) == 0 {
 		t.Fatal("unknown output field must be rejected")
+	}
+	if errs := c.ValidateOutput([]byte(`{"branding":"x"}`)); len(errs) == 0 {
+		t.Fatal("branding must be an object")
 	}
 	if errs := c.ValidateOutput([]byte(`{"line_items":{"a":1}}`)); len(errs) == 0 {
 		t.Fatal("line_items must be an array")

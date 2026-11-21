@@ -44,6 +44,7 @@ func documentContracts() []Contract {
 			Output: schema(
 				opt("record", TypeObject, "fields to merge over the record (a patch: absent keys stay); the provider never removes columns"),
 				opt("children", TypeObject, "child sets to REPLACE by name (name -> array of rows); absent names stay"),
+				opt("branding", TypeObject, "branding fields to merge over the org branding for THIS print (string -> string); e.g. the emisor a stamped comprobante names"),
 				opt("line_items", TypeArray, "the main line-item rows for {{#line_items}}; omitted = the host's own"),
 			),
 			Errors: []string{ErrCodeInvalidInput, ErrCodeNotApplicable},

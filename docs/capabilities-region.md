@@ -89,6 +89,7 @@ Salida (cerrada, todo opcional):
 |---|---|---|
 | `record` | object | parche que se mezcla sobre el registro; las claves ausentes se quedan, nunca se borran columnas |
 | `children` | object | conjuntos hijos que se REEMPLAZAN por nombre; los nombres ausentes se quedan |
+| `branding` | object | parche sobre la marca de la org solo para esta impresión (string → string); p. ej. el emisor que nombra un comprobante timbrado |
 | `line_items` | array | filas de `{{#line_items}}`; omitido = las del host |
 
 Notas:
