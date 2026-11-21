@@ -60,6 +60,8 @@ type PartRef struct {
 	// RecordsFind are the models the Part may look up through the host
 	// (UINeeds.Records.Find); the client grants caps.records only for these.
 	RecordsFind []string `json:"records_find,omitempty"`
+	// Device mirrors UINeeds.Device.
+	Device []string `json:"device,omitempty"`
 }
 
 // ClientWhen carries the clauses only the client can evaluate (they depend on
@@ -86,6 +88,7 @@ type Graft struct {
 	Network  string         `json:"network"`
 	Hosts    []string       `json:"hosts,omitempty"`
 	Offline  bool           `json:"offline,omitempty"`
+	Device   []string       `json:"device,omitempty"`
 	Props    map[string]any `json:"props,omitempty"`
 	// Inert is set when a remediable condition is unmet (unmet: disable): the
 	// client renders it disabled with this reason.
@@ -172,6 +175,9 @@ func Resolve(installed []Installed, sub Subject, preset PresetUI, opts Options) 
 				pr := ref(p.ID, p.Version, p.Expose, p.SelfReview)
 				if p.Needs != nil && p.Needs.Records != nil {
 					pr.RecordsFind = append([]string(nil), p.Needs.Records.Find...)
+				}
+				if p.Needs != nil && len(p.Needs.Device) > 0 {
+					pr.Device = append([]string(nil), p.Needs.Device...)
 				}
 				parts[p.ID] = pr
 			}
@@ -292,7 +298,7 @@ func Resolve(installed []Installed, sub Subject, preset PresetUI, opts Options) 
 		res.Grafts = append(res.Grafts, Graft{
 			ID: g.ID, Addon: c.addon, Seam: g.Seam, Part: part, Requires: g.Requires, Kind: kind, Mode: mode,
 			Order: order, When: client, Reads: g.Reads, Writes: g.Writes, Emits: g.Emits, Network: network,
-			Hosts: g.Hosts, Offline: g.Offline, Props: g.Props, Inert: inert, Legacy: c.legacy,
+			Hosts: g.Hosts, Offline: g.Offline, Device: g.Device, Props: g.Props, Inert: inert, Legacy: c.legacy,
 		})
 	}
 	sort.SliceStable(res.Grafts, func(i, j int) bool {

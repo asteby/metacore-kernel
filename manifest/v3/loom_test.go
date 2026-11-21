@@ -19,7 +19,7 @@ const loomBase = `{
   "ui": {
     "exposes": [
       { "id": "fiscal_mexico.csf-import", "version": "1.0.0", "expose": "./parts/csf-import",
-        "needs": { "network": "none", "offline": true, "records": { "find": ["customers.Customer"] } }, "self_review": true }
+        "needs": { "network": "none", "offline": true, "records": { "find": ["customers.Customer"] }, "device": ["camera"] }, "self_review": true }
     ],
     "seams": [
       { "id": "fiscal_mexico.invoice.footer", "version": "1.0.0", "lenses": { "invoice": "money", "customer": "pii.fiscal" } }
@@ -122,6 +122,8 @@ func TestLoom_Errors(t *testing.T) {
 			m["ui"].(map[string]any)["seams"].([]any)[0].(map[string]any)["lenses"] = map[string]any{"x": "secretish"}
 		}, "schema validation failed"},
 		{"unknown graft field", func(m map[string]any) { graft0(m)["component"] = "x" }, "component"},
+		{"bad device", func(m map[string]any) { graft0(m)["device"] = []any{"bluetooth"} }, "schema validation failed"},
+		{"duplicated device", func(m map[string]any) { graft0(m)["device"] = []any{"camera", "camera"} }, "twice"},
 		{"empty records model", func(m map[string]any) {
 			m["ui"].(map[string]any)["exposes"].([]any)[0].(map[string]any)["needs"] = map[string]any{"records": map[string]any{"find": []any{" "}}}
 		}, "must name a model"},

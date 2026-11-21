@@ -4723,6 +4723,18 @@
         "offline": {
           "type": "boolean"
         },
+        "device": {
+          "type": "array",
+          "description": "Browser devices the Part may use; the SDK blocks any other.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "camera",
+              "microphone",
+              "geolocation"
+            ]
+          }
+        },
         "records": {
           "type": "object",
           "additionalProperties": false,
@@ -4896,6 +4908,18 @@
         },
         "offline": {
           "type": "boolean"
+        },
+        "device": {
+          "type": "array",
+          "description": "Browser devices the Part may use; the SDK blocks any other.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "camera",
+              "microphone",
+              "geolocation"
+            ]
+          }
         },
         "props": {
           "type": "object"

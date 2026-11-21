@@ -33,8 +33,8 @@ type UIPart struct {
 	// proposal it marks apply:auto is applied directly (with undo). Without it,
 	// every proposal goes through the host's reviewable diff. Never auto on
 	// secret fields (the client enforces both rules).
-	SelfReview bool `json:"self_review,omitempty"`
-	Description string   `json:"description,omitempty"`
+	SelfReview  bool   `json:"self_review,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // UINeeds is what a Part needs to run.
@@ -49,6 +49,10 @@ type UINeeds struct {
 	// customer already exists). The HOST runs them with the user's permissions:
 	// exact-field match, capped results, no listings. See UIRecordsNeed.
 	Records *UIRecordsNeed `json:"records,omitempty"`
+	// Device lists the browser devices the Part may use (camera, microphone,
+	// geolocation). The SDK only lets a Part request a device it declared; the
+	// admin screen shows it like app permissions.
+	Device []string `json:"device,omitempty"`
 }
 
 // UIRecordsNeed lists the models a Part may look up through the host
@@ -105,10 +109,12 @@ type UIGraft struct {
 	// Emits are the seam intents it may request.
 	Emits []string `json:"emits,omitempty"`
 	// Network / Hosts / Offline: same contract as UINeeds.
-	Network string         `json:"network,omitempty"`
-	Hosts   []string       `json:"hosts,omitempty"`
-	Offline bool           `json:"offline,omitempty"`
-	Props   map[string]any `json:"props,omitempty"`
+	Network string   `json:"network,omitempty"`
+	Hosts   []string `json:"hosts,omitempty"`
+	Offline bool     `json:"offline,omitempty"`
+	// Device: same contract as UINeeds.Device, for the graft.
+	Device []string       `json:"device,omitempty"`
+	Props  map[string]any `json:"props,omitempty"`
 }
 
 // UIWhen gates a graft. Every present clause must hold. The server evaluates
@@ -180,6 +186,9 @@ func validateLoom(m *Manifest, warn func(rule, msg string)) []string {
 			}
 		}
 		errs = append(errs, uiNetworkErrs(fmt.Sprintf("ui.exposes[%d].needs", i), p.Needs)...)
+		if p.Needs != nil {
+			errs = append(errs, uiDeviceErrs(fmt.Sprintf("ui.exposes[%d].needs.device", i), p.Needs.Device)...)
+		}
 		if p.Needs != nil && p.Needs.Records != nil {
 			for j, mdl := range p.Needs.Records.Find {
 				if strings.TrimSpace(mdl) == "" {
@@ -247,9 +256,25 @@ func validateLoom(m *Manifest, warn func(rule, msg string)) []string {
 			}
 		}
 		errs = append(errs, uiNetworkErrs(where, &UINeeds{Network: g.Network, Hosts: g.Hosts})...)
+		errs = append(errs, uiDeviceErrs(where+".device", g.Device)...)
 		if g.When != nil && g.When.Setting != nil && strings.TrimSpace(g.When.Setting.Key) == "" {
 			errs = append(errs, fmt.Sprintf("%s.when.setting.key is required", where))
 		}
+	}
+	return errs
+}
+
+// UIDevices are the browser devices a Part or graft may declare.
+var UIDevices = []string{"camera", "microphone", "geolocation"}
+
+func uiDeviceErrs(where string, devices []string) []string {
+	var errs []string
+	seen := map[string]bool{}
+	for _, d := range devices {
+		if seen[d] {
+			errs = append(errs, fmt.Sprintf("%s lists %q twice", where, d))
+		}
+		seen[d] = true
 	}
 	return errs
 }
