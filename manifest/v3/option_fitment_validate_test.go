@@ -100,6 +100,25 @@ func TestValidate_OptionFitment_SubjectFieldResolution(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "asset_id") {
 		t.Errorf("standalone model with unknown subject_field must fail, got %v", err)
 	}
+	// a header reachable only through a ref column of the line (no relation through
+	// the line, no rule with a parent) still resolves the subject field
+	if _, err := validateFitmentModels(t, func(ms []interface{}) {
+		ms[0].(im)["relations"] = []interface{}{}
+		ms[1].(im)["rules"] = []interface{}{}
+		ms[1].(im)["columns"].([]interface{})[len(ms[1].(im)["columns"].([]interface{}))-1].(im)["ref"] = "SalesOrder"
+	}); err != nil {
+		t.Errorf("header reachable through a ref column rejected: %v", err)
+	}
+	// ... by table name or addon-qualified ref too
+	for _, ref := range []string{"sales_orders", "orders_addon.SalesOrder"} {
+		if _, err := validateFitmentModels(t, func(ms []interface{}) {
+			ms[0].(im)["relations"] = []interface{}{}
+			ms[1].(im)["rules"] = []interface{}{}
+			ms[1].(im)["columns"].([]interface{})[len(ms[1].(im)["columns"].([]interface{}))-1].(im)["ref"] = ref
+		}); err != nil {
+			t.Errorf("ref %q: %v", ref, err)
+		}
+	}
 	// a line whose header lives elsewhere (no local relation): warning, not error
 	warns, err := validateFitmentModels(t, func(ms []interface{}) {
 		ms[0].(im)["relations"] = []interface{}{}

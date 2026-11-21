@@ -86,6 +86,24 @@ func validateOptionFitment(where string, c Column, mod Model, m *Manifest, ownCo
 			}
 		}
 	}
+	// A line may also reach its header only through a ref column (no relation
+	// through it, no rule with a parent): any local model a ref column of the
+	// line points at can hold the subject field, and that is enough to resolve it.
+	for _, rc := range mod.Columns {
+		if rc.Ref == "" {
+			continue
+		}
+		for _, h := range m.Models {
+			if h.Key == mod.Key || !refPointsAt(rc.Ref, h) {
+				continue
+			}
+			if cols, ok := colsByModel[h.Key]; ok {
+				if _, has := cols[f.SubjectField]; has {
+					return nil
+				}
+			}
+		}
+	}
 	switch {
 	case headers > 0:
 		return []string{fmt.Sprintf("%s.subject_field %q is not a column of %s nor of the header model(s) it is a line of", w, f.SubjectField, mod.Key)}
@@ -106,4 +124,14 @@ func modelIsLine(mod Model) bool {
 		}
 	}
 	return false
+}
+
+// refPointsAt reports whether a column ref ("Quote", "quotes.Quote" or a table
+// name) designates the model.
+func refPointsAt(ref string, h Model) bool {
+	r := strings.TrimSpace(ref)
+	if i := strings.LastIndex(r, "."); i >= 0 {
+		r = r[i+1:]
+	}
+	return r != "" && (r == h.Key || r == h.Table)
 }
