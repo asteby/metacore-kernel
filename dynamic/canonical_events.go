@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"github.com/asteby/metacore-kernel/provenance"
+	"log"
 	"strings"
 	"time"
 
@@ -43,7 +43,7 @@ type CanonicalEvent struct {
 	// re-delivery without swallowing every update after the first.
 	OccurrenceID string `json:"occurrence_id,omitempty"`
 	Model        string `json:"model"`
-	Action       string `json:"action"` // created|updated|deleted
+	Action       string `json:"action"` // created|updated|deleted|transitioned
 	AddonKey     string `json:"addon_key"`
 	ActorID      string `json:"actor_id,omitempty"`
 	// BranchID is the branch the event belongs to: the row's own branch_id
@@ -54,6 +54,10 @@ type CanonicalEvent struct {
 	CorrelationID string         `json:"correlation_id,omitempty"`
 	Before        map[string]any `json:"before,omitempty"`
 	After         map[string]any `json:"after,omitempty"`
+	// StageFrom / StageTo are set only on the "transitioned" action: the stage the
+	// record left and the one it entered (models[].stage_field machines).
+	StageFrom string `json:"stage_from,omitempty"`
+	StageTo   string `json:"stage_to,omitempty"`
 	// Reason is the operator's stated motive for a destructive operation
 	// (delete, or an action listed in Model.reason_required — PER-4). Empty on
 	// every other event.
@@ -223,6 +227,12 @@ func uuidString(v any) string {
 // and we keep the same "post-mutation side-effects must not roll back the
 // data" policy as the AfterCreate/Update/Delete hooks.
 func (s *Service) publishCanonical(ctx context.Context, model, action string, user modelbase.AuthUser, id string, before, after map[string]any) {
+	s.publishCanonicalWith(ctx, model, action, user, id, before, after, nil)
+}
+
+// publishCanonicalWith is publishCanonical with a hook that decorates the event
+// payload before it is persisted and published (same outbox, same relay).
+func (s *Service) publishCanonicalWith(ctx context.Context, model, action string, user modelbase.AuthUser, id string, before, after map[string]any, decorate func(*CanonicalEvent)) {
 	if s.bus == nil {
 		return
 	}
@@ -257,6 +267,9 @@ func (s *Service) publishCanonical(ctx context.Context, model, action string, us
 		Provenance:    provenanceFromContext(ctx),
 		Before:        before,
 		After:         after,
+	}
+	if decorate != nil {
+		decorate(payload)
 	}
 	event := fmt.Sprintf("%s.%s.%s", addonKey, modelKey, action)
 	if len(event) > MaxEventNameLen {
