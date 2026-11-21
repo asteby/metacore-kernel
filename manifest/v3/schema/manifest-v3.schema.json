@@ -1170,6 +1170,15 @@
           "type": "boolean",
           "description": "Marks the model as an append-only ledger: rows can be created but never updated or deleted. The kernel refuses every UPDATE/DELETE (REST and the wasm data_mutate/data_batch imports) with code 'append_only'; a mistake is corrected with a reversing row. Incompatible with a stage machine."
         },
+        "view": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sql"],
+          "description": "Backs the model with a SQL view (read-only). The kernel emits CREATE OR REPLACE VIEW from sql; every create/update/delete is refused with code read_only. The model must declare id and organization_id. Incompatible with append_only, a stage machine, extends and seed.",
+          "properties": {
+            "sql": {"type": "string", "minLength": 1, "description": "One SELECT statement, no semicolon, no comments."}
+          }
+        },
         "audit": {
           "type": "boolean",
           "description": "Audit-column standard (docs/audit-columns.md). Default true: the kernel adds created_at, updated_at, deleted_at, created_by_id, updated_by_id and deleted_by_id to the table even when not declared. false opts a purely technical table out of the who-columns and the deleted_at tombstone (created_at/updated_at remain). Ignored for append_only models, which always get the ledger subset (created_at, created_by_id)."

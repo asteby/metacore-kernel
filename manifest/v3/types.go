@@ -853,6 +853,16 @@ type Model struct {
 	// machine (a stage is a mutation by definition) and with model extensions.
 	AppendOnly bool `json:"append_only,omitempty"`
 
+	// View makes the model read-only and backed by a SQL view instead of a
+	// table: the kernel emits CREATE OR REPLACE VIEW from View.SQL (no table,
+	// indices, RLS or seed) and refuses every create/update/delete/restore with
+	// the stable code "read_only". The SELECT must expose the declared columns
+	// (id and organization_id included); the tenant scope is applied by the
+	// runtime on organization_id like any model. Use it for aggregates (totals
+	// per product) that must be a first-class dynamic table with search, sort
+	// and filters. Incompatible with append_only, a stage machine and extensions.
+	View *ModelView `json:"view,omitempty"`
+
 	// RowConditions gates the generic UPDATE and DELETE of the model on the
 	// PERSISTED row, as data (see RowConditions): `update: {field: "id",
 	// operator: "neq", value: 1}` protects a default row, `delete: {field:
@@ -3904,3 +3914,11 @@ type StageAuthority struct {
 
 // StageAuthorityActionPermission is the only StageAuthority.Authority value.
 const StageAuthorityActionPermission = "action_permission"
+
+// ModelView is the SQL definition of a view-backed model (Model.view).
+type ModelView struct {
+	// SQL is a single SELECT statement (no trailing ";"). It is stored as the
+	// view body verbatim, so it must come from the manifest author, never from
+	// request data.
+	SQL string `json:"sql"`
+}

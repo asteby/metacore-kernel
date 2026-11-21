@@ -60,6 +60,10 @@ type AuditPlan struct {
 // the corresponding column on regardless of the mode and are now redundant with
 // the default, but stay honoured.
 func AuditPlanFor(def manifest.ModelDefinition, alwaysSoftDelete, includeCreatedBy bool) AuditPlan {
+	if def.View != "" {
+		// A view carries exactly the columns its SELECT exposes.
+		return AuditPlan{}
+	}
 	p := AuditPlan{CreatedAt: true, UpdatedAt: true}
 	switch {
 	case def.AppendOnly:

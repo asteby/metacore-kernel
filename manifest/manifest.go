@@ -1384,6 +1384,9 @@ type ModelDefinition struct {
 	// model is an append-only ledger and every UPDATE/DELETE on it is refused
 	// (dynamic.Service and the wasm data_mutate / data_batch imports).
 	AppendOnly bool `json:"append_only,omitempty"`
+	// View is the host/runtime projection of v3 Model.view: the SELECT backing a
+	// read-only, view-backed model. Empty = an ordinary table.
+	View string `json:"view,omitempty"`
 	// RowConditions is the host/runtime projection of v3 Model.row_conditions:
 	// per-row data gates on the generic UPDATE and DELETE, enforced by
 	// dynamic.Service through Config.RowConditionResolver.

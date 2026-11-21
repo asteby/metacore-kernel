@@ -640,6 +640,13 @@ func (h *Handler) handleError(c fiber.Ctx, err error) error {
 			"code":    "action_condition_not_met",
 		}))
 	}
+	if errors.Is(err, ErrReadOnly) {
+		return c.Status(fiber.StatusMethodNotAllowed).JSON(withCorrelation(c, fiber.Map{
+			"success": false,
+			"message": err.Error(),
+			"code":    "read_only",
+		}))
+	}
 	if errors.Is(err, ErrAppendOnly) {
 		return c.Status(fiber.StatusConflict).JSON(withCorrelation(c, fiber.Map{
 			"success": false,

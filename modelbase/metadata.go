@@ -81,6 +81,11 @@ type TableMetadata struct {
 	// manifest; omitted for ordinary models.
 	AppendOnly bool `json:"append_only,omitempty"`
 
+	// ReadOnly marks a view-backed model (manifest Model.view): rows are listed
+	// and read, never created, edited or deleted, so the SDK hides those
+	// affordances. The server refuses the writes regardless (dynamic.ErrReadOnly).
+	ReadOnly bool `json:"read_only,omitempty"`
+
 	// Audit names the row keys that answer "when and who" for every change to a
 	// record of this model, so the SDK can render "Creado por / Modificado por /
 	// fecha" without the manifest declaring those columns. Each field holds the
