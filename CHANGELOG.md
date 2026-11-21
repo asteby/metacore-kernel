@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `httpx/metacore` (**`ServeAddonFrontend` respondia 403 en Windows**): con un `FrontendBasePath` absoluto, la ruta lleva la letra de unidad (`C:`) y el servidor de archivos de fasthttp la rechaza con 403 (su guarda contra flujos alternos de NTFS), asi que ningun `remoteEntry.js` de addon cargaba. Ahora se envia el archivo ya validado con `SendStream`; cabeceras (tipo, `nosniff`, no-cache del entry) y la guarda de traversal sin cambios. Prueba: `TestServeAddonFrontend_AbsoluteBasePath` (403 antes, 200 despues en Windows).
+
 ### Added
 
 - `manifest/v3`, `loom` (**Loom: `needs.device`**; aditivo, un manifest sin el campo se sirve IDENTICO): `ui.exposes[].needs.device` y `ui.contributions[].device` declaran los dispositivos del navegador que usa la Part (`camera`, `microphone`, `geolocation`; esquema en sus 2 copias, sin repetidos). `loom.Resolve` los sirve en `PartRef.device` y `Graft.device`; el SDK solo deja pedir los declarados. Pruebas: `manifest/v3/loom_test.go`, `loom/resolve_test.go`.
