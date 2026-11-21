@@ -85,6 +85,40 @@ type Resolved struct {
 	// FlattenWithFiles (overlay files win). Nil when resolved from a bare
 	// manifest.
 	Files map[string][]byte
+	// UI are the Loom grafts (RFC 0005) the preset activates: its
+	// ui.contributions[], base first and an overlay entry with the same id
+	// replacing the base one. A preset only grafts Parts that addons expose.
+	UI []v3.UIGraft
+}
+
+// presetGrafts is ui.contributions[] of a preset manifest (nil-safe copy).
+func presetGrafts(m *v3.Manifest) []v3.UIGraft {
+	if m == nil || m.UI == nil || len(m.UI.Contributions) == 0 {
+		return nil
+	}
+	return append([]v3.UIGraft(nil), m.UI.Contributions...)
+}
+
+// mergeGrafts keeps base order, replaces by id with the overlay and appends
+// the overlay's new ids.
+func mergeGrafts(base, overlay []v3.UIGraft) []v3.UIGraft {
+	if len(overlay) == 0 {
+		return append([]v3.UIGraft(nil), base...)
+	}
+	out := append([]v3.UIGraft(nil), base...)
+	idx := make(map[string]int, len(out))
+	for i, g := range out {
+		idx[g.ID] = i
+	}
+	for _, g := range overlay {
+		if i, ok := idx[g.ID]; ok {
+			out[i] = g
+			continue
+		}
+		idx[g.ID] = len(out)
+		out = append(out, g)
+	}
+	return out
 }
 
 // Required returns just the non-optional addons, preserving order. These are
@@ -163,6 +197,7 @@ func ResolveFromManifest(m *v3.Manifest) (Resolved, error) {
 		Addons:   sorted,
 		Defaults: m.Preset.Defaults,
 		Lineage:  []LineageEntry{{Key: m.Metadata.Key, Version: m.Metadata.Version}},
+		UI:       presetGrafts(m),
 	}, nil
 }
 

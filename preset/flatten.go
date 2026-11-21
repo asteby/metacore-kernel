@@ -117,6 +117,7 @@ func flatten(base Resolved, overlay *v3.Manifest, opts FlattenOptions) (Resolved
 		Defaults: MergeDefaults(base.Defaults, overlay.Preset.Defaults),
 		Lineage:  append(append([]LineageEntry(nil), lineage...), LineageEntry{Key: overlay.Metadata.Key, Version: overlay.Metadata.Version}),
 		Files:    mergeFiles(base.Files, nil),
+		UI:       mergeGrafts(base.UI, presetGrafts(overlay)),
 	}
 	return out, nil
 }
