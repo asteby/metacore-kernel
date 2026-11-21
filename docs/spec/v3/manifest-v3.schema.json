@@ -1060,6 +1060,12 @@
       ],
       "description": "A data model the addon owns. Materialised by the installer.",
       "properties": {
+        "aliases": {
+          "type": "array",
+          "description": "Extra slugs that resolve to this model next to key and table (RFC 0004). Matching ignores case and separators and tolerates singular/plural. Must not collide with the key, table or alias of another model.",
+          "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" },
+          "uniqueItems": true
+        },
         "key": {
           "type": "string",
           "pattern": "^[A-Z][A-Za-z0-9]+$",

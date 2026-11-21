@@ -10,6 +10,7 @@ import (
 
 	"github.com/asteby/metacore-kernel/cachecoherence"
 	"github.com/asteby/metacore-kernel/i18n"
+	"github.com/asteby/metacore-kernel/modelalias"
 	"github.com/asteby/metacore-kernel/modelbase"
 )
 
@@ -36,6 +37,11 @@ type Config struct {
 	// ok==false (or is nil), the lookup falls back to modelbase.Get, so the
 	// zero value preserves the historical behaviour exactly.
 	ModelResolver func(modelKey string) (modelbase.ModelDefiner, bool)
+
+	// ModelAliases resolves alternative slugs (models[].aliases, RFC 0004) to the
+	// canonical model key at the HTTP edge, only when the slug is not itself a
+	// known model. Nil = no aliases.
+	ModelAliases modelalias.Resolver
 }
 
 // TableTransformer mutates a TableMetadata after it has been produced by the
@@ -88,6 +94,7 @@ type Service struct {
 	// Config.ModelResolver in New. Consulted before modelbase.Get; nil
 	// preserves the historical modelbase-only behaviour.
 	modelResolver func(modelKey string) (modelbase.ModelDefiner, bool)
+	slugAliases   modelalias.Resolver
 }
 
 // AllMetadata is the wire payload of GetAll. It is a snapshot of every
@@ -121,6 +128,7 @@ func New(cfg Config) *Service {
 		cache:         newCache(ttl),
 		startedAt:     time.Now(),
 		modelResolver: cfg.ModelResolver,
+		slugAliases:   cfg.ModelAliases,
 	}
 	// Dynamic-model metadata is derived from installed manifests and live
 	// schema: drop it, and move its version token, on every coherence bump.
@@ -423,4 +431,17 @@ func cloneDocumentForms(in *modelbase.DocumentForms) *modelbase.DocumentForms {
 		return nil
 	}
 	return &out
+}
+
+// CanonicalModel maps a request slug to the canonical model key: the slug when
+// it names a known model, else the model whose models[].aliases (RFC 0004) it
+// matches, else the slug unchanged.
+func (s *Service) CanonicalModel(slug string) string {
+	if s.slugAliases == nil {
+		return slug
+	}
+	return modelalias.Canonical(slug, func(name string) bool {
+		_, ok := s.resolveModel(name)
+		return ok
+	}, s.slugAliases)
 }

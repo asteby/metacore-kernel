@@ -1303,6 +1303,9 @@ type ModelDefinition struct {
 	// (it is the target row's id) and, when the host resolves where the target
 	// table lives, a FOREIGN KEY to it with ON DELETE CASCADE. Empty = an
 	// ordinary model.
+	// Aliases carries v3 Model.aliases: extra slugs that resolve to this model
+	// (see the modelalias package). Empty = key and table only.
+	Aliases []string `json:"aliases,omitempty"`
 	Extends    string      `json:"extends,omitempty"`
 	OrgScoped  bool        `json:"org_scoped,omitempty"`
 	SoftDelete bool        `json:"soft_delete,omitempty"`

@@ -757,6 +757,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		// dynamic engine derives the status display, validates moves and fires
 		// on_transition hooks. Empty StageField/Stages leaves the model
 		// unrestricted (the legacy behaviour).
+		def.Aliases = append([]string(nil), m.Aliases...)
 		def.StageField = m.StageField
 		def.Stages = mapModelStages(m.Stages)
 		def.Transitions = mapModelTransitions(m.Transitions)

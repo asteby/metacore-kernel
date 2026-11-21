@@ -177,7 +177,7 @@ func (h *Handler) list(c fiber.Ctx) error {
 	if err != nil {
 		return respondErr(c, fiber.StatusBadRequest, err.Error())
 	}
-	items, meta, err := h.service.List(c, c.Params("model"), u, params)
+	items, meta, err := h.service.List(c, h.service.CanonicalModel(c, c.Params("model")), u, params)
 	if err != nil {
 		return h.handleError(c, err)
 	}
@@ -195,7 +195,7 @@ func (h *Handler) aggregate(c fiber.Ctx) error {
 	if u == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
 	}
-	model := c.Params("model")
+	model := h.service.CanonicalModel(c, c.Params("model"))
 	params, err := query.ParseFiber(c)
 	if err != nil {
 		return respondErr(c, fiber.StatusBadRequest, err.Error())
@@ -251,7 +251,7 @@ func (h *Handler) facets(c fiber.Ctx) error {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
 	}
 	q := FacetsQuery{
-		Model: c.Params("model"),
+		Model: h.service.CanonicalModel(c, c.Params("model")),
 		Field: c.Query("field"),
 		Q:     c.Query("q"),
 	}
@@ -281,7 +281,7 @@ func (h *Handler) uniqueViolations(c fiber.Ctx) error {
 	if u == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
 	}
-	reports, err := h.service.UniqueViolations(c, c.Params("model"), u)
+	reports, err := h.service.UniqueViolations(c, h.service.CanonicalModel(c, c.Params("model")), u)
 	if err != nil {
 		return h.handleError(c, err)
 	}
@@ -299,7 +299,7 @@ func (h *Handler) materializeUnique(c fiber.Ctx) error {
 	if u == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
 	}
-	statuses, err := h.service.MaterializeUniqueIndexes(c, c.Params("model"), u)
+	statuses, err := h.service.MaterializeUniqueIndexes(c, h.service.CanonicalModel(c, c.Params("model")), u)
 	if err != nil {
 		return h.handleError(c, err)
 	}
@@ -315,7 +315,7 @@ func (h *Handler) get(c fiber.Ctx) error {
 	if err != nil {
 		return respondErr(c, fiber.StatusBadRequest, ErrInvalidID.Error())
 	}
-	record, err := h.service.Get(c, c.Params("model"), u, id)
+	record, err := h.service.Get(c, h.service.CanonicalModel(c, c.Params("model")), u, id)
 	if err != nil {
 		return h.handleError(c, err)
 	}
@@ -330,7 +330,7 @@ func (h *Handler) sourceLines(c fiber.Ctx) error {
 	if u == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
 	}
-	rows, err := h.service.SourceLines(c, c.Params("model"), u, c.Query("source"), c.Query("id"), c.Query("exclude"))
+	rows, err := h.service.SourceLines(c, h.service.CanonicalModel(c, c.Params("model")), u, c.Query("source"), c.Query("id"), c.Query("exclude"))
 	if err != nil {
 		return h.handleError(c, err)
 	}
@@ -345,7 +345,7 @@ func (h *Handler) current(c fiber.Ctx) error {
 	if u == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
 	}
-	res, err := h.service.GetSingleton(c, c.Params("model"), u)
+	res, err := h.service.GetSingleton(c, h.service.CanonicalModel(c, c.Params("model")), u)
 	if err != nil {
 		return h.handleError(c, err)
 	}
@@ -365,7 +365,7 @@ func (h *Handler) saveCurrent(c fiber.Ctx) error {
 	if input == nil {
 		input = map[string]any{}
 	}
-	record, err := h.service.SaveSingleton(c, c.Params("model"), u, input)
+	record, err := h.service.SaveSingleton(c, h.service.CanonicalModel(c, c.Params("model")), u, input)
 	if err != nil {
 		return h.handleError(c, err)
 	}
@@ -381,7 +381,7 @@ func (h *Handler) create(c fiber.Ctx) error {
 	if err := c.Bind().Body(&input); err != nil {
 		return respondErr(c, fiber.StatusBadRequest, "invalid body")
 	}
-	record, err := h.service.Create(c, c.Params("model"), u, input)
+	record, err := h.service.Create(c, h.service.CanonicalModel(c, c.Params("model")), u, input)
 	if err != nil {
 		return h.handleError(c, err)
 	}
@@ -401,7 +401,7 @@ func (h *Handler) update(c fiber.Ctx) error {
 	if err := c.Bind().Body(&input); err != nil {
 		return respondErr(c, fiber.StatusBadRequest, "invalid body")
 	}
-	record, err := h.service.Update(c, c.Params("model"), u, id, input)
+	record, err := h.service.Update(c, h.service.CanonicalModel(c, c.Params("model")), u, id, input)
 	if err != nil {
 		return h.handleError(c, err)
 	}
@@ -418,7 +418,7 @@ func (h *Handler) delete(c fiber.Ctx) error {
 		return respondErr(c, fiber.StatusBadRequest, ErrInvalidID.Error())
 	}
 	ctx := WithReason(c, DeleteReason(c))
-	if err := h.service.Delete(ctx, c.Params("model"), u, id); err != nil {
+	if err := h.service.Delete(ctx, h.service.CanonicalModel(c, c.Params("model")), u, id); err != nil {
 		return h.handleError(c, err)
 	}
 	return c.JSON(fiber.Map{"success": true})
@@ -442,7 +442,7 @@ func (h *Handler) action(c fiber.Ctx) error {
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	res, err := h.service.ExecAction(c, c.Params("model"), u, id, c.Params("key"), payload)
+	res, err := h.service.ExecAction(c, h.service.CanonicalModel(c, c.Params("model")), u, id, c.Params("key"), payload)
 	if err != nil {
 		return h.handleError(c, err)
 	}
@@ -462,7 +462,7 @@ func (h *Handler) action(c fiber.Ctx) error {
 func (h *Handler) options(c fiber.Ctx) error {
 	u := h.user(c)
 	q := OptionsQuery{
-		Model:       c.Params("model"),
+		Model:       h.service.CanonicalModel(c, c.Params("model")),
 		Field:       c.Query("field"),
 		Q:           c.Query("q"),
 		FilterValue: c.Query("filter_value"),
@@ -521,7 +521,7 @@ func OptionIDsFromQuery(c fiber.Ctx) []string {
 func (h *Handler) search(c fiber.Ctx) error {
 	u := h.user(c)
 	q := SearchQuery{
-		Model: c.Params("model"),
+		Model: h.service.CanonicalModel(c, c.Params("model")),
 		Q:     c.Query("q"),
 	}
 	if q.Q == "" {
