@@ -3528,6 +3528,11 @@
           },
           "description": "Org roles allowed to make this move; empty = any role with update permission."
         },
+        "permission": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.:-]*$",
+          "description": "Capability that also authorizes this move (e.g. orders.confirm): holding it is enough without one of roles. Empty = only roles gate the move."
+        },
         "requires_fields": {
           "type": "array",
           "items": {

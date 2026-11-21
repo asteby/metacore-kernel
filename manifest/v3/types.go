@@ -994,6 +994,11 @@ type Transition struct {
 	To             string          `json:"to"`
 	Guard          string          `json:"guard,omitempty"`
 	Roles          []string        `json:"roles,omitempty"`
+	// Permission names a capability ("orders.confirm") that also authorizes this
+	// move: a user who holds it may make the transition without holding one of
+	// Roles, so a single transition can be delegated without creating a role.
+	// With both set, either is enough. Empty = only Roles (or nothing) gates it.
+	Permission string `json:"permission,omitempty"`
 	RequiresFields []string        `json:"requires_fields,omitempty"`
 	Approval       *ApprovalPolicy `json:"approval,omitempty"`
 	Reopen         bool            `json:"reopen,omitempty"`

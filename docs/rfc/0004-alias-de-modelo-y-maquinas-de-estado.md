@@ -56,7 +56,7 @@ nativo declara sus estados con `stage_field`/`stages`/`transitions` y obtiene to
    de la máquina solo se rechaza por la ruta dinámica, no por escrituras directas de módulos nativos. Propuesta:
    `stage_check: true` opt-in por modelo (no por defecto: una tabla con datos previos fuera de la máquina fallaría
    al instalar); el instalador lo crea `NOT VALID` y valida en una fase aparte.
-2. **Permiso por transición** (`transitions[].permission`): hoy se autoriza por `roles` o por la acción que mueve
+2. **Permiso por transición** (IMPLEMENTADO: `transitions[].permission`, una capacidad que sustituye al gate de `roles` para esa jugada; requires_fields, guard y approval siguen aplicando; la ruta wasm/guest sigue usando `stage_authority`): hoy se autoriza por `roles` o por la acción que mueve
    (`stage_authority`). Un permiso nombrado permitiría delegar una transición concreta sin crear un rol.
 3. **Eventos de transición por el outbox**: `on_transition` ya despacha; falta que el evento canónico
    `<addon>.<model>.<action>` salga por el outbox transaccional (ver §3) en vez de post-commit sin respaldo.

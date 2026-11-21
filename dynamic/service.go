@@ -1527,6 +1527,9 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 				// reject the move; `approval` parks it for a supervisor and the
 				// approved replay skips exactly this gate.
 				roles, bypass := s.transitionRoles(ctx, user, model, fromStage, toStage)
+				if !bypass && s.transitionPermitted(ctx, user, sm, fromStage, toStage) {
+					bypass = true
+				}
 				if err := CheckTransitionPolicy(sm, fromStage, toStage, merged, roles, bypass); err != nil {
 					return err
 				}
