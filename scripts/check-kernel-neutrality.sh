@@ -3,6 +3,7 @@
 # Spanish prose in non-test Go code (user-facing text goes through i18n keys /
 # stable error codes; fallback messages are English).
 #
+# Windows: .gitattributes pins *.sh and scripts/*.txt to LF; run from Git Bash (perl required).
 # Usage: scripts/check-kernel-neutrality.sh [base-ref]
 #   --update   rewrite the counts in scripts/kernel-neutrality-baseline.txt
 #              (only allowed to LOWER them; use after you removed offenders).
