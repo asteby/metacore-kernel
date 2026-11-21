@@ -33,6 +33,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/asteby/metacore-kernel/nativekit/observe"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -82,6 +83,7 @@ var symbolRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 type Dispatcher struct {
 	inv Invoker
 	res Resolver
+	obs *observe.Observer
 }
 
 // New builds a Dispatcher over inv. res resolves installations; nil means
@@ -110,9 +112,40 @@ func Target(ref string) (string, error) {
 	return ref, nil
 }
 
+// Observe installs the observer that receives one Sample per invocation (kind
+// "compiled", module = addon key, action = handler symbol). nil disables it.
+func (d *Dispatcher) Observe(o *observe.Observer) {
+	if d != nil {
+		d.obs = o
+	}
+}
+
+// observed classifies err for the observer without changing what callers see.
+func observed(err error) error {
+	if errors.Is(err, ErrNotInstalled) {
+		return fmt.Errorf("%w: %w", observe.ErrNotInstalled, err)
+	}
+	return err
+}
+
 // CallRaw invokes function of addonKey for orgID and returns the handler's raw
 // output. tx, when non-nil, is the open transaction the handler's writes join.
 func (d *Dispatcher) CallRaw(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, addonKey, function string, payload []byte) ([]byte, error) {
+	sp := d.span(addonKey, function, orgID)
+	out, err := d.callRaw(ctx, tx, orgID, addonKey, function, payload)
+	sp.End(ctx, observed(err))
+	return out, err
+}
+
+func (d *Dispatcher) span(addonKey, function string, orgID uuid.UUID) *observe.Span {
+	var o *observe.Observer
+	if d != nil {
+		o = d.obs
+	}
+	return o.Start(observe.KindCompiled, addonKey, function).With(orgID, "")
+}
+
+func (d *Dispatcher) callRaw(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, addonKey, function string, payload []byte) ([]byte, error) {
 	if !d.Ready() {
 		return nil, ErrNoExecutor
 	}
@@ -227,11 +260,19 @@ func Decode(raw []byte) (Result, error) {
 
 // Call is CallRaw plus Decode.
 func (d *Dispatcher) Call(ctx context.Context, tx *gorm.DB, orgID uuid.UUID, addonKey, function string, payload []byte) (Result, error) {
-	out, err := d.CallRaw(ctx, tx, orgID, addonKey, function, payload)
+	sp := d.span(addonKey, function, orgID)
+	out, err := d.callRaw(ctx, tx, orgID, addonKey, function, payload)
 	if err != nil {
+		sp.End(ctx, observed(err))
 		return Result{}, err
 	}
-	return Decode(out)
+	res, err := Decode(out)
+	if err == nil && !res.Success {
+		sp.End(ctx, fmt.Errorf("%w: %s", observe.ErrDeclined, addonKey))
+		return res, nil
+	}
+	sp.End(ctx, err)
+	return res, err
 }
 
 // callOK is Call for tiers that cannot carry a decline: success:false becomes
