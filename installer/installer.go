@@ -1247,6 +1247,9 @@ func (i *Installer) uninstallAddon(orgID uuid.UUID, addonKey string, dropSchema 
 		}
 	}()
 	lc, ok := i.Lifecycles.Get(addonKey)
+	if ok {
+		warnDanglingContracts(i.Lifecycles, lc.Manifest())
+	}
 	var installation Installation
 	_ = i.DB.Where("organization_id = ? AND addon_key = ?", orgID, addonKey).Take(&installation).Error
 	var iso dynamic.Isolation = dynamic.IsolationShared
@@ -2012,16 +2015,4 @@ func ensureAuditInPrimarySchema(db *gorm.DB, migrationSchema func(addonKey strin
 		}
 	}
 	return nil
-}
-
-// registerDeclaredContracts records the contracts of an installed addon with
-// role "contract" in the process registry of capability keys (X-R2), so a
-// consumer's or provider's key resolves as known. It never fails an install or
-// an upgrade: a conflict (another addon already owns the contract key) is
-// logged. Uninstall does not unregister: other organizations may still run the
-// addon, and a stale entry only keeps a key known.
-func registerDeclaredContracts(m *manifest.Manifest) {
-	if err := m.RegisterDeclaredContracts(); err != nil {
-		slog.Warn("installer.contracts_register_failed", "addon", m.Key, "version", m.Version, "error", err)
-	}
 }

@@ -1,8 +1,11 @@
 package capability
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func cleanDeclared(t *testing.T, owners ...string) {
@@ -127,4 +130,61 @@ func TestSatisfies(t *testing.T) {
 			t.Errorf("Satisfies(%q, %q) = %v, %v", c.v, c.r, got, err)
 		}
 	}
+}
+
+// Registering, unregistering and looking up from many goroutines is race-free
+// (run with -race) and never leaves a half-written declaration visible: every
+// contract a reader sees (one LookupDeclared call = one atomic snapshot) carries
+// all of its operations.
+func TestDeclaredRegistry_Concurrent(t *testing.T) {
+	cleanDeclared(t, "w0", "w1", "w2", "w3")
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for w := 0; w < 4; w++ {
+		owner := fmt.Sprintf("w%d", w)
+		key := fmt.Sprintf("acme.c%d", w)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for n := 0; n < 300; n++ {
+				ops := []DeclaredOperation{{Key: "a"}, {Key: "b"}}
+				if err := RegisterDeclared(owner, Declared{Key: key, Version: "1.0.0", Operations: ops}); err != nil {
+					t.Errorf("register: %v", err)
+					return
+				}
+				if n%3 == 0 {
+					UnregisterDeclared(owner)
+				}
+			}
+		}()
+	}
+	for r := 0; r < 4; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				for w := 0; w < 4; w++ {
+					key := fmt.Sprintf("acme.c%d", w)
+					_, _ = Known(key + ".a")
+					if d, _, ok := LookupDeclared(key); ok && len(d.Operations) != 2 {
+						t.Errorf("half-written declaration: %+v", d)
+						return
+					}
+					_ = DeclaredKeys()
+				}
+			}
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	// writers finish on their own; stop the readers after them.
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	close(stop)
+	<-done
 }
