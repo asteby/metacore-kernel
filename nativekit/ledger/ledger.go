@@ -144,6 +144,11 @@ type Config struct {
 	// AllowNegative lets balances go below zero by default (overdraft style
 	// ledgers). Per-line Floor still wins.
 	AllowNegative bool
+	// TablePrefix keeps this ledger in its own tables (<prefix>cells,
+	// <prefix>postings, <prefix>entries) instead of the shared metacore_ledger_*
+	// ones, so a module can adopt the ledger without migrating its data into
+	// them. Letters, digits and underscore only. Create them with Ledger.Migrate.
+	TablePrefix string
 	// Now is injectable for tests.
 	Now func() time.Time
 }
@@ -153,6 +158,8 @@ type Config struct {
 type Ledger struct {
 	name string
 	cfg  Config
+
+	tCells, tPostings, tEntries string
 }
 
 // New creates the ledger called name ("inventory.stock", "customer.wallet").
@@ -162,7 +169,9 @@ func New(name string, cfg Config) *Ledger {
 	if name == "" {
 		panic("ledger: empty name")
 	}
-	return &Ledger{name: name, cfg: cfg}
+	l := &Ledger{name: name, cfg: cfg}
+	l.tCells, l.tPostings, l.tEntries = tableNames(cfg.TablePrefix)
+	return l
 }
 
 // Name is the ledger's partition key.
@@ -272,18 +281,18 @@ func (s *Session) Post(p NewPosting) (Result, error) {
 	}
 	for _, k := range keys {
 		c := cells[k]
-		if err := tx.Model(&Cell{}).Where("id = ?", c.ID).
+		if err := tx.Table(s.l.tCells).Where("id = ?", c.ID).
 			Updates(map[string]any{"balance": c.Balance, "version": c.Version, "updated_at": s.l.now()}).Error; err != nil {
 			return Result{}, err
 		}
 	}
-	if err := tx.Create(&post).Error; err != nil {
+	if err := tx.Table(s.l.tPostings).Create(&post).Error; err != nil {
 		if isUnique(err) && p.Key != "" {
 			return Result{}, nativekit.E(codeDuplicateInFlght, "a posting with this key is being applied", map[string]any{"key": p.Key})
 		}
 		return Result{}, err
 	}
-	if err := tx.Create(&entries).Error; err != nil {
+	if err := tx.Table(s.l.tEntries).Create(&entries).Error; err != nil {
 		return Result{}, err
 	}
 
@@ -321,7 +330,7 @@ type ReverseInput struct {
 func (s *Session) Reverse(in ReverseInput) (Result, error) {
 	tx := s.op.Tx()
 	var orig Posting
-	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+	err := tx.Table(s.l.tPostings).Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("id = ? AND org_id = ? AND ledger = ?", in.PostingID, in.Org, s.l.name).Take(&orig).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return Result{}, nativekit.E(CodePostingNotFound, "posting not found", map[string]any{"posting_id": in.PostingID.String()})
@@ -338,14 +347,14 @@ func (s *Session) Reverse(in ReverseInput) (Result, error) {
 	}
 	if orig.ReversedBy != nil {
 		var prev Posting
-		if err := tx.Where("id = ?", *orig.ReversedBy).Take(&prev).Error; err == nil && prev.IdemKey != nil && *prev.IdemKey == key {
+		if err := tx.Table(s.l.tPostings).Where("id = ?", *orig.ReversedBy).Take(&prev).Error; err == nil && prev.IdemKey != nil && *prev.IdemKey == key {
 			r, _, rerr := s.replay(NewPosting{Org: in.Org, Key: key})
 			return r, rerr
 		}
 		return Result{}, nativekit.E(CodeAlreadyReversed, "posting already reversed", map[string]any{"posting_id": orig.ID.String()})
 	}
 	var entries []Entry
-	if err := tx.Where("posting_id = ?", orig.ID).Order("seq").Find(&entries).Error; err != nil {
+	if err := tx.Table(s.l.tEntries).Where("posting_id = ?", orig.ID).Order("seq").Find(&entries).Error; err != nil {
 		return Result{}, err
 	}
 	lines := make([]Line, 0, len(entries))
@@ -365,7 +374,7 @@ func (s *Session) Reverse(in ReverseInput) (Result, error) {
 	if err != nil || r.Replayed {
 		return r, err
 	}
-	if err := tx.Model(&Posting{}).Where("id = ?", orig.ID).Update("reversed_by", r.Posting.ID).Error; err != nil {
+	if err := tx.Table(s.l.tPostings).Where("id = ?", orig.ID).Update("reversed_by", r.Posting.ID).Error; err != nil {
 		return Result{}, err
 	}
 	return r, nil
@@ -378,7 +387,7 @@ func (s *Session) replay(p NewPosting) (Result, bool, error) {
 	}
 	tx := s.op.Tx()
 	var prev Posting
-	err := tx.Where("org_id = ? AND ledger = ? AND idem_key = ?", p.Org, s.l.name, p.Key).Take(&prev).Error
+	err := tx.Table(s.l.tPostings).Where("org_id = ? AND ledger = ? AND idem_key = ?", p.Org, s.l.name, p.Key).Take(&prev).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return Result{}, false, nil
 	}
@@ -389,7 +398,7 @@ func (s *Session) replay(p NewPosting) (Result, bool, error) {
 		return Result{}, false, nativekit.E(CodeKeyReused, "idempotency key reused with a different payload", map[string]any{"key": p.Key})
 	}
 	var entries []Entry
-	if err := tx.Where("posting_id = ?", prev.ID).Order("seq").Find(&entries).Error; err != nil {
+	if err := tx.Table(s.l.tEntries).Where("posting_id = ?", prev.ID).Order("seq").Find(&entries).Error; err != nil {
 		return Result{}, false, err
 	}
 	return Result{Posting: prev, Entries: entries, Replayed: true}, true, nil
@@ -454,7 +463,7 @@ func (s *Session) lockCell(org uuid.UUID, k cellKey) (*Cell, error) {
 	tx := s.op.Tx()
 	var c Cell
 	find := func() error {
-		return tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		return tx.Table(s.l.tCells).Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("org_id = ? AND ledger = ? AND account = ? AND bucket = ?", org, s.l.name, k.account, k.bucket).Take(&c).Error
 	}
 	err := find()
@@ -465,7 +474,7 @@ func (s *Session) lockCell(org uuid.UUID, k cellKey) (*Cell, error) {
 		return nil, err
 	}
 	nc := Cell{ID: uuid.New(), OrgID: org, Ledger: s.l.name, Account: k.account, Bucket: k.bucket}
-	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&nc).Error; err != nil {
+	if err := tx.Table(s.l.tCells).Clauses(clause.OnConflict{DoNothing: true}).Create(&nc).Error; err != nil {
 		return nil, err
 	}
 	if err := find(); err != nil {
