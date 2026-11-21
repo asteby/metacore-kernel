@@ -86,7 +86,7 @@ func TestRoles_ValidManifests(t *testing.T) {
 		"replaces + deprecated": roleDoc("acme_pay", "provider", func(m map[string]interface{}) {
 			asProvider(m)
 			m["replaces"] = []interface{}{"acme_legacy"}
-			m["metadata"].(map[string]interface{})["deprecated"] = mm("since", "2.0.0", "message", "use acme_pay2", "replaced_by", "acme_pay2")
+			m["metadata"].(map[string]interface{})["deprecated"] = mm("since", "2.0.0", "replacement", "acme_pay2", "sunset", "2027-12-31")
 		}),
 	}
 	for name, m := range cases {
@@ -258,5 +258,58 @@ func TestRoles_RealAddonManifestsUnchanged(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// The frozen shape of the contract surface: deprecated{since, replacement,
+// sunset} on addon, contract and operation; failover before_effect;
+// implements[].scope; Family() derived from the key.
+func TestRoles_FrozenContractShape(t *testing.T) {
+	ok := roleDoc("acme_core", "contract", func(m map[string]interface{}) {
+		asContract(m)
+		c := m["contracts"].([]interface{})[0].(map[string]interface{})
+		c["deprecated"] = mm("since", "1.2.0", "replacement", "acme.document2", "sunset", "2027-06-30")
+		ops := c["operations"].([]interface{})
+		ops[0].(map[string]interface{})["failover"] = "before_effect"
+		ops[1].(map[string]interface{})["deprecated"] = mm("since", "1.1.0", "replacement", "lookup")
+		m["metadata"].(map[string]interface{})["deprecated"] = mm("since", "2.0.0", "replacement", "acme_core2", "sunset", "2028-01-01")
+	})
+	if _, err := validateRole(t, ok, Options{Strict: true}); err != nil {
+		t.Fatalf("frozen shape must validate: %v", err)
+	}
+	prov := roleDoc("acme_pay", "provider", func(m map[string]interface{}) {
+		asProvider(m)
+		m["implements"].([]interface{})[0].(map[string]interface{})["scope"] = []interface{}{"org", "branch"}
+	})
+	if _, err := validateRole(t, prov, Options{Strict: true}); err != nil {
+		t.Fatalf("implements[].scope must validate: %v", err)
+	}
+
+	bad := map[string]map[string]interface{}{
+		"old replaced_by name": roleDoc("acme_items", "foundation", func(m map[string]interface{}) {
+			m["metadata"].(map[string]interface{})["deprecated"] = mm("replaced_by", "x")
+		}),
+		"sunset not a date": roleDoc("acme_items", "foundation", func(m map[string]interface{}) {
+			m["metadata"].(map[string]interface{})["deprecated"] = mm("sunset", "soon")
+		}),
+		"operation deprecated unknown prop": roleDoc("acme_core", "contract", func(m map[string]interface{}) {
+			asContract(m)
+			m["contracts"].([]interface{})[0].(map[string]interface{})["operations"].([]interface{})[0].(map[string]interface{})["deprecated"] = mm("message", "x")
+		}),
+		"implements scope enum": roleDoc("acme_pay", "provider", func(m map[string]interface{}) {
+			asProvider(m)
+			m["implements"].([]interface{})[0].(map[string]interface{})["scope"] = []interface{}{"planet"}
+		}),
+	}
+	for name, m := range bad {
+		if _, err := validateRole(t, m, Options{Strict: true}); err == nil {
+			t.Errorf("%s: schema must reject it", name)
+		}
+	}
+	if got := (Contract{Key: "acme.document"}).Family(); got != "acme" {
+		t.Errorf("Family() = %q", got)
+	}
+	if got := (Contract{Key: "single"}).Family(); got != "single" {
+		t.Errorf("Family() of a key without dot = %q", got)
 	}
 }

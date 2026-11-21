@@ -2032,11 +2032,11 @@
     "Deprecation": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Informative end-of-life notice of an addon or contract.",
+      "description": "End-of-life notice of an addon, a contract or a contract operation: deprecated{since, replacement, sunset}.",
       "properties": {
-        "since": { "type": "string", "description": "Version from which it is deprecated (semver)." },
-        "message": { "type": "string" },
-        "replaced_by": { "type": "string", "description": "Successor: an addon key, or a contract key." }
+        "since": { "type": "string", "description": "Version (semver) from which it is deprecated." },
+        "replacement": { "type": "string", "description": "Successor: an addon key, a contract key or an operation key, according to what is deprecated." },
+        "sunset": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "Date (YYYY-MM-DD) after which it may stop being served." }
       }
     },
     "Contract": {
@@ -2045,7 +2045,7 @@
       "required": ["key", "version"],
       "description": "A versioned capability contract owned by a 'contract' addon.",
       "properties": {
-        "key": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$", "description": "'<family>.<name>' in lower snake case." },
+        "key": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$", "description": "'<family>.<name>' in lower snake case. The family is the first segment (there is no separate field); the owning addon is conventionally '<family>_core'." },
         "version": { "type": "string", "description": "Contract semver; a minor is additive only." },
         "operations": { "type": "array", "items": { "$ref": "#/$defs/ContractOperation" } },
         "events": { "type": "array", "items": { "$ref": "#/$defs/ContractEvent" } },
@@ -2069,9 +2069,10 @@
         "output": { "type": "string" },
         "idempotent": { "type": "boolean" },
         "timeout_s": { "type": "integer", "minimum": 0 },
-        "failover": { "type": "string", "enum": ["never", "allowed"] },
+        "failover": { "type": "string", "enum": ["never", "allowed", "before_effect"], "description": "never: irreversible or indeterminate, stays pending; allowed: reads and idempotent calls without external effect; before_effect: retry on another provider only if the failed one provably did not receive the request. Empty = never." },
         "errors": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
-        "required": { "type": "boolean", "description": "false makes the operation optional for a provider (default true)." }
+        "required": { "type": "boolean", "description": "false makes the operation optional for a provider (default true)." },
+        "deprecated": { "$ref": "#/$defs/Deprecation" }
       }
     },
     "ContractEvent": {
@@ -2081,7 +2082,7 @@
       "properties": {
         "name": { "type": "string", "minLength": 1 },
         "version": { "type": "integer", "minimum": 1 },
-        "payload_schema": { "type": "string" }
+        "payload_schema": { "type": "string", "description": "Path of the payload JSON schema. Optional (relaxing later is compatible; requiring it later is not); the conformance suite asks for it." }
       }
     },
     "ContractStates": {
@@ -2130,6 +2131,7 @@
       "properties": {
         "contract": { "type": "string" },
         "version": { "type": "string", "description": "Semver range the implemented contract must satisfy." },
+        "scope": { "type": "array", "uniqueItems": true, "items": { "type": "string", "enum": ["org", "entity", "branch", "country", "channel"] }, "description": "Binding scopes at which this implementation can be selected; empty = any scope the contract's selection allows." },
         "countries": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z]{2}$" } },
         "operations": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
       }

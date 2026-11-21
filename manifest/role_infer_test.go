@@ -52,10 +52,10 @@ func TestFromV3_CarriesRoleFields(t *testing.T) {
 		provider(m)
 		m["extends_addon"] = rm("key", "acme_core", "version", "^1")
 		m["replaces"] = []any{"acme_legacy"}
-		m["metadata"].(map[string]any)["deprecated"] = rm("since", "2.0.0", "replaced_by", "acme_next")
+		m["metadata"].(map[string]any)["deprecated"] = rm("since", "2.0.0", "replacement", "acme_next", "sunset", "2027-01-31")
 	}))
 	if m.Role != "extension" || len(m.Implements) != 1 || m.ExtendsAddon == nil || m.ExtendsAddon.Key != "acme_core" ||
-		len(m.Replaces) != 1 || m.Deprecated == nil || m.Deprecated.ReplacedBy != "acme_next" {
+		len(m.Replaces) != 1 || m.Deprecated == nil || m.Deprecated.Replacement != "acme_next" {
 		t.Fatalf("role fields lost in FromV3: %+v", m)
 	}
 	if err := m.Validate("3.1.0"); err != nil {

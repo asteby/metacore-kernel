@@ -661,15 +661,18 @@ type Metadata struct {
 	Deprecated *Deprecation `json:"deprecated,omitempty"`
 }
 
-// Deprecation is the informative end-of-life notice of an addon or contract.
+// Deprecation is the end-of-life notice of an addon, a contract or one
+// contract operation (plan §4A.4: deprecated{since, replacement, sunset}). The
+// hub warns and fleet telemetry counts the calls; nothing is blocked by the
+// kernel. The field names are part of the frozen contract.
 type Deprecation struct {
 	// Since is the version (semver) from which it is deprecated.
 	Since string `json:"since,omitempty"`
-	// Message is a short human explanation.
-	Message string `json:"message,omitempty"`
-	// ReplacedBy names the successor (an addon key, or a contract key for a
-	// contract).
-	ReplacedBy string `json:"replaced_by,omitempty"`
+	// Replacement names the successor: an addon key, a contract key, or an
+	// operation key, according to what is deprecated.
+	Replacement string `json:"replacement,omitempty"`
+	// Sunset is the date (YYYY-MM-DD) after which it may stop being served.
+	Sunset string `json:"sunset,omitempty"`
 }
 
 // Addon roles (metadata.role). Taxonomy of the base + successors pattern: a
@@ -4012,7 +4015,10 @@ type ModelView struct {
 
 // Contract is a versioned capability contract owned by a "contract" addon.
 type Contract struct {
-	// Key is "<family>.<name>" in lower snake case, e.g. "acme.document".
+	// Key is "<family>.<name>" in lower snake case, e.g. "acme.document". The
+	// FAMILY of a contract is its first segment (Family()): there is no
+	// separate field, so the two can never disagree. The owning addon is
+	// conventionally "<family>_core".
 	Key string `json:"key"`
 	// Version is the contract's semver. A minor is additive only.
 	Version string `json:"version"`
@@ -4036,6 +4042,27 @@ type Contract struct {
 	Deprecated *Deprecation `json:"deprecated,omitempty"`
 }
 
+// Family is the first segment of the contract key ("acme" for "acme.document").
+func (c Contract) Family() string {
+	if i := strings.Index(c.Key, "."); i > 0 {
+		return c.Key[:i]
+	}
+	return c.Key
+}
+
+// Contract operation failover modes (plan §4A.3).
+const (
+	// FailoverNever: the effect is irreversible or the outcome can be
+	// indeterminate; the call stays pending and is reconciled, never retried on
+	// another provider.
+	FailoverNever = "never"
+	// FailoverAllowed: reads and idempotent calls without external effect.
+	FailoverAllowed = "allowed"
+	// FailoverBeforeEffect: the host may retry on another provider only when
+	// the failed provider provably did not receive the request.
+	FailoverBeforeEffect = "before_effect"
+)
+
 // ContractOperation is one verb of a contract.
 type ContractOperation struct {
 	Key string `json:"key"`
@@ -4047,19 +4074,25 @@ type ContractOperation struct {
 	Idempotent bool `json:"idempotent,omitempty"`
 	// TimeoutS is the per-call budget in seconds (0 = host default).
 	TimeoutS int `json:"timeout_s,omitempty"`
-	// Failover is "never" or "allowed": whether the host may retry the
-	// operation on another provider after a failure.
+	// Failover is "never", "allowed" or "before_effect" (FailoverNever,
+	// FailoverAllowed, FailoverBeforeEffect): whether and when the host may
+	// retry the operation on another provider after a failure. Empty = never.
 	Failover string `json:"failover,omitempty"`
 	// Errors is the closed set of error codes the operation may return.
 	Errors []string `json:"errors,omitempty"`
 	// Required false makes the operation optional for a provider (default true).
 	Required *bool `json:"required,omitempty"`
+	// Deprecated marks this operation as superseded.
+	Deprecated *Deprecation `json:"deprecated,omitempty"`
 }
 
 // ContractEvent is a versioned event of a contract.
 type ContractEvent struct {
-	Name          string `json:"name"`
-	Version       int    `json:"version"`
+	Name    string `json:"name"`
+	Version int    `json:"version"`
+	// PayloadSchema is the path of the payload JSON schema. Optional on
+	// purpose: making it required later would break manifests, relaxing it
+	// never does; the conformance suite is what asks for it.
 	PayloadSchema string `json:"payload_schema,omitempty"`
 }
 
@@ -4102,6 +4135,10 @@ type Implements struct {
 	Contract string `json:"contract"`
 	// Version is a semver range the implemented contract must satisfy.
 	Version string `json:"version"`
+	// Scope lists the binding scopes (org|entity|branch|country|channel) at
+	// which this implementation can be selected; empty = any scope the
+	// contract's selection allows.
+	Scope []string `json:"scope,omitempty"`
 	// Countries scopes the implementation to ISO 3166-1 alpha-2 markets.
 	Countries []string `json:"countries,omitempty"`
 	// Operations lists the operations implemented (empty = all required).
