@@ -119,6 +119,10 @@ func validateExtraColumns(where string, d *DynamicOptions, ownCols map[string]st
 // action field and recursively on its item_fields.
 func validateActionFieldPickerMeta(where string, f ActionField, colsByModel map[string]map[string]struct{}) []string {
 	errs := validateOptionFilter(where, f.OptionFilter)
+	errs = append(errs, validateOptionFitmentShape(where, f.OptionFitment)...)
+	if f.OptionFitment != nil && f.Ref == "" && f.Options.Dynamic == nil {
+		errs = append(errs, where+".option_fitment needs a picker field: declare ref or an options object on the same field")
+	}
 	if f.Options.Dynamic != nil {
 		errs = append(errs, validateExtraColumns(where, f.Options.Dynamic, colsByModel[f.Options.Dynamic.Source])...)
 	}

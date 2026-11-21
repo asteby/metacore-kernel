@@ -1338,6 +1338,12 @@ type Column struct {
 	// the extra columns /options returns, so list them in the options object's
 	// extra_columns. Pure UI metadata; the DDL plane ignores it. Optional.
 	OptionFilter OptionFilter `json:"option_filter,omitempty"`
+	// OptionFitment declares that this picker's options are checked for FIT
+	// against a subject chosen elsewhere in the same form (see OptionFitment):
+	// the SDK flags or hides the options whose attributes the organization's
+	// fitment rules do not accept for that subject. Pure UI metadata; the
+	// DDL/install plane ignores it. Optional.
+	OptionFitment *OptionFitment `json:"option_fitment,omitempty"`
 	// OptionsSource declares a DYNAMIC select for the column: instead of a
 	// hardcoded Options list, it names a PROVIDER key (e.g.
 	// "registered_models", "installed_addons") the HOST registers and resolves
@@ -2779,6 +2785,10 @@ type ActionField struct {
 	// OptionFilter hides options of this field's relation / dynamic picker (see
 	// Column.OptionFilter). The host projects it onto modelbase.FieldDef.OptionFilter.
 	OptionFilter OptionFilter `json:"option_filter,omitempty"`
+	// OptionFitment flags or hides this picker's options that the fitment rules
+	// do not accept for a subject chosen in another field (see OptionFitment).
+	// Mirrors Column.option_fitment. Pure UI metadata.
+	OptionFitment *OptionFitment `json:"option_fitment,omitempty"`
 
 	// Scan opts this action field into CAMERA BARCODE SCANNING: the SDK shows a
 	// camera button that scans a barcode to FILL the field fast — a text/number
@@ -2918,6 +2928,43 @@ type DynamicOptions struct {
 	// invoices). Names are lowercase snake_case identifiers; each must be a
 	// column of Source when Source is an own model. Optional.
 	ExtraColumns []string `json:"extra_columns,omitempty"`
+}
+
+// Fitment modes of OptionFitment.
+const (
+	// OptionFitmentFlag keeps every option and marks the ones that do not fit.
+	OptionFitmentFlag = "flag"
+	// OptionFitmentFilter hides the options that do not fit.
+	OptionFitmentFilter = "filter"
+)
+
+// OptionFitment declares, on a picker column (or action field), that the
+// candidates must fit a SUBJECT picked in another field of the same form (the
+// row being edited, or the header of the document the row belongs to), using
+// the fitment rules the organization keeps as records: a subject accepts
+// targets according to those rules. The kernel only validates and carries the
+// declaration; the SDK resolves it (rules + the subject row + the options'
+// attributes), so no host code is involved.
+//
+//	SubjectField — name of the field holding the subject's id, looked up in the
+//	               row first and then in the header form. ONE field: support for
+//	               several subjects, if ever needed, arrives as a NEW additive
+//	               field (e.g. subject_fields), never by changing this type.
+//	               Required.
+//	SubjectModel — model of the subject, whose row supplies the attributes the
+//	               rules compare. Required.
+//	TargetModel  — the rules' target model: names which rules apply and which
+//	               attribute group of the option's row is compared. Required.
+//	Mode         — "flag" (default: mark non-fitting options) or "filter" (hide
+//	               them). A consumer that does not know a mode MUST behave as
+//	               "flag" (marking never loses data). A subject with no rules
+//	               for the target never flags or hides anything: no data is not
+//	               a mismatch.
+type OptionFitment struct {
+	SubjectField string `json:"subject_field"`
+	SubjectModel string `json:"subject_model"`
+	TargetModel  string `json:"target_model"`
+	Mode         string `json:"mode,omitempty"`
 }
 
 // OptionFilterRule hides options of a relation / dynamic picker. The SDK

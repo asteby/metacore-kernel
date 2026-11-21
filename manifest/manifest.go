@@ -1199,6 +1199,8 @@ type FieldDef struct {
 	// ineligible options of this field's relation / dynamic picker. JSON tag
 	// matches modelbase.FieldDef.OptionFilter. Empty = every option is listed.
 	OptionFilter v3.OptionFilter `json:"option_filter,omitempty"`
+	// OptionFitment forwards the v3 ActionField.option_fitment (see Column).
+	OptionFitment *v3.OptionFitment `json:"option_fitment,omitempty"`
 
 	// DefaultFromRecord forwards the v3 ActionField.default_from_record (a
 	// column name, or a list whose first non-empty value wins) so the SDK seeds
@@ -2048,6 +2050,11 @@ type ColumnDef struct {
 	// /options returns) through the v3 → host conversion onto the served
 	// modelbase.ColumnDef/FieldDef.OptionFilter. Pure UI metadata.
 	OptionFilter v3.OptionFilter `json:"option_filter,omitempty"`
+
+	// OptionFitment carries the v3 Column.option_fitment (flag / hide the
+	// options that do not fit a subject chosen in the same form) onto the
+	// served modelbase.ColumnDef/FieldDef.OptionFitment. Pure UI metadata.
+	OptionFitment *v3.OptionFitment `json:"option_fitment,omitempty"`
 }
 
 // VisibleWhenDef is the legacy carrier for the v3 VisibleWhen block. It rides

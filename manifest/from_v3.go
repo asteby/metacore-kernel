@@ -653,6 +653,8 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				DependsOn: c.DependsOn,
 				// OptionFilter hides ineligible options of this picker (SDK-side).
 				OptionFilter: c.OptionFilter,
+				// OptionFitment flags / hides options that do not fit a subject (SDK-side).
+				OptionFitment: c.OptionFitment,
 				// Scan opts the column's form input into camera barcode scanning;
 				// rides ColumnDef.Scan so DeriveFormFields carries it onto the
 				// served FieldDef and the SDK shows a scan-to-fill button.
@@ -1548,6 +1550,8 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 			DependsOn: f.DependsOn,
 			// OptionFilter forwards the option-hiding rules of this picker.
 			OptionFilter: f.OptionFilter,
+			// OptionFitment forwards the fitment declaration of this picker.
+			OptionFitment: f.OptionFitment,
 			// DefaultFromRecord forwards the record-seeding column(s) so the SDK
 			// prefills the field from the row the action was opened on.
 			DefaultFromRecord: f.DefaultFromRecord,
