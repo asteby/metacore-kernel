@@ -142,6 +142,9 @@ func (d *Dispatcher) span(addonKey, function string, orgID uuid.UUID) *observe.S
 	if d != nil {
 		o = d.obs
 	}
+	if sym, err := Target(function); err == nil {
+		function = sym // "compiled:Post" and "Post" are one action
+	}
 	return o.Start(observe.KindCompiled, addonKey, function).With(orgID, "")
 }
 
