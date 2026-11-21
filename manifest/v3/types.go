@@ -709,6 +709,11 @@ type Model struct {
 	Key         string       `json:"key"`
 	Table       string       `json:"table"`
 	Label       string       `json:"label,omitempty"`
+	// Aliases are extra slugs that resolve to this model next to Key and Table
+	// (RFC 0004): /metadata, /data and /options accept them, matching ignores
+	// case and separators ("order-items" == "order_items" == "OrderItems").
+	// They never change permissions: the canonical model's apply.
+	Aliases []string `json:"aliases,omitempty"`
 	Columns     []Column     `json:"columns"`
 	Indices     []Index      `json:"indices,omitempty"`
 	ForeignKeys []ForeignKey `json:"foreign_keys,omitempty"`

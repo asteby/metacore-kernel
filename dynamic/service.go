@@ -17,6 +17,7 @@ import (
 
 	"github.com/asteby/metacore-kernel/auth/adapters"
 	"github.com/asteby/metacore-kernel/metadata"
+	"github.com/asteby/metacore-kernel/modelalias"
 	"github.com/asteby/metacore-kernel/modelbase"
 	"github.com/asteby/metacore-kernel/permission"
 	"github.com/asteby/metacore-kernel/query"
@@ -169,6 +170,13 @@ type Config struct {
 	// an addon-populated table) plug it here. When nil, modelbase.Get is
 	// used — which only covers models explicitly registered at package init.
 	ModelResolver ModelResolver
+
+	// ModelAliases resolves alternative slugs (models[].aliases, RFC 0004) to the
+	// canonical model key at the HTTP edge. It is consulted only when the slug is
+	// NOT itself a known model, so models without aliases pay nothing and the
+	// canonical name always wins. Typically a *modelalias.Index the host fills at
+	// install time. Nil = no aliases (the historical behaviour).
+	ModelAliases modelalias.Resolver
 
 	// TableNameResolver returns the database table for a model name. It exists
 	// for hosts whose dynamic (addon) models are reflect-built structs that
@@ -502,6 +510,7 @@ type Service struct {
 	matchClause       SearchMatchClause
 	listSearchClause  SearchMatchClause // explicit-only; threaded into List's builder search
 	modelResolver     ModelResolver
+	slugAliases       modelalias.Resolver
 	requirePerms      bool
 	updateDeny        map[string][]string
 	requireTenant     bool
@@ -623,6 +632,7 @@ func New(cfg Config) *Service {
 		matchClause:       cfg.SearchMatchClause,
 		listSearchClause:  explicitSearchClause,
 		modelResolver:     cfg.ModelResolver,
+		slugAliases:       cfg.ModelAliases,
 		tableNameResolver: cfg.TableNameResolver,
 		bus:               cfg.Bus,
 		addonKeyForModel:  cfg.AddonKeyForModel,
@@ -2149,4 +2159,19 @@ func (s *Service) stripUpdateDeny(model string, input map[string]any) {
 	for _, k := range s.updateDeny[model] {
 		delete(input, k)
 	}
+}
+
+// CanonicalModel maps a request slug to the canonical model key: the slug
+// itself when it names a known model, else the model whose models[].aliases
+// (RFC 0004) it matches, else the slug unchanged (so the caller reports its
+// usual "model not found"). HTTP handlers call it once at the edge so every
+// downstream permission check, audit row and event sees the canonical key.
+func (s *Service) CanonicalModel(ctx context.Context, slug string) string {
+	if s.slugAliases == nil {
+		return slug
+	}
+	return modelalias.Canonical(slug, func(name string) bool {
+		_, ok := s.lookupModel(ctx, name)
+		return ok
+	}, s.slugAliases)
 }

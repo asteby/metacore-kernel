@@ -24,7 +24,7 @@ func NewHandler(service *Service) *Handler {
 
 // GetTable handles GET /metadata/table/:model.
 func (h *Handler) GetTable(c fiber.Ctx) error {
-	modelKey := c.Params(paramModel)
+	modelKey := h.service.CanonicalModel(c.Params(paramModel))
 	if modelKey == "" {
 		return respondError(c, fiber.StatusBadRequest, MsgModelNotFound)
 	}
@@ -38,7 +38,7 @@ func (h *Handler) GetTable(c fiber.Ctx) error {
 
 // GetModal handles GET /metadata/modal/:model.
 func (h *Handler) GetModal(c fiber.Ctx) error {
-	modelKey := c.Params(paramModel)
+	modelKey := h.service.CanonicalModel(c.Params(paramModel))
 	if modelKey == "" {
 		return respondError(c, fiber.StatusBadRequest, MsgModelNotFound)
 	}

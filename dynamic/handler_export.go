@@ -51,7 +51,7 @@ func (h *Handler) exportData(c fiber.Ctx) error {
 	if u == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
 	}
-	model := c.Params("model")
+	model := h.service.CanonicalModel(c, c.Params("model"))
 	cols, err := resolveExportColumns(c, h, model)
 	if err != nil {
 		return h.handleError(c, err)
@@ -102,7 +102,7 @@ func (h *Handler) exportData(c fiber.Ctx) error {
 // instructions sheet; csv emits just the header row for tooling that wants a
 // flat file.
 func (h *Handler) exportTemplate(c fiber.Ctx) error {
-	model := c.Params("model")
+	model := h.service.CanonicalModel(c, c.Params("model"))
 	spec, err := h.service.ImportSpec(c, model)
 	if err != nil {
 		return h.handleError(c, err)
@@ -176,7 +176,7 @@ func (h *Handler) importData(c fiber.Ctx) error {
 	if u == nil {
 		return respondErr(c, fiber.StatusUnauthorized, "not authenticated")
 	}
-	model := c.Params("model")
+	model := h.service.CanonicalModel(c, c.Params("model"))
 	prepared, _, err := h.prepareImport(c)
 	if prepared == nil {
 		return err
@@ -227,7 +227,7 @@ func (h *Handler) importData(c fiber.Ctx) error {
 // engine so hosts that have not yet adopted dynamic.Service still run the
 // exact same code. The returned error is already an HTTP response.
 func (h *Handler) prepareImport(c fiber.Ctx) (*importer.Prepared, modelbase.ImportSpec, error) {
-	model := c.Params("model")
+	model := h.service.CanonicalModel(c, c.Params("model"))
 	spec, err := h.service.ImportSpec(c, model)
 	if err != nil {
 		return nil, spec, h.handleError(c, err)

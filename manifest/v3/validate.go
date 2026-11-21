@@ -14,6 +14,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/asteby/metacore-kernel/manifest/computeexpr"
+	"github.com/asteby/metacore-kernel/modelalias"
 	"github.com/asteby/metacore-kernel/manifest/rulesexpr"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -1735,6 +1736,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 		// (the schema pattern already enforces the shape). Mirrors the legacy
 		// validator so a manifest fails identically on both surfaces.
 		errs = append(errs, validateStageMachine(mi, mod, ownCols)...)
+		errs = append(errs, validateAliases(mi, mod, m.Models)...)
 		// A final stage has no way out unless the reopen is an approved,
 		// explicit transition (P3). Legacy manifests declared exits freely, so
 		// the rule is a warning for one release (see compat.go).
@@ -2936,4 +2938,44 @@ func ValidFormulaHandler(h string) bool {
 		}
 	}
 	return true
+}
+
+// validateAliases enforces models[].aliases: each alias is a slug that, once
+// normalized (case and separators ignored), differs from the key and table of
+// every model in the manifest and from every other alias. A collision between
+// models of DIFFERENT manifests is checked when the host registers the model in
+// its modelalias.Index at install time.
+func validateAliases(mi int, mod Model, all []Model) []string {
+	if len(mod.Aliases) == 0 {
+		return nil
+	}
+	var errs []string
+	norm := func(s string) string { return modelalias.Normalize(s) }
+	taken := map[string]string{}
+	for oi, other := range all {
+		if oi == mi {
+			continue
+		}
+		taken[norm(other.Key)] = "the key of " + other.Key
+		taken[norm(other.Table)] = "the table of " + other.Key
+		for _, a := range other.Aliases {
+			taken[norm(a)] = "an alias of " + other.Key
+		}
+	}
+	own := map[string]string{norm(mod.Key): "its own key", norm(mod.Table): "its own table"}
+	for ai, a := range mod.Aliases {
+		n := norm(a)
+		where := fmt.Sprintf("models[%d].aliases[%d] %q", mi, ai, a)
+		if n == "" {
+			errs = append(errs, where+" is empty")
+			continue
+		}
+		if what, ok := own[n]; ok {
+			errs = append(errs, fmt.Sprintf("%s repeats %s", where, what))
+		} else if what, ok := taken[n]; ok {
+			errs = append(errs, fmt.Sprintf("%s collides with %s", where, what))
+		}
+		own[n] = "another alias of the same model"
+	}
+	return errs
 }
