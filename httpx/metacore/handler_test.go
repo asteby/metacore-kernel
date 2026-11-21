@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/asteby/metacore-kernel/bridge"
@@ -220,3 +223,49 @@ func TestExecuteTool_NotRegistered(t *testing.T) {
 // io.EOF references in inactive branches as ineligible for the imports
 // pruner, which would otherwise drop the symbol.
 var _ = io.EOF
+
+// TestServeAddonFrontend_AbsoluteBasePath serves remoteEntry.js from an
+// ABSOLUTE FrontendBasePath. On Windows the absolute path carries a drive
+// colon that fasthttp's SendFile rejected with 403; the file is streamed now.
+func TestServeAddonFrontend_AbsoluteBasePath(t *testing.T) {
+	db := setupTestDB(t)
+	b, err := bridge.New(bridge.Config{DB: db})
+	if err != nil {
+		t.Fatalf("bridge.New: %v", err)
+	}
+	base, err := filepath.Abs(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(base, "fiscal_mexico"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "fiscal_mexico", "remoteEntry.js"), []byte("export const x = 1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h, err := NewHandler(Deps{Bridge: b, FrontendBasePath: base})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	app := fiber.New()
+	app.Get("/addons/:key/frontend/*", h.ServeAddonFrontend)
+	resp, err := app.Test(httptest.NewRequest("GET", "/addons/fiscal_mexico/frontend/remoteEntry.js", nil), fiber.TestConfig{Timeout: 0})
+	if err != nil {
+		t.Fatalf("app.Test: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 || string(body) != "export const x = 1" {
+		t.Fatalf("status = %d body = %q", resp.StatusCode, body)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Fatalf("content-type = %q", ct)
+	}
+	if cc := resp.Header.Get("Cache-Control"); !strings.Contains(cc, "no-store") {
+		t.Fatalf("remoteEntry.js must not be cached: %q", cc)
+	}
+	// Traversal stays rejected.
+	resp, _ = app.Test(httptest.NewRequest("GET", "/addons/fiscal_mexico/frontend/..%2F..%2Fsecret", nil), fiber.TestConfig{Timeout: 0})
+	if resp.StatusCode == 200 {
+		t.Fatal("traversal must not be served")
+	}
+}

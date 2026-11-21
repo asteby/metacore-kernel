@@ -500,7 +500,8 @@ func (h *Handler) ServeAddonFrontend(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).SendString("invalid path")
 	}
 
-	if info, err := os.Stat(filePath); err != nil || info.IsDir() {
+	info, err := os.Stat(filePath)
+	if err != nil || info.IsDir() {
 		return c.Status(fiber.StatusNotFound).SendString("file not found")
 	}
 
@@ -526,7 +527,16 @@ func (h *Handler) ServeAddonFrontend(c fiber.Ctx) error {
 	} else {
 		c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
 	}
-	return c.SendFile(filePath)
+	// Stream the already-validated file instead of c.SendFile: fasthttp's file
+	// server rejects with 403 any rewritten path holding a Windows drive colon
+	// ("C:...", its NTFS alternate-data-stream guard), so an absolute
+	// FrontendBasePath on Windows made every remoteEntry.js answer 403. The
+	// path was already confined to the addon dir above.
+	f, err := os.Open(filePath)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).SendString("file not found")
+	}
+	return c.SendStream(f, int(info.Size()))
 }
 
 // guard: ensure errors stays referenced if future refactors switch
