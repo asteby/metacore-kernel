@@ -1246,6 +1246,9 @@
             "max_batch": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum items per request. Default 500." }
           }
         },
+        "import": {
+          "$ref": "#/$defs/ImportSpec"
+        },
         "sequences": {
           "type": "array",
           "description": "Atomic folio counters the kernel maintains per org (or branch) for this model — invoice folios, remission numbers, tickets. A column binds to one via 'sequence' for auto-stamping on create; a wasm handler pulls one via the sequence_next host import.",
@@ -1992,6 +1995,44 @@
           "minLength": 1,
           "description": "Template rendered around the numeric value; MUST contain exactly one {seq} or zero-padded {seq:0N} placeholder, e.g. 'A-{seq:06}' → 'A-000042'."
         }
+      }
+    },
+    "ImportSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["columns"],
+      "description": "Spreadsheet-import declaration of a model: the template the user downloads and the parser that reads the filled file back. Omit it to let the kernel derive a spec from the model's columns.",
+      "properties": {
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Ordered column list of the template.",
+          "items": { "$ref": "#/$defs/ImportColumn" }
+        },
+        "max_rows": { "type": "integer", "minimum": 0, "description": "Cap for a single upload. 0 uses the kernel default." },
+        "sheet_name": { "type": "string", "description": "Title of the data sheet. Empty uses the model's label." },
+        "instructions": {
+          "type": "array",
+          "description": "Free-form lines rendered on a second sheet, e.g. what the import does NOT cover.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "ImportColumn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "header"],
+      "description": "One spreadsheet column of an ImportSpec.",
+      "properties": {
+        "key": { "type": "string", "minLength": 1, "description": "Column (or dot-path) the cell value is written to." },
+        "header": { "type": "string", "minLength": 1, "description": "Human title in the template and primary match when reading a file back." },
+        "aliases": { "type": "array", "items": { "type": "string" }, "description": "Extra accepted headers (case and trailing '*' are ignored)." },
+        "required": { "type": "boolean", "description": "Reject the row when the cell is empty." },
+        "type": { "type": "string", "description": "Mirrors the column type; drives cell validation." },
+        "example": { "type": "string", "description": "Value of the sample row." },
+        "hint": { "type": "string", "description": "Short description under the example row." },
+        "generator": { "type": "string", "description": "Host-registered value provider used when the cell is blank." },
+        "transform": { "type": "string", "description": "Cell post-processor run after coercion (e.g. 'media_url')." }
       }
     },
     "Constraint": {
