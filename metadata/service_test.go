@@ -42,9 +42,13 @@ func (f *fakeModel) DefineModal() modelbase.ModalMetadata {
 // registerFakeModel registers a fresh fakeModel under a test-local key and
 // returns that key. Each call uses a unique suffix so parallel-running tests
 // do not collide on the global registry.
+// fakeKeySeq keeps keys unique when the clock is too coarse to tell two
+// back-to-back registrations apart (Windows).
+var fakeKeySeq atomic.Int64
+
 func registerFakeModel(t *testing.T, title string) string {
 	t.Helper()
-	key := fmt.Sprintf("metadata_test_%s_%d", t.Name(), time.Now().UnixNano())
+	key := fmt.Sprintf("metadata_test_%s_%d_%d", t.Name(), time.Now().UnixNano(), fakeKeySeq.Add(1))
 	// Capture by value so each factory call returns an independent instance.
 	titleCopy := title
 	modelbase.Register(key, func() modelbase.ModelDefiner {
