@@ -51,6 +51,8 @@ func (mediaThing) DefineTable() modelbase.TableMetadata {
 			{Key: "cover", Label: "Cover", CellStyle: "image"},
 			// Opt-in on a non-file column is ignored.
 			{Key: "avatar_note", Label: "Note", StyleConfig: map[string]any{StorageKeyConfigKey: true}},
+			// Folder declared by the model: the resolver sees "avatars/<value>".
+			{Key: "avatar", Label: "Avatar", CellStyle: "image", StyleConfig: map[string]any{StorageKeyConfigKey: true, StoragePrefixConfigKey: "/avatars/"}},
 		},
 	}
 }
@@ -75,7 +77,7 @@ func TestListResolvesStorageKeyColumns(t *testing.T) {
 	user := newUser(uuid.New())
 	ctx := context.Background()
 	for _, in := range []map[string]any{
-		{"name": "a", "image": "products/a.jpg", "cover": "products/c.jpg"},
+		{"name": "a", "image": "products/a.jpg", "cover": "products/c.jpg", "avatar": "me.png"},
 		{"name": "b", "image": "https://other.test/b.jpg"},
 		{"name": "c", "image": "/storage/c.jpg"},
 		{"name": "d", "image": "missing.jpg"},
@@ -91,9 +93,11 @@ func TestListResolvesStorageKeyColumns(t *testing.T) {
 	}
 	got := map[string]string{}
 	covers := map[string]string{}
+	avatars := map[string]string{}
 	for _, r := range rows {
 		got[r["name"].(string)], _ = r["image"].(string)
 		covers[r["name"].(string)], _ = r["cover"].(string)
+		avatars[r["name"].(string)], _ = r["avatar"].(string)
 	}
 	want := map[string]string{
 		"a": "https://cdn.test/products/a.jpg", // resolved
@@ -106,6 +110,9 @@ func TestListResolvesStorageKeyColumns(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("row %s image = %q, want %q", k, got[k], v)
 		}
+	}
+	if avatars["a"] != "https://cdn.test/avatars/me.png" {
+		t.Errorf("storage_prefix: avatar = %q", avatars["a"])
 	}
 	if covers["a"] != "products/c.jpg" {
 		t.Errorf("column without opt-in must stay raw, got %q", covers["a"])

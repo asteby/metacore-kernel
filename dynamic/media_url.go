@@ -21,17 +21,26 @@ const StorageKeyConfigKey = "storage_key"
 // value: only keys that are relative (no scheme, not rooted) reach it.
 type MediaURLResolver func(ctx context.Context, user modelbase.AuthUser, key string) string
 
-// storageKeyColumns returns the keys of the columns that opted into URL
-// resolution (CellStyle or Type "image"/"file" plus display_config.storage_key).
-func storageKeyColumns(meta *modelbase.TableMetadata) []string {
+// StoragePrefixConfigKey is an optional display_config key next to storage_key:
+// a folder the column's values live under ("products" for a column that stores
+// just "a.jpg"). The resolver receives "<prefix>/<value>", so the folder
+// convention is declared by the model, never hardcoded in the host.
+const StoragePrefixConfigKey = "storage_prefix"
+
+type storageCol struct{ key, prefix string }
+
+// storageKeyColumns returns the columns that opted into URL resolution
+// (CellStyle or Type "image"/"file" plus display_config.storage_key).
+func storageKeyColumns(meta *modelbase.TableMetadata) []storageCol {
 	if meta == nil {
 		return nil
 	}
-	var out []string
+	var out []storageCol
 	for _, c := range meta.Columns {
 		on, _ := c.StyleConfig[StorageKeyConfigKey].(bool)
 		if on && isFileColumn(c.Key, c.Type, c.CellStyle) {
-			out = append(out, c.Key)
+			p, _ := c.StyleConfig[StoragePrefixConfigKey].(string)
+			out = append(out, storageCol{key: c.Key, prefix: strings.Trim(strings.TrimSpace(p), "/")})
 		}
 	}
 	return out
@@ -68,12 +77,17 @@ func (s *Service) resolveMediaURLs(ctx context.Context, user modelbase.AuthUser,
 		return
 	}
 	for _, row := range rows {
-		for _, k := range cols {
+		for _, col := range cols {
+			k := col.key
 			raw, ok := row[k].(string)
 			if !ok || !isRelativeStorageKey(raw) {
 				continue
 			}
-			if u := s.mediaURL(ctx, user, strings.TrimSpace(raw)); u != "" {
+			key := strings.TrimSpace(raw)
+			if col.prefix != "" {
+				key = col.prefix + "/" + key
+			}
+			if u := s.mediaURL(ctx, user, key); u != "" {
 				row[k] = u
 			}
 		}
