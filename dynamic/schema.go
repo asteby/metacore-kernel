@@ -41,6 +41,9 @@ type TableOptions struct {
 // CreateTableWithOptions is CreateTable plus the Extends FOREIGN KEY when the
 // host resolves the target table.
 func CreateTableWithOptions(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, def manifest.ModelDefinition, opts TableOptions) error {
+	if def.View != "" {
+		return createView(db, addonKey, orgID, iso, def)
+	}
 	target, hasTarget, err := resolveExtendsTarget(def, opts.ResolveModelTarget)
 	if err != nil {
 		return err
@@ -274,6 +277,9 @@ func enableRLS(db *gorm.DB, schema, table string) error {
 // SyncSchema adds columns the manifest declares but the table is missing.
 // DROP and RENAME are not performed here — those require an explicit migration.
 func SyncSchema(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, def manifest.ModelDefinition) error {
+	if def.View != "" {
+		return nil
+	}
 	defer InvalidateTableColumns() // columns may change: drop cached sets
 	schema := SchemaName(addonKey, orgID, iso)
 	existing, err := columnsOf(db, schema, def.TableName)
@@ -423,3 +429,25 @@ func SetRequestOrg(db *gorm.DB, orgID uuid.UUID) error {
 
 // Ensure we keep database/sql imported for future raw Rows usage.
 var _ = sql.ErrNoRows
+
+// createView emits CREATE OR REPLACE VIEW for a view-backed model
+// (def.View, manifest Model.view). No table, index, RLS or seed: the SELECT is
+// the manifest author's, validated at publish (single SELECT, no ";").
+// CREATE OR REPLACE keeps the view in step with a newer manifest as long as the
+// column list stays compatible; an incompatible change needs a DROP VIEW in a
+// migration, which surfaces here as the Postgres error.
+func createView(db *gorm.DB, addonKey string, orgID uuid.UUID, iso Isolation, def manifest.ModelDefinition) error {
+	schema := SchemaName(addonKey, orgID, iso)
+	stmt := viewDDL(schema, def)
+	if err := db.Exec(stmt).Error; err != nil {
+		return fmt.Errorf("create view %s.%s: %w", schema, def.TableName, err)
+	}
+	return nil
+}
+
+// viewDDL is the CREATE OR REPLACE VIEW statement of a view-backed model; shared
+// by CreateTable and ToDDL so a host that executes the statements itself gets
+// the same text.
+func viewDDL(schema string, def manifest.ModelDefinition) string {
+	return fmt.Sprintf(`CREATE OR REPLACE VIEW %q.%q AS %s`, schema, def.TableName, def.View)
+}

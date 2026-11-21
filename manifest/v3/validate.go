@@ -1754,6 +1754,8 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 		if mod.AppendOnly && (mod.StageField != "" || len(mod.Stages) > 0 || len(mod.Transitions) > 0 || len(mod.OnTransition) > 0) {
 			errs = append(errs, fmt.Sprintf("models[%d]: append_only cannot be combined with a stage machine (stage_field/stages/transitions/on_transition)", mi))
 		}
+		errs = append(errs, validateModelView(mi, mod)...)
+		errs = append(errs, validateModelView(mi, mod)...)
 		// Row conditions (update/delete gates): shape, operators and that every
 		// leaf reads a column of the model (or a kernel-owned standard column).
 		if mod.RowConditions != nil {

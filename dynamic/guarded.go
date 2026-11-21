@@ -311,6 +311,9 @@ func (s *Service) DeleteSealed(ctx context.Context, model string, user modelbase
 	if ctx, err = s.requireDeleteReason(ctx, model); err != nil {
 		return err
 	}
+	if err := s.refuseIfReadOnly(ctx, model, "delete"); err != nil {
+		return err
+	}
 	if err := s.refuseIfAppendOnly(ctx, model, "delete"); err != nil {
 		return err
 	}

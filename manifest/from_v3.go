@@ -772,6 +772,10 @@ func mapModels(in []v3.Model) []ModelDefinition {
 			def.ReasonRequired = &ReasonRequiredDef{Delete: rr.Delete, Actions: rr.Actions, MinLength: rr.MinLength}
 		}
 		def.AppendOnly = m.AppendOnly
+		if m.View != nil {
+			def.View = strings.TrimSpace(m.View.SQL)
+			def.SoftDelete = false
+		}
 		def.RowConditions = m.RowConditions
 		def.NoAudit = m.Audit != nil && !*m.Audit
 		def.Rules = mapModelRules(m.Rules)

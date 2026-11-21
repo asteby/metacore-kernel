@@ -280,6 +280,10 @@ type Config struct {
 	// refuse with ErrAppendOnly (HTTP 409, code "append_only"); Create is
 	// unaffected. nil = every model stays writable (back-compat).
 	AppendOnlyResolver AppendOnlyResolver
+	// ReadOnlyResolver reports whether a model is read-only (manifest Model.view).
+	// When true every write is refused with ErrReadOnly (HTTP 405, code
+	// "read_only"). nil = every model stays writable.
+	ReadOnlyResolver ReadOnlyResolver
 	// RowConditionResolver returns the per-row gates (manifest row_conditions) the
 	// generic Update and Delete enforce against the persisted row. nil leaves every
 	// model ungated (back-compat). See row_condition.go.
@@ -512,6 +516,7 @@ type Service struct {
 	reasonPolicies    ReasonPolicyResolver
 	supervisorBypass  SupervisorBypass
 	appendOnly        AppendOnlyResolver
+	readOnly          ReadOnlyResolver
 	rowConditions     RowConditionResolver
 	validationSchema  ValidationSchemaResolver
 	customValidators  validate.Resolver
@@ -624,6 +629,7 @@ func New(cfg Config) *Service {
 		reasonPolicies:    cfg.ReasonPolicyResolver,
 		supervisorBypass:  cfg.SupervisorBypass,
 		appendOnly:        cfg.AppendOnlyResolver,
+		readOnly:          cfg.ReadOnlyResolver,
 		rowConditions:     cfg.RowConditionResolver,
 		validationSchema:  cfg.ValidationSchemaResolver,
 		customValidators:  cfg.CustomValidatorResolver,
@@ -1037,6 +1043,9 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	if err := s.authorize(ctx, user, model, instance, modelbase.AccessCreate); err != nil {
 		return nil, err
 	}
+	if err := s.refuseIfReadOnly(ctx, model, "create"); err != nil {
+		return nil, err
+	}
 
 	tableName, err := s.tableNameFor(ctx, model, instance)
 	if err != nil {
@@ -1344,6 +1353,9 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 		return nil, err
 	}
 	if err := s.authorize(ctx, user, model, instance, modelbase.AccessUpdate); err != nil {
+		return nil, err
+	}
+	if err := s.refuseIfReadOnly(ctx, model, "update"); err != nil {
 		return nil, err
 	}
 	if err := s.refuseIfAppendOnly(ctx, model, "update"); err != nil {
@@ -1800,6 +1812,9 @@ func (s *Service) Delete(ctx context.Context, model string, user modelbase.AuthU
 	if ctx, err = s.requireDeleteReason(ctx, model); err != nil {
 		return err
 	}
+	if err := s.refuseIfReadOnly(ctx, model, "delete"); err != nil {
+		return err
+	}
 	if err := s.refuseIfAppendOnly(ctx, model, "delete"); err != nil {
 		return err
 	}
@@ -1943,6 +1958,9 @@ func (s *Service) Restore(ctx context.Context, model string, user modelbase.Auth
 		return nil, err
 	}
 	if err := s.authorize(ctx, user, model, instance, modelbase.AccessUpdate); err != nil {
+		return nil, err
+	}
+	if err := s.refuseIfReadOnly(ctx, model, "update"); err != nil {
 		return nil, err
 	}
 	if err := s.refuseIfAppendOnly(ctx, model, "update"); err != nil {

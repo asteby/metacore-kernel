@@ -283,6 +283,9 @@ func ToDDL(def manifest.ModelDefinition, opts DDLOptions) ([]string, error) {
 	if schema == "" {
 		schema = SchemaName(opts.AddonKey, opts.OrgID, opts.Isolation)
 	}
+	if def.View != "" {
+		return []string{viewDDL(schema, def)}, nil
+	}
 
 	tsType := "timestamptz"
 	if opts.TimestampWithoutZone {
