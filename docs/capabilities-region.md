@@ -58,3 +58,44 @@ Notas:
   Esta consulta, con el catálogo oficial del paquete, es la única fuente
   **autoritativa** de estado, municipio y colonia de una dirección; los
   sugeridores de calle (`geo.address.suggest`) nunca la sustituyen.
+
+## `documents.enrich`
+
+enrich one printable document (record + children) before its template is
+hydrated. Consulta · cardinalidad **one** · tiempo límite por proveedor **5s** ·
+errores `invalid_input`, `not_applicable`.
+
+El host (ops) carga el registro y sus hijos, pregunta al proveedor por
+`doc_kind` (el `DocumentDef.kind` del manifest), mezcla la respuesta y
+hidrata la plantilla. El host no trae código de ningún país: lo provee el
+paquete de región o fiscal del país. Sin proveedor,
+o con `not_applicable`, se imprime el documento genérico.
+
+Entrada:
+
+| Campo | Tipo | Req. | Notas |
+|---|---|---|---|
+| `doc_kind` | string | sí | `DocumentDef.kind` (snake_case, p. ej. `invoice`, `credit_note`); un proveedor que no lo conoce responde `not_applicable` |
+| `model` | string | sí | modelo del registro que se imprime |
+| `document_key` | string |  | `DocumentDef.key` |
+| `record` | object | sí | el registro como lo cargó el host (columna → valor) |
+| `children` | object |  | relaciones hijas precargadas: nombre → arreglo de filas |
+| `branding` | object |  | campos de marca de la org (string → string) |
+| `locale` | string |  | etiqueta BCP 47 (en, es, pt-BR) |
+
+Salida (cerrada, todo opcional):
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `record` | object | parche que se mezcla sobre el registro; las claves ausentes se quedan, nunca se borran columnas |
+| `children` | object | conjuntos hijos que se REEMPLAZAN por nombre; los nombres ausentes se quedan |
+| `branding` | object | parche sobre la marca de la org solo para esta impresión (string → string); p. ej. el emisor que nombra un comprobante timbrado |
+| `line_items` | array | filas de `{{#line_items}}`; omitido = las del host |
+
+Notas:
+
+- Aditivo (R2-b): `DocumentDef.kind` es opcional; un manifest sin `kind` se
+  comporta como antes.
+- `not_applicable` no es un fallo: el consumidor no reintenta ni alerta.
+- El proveedor no emite dinero con coma flotante: las cantidades viajan como
+  el host las cargó (decimales) y el redondeo es el del país del proveedor.
