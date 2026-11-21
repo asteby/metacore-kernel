@@ -1348,6 +1348,8 @@ type ModelDefinition struct {
 	// validate stage moves on Update, and to fire OnTransition hooks. Empty
 	// StageField/Stages = no stage machine (the legacy, unrestricted behaviour).
 	StageField   string              `json:"stageField,omitempty"`
+	// StageCheck carries v3 Model.stage_check (see there).
+	StageCheck bool `json:"stageCheck,omitempty"`
 	Stages       []StageDef          `json:"stages,omitempty"`
 	Transitions  []TransitionDef     `json:"transitions,omitempty"`
 	OnTransition []TransitionHookDef `json:"onTransition,omitempty"`

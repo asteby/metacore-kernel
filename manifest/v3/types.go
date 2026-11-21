@@ -901,6 +901,13 @@ type Model struct {
 	// has no stage machine (the default; flat models are unaffected).
 	StageField string `json:"stage_field,omitempty"`
 
+	// StageCheck opts the model into a database CHECK derived from Stages:
+	// CHECK (stage_field IN (stage keys)), created NOT VALID so rows that predate
+	// the machine never block the install; validate separately once the data is
+	// clean. Needs StageField and Stages. Default false: the kernel then only
+	// guards moves on its own write paths.
+	StageCheck bool `json:"stage_check,omitempty"`
+
 	// Stages enumerates the ordered lifecycle stages of the StageField column.
 	// Each Stage supplies the value/label/colour the kernel projects onto the
 	// derived `status` display. Empty = no stage machine (back-compat): the

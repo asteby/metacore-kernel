@@ -759,6 +759,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 		// unrestricted (the legacy behaviour).
 		def.Aliases = append([]string(nil), m.Aliases...)
 		def.StageField = m.StageField
+		def.StageCheck = m.StageCheck
 		def.Stages = mapModelStages(m.Stages)
 		def.Transitions = mapModelTransitions(m.Transitions)
 		def.OnTransition = mapModelTransitionHooks(m.OnTransition)

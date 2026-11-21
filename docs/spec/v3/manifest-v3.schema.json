@@ -1271,6 +1271,10 @@
           "pattern": "^[a-z][a-z0-9_]*$",
           "description": "Column carrying the model's pipeline stage. With 'stages' it turns the model into a stage machine: the kernel derives a 'status' display for the column and validates moves + fires on_transition hooks on every Update that changes it."
         },
+        "stage_check": {
+          "type": "boolean",
+          "description": "Opt-in: derive a database CHECK (stage_field IN stage keys) from the stages, created NOT VALID so pre-existing rows never block the install. Requires stage_field and stages."
+        },
         "stages": {
           "type": "array",
           "description": "Ordered lifecycle stages of stage_field. The kernel projects them onto the column's derived status display (value/label/colour). Empty = no stage machine.",
