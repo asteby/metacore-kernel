@@ -521,6 +521,7 @@ func mapModels(in []v3.Model) []ModelDefinition {
 			ModelKey:  m.Key,
 			Label:     m.Label,
 			Extends:   m.Extends,
+			Scope:     string(m.Scope),
 		}
 		// An extension table carries the tenancy column implicitly (Validate
 		// forbids declaring it), so it is org-scoped like its target.

@@ -1126,6 +1126,11 @@
             "inventory.Lot"
           ]
         },
+        "scope": {
+          "type": "string",
+          "enum": ["merchant", "market", "shared", "group"],
+          "description": "Organizational boundary this model lives behind (RFC 0006): 'merchant' = belongs to one merchant via its branch; 'market' = shared master visible per its 'markets' jsonb column (required); 'shared' = organization-wide master; 'group' = group view only. Omit = undeclared."
+        },
         "attribute_classes": {
           "type": "array",
           "description": "Named sets of this extension table's columns (classification). Which categories use a class is organization data. Only on a model with 'extends'.",
