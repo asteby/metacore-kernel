@@ -14,14 +14,14 @@ func TestDerive_OptionFitmentProjected(t *testing.T) {
 		TableName: "quote_items",
 		Columns: []manifest.ColumnDef{
 			{Name: "product_id", Type: "uuid", Ref: "products", OptionFitment: &v3.OptionFitment{
-				SubjectField: "vehicle_id", SubjectModel: "Vehicle", TargetModel: "TireSpec", Mode: "filter"}},
+				SubjectField: "asset_id", SubjectModel: "Subject", TargetModel: "TargetSpec", Mode: "filter"}},
 			{Name: "note", Type: "text"},
 		},
 	}
 	for _, c := range DeriveTableColumns(def) {
 		switch c.Key {
 		case "product_id":
-			if c.OptionFitment == nil || c.OptionFitment.SubjectField != "vehicle_id" || c.OptionFitment.TargetModel != "TireSpec" || c.OptionFitment.Mode != "filter" {
+			if c.OptionFitment == nil || c.OptionFitment.SubjectField != "asset_id" || c.OptionFitment.TargetModel != "TargetSpec" || c.OptionFitment.Mode != "filter" {
 				t.Errorf("table column lost option_fitment: %+v", c.OptionFitment)
 			}
 		case "note":
@@ -33,7 +33,7 @@ func TestDerive_OptionFitmentProjected(t *testing.T) {
 	for _, f := range DeriveFormFields(def) {
 		switch f.Key {
 		case "product_id":
-			if f.OptionFitment == nil || f.OptionFitment.SubjectModel != "Vehicle" {
+			if f.OptionFitment == nil || f.OptionFitment.SubjectModel != "Subject" {
 				t.Errorf("form field lost option_fitment: %+v", f.OptionFitment)
 			}
 		case "note":

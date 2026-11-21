@@ -39,42 +39,6 @@ func isOptionScalar(v any) bool {
 
 // validateOptionFilter checks one field/column option_filter. where is the
 // path of the owning field (e.g. "models[0].columns[2]").
-// validateOptionFitment checks Column.option_fitment: the three names are
-// required snake_case/identifier-shaped strings, mode is flag|filter, and the
-// column must be a picker (a ref, or an options object) - on a plain value
-// column there are no options to check. subject_field is NOT looked up in the
-// owning model: for a document line it lives on the header model.
-func validateOptionFitment(where string, c Column) []string {
-	f := c.OptionFitment
-	if f == nil {
-		return nil
-	}
-	var errs []string
-	w := where + ".option_fitment"
-	for _, p := range []struct{ name, v string }{
-		{"subject_field", f.SubjectField},
-		{"subject_model", f.SubjectModel},
-		{"target_model", f.TargetModel},
-	} {
-		if strings.TrimSpace(p.v) == "" {
-			errs = append(errs, fmt.Sprintf("%s.%s is required", w, p.name))
-		} else if !optionFitmentIdent.MatchString(p.v) {
-			errs = append(errs, fmt.Sprintf("%s.%s %q must be an identifier (letters, digits, underscore)", w, p.name, p.v))
-		}
-	}
-	switch f.Mode {
-	case "", OptionFitmentFlag, OptionFitmentFilter:
-	default:
-		errs = append(errs, fmt.Sprintf("%s.mode %q is not one of %s|%s", w, f.Mode, OptionFitmentFlag, OptionFitmentFilter))
-	}
-	if c.Ref == "" && c.Options.Dynamic == nil {
-		errs = append(errs, fmt.Sprintf("%s needs a picker column: declare ref or an options object on the same column", w))
-	}
-	return errs
-}
-
-var optionFitmentIdent = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
-
 func validateOptionFilter(where string, f OptionFilter) []string {
 	var errs []string
 	for i, r := range f {
@@ -155,6 +119,10 @@ func validateExtraColumns(where string, d *DynamicOptions, ownCols map[string]st
 // action field and recursively on its item_fields.
 func validateActionFieldPickerMeta(where string, f ActionField, colsByModel map[string]map[string]struct{}) []string {
 	errs := validateOptionFilter(where, f.OptionFilter)
+	errs = append(errs, validateOptionFitmentShape(where, f.OptionFitment)...)
+	if f.OptionFitment != nil && f.Ref == "" && f.Options.Dynamic == nil {
+		errs = append(errs, where+".option_fitment needs a picker field: declare ref or an options object on the same field")
+	}
 	if f.Options.Dynamic != nil {
 		errs = append(errs, validateExtraColumns(where, f.Options.Dynamic, colsByModel[f.Options.Dynamic.Source])...)
 	}

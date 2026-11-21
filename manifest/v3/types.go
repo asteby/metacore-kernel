@@ -2727,6 +2727,10 @@ type ActionField struct {
 	// OptionFilter hides options of this field's relation / dynamic picker (see
 	// Column.OptionFilter). The host projects it onto modelbase.FieldDef.OptionFilter.
 	OptionFilter OptionFilter `json:"option_filter,omitempty"`
+	// OptionFitment flags or hides this picker's options that the fitment rules
+	// do not accept for a subject chosen in another field (see OptionFitment).
+	// Mirrors Column.option_fitment. Pure UI metadata.
+	OptionFitment *OptionFitment `json:"option_fitment,omitempty"`
 
 	// Scan opts this action field into CAMERA BARCODE SCANNING: the SDK shows a
 	// camera button that scans a barcode to FILL the field fast — a text/number
@@ -2876,25 +2880,28 @@ const (
 	OptionFitmentFilter = "filter"
 )
 
-// OptionFitment declares, on a column's relation / dynamic picker, that the
+// OptionFitment declares, on a picker column (or action field), that the
 // candidates must fit a SUBJECT picked in another field of the same form (the
-// header of a document, a sibling field). It is generic compatibility data, not
-// a domain concept: a subject (a vehicle, a device, a machine) accepts targets
-// (a size, a consumable, a part) according to fitment rules the organization
-// keeps as records. The kernel only validates and carries the declaration; the
-// SDK resolves it (rules + the subject row + the options' attributes), so no
-// host code is involved.
+// row being edited, or the header of the document the row belongs to), using
+// the fitment rules the organization keeps as records: a subject accepts
+// targets according to those rules. The kernel only validates and carries the
+// declaration; the SDK resolves it (rules + the subject row + the options'
+// attributes), so no host code is involved.
 //
-//	SubjectField — field holding the subject's id: resolved like depends_on
-//	               (the row first, then the header form). Required.
+//	SubjectField — name of the field holding the subject's id, looked up in the
+//	               row first and then in the header form. ONE field: support for
+//	               several subjects, if ever needed, arrives as a NEW additive
+//	               field (e.g. subject_fields), never by changing this type.
+//	               Required.
 //	SubjectModel — model of the subject, whose row supplies the attributes the
 //	               rules compare. Required.
 //	TargetModel  — the rules' target model: names which rules apply and which
-//	               extension/attribute group of the option's row is compared.
-//	               Required.
+//	               attribute group of the option's row is compared. Required.
 //	Mode         — "flag" (default: mark non-fitting options) or "filter" (hide
-//	               them). A subject with no rules for the target never flags or
-//	               hides anything: no data is not a mismatch.
+//	               them). A consumer that does not know a mode MUST behave as
+//	               "flag" (marking never loses data). A subject with no rules
+//	               for the target never flags or hides anything: no data is not
+//	               a mismatch.
 type OptionFitment struct {
 	SubjectField string `json:"subject_field"`
 	SubjectModel string `json:"subject_model"`

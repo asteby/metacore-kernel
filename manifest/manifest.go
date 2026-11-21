@@ -1187,6 +1187,8 @@ type FieldDef struct {
 	// ineligible options of this field's relation / dynamic picker. JSON tag
 	// matches modelbase.FieldDef.OptionFilter. Empty = every option is listed.
 	OptionFilter v3.OptionFilter `json:"option_filter,omitempty"`
+	// OptionFitment forwards the v3 ActionField.option_fitment (see Column).
+	OptionFitment *v3.OptionFitment `json:"option_fitment,omitempty"`
 
 	// DefaultFromRecord forwards the v3 ActionField.default_from_record (a
 	// column name, or a list whose first non-empty value wins) so the SDK seeds

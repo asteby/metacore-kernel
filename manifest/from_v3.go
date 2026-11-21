@@ -1543,6 +1543,8 @@ func mapActionFields(in []v3.ActionField) []FieldDef {
 			DependsOn: f.DependsOn,
 			// OptionFilter forwards the option-hiding rules of this picker.
 			OptionFilter: f.OptionFilter,
+			// OptionFitment forwards the fitment declaration of this picker.
+			OptionFitment: f.OptionFitment,
 			// DefaultFromRecord forwards the record-seeding column(s) so the SDK
 			// prefills the field from the row the action was opened on.
 			DefaultFromRecord: f.DefaultFromRecord,
