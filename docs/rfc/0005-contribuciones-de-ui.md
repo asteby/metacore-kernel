@@ -329,16 +329,16 @@ Ajustes al diseño que salieron de implementar:
 
 1. **El tipo Go es `UIBlock`** (no `UI`): `manifest/v3/ui.go` ya nombra «superficies de UI» (páginas, vistas, paneles). El campo del manifiesto sigue siendo `ui`.
 2. **`network` es texto + `hosts`** (`none|org|hosts`), no una unión texto/array: esquema más simple y validable.
-3. **`apply: "auto"` existe y hace falta.** El lector de constancia ya tiene su propio paso de revisión campo a campo; pedir un segundo diff habría cambiado el flujo que conoce el personal. Regla propuesta: `auto` solo si el Part tiene revisión propia, y siempre con «Deshacer».
+3. **`apply: "auto"` existe y hace falta.** El lector de constancia ya tiene su propio paso de revisión campo a campo; pedir un segundo diff habría cambiado el flujo que conoce el personal. Regla adoptada en §16.2.
 4. **Dos intenciones estándar del formulario**: `record.select` (el RFC ya existe: usar ese cliente) y `record.edit` (abrir su edición con el parche como propuesta). Las atiende quien abrió el diálogo (`useRecordPickerDialog`); sin anfitrión que las atienda, el injerto cae a proponer el parche.
 5. **Las lentes se copian antes de congelarlas**: congelar en sitio rompía el estado del formulario del anfitrión.
 6. **El servidor no evaluaba `contributions.slots[].permission`/`condition`**: `loom.Resolve` los aplica al proyectar los slots heredados como injertos `legacy`.
 7. Un injerto registrado en proceso sigue siendo necesario mientras el host no sirve `/api/ui/grafts` (el POS de 7 Leguas declara el suyo con `registerGraft`); con `LoomProvider serverAuthoritative` solo se montan los ids servidos.
 
-## 16. Decisiones para el dueño
+## 16. Decisiones tomadas (2026-11-20)
 
-1. Nombre **Loom** y vocabulario (Part/Seam/Graft/Lens/Proposal/Overlay) para API pública.
-2. ¿`apply: auto` de propuestas permitido por preset, o siempre revisión humana en campos `pii.fiscal`?
-3. Marketplace con iframe sandbox desde fase 5: ¿se acepta que los terceros no puedan `wrap`/`replace` nunca?
-4. `/display` solo declarativo (sin ESM): ¿suficiente para la pantalla de cliente de 7 Leguas?
-5. Plazo de deprecación de `registerRecordPrefill` (propuesta: dos menores con aviso, luego adaptador permanente).
+1. **Loom** y su vocabulario (Part, Seam, Graft, Lens, Proposal, Overlay) son API pública.
+2. **Regla de .** Una propuesta solo se aplica directa (, siempre con «Deshacer») si la Part declara su propio paso de revisión (; en el SDK ) **y** ningún campo del parche es de clase  (;  marca  y ). En cualquier otro caso el seam la baja a diff revisable, también para el parche que viaja en . El preset no puede saltarse la regla. Implementado y probado: SDK , kernel  (#685).
+3. **Marketplace** corre en iframe sandbox y **nunca** puede  ni .
+4. **** solo declarativo (bloques  + overlays), sin ESM.
+5. ****: en desuso desde la versión que publica la regla de  (aviso una vez por sesión); dos versiones menores con el aviso y después queda como **adaptador permanente** que proyecta cada prefill como Graft en  ( → ). Nadie tiene que migrar a la fuerza.
