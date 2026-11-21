@@ -1,0 +1,312 @@
+{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": {
+    "key": "balancing",
+    "name": "Wheel Balancing",
+    "description": "Record wheel balancing with the counterweight in grams for each wheel, tied to the work order, the vehicle and the technician, and close each job.",
+    "version": "0.5.4",
+    "category": "vertical.pitsline.balancing",
+    "icon": { "type": "lucide", "slug": "Disc", "color": "#F97316" },
+    "author": "Asteby",
+    "license": "Apache-2.0",
+    "readme": "README.md",
+    "features": [
+      "Link each balancing to the work order, the vehicle and the technician who did it.",
+      "Record the counterweight in grams for each wheel: front or rear, left or right.",
+      "Search for the vehicle, work order and technician right from the form.",
+      "Move each job from reception to completed; closing is only allowed from reception."
+    ],
+    "i18n": {
+      "es": {
+        "name": "Balanceo",
+        "description": "Registra balanceos de ruedas con el contrapeso en gramos de cada rueda, ligados a la orden de trabajo, al vehículo y al técnico, y cierra cada trabajo.",
+        "features": [
+          "Liga cada balanceo a la orden de trabajo, al vehículo y al técnico que lo hizo.",
+          "Registra el contrapeso en gramos de cada rueda: delantera o trasera, izquierda o derecha.",
+          "Busca el vehículo, la orden de trabajo y el técnico desde el mismo formulario.",
+          "Lleva cada trabajo de recepción a terminado; solo se puede cerrar desde recepción."
+        ]
+      },
+      "en": {
+        "name": "Wheel Balancing",
+        "description": "Record wheel balancing with the counterweight in grams for each wheel, tied to the work order, the vehicle and the technician, and close each job.",
+        "features": [
+          "Link each balancing to the work order, the vehicle and the technician who did it.",
+          "Record the counterweight in grams for each wheel: front or rear, left or right.",
+          "Search for the vehicle, work order and technician right from the form.",
+          "Move each job from reception to completed; closing is only allowed from reception."
+        ]
+      }
+    }
+  },
+  "compatibility": {
+    "requires": [
+      { "key": "kernel", "version": ">=3.0.0 <4.0.0" }
+    ]
+  },
+  "tenancy": {
+    "isolation": "shared",
+    "rls_column": "organization_id"
+  },
+  "capabilities": [
+    { "kind": "db:write", "target": "addon_balancing.*", "reason": "Save balancing services and their per-wheel weights, and close a service." },
+    { "kind": "db:read",  "target": "addon_balancing.*", "reason": "Read balancing services and weights for screens and the status gate." }
+  ],
+  "models": [
+    {
+      "key": "BalancingService",
+      "table": "balancing_services",
+      "label": "balancing.model.service",
+      "columns": [
+        { "name": "id", "type": "uuid", "primary_key": true, "default": "gen_random_uuid()", "label": "balancing.field.id" },
+        { "name": "organization_id", "type": "uuid", "not_null": true, "label": "balancing.field.organization_id" },
+        { "name": "work_order_id", "type": "uuid", "not_null": true, "comment": "Soft FK to workshop.work_orders.", "ref": "workshop.WorkOrder", "label": "balancing.field.work_order_id" },
+        { "name": "vehicle_id", "type": "uuid", "not_null": true, "comment": "Soft FK to vehicles addon.", "ref": "vehicles.Vehicle", "label": "balancing.field.vehicle_id" },
+        { "name": "technician_id", "type": "uuid", "comment": "Soft FK to the Employee model (HR/people addon).", "label": "balancing.field.technician_id" },
+        { "name": "serviced_at", "type": "timestamptz", "not_null": true, "default": "now()", "label": "balancing.field.serviced_at" },
+        {
+          "name": "status",
+          "type": "text",
+          "not_null": true,
+          "default": "reception",
+          "comment": "reception | completed",
+          "label": "balancing.field.status",
+          "options": [
+            {
+              "value": "reception",
+              "label": "balancing.status.reception",
+              "color": "amber"
+            },
+            {
+              "value": "completed",
+              "label": "balancing.status.completed",
+              "color": "green"
+            }
+          ]
+        }
+      ],
+      "indices": [
+        { "name": "balancing_services_org_status_idx", "columns": ["organization_id", "status"] },
+        { "name": "balancing_services_org_work_order_idx", "columns": ["organization_id", "work_order_id"] }
+      ],
+      "relations": [
+        {
+          "name": "weights",
+          "embed": true,
+          "kind": "one_to_many",
+          "through": "WheelWeight",
+          "foreign_key": "balancing_service_id",
+          "label": "balancing.relations.weights"
+        }
+      ]
+    },
+    {
+      "key": "WheelWeight",
+      "table": "wheel_weights",
+      "label": "balancing.model.wheel_weight",
+      "columns": [
+        { "name": "id", "type": "uuid", "primary_key": true, "default": "gen_random_uuid()", "label": "balancing.field.id" },
+        { "name": "organization_id", "type": "uuid", "not_null": true, "label": "balancing.field.organization_id" },
+        { "name": "balancing_service_id", "type": "uuid", "not_null": true, "ref": "balancing.BalancingService", "label": "balancing.field.balancing_service_id" },
+        { "name": "position", "type": "text", "not_null": true, "comment": "front_left | front_right | rear_left | rear_right", "label": "balancing.field.position" },
+        { "name": "grams", "type": "integer", "not_null": true, "default": 0, "label": "balancing.field.grams" }
+      ],
+      "indices": [
+        { "name": "wheel_weights_service_idx", "columns": ["balancing_service_id"] }
+      ],
+      "foreign_keys": [
+        {
+          "columns": ["balancing_service_id"],
+          "references": { "model": "balancing.BalancingService", "columns": ["id"] },
+          "policy": "physical",
+          "on_delete": "cascade"
+        }
+      ]
+    }
+  ],
+  "contributions": {
+    "navigation": [
+      {
+        "title": "balancing.nav.group",
+        "icon": "Disc",
+        "target": "sidebar.operations",
+        "items": [
+          { "title": "balancing.nav.all", "icon": "Disc", "model": "BalancingService", "permission": "balancing.service.read" },
+          { "title": "balancing.nav.reception", "icon": "Inbox", "model": "BalancingService", "filter": { "status": "reception" }, "permission": "balancing.service.read" },
+          { "title": "balancing.nav.completed", "icon": "CheckCircle2", "model": "BalancingService", "filter": { "status": "completed" }, "permission": "balancing.service.read" }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "key": "register_balancing",
+        "label": "balancing.action.register",
+        "icon": "Disc",
+        "target_model": "BalancingService",
+        "handler": { "type": "wasm", "function": "handle_BalancingService_register_balancing" },
+        "placement": "create",
+        "fields": [
+          {
+            "key": "vehicle_id",
+            "label": "balancing.action.fields.vehicle",
+            "type": "dynamic_select",
+            "required": true,
+            "ref": "Vehicle",
+            "placeholder": "balancing.action.fields.vehicle_ph"
+          },
+          {
+            "key": "work_order_id",
+            "label": "balancing.action.fields.work_order",
+            "type": "dynamic_select",
+            "required": true,
+            "ref": "WorkOrder",
+            "placeholder": "balancing.action.fields.work_order_ph"
+          },
+          {
+            "key": "technician_id",
+            "label": "balancing.action.fields.technician",
+            "type": "dynamic_select",
+            "required": false,
+            "ref": "Employee",
+            "placeholder": "balancing.action.fields.technician_ph"
+          },
+          {
+            "key": "serviced_at",
+            "label": "balancing.action.fields.serviced_at",
+            "type": "date",
+            "required": true
+          },
+          {
+            "key": "weights",
+            "label": "balancing.action.fields.weights",
+            "type": "array",
+            "required": true,
+            "item_fields": [
+              {
+                "key": "position",
+                "label": "balancing.action.fields.position",
+                "type": "select",
+                "required": true,
+                "options": [
+                  { "value": "front_left", "label": "balancing.position.front_left" },
+                  { "value": "front_right", "label": "balancing.position.front_right" },
+                  { "value": "rear_left", "label": "balancing.position.rear_left" },
+                  { "value": "rear_right", "label": "balancing.position.rear_right" }
+                ]
+              },
+              {
+                "key": "grams",
+                "label": "balancing.action.fields.grams",
+                "type": "number",
+                "required": true,
+                "total": true,
+                "placeholder": "0"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "key": "close_balancing",
+        "label": "balancing.action.close",
+        "icon": "CheckCircle2",
+        "target_model": "BalancingService",
+        "handler": { "type": "wasm", "function": "handle_BalancingService_close_balancing" },
+        "placement": "row",
+        "requires_state": ["reception"],
+        "confirm": true,
+        "confirm_message": "balancing.action.close_confirm"
+      }
+    ]
+  },
+  "i18n": {
+    "default_locale": "es-MX",
+    "bundles": [
+      { "locale": "es-MX", "path": "locales/es-MX.json" },
+      { "locale": "en-US", "path": "locales/en-US.json" }
+    ]
+  },
+  "rbac": {
+    "roles": [
+      {
+        "key": "balancing_technician",
+        "label": "balancing.role.technician",
+        "description": "balancing.role.technician_desc",
+        "permissions": [
+          "balancing.service.read",
+          "balancing.service.write",
+          "balancing.weight.write"
+        ]
+      },
+      {
+        "key": "mecanico",
+        "label": "balancing.role.mechanic",
+        "permissions": [
+          "balancing.service.read",
+          "balancing.service.write",
+          "balancing.weight.write"
+        ]
+      },
+      {
+        "key": "jefe_taller",
+        "label": "balancing.role.workshop_manager",
+        "permissions": [
+          "balancing.service.read",
+          "balancing.service.write",
+          "balancing.weight.write"
+        ]
+      }
+    ],
+    "permissions": [
+      {
+        "key": "balancing.service.read",
+        "label": "balancing.permission.service_read",
+        "models": [
+          {
+            "model": "BalancingService",
+            "actions": [
+              "index",
+              "show"
+            ]
+          },
+          {
+            "model": "WheelWeight",
+            "actions": [
+              "index",
+              "show"
+            ]
+          }
+        ]
+      },
+      {
+        "key": "balancing.service.write",
+        "label": "balancing.permission.service_write",
+        "models": [
+          {
+            "model": "BalancingService",
+            "actions": [
+              "create",
+              "update",
+              "register_balancing",
+              "close_balancing"
+            ]
+          }
+        ]
+      },
+      {
+        "key": "balancing.weight.write",
+        "label": "balancing.permission.weight_write",
+        "models": [
+          {
+            "model": "WheelWeight",
+            "actions": [
+              "create",
+              "update"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

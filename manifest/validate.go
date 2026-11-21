@@ -225,6 +225,7 @@ func (m *Manifest) ValidateAdvisory(kernelVersion string) ([]string, error) {
 		return nil, fmt.Errorf("manifest: nil")
 	}
 	var warnings []string
+	warnings = append(warnings, v3.RoleMissingWarnings(m.RoleFacts())...)
 	// Events at the manifest root were the v0.x mechanism to declare the
 	// event names an addon could emit. As of v0.11.0 the gate is the set
 	// of `event:emit` capabilities the addon requests — manifest.events
@@ -357,6 +358,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 	}
 	if err := m.checkKernelRange(kernelVersion); err != nil {
 		return err
+	}
+	if m.Role != "" && !v3.ValidRole(m.Role) {
+		return fmt.Errorf("manifest: metadata.role %q is not one of %s", m.Role, strings.Join(v3.Roles, "|"))
 	}
 	// Index every model's declared columns by model KEY so the compute-engine
 	// cross-field checks (rollup target on the parent, rollup from on the
@@ -2271,4 +2275,33 @@ func validateRecordPresentation(md ModelDefinition) error {
 		}
 	}
 	return nil
+}
+
+// RoleFacts projects the host manifest for the role rules (see v3.CheckRoles).
+func (m *Manifest) RoleFacts() v3.RoleFacts {
+	f := v3.RoleFacts{
+		Key:          m.Key,
+		Role:         m.Role,
+		Contracts:    m.Contracts,
+		Implements:   m.Implements,
+		ExtendsAddon: m.ExtendsAddon,
+		Replaces:     m.Replaces,
+	}
+	for _, r := range m.AddonRequires {
+		f.Requires = append(f.Requires, v3.RoleRequire{Key: r.Key, Optional: r.Optional})
+	}
+	for _, c := range m.Capabilities {
+		if c.Kind == "db:write" {
+			f.DBWrites = append(f.DBWrites, c.Target)
+		}
+	}
+	for _, md := range m.ModelDefinitions {
+		f.OwnModelKeys = append(f.OwnModelKeys, md.ModelKey)
+		f.OwnTables = append(f.OwnTables, md.TableName)
+	}
+	for _, p := range m.ProvidesCapabilities {
+		f.ProvidedCapabilities = append(f.ProvidedCapabilities, p.Key)
+	}
+	f.NavigationGroups = len(m.Navigation)
+	return f
 }

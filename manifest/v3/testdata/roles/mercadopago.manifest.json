@@ -1,0 +1,1243 @@
+{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": {
+    "key": "mercadopago",
+    "name": "Mercado Pago",
+    "description": "Mercado Pago for online stores and points of sale: Checkout Pro and Bricks with cards, interest-free installments (MSI), OXXO, SPEI and Mercado Crédito; signed webhooks, full and partial refunds, sandbox mode; plus Point card terminals through a store-local edge agent.",
+    "version": "0.15.11",
+    "category": "integration.payments",
+    "icon": {
+      "type": "svg",
+      "slug": "assets/logo.svg",
+      "color": "#00B1EA"
+    },
+    "author": "Asteby",
+    "license": "Apache-2.0",
+    "website": "https://www.mercadopago.com.mx/developers",
+    "readme": "README.md",
+    "i18n": {
+      "es": {
+        "name": "Mercado Pago",
+        "description": "Cobra en tu tienda en línea y en mostrador con Mercado Pago: Checkout Pro o Bricks integrados con tarjetas, meses sin intereses, OXXO, SPEI y Mercado Crédito; webhooks firmados, reembolsos totales y parciales y modo de pruebas. Incluye terminales Point para el punto de venta.",
+        "features": [
+          "Checkout Pro (redirección) y Payment Brick integrado en tu tienda",
+          "Pago integrado en la página: tarjeta con Payment Brick y efectivo (OXXO, 7 Eleven, Circle K, Soriana, STP) sin salir de la tienda",
+          "Tarjetas de crédito y débito con hasta 12 meses sin intereses",
+          "Efectivo en OXXO, transferencia SPEI y Mercado Crédito",
+          "Capacidades commerce.payments: sesión, confirmación y reembolso",
+          "Webhooks verificados con x-signature; el pago siempre se consulta en Mercado Pago",
+          "Reembolsos totales y parciales sin cobros duplicados (idempotencia)",
+          "Modo sandbox con usuarios de prueba y ajustes por mercado",
+          "Terminales Point para el punto de venta"
+        ]
+      },
+      "en": {
+        "name": "Mercado Pago",
+        "description": "Get paid online and in store with Mercado Pago: Checkout Pro or embedded Bricks with cards, interest-free installments, OXXO, SPEI and Mercado Crédito; signed webhooks, full and partial refunds and sandbox mode. Includes Point terminals for the point of sale.",
+        "features": [
+          "Checkout Pro (redirect) and embedded Payment Brick",
+          "Payment inside the store page: card with the Payment Brick and cash (OXXO, 7 Eleven, Circle K, Soriana, STP) without leaving the store",
+          "Cards with up to 12 interest-free installments (MSI per account promotions)",
+          "OXXO cash, SPEI bank transfer and Mercado Crédito",
+          "commerce.payments session, confirm and refund capabilities for the storefront",
+          "Webhooks verified with x-signature; payment always re-read from the Mercado Pago API",
+          "Full and partial refunds with idempotency keys",
+          "Sandbox with test users, per-market settings",
+          "Point card terminals for the POS"
+        ]
+      }
+    },
+    "countries": [
+      "MX",
+      "AR",
+      "BR",
+      "CL",
+      "CO",
+      "PE",
+      "UY"
+    ],
+    "features": [
+      "Checkout Pro (redirect) and embedded Payment Brick",
+      "Payment inside the store page: card with the Payment Brick and cash (OXXO, 7 Eleven, Circle K, Soriana, STP) without leaving the store",
+      "Cards with up to 12 interest-free installments (MSI per account promotions)",
+      "OXXO cash, SPEI bank transfer and Mercado Crédito",
+      "commerce.payments session, confirm and refund capabilities for the storefront",
+      "Webhooks verified with x-signature; payment always re-read from the Mercado Pago API",
+      "Full and partial refunds with idempotency keys",
+      "Sandbox with test users, per-market settings",
+      "Point card terminals for the POS"
+    ]
+  },
+  "compatibility": {
+    "requires": [
+      {
+        "key": "kernel",
+        "version": ">=3.0.0 <4.0.0"
+      },
+      {
+        "key": "customers",
+        "version": ">=0.1.0",
+        "optional": true,
+        "reason": "Recommended: payments reference SalesOrder. With caja, settlements liquidate pending_payment orders."
+      },
+      {
+        "key": "caja",
+        "version": ">=0.2.0",
+        "optional": true,
+        "reason": "Recommended: caja listens to payment_confirmed / point_payment_approved to settle the queue."
+      }
+    ]
+  },
+  "tenancy": {
+    "isolation": "shared",
+    "rls_column": "organization_id"
+  },
+  "capabilities": [
+    {
+      "kind": "db:write",
+      "target": "addon_mercadopago.*",
+      "reason": "Persist Mercado Pago payments and their status."
+    },
+    {
+      "kind": "db:read",
+      "target": "addon_mercadopago.*",
+      "reason": "Read payments for screens and reconciliation."
+    },
+    {
+      "kind": "http:fetch",
+      "target": "api.mercadopago.com",
+      "reason": "Create Checkout Pro preferences and Bricks payments, read and search payments, and issue refunds against the Mercado Pago API."
+    },
+    {
+      "kind": "http:fetch",
+      "target": "connector:mercadopago.api_base",
+      "reason": "Sandbox / test only: reach the local payment simulator (tools/payment-sim) when the connector sets api_base. Ignored and rejected with production credentials."
+    },
+    {
+      "kind": "connector:read",
+      "target": "mercadopago",
+      "reason": "Read the org's Mercado Pago credentials (access token, public key, webhook secret) to call the API and verify notifications."
+    },
+    {
+      "kind": "event:emit",
+      "target": "mercadopago.payment_confirmed",
+      "reason": "Notify POS/kiosk when a payment is confirmed approved at Mercado Pago."
+    },
+    {
+      "kind": "event:emit",
+      "target": "mercadopago.point_payment_approved",
+      "reason": "Notify POS/kiosk when a Point terminal approves a card payment."
+    },
+    {
+      "kind": "event:emit",
+      "target": "mercadopago.payment_updated",
+      "reason": "Tell the storefront cart and OPS that an online payment changed status (paid, failed, refunded), after re-reading it from the Mercado Pago API."
+    },
+    {
+      "kind": "event:emit",
+      "target": "commerce.payments.confirmed",
+      "reason": "Neutral contract event of the commerce.payments family, {provider, result}: tells the storefront cart that a payment changed, in the commerce.payments.confirm shape, so the cart does not have to name this provider or wait for its poll. Only a signal: the cart re-reads the payment with commerce.payments.status before acting."
+    },
+    {
+      "kind": "event:emit",
+      "target": "mercadopago.refund_created",
+      "reason": "Tell OPS a refund was issued at Mercado Pago so returns and accounting can reconcile it."
+    },
+    {
+      "kind": "event:emit",
+      "target": "mercadopago.webhook_signature_invalid",
+      "reason": "Signal for OPS to open the «update the webhook secret» incident: a notification arrived whose x-signature did not verify. Carries only a reason code, counts and the payment id the notification points at; never a secret or a hash."
+    },
+    {
+      "kind": "event:emit",
+      "target": "mercadopago.payment_write_failed",
+      "reason": "Signal for OPS to open the «payment not recorded» incident: a payment taken by commerce.payments.submit (it exists at Mercado Pago and was answered to the store) could not be written to the local ledger after a retry. Carries ids, status and the host's refusal cause; never a card token, a secret or personal data."
+    }
+  ],
+  "connectors": [
+    {
+      "key": "mercadopago",
+      "label": "mercadopago.connector.label",
+      "auth": "token",
+      "form_layout": {
+        "mode": "steps",
+        "sections": [
+          {
+            "key": "connection",
+            "title": "mercadopago.connector.section.connection",
+            "description": "mercadopago.connector.section.connection_help",
+            "blocks": [
+              {
+                "key": "test_connection",
+                "kind": "action",
+                "title": "mercadopago.connector.block.test_connection.title",
+                "description": "mercadopago.connector.block.test_connection.help",
+                "label": "mercadopago.connector.block.test_connection.label",
+                "export": "handle_connector_test"
+              }
+            ]
+          },
+          {
+            "key": "advanced",
+            "title": "mercadopago.connector.section.advanced",
+            "description": "mercadopago.connector.section.advanced_help",
+            "blocks": [
+              {
+                "key": "webhook_url",
+                "kind": "webhook_url",
+                "webhook": "notifications",
+                "title": "mercadopago.connector.block.webhook_url.title",
+                "description": "mercadopago.connector.block.webhook_url.help",
+                "links": [
+                  {
+                    "label": "mercadopago.connector.block.webhook_url.panel",
+                    "url": "https://www.mercadopago.com.mx/developers/panel/app"
+                  }
+                ]
+              },
+              {
+                "key": "test_order",
+                "kind": "action",
+                "title": "mercadopago.connector.block.test_order.title",
+                "description": "mercadopago.connector.block.test_order.help",
+                "label": "mercadopago.connector.block.test_order.label",
+                "export": "handle_setup_test_order"
+              }
+            ]
+          }
+        ]
+      },
+      "credentials": [
+        {
+          "key": "environment",
+          "type": "select",
+          "label": "mercadopago.connector.field.environment",
+          "description": "mercadopago.connector.help.environment",
+          "required": true,
+          "section": "connection",
+          "default": "sandbox",
+          "options": [
+            {
+              "value": "sandbox",
+              "label": "mercadopago.option.env.sandbox"
+            },
+            {
+              "value": "production",
+              "label": "mercadopago.option.env.production"
+            }
+          ]
+        },
+        {
+          "key": "access_token",
+          "type": "secret",
+          "label": "mercadopago.connector.field.access_token",
+          "description": "mercadopago.connector.help.access_token",
+          "required": true,
+          "section": "connection"
+        },
+        {
+          "key": "public_key",
+          "type": "string",
+          "label": "mercadopago.connector.field.public_key",
+          "description": "mercadopago.connector.help.public_key",
+          "required": false,
+          "section": "connection"
+        },
+        {
+          "key": "webhook_secret",
+          "type": "secret",
+          "label": "mercadopago.connector.field.webhook_secret",
+          "description": "mercadopago.connector.help.webhook_secret",
+          "required": false,
+          "section": "advanced"
+        },
+        {
+          "key": "webhook_secret_test",
+          "type": "secret",
+          "label": "mercadopago.connector.field.webhook_secret_test",
+          "description": "mercadopago.connector.help.webhook_secret_test",
+          "required": false,
+          "section": "advanced"
+        },
+        {
+          "key": "api_base",
+          "type": "string",
+          "label": "mercadopago.connector.field.api_base",
+          "description": "mercadopago.connector.help.api_base",
+          "required": false,
+          "section": "advanced"
+        }
+      ],
+      "test_export": "handle_connector_test"
+    }
+  ],
+  "models": [
+    {
+      "key": "MercadoPagoPayment",
+      "table": "mp_payments",
+      "label": "mercadopago.model.payment",
+      "stage_field": "status",
+      "stages": [
+        {
+          "key": "pending",
+          "label": "mercadopago.field.status_opt.pending",
+          "color": "slate",
+          "order": 0
+        },
+        {
+          "key": "approved",
+          "label": "mercadopago.field.status_opt.approved",
+          "color": "green",
+          "order": 1
+        },
+        {
+          "key": "rejected",
+          "label": "mercadopago.field.status_opt.rejected",
+          "color": "red",
+          "order": 2,
+          "is_final": true
+        },
+        {
+          "key": "cancelled",
+          "label": "mercadopago.field.status_opt.cancelled",
+          "color": "amber",
+          "order": 3,
+          "is_final": true
+        },
+        {
+          "key": "refunded",
+          "label": "mercadopago.field.status_opt.refunded",
+          "color": "blue",
+          "order": 4,
+          "is_final": true
+        }
+      ],
+      "transitions": [
+        {
+          "from": "pending",
+          "to": "approved"
+        },
+        {
+          "from": "pending",
+          "to": "rejected"
+        },
+        {
+          "from": "pending",
+          "to": "cancelled"
+        },
+        {
+          "from": "pending",
+          "to": "refunded"
+        },
+        {
+          "from": "approved",
+          "to": "refunded"
+        }
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "primary_key": true,
+          "label": "mercadopago.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "mercadopago.field.organization_id"
+        },
+        {
+          "name": "reference",
+          "type": "text",
+          "label": "mercadopago.field.reference"
+        },
+        {
+          "name": "sale_id",
+          "type": "uuid",
+          "ref": "customers.SalesOrder",
+          "label": "mercadopago.field.sale_id"
+        },
+        {
+          "name": "amount",
+          "type": "numeric",
+          "not_null": true,
+          "label": "mercadopago.field.amount",
+          "display": "currency"
+        },
+        {
+          "name": "currency_code",
+          "type": "text",
+          "default": "MXN",
+          "label": "mercadopago.field.currency_code"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "default": "pending",
+          "options": [
+            {
+              "value": "pending",
+              "label": "Pendiente"
+            },
+            {
+              "value": "approved",
+              "label": "Aprobado"
+            },
+            {
+              "value": "rejected",
+              "label": "Rechazado"
+            },
+            {
+              "value": "cancelled",
+              "label": "Cancelado"
+            },
+            {
+              "value": "refunded",
+              "label": "Reembolsado"
+            }
+          ],
+          "display": "status",
+          "label": "mercadopago.field.status"
+        },
+        {
+          "name": "mp_preference_id",
+          "type": "text",
+          "label": "mercadopago.field.mp_preference_id"
+        },
+        {
+          "name": "mp_payment_id",
+          "type": "text",
+          "label": "mercadopago.field.mp_payment_id"
+        },
+        {
+          "name": "link_url",
+          "type": "text",
+          "display": "url",
+          "label": "mercadopago.field.link_url"
+        },
+        {
+          "name": "payer_email",
+          "type": "text",
+          "label": "mercadopago.field.payer_email"
+        },
+        {
+          "name": "source",
+          "type": "text",
+          "default": "pos",
+          "options": [
+            {
+              "value": "pos",
+              "label": "Punto de venta"
+            },
+            {
+              "value": "storefront",
+              "label": "Tienda en línea"
+            },
+            {
+              "value": "online",
+              "label": "En línea (otro)"
+            }
+          ],
+          "label": "mercadopago.field.source"
+        },
+        {
+          "name": "checkout_id",
+          "type": "text",
+          "label": "mercadopago.field.checkout_id"
+        },
+        {
+          "name": "market",
+          "type": "text",
+          "label": "mercadopago.field.market"
+        },
+        {
+          "name": "status_detail",
+          "type": "text",
+          "label": "mercadopago.field.status_detail"
+        },
+        {
+          "name": "diagnostic",
+          "type": "text",
+          "label": "mercadopago.field.diagnostic"
+        },
+        {
+          "name": "payment_type_id",
+          "type": "text",
+          "label": "mercadopago.field.payment_type_id"
+        },
+        {
+          "name": "payment_method_id",
+          "type": "text",
+          "label": "mercadopago.field.payment_method_id"
+        },
+        {
+          "name": "installments",
+          "type": "integer",
+          "label": "mercadopago.field.installments"
+        },
+        {
+          "name": "attempt",
+          "type": "integer",
+          "label": "mercadopago.field.attempt"
+        },
+        {
+          "name": "payment_point",
+          "type": "text",
+          "label": "mercadopago.field.payment_point"
+        },
+        {
+          "name": "expires_at",
+          "type": "text",
+          "label": "mercadopago.field.expires_at"
+        },
+        {
+          "name": "amount_refunded",
+          "type": "numeric",
+          "default": "0",
+          "display": "currency",
+          "label": "mercadopago.field.amount_refunded"
+        },
+        {
+          "name": "sandbox",
+          "type": "boolean",
+          "default": "false",
+          "label": "mercadopago.field.sandbox"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "label": "mercadopago.field.deleted_at"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "mercadopago.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "mercadopago.field.updated_at"
+        }
+      ]
+    },
+    {
+      "key": "MercadoPagoRefund",
+      "table": "mp_refunds",
+      "label": "mercadopago.model.refund",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "primary_key": true,
+          "label": "mercadopago.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "mercadopago.field.organization_id"
+        },
+        {
+          "name": "mp_payment_id",
+          "type": "text",
+          "not_null": true,
+          "label": "mercadopago.field.mp_payment_id"
+        },
+        {
+          "name": "mp_refund_id",
+          "type": "text",
+          "label": "mercadopago.field.mp_refund_id"
+        },
+        {
+          "name": "reference",
+          "type": "text",
+          "label": "mercadopago.field.reference"
+        },
+        {
+          "name": "amount",
+          "type": "numeric",
+          "not_null": true,
+          "label": "mercadopago.field.amount",
+          "display": "currency"
+        },
+        {
+          "name": "currency_code",
+          "type": "text",
+          "default": "MXN",
+          "label": "mercadopago.field.currency_code"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "default": "pending",
+          "display": "status",
+          "label": "mercadopago.field.status",
+          "options": [
+            {
+              "value": "pending",
+              "label": "Pendiente"
+            },
+            {
+              "value": "succeeded",
+              "label": "Reembolsado"
+            },
+            {
+              "value": "failed",
+              "label": "Fallido"
+            }
+          ]
+        },
+        {
+          "name": "reason",
+          "type": "text",
+          "label": "mercadopago.field.reason"
+        },
+        {
+          "name": "idempotency_key",
+          "type": "text",
+          "label": "mercadopago.field.idempotency_key"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "label": "mercadopago.field.deleted_at"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "mercadopago.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "mercadopago.field.updated_at"
+        }
+      ]
+    },
+    {
+      "key": "MercadoPagoWebhookHint",
+      "table": "mp_webhook_hints",
+      "label": "mercadopago.model.webhook_hint",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "primary_key": true,
+          "label": "mercadopago.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "mercadopago.field.organization_id"
+        },
+        {
+          "name": "resource_id",
+          "type": "text",
+          "not_null": true,
+          "label": "mercadopago.field.resource_id"
+        },
+        {
+          "name": "hour_bucket",
+          "type": "text",
+          "not_null": true,
+          "label": "mercadopago.field.hour_bucket"
+        },
+        {
+          "name": "read_at",
+          "type": "text",
+          "not_null": true,
+          "label": "mercadopago.field.read_at"
+        },
+        {
+          "name": "reconciled",
+          "type": "boolean",
+          "default": "false",
+          "label": "mercadopago.field.reconciled"
+        },
+        {
+          "name": "outcome",
+          "type": "text",
+          "label": "mercadopago.field.outcome"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "label": "mercadopago.field.deleted_at"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "mercadopago.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "mercadopago.field.updated_at"
+        }
+      ]
+    }
+  ],
+  "provides_capabilities": [
+    {
+      "key": "commerce.payments.session",
+      "label": "mercadopago.capability.session.label",
+      "description": "mercadopago.capability.session.description",
+      "handler": {
+        "type": "wasm",
+        "function": "mp_payments_session"
+      },
+      "countries": [
+        "MX"
+      ]
+    },
+    {
+      "key": "commerce.payments.confirm",
+      "label": "mercadopago.capability.confirm.label",
+      "description": "mercadopago.capability.confirm.description",
+      "handler": {
+        "type": "wasm",
+        "function": "mp_payments_confirm"
+      },
+      "countries": [
+        "MX"
+      ]
+    },
+    {
+      "key": "commerce.payments.refund",
+      "label": "mercadopago.capability.refund.label",
+      "description": "mercadopago.capability.refund.description",
+      "handler": {
+        "type": "wasm",
+        "function": "mp_payments_refund"
+      },
+      "countries": [
+        "MX"
+      ]
+    },
+    {
+      "key": "commerce.payments.status",
+      "label": "mercadopago.capability.status.label",
+      "description": "mercadopago.capability.status.description",
+      "handler": {
+        "type": "wasm",
+        "function": "mp_payments_status"
+      },
+      "countries": [
+        "MX"
+      ]
+    },
+    {
+      "key": "commerce.payments.submit",
+      "label": "mercadopago.capability.submit.label",
+      "description": "mercadopago.capability.submit.description",
+      "handler": {
+        "type": "wasm",
+        "function": "mp_payments_submit"
+      },
+      "countries": [
+        "MX"
+      ]
+    },
+    {
+      "key": "commerce.payments.client",
+      "label": "mercadopago.capability.client.label",
+      "description": "mercadopago.capability.client.description",
+      "handler": {
+        "type": "wasm",
+        "function": "mp_payments_client"
+      },
+      "countries": [
+        "MX"
+      ]
+    },
+    {
+      "key": "mercadopago.payments.brick_submit",
+      "label": "mercadopago.capability.brick_submit.label",
+      "description": "mercadopago.capability.brick_submit.description",
+      "handler": {
+        "type": "wasm",
+        "function": "mp_payments_brick_submit"
+      },
+      "countries": [
+        "MX"
+      ]
+    },
+    {
+      "key": "commerce.payments.cancel",
+      "label": "mercadopago.capability.cancel.label",
+      "description": "mercadopago.capability.cancel.description",
+      "handler": {
+        "type": "wasm",
+        "function": "mp_payments_cancel"
+      },
+      "countries": [
+        "MX"
+      ]
+    },
+    {
+      "key": "commerce.payments.capabilities",
+      "label": "mercadopago.capability.capabilities.label",
+      "description": "mercadopago.capability.capabilities.description",
+      "handler": {
+        "type": "wasm",
+        "function": "mp_payments_capabilities"
+      },
+      "countries": [
+        "MX"
+      ]
+    },
+    {
+      "key": "commerce.payments.reconcile",
+      "label": "mercadopago.capability.reconcile.label",
+      "description": "mercadopago.capability.reconcile.description",
+      "handler": {
+        "type": "wasm",
+        "function": "mp_payments_reconcile"
+      },
+      "countries": [
+        "MX"
+      ]
+    },
+    {
+      "key": "commerce.payments.terminal.create",
+      "label": "mercadopago.capability.terminal_create.label",
+      "description": "mercadopago.capability.terminal_create.description",
+      "handler": {
+        "type": "wasm",
+        "function": "mp_payments_terminal_create"
+      },
+      "countries": [
+        "MX"
+      ]
+    },
+    {
+      "key": "commerce.payments.terminal.devices",
+      "label": "mercadopago.capability.terminal_devices.label",
+      "description": "mercadopago.capability.terminal_devices.description",
+      "handler": {
+        "type": "wasm",
+        "function": "mp_payments_terminal_devices"
+      },
+      "countries": [
+        "MX"
+      ]
+    }
+  ],
+  "webhooks": [
+    {
+      "key": "notifications",
+      "path": "/notifications",
+      "do": "wasm:mp_webhook"
+    }
+  ],
+  "settings": [
+    {
+      "key": "markets",
+      "type": "string",
+      "label": "mercadopago.settings.markets",
+      "description": "mercadopago.settings.markets_help",
+      "default": "mx",
+      "required": false
+    },
+    {
+      "key": "checkout_mode",
+      "type": "select",
+      "label": "mercadopago.settings.checkout_mode",
+      "description": "mercadopago.settings.checkout_mode_help",
+      "default": "redirect",
+      "options": [
+        {
+          "value": "redirect",
+          "label": "mercadopago.settings.checkout_mode_redirect"
+        },
+        {
+          "value": "brick",
+          "label": "mercadopago.settings.checkout_mode_brick"
+        }
+      ],
+      "required": false
+    },
+    {
+      "key": "max_installments",
+      "type": "integer",
+      "label": "mercadopago.settings.max_installments",
+      "description": "mercadopago.settings.max_installments_help",
+      "default": 12,
+      "required": false
+    },
+    {
+      "key": "excluded_payment_types",
+      "type": "string",
+      "label": "mercadopago.settings.excluded_payment_types",
+      "description": "mercadopago.settings.excluded_payment_types_help",
+      "required": false
+    },
+    {
+      "key": "statement_descriptor",
+      "type": "string",
+      "label": "mercadopago.settings.statement_descriptor",
+      "description": "mercadopago.settings.statement_descriptor_help",
+      "required": false
+    },
+    {
+      "key": "binary_mode",
+      "type": "boolean",
+      "label": "mercadopago.settings.binary_mode",
+      "description": "mercadopago.settings.binary_mode_help",
+      "default": false,
+      "required": false
+    },
+    {
+      "key": "session_expiration_minutes",
+      "type": "integer",
+      "label": "mercadopago.settings.session_expiration_minutes",
+      "description": "mercadopago.settings.session_expiration_minutes_help",
+      "default": 60,
+      "required": false
+    },
+    {
+      "key": "cash_expiration_hours",
+      "type": "integer",
+      "label": "mercadopago.settings.cash_expiration_hours",
+      "description": "mercadopago.settings.cash_expiration_hours_help",
+      "default": 72,
+      "required": false
+    },
+    {
+      "key": "notification_url",
+      "type": "string",
+      "label": "mercadopago.settings.notification_url",
+      "description": "mercadopago.settings.notification_url_help",
+      "required": false
+    },
+    {
+      "key": "require_webhook_signature",
+      "type": "boolean",
+      "label": "mercadopago.settings.require_webhook_signature",
+      "description": "mercadopago.settings.require_webhook_signature_help",
+      "default": false,
+      "required": false
+    },
+    {
+      "key": "signature_hint_dedupe_seconds",
+      "type": "integer",
+      "label": "mercadopago.settings.signature_hint_dedupe_seconds",
+      "description": "mercadopago.settings.signature_hint_dedupe_seconds_help",
+      "default": 60,
+      "required": false
+    },
+    {
+      "key": "three_d_secure_mode",
+      "type": "select",
+      "label": "mercadopago.settings.three_d_secure_mode",
+      "description": "mercadopago.settings.three_d_secure_mode_help",
+      "default": "optional",
+      "options": [
+        {
+          "value": "optional",
+          "label": "mercadopago.settings.three_d_secure_mode_optional"
+        },
+        {
+          "value": "not_supported",
+          "label": "mercadopago.settings.three_d_secure_mode_not_supported"
+        }
+      ],
+      "required": false
+    },
+    {
+      "key": "cash_points",
+      "type": "string",
+      "label": "mercadopago.settings.cash_points",
+      "description": "mercadopago.settings.cash_points_help",
+      "default": "stp,oxxo,7eleven,circlek,soriana",
+      "required": false
+    },
+    {
+      "key": "wallet_enabled",
+      "type": "boolean",
+      "label": "mercadopago.settings.wallet_enabled",
+      "description": "mercadopago.settings.wallet_enabled_help",
+      "default": true,
+      "required": false
+    },
+    {
+      "key": "credits_enabled",
+      "type": "boolean",
+      "label": "mercadopago.settings.credits_enabled",
+      "description": "mercadopago.settings.credits_enabled_help",
+      "default": true,
+      "required": false
+    },
+    {
+      "key": "api_mode",
+      "type": "select",
+      "label": "mercadopago.settings.api_mode",
+      "description": "mercadopago.settings.api_mode_help",
+      "default": "payments",
+      "options": [
+        {
+          "value": "payments",
+          "label": "mercadopago.settings.api_mode_payments"
+        },
+        {
+          "value": "orders",
+          "label": "mercadopago.settings.api_mode_orders"
+        }
+      ],
+      "required": false
+    },
+    {
+      "key": "item_category_id",
+      "type": "string",
+      "label": "mercadopago.settings.item_category_id",
+      "description": "mercadopago.settings.item_category_id_help",
+      "default": "others",
+      "required": false
+    },
+    {
+      "key": "market_overrides",
+      "type": "json",
+      "label": "mercadopago.settings.market_overrides",
+      "description": "mercadopago.settings.market_overrides_help",
+      "required": false
+    },
+    {
+      "key": "standard_fields",
+      "type": "boolean",
+      "label": "mercadopago.settings.standard_fields",
+      "description": "mercadopago.settings.standard_fields_help",
+      "default": false,
+      "required": false
+    }
+  ],
+  "contributions": {
+    "navigation": [
+      {
+        "title": "mercadopago.nav.group",
+        "icon": "CreditCard",
+        "target": "sidebar.operations",
+        "items": [
+          {
+            "title": "mercadopago.nav.payments",
+            "icon": "CreditCard",
+            "model": "MercadoPagoPayment",
+            "permission": "mercadopago.mercadopagopayment.read"
+          },
+          {
+            "title": "mercadopago.nav.refunds",
+            "icon": "Undo2",
+            "model": "MercadoPagoRefund",
+            "permission": "mercadopago.mercadopagorefund.read"
+          }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "key": "create_link",
+        "label": "mercadopago.action.create_link.label",
+        "icon": "Link",
+        "target_model": "MercadoPagoPayment",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_MercadoPagoPayment_create_link"
+        },
+        "placement": "row"
+      },
+      {
+        "key": "check_status",
+        "label": "mercadopago.action.check_status.label",
+        "icon": "RefreshCw",
+        "target_model": "MercadoPagoPayment",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_MercadoPagoPayment_check_status"
+        },
+        "placement": "row"
+      },
+      {
+        "key": "refund",
+        "label": "mercadopago.action.refund.label",
+        "icon": "Undo2",
+        "target_model": "MercadoPagoPayment",
+        "handler": {
+          "type": "wasm",
+          "function": "handle_MercadoPagoPayment_refund"
+        },
+        "placement": "row",
+        "fields": [
+          {
+            "key": "amount",
+            "label": "mercadopago.action.refund.amount",
+            "type": "string",
+            "required": false,
+            "widget": "text",
+            "placeholder": "mercadopago.action.refund.amount_placeholder"
+          },
+          {
+            "key": "reason",
+            "label": "mercadopago.action.refund.reason",
+            "type": "string",
+            "required": false,
+            "widget": "text"
+          }
+        ],
+        "requires_state": [
+          "approved"
+        ],
+        "confirm": true,
+        "confirm_message": "mercadopago.action.refund.confirm"
+      }
+    ]
+  },
+  "i18n": {
+    "default_locale": "es-MX",
+    "bundles": [
+      {
+        "locale": "es-MX",
+        "path": "locales/es-MX.json"
+      },
+      {
+        "locale": "en-US",
+        "path": "locales/en-US.json"
+      }
+    ]
+  },
+  "rbac": {
+    "roles": [
+      {
+        "key": "mercadopago_manager",
+        "label": "mercadopago.role.manager",
+        "description": "Manage Mercado Pago payments and connector.",
+        "permissions": [
+          "mercadopago.mercadopagopayment.read",
+          "mercadopago.mercadopagopayment.write",
+          "mercadopago.mercadopagorefund.read",
+          "mercadopago.mercadopagorefund.write",
+          "mercadopago.mercadopagopayment.refund"
+        ]
+      }
+    ]
+  },
+  "edge_devices": [
+    {
+      "key": "mp_point",
+      "label": "mercadopago.device.point.label",
+      "kind": "card_terminal",
+      "capabilities": [
+        "card_payment"
+      ],
+      "transport": "ws",
+      "heartbeat_interval_seconds": 20,
+      "form_layout": {
+        "mode": "sections",
+        "sections": [
+          {
+            "key": "pairing",
+            "title": "mercadopago.device.point.section.pairing"
+          }
+        ]
+      },
+      "pairing_credentials": [
+        {
+          "key": "branch_id",
+          "type": "string",
+          "label": "mercadopago.device.point.field.branch",
+          "required": true,
+          "section": "pairing"
+        },
+        {
+          "key": "terminal_id",
+          "type": "string",
+          "label": "mercadopago.device.point.field.terminal",
+          "required": true,
+          "section": "pairing",
+          "description": "mercadopago.device.point.help.terminal"
+        },
+        {
+          "key": "pairing_pin",
+          "type": "secret",
+          "label": "mercadopago.device.point.field.pin",
+          "required": true,
+          "section": "pairing"
+        }
+      ],
+      "events": [
+        {
+          "type": "payment.approved",
+          "do": "wasm:on_point_payment_approved",
+          "idempotent": true
+        },
+        {
+          "type": "payment.rejected",
+          "do": "wasm:on_point_payment_rejected",
+          "idempotent": true
+        },
+        {
+          "type": "device.error",
+          "do": "wasm:on_point_device_error"
+        },
+        {
+          "type": "device.offline",
+          "do": "wasm:on_point_device_offline"
+        }
+      ],
+      "commands": [
+        {
+          "type": "create_payment_intent",
+          "timeout_seconds": 10
+        },
+        {
+          "type": "cancel_payment_intent",
+          "timeout_seconds": 5
+        }
+      ]
+    }
+  ],
+  "extension_points": {
+    "events": [
+      {
+        "name": "mercadopago.payment_confirmed",
+        "description": "Online payment confirmed approved. payload: organization_id, payment_id, sale_id, reference, checkout_id, amount, currency_code, mp_payment_id, occurred_at, plus amount_matches (true/false; null when no expected amount is known), expected_amount and expected_currency_code. The expected amount is the order total the submit charged for or, for Checkout Pro, the amount recorded when the preference was created (it can be stale if the cart changed after that preference); a signal for auditing, the event is emitted the same either way."
+      },
+      {
+        "name": "mercadopago.point_payment_approved",
+        "description": "Point terminal approved a card payment (store-local edge device, or an Orders API order: payload.external_reference, payment_id = order id, amount, currency_code)."
+      },
+      {
+        "name": "mercadopago.payment_updated",
+        "description": "Online payment status changed (payload.payment uses the commerce.payments.confirm output shape: order_ref, status, amount, currency, provider_ref, event_id)."
+      },
+      {
+        "name": "mercadopago.refund_created",
+        "description": "Refund issued at Mercado Pago (payload.refund uses the commerce.payments.refund output shape; provider_ref and order_ref sit beside it)."
+      },
+      {
+        "name": "mercadopago.webhook_signature_invalid",
+        "description": "A Mercado Pago notification arrived with an x-signature that did not verify. It was used as a hint (the payment was read from the API by id), not trusted. payload: organization_id, resource_id, reason (a code), cause (secret_not_configured: require_webhook_signature is on and the connector has no webhook key; signature_missing; signature_invalid: a key was tried and did not verify), secret_configured, keys_tried, reconciled, outcome."
+      },
+      {
+        "name": "mercadopago.payment_write_failed",
+        "description": "A payment taken by commerce.payments.submit could not be written to mp_payments (after one retry). The payment is safe at Mercado Pago; the webhook and the sweeper bring the row in line. payload: provider_ref, order_ref, checkout_id, status, source, essential, write_failures [{table,row,cause}], occurred_at."
+      }
+    ]
+  }
+}

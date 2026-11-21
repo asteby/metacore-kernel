@@ -85,6 +85,13 @@ func FromV3(m *v3.Manifest) Manifest {
 		Features:     m.Metadata.Features,
 		Countries:    m.Metadata.Countries,
 		MetadataI18n: mapMetadataI18n(m.Metadata.I18n),
+
+		Role:         m.Metadata.Role,
+		Deprecated:   m.Metadata.Deprecated,
+		Contracts:    m.Contracts,
+		Implements:   m.Implements,
+		ExtendsAddon: m.ExtendsAddon,
+		Replaces:     m.Replaces,
 	}
 
 	// Icon triplet. v3 carries the structured {type, slug, color}; the legacy

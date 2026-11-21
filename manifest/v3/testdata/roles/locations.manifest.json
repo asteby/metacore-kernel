@@ -1,0 +1,784 @@
+{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": {
+    "key": "locations",
+    "name": "Locations",
+    "description": "Organize your business by branch: each sales point and physical location, with its address and a default warehouse for its sales, shared by point of sale, customers and inventory.",
+    "version": "0.5.0",
+    "category": "foundation.operations",
+    "icon": {
+      "type": "lucide",
+      "slug": "Building2",
+      "color": "#F59E0B"
+    },
+    "author": "Asteby",
+    "license": "Apache-2.0",
+    "readme": "README.md",
+    "features": [
+      "Register each branch as a sales point and physical location under your company.",
+      "Keep the address, phone and tax details of every branch.",
+      "Choose a default warehouse for the stock movements of each branch's sales.",
+      "Mark branches active or inactive without losing their history.",
+      "Point of sale, customers and inventory work against the branch you pick.",
+      "Prepare each branch for the online store: map location, opening hours, contact and in-store pickup, hidden until you turn it on.",
+      "A default branch named Sucursal Principal is created when you install.",
+      "Assign users to the branches they work at; people with no assignment keep seeing every branch."
+    ],
+    "i18n": {
+      "es": {
+        "name": "Sucursales",
+        "description": "Organiza tu negocio por sucursal: cada punto de venta y ubicación física con su dirección y un almacén por defecto para sus ventas, compartidas por punto de venta, clientes e inventario.",
+        "features": [
+          "Registra cada sucursal como punto de venta y ubicación física de tu empresa.",
+          "Guarda la dirección, el teléfono y los datos fiscales de cada sucursal.",
+          "Elige un almacén por defecto para los movimientos de inventario de las ventas de cada sucursal.",
+          "Marca sucursales como activas o inactivas sin perder su historial.",
+          "El punto de venta, los clientes y el inventario trabajan sobre la sucursal que elijas.",
+          "Prepara cada sucursal para la tienda en línea: ubicación en el mapa, horario, contacto y recolección en sucursal, oculta hasta que la actives.",
+          "Al instalar se crea una sucursal predeterminada llamada Sucursal Principal.",
+          "Asigna usuarios a las sucursales donde trabajan; quien no tiene asignación sigue viendo todas las sucursales."
+        ]
+      },
+      "en": {
+        "name": "Locations",
+        "description": "Organize your business by branch: each sales point and physical location, with its address and a default warehouse for its sales, shared by point of sale, customers and inventory.",
+        "features": [
+          "Register each branch as a sales point and physical location under your company.",
+          "Keep the address, phone and tax details of every branch.",
+          "Choose a default warehouse for the stock movements of each branch's sales.",
+          "Mark branches active or inactive without losing their history.",
+          "Point of sale, customers and inventory work against the branch you pick.",
+          "Prepare each branch for the online store: map location, opening hours, contact and in-store pickup, hidden until you turn it on.",
+          "A default branch named Sucursal Principal is created when you install.",
+          "Assign users to the branches they work at; people with no assignment keep seeing every branch."
+        ]
+      }
+    }
+  },
+  "compatibility": {
+    "requires": [
+      {
+        "key": "kernel",
+        "version": ">=3.0.0 <4.0.0"
+      }
+    ]
+  },
+  "tenancy": {
+    "isolation": "shared",
+    "rls_column": "organization_id"
+  },
+  "capabilities": [
+    {
+      "kind": "db:write",
+      "target": "addon_locations.*",
+      "reason": "Persist branches (name, code, address, default warehouse, active flag) and which users work at each branch."
+    },
+    {
+      "kind": "db:read",
+      "target": "addon_locations.*",
+      "reason": "Read branches and branch assignments for the branch selector, screens, reports, cross-addon references and branch-scoped access."
+    }
+  ],
+  "models": [
+    {
+      "key": "Branch",
+      "table": "branches",
+      "label": "locations.model.branch",
+      "seed": {
+        "key": "code",
+        "rows": [
+          {
+            "name": "Sucursal Principal",
+            "code": "main",
+            "is_active": true
+          }
+        ]
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "primary_key": true,
+          "default": "gen_random_uuid()",
+          "label": "locations.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "locations.field.organization_id"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "not_null": true,
+          "label": "locations.field.name"
+        },
+        {
+          "name": "code",
+          "type": "text",
+          "label": "locations.field.code"
+        },
+        {
+          "name": "address_line",
+          "type": "text",
+          "label": "locations.field.address_line"
+        },
+        {
+          "name": "city",
+          "type": "text",
+          "label": "locations.field.city"
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "label": "locations.field.state"
+        },
+        {
+          "name": "postal_code",
+          "type": "text",
+          "label": "locations.field.postal_code"
+        },
+        {
+          "name": "phone",
+          "type": "text",
+          "label": "locations.field.phone"
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "default": true,
+          "label": "locations.field.is_active"
+        },
+        {
+          "name": "default_warehouse_id",
+          "type": "uuid",
+          "label": "locations.field.default_warehouse_id",
+          "ref": "inventory.Warehouse"
+        },
+        {
+          "name": "fiscal_data",
+          "type": "jsonb",
+          "default": "{}",
+          "label": "locations.field.fiscal_data"
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "default": "'store'",
+          "comment": "Branch type. NULL is read as 'store'.",
+          "options": [
+            {
+              "value": "store",
+              "label": "locations.option.kind.store",
+              "color": "blue"
+            },
+            {
+              "value": "service_center",
+              "label": "locations.option.kind.service_center",
+              "color": "green"
+            },
+            {
+              "value": "warehouse",
+              "label": "locations.option.kind.warehouse",
+              "color": "amber"
+            },
+            {
+              "value": "office",
+              "label": "locations.option.kind.office",
+              "color": "gray"
+            }
+          ],
+          "label": "locations.field.kind"
+        },
+        {
+          "name": "lat",
+          "type": "numeric(9,6)",
+          "validation": {
+            "min": -90,
+            "max": 90
+          },
+          "comment": "Latitude in decimal degrees (WGS84). Must be set together with lng; (0,0) is rejected.",
+          "label": "locations.field.lat"
+        },
+        {
+          "name": "lng",
+          "type": "numeric(9,6)",
+          "validation": {
+            "min": -180,
+            "max": 180
+          },
+          "comment": "Longitude in decimal degrees (WGS84). Must be set together with lat; (0,0) is rejected.",
+          "label": "locations.field.lng"
+        },
+        {
+          "name": "timezone",
+          "type": "text",
+          "comment": "IANA timezone, e.g. America/Mexico_City. Opening hours are read in this zone.",
+          "label": "locations.field.timezone"
+        },
+        {
+          "name": "opening_hours",
+          "type": "jsonb",
+          "comment": "{weekly:[{day:1..7 (1=Mon),open:'HH:MM',close:'HH:MM'}], exceptions:[{date:'YYYY-MM-DD',closed?:bool,open?:'HH:MM',close?:'HH:MM',note?:text}]}. Shape enforced by a CHECK constraint (object, weekly/exceptions arrays).",
+          "label": "locations.field.opening_hours"
+        },
+        {
+          "name": "services",
+          "type": "jsonb",
+          "default": "'[]'",
+          "comment": "JSON array of free-text service labels offered at the branch (e.g. [\"pickup\",\"installation\"]).",
+          "label": "locations.field.services"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "label": "locations.field.email"
+        },
+        {
+          "name": "whatsapp",
+          "type": "text",
+          "comment": "WhatsApp number in international format.",
+          "label": "locations.field.whatsapp"
+        },
+        {
+          "name": "maps_url",
+          "type": "text",
+          "comment": "Public map link (Google Maps, Apple Maps, OSM).",
+          "label": "locations.field.maps_url"
+        },
+        {
+          "name": "storefront_visible",
+          "type": "boolean",
+          "default": "false",
+          "comment": "Opt-in: only branches with true are exposed to the storefront. NULL is read as false.",
+          "label": "locations.field.storefront_visible"
+        },
+        {
+          "name": "pickup_enabled",
+          "type": "boolean",
+          "default": "false",
+          "comment": "The branch accepts in-store pickup orders. NULL is read as false.",
+          "label": "locations.field.pickup_enabled"
+        },
+        {
+          "name": "pickup_fee",
+          "type": "numeric(12,2)",
+          "validation": {
+            "min": 0
+          },
+          "comment": "Pickup fee. NULL means free pickup.",
+          "label": "locations.field.pickup_fee"
+        },
+        {
+          "name": "pickup_prep_days_min",
+          "type": "integer",
+          "validation": {
+            "min": 0
+          },
+          "comment": "Minimum days to have a pickup order ready.",
+          "label": "locations.field.pickup_prep_days_min"
+        },
+        {
+          "name": "pickup_prep_days_max",
+          "type": "integer",
+          "validation": {
+            "min": 0
+          },
+          "comment": "Maximum days to have a pickup order ready.",
+          "label": "locations.field.pickup_prep_days_max"
+        },
+        {
+          "name": "ships_from",
+          "type": "boolean",
+          "default": "false",
+          "comment": "The branch can be the origin of shipments. NULL is read as false.",
+          "label": "locations.field.ships_from"
+        },
+        {
+          "name": "position",
+          "type": "integer",
+          "default": "0",
+          "comment": "Sort order in storefront listings (ascending).",
+          "label": "locations.field.position"
+        },
+        {
+          "name": "market_code",
+          "type": "text",
+          "default": "",
+          "label": "locations.field.market_code",
+          "description": "locations.help.market_code",
+          "comment": "Code of the organization market (org_markets.code: mx, us...) this branch sells in. Empty = not tied to a market. Orders from the storefront are created in the branch of their market."
+        },
+        {
+          "name": "entity_id",
+          "type": "uuid",
+          "ref": "locations.Entity",
+          "label": "locations.field.entity_id",
+          "comment": "Legal entity (razon social) this branch belongs to. Filled with the organization default entity when empty, so organizations that never configure entities behave as before."
+        },
+        {
+          "name": "branch_type",
+          "type": "text",
+          "not_null": true,
+          "default": "'physical'",
+          "label": "locations.field.branch_type",
+          "comment": "What the branch is. physical = a local with address and hours; channel = a virtual branch of a sales channel (Mercado Libre, Amazon, online store) that gives its orders an entity, series and issuer, with no local and no pickup; virtual_warehouse = groups stock without a local and does not sell. Independent from kind (store, service_center...).",
+          "options": [
+            {
+              "value": "physical",
+              "label": "locations.option.branch_type.physical",
+              "color": "blue"
+            },
+            {
+              "value": "channel",
+              "label": "locations.option.branch_type.channel",
+              "color": "purple"
+            },
+            {
+              "value": "virtual_warehouse",
+              "label": "locations.option.branch_type.virtual_warehouse",
+              "color": "amber"
+            }
+          ]
+        },
+        {
+          "name": "channel_account_ref",
+          "type": "text",
+          "label": "locations.field.channel_account_ref",
+          "comment": "Only for channel branches: reference to the channel account (Mercado Libre, Amazon...) that sells on behalf of this branch. One channel account belongs to one channel branch."
+        },
+        {
+          "name": "fulfillment_warehouse_id",
+          "type": "uuid",
+          "label": "locations.field.fulfillment_warehouse_id",
+          "comment": "Where the goods leave from. Defined apart from the entity: the order entity is the branch entity, not the warehouse entity. When they differ the platform flags an intercompany operation."
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "label": "locations.field.deleted_at"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "locations.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "locations.field.updated_at"
+        }
+      ],
+      "indices": [
+        {
+          "name": "branches_org_idx",
+          "columns": [
+            "organization_id"
+          ]
+        },
+        {
+          "name": "branches_org_code_uq",
+          "columns": [
+            "organization_id",
+            "code"
+          ],
+          "unique": true
+        },
+        {
+          "name": "branches_org_entity_idx",
+          "columns": [
+            "organization_id",
+            "entity_id"
+          ]
+        }
+      ],
+      "relations": [
+        {
+          "name": "members",
+          "embed": true,
+          "kind": "one_to_many",
+          "through": "BranchMember",
+          "foreign_key": "branch_id",
+          "label": "locations.relation.members"
+        }
+      ]
+    },
+    {
+      "key": "Entity",
+      "table": "entities",
+      "label": "locations.model.entity",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "primary_key": true,
+          "default": "gen_random_uuid()",
+          "label": "locations.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "locations.field.organization_id"
+        },
+        {
+          "name": "code",
+          "type": "text",
+          "not_null": true,
+          "label": "locations.field.code",
+          "comment": "Stable identifier, unique per organization. It is the key used to map the entity with an external system; names are never used as keys."
+        },
+        {
+          "name": "legal_name",
+          "type": "text",
+          "not_null": true,
+          "label": "locations.field.legal_name",
+          "comment": "Legal name (razon social)."
+        },
+        {
+          "name": "display_name",
+          "type": "text",
+          "label": "locations.field.display_name"
+        },
+        {
+          "name": "country",
+          "type": "text",
+          "label": "locations.field.country",
+          "comment": "ISO 3166-1 alpha-2. The region addon of that country defines which tax id and regime fields apply."
+        },
+        {
+          "name": "fiscal",
+          "type": "jsonb",
+          "default": "{}",
+          "label": "locations.field.fiscal",
+          "comment": "Generic tax data: tax_id_type, tax_id, regime, postal_code. The region addon validates it; the core never assumes a country."
+        },
+        {
+          "name": "is_default",
+          "type": "boolean",
+          "not_null": true,
+          "default": false,
+          "label": "locations.field.is_default",
+          "comment": "Exactly one default entity per organization: it takes the branches and records that do not choose one."
+        },
+        {
+          "name": "source",
+          "type": "text",
+          "not_null": true,
+          "default": "'local'",
+          "label": "locations.field.source",
+          "comment": "Where the entity is maintained. erp = an external system is the source of truth and Ops shows it read-only.",
+          "options": [
+            {
+              "value": "local",
+              "label": "locations.option.source.local",
+              "color": "blue"
+            },
+            {
+              "value": "erp",
+              "label": "locations.option.source.erp",
+              "color": "purple"
+            }
+          ]
+        },
+        {
+          "name": "external_system",
+          "type": "text",
+          "label": "locations.field.external_system",
+          "comment": "Name of the external system when source is erp (for example 7leguas-v2)."
+        },
+        {
+          "name": "external_ref",
+          "type": "text",
+          "label": "locations.field.external_ref",
+          "comment": "Id of the entity in the external system."
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "not_null": true,
+          "default": true,
+          "label": "locations.field.is_active"
+        },
+        {
+          "name": "position",
+          "type": "integer",
+          "default": 0,
+          "label": "locations.field.position"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "label": "locations.field.deleted_at"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "locations.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "locations.field.updated_at"
+        }
+      ],
+      "indices": [
+        {
+          "name": "entities_org_idx",
+          "columns": [
+            "organization_id"
+          ]
+        },
+        {
+          "name": "entities_org_code_uq",
+          "columns": [
+            "organization_id",
+            "code"
+          ],
+          "unique": true
+        }
+      ],
+      "relations": [
+        {
+          "name": "branches",
+          "embed": true,
+          "kind": "one_to_many",
+          "through": "Branch",
+          "foreign_key": "entity_id",
+          "label": "locations.relation.entity_branches"
+        }
+      ]
+    },
+    {
+      "key": "BranchMember",
+      "table": "branch_members",
+      "label": "locations.model.branch_member",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "primary_key": true,
+          "default": "gen_random_uuid()",
+          "label": "locations.field.id"
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "label": "locations.field.organization_id"
+        },
+        {
+          "name": "branch_id",
+          "type": "uuid",
+          "not_null": true,
+          "ref": "locations.Branch",
+          "label": "locations.field.branch_id"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "not_null": true,
+          "ref": "users",
+          "label": "locations.field.user_id"
+        },
+        {
+          "name": "is_default",
+          "type": "boolean",
+          "not_null": true,
+          "default": false,
+          "label": "locations.field.is_default"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "label": "locations.field.deleted_at"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "locations.field.created_at"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "not_null": true,
+          "default": "now()",
+          "label": "locations.field.updated_at"
+        }
+      ],
+      "rules": [
+        {
+          "kind": "unique",
+          "error_key": "locations.error.branch_member_duplicate",
+          "columns": [
+            "branch_id",
+            "user_id"
+          ]
+        }
+      ],
+      "indices": [
+        {
+          "name": "branch_members_org_branch_user_idx",
+          "columns": [
+            "organization_id",
+            "branch_id",
+            "user_id"
+          ]
+        },
+        {
+          "name": "branch_members_org_user_idx",
+          "columns": [
+            "organization_id",
+            "user_id"
+          ]
+        }
+      ]
+    }
+  ],
+  "contributions": {
+    "navigation": [
+      {
+        "title": "locations.nav.group",
+        "icon": "Building2",
+        "target": "sidebar.operations",
+        "items": [
+          {
+            "title": "locations.nav.branches",
+            "icon": "Building2",
+            "model": "Branch",
+            "permission": "locations.branch.read"
+          },
+          {
+            "title": "locations.nav.entities",
+            "icon": "Landmark",
+            "model": "Entity",
+            "permission": "locations.entity.read"
+          }
+        ]
+      }
+    ]
+  },
+  "extension_points": {
+    "events": [
+      {
+        "name": "locations.branch_created",
+        "description": "DEPRECATED: no live emitter and no subscriber - nothing publishes this event, do not subscribe to it. Was: A branch was created. Published by the host as locations.Branch.created after commit."
+      },
+      {
+        "name": "locations.branch_updated",
+        "description": "DEPRECATED: no live emitter and no subscriber - nothing publishes this event, do not subscribe to it. Was: A branch changed. Published by the host as locations.Branch.updated after commit."
+      },
+      {
+        "name": "locations.branch_member_created",
+        "description": "DEPRECATED: no live emitter and no subscriber - nothing publishes this event, do not subscribe to it. Was: A user was assigned to a branch. Published by the host as locations.BranchMember.created after commit."
+      },
+      {
+        "name": "locations.branch_member_updated",
+        "description": "DEPRECATED: no live emitter and no subscriber - nothing publishes this event, do not subscribe to it. Was: A branch assignment changed (for example, the default branch). Published by the host as locations.BranchMember.updated after commit."
+      },
+      {
+        "name": "locations.branch_member_deleted",
+        "description": "DEPRECATED: no live emitter and no subscriber - nothing publishes this event, do not subscribe to it. Was: A user was removed from a branch. Published by the host as locations.BranchMember.deleted after commit."
+      },
+      {
+        "name": "locations.entity_created",
+        "description": "A legal entity (razon social) was created. Published by the host as locations.Entity.created after commit."
+      },
+      {
+        "name": "locations.entity_updated",
+        "description": "A legal entity changed, including its deactivation. Published by the host as locations.Entity.updated after commit."
+      },
+      {
+        "name": "locations.branch_assigned",
+        "description": "A branch was assigned to another legal entity. Published by the host as locations.Branch.updated after commit; the payload carries entity_id and previous_entity_id, so consumers do not rewrite history (issued fiscal documents keep the entity they were issued with)."
+      }
+    ],
+    "model_extensions_accepted": [
+      "Branch"
+    ]
+  },
+  "lifecycle": {
+    "install": "Install",
+    "uninstall": "Uninstall",
+    "enable": "Enable",
+    "disable": "Disable"
+  },
+  "i18n": {
+    "default_locale": "es-MX",
+    "bundles": [
+      {
+        "locale": "es-MX",
+        "path": "locales/es-MX.json"
+      },
+      {
+        "locale": "en-US",
+        "path": "locales/en-US.json"
+      }
+    ]
+  },
+  "rbac": {
+    "roles": [
+      {
+        "key": "locations_manager",
+        "label": "locations.role.manager",
+        "description": "locations.role.manager_description",
+        "permissions": [
+          "locations.branch.read",
+          "locations.branch.write",
+          "locations.branch_member.read",
+          "locations.branch_member.write",
+          "locations.entity.read",
+          "locations.entity.write"
+        ]
+      },
+      {
+        "key": "locations_viewer",
+        "label": "locations.role.viewer",
+        "description": "locations.role.viewer_description",
+        "permissions": [
+          "locations.branch.read",
+          "locations.branch_member.read",
+          "locations.entity.read"
+        ]
+      }
+    ],
+    "permissions": [
+      {
+        "key": "locations.branch.read",
+        "label": "locations.permission.read"
+      },
+      {
+        "key": "locations.branch.write",
+        "label": "locations.permission.write"
+      },
+      {
+        "key": "locations.branch_member.read",
+        "label": "locations.permission.member_read"
+      },
+      {
+        "key": "locations.branch_member.write",
+        "label": "locations.permission.member_write"
+      },
+      {
+        "key": "locations.entity.read",
+        "label": "locations.permission.entity_read"
+      },
+      {
+        "key": "locations.entity.write",
+        "label": "locations.permission.entity_write"
+      }
+    ]
+  }
+}

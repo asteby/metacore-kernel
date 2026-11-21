@@ -84,6 +84,7 @@ var legacyTolerated = []string{
 	RulePrivateFrontendIntegrity,
 	RulePrivateExplicitCapabilities,
 	RuleEventEmitCapability,
+	RuleRoleMissing,
 }
 
 // warnOnlyWindow marks the legacyTolerated rules that are reported as warnings
@@ -96,6 +97,7 @@ var warnOnlyWindow = map[string]struct{}{
 	RulePrivateFrontendIntegrity:    {},
 	RulePrivateExplicitCapabilities: {},
 	RuleEventEmitCapability:         {},
+	RuleRoleMissing:                 {},
 }
 
 // LegacyTolerated returns the rule ids currently inside their compatibility
