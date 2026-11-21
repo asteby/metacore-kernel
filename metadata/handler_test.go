@@ -16,7 +16,7 @@ import (
 // that uses a distinct prefix so the two test files do not contend on keys.
 func registerHandlerModel(t *testing.T, title string) string {
 	t.Helper()
-	key := fmt.Sprintf("metadata_handler_test_%s_%d", t.Name(), time.Now().UnixNano())
+	key := fmt.Sprintf("metadata_handler_test_%s_%d_%d", t.Name(), time.Now().UnixNano(), fakeKeySeq.Add(1))
 	titleCopy := title
 	modelbase.Register(key, func() modelbase.ModelDefiner {
 		return &fakeModel{key: key, title: titleCopy}
