@@ -239,6 +239,7 @@ func mapDocuments(m *v3.Manifest) []DocumentDef {
 			Label:         d.Label,
 			RequiresState: d.RequiresState,
 			Condition:     d.Condition,
+			Kind:          d.Kind,
 		})
 	}
 	return out

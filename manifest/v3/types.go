@@ -2194,6 +2194,13 @@ type DocumentDef struct {
 	// Comment is an optional author note for the Plantillas catalog; not
 	// shown to end users unless the host chooses to surface it.
 	Comment string `json:"comment,omitempty"`
+	// Kind is the optional regional/semantic kind of the document
+	// (snake_case, e.g. "cfdi_invoice", "cfdi_credit_note"). The host passes
+	// it as doc_kind to the documents.enrich capability so a region pack can
+	// enrich the record before the template is hydrated, instead of the host
+	// guessing from the key or model name. Empty = no enrichment is asked
+	// for. Additive: manifests without it behave as before.
+	Kind string `json:"kind,omitempty"`
 }
 
 // DashboardWidget is one tile an addon contributes to the host's modular

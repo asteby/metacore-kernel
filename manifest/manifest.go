@@ -283,6 +283,9 @@ type DocumentDef struct {
 	// against the row being printed. Projected verbatim from
 	// v3.DocumentDef.Condition.
 	Condition *v3.RecordFieldCondition `json:"condition,omitempty"`
+	// Kind is the document's semantic kind (documents.enrich doc_kind).
+	// Projected verbatim from v3.DocumentDef.Kind.
+	Kind string `json:"kind,omitempty"`
 }
 
 // ConnectorDef is the host/runtime projection of a v3 Connector: a third-party

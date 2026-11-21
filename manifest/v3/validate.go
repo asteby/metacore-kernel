@@ -442,6 +442,9 @@ func validateDocuments(m *Manifest, colsByModel map[string]map[string]struct{}) 
 		} else if _, ok := docPapers[d.Paper]; !ok {
 			errs = append(errs, fmt.Sprintf("%s.paper %q is not one of A4|letter|ticket80", where, d.Paper))
 		}
+		if d.Kind != "" && !documentKindRe.MatchString(d.Kind) {
+			errs = append(errs, fmt.Sprintf("%s.kind %q must be snake_case (^[a-z][a-z0-9_]*$)", where, d.Kind))
+		}
 		if d.Condition != nil {
 			if row := d.Condition.Row(); row == nil {
 				errs = append(errs, fmt.Sprintf("%s.condition.field is required", where))
@@ -452,6 +455,10 @@ func validateDocuments(m *Manifest, colsByModel map[string]map[string]struct{}) 
 	}
 	return errs
 }
+
+// documentKindRe mirrors the DocumentDef.kind pattern of the JSON schema
+// (dual validation).
+var documentKindRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // publicRouteKinds is the rendering enum for public routes, shared with the
 // JSON schema (dual validation).
