@@ -44,6 +44,17 @@ type UINeeds struct {
 	// Hosts is the allowlist when Network is "hosts"; they go to the addon CSP.
 	Hosts   []string `json:"hosts,omitempty"`
 	Offline bool     `json:"offline,omitempty"`
+	// Records are host-mediated, read-only lookups the Part may ask for while
+	// having no network of its own (e.g. a document reader checking whether the
+	// customer already exists). The HOST runs them with the user's permissions:
+	// exact-field match, capped results, no listings. See UIRecordsNeed.
+	Records *UIRecordsNeed `json:"records,omitempty"`
+}
+
+// UIRecordsNeed lists the models a Part may look up through the host
+// (records.find). The data it returns is class pii.
+type UIRecordsNeed struct {
+	Find []string `json:"find,omitempty"`
 }
 
 // UISeam is a typed extension point this addon owns (generalizes
@@ -169,6 +180,13 @@ func validateLoom(m *Manifest, warn func(rule, msg string)) []string {
 			}
 		}
 		errs = append(errs, uiNetworkErrs(fmt.Sprintf("ui.exposes[%d].needs", i), p.Needs)...)
+		if p.Needs != nil && p.Needs.Records != nil {
+			for j, mdl := range p.Needs.Records.Find {
+				if strings.TrimSpace(mdl) == "" {
+					errs = append(errs, fmt.Sprintf("ui.exposes[%d].needs.records.find[%d] must name a model", i, j))
+				}
+			}
+		}
 	}
 	seams := map[string]struct{}{}
 	for i, s := range m.UI.Seams {

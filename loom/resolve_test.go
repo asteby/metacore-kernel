@@ -20,7 +20,7 @@ const fiscal = `{
   "metadata": { "key": "fiscal_mexico" },
   "frontend": { "entry": "/addons/fiscal_mexico/remoteEntry.js", "container": "fiscal_mexico", "integrity": "sha384-manifest" },
   "ui": {
-    "exposes": [{ "id": "fiscal_mexico.csf-import", "version": "1.0.0", "expose": "./parts/csf-import", "self_review": true }],
+    "exposes": [{ "id": "fiscal_mexico.csf-import", "version": "1.0.0", "expose": "./parts/csf-import", "self_review": true, "needs": { "records": { "find": ["customers.Customer"] } } }],
     "contributions": [
       { "id": "fiscal_mexico.csf-in-customer", "part": "fiscal_mexico.csf-import", "seam": "record.dialog.header",
         "requires": "^1", "order": 10,
@@ -85,6 +85,9 @@ func TestResolve_FiltersOrdersAndExplains(t *testing.T) {
 		t.Fatalf("grafts = %v, want %v", got, want)
 	}
 	g := r.Grafts[0]
+	if len(g.Part.RecordsFind) != 1 || g.Part.RecordsFind[0] != "customers.Customer" || len(r.Grafts[3].Part.RecordsFind) != 0 {
+		t.Fatalf("records_find must travel with the Part only: %#v", g.Part)
+	}
 	if !g.Part.SelfReview || r.Grafts[3].Part.SelfReview {
 		t.Fatalf("self_review must travel with the Part only: %#v / %#v", g.Part, r.Grafts[3].Part)
 	}

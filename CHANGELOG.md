@@ -9,6 +9,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `manifest/v3`, `loom` (**Loom: `ui.exposes[].needs.records.find`**; aditivo): busquedas de solo lectura MEDIADAS por el anfitrion para una Part sin red (p. ej. el lector de constancia comprueba si el RFC ya existe). El anfitrion las ejecuta con los permisos del usuario: campo exacto, resultados acotados, sin listados; los datos son clase `pii`. `loom.Resolve` lo sirve en `PartRef.records_find`. Esquema JSON en sus 2 copias. Pruebas: `loom/resolve_test.go`, `manifest/v3/loom_test.go`.
+
 - `preset` (**Loom: `Resolved.UI`**; aditivo): los `ui.contributions[]` de un preset (RFC 0005) viajan en `Resolved.UI`; `Flatten` conserva el orden de la base, el overlay reemplaza por `id` y anade los suyos. El host lo persiste por organizacion y lo pasa a `loom.Resolve`. Pruebas: `preset/ui_test.go`.
 
 - `manifest/v3`, `loom` (**Loom: `ui.exposes[].self_review`**; aditivo): la Part declara que tiene su propio paso de revision campo a campo; `loom.Resolve` lo sirve en `PartRef.self_review`. El SDK solo aplica directo (`apply: auto`, con deshacer) una propuesta de una Part con `self_review` y nunca si toca un campo `secret`; en otro caso, diff revisable (decision del RFC 0005). Esquema JSON en sus 2 copias. Pruebas: `loom/resolve_test.go`, `manifest/v3/loom_test.go`.
