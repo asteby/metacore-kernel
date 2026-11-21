@@ -328,6 +328,7 @@ func ToDDL(def manifest.ModelDefinition, opts DDLOptions) ([]string, error) {
 	}
 	stmts = append(stmts, indexStatementsWithPrefix(schema, def, needsOrgColumn, uniquePrefix)...)
 	stmts = append(stmts, auditIndexStatements(schema, def, plan, needsOrgColumn)...)
+	stmts = append(stmts, stageCheckStatements(schema, def)...)
 	if opts.Isolation == IsolationShared && needsOrgColumn && !opts.DisableRLS {
 		stmts = append(stmts, rlsStatements(schema, def.TableName)...)
 	}

@@ -55,3 +55,16 @@ func TestModelAliases_Validation(t *testing.T) {
 		}
 	}
 }
+
+func TestStageCheck_RequiresMachine(t *testing.T) {
+	m := withStageAction([]interface{}{"draft"})
+	m["models"].([]interface{})[0].(map[string]interface{})["stage_check"] = true
+	if err := Validate(mustJSON(t, m)); err != nil {
+		t.Fatalf("stage_check with a machine: %v", err)
+	}
+	bad := aliasManifest(aliasModel("Order", "orders"))
+	bad["models"].([]interface{})[0].(map[string]interface{})["stage_check"] = true
+	if err := Validate(mustJSON(t, bad)); err == nil || !strings.Contains(err.Error(), "stage_check needs stage_field and stages") {
+		t.Fatalf("stage_check without machine must fail, got %v", err)
+	}
+}

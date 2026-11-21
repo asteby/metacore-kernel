@@ -867,7 +867,7 @@ var validHookPrefixes = map[string]struct{}{
 // the offending model's index so the caller can append. Empty stages is a
 // no-op (the model has no stage machine).
 func validateStageMachine(mi int, mod Model, ownCols map[string]struct{}) []string {
-	if len(mod.Stages) == 0 && mod.StageField == "" && len(mod.Transitions) == 0 && len(mod.OnTransition) == 0 {
+	if len(mod.Stages) == 0 && mod.StageField == "" && len(mod.Transitions) == 0 && len(mod.OnTransition) == 0 && !mod.StageCheck {
 		return nil
 	}
 	var errs []string
@@ -892,6 +892,9 @@ func validateStageMachine(mi int, mod Model, ownCols map[string]struct{}) []stri
 			errs = append(errs, fmt.Sprintf("%s.stages[%d].key %q is duplicated", where, si, st.Key))
 		}
 		stageKeys[st.Key] = struct{}{}
+	}
+	if mod.StageCheck && (mod.StageField == "" || len(mod.Stages) == 0) {
+		errs = append(errs, fmt.Sprintf("%s.stage_check needs stage_field and stages", where))
 	}
 	if len(mod.Stages) == 0 && mod.StageField != "" {
 		errs = append(errs, fmt.Sprintf("%s declares stage_field %q but no stages", where, mod.StageField))

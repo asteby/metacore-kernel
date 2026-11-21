@@ -52,7 +52,7 @@ Por tanto NO se añade un bloque `state_machine` paralelo: sería un segundo voc
 nativo declara sus estados con `stage_field`/`stages`/`transitions` y obtiene todo lo anterior.
 
 ### Huecos reales (propuestos, no implementados)
-1. **CHECK derivado** (`CHECK (col IN (stages...))`): hoy los `stages` no generan restricción en DB; un valor fuera
+1. **CHECK derivado** (IMPLEMENTADO como `models[].stage_check`, opt-in, `NOT VALID`; `dynamic.StageCheckValidateStatement` valida las filas viejas) (`CHECK (col IN (stages...))`): hoy los `stages` no generan restricción en DB; un valor fuera
    de la máquina solo se rechaza por la ruta dinámica, no por escrituras directas de módulos nativos. Propuesta:
    `stage_check: true` opt-in por modelo (no por defecto: una tabla con datos previos fuera de la máquina fallaría
    al instalar); el instalador lo crea `NOT VALID` y valida en una fase aparte.
