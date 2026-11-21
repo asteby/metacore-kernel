@@ -36,7 +36,7 @@ func Check(value any, spec Spec) []Issue {
 	}
 
 	var out []Issue
-	typ := strings.ToLower(strings.TrimSpace(spec.Type))
+	typ := baseType(spec.Type)
 
 	if _, isNum := numericTypes[typ]; isNum && !isNumeric(value) {
 		out = append(out, issue(CodeInvalidType, map[string]any{"expected": "number"}))
@@ -184,4 +184,16 @@ func numericValue(raw any) float64 {
 		n, _ := strconv.ParseFloat(valueToString(raw), 64)
 		return n
 	}
+}
+
+// baseType deja el tipo base en minusculas sin sus parametros: numeric(18,6) -> numeric,
+// varchar(120) -> varchar. Una columna parametrizada sigue siendo numerica/textual para
+// las reglas min/max/regex (antes numeric(p,s) caia en la rama de longitud y un min:0 no
+// rechazaba negativos).
+func baseType(t string) string {
+	t = strings.ToLower(strings.TrimSpace(t))
+	if i := strings.IndexByte(t, '('); i >= 0 {
+		t = strings.TrimSpace(t[:i])
+	}
+	return t
 }

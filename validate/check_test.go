@@ -145,3 +145,19 @@ func checkModelYear(t *testing.T, spec Spec) {
 		}
 	}
 }
+
+func TestCheck_ParametrizedNumericKeepsValueBounds(t *testing.T) {
+	min := 0.0
+	for _, typ := range []string{"numeric", "numeric(18,6)", "DECIMAL(10, 2)"} {
+		spec := Spec{Type: typ, Min: &min}
+		if iss := Check(float64(-50), spec); len(iss) != 1 || iss[0].Code != CodeMin {
+			t.Errorf("%s: -50 debe fallar con min; issues=%v", typ, iss)
+		}
+		if iss := Check(float64(1500.5), spec); len(iss) != 0 {
+			t.Errorf("%s: 1500.5 debe pasar; issues=%v", typ, iss)
+		}
+		if iss := Check("abc", spec); len(iss) != 1 || iss[0].Code != CodeInvalidType {
+			t.Errorf("%s: texto debe ser invalid_type; issues=%v", typ, iss)
+		}
+	}
+}
