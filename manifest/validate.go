@@ -226,6 +226,8 @@ func (m *Manifest) ValidateAdvisory(kernelVersion string) ([]string, error) {
 	}
 	var warnings []string
 	warnings = append(warnings, v3.RoleMissingWarnings(m.RoleFacts())...)
+	_, roleWarns := m.CheckRoles(nil)
+	warnings = append(warnings, roleWarns...)
 	// Events at the manifest root were the v0.x mechanism to declare the
 	// event names an addon could emit. As of v0.11.0 the gate is the set
 	// of `event:emit` capabilities the addon requests — manifest.events
@@ -359,8 +361,8 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 	if err := m.checkKernelRange(kernelVersion); err != nil {
 		return err
 	}
-	if m.Role != "" && !v3.ValidRole(m.Role) {
-		return fmt.Errorf("manifest: metadata.role %q is not one of %s", m.Role, strings.Join(v3.Roles, "|"))
+	if errs, _ := m.CheckRoles(nil); len(errs) > 0 {
+		return fmt.Errorf("manifest: %s", errs[0])
 	}
 	// Index every model's declared columns by model KEY so the compute-engine
 	// cross-field checks (rollup target on the parent, rollup from on the
@@ -2304,4 +2306,13 @@ func (m *Manifest) RoleFacts() v3.RoleFacts {
 	}
 	f.NavigationGroups = len(m.Navigation)
 	return f
+}
+
+// CheckRoles applies the base + successors role rules (R-A..R-D, structure of
+// contracts / implements / extends_addon) to the host manifest. The same
+// function the v3 validator uses, so both reject the same manifests. cat is
+// optional: nil skips the rules that need other addons (R-A, R-B against a
+// contract). Only a declared metadata.role is enforced; an inferred one warns.
+func (m *Manifest) CheckRoles(cat v3.RoleCatalog) (errs, warns []string) {
+	return v3.CheckRoles(m.RoleFacts(), cat)
 }

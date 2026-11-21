@@ -2121,6 +2121,9 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	validateSlotsAndPrivate(&m, warnOnly)
 	errs = append(errs, validateLoom(&m, warnOnly)...)
 	*warnings = append(*warnings, RoleMissingWarnings(m.RoleFacts())...)
+	roleErrs, roleWarns := CheckRoles(m.RoleFacts(), opts.RoleCatalog)
+	errs = append(errs, roleErrs...)
+	*warnings = append(*warnings, roleWarns...)
 
 	if len(errs) > 0 {
 		return fmt.Errorf("v3: manifest validation failed:\n  - %s", strings.Join(errs, "\n  - "))

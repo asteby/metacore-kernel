@@ -32,7 +32,7 @@ func roleDoc(key, role string, mut func(m map[string]interface{})) map[string]in
 }
 
 func ownModel() []interface{} {
-	return []interface{}{mm("key", "Doc", "table", "docs", "columns", []interface{}{
+	return []interface{}{mm("key", "Doc", "table", "doc_records", "columns", []interface{}{
 		mm("name", "id", "type", "uuid"), mm("name", "organization_id", "type", "uuid", "not_null", true),
 	})}
 }
