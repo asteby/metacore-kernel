@@ -4722,6 +4722,20 @@
         },
         "offline": {
           "type": "boolean"
+        },
+        "records": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Host-mediated read-only lookups (records.find): exact field, capped results, the user's permissions.",
+          "properties": {
+            "find": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
         }
       }
     },

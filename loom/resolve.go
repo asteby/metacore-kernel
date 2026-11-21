@@ -57,6 +57,9 @@ type PartRef struct {
 	SDK       string `json:"sdk,omitempty"`
 	// SelfReview mirrors UIPart.SelfReview (gates apply:auto on the client).
 	SelfReview bool `json:"self_review,omitempty"`
+	// RecordsFind are the models the Part may look up through the host
+	// (UINeeds.Records.Find); the client grants caps.records only for these.
+	RecordsFind []string `json:"records_find,omitempty"`
 }
 
 // ClientWhen carries the clauses only the client can evaluate (they depend on
@@ -166,7 +169,11 @@ func Resolve(installed []Installed, sub Subject, preset PresetUI, opts Options) 
 		}
 		if m.UI != nil {
 			for _, p := range m.UI.Exposes {
-				parts[p.ID] = ref(p.ID, p.Version, p.Expose, p.SelfReview)
+				pr := ref(p.ID, p.Version, p.Expose, p.SelfReview)
+				if p.Needs != nil && p.Needs.Records != nil {
+					pr.RecordsFind = append([]string(nil), p.Needs.Records.Find...)
+				}
+				parts[p.ID] = pr
 			}
 			for _, g := range m.UI.Contributions {
 				cands = append(cands, candidate{addon: key, g: g})
