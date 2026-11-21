@@ -342,3 +342,26 @@ Ajustes al diseño que salieron de implementar:
 3. **Marketplace** corre en iframe sandbox y **nunca** puede `wrap` ni `replace`.
 4. **`/display`** solo declarativo (bloques `genui` + overlays), sin ESM.
 5. **`registerRecordPrefill`**: en desuso desde la versión que publica la regla de `apply` (aviso una vez por sesión); dos versiones menores con el aviso y después queda como **adaptador permanente** que proyecta cada prefill como Graft en `record.dialog.header` (`applyValues` → `propose`). Nadie tiene que migrar a la fuerza.
+
+## 17. `records.find`: búsqueda mediada por el anfitrión (2026-11-21)
+
+**Problema.** El lector de constancia es una Part con `network: none`, pero el flujo del personal necesita saber si el RFC ya existe ("usar el cliente existente" / "editarlo con la constancia"). Darle red rompería la garantía de privacidad.
+
+**Diseño.** La Part declara qué modelos puede consultar y el ANFITRIÓN hace la consulta:
+
+```jsonc
+"exposes": [{ "id": "fiscal_mexico.csf-import", "self_review": true,
+  "needs": { "network": "none", "records": { "find": ["customers.Customer"] } } }]
+```
+
+- `loom.Resolve` lo sirve en `PartRef.records_find`; el SDK ofrece `caps.records.find({ model, field, value, limit })` solo a esa Part.
+- Contrato (SDK `loom/records.ts`, probado): modelo declarado; permiso `<modelo>.index` del usuario; igualdad exacta de un campo simple; valor de 1 a 128 caracteres; como mucho 5 resultados, copiados y congelados; sin listados ni comodines.
+- Los resultados son clase `pii`: el error del host no llega a la Part ni a la telemetría con el valor; cada uso emite `records_find` (modelo, campo, resultado, conteo, nunca el valor) para auditoría.
+- La consulta sale por la API de datos normal (`f_<campo>=eq:<valor>`), con el RBAC del servidor: un permiso que el cliente creyera tener se topa con el 403 de siempre.
+- Combina con las intenciones existentes: `record.select` (usar el existente) y `record.edit` (abrirlo con la constancia como propuesta).
+
+Implementado: kernel #687 (v0.313.0), SDK `@asteby/metacore-runtime-react` (records.find), OPS #2419 (pasa `records_find` del servidor al injerto).
+
+## 18. Peso en el shell de los hosts federados (2026-11-21)
+
+El chunk compartido de federación no hace *tree-shaking*: todo lo que exporta el índice de `runtime-react` viaja en el shell. Medido en OPS: 856.2 KB (53.28) → 861.8 KB (Loom en el índice) → **837.3 KB** con el subpath `./loom` y envoltorios perezosos (`Seam`, `ProposalReview`, `SeamInspector`, y de paso los 7 componentes de `./setup`). Regla para el SDK: los componentes con UI que no pinta el shell se exportan en el índice como envoltorios perezosos; la implementación directa vive en su subpath. Los hosts federados importan del índice (un subpath no compartido duplicaría los registros de Loom).
