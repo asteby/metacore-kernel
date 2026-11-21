@@ -4694,6 +4694,9 @@
         "needs": {
           "$ref": "#/$defs/UINeeds"
         },
+        "self_review": {
+          "type": "boolean"
+        },
         "description": {
           "type": "string"
         }

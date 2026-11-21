@@ -19,7 +19,7 @@ const loomBase = `{
   "ui": {
     "exposes": [
       { "id": "fiscal_mexico.csf-import", "version": "1.0.0", "expose": "./parts/csf-import",
-        "needs": { "network": "none", "offline": true } }
+        "needs": { "network": "none", "offline": true }, "self_review": true }
     ],
     "seams": [
       { "id": "fiscal_mexico.invoice.footer", "version": "1.0.0", "lenses": { "invoice": "money", "customer": "pii.fiscal" } }

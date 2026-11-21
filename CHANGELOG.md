@@ -1,4 +1,6 @@
-# Changelog — metacore-kernel
+# Changelo- `manifest/v3`, `loom` (**Loom: `ui.exposes[].self_review`**; aditivo): la Part declara que tiene su propio paso de revision campo a campo; `loom.Resolve` lo sirve en `PartRef.self_review`. El SDK solo aplica directo (`apply: auto`, con deshacer) una propuesta de una Part con `self_review` y nunca si toca un campo `secret`; en otro caso, diff revisable (decision del RFC 0005). Esquema JSON en sus 2 copias. Pruebas: `loom/resolve_test.go`, `manifest/v3/loom_test.go`.
+
+g — metacore-kernel
 
 All notable changes to this module are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).

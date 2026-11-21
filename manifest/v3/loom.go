@@ -29,6 +29,11 @@ type UIPart struct {
 	Expose      string   `json:"expose"`
 	PropsSchema string   `json:"props_schema,omitempty"`
 	Needs       *UINeeds `json:"needs,omitempty"`
+	// SelfReview: the Part has its own field-by-field review step, so a
+	// proposal it marks apply:auto is applied directly (with undo). Without it,
+	// every proposal goes through the host's reviewable diff. Never auto on
+	// secret fields (the client enforces both rules).
+	SelfReview bool `json:"self_review,omitempty"`
 	Description string   `json:"description,omitempty"`
 }
 

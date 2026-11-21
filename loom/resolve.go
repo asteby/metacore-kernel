@@ -55,6 +55,8 @@ type PartRef struct {
 	Entry     string `json:"entry,omitempty"`
 	Integrity string `json:"integrity,omitempty"`
 	SDK       string `json:"sdk,omitempty"`
+	// SelfReview mirrors UIPart.SelfReview (gates apply:auto on the client).
+	SelfReview bool `json:"self_review,omitempty"`
 }
 
 // ClientWhen carries the clauses only the client can evaluate (they depend on
@@ -151,8 +153,8 @@ func Resolve(installed []Installed, sub Subject, preset PresetUI, opts Options) 
 		key := m.Metadata.Key
 		fe := m.Frontend
 		integrity := in.Integrity
-		ref := func(id, version, expose string) PartRef {
-			p := PartRef{ID: id, Version: version, Addon: key, Expose: expose}
+		ref := func(id, version, expose string, selfReview bool) PartRef {
+			p := PartRef{ID: id, Version: version, Addon: key, Expose: expose, SelfReview: selfReview}
 			if fe != nil {
 				p.Container, p.Entry, p.SDK = fe.Container, fe.Entry, fe.SDK
 				p.Integrity = fe.Integrity
@@ -164,7 +166,7 @@ func Resolve(installed []Installed, sub Subject, preset PresetUI, opts Options) 
 		}
 		if m.UI != nil {
 			for _, p := range m.UI.Exposes {
-				parts[p.ID] = ref(p.ID, p.Version, p.Expose)
+				parts[p.ID] = ref(p.ID, p.Version, p.Expose, p.SelfReview)
 			}
 			for _, g := range m.UI.Contributions {
 				cands = append(cands, candidate{addon: key, g: g})
@@ -173,7 +175,7 @@ func Resolve(installed []Installed, sub Subject, preset PresetUI, opts Options) 
 		if m.Contributions != nil {
 			for i, s := range m.Contributions.Slots {
 				id := fmt.Sprintf("%s.slot.%d", key, i)
-				pr := ref(key+"."+strings.TrimPrefix(s.Entry, "./"), "", s.Entry)
+				pr := ref(key+"."+strings.TrimPrefix(s.Entry, "./"), "", s.Entry, false)
 				cands = append(cands, candidate{
 					addon:      key,
 					legacy:     true,
