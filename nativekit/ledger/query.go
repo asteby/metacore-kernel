@@ -18,7 +18,7 @@ func (l *Ledger) Balance(ctx context.Context, db *gorm.DB, org uuid.UUID, accoun
 		bucket = DefaultBucket
 	}
 	var c Cell
-	err := db.WithContext(ctx).
+	err := db.WithContext(ctx).Table(l.tCells).
 		Where("org_id = ? AND ledger = ? AND account = ? AND bucket = ?", org, l.name, account, bucket).Take(&c).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return 0, nil
@@ -29,7 +29,7 @@ func (l *Ledger) Balance(ctx context.Context, db *gorm.DB, org uuid.UUID, accoun
 // Balances reads every bucket of an account.
 func (l *Ledger) Balances(ctx context.Context, db *gorm.DB, org uuid.UUID, account string) (map[string]dec.D, error) {
 	var cells []Cell
-	if err := db.WithContext(ctx).
+	if err := db.WithContext(ctx).Table(l.tCells).
 		Where("org_id = ? AND ledger = ? AND account = ?", org, l.name, account).Find(&cells).Error; err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func (l *Ledger) History(ctx context.Context, db *gorm.DB, org uuid.UUID, f Hist
 	if f.Limit > 500 {
 		f.Limit = 500
 	}
-	q := db.WithContext(ctx).
+	q := db.WithContext(ctx).Table(l.tEntries).
 		Where("org_id = ? AND ledger = ? AND account = ? AND bucket = ?", org, l.name, f.Account, f.Bucket)
 	if !f.Before.IsZero() {
 		q = q.Where("created_at < ?", f.Before)
@@ -84,7 +84,7 @@ type Drift struct {
 // import it as an "opening" posting instead of writing the cell directly.
 func (l *Ledger) Reconcile(ctx context.Context, db *gorm.DB, org uuid.UUID) ([]Drift, error) {
 	var cells []Cell
-	if err := db.WithContext(ctx).Where("org_id = ? AND ledger = ?", org, l.name).Find(&cells).Error; err != nil {
+	if err := db.WithContext(ctx).Table(l.tCells).Where("org_id = ? AND ledger = ?", org, l.name).Find(&cells).Error; err != nil {
 		return nil, err
 	}
 	var sums []struct {
@@ -92,7 +92,7 @@ func (l *Ledger) Reconcile(ctx context.Context, db *gorm.DB, org uuid.UUID) ([]D
 		Bucket  string
 		Total   dec.D
 	}
-	if err := db.WithContext(ctx).Table((Entry{}).TableName()).
+	if err := db.WithContext(ctx).Table(l.tEntries).
 		Select("account, bucket, SUM(delta) AS total").
 		Where("org_id = ? AND ledger = ?", org, l.name).
 		Group("account, bucket").Scan(&sums).Error; err != nil {

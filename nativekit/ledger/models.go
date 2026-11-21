@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"context"
+	"regexp"
 	"time"
 
 	"github.com/google/uuid"
@@ -76,4 +77,53 @@ func (Entry) TableName() string { return "metacore_ledger_entries" }
 // Migrate creates the ledger tables and indexes. Safe to call at every boot.
 func Migrate(ctx context.Context, db *gorm.DB) error {
 	return db.WithContext(ctx).AutoMigrate(&Cell{}, &Posting{}, &Entry{})
+}
+
+var prefixRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
+
+func tableNames(prefix string) (cells, postings, entries string) {
+	if prefix == "" {
+		return Cell{}.TableName(), Posting{}.TableName(), Entry{}.TableName()
+	}
+	if !prefixRe.MatchString(prefix) {
+		panic("ledger: invalid TablePrefix " + prefix)
+	}
+	return prefix + "cells", prefix + "postings", prefix + "entries"
+}
+
+// Migrate creates this ledger's tables. With the default (shared) tables it is
+// the package-level Migrate; with Config.TablePrefix it creates the prefixed
+// tables and indexes (index names carry the prefix, since they are
+// schema-global). Safe to call at every boot.
+func (l *Ledger) Migrate(ctx context.Context, db *gorm.DB) error {
+	if l.cfg.TablePrefix == "" {
+		return Migrate(ctx, db)
+	}
+	c, p, e := l.tCells, l.tPostings, l.tEntries
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS ` + c + ` (
+			id uuid PRIMARY KEY, org_id uuid NOT NULL, ledger varchar(120) NOT NULL, account varchar(250) NOT NULL,
+			bucket varchar(60) NOT NULL, balance numeric(24,6) NOT NULL DEFAULT 0, version bigint NOT NULL DEFAULT 0,
+			created_at timestamp, updated_at timestamp)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_` + c + ` ON ` + c + ` (org_id, ledger, account, bucket)`,
+		`CREATE TABLE IF NOT EXISTS ` + p + ` (
+			id uuid PRIMARY KEY, org_id uuid NOT NULL, ledger varchar(120) NOT NULL, idem_key varchar(250), fingerprint varchar(64),
+			kind varchar(60) NOT NULL, ref_kind varchar(60), ref_id varchar(120), actor varchar(120), memo text, meta text,
+			reverses_id uuid, reversed_by uuid, occurred_at timestamp NOT NULL, created_at timestamp)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_` + p + `_key ON ` + p + ` (org_id, ledger, idem_key)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_` + p + `_rev ON ` + p + ` (reverses_id)`,
+		`CREATE INDEX IF NOT EXISTS ix_` + p + `_ref ON ` + p + ` (org_id, ledger, ref_kind, ref_id)`,
+		`CREATE TABLE IF NOT EXISTS ` + e + ` (
+			id uuid PRIMARY KEY, posting_id uuid NOT NULL, org_id uuid NOT NULL, ledger varchar(120) NOT NULL,
+			account varchar(250) NOT NULL, bucket varchar(60) NOT NULL, seq integer NOT NULL,
+			delta numeric(24,6) NOT NULL, balance_after numeric(24,6) NOT NULL, created_at timestamp)`,
+		`CREATE INDEX IF NOT EXISTS ix_` + e + `_posting ON ` + e + ` (posting_id)`,
+		`CREATE INDEX IF NOT EXISTS ix_` + e + `_cell ON ` + e + ` (org_id, ledger, account, bucket, created_at)`,
+	}
+	for _, s := range stmts {
+		if err := db.WithContext(ctx).Exec(s).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
