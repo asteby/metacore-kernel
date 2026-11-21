@@ -284,6 +284,10 @@ type Config struct {
 	// When true every write is refused with ErrReadOnly (HTTP 405, code
 	// "read_only"). nil = every model stays writable.
 	ReadOnlyResolver ReadOnlyResolver
+	// MediaURLResolver resolves relative storage keys of columns declaring
+	// display_config.storage_key into URLs in List responses (see media_url.go).
+	// nil leaves the stored values untouched.
+	MediaURLResolver MediaURLResolver
 	// RowConditionResolver returns the per-row gates (manifest row_conditions) the
 	// generic Update and Delete enforce against the persisted row. nil leaves every
 	// model ungated (back-compat). See row_condition.go.
@@ -517,6 +521,7 @@ type Service struct {
 	supervisorBypass  SupervisorBypass
 	appendOnly        AppendOnlyResolver
 	readOnly          ReadOnlyResolver
+	mediaURL          MediaURLResolver
 	rowConditions     RowConditionResolver
 	validationSchema  ValidationSchemaResolver
 	customValidators  validate.Resolver
@@ -630,6 +635,7 @@ func New(cfg Config) *Service {
 		supervisorBypass:  cfg.SupervisorBypass,
 		appendOnly:        cfg.AppendOnlyResolver,
 		readOnly:          cfg.ReadOnlyResolver,
+		mediaURL:          cfg.MediaURLResolver,
 		rowConditions:     cfg.RowConditionResolver,
 		validationSchema:  cfg.ValidationSchemaResolver,
 		customValidators:  cfg.CustomValidatorResolver,
@@ -862,6 +868,7 @@ func (s *Service) List(ctx context.Context, model string, user modelbase.AuthUse
 		return nil, query.PageMeta{}, err
 	}
 	items = mask.RedactRows(items)
+	s.resolveMediaURLs(ctx, user, tableMeta, items)
 	items = query.ProjectMaps(items, params.Fields)
 	if params.SkipCount {
 		meta := builder.PageMeta(int64(len(items)), params)
