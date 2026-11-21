@@ -8,6 +8,7 @@ import (
 
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/modelbase"
+	"github.com/asteby/metacore-kernel/permission"
 )
 
 // transitionKey is the stable constraint key under which a transition's
@@ -149,4 +150,17 @@ func (s *Service) checkCreateStage(sm *StageMachine, model string, input map[str
 		return nil
 	}
 	return nil
+}
+
+// transitionPermitted reports whether the acting user holds the capability the
+// transition names in `permission`, which then stands in for its `roles` gate
+// (RFC 0004). False when the transition declares none, no permission service is
+// wired, there is no user, or the user lacks it: the roles gate then applies
+// exactly as before. requires_fields, guard and approval are never skipped.
+func (s *Service) transitionPermitted(ctx context.Context, user modelbase.AuthUser, sm *StageMachine, from, to string) bool {
+	t := sm.Transition(from, to)
+	if t == nil || t.Permission == "" || s.perms == nil || user == nil {
+		return false
+	}
+	return s.perms.Check(ctx, user, permission.Capability(t.Permission)) == nil
 }

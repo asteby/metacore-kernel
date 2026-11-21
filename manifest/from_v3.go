@@ -1024,6 +1024,7 @@ func mapModelTransitions(in []v3.Transition) []TransitionDef {
 			To:             t.To,
 			Guard:          t.Guard,
 			Roles:          append([]string(nil), t.Roles...),
+			Permission:     t.Permission,
 			RequiresFields: append([]string(nil), t.RequiresFields...),
 			Approval:       mapApprovalPolicy(t.Approval),
 			Reopen:         t.Reopen,

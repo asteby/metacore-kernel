@@ -1567,6 +1567,8 @@ type TransitionDef struct {
 	To             string         `json:"to"`
 	Guard          string         `json:"guard,omitempty"`
 	Roles          []string       `json:"roles,omitempty"`
+	// Permission is a capability that also authorizes the move (v3 Transition.permission).
+	Permission     string         `json:"permission,omitempty"`
 	RequiresFields []string       `json:"requiresFields,omitempty"`
 	Approval       *ApprovalDef   `json:"approval,omitempty"`
 	Reopen         bool           `json:"reopen,omitempty"`
