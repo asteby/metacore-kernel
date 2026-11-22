@@ -23,6 +23,10 @@ type Options struct {
 	// writable_models; unknown implemented contracts). The hub and ops pass
 	// theirs. nil skips those checks and never panics.
 	RoleCatalog RoleCatalog
+	// CapabilityCatalog, when set, extends the registry of known capability
+	// keys (the hub passes the keys of its published contracts). nil uses the
+	// kernel registry alone.
+	CapabilityCatalog CapabilityCatalog
 }
 
 // Rule ids of the legacy-tolerated rules. Warnings are prefixed "[id] ".
@@ -92,6 +96,8 @@ var legacyTolerated = []string{
 	RuleRoleMissing,
 	RuleRoleInferred,
 	RuleRoleProviderForeignWrite,
+	RuleCapabilityKeyUnknown,
+	RuleImplementsVersionUnchecked,
 }
 
 // warnOnlyWindow marks the legacyTolerated rules that are reported as warnings
@@ -107,6 +113,8 @@ var warnOnlyWindow = map[string]struct{}{
 	RuleRoleMissing:                 {},
 	RuleRoleInferred:                {},
 	RuleRoleProviderForeignWrite:    {},
+	RuleCapabilityKeyUnknown:        {},
+	RuleImplementsVersionUnchecked:  {},
 }
 
 // LegacyTolerated returns the rule ids currently inside their compatibility

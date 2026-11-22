@@ -228,6 +228,7 @@ func (m *Manifest) ValidateAdvisory(kernelVersion string) ([]string, error) {
 	warnings = append(warnings, v3.RoleMissingWarnings(m.RoleFacts())...)
 	_, roleWarns := m.CheckRoles(nil)
 	warnings = append(warnings, roleWarns...)
+	warnings = append(warnings, m.UnknownCapabilityWarnings(nil)...)
 	// Events at the manifest root were the v0.x mechanism to declare the
 	// event names an addon could emit. As of v0.11.0 the gate is the set
 	// of `event:emit` capabilities the addon requests — manifest.events
@@ -2315,4 +2316,55 @@ func (m *Manifest) RoleFacts() v3.RoleFacts {
 // contract). Only a declared metadata.role is enforced; an inferred one warns.
 func (m *Manifest) CheckRoles(cat v3.RoleCatalog) (errs, warns []string) {
 	return v3.CheckRoles(m.RoleFacts(), cat)
+}
+
+// CapabilityUses lists the capability keys the host manifest mentions:
+// provides_capabilities[] and every action / subscription trigger of type
+// capability.
+func (m *Manifest) CapabilityUses() []v3.CapabilityUse {
+	var out []v3.CapabilityUse
+	for i, pc := range m.ProvidesCapabilities {
+		out = append(out, v3.CapabilityUse{Key: pc.Key, Where: fmt.Sprintf("provides_capabilities[%d]", i)})
+	}
+	models := make([]string, 0, len(m.Actions))
+	for k := range m.Actions {
+		models = append(models, k)
+	}
+	sort.Strings(models)
+	for _, model := range models {
+		for _, a := range m.Actions[model] {
+			if a.Trigger != nil && a.Trigger.Type == "capability" {
+				out = append(out, v3.CapabilityUse{Key: a.Trigger.Capability, Where: fmt.Sprintf("actions[%s].%s.trigger", model, a.Key)})
+			}
+		}
+	}
+	for i, sub := range m.Subscriptions {
+		if sub.Trigger != nil && sub.Trigger.Type == "capability" {
+			out = append(out, v3.CapabilityUse{Key: sub.Trigger.Capability, Where: fmt.Sprintf("subscriptions[%d].trigger", i)})
+		}
+	}
+	return out
+}
+
+// DeclaredContracts projects contracts[] onto the capability registry's view.
+func (m *Manifest) DeclaredContracts() []capability.Declared {
+	return (&v3.Manifest{Contracts: m.Contracts}).DeclaredContracts()
+}
+
+// UnknownCapabilityWarnings is the closed-registry check (rule
+// capability_key_unknown, warning-only in this release) over the host manifest.
+// cat is optional (nil-safe).
+func (m *Manifest) UnknownCapabilityWarnings(cat v3.CapabilityCatalog) []string {
+	return v3.UnknownCapabilityWarnings(m.CapabilityUses(), m.DeclaredContracts(), cat)
+}
+
+// RegisterDeclaredContracts records the contracts this addon owns in reg, the
+// registry of ONE scope (an organization's installs). A manifest without
+// contracts[] is a no-op, and so is a nil reg.
+func (m *Manifest) RegisterDeclaredContracts(reg *capability.Registry) error {
+	ds := m.DeclaredContracts()
+	if len(ds) == 0 || reg == nil {
+		return nil
+	}
+	return reg.Register(m.Key, ds...)
 }

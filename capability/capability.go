@@ -67,7 +67,11 @@ const (
 // validators); Input, when set, carries their types and is the source those
 // lists are derived from. Output is mandatory for a KindQuery contract.
 type Contract struct {
-	Key      string
+	Key string
+	// Version is the contract's semver ("" = DefaultVersion). A minor is
+	// additive only; a provider's implements[].version range is checked
+	// against it. See Semver and Family.
+	Version  string
 	Required []string
 	Optional []string
 

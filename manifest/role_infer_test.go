@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/asteby/metacore-kernel/capability"
 	v3 "github.com/asteby/metacore-kernel/manifest/v3"
 )
 
@@ -83,5 +84,37 @@ func TestLegacyValidator_InferredRoleWarns(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(warns, "\n"), "role_missing") {
 		t.Fatalf("want role_missing warning, got %v", warns)
+	}
+}
+
+// The host manifest warns about unknown capability keys the same way the v3
+// validator does, and records its own contracts in the scope's registry.
+func TestLegacyManifest_ClosedRegistry(t *testing.T) {
+	m := legacyFromV3(t, doc("acme_pay", "", func(d map[string]any) {
+		d["provides_capabilities"] = []any{rm("key", "acme.document.issue", "handler", rm("type", "wasm", "function", "do_it"))}
+	}))
+	warns, err := m.ValidateAdvisory("3.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(warns, "\n"), "capability_key_unknown") {
+		t.Fatalf("want capability_key_unknown, got %v", warns)
+	}
+	owner := legacyFromV3(t, doc("acme_core", "contract", func(d map[string]any) {
+		d["models"] = []any{rm("key", "Doc", "table", "doc_records", "columns", []any{rm("name", "id", "type", "uuid"), rm("name", "organization_id", "type", "uuid", "not_null", true)})}
+		d["contracts"] = []any{rm("key", "acme.document", "version", "1.0.0", "operations", []any{rm("key", "issue", "kind", "action")})}
+	}))
+	reg := capability.NewRegistry()
+	if err := owner.RegisterDeclaredContracts(reg); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.UnknownCapabilityWarnings(reg); len(got) != 0 {
+		t.Fatalf("the key is known in the scope that registered it: %v", got)
+	}
+	if got := m.UnknownCapabilityWarnings(capability.NewRegistry()); len(got) != 1 {
+		t.Fatalf("another scope does not know it: %v", got)
+	}
+	if err := owner.RegisterDeclaredContracts(nil); err != nil {
+		t.Fatalf("a nil registry is a no-op: %v", err)
 	}
 }

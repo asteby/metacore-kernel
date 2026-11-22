@@ -94,8 +94,12 @@ func TestRoles_ValidManifests(t *testing.T) {
 		if err != nil {
 			t.Errorf("%s: want valid, got %v", name, err)
 		}
-		if len(warns) != 0 {
-			t.Errorf("%s: declared role must not warn, got %v", name, warns)
+		for _, w := range warns {
+			// implements[].version cannot be checked without a catalog: that one
+			// warning is expected for a provider/extension; nothing else is.
+			if !strings.Contains(w, RuleImplementsVersionUnchecked) {
+				t.Errorf("%s: declared role must not warn, got %q", name, w)
+			}
 		}
 	}
 }

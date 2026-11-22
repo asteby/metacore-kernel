@@ -1,0 +1,317 @@
+{
+  "apiVersion": "asteby.com/v3",
+  "kind": "Addon",
+  "metadata": {
+    "key": "fx_providers",
+    "name": "Exchange rate providers",
+    "version": "0.2.0",
+    "category": "foundation.commerce",
+    "description": "Keeps each organization's exchange rates up to date from pluggable providers (BCV for Venezuela, the European Central Bank, or typed by hand), writes them append-only to fx_rates and prefills the POS. If a provider is down the last rate stays and is flagged as old; a manual rate is never shadowed by an automatic one.",
+    "icon": {
+      "type": "svg",
+      "slug": "assets/logo.svg",
+      "color": "#1D4ED8"
+    },
+    "author": "Asteby",
+    "license": "Apache-2.0",
+    "readme": "README.md",
+    "screenshots": [],
+    "features": [
+      "Pluggable providers: BCV (official and parallel USD→VES), ECB (EUR base, with exact cross rates) and manual; Banxico documented as a stub until its token connector exists",
+      "Per-organization choice of provider, default rate kind and refresh frequency; 'auto' suggests one from the currencies the organization enabled",
+      "Append-only and idempotent: re-running never duplicates a rate, and a manual rate newer than the provider's is never shadowed",
+      "Resilient: when a provider fails the last rate is kept, the failure is recorded and the rate is flagged old with its age",
+      "Prefills the POS: fx.rate.current answers value, kind, source, date and age; fx.rate.refresh makes sure the rate is today's when the till opens",
+      "Bridges into the POS's local rate table while the POS still reads it, one row per day, never overwriting a day that already has a rate"
+    ],
+    "i18n": {
+      "es": {
+        "name": "Proveedores de tasa de cambio",
+        "description": "Mantiene al día las tasas de cambio de cada organización desde proveedores enchufables (BCV para Venezuela, el Banco Central Europeo o escritas a mano), las guarda solo-de-añadir en fx_rates y prellena el POS. Si un proveedor falla se conserva la última tasa y se marca como vieja; una tasa manual nunca queda tapada por una automática.",
+        "features": [
+          "Proveedores enchufables: BCV (oficial y paralelo USD→VES), BCE (base EUR, con cruces exactos) y manual; Banxico queda documentado como stub hasta que exista su conector con token",
+          "Por organización: proveedor, tipo de tasa por defecto y frecuencia; 'auto' sugiere uno según las monedas habilitadas",
+          "Solo-de-añadir e idempotente: repetir la corrida nunca duplica una tasa, y una tasa manual más reciente que la del proveedor nunca se tapa",
+          "Tolerante a fallos: si el proveedor cae se conserva la última tasa, se registra el fallo y se marca como vieja con su antigüedad",
+          "Prellena el POS: fx.rate.current responde valor, tipo, fuente, fecha y antigüedad; fx.rate.refresh asegura que sea la de hoy al abrir la caja",
+          "Puente al POS: mientras el POS lea su tabla local de tasas, agrega una fila por día sin pisar un día que ya tenga tasa"
+        ]
+      }
+    }
+  },
+  "compatibility": {
+    "requires": [
+      {
+        "key": "kernel",
+        "version": ">=3.0.0 <4.0.0"
+      }
+    ],
+    "provides": [
+      "fx_providers",
+      "fx.rate.current",
+      "fx.rate.refresh"
+    ]
+  },
+  "tenancy": {
+    "isolation": "shared",
+    "rls_column": "organization_id"
+  },
+  "capabilities": [
+    {
+      "kind": "db:read",
+      "target": "fx_rates",
+      "reason": "Read the latest rates to skip duplicates, to see whether a manual rate outranks the provider's and to answer fx.rate.current."
+    },
+    {
+      "kind": "db:write",
+      "target": "fx_rates",
+      "reason": "Append a provider rate (rates are never updated or deleted)."
+    },
+    {
+      "kind": "db:read",
+      "target": "org_currencies",
+      "reason": "Know the organization's base currency and the foreign currencies it enabled, to ask the provider only for what it needs."
+    },
+    {
+      "kind": "db:read",
+      "target": "pos_org_currencies",
+      "reason": "Find the POS currency codes (e.g. Bs) that correspond to a rate's quote currency."
+    },
+    {
+      "kind": "db:read",
+      "target": "pos_local_exchange_rates",
+      "reason": "Avoid a second row for a day that already has a POS rate."
+    },
+    {
+      "kind": "db:write",
+      "target": "pos_local_exchange_rates",
+      "reason": "Add the day's rate to the POS table it reads today (compatibility bridge, one row per day)."
+    },
+    {
+      "kind": "db:read",
+      "target": "addon_fx_providers.*",
+      "reason": "Read when each provider last succeeded or failed."
+    },
+    {
+      "kind": "db:write",
+      "target": "addon_fx_providers.*",
+      "reason": "Record each refresh (provider, time, rates written, last error)."
+    },
+    {
+      "kind": "http:fetch",
+      "target": "ve.dolarapi.com",
+      "reason": "Read the BCV official and parallel USD→VES rates (GET, public, no credentials)."
+    },
+    {
+      "kind": "http:fetch",
+      "target": "www.ecb.europa.eu",
+      "reason": "Read the European Central Bank daily reference rates (GET, public XML, no credentials)."
+    }
+  ],
+  "provides_capabilities": [
+    {
+      "key": "fx.rate.current",
+      "label": "capability.current.label",
+      "description": "capability.current.description",
+      "handler": {
+        "type": "wasm",
+        "function": "fx_rate_current"
+      }
+    },
+    {
+      "key": "fx.rate.refresh",
+      "label": "capability.refresh.label",
+      "description": "capability.refresh.description",
+      "handler": {
+        "type": "wasm",
+        "function": "fx_rate_refresh"
+      }
+    }
+  ],
+  "settings": [
+    {
+      "key": "provider",
+      "type": "select",
+      "label": "settings.provider",
+      "description": "settings.provider_help",
+      "default": "auto",
+      "required": false,
+      "options": [
+        {
+          "value": "auto",
+          "label": "settings.opt.auto"
+        },
+        {
+          "value": "off",
+          "label": "settings.opt.off"
+        },
+        {
+          "value": "bcv",
+          "label": "settings.opt.bcv"
+        },
+        {
+          "value": "ecb",
+          "label": "settings.opt.ecb"
+        },
+        {
+          "value": "manual",
+          "label": "settings.opt.manual"
+        },
+        {
+          "value": "banxico",
+          "label": "settings.opt.banxico"
+        }
+      ]
+    },
+    {
+      "key": "default_kind",
+      "type": "select",
+      "label": "settings.default_kind",
+      "description": "settings.default_kind_help",
+      "default": "official",
+      "required": false,
+      "options": [
+        {
+          "value": "official",
+          "label": "settings.opt.official"
+        },
+        {
+          "value": "mid",
+          "label": "settings.opt.mid"
+        },
+        {
+          "value": "parallel",
+          "label": "settings.opt.parallel"
+        },
+        {
+          "value": "buy",
+          "label": "settings.opt.buy"
+        },
+        {
+          "value": "sell",
+          "label": "settings.opt.sell"
+        }
+      ]
+    },
+    {
+      "key": "frequency_hours",
+      "type": "number",
+      "label": "settings.frequency_hours",
+      "description": "settings.frequency_hours_help",
+      "default": 24,
+      "required": false
+    },
+    {
+      "key": "stale_after_hours",
+      "type": "number",
+      "label": "settings.stale_after_hours",
+      "description": "settings.stale_after_hours_help",
+      "default": 36,
+      "required": false
+    },
+    {
+      "key": "sync_pos",
+      "type": "boolean",
+      "label": "settings.sync_pos",
+      "description": "settings.sync_pos_help",
+      "default": true,
+      "required": false
+    }
+  ],
+  "models": [
+    {
+      "key": "FxProvidersRun",
+      "table": "fx_providers_runs",
+      "label": "model.run",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "label": "field.id",
+          "default": "gen_random_uuid()",
+          "primary_key": true
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "label": "field.organization_id",
+          "not_null": true
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "label": "field.provider",
+          "not_null": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "label": "field.status",
+          "not_null": true,
+          "default": "ok",
+          "comment": "ok | error"
+        },
+        {
+          "name": "fetched_at",
+          "type": "timestamptz",
+          "label": "field.fetched_at"
+        },
+        {
+          "name": "last_ok_at",
+          "type": "timestamptz",
+          "label": "field.last_ok_at",
+          "comment": "Last successful fetch; the frequency gate and the old-rate flag read it."
+        },
+        {
+          "name": "rates_written",
+          "type": "bigint",
+          "label": "field.rates_written",
+          "not_null": true,
+          "default": "0"
+        },
+        {
+          "name": "error",
+          "type": "text",
+          "label": "field.error",
+          "not_null": true,
+          "default": "",
+          "comment": "Last failure text; empty after a success."
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "label": "field.created_at",
+          "not_null": true,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "label": "field.updated_at",
+          "not_null": true,
+          "default": "now()"
+        }
+      ]
+    }
+  ],
+  "schedules": [
+    {
+      "key": "refresh_rates",
+      "every": "1h",
+      "do": "wasm:refresh_rates"
+    }
+  ],
+  "i18n": {
+    "default_locale": "es-MX",
+    "bundles": [
+      {
+        "locale": "es-MX",
+        "path": "locales/es-MX.json"
+      },
+      {
+        "locale": "en-US",
+        "path": "locales/en-US.json"
+      }
+    ]
+  }
+}

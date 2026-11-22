@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/asteby/metacore-kernel/capability"
 )
 
 // Role validation (X-R1): the base + successors pattern. The rules are pure
@@ -22,6 +23,9 @@ const (
 	// RuleRoleInferred: a role rule is violated by a manifest whose role is
 	// only inferred. Warning-only until the role is declared.
 	RuleRoleInferred = "role_inferred"
+	// RuleImplementsVersionUnchecked: implements[].version could not be checked
+	// because no catalog served the contract's version. Warning-only.
+	RuleImplementsVersionUnchecked = "implements_version_unchecked"
 	// RuleRoleProviderForeignWrite: a provider holds db:write outside its own
 	// namespace and no catalog was supplied to check the contract's
 	// writable_models. Warning-only.
@@ -114,7 +118,7 @@ func CheckRoles(f RoleFacts, cat RoleCatalog) (errs, warns []string) {
 	}
 
 	errs = append(errs, checkContracts(f)...)
-	errs, warns = checkImplements(f, cat, errs, warns)
+	errs, warns = checkImplements(f, cat, declared, errs, warns)
 
 	// R-D: successors have no navigation of their own.
 	if isSuccessor && f.NavigationGroups > 0 {
@@ -214,11 +218,14 @@ func ContractWritableTables(m *Manifest) map[string][]string {
 
 // nilCatalog reports whether cat is nil or an interface holding a nil pointer
 // (a typed nil), which a host may pass by accident; both mean "no catalog".
-func nilCatalog(cat RoleCatalog) bool {
-	if cat == nil {
+func nilCatalog(cat RoleCatalog) bool { return isNilValue(cat) }
+
+// isNilValue reports whether v is nil or an interface holding a nil pointer.
+func isNilValue(v interface{}) bool {
+	if v == nil {
 		return true
 	}
-	rv := reflect.ValueOf(cat)
+	rv := reflect.ValueOf(v)
 	switch rv.Kind() {
 	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Func, reflect.Interface, reflect.Chan:
 		return rv.IsNil()
@@ -305,7 +312,7 @@ func checkContracts(f RoleFacts) []string {
 	return errs
 }
 
-func checkImplements(f RoleFacts, cat RoleCatalog, errs, warns []string) ([]string, []string) {
+func checkImplements(f RoleFacts, cat RoleCatalog, declared bool, errs, warns []string) ([]string, []string) {
 	seen := map[string]bool{}
 	for i, im := range f.Implements {
 		w := fmt.Sprintf("implements[%d] (%s)", i, im.Contract)
@@ -321,6 +328,36 @@ func checkImplements(f RoleFacts, cat RoleCatalog, errs, warns []string) ([]stri
 				errs = append(errs, fmt.Sprintf("%s: unknown contract (not in the catalog)", w))
 			}
 		}
+		// Version compatibility (X-R2): the implemented contract's version must
+		// satisfy the range. The version comes from the catalog (optional
+		// ContractVersioned) or the host's registry of declared contracts; when
+		// neither knows the contract nothing is checked.
+		if v, ok := contractVersion(im.Contract, cat); ok {
+			if sat, err := capability.Satisfies(v, im.Version); err == nil && !sat {
+				msg := fmt.Sprintf("%s.version %q is not satisfied by contract version %s", w, im.Version, v)
+				if declared {
+					errs = append(errs, msg)
+				} else {
+					warns = append(warns, fmt.Sprintf("[%s] %s", RuleRoleInferred, msg))
+				}
+			}
+		} else {
+			warns = append(warns, fmt.Sprintf("[%s] %s: the version of the implemented contract is unknown here (no catalog serves it), so %q was not checked", RuleImplementsVersionUnchecked, w, im.Version))
+		}
 	}
 	return errs, warns
+}
+
+// contractVersion finds the version of an implemented contract. It comes ONLY
+// from the host's catalog (optional ContractVersioned on the RoleCatalog): what
+// an organization has installed is that organization's fact, so the kernel keeps
+// no process-wide fallback that another tenant's upgrade could change.
+func contractVersion(key string, cat RoleCatalog) (string, bool) {
+	if isNilValue(cat) {
+		return "", false
+	}
+	if cv, ok := cat.(ContractVersioned); ok {
+		return cv.ContractVersion(key)
+	}
+	return "", false
 }
