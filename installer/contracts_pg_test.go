@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/asteby/metacore-kernel/capability"
+	"github.com/asteby/metacore-kernel/lifecycle"
 	v3 "github.com/asteby/metacore-kernel/manifest/v3"
 	"github.com/google/uuid"
 )
@@ -61,6 +62,7 @@ func TestUninstall_UnregistersContractsAndImplements(t *testing.T) {
 	f.b.Manifest.Implements = []v3.Implements{{Contract: "acme.mail", Version: "^1.0"}}
 	reg := capability.NewRegistry()
 	f.inst.ContractRegistry = func(uuid.UUID) *capability.Registry { return reg }
+	f.inst.Interceptors = lifecycle.NewInterceptorRegistry() // uninstall releases the addon's interceptors
 	if _, _, err := f.inst.Install(f.org, f.b); err != nil {
 		t.Fatalf("install: %v", err)
 	}
