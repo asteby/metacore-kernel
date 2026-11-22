@@ -288,3 +288,62 @@ func TestRegistry_ConcurrentRace(t *testing.T) {
 	readers.Wait()
 	wg.Wait()
 }
+
+func TestRegistry_Implementers(t *testing.T) {
+	r := NewRegistry()
+	if got := r.Implementers("acme.document"); got != nil {
+		t.Fatalf("empty: %v", got)
+	}
+	for owner, impls := range map[string][]Implemented{
+		"zeta_pay":  {{Contract: "acme.document", Range: "^1.0"}},
+		"alpha_pay": {{Contract: "acme.document", Range: ">=1.2.0"}, {Contract: "acme.mail", Range: "^1"}},
+		"other":     {{Contract: "acme.mail", Range: "^2"}},
+	} {
+		if err := r.RegisterImplements(owner, impls...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := r.Implementers("acme.document")
+	if len(got) != 2 || got[0].Owner != "alpha_pay" || got[1].Owner != "zeta_pay" || got[1].Range != "^1.0" {
+		t.Fatalf("sorted by owner: %+v", got)
+	}
+	// Replacing an owner's list (an upgrade) drops what it no longer implements.
+	if err := r.RegisterImplements("alpha_pay", Implemented{Contract: "acme.mail", Range: "^1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Implementers("acme.document"); len(got) != 1 || got[0].Owner != "zeta_pay" {
+		t.Fatalf("after upgrade: %+v", got)
+	}
+	r.Unregister("zeta_pay")
+	if got := r.Implementers("acme.document"); len(got) != 0 {
+		t.Fatalf("Unregister must forget implementations: %+v", got)
+	}
+	// Scopes are isolated and a nil registry has none.
+	if got := NewRegistry().Implementers("acme.mail"); len(got) != 0 {
+		t.Fatal("another scope has no implementers")
+	}
+	var none *Registry
+	if none.Implementers("acme.mail") != nil {
+		t.Fatal("nil registry has none")
+	}
+	for name, c := range map[string]struct {
+		impls []Implemented
+		want  string
+	}{
+		"bad key":   {[]Implemented{{Contract: "NoDot", Range: "^1"}}, "invalid implemented contract key"},
+		"bad range": {[]Implemented{{Contract: "acme.x", Range: "nope"}}, "invalid range"},
+		"twice":     {[]Implemented{{Contract: "acme.x", Range: "^1"}, {Contract: "acme.x", Range: "^2"}}, "implemented twice"},
+	} {
+		if err := r.RegisterImplements("p", c.impls...); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: want %q, got %v", name, c.want, err)
+		}
+	}
+	if err := r.RegisterImplements("", Implemented{Contract: "acme.x", Range: "^1"}); err == nil {
+		t.Error("owner required")
+	}
+	// Rehydrate rebuilds implementers too, and replaces them.
+	rep := r.Rehydrate([]InstalledContracts{{Owner: "late", Implements: []Implemented{{Contract: "acme.mail", Range: "^3"}}}})
+	if len(rep.Failed) != 0 || len(r.Implementers("acme.mail")) != 1 || r.Implementers("acme.mail")[0].Owner != "late" {
+		t.Fatalf("rehydrate implementers: %+v %+v", rep, r.Implementers("acme.mail"))
+	}
+}

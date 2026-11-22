@@ -2358,13 +2358,23 @@ func (m *Manifest) UnknownCapabilityWarnings(cat v3.CapabilityCatalog) []string 
 	return v3.UnknownCapabilityWarnings(m.CapabilityUses(), m.DeclaredContracts(), cat)
 }
 
-// RegisterDeclaredContracts records the contracts this addon owns in reg, the
-// registry of ONE scope (an organization's installs). A manifest without
-// contracts[] is a no-op, and so is a nil reg.
+// DeclaredImplements projects implements[] onto the capability registry's view.
+func (m *Manifest) DeclaredImplements() []capability.Implemented {
+	return (&v3.Manifest{Implements: m.Implements}).DeclaredImplements()
+}
+
+// RegisterDeclaredContracts records, in reg (the registry of ONE scope, an
+// organization's installs), the contracts this addon owns and the ones it
+// implements. Both calls are ALWAYS made: an upgrade that drops contracts[] or
+// implements[] must clear the owner's previous entries (an empty list replaces
+// them), otherwise a provider that no longer implements a contract would keep
+// showing up in Implementers until the next restart. A nil reg is a no-op.
 func (m *Manifest) RegisterDeclaredContracts(reg *capability.Registry) error {
-	ds := m.DeclaredContracts()
-	if len(ds) == 0 || reg == nil {
+	if reg == nil {
 		return nil
 	}
-	return reg.Register(m.Key, ds...)
+	if err := reg.Register(m.Key, m.DeclaredContracts()...); err != nil {
+		return err
+	}
+	return reg.RegisterImplements(m.Key, m.DeclaredImplements()...)
 }

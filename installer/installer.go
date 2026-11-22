@@ -1253,6 +1253,7 @@ func (i *Installer) uninstallAddon(orgID uuid.UUID, addonKey string, dropSchema 
 	// here, after a possible DROP SCHEMA has run.
 	defer func() {
 		if err == nil {
+			i.unregisterDeclaredContracts(orgID, addonKey)
 			i.coherenceBump("addon.uninstall.done", orgID, addonKey)
 		}
 	}()

@@ -20,15 +20,28 @@ import (
 // registerDeclaredContracts records the contracts of an addon that was just
 // installed or upgraded in the org's registry. It never fails an install or an
 // upgrade: a conflict (another addon of that scope already owns the contract
-// key) is logged. Uninstall does not unregister: a stale entry only keeps a key
-// known, and warnDanglingContracts makes the removal visible.
+// key) is logged. An addon without contracts[]/implements[] still goes through
+// the registry so an upgrade that DROPS them clears the old entries. Uninstall
+// unregisters it from this org's registry (unregisterDeclaredContracts), and
+// warnDanglingContracts makes the removal of a contract owner visible.
 func (i *Installer) registerDeclaredContracts(orgID uuid.UUID, m *manifest.Manifest) {
-	if i == nil || i.ContractRegistry == nil || len(m.Contracts) == 0 {
+	if i == nil || i.ContractRegistry == nil {
 		return
 	}
 	if err := m.RegisterDeclaredContracts(i.ContractRegistry(orgID)); err != nil {
 		slog.Warn("installer.contracts_register_failed", "addon", m.Key, "version", m.Version, "org_id", orgID.String(), "error", err)
 	}
+}
+
+// unregisterDeclaredContracts forgets, in the org's registry, everything the
+// addon owned or implemented. It runs when the addon is uninstalled FROM THAT
+// ORG: the registry is per org, so other orgs that still run the addon keep
+// their own entries. A nil wiring is a no-op.
+func (i *Installer) unregisterDeclaredContracts(orgID uuid.UUID, addonKey string) {
+	if i == nil || i.ContractRegistry == nil {
+		return
+	}
+	i.ContractRegistry(orgID).Unregister(addonKey)
 }
 
 // InstalledContracts lists, for one organization, the contracts declared by the
@@ -48,11 +61,23 @@ func (i *Installer) InstalledContracts(orgID uuid.UUID) ([]capability.InstalledC
 			continue
 		}
 		m := lc.Manifest()
-		ds := (&m).DeclaredContracts()
-		if len(ds) == 0 {
+		// The lifecycle registry holds ONE manifest per addon key for the whole
+		// process, but each organization persists the version IT installed. When
+		// they differ the loaded manifest is not what this org runs: feeding its
+		// contracts would hand this org another tenant's version, so the addon is
+		// skipped (loudly) and the next install/upgrade of it registers the truth.
+		if m.Version != r.Version {
+			slog.Warn("installer.contracts_rehydrate_version_mismatch",
+				"addon", r.AddonKey, "org_id", orgID.String(),
+				"installed_version", r.Version, "loaded_version", m.Version,
+				"detail", "skipped: the loaded manifest is not the version this organization installed")
 			continue
 		}
-		out = append(out, capability.InstalledContracts{Owner: r.AddonKey, Contracts: ds})
+		ds, is := (&m).DeclaredContracts(), (&m).DeclaredImplements()
+		if len(ds) == 0 && len(is) == 0 {
+			continue
+		}
+		out = append(out, capability.InstalledContracts{Owner: r.AddonKey, Contracts: ds, Implements: is})
 	}
 	return out, nil
 }
