@@ -52,3 +52,28 @@ func TestInstall_ContractsRegisteredOnlyAfterCommit(t *testing.T) {
 		t.Fatalf("rehydrated state must equal the live one: live=%+v rehydrated=%+v ok=%v", live, again, ok)
 	}
 }
+
+// Uninstall really forgets the addon in the org's registry (the unit test covers
+// unregisterDeclaredContracts; this one covers the call from uninstallAddon).
+func TestUninstall_UnregistersContractsAndImplements(t *testing.T) {
+	f := newCompFixture(t)
+	f.b.Manifest.Contracts = []v3.Contract{{Key: "acme.document", Version: "1.0.0", Operations: []v3.ContractOperation{{Key: "issue", Kind: "action"}}}}
+	f.b.Manifest.Implements = []v3.Implements{{Contract: "acme.mail", Version: "^1.0"}}
+	reg := capability.NewRegistry()
+	f.inst.ContractRegistry = func(uuid.UUID) *capability.Registry { return reg }
+	if _, _, err := f.inst.Install(f.org, f.b); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if len(reg.Implementers("acme.mail")) != 1 {
+		t.Fatal("install must register the implementer")
+	}
+	if err := f.inst.Uninstall(f.org, f.key, false); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if got := reg.Implementers("acme.mail"); len(got) != 0 {
+		t.Fatalf("an uninstalled provider must leave Implementers: %+v", got)
+	}
+	if _, ok := reg.Known("acme.document.issue"); ok {
+		t.Fatal("an uninstalled contract owner must leave the registry")
+	}
+}

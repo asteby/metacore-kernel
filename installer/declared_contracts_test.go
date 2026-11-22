@@ -253,3 +253,53 @@ func TestInstalledContracts_ImplementersRehydrated(t *testing.T) {
 		t.Fatalf("install must register implementers: %+v", got)
 	}
 }
+
+// An upgrade that DROPS implements[] / contracts[] clears the owner's previous
+// entries at once (regression: empty lists were skipped, so a provider that no
+// longer implements a contract kept showing in Implementers until a restart).
+func TestRegisterDeclaredContracts_UpgradeThatDropsEntriesClearsThem(t *testing.T) {
+	org := uuid.New()
+	reg := capability.NewRegistry()
+	inst := &Installer{ContractRegistry: func(uuid.UUID) *capability.Registry { return reg }}
+
+	v1 := manifest.Manifest{Key: "acme_pay", Version: "1.0.0",
+		Contracts:  []v3.Contract{{Key: "acme.local", Version: "1.0.0", Operations: []v3.ContractOperation{{Key: "do", Kind: "action"}}}},
+		Implements: []v3.Implements{{Contract: "acme.document", Version: "^1.0"}}}
+	inst.registerDeclaredContracts(org, &v1)
+	if len(reg.Implementers("acme.document")) != 1 {
+		t.Fatal("v1 must register its implements")
+	}
+	if _, ok := reg.Known("acme.local.do"); !ok {
+		t.Fatal("v1 must register its contract")
+	}
+
+	v2 := manifest.Manifest{Key: "acme_pay", Version: "2.0.0"} // drops both
+	inst.registerDeclaredContracts(org, &v2)
+	if got := reg.Implementers("acme.document"); len(got) != 0 {
+		t.Fatalf("upgrade dropped implements[]: Implementers must be empty, got %+v", got)
+	}
+	if _, ok := reg.Known("acme.local.do"); ok {
+		t.Fatal("upgrade dropped contracts[]: the contract must be forgotten")
+	}
+}
+
+// Uninstalling from an org forgets the addon in THAT org's registry only.
+func TestUnregisterDeclaredContracts_PerOrg(t *testing.T) {
+	orgA, orgB := uuid.New(), uuid.New()
+	regs := map[uuid.UUID]*capability.Registry{orgA: capability.NewRegistry(), orgB: capability.NewRegistry()}
+	inst := &Installer{ContractRegistry: func(o uuid.UUID) *capability.Registry { return regs[o] }}
+	pay := manifest.Manifest{Key: "acme_pay", Version: "1.0.0", Implements: []v3.Implements{{Contract: "acme.document", Version: "^1.0"}}}
+	inst.registerDeclaredContracts(orgA, &pay)
+	inst.registerDeclaredContracts(orgB, &pay)
+
+	inst.unregisterDeclaredContracts(orgA, "acme_pay")
+	if got := regs[orgA].Implementers("acme.document"); len(got) != 0 {
+		t.Fatalf("uninstalled from org A: must not remain an implementer there: %+v", got)
+	}
+	if got := regs[orgB].Implementers("acme.document"); len(got) != 1 {
+		t.Fatalf("org B still runs the addon: %+v", got)
+	}
+	(&Installer{}).unregisterDeclaredContracts(orgA, "x")
+	var nilInst *Installer
+	nilInst.unregisterDeclaredContracts(orgA, "x")
+}

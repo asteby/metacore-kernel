@@ -2365,18 +2365,16 @@ func (m *Manifest) DeclaredImplements() []capability.Implemented {
 
 // RegisterDeclaredContracts records, in reg (the registry of ONE scope, an
 // organization's installs), the contracts this addon owns and the ones it
-// implements. A manifest with neither is a no-op, and so is a nil reg.
+// implements. Both calls are ALWAYS made: an upgrade that drops contracts[] or
+// implements[] must clear the owner's previous entries (an empty list replaces
+// them), otherwise a provider that no longer implements a contract would keep
+// showing up in Implementers until the next restart. A nil reg is a no-op.
 func (m *Manifest) RegisterDeclaredContracts(reg *capability.Registry) error {
 	if reg == nil {
 		return nil
 	}
-	if ds := m.DeclaredContracts(); len(ds) > 0 {
-		if err := reg.Register(m.Key, ds...); err != nil {
-			return err
-		}
+	if err := reg.Register(m.Key, m.DeclaredContracts()...); err != nil {
+		return err
 	}
-	if is := m.DeclaredImplements(); len(is) > 0 {
-		return reg.RegisterImplements(m.Key, is...)
-	}
-	return nil
+	return reg.RegisterImplements(m.Key, m.DeclaredImplements()...)
 }
