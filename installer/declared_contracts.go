@@ -23,7 +23,7 @@ import (
 // key) is logged. Uninstall does not unregister: a stale entry only keeps a key
 // known, and warnDanglingContracts makes the removal visible.
 func (i *Installer) registerDeclaredContracts(orgID uuid.UUID, m *manifest.Manifest) {
-	if i == nil || i.ContractRegistry == nil || len(m.Contracts) == 0 {
+	if i == nil || i.ContractRegistry == nil || (len(m.Contracts) == 0 && len(m.Implements) == 0) {
 		return
 	}
 	if err := m.RegisterDeclaredContracts(i.ContractRegistry(orgID)); err != nil {
@@ -48,11 +48,23 @@ func (i *Installer) InstalledContracts(orgID uuid.UUID) ([]capability.InstalledC
 			continue
 		}
 		m := lc.Manifest()
-		ds := (&m).DeclaredContracts()
-		if len(ds) == 0 {
+		// The lifecycle registry holds ONE manifest per addon key for the whole
+		// process, but each organization persists the version IT installed. When
+		// they differ the loaded manifest is not what this org runs: feeding its
+		// contracts would hand this org another tenant's version, so the addon is
+		// skipped (loudly) and the next install/upgrade of it registers the truth.
+		if m.Version != r.Version {
+			slog.Warn("installer.contracts_rehydrate_version_mismatch",
+				"addon", r.AddonKey, "org_id", orgID.String(),
+				"installed_version", r.Version, "loaded_version", m.Version,
+				"detail", "skipped: the loaded manifest is not the version this organization installed")
 			continue
 		}
-		out = append(out, capability.InstalledContracts{Owner: r.AddonKey, Contracts: ds})
+		ds, is := (&m).DeclaredContracts(), (&m).DeclaredImplements()
+		if len(ds) == 0 && len(is) == 0 {
+			continue
+		}
+		out = append(out, capability.InstalledContracts{Owner: r.AddonKey, Contracts: ds, Implements: is})
 	}
 	return out, nil
 }

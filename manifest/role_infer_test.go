@@ -118,3 +118,18 @@ func TestLegacyManifest_ClosedRegistry(t *testing.T) {
 		t.Fatalf("a nil registry is a no-op: %v", err)
 	}
 }
+
+// RegisterDeclaredContracts records what the addon implements too, so the
+// scope can answer "who implements X".
+func TestLegacyManifest_RegistersImplements(t *testing.T) {
+	m := legacyFromV3(t, doc("acme_pay", "provider", func(d map[string]any) {
+		d["implements"] = []any{rm("contract", "acme.document", "version", "^1.0")}
+	}))
+	reg := capability.NewRegistry()
+	if err := m.RegisterDeclaredContracts(reg); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.Implementers("acme.document"); len(got) != 1 || got[0].Owner != "acme_pay" || got[0].Range != "^1.0" {
+		t.Fatalf("Implementers = %+v", got)
+	}
+}

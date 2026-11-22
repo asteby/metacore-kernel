@@ -165,3 +165,91 @@ func TestWarnDanglingContracts(t *testing.T) {
 		t.Fatalf("nothing to warn: %q", buf.String())
 	}
 }
+
+// The lifecycle registry keeps ONE manifest per addon key for the whole
+// process, while each org persists the version it installed. Rehydrating an org
+// whose row differs from the loaded manifest must not hand it the other
+// tenant's version (regression: org A on 1.x came back with org B's 2.0).
+func TestInstalledContracts_SkipsVersionNotInstalledByTheOrg(t *testing.T) {
+	db := newInstallationsDB(t)
+	orgA, orgB := uuid.New(), uuid.New()
+	now := time.Now()
+	for _, r := range []Installation{
+		{OrganizationID: orgA, AddonKey: "acme_core", Version: "1.0.0", Status: "enabled", Source: "bundle", InstalledAt: now},
+		{OrganizationID: orgB, AddonKey: "acme_core", Version: "2.0.0", Status: "enabled", Source: "bundle", InstalledAt: now},
+	} {
+		r.ID = uuid.New()
+		if err := db.Create(&r).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	lcs := lifecycle.NewRegistry()
+	loaded := contractManifest("acme_core", "2.0.0", "2.0.0") // the process loaded 2.0.0
+	lcs.Register("acme_core", &lifecycle.ManifestOnly{Data: loaded})
+	inst := &Installer{DB: db, Lifecycles: lcs}
+
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	icA, err := inst.InstalledContracts(orgA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(icA) != 0 {
+		t.Fatalf("org A installed 1.0.0 but 2.0.0 is loaded: it must not be fed org B's version, got %+v", icA)
+	}
+	if !strings.Contains(buf.String(), "installer.contracts_rehydrate_version_mismatch") {
+		t.Fatalf("the skip must be visible: %q", buf.String())
+	}
+	icB, _ := inst.InstalledContracts(orgB)
+	reg := capability.NewRegistry()
+	reg.Rehydrate(icB)
+	if v, _ := reg.ContractVersion("acme.document"); v != "2.0.0" {
+		t.Fatalf("org B (2.0.0 installed and loaded) rehydrates 2.0.0, got %q", v)
+	}
+}
+
+// Implementers: who implements a contract in THIS scope, fed by Install and by
+// Rehydrate, including addons that implement a contract without owning one.
+func TestInstalledContracts_ImplementersRehydrated(t *testing.T) {
+	db := newInstallationsDB(t)
+	org := uuid.New()
+	now := time.Now()
+	for i, k := range []string{"acme_core", "acme_pay", "acme_mail"} {
+		r := Installation{ID: uuid.New(), OrganizationID: org, AddonKey: k, Version: "1.0.0", Status: "enabled", Source: "bundle", InstalledAt: now.Add(time.Duration(i) * time.Second)}
+		if err := db.Create(&r).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	lcs := lifecycle.NewRegistry()
+	lcs.Register("acme_core", &lifecycle.ManifestOnly{Data: contractManifest("acme_core", "1.0.0", "1.0.0")})
+	lcs.Register("acme_pay", &lifecycle.ManifestOnly{Data: manifest.Manifest{Key: "acme_pay", Version: "1.0.0", Implements: []v3.Implements{{Contract: "acme.document", Version: "^1.0"}}}})
+	lcs.Register("acme_mail", &lifecycle.ManifestOnly{Data: manifest.Manifest{Key: "acme_mail", Version: "1.0.0", Implements: []v3.Implements{{Contract: "acme.document", Version: ">=1.2.0"}, {Contract: "acme.mail", Version: "^1"}}}})
+	inst := &Installer{DB: db, Lifecycles: lcs}
+
+	ic, err := inst.InstalledContracts(org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := capability.NewRegistry()
+	if rep := reg.Rehydrate(ic); len(rep.Failed) != 0 {
+		t.Fatalf("rehydrate: %+v", rep)
+	}
+	got := reg.Implementers("acme.document")
+	if len(got) != 2 || got[0].Owner != "acme_mail" || got[0].Range != ">=1.2.0" || got[1].Owner != "acme_pay" || got[1].Range != "^1.0" {
+		t.Fatalf("Implementers(acme.document) = %+v", got)
+	}
+	if got := reg.Implementers("acme.mail"); len(got) != 1 || got[0].Owner != "acme_mail" {
+		t.Fatalf("Implementers(acme.mail) = %+v", got)
+	}
+	// Install wiring feeds the same query.
+	live := capability.NewRegistry()
+	w := &Installer{ContractRegistry: func(uuid.UUID) *capability.Registry { return live }}
+	pay := manifest.Manifest{Key: "acme_pay", Version: "1.0.0", Implements: []v3.Implements{{Contract: "acme.document", Version: "^1.0"}}}
+	w.registerDeclaredContracts(org, &pay)
+	if got := live.Implementers("acme.document"); len(got) != 1 || got[0].Owner != "acme_pay" {
+		t.Fatalf("install must register implementers: %+v", got)
+	}
+}

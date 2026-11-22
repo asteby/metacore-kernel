@@ -83,11 +83,13 @@ type declaredEntry struct {
 type Registry struct {
 	mu       sync.RWMutex
 	declared map[string]declaredEntry // contract key -> entry
+	// implements maps an owner addon to the contracts it implements.
+	implements map[string][]Implemented
 }
 
 // NewRegistry returns an empty Registry.
 func NewRegistry() *Registry {
-	return &Registry{declared: map[string]declaredEntry{}}
+	return &Registry{declared: map[string]declaredEntry{}, implements: map[string][]Implemented{}}
 }
 
 // Register records the contracts an installed addon owns. It rejects a
@@ -160,6 +162,76 @@ func (r *Registry) Unregister(owner string) {
 			delete(r.declared, k)
 		}
 	}
+	delete(r.implements, owner)
+}
+
+// Implemented is one contract an addon implements (a manifest's implements[]
+// entry): the contract key and the semver range it was written against.
+type Implemented struct {
+	Contract string
+	// Range is the implements[].version range ("^1.0").
+	Range string
+}
+
+// Implementer is an addon that implements a contract in this registry's scope.
+type Implementer struct {
+	Owner string
+	// Range is the version range the owner declared for the contract.
+	Range string
+}
+
+// RegisterImplements records the contracts an installed addon implements,
+// replacing that owner's previous list (an upgrade). Nothing about the contract
+// has to be declared in this registry: the implementer may be installed before
+// or without its contract owner. All-or-nothing; rejects a malformed contract
+// key, an invalid range or a contract listed twice.
+func (r *Registry) RegisterImplements(owner string, impls ...Implemented) error {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return fmt.Errorf("capability: implemented contracts need an owner addon key")
+	}
+	seen := map[string]bool{}
+	for _, im := range impls {
+		if !ValidKey(im.Contract) {
+			return fmt.Errorf("capability: invalid implemented contract key %q", im.Contract)
+		}
+		if _, err := semver.NewConstraint(im.Range); err != nil {
+			return fmt.Errorf("capability: implemented contract %q has invalid range %q: %w", im.Contract, im.Range, err)
+		}
+		if seen[im.Contract] {
+			return fmt.Errorf("capability: contract %q implemented twice by %q", im.Contract, owner)
+		}
+		seen[im.Contract] = true
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(impls) == 0 {
+		delete(r.implements, owner)
+		return nil
+	}
+	r.implements[owner] = append([]Implemented(nil), impls...)
+	return nil
+}
+
+// Implementers lists, sorted by owner, the addons of this scope that implement
+// the contract. It is the "who depends on X" query behind provider selection and
+// the uninstall/upgrade guards. A nil registry has none.
+func (r *Registry) Implementers(contractKey string) []Implementer {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []Implementer
+	for owner, impls := range r.implements {
+		for _, im := range impls {
+			if im.Contract == contractKey {
+				out = append(out, Implementer{Owner: owner, Range: im.Range})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Owner < out[j].Owner })
+	return out
 }
 
 // Lookup returns the declared contract with that key and its owner addon.
@@ -178,6 +250,8 @@ func (r *Registry) Lookup(contractKey string) (d Declared, owner string, ok bool
 type InstalledContracts struct {
 	Owner     string
 	Contracts []Declared
+	// Implements are the contracts the addon implements (feeds Implementers).
+	Implements []Implemented
 }
 
 // RehydrateReport is the outcome of Rehydrate.
@@ -200,13 +274,21 @@ func (r *Registry) Rehydrate(installed []InstalledContracts) RehydrateReport {
 	rep := RehydrateReport{Failed: map[string]error{}}
 	r.mu.Lock()
 	r.declared = map[string]declaredEntry{}
+	r.implements = map[string][]Implemented{}
 	r.mu.Unlock()
 	for _, in := range installed {
-		if len(in.Contracts) == 0 {
+		if len(in.Contracts) == 0 && len(in.Implements) == 0 {
 			continue
 		}
-		if err := r.Register(in.Owner, in.Contracts...); err != nil {
-			rep.Failed[in.Owner] = err
+		var failed error
+		if len(in.Contracts) > 0 {
+			failed = r.Register(in.Owner, in.Contracts...)
+		}
+		if failed == nil && len(in.Implements) > 0 {
+			failed = r.RegisterImplements(in.Owner, in.Implements...)
+		}
+		if failed != nil {
+			rep.Failed[in.Owner] = failed
 			continue
 		}
 		rep.Registered = append(rep.Registered, in.Owner)

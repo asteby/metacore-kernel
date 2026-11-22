@@ -52,6 +52,15 @@ func (m *Manifest) DeclaredContracts() []capability.Declared {
 	return out
 }
 
+// DeclaredImplements projects implements[] onto the registry's view.
+func (m *Manifest) DeclaredImplements() []capability.Implemented {
+	out := make([]capability.Implemented, 0, len(m.Implements))
+	for _, im := range m.Implements {
+		out = append(out, capability.Implemented{Contract: im.Contract, Range: im.Version})
+	}
+	return out
+}
+
 // CapabilityUse is one capability key a manifest mentions and where.
 type CapabilityUse struct {
 	Key   string
