@@ -205,3 +205,30 @@ model is not registered: the create is refused **before writing anything** with
 the field error `_children.<relation>` / code `child_unavailable`
 (params `model`, `addon`). The relation is served in
 `/api/metadata/table/:model` as `relations[].addon` / `.widget`.
+
+## Update: `_children` synchronises the relations it names
+
+`Service.Update` accepts the same `_children` object. Each relation it names is
+**synchronised** with the posted rows:
+
+| Posted row | Effect |
+| --- | --- |
+| has the `id` of an existing child of this parent | the child is **updated** (through its model's Update) |
+| has no `id` | a child is **created** (runtime-owned id, foreign key and scope) |
+| an existing child is not in the list | the child is **deleted** (soft delete, through its model's Delete) |
+| `[]` | every child is deleted (subject to `min`) |
+| relation not named | untouched (and `min` is not asked) |
+
+An `id` that is not a child of this parent (or is repeated) is a field error
+`_children.<relation>.<i>.id` / `not_found`. The sync reads up to 1000 existing
+children per relation.
+
+Everything that can be refused is refused **before the parent is written**: the
+shape, `min`, unknown ids, a child model that is not registered
+(`child_unavailable`) and the caller's permission on each child model (create /
+update / delete, only for the operations the plan really needs). If a child
+fails while it is being written, everything is put back: created rows are hard
+deleted, updated rows get their previous values, deleted rows are revived and
+the parent's columns are restored. The compensation is best effort (straight to
+the tables, no hooks or events, JSON columns are not restored) and does not undo
+other post-commit steps (pivots, extensions, document lines).
