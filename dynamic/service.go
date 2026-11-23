@@ -1107,6 +1107,15 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	if err != nil {
 		return nil, err
 	}
+	// The children carry the parent's id as their foreign key and the undo of a
+	// failed create targets it, so with children the id is fixed BEFORE the insert
+	// instead of left to the table default (a table without one — or an insert that
+	// does not hand the default back — would leave an unaddressable parent).
+	if inline != nil {
+		if v, ok := input["id"]; !ok || v == nil || fmt.Sprint(v) == "" {
+			input["id"] = uuid.NewString()
+		}
+	}
 
 	s.scope.InjectOnCreate(input, user)
 	input[ColCreatedByID] = user.GetID()

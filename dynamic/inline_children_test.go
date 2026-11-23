@@ -556,3 +556,25 @@ func TestCreate_InlineChildOfMissingAddonIsRefusedBeforeWriting(t *testing.T) {
 		t.Fatalf("left %d rows", n)
 	}
 }
+
+// Sin `id` en el padre (una tabla sin default de id, como la del arnés) el crear
+// con hijos fija el id antes del insert: los hijos apuntan a él y el deshacer
+// de un crear fallido sabe qué padre quitar.
+func TestCreate_InlineAssignsTheParentIDWhenNoneIsGiven(t *testing.T) {
+	svc, db := newInlineService(t, true)
+	user := newUser(uuid.New())
+	out, err := svc.Create(context.Background(), "IcProduct", user, map[string]any{
+		"name":      "Sin id",
+		"_children": map[string]any{"prices": []any{map[string]any{"market": "mx", "price": 1.0}}},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id := fmt.Sprint(out["id"])
+	if id == "" || id == "<nil>" {
+		t.Fatalf("parent id = %q, want one assigned", id)
+	}
+	if rows := icRows(t, db, "ic_prices", "product_id", id); len(rows) != 1 {
+		t.Fatalf("prices of %s = %d, want 1", id, len(rows))
+	}
+}
