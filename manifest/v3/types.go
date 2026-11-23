@@ -1209,6 +1209,18 @@ type ModelRelation struct {
 	// must send for this relation. Only with create_inline; >= 0.
 	Min int `json:"min,omitempty"`
 
+	// Addon is the key of the addon that owns the child model (`through`) when
+	// it is not this manifest's own. With create_inline the kernel writes the
+	// children of that addon's model in the parent's all-or-nothing create; the
+	// addon must be listed in compatibility.requires (optional or not). Empty =
+	// the child model is of this manifest. Optional.
+	Addon string `json:"addon,omitempty"`
+
+	// Widget names a registered frontend relation widget that renders this
+	// relation instead of the default inline sub-table (it receives the live
+	// form values). Pure UI metadata; empty = the default sub-table. Optional.
+	Widget string `json:"widget,omitempty"`
+
 	// Rollups declare PARENT columns whose value is an aggregate over this
 	// relation's child rows (Tier-1 of the declarative compute engine, akin to
 	// a Salesforce Roll-Up Summary or an Odoo stored computed field). On every

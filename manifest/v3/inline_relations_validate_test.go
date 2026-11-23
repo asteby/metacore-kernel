@@ -87,16 +87,87 @@ func TestValidate_InlineRelation_ExistingRelationsUnchanged(t *testing.T) {
 func TestValidateInlineRelation_Unit(t *testing.T) {
 	cols := map[string]map[string]struct{}{"Child": {"parent_id": {}}}
 	ok := ModelRelation{Name: "rows", Kind: "one_to_many", Through: "Child", ForeignKey: "parent_id", Embed: true, CreateInline: true, Min: 2}
-	if errs := validateInlineRelation("w", ok, cols); len(errs) != 0 {
+	if errs := validateInlineRelation("w", ok, cols, nil); len(errs) != 0 {
 		t.Fatalf("valid relation: %v", errs)
 	}
 	bad := ok
 	bad.Min = -1
-	if errs := validateInlineRelation("w", bad, cols); len(errs) != 1 || !strings.Contains(errs[0], "must be >= 0") {
+	if errs := validateInlineRelation("w", bad, cols, nil); len(errs) != 1 || !strings.Contains(errs[0], "must be >= 0") {
 		t.Fatalf("negative min: %v", errs)
 	}
 	plain := ModelRelation{Name: "rows", Kind: "one_to_many", Through: "Elsewhere", ForeignKey: "x"}
-	if errs := validateInlineRelation("w", plain, cols); len(errs) != 0 {
+	if errs := validateInlineRelation("w", plain, cols, nil); len(errs) != 0 {
 		t.Fatalf("a relation without create_inline is not checked: %v", errs)
+	}
+}
+
+// validateInlineCross builds the inline relation pointing at ANOTHER addon's
+// model (`addon` set, through not a model of this manifest); requireIt lists
+// that addon in compatibility.requires.
+func validateInlineCross(t *testing.T, requireIt bool, mutate func(rel map[string]interface{})) error {
+	t.Helper()
+	m := baseValid()
+	m["models"] = inlineModels(func(r map[string]interface{}) {
+		r["through"] = "PriceListItem"
+		r["foreign_key"] = "product_id"
+		r["addon"] = "customers"
+		delete(r, "rollups") // a rollup needs the child columns, which another manifest owns
+		if mutate != nil {
+			mutate(r)
+		}
+	})
+	if requireIt {
+		c := m["compatibility"].(map[string]interface{})
+		c["requires"] = append(c["requires"].([]interface{}), map[string]interface{}{"key": "customers", "version": ">=0.100.0"})
+	}
+	return Validate(mustJSON(t, m))
+}
+
+// Con `addon` el modelo hijo vive en otro manifiesto: no hace falta que sea de
+// éste ni que se pueda comprobar su columna; sí que el addon esté en requires.
+func TestValidate_InlineRelation_CrossAddon(t *testing.T) {
+	if err := validateInlineCross(t, true, nil); err != nil {
+		t.Fatalf("a relation to a required addon's model must validate: %v", err)
+	}
+	if err := validateInlineCross(t, true, func(r map[string]interface{}) { r["widget"] = "market_prices" }); err != nil {
+		t.Fatalf("widget on a cross-addon relation: %v", err)
+	}
+	err := validateInlineCross(t, false, nil)
+	if err == nil || !strings.Contains(err.Error(), `addon "customers" must be listed in compatibility.requires`) {
+		t.Fatalf("addon not in requires must be rejected, got: %v", err)
+	}
+	// Sin `addon` el through ajeno sigue prohibido (comportamiento de siempre).
+	err = validateInlineCross(t, true, func(r map[string]interface{}) { delete(r, "addon") })
+	if err == nil || !strings.Contains(err.Error(), `through "PriceListItem" is not a model`) {
+		t.Fatalf("without addon the through must be a model of the manifest, got: %v", err)
+	}
+	// Las demás reglas de create_inline siguen aplicando con addon.
+	err = validateInlineCross(t, true, func(r map[string]interface{}) { r["embed"] = false })
+	if err == nil || !strings.Contains(err.Error(), "create_inline requires embed") {
+		t.Fatalf("create_inline rules still apply with addon, got: %v", err)
+	}
+}
+
+func TestValidate_RelationWidgetKey(t *testing.T) {
+	for _, bad := range []string{"Market Prices", "1abc", "a/b", "A"} {
+		err := validateInline(t, func(r map[string]interface{}) { r["widget"] = bad })
+		if err == nil {
+			t.Fatalf("widget %q must be rejected", bad)
+		}
+	}
+	for _, good := range []string{"market_prices", "products.market-prices"} {
+		if err := validateInline(t, func(r map[string]interface{}) { r["widget"] = good }); err != nil {
+			t.Fatalf("widget %q must validate: %v", good, err)
+		}
+	}
+}
+
+func TestValidateInlineRelation_UnitCrossAddon(t *testing.T) {
+	rel := ModelRelation{Name: "prices", Kind: "one_to_many", Through: "PriceListItem", ForeignKey: "product_id", Embed: true, CreateInline: true, Addon: "customers"}
+	if errs := validateInlineRelation("w", rel, map[string]map[string]struct{}{}, map[string]struct{}{"customers": {}}); len(errs) != 0 {
+		t.Fatalf("cross-addon relation with the addon required: %v", errs)
+	}
+	if errs := validateInlineRelation("w", rel, map[string]map[string]struct{}{}, nil); len(errs) != 1 {
+		t.Fatalf("cross-addon relation without the addon required: %v", errs)
 	}
 }

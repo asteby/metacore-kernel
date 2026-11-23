@@ -22,6 +22,7 @@ package dynamic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -48,6 +49,10 @@ const (
 	// CodeInlineInvalidType: `_children`, a relation's value or a row has the
 	// wrong shape (not an object / not a list of objects).
 	CodeInlineInvalidType = "invalid_type"
+	// CodeInlineChildUnavailable: the relation's child model is not registered
+	// (its addon — relation.addon — is not installed or not loaded). Nothing is
+	// written; params carry {model, addon}.
+	CodeInlineChildUnavailable = "child_unavailable"
 )
 
 // InlineRelation is the executable form of a create_inline relation.
@@ -56,6 +61,12 @@ type InlineRelation struct {
 	Name string
 	// Model is the child model (the relation's `through`).
 	Model string
+	// Addon is the addon that owns Model when it is not the parent's own (the
+	// relation's `addon`); empty = same addon. Only used to name the missing
+	// addon when Model is not registered: the child is written through the same
+	// Create as any other model, resolved by name, with its own validation,
+	// hooks, permissions and organization scope.
+	Addon string
 	// ForeignKey is the child column that receives the parent id.
 	ForeignKey string
 	// Scope is the static equality filter of the relation (polymorphic
@@ -93,7 +104,7 @@ func DeriveInlineRelations(def manifest.ModelDefinition) []InlineRelation {
 		if mn < 0 {
 			mn = 0
 		}
-		out = append(out, InlineRelation{Name: r.Name, Model: r.Through, ForeignKey: r.ForeignKey, Scope: scope, Min: mn})
+		out = append(out, InlineRelation{Name: r.Name, Model: r.Through, Addon: r.Addon, ForeignKey: r.ForeignKey, Scope: scope, Min: mn})
 	}
 	return out
 }
@@ -196,12 +207,21 @@ func (s *Service) takeInlineChildren(ctx context.Context, model string, user mod
 	// The parent is not written when the caller cannot create its children.
 	for _, b := range ic.batches {
 		instance, _, err := s.resolveModel(ctx, b.rel.Model)
+		if errors.Is(err, ErrModelNotFound) {
+			// The child's addon is not installed: a clear field error, and the
+			// parent is not created (nothing was written yet).
+			ve.Add(InlineChildrenKey+"."+b.rel.Name, CodeInlineChildUnavailable, map[string]any{"model": b.rel.Model, "addon": b.rel.Addon})
+			continue
+		}
 		if err != nil {
 			return nil, nil, err
 		}
 		if err := s.authorize(ctx, user, b.rel.Model, instance, modelbase.AccessCreate); err != nil {
 			return nil, nil, err
 		}
+	}
+	if !ve.Empty() {
+		return nil, ve, nil
 	}
 	if len(ic.batches) == 0 {
 		return nil, nil, nil

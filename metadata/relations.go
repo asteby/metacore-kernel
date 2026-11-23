@@ -83,6 +83,8 @@ func deriveRefsFromDef(def modelbase.ModelDefiner, meta *modelbase.TableMetadata
 				Embed:        r.Embed,
 				CreateInline: r.CreateInline,
 				Min:          r.Min,
+				Addon:        r.Addon,
+				Widget:       r.Widget,
 			})
 		}
 	}

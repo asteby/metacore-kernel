@@ -6,8 +6,10 @@ import "fmt"
 // v3.validateInlineRelation (docs/inline-relations.md): create_inline requires
 // kind one_to_many, embed true and not readonly; min is >= 0 and needs
 // create_inline; the child model (through) must be a model of the manifest and
-// foreign_key one of its columns. Relations that declare neither create_inline
-// nor min are not checked, so existing manifests validate as before.
+// foreign_key one of its columns — unless Addon names the addon that owns the
+// child model: then it lives in another manifest and the kernel validates its
+// columns at write time. Relations that declare neither create_inline nor min
+// are not checked, so existing manifests validate as before.
 func validateInlineRelations(rels []RelationDef, colsByModel map[string]map[string]struct{}) error {
 	for i, r := range rels {
 		if r.Min < 0 {
@@ -27,6 +29,9 @@ func validateInlineRelations(rels []RelationDef, colsByModel map[string]map[stri
 		}
 		if r.Readonly {
 			return fmt.Errorf("relations[%d]: create_inline is incompatible with readonly", i)
+		}
+		if r.Addon != "" {
+			continue // the child model is another addon's: checked at write time
 		}
 		childCols, ok := colsByModel[r.Through]
 		if !ok {

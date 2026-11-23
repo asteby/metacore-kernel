@@ -50,6 +50,20 @@ func icDefs() map[string]manifest.ModelDefinition {
 			ModelKey: "IcSecret", TableName: "ic_secrets", OrgScoped: true,
 			Columns: []manifest.ColumnDef{{Name: "rule_id", Type: "uuid"}, {Name: "body", Type: "string"}},
 		},
+		// Hijos de OTRO addon (relation.addon): IcPrice es de «pricing» (registrado) e
+		// IcGhost de «ghostaddon» (no registrado: su addon no está instalado).
+		"IcProduct": {
+			ModelKey: "IcProduct", TableName: "ic_products", OrgScoped: true,
+			Columns: []manifest.ColumnDef{{Name: "name", Type: "string"}},
+			Relations: []manifest.RelationDef{
+				{Name: "prices", Kind: "one_to_many", Through: "IcPrice", ForeignKey: "product_id", Embed: true, CreateInline: true, Addon: "pricing", Widget: "market_prices"},
+				{Name: "ghosts", Kind: "one_to_many", Through: "IcGhost", ForeignKey: "product_id", Embed: true, CreateInline: true, Addon: "ghostaddon"},
+			},
+		},
+		"IcPrice": {
+			ModelKey: "IcPrice", TableName: "ic_prices", OrgScoped: true,
+			Columns: []manifest.ColumnDef{{Name: "product_id", Type: "uuid"}, {Name: "market", Type: "string"}, {Name: "price", Type: "decimal"}},
+		},
 	}
 }
 
@@ -452,5 +466,93 @@ func TestCreate_InlineSurvivesApprovalReplayInput(t *testing.T) {
 	}
 	if n := icCount(t, db, "ic_tiers"); n != 2 {
 		t.Fatalf("tiers after replay = %d", n)
+	}
+}
+
+// Un create_inline hacia el modelo de OTRO addon (relation.addon) se deriva con
+// su dueño y se escribe con el mismo Create del hijo: org, id y foreign_key los
+// pone el runtime, y todo es todo-o-nada con el padre.
+func TestDeriveInlineRelations_CarriesTheChildAddon(t *testing.T) {
+	got := DeriveInlineRelations(icDefs()["IcProduct"])
+	if len(got) != 2 || got[0].Name != "prices" || got[0].Addon != "pricing" || got[0].Model != "IcPrice" {
+		t.Fatalf("relations = %+v", got)
+	}
+}
+
+func TestCreate_InlineWritesChildrenOfAnotherAddon(t *testing.T) {
+	svc, db := newInlineService(t, true)
+	user := newUser(uuid.New())
+	id := uuid.NewString()
+	if _, err := svc.Create(context.Background(), "IcProduct", user, map[string]any{
+		"id": id, "name": "Creatina",
+		"_children": map[string]any{
+			"prices": []any{
+				map[string]any{"market": "mx", "price": 1399.0},
+				map[string]any{"market": "us", "price": 69.99},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	rows := icRows(t, db, "ic_prices", "product_id", id)
+	if len(rows) != 2 {
+		t.Fatalf("prices = %d, want 2 (%v)", len(rows), rows)
+	}
+	for _, r := range rows {
+		if fmt.Sprint(r["organization_id"]) != user.orgID.String() {
+			t.Fatalf("a child of another addon lost the org scope: %v", r)
+		}
+	}
+}
+
+func TestCreate_InlineCrossAddonFailureUndoesTheParent(t *testing.T) {
+	hooks := NewHookRegistry()
+	hooks.RegisterBeforeCreate("IcPrice", func(_ context.Context, _ HookContext, in map[string]any) error {
+		if in["market"] == nil || in["market"] == "" {
+			return NewValidationError().AddMessage("market", "Elige el mercado").Err()
+		}
+		return nil
+	})
+	svc, db := newInlineService(t, true, hooks)
+	user := newUser(uuid.New())
+	_, err := svc.Create(context.Background(), "IcProduct", user, map[string]any{
+		"name": "P",
+		"_children": map[string]any{
+			"prices": []any{map[string]any{"market": "mx", "price": 1.0}, map[string]any{"price": 2.0}},
+		},
+	})
+	ve := icValidation(t, err)
+	if f := ve.Fields["_children.prices.1.market"]; len(f) != 1 {
+		t.Fatalf("the other addon's own validation must surface: %+v", ve.Fields)
+	}
+	for _, table := range []string{"ic_products", "ic_prices"} {
+		if n := icCount(t, db, table); n != 0 {
+			t.Fatalf("%s kept %d rows after the failed create", table, n)
+		}
+	}
+}
+
+// Si el addon dueño del hijo no está instalado (modelo sin registrar) el error
+// es claro y por relación, y el padre no se escribe.
+func TestCreate_InlineChildOfMissingAddonIsRefusedBeforeWriting(t *testing.T) {
+	svc, db := newInlineService(t, true)
+	user := newUser(uuid.New())
+	_, err := svc.Create(context.Background(), "IcProduct", user, map[string]any{
+		"name": "P",
+		"_children": map[string]any{
+			"prices": []any{map[string]any{"market": "mx", "price": 1.0}},
+			"ghosts": []any{map[string]any{"x": 1.0}},
+		},
+	})
+	ve := icValidation(t, err)
+	f := ve.Fields["_children.ghosts"]
+	if len(f) != 1 || f[0].Code != CodeInlineChildUnavailable {
+		t.Fatalf("errors = %+v", ve.Fields)
+	}
+	if f[0].Params["addon"] != "ghostaddon" || f[0].Params["model"] != "IcGhost" {
+		t.Fatalf("params = %+v", f[0].Params)
+	}
+	if n := icCount(t, db, "ic_products") + icCount(t, db, "ic_prices"); n != 0 {
+		t.Fatalf("left %d rows", n)
 	}
 }

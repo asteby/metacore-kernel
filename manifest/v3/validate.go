@@ -1625,6 +1625,12 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	// cross-field checks can resolve targets/identifiers on the PARENT (the
 	// model owning the relation) and on the CHILD (relation.Through). Built
 	// once for the whole manifest.
+	// requiredAddons: the addons this manifest requires — a relation's `addon`
+	// (the owner of a child model that lives in another manifest) must be one.
+	requiredAddons := make(map[string]struct{}, len(m.Compatibility.Requires))
+	for _, r := range m.Compatibility.Requires {
+		requiredAddons[r.Key] = struct{}{}
+	}
 	colsByModel := make(map[string]map[string]struct{}, len(m.Models))
 	for _, mod := range m.Models {
 		set := make(map[string]struct{}, len(mod.Columns))
@@ -1899,7 +1905,7 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 			if rel.ForeignKey == "" {
 				errs = append(errs, fmt.Sprintf("%s.foreign_key is empty", where))
 			}
-			errs = append(errs, validateInlineRelation(where, rel, colsByModel)...)
+			errs = append(errs, validateInlineRelation(where, rel, colsByModel, requiredAddons)...)
 			// Tier-1 rollups: target must be a column on the PARENT (this
 			// model); from (if present) must be a column on the CHILD
 			// (relation.Through); fn must be in the enum; exactly one of

@@ -205,6 +205,13 @@ type RelationMeta struct {
 	// Min is the minimum number of child rows the create form must carry
 	// (only with CreateInline).
 	Min int `json:"min,omitempty"`
+	// Addon is the owner addon of the child model (Through) when it is not the
+	// parent's own; empty = same addon. Projected from v3 ModelRelation.addon.
+	Addon string `json:"addon,omitempty"`
+	// Widget is the frontend relation widget key that renders this relation
+	// instead of the default sub-table. Pure UI; projected from
+	// v3 ModelRelation.widget.
+	Widget string `json:"widget,omitempty"`
 }
 
 // ColumnDef describes a single column in a TableMetadata.

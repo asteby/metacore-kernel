@@ -901,6 +901,8 @@ func mapModelRelations(in []v3.ModelRelation) []RelationDef {
 			Embed:        r.Embed,
 			CreateInline: r.CreateInline,
 			Min:          r.Min,
+			Addon:        r.Addon,
+			Widget:       r.Widget,
 			Rollups:      mapRollups(r.Rollups),
 		})
 	}

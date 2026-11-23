@@ -19,6 +19,8 @@ On a `models[].relations[]` entry (v3 `ModelRelation`, legacy
 | --- | --- | --- |
 | `create_inline` | bool | The create form captures this relation's rows with the parent. Default `false`. |
 | `min` | int >= 0 | Minimum child rows when `_children` is sent. Only with `create_inline`. |
+| `addon` | string | Key of the addon that **owns** the child model (`through`) when it is not this manifest's own. Omitted = same manifest. See [Children of another addon](#children-of-another-addon). |
+| `widget` | string | Key of a registered frontend relation widget that replaces the default inline sub-table (it receives the live form values). Pure UI metadata; omitted = the sub-table. |
 
 Validation (`v3.Validate`, `Manifest.Validate`, and the strict JSON schema in
 `manifest/v3/schema/manifest-v3.schema.json` / `docs/spec/v3/`):
@@ -26,7 +28,41 @@ Validation (`v3.Validate`, `Manifest.Validate`, and the strict JSON schema in
 - `create_inline` requires `kind: one_to_many`, `embed: true` and no `readonly`.
 - `min` must be >= 0 and requires `create_inline`.
 - `through` must be a model of the same manifest and `foreign_key` one of its
-  columns (the runtime injects the parent id there).
+  columns (the runtime injects the parent id there) — unless `addon` is set.
+- `addon` must be listed in `compatibility.requires` (optional or not): the
+  child model belongs to it. With `addon` the model is not checked against this
+  manifest (the kernel validates its columns when the child is written); a
+  `rollup` over such a relation is rejected (it needs the child's columns).
+- `widget` matches `^[a-z][a-z0-9_.-]*# Inline relations: a parent and its child rows in one call
+
+A `one_to_many` relation declared with `create_inline` lets the create flow
+capture the child rows together with the parent record. The client posts them
+under the reserved key `_children`; the kernel's `dynamic.Service.Create` writes
+the parent and then every child, all-or-nothing. It is the general form of the
+document lines of [document-forms.md](document-forms.md) (a record plus its
+rows) for any composition relation, and it reuses their machinery.
+
+Without `_children` a create behaves exactly as before, and a manifest that
+declares neither flag validates and serves the same payload as before.
+
+## Manifest contract
+
+On a `models[].relations[]` entry (v3 `ModelRelation`, legacy
+`manifest.RelationDef`):
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `create_inline` | bool | The create form captures this relation's rows with the parent. Default `false`. |
+| `min` | int >= 0 | Minimum child rows when `_children` is sent. Only with `create_inline`. |
+| `addon` | string | Key of the addon that **owns** the child model (`through`) when it is not this manifest's own. Omitted = same manifest. See [Children of another addon](#children-of-another-addon). |
+| `widget` | string | Key of a registered frontend relation widget that replaces the default inline sub-table (it receives the live form values). Pure UI metadata; omitted = the sub-table. |
+
+Validation (`v3.Validate`, `Manifest.Validate`, and the strict JSON schema in
+`manifest/v3/schema/manifest-v3.schema.json` / `docs/spec/v3/`):
+
+- `create_inline` requires `kind: one_to_many`, `embed: true` and no `readonly`.
+- `min` must be >= 0 and requires `create_inline`.
+.
 
 ```json
 {
@@ -148,3 +184,24 @@ created in one call with its tiers; a rule without tiers is rejected with
 `_children.tiers: min` instead of being saved as a rule that does nothing. A
 tier that fails (`percent` missing) answers `_children.tiers.1.percent` and
 nothing is left behind.
+
+## Children of another addon
+
+A product's per-market prices live in another addon's model
+(`PriceListItem` of `customers`). Declare the relation with `addon`:
+
+```json
+{ "name": "market_prices", "kind": "one_to_many", "through": "PriceListItem",
+  "foreign_key": "product_id", "embed": true, "create_inline": true,
+  "addon": "customers", "widget": "market_prices" }
+```
+
+The runtime is the same as for any child: the row is written through
+`Service.Create` of the child model, resolved by name, so it keeps its own
+validation, hooks, permissions and organization scope, the foreign key and id
+are stamped by the runtime, and everything is compensated if any row fails.
+`addon` only changes (1) the manifest validation and (2) the error when the
+model is not registered: the create is refused **before writing anything** with
+the field error `_children.<relation>` / code `child_unavailable`
+(params `model`, `addon`). The relation is served in
+`/api/metadata/table/:model` as `relations[].addon` / `.widget`.
