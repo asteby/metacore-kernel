@@ -269,12 +269,15 @@ func (m *orgRefModalModel) DefineModal() modelbase.ModalMetadata {
 
 // TestService_ProjectsRelationCreateInlineOntoTableMetadata locks create_inline
 // and min onto the served payload: the SDK's create form reads them to render
-// the inline sub-table and enforce the minimum rows.
+// the inline sub-table and enforce the minimum rows. addon (owner of a child
+// model that lives in another addon) and widget (frontend relation widget that
+// replaces the sub-table) travel the same way.
 func TestService_ProjectsRelationCreateInlineOntoTableMetadata(t *testing.T) {
 	svc := New(Config{CacheTTL: time.Minute})
 	key := registerRelated(t, "DiscountRules", []modelbase.RelationDef{
 		{Name: "tiers", Kind: "one_to_many", Through: "DiscountRuleTier", ForeignKey: "discount_rule_id", Embed: true, CreateInline: true, Min: 1},
 		{Name: "audits", Kind: "one_to_many", Through: "Audit", ForeignKey: "discount_rule_id", Embed: true},
+		{Name: "prices", Kind: "one_to_many", Through: "PriceListItem", ForeignKey: "product_id", Embed: true, CreateInline: true, Addon: "customers", Widget: "market_prices"},
 	})
 	meta, err := svc.GetTable(context.Background(), key)
 	if err != nil {
@@ -283,6 +286,12 @@ func TestService_ProjectsRelationCreateInlineOntoTableMetadata(t *testing.T) {
 	byName := map[string]modelbase.RelationMeta{}
 	for _, r := range meta.Relations {
 		byName[r.Name] = r
+	}
+	if got := byName["prices"]; got.Addon != "customers" || got.Widget != "market_prices" || !got.CreateInline {
+		t.Errorf("prices = %+v, want addon customers, widget market_prices and create_inline", got)
+	}
+	if got := byName["tiers"]; got.Addon != "" || got.Widget != "" {
+		t.Errorf("tiers = %+v, want no addon/widget (same-addon, default sub-table)", got)
 	}
 	if !byName["tiers"].CreateInline || byName["tiers"].Min != 1 {
 		t.Errorf("tiers = %+v, want create_inline and min 1", byName["tiers"])

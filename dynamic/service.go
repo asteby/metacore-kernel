@@ -1107,6 +1107,15 @@ func (s *Service) Create(ctx context.Context, model string, user modelbase.AuthU
 	if err != nil {
 		return nil, err
 	}
+	// The children carry the parent's id as their foreign key and the undo of a
+	// failed create targets it, so with children the id is fixed BEFORE the insert
+	// instead of left to the table default (a table without one — or an insert that
+	// does not hand the default back — would leave an unaddressable parent).
+	if inline != nil {
+		if v, ok := input["id"]; !ok || v == nil || fmt.Sprint(v) == "" {
+			input["id"] = uuid.NewString()
+		}
+	}
 
 	s.scope.InjectOnCreate(input, user)
 	input[ColCreatedByID] = user.GetID()
@@ -1452,6 +1461,22 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 		return nil, err
 	}
 
+	// Inline children (`_children`, create_inline relations): the relations named
+	// are synchronised with the posted rows after the parent is saved. Everything
+	// that can be refused is refused here, before the parent is written; see
+	// inline_children_update.go.
+	var inlineSync *inlineSyncPlan
+	if !o.deleting() {
+		var inlineVE *ValidationError
+		inlineSync, inlineVE, err = s.planInlineChildrenUpdate(ctx, model, user, id.String(), input)
+		if err != nil {
+			return nil, err
+		}
+		if inlineVE != nil {
+			return nil, inlineVE
+		}
+	}
+
 	// core runs the load/evaluate/save against execDB. inTx reports whether it
 	// runs inside a caller-owned transaction (the row-locking path) — the save +
 	// transition hooks then run directly on execDB rather than opening a nested
@@ -1791,6 +1816,19 @@ func (s *Service) update(ctx context.Context, model string, user modelbase.AuthU
 	// served totals carry the line rollups.
 	if docLines != nil {
 		if err := s.replaceDocumentLines(ctx, user, docLines, id.String()); err != nil {
+			return nil, err
+		}
+		if err := s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance).First(instance, "id = ?", id).Error; err == nil {
+			after = toMap(instance)
+		}
+	}
+	// Inline children: synchronised on the same boundary. A child that cannot be
+	// written takes the children already written and the parent's change back.
+	if inlineSync != nil {
+		undo, err := s.applyInlineChildrenUpdate(ctx, user, inlineSync, id.String())
+		if err != nil {
+			s.undoInlineChildrenUpdate(ctx, undo)
+			s.revertParentUpdate(ctx, tableName, id.String(), before, input)
 			return nil, err
 		}
 		if err := s.tableDB(ctx, s.db.WithContext(ctx), tableName, instance).First(instance, "id = ?", id).Error; err == nil {

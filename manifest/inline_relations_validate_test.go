@@ -79,3 +79,22 @@ func TestValidate_InlineRelation_PlainRelationUnchanged(t *testing.T) {
 		t.Fatalf("plain relation must keep validating, got %v", err)
 	}
 }
+
+// With Addon the child model belongs to another manifest: the through/foreign
+// key are not checked against this manifest's models (the kernel checks them
+// when the child is written).
+func TestValidate_InlineRelation_CrossAddonSkipsLocalModelCheck(t *testing.T) {
+	r := inlineRel()
+	r.Through = "PriceListItem"
+	r.ForeignKey = "product_id"
+	r.Addon = "customers"
+	m := inlineManifest(r)
+	if err := m.Validate("2.0.0"); err != nil {
+		t.Fatalf("cross-addon create_inline must validate, got %v", err)
+	}
+	r.Addon = ""
+	m = inlineManifest(r)
+	if err := m.Validate("2.0.0"); err == nil {
+		t.Fatal("without addon a through outside the manifest must still be rejected")
+	}
+}

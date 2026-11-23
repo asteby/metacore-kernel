@@ -22,6 +22,7 @@ package dynamic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -48,6 +49,10 @@ const (
 	// CodeInlineInvalidType: `_children`, a relation's value or a row has the
 	// wrong shape (not an object / not a list of objects).
 	CodeInlineInvalidType = "invalid_type"
+	// CodeInlineChildUnavailable: the relation's child model is not registered
+	// (its addon — relation.addon — is not installed or not loaded). Nothing is
+	// written; params carry {model, addon}.
+	CodeInlineChildUnavailable = "child_unavailable"
 )
 
 // InlineRelation is the executable form of a create_inline relation.
@@ -56,6 +61,12 @@ type InlineRelation struct {
 	Name string
 	// Model is the child model (the relation's `through`).
 	Model string
+	// Addon is the addon that owns Model when it is not the parent's own (the
+	// relation's `addon`); empty = same addon. Only used to name the missing
+	// addon when Model is not registered: the child is written through the same
+	// Create as any other model, resolved by name, with its own validation,
+	// hooks, permissions and organization scope.
+	Addon string
 	// ForeignKey is the child column that receives the parent id.
 	ForeignKey string
 	// Scope is the static equality filter of the relation (polymorphic
@@ -93,7 +104,7 @@ func DeriveInlineRelations(def manifest.ModelDefinition) []InlineRelation {
 		if mn < 0 {
 			mn = 0
 		}
-		out = append(out, InlineRelation{Name: r.Name, Model: r.Through, ForeignKey: r.ForeignKey, Scope: scope, Min: mn})
+		out = append(out, InlineRelation{Name: r.Name, Model: r.Through, Addon: r.Addon, ForeignKey: r.ForeignKey, Scope: scope, Min: mn})
 	}
 	return out
 }
@@ -134,16 +145,53 @@ type inlineWritten struct {
 // error result is for a refusal that is not a field problem — the caller may
 // not create the child model (the parent is not written without its children).
 func (s *Service) takeInlineChildren(ctx context.Context, model string, user modelbase.AuthUser, input map[string]any) (*inlineChildren, *ValidationError, error) {
+	ic, ve := s.parseInlineChildren(ctx, model, input, false)
+	if ve != nil {
+		return nil, ve, nil
+	}
+	if ic == nil || len(ic.batches) == 0 {
+		return nil, nil, nil
+	}
+
+	// The parent is not written when the caller cannot create its children, or
+	// when the child model is not there (its addon is not installed).
+	ve = NewValidationError()
+	for _, b := range ic.batches {
+		instance, _, err := s.resolveModel(ctx, b.rel.Model)
+		if errors.Is(err, ErrModelNotFound) {
+			ve.Add(InlineChildrenKey+"."+b.rel.Name, CodeInlineChildUnavailable, map[string]any{"model": b.rel.Model, "addon": b.rel.Addon})
+			continue
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := s.authorize(ctx, user, b.rel.Model, instance, modelbase.AccessCreate); err != nil {
+			return nil, nil, err
+		}
+	}
+	if !ve.Empty() {
+		return nil, ve, nil
+	}
+	return ic, nil, nil
+}
+
+// parseInlineChildren removes `_children` from input (it is not a column) and
+// checks its shape: an object keyed by declared create_inline relations, each a
+// list of objects, at least rel.Min rows, no nested `_children`. It is the
+// part Create and Update share. nil, nil when the payload does not carry the
+// key. keepEmpty keeps a relation sent as an empty list (Update: it means
+// "remove every child"); Create drops it (nothing to write).
+func (s *Service) parseInlineChildren(ctx context.Context, model string, input map[string]any, keepEmpty bool) (*inlineChildren, *ValidationError) {
 	raw, ok := input[InlineChildrenKey]
 	if !ok {
-		return nil, nil, nil
+		return nil, nil
 	}
 	delete(input, InlineChildrenKey)
 
 	ve := NewValidationError()
 	posted, ok := childrenByRelation(raw)
 	if !ok {
-		return nil, ve.Add(InlineChildrenKey, CodeInlineInvalidType, nil), nil
+		return nil, ve.Add(InlineChildrenKey, CodeInlineInvalidType, nil)
 	}
 
 	rels := s.resolveInlineRelations(ctx, model)
@@ -165,7 +213,11 @@ func (s *Service) takeInlineChildren(ctx context.Context, model string, user mod
 	ic := &inlineChildren{}
 	for _, rel := range rels {
 		key := InlineChildrenKey + "." + rel.Name
-		rows, bad, isList := inlineRows(posted[rel.Name])
+		value, sent := posted[rel.Name]
+		if keepEmpty && !sent {
+			continue // Update: a relation that is not sent is left untouched (no min either)
+		}
+		rows, bad, isList := inlineRows(value)
 		if !isList {
 			ve.Add(key, CodeInlineInvalidType, nil)
 			continue
@@ -185,28 +237,14 @@ func (s *Service) takeInlineChildren(ctx context.Context, model string, user mod
 		if len(rows)+len(bad) < rel.Min {
 			ve.Add(key, CodeInlineMin, map[string]any{"min": rel.Min, "count": len(rows) + len(bad)})
 		}
-		if len(rows) > 0 {
+		if len(rows) > 0 || (keepEmpty && sent) {
 			ic.batches = append(ic.batches, inlineBatch{rel: rel, rows: rows})
 		}
 	}
 	if !ve.Empty() {
-		return nil, ve, nil
+		return nil, ve
 	}
-
-	// The parent is not written when the caller cannot create its children.
-	for _, b := range ic.batches {
-		instance, _, err := s.resolveModel(ctx, b.rel.Model)
-		if err != nil {
-			return nil, nil, err
-		}
-		if err := s.authorize(ctx, user, b.rel.Model, instance, modelbase.AccessCreate); err != nil {
-			return nil, nil, err
-		}
-	}
-	if len(ic.batches) == 0 {
-		return nil, nil, nil
-	}
-	return ic, nil, nil
+	return ic, nil
 }
 
 // childrenByRelation reads the `_children` value: an object keyed by relation
@@ -266,16 +304,9 @@ func (s *Service) writeInlineChildren(ctx context.Context, user modelbase.AuthUs
 	for _, b := range ic.batches {
 		w := inlineWritten{model: b.rel.Model}
 		for i, r := range b.rows {
-			row := make(map[string]any, len(r)+len(b.rel.Scope)+2)
-			for k, v := range r {
-				row[k] = v
-			}
-			for k, v := range b.rel.Scope {
-				row[k] = v
-			}
+			row := stampChild(r, b.rel, parentID)
 			id := uuid.NewString()
 			row["id"] = id
-			row[b.rel.ForeignKey] = parentID
 			if _, err := s.Create(ctx, b.rel.Model, user, row); err != nil {
 				done = append(done, w)
 				return done, lineError(InlineChildrenKey+"."+b.rel.Name, i, i, err)

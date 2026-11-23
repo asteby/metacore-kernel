@@ -1472,12 +1472,22 @@
         },
         "create_inline": {
           "type": "boolean",
-          "description": "When true, the create form captures this relation's child rows together with the parent: the kernel's Create accepts them under `_children.<name>` and writes parent + children in one call, all-or-nothing. Requires kind one_to_many, embed true and not readonly; the child model (through) must be a model of the manifest and foreign_key one of its columns. Defaults false."
+          "description": "When true, the create form captures this relation's child rows together with the parent: the kernel's Create accepts them under `_children.<name>` and writes parent + children in one call, all-or-nothing. Requires kind one_to_many, embed true and not readonly; the child model (through) must be a model of the manifest (or of the addon named in `addon`) and foreign_key one of its columns. Defaults false."
         },
         "min": {
           "type": "integer",
           "minimum": 0,
           "description": "Minimum number of child rows a create carrying `_children` must send for this relation. Only with create_inline."
+        },
+        "addon": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Key of the addon that owns the child model (`through`) when it is not this manifest's own. With create_inline the kernel writes that addon's rows in the parent's all-or-nothing create; the addon must be listed in compatibility.requires. Omitted = the child model is of this manifest."
+        },
+        "widget": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]*$",
+          "description": "Key of a registered frontend relation widget that renders this relation instead of the default inline sub-table (it receives the live form values). Pure UI metadata; omitted = the default sub-table."
         },
         "rollups": {
           "type": "array",

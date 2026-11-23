@@ -1834,6 +1834,18 @@ type RelationDef struct {
 	// create sends `_children` (a plain create without it is unchanged).
 	Min int `json:"min,omitempty"`
 
+	// Addon is the key of the addon that OWNS the child model (Through) when it
+	// is not this manifest's own: a create_inline relation then writes rows of
+	// another addon's model (Product → PriceListItem of customers) in the same
+	// all-or-nothing create. Empty = the child model is of this manifest
+	// (unchanged). Mirrors v3 ModelRelation.addon.
+	Addon string `json:"addon,omitempty"`
+
+	// Widget names a registered frontend relation widget that renders this
+	// relation instead of the default inline sub-table. Pure UI metadata; empty
+	// = the default. Mirrors v3 ModelRelation.widget.
+	Widget string `json:"widget,omitempty"`
+
 	// Rollups declare PARENT columns the kernel maintains as aggregates over
 	// this relation's child rows (Tier-1 of the declarative compute engine).
 	// On every child create/update/delete the dynamic engine recomputes each

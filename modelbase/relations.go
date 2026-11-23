@@ -57,6 +57,13 @@ type RelationDef struct {
 	// RelationMeta so the SDK renders the inline sub-table on create.
 	CreateInline bool `json:"create_inline,omitempty"`
 	Min          int  `json:"min,omitempty"`
+
+	// Addon / Widget mirror manifest.RelationDef.Addon / Widget: the owner addon
+	// of the child model (Through) when it is not this model's own, and the
+	// frontend relation widget that replaces the default sub-table. Projected
+	// onto RelationMeta.
+	Addon  string `json:"addon,omitempty"`
+	Widget string `json:"widget,omitempty"`
 }
 
 // HasRelations is implemented by compiled models that declare model-to-model
