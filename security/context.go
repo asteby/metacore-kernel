@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/asteby/metacore-kernel/capability"
 	"github.com/asteby/metacore-kernel/manifest"
 	"github.com/asteby/metacore-kernel/netguard"
 )
@@ -23,16 +24,17 @@ type Capabilities struct {
 	// but comes from the org's connector configuration
 	// ("connector:<connector>.<credential>", e.g. a store_url). The runtime
 	// resolves them per invocation; see CanFetchHosts.
-	connHost  []ConnectorHostRef
+	connHost []ConnectorHostRef
 	// smtp:send grants (smtp_send host import): fixed host globs, and hosts read from the org
 	// connector ("connector:<c>.<credential>").
-	smtpHost []string
-	smtpConn []ConnectorHostRef
+	smtpHost  []string
+	smtpConn  []ConnectorHostRef
 	eventPub  []string
 	eventSub  []string
 	connRead  []string        // connector keys: "github", "*" for any
 	ctxScope  map[string]bool // ctx_get slices: "user", "roles", "org_config"
 	capQuery  []string        // capability keys (globs) the addon may query via capability_query
+	aiFeature []string        // ai:complete features (exact keys) the addon may call ai.complete for
 	edgeCmd   []string        // "<device_key>.<command_kind>" globs the addon may send via edge_command
 	domManage []string        // domain purposes (globs) the addon may manage via the domains package
 }
@@ -66,6 +68,12 @@ func Compile(addonKey string, caps []manifest.Capability) *Capabilities {
 			c.connRead = append(c.connRead, cap.Target)
 		case "capability:query":
 			c.capQuery = append(c.capQuery, cap.Target)
+		case capability.AIPermissionKind:
+			// ai:complete <feature> implies capability:query ai.complete: the
+			// wasm capability_query import reaches the host-implemented
+			// contract and capability.AIGate checks the feature.
+			c.aiFeature = append(c.aiFeature, cap.Target)
+			c.capQuery = append(c.capQuery, capability.AIComplete)
 		case "edge:command":
 			c.edgeCmd = append(c.edgeCmd, cap.Target)
 		case "domain:manage":
@@ -312,6 +320,32 @@ func (c *Capabilities) CanQueryCapability(key string) error {
 		addon = c.addonKey
 	}
 	return fmt.Errorf("addon %q lacks capability:query %q", addon, key)
+}
+
+// CanCompleteAI returns nil if the addon declared `ai:complete <feature>`.
+// Exact match: AI features never take globs (each one is a purpose the admin
+// consented to).
+func (c *Capabilities) CanCompleteAI(feature string) error {
+	if c != nil {
+		for _, f := range c.aiFeature {
+			if f == feature {
+				return nil
+			}
+		}
+	}
+	addon := ""
+	if c != nil {
+		addon = c.addonKey
+	}
+	return fmt.Errorf("addon %q lacks %s %q", addon, capability.AIPermissionKind, feature)
+}
+
+// AIFeatures lists the features the addon may call ai.complete for.
+func (c *Capabilities) AIFeatures() []string {
+	if c == nil {
+		return nil
+	}
+	return append([]string(nil), c.aiFeature...)
 }
 
 // CanSendEdgeCommand returns nil if the addon declared

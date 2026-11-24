@@ -50,6 +50,9 @@
         "$ref": "#/$defs/Capability"
       }
     },
+    "ai": {
+      "$ref": "#/$defs/AI"
+    },
     "models": {
       "type": "array",
       "description": "Data models the addon owns. The installer materialises each as a table in the addon schema (shared) or per-tenant schema, with the declared columns, indices and RLS policies.",
@@ -1013,6 +1016,58 @@
         }
       ]
     },
+    "AI": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Limits of the AI features granted by ai:complete capabilities (capability.AISpec). Zero means no own limit: the host configuration applies. See docs/capabilities-ai.md.",
+      "properties": {
+        "monthly_sparks_cap": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Pulse Sparks the addon may spend per organization and calendar month, across features."
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AIFeature"
+          }
+        }
+      }
+    },
+    "AIFeature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,47}$",
+          "description": "Feature key; must be granted by an ai:complete capability."
+        },
+        "max_tier": {
+          "type": "string",
+          "enum": [
+            "fast",
+            "balanced",
+            "heavy"
+          ]
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "monthly_sparks_cap": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "personal_data": {
+          "type": "boolean",
+          "description": "The feature sends personal data; shown in the install consent and the host asks the hub to redact PII."
+        }
+      }
+    },
     "Capability": {
       "type": "object",
       "additionalProperties": false,
@@ -1044,9 +1099,10 @@
             "queue:consume",
             "file-storage:write",
             "time:wallclock",
-            "smtp:send"
+            "smtp:send",
+            "ai:complete"
           ],
-          "description": "Closed set of capability kinds the runtime enforces. `capability:query <key>` grants the capability_query host import for one capability key (glob allowed, e.g. `commerce.shipping.rates`): the addon asks for a capability and the host resolves the provider per organization and market. `connector:read <key>` grants connector_get for one connector key: an addon implicitly reads the connectors it declares in its own `connectors` block, so this kind is what an addon uses to read a connector DECLARED BY ANOTHER ADDON (e.g. waybill-cartaporte reading fiscal_mexico's `factura_com` so the org configures the PAC credentials once). `edge:command <device_key>.<command_kind>` grants the edge_command host import: send that command kind (glob allowed, e.g. `cashdro.*`) to a physical device of the org whose class is the addon's own `edge_devices[].key`, and receive the answer the host transported from the device's agent. `ctx:user` / `ctx:roles` / `ctx:org_config` grant the matching slice of the ctx_get host import (acting user id+email / the user's role keys / the org's currency, tax, locale and timezone settings); the target is ignored and conventionally `*`. `domain:manage <purpose>` lets the addon manage the organization's domains (package domains: register, verify ownership, read/apply DNS records) whose purposes include <purpose> (glob allowed, e.g. `mail` or `*`); it never reaches domains reserved for other purposes. `smtp:send <host>` grants the smtp_send host import (ABI 1.20): deliver one ready-made RFC 5322 message over SMTP through a mail server the organization configured; the target is a fixed host glob or `connector:<connector>.<credential>` so the host comes from the org's connector, never from the guest. TLS is mandatory and submission ports only."
+          "description": "Closed set of capability kinds the runtime enforces. `capability:query <key>` grants the capability_query host import for one capability key (glob allowed, e.g. `commerce.shipping.rates`): the addon asks for a capability and the host resolves the provider per organization and market. `connector:read <key>` grants connector_get for one connector key: an addon implicitly reads the connectors it declares in its own `connectors` block, so this kind is what an addon uses to read a connector DECLARED BY ANOTHER ADDON (e.g. waybill-cartaporte reading fiscal_mexico's `factura_com` so the org configures the PAC credentials once). `edge:command <device_key>.<command_kind>` grants the edge_command host import: send that command kind (glob allowed, e.g. `cashdro.*`) to a physical device of the org whose class is the addon's own `edge_devices[].key`, and receive the answer the host transported from the device's agent. `ctx:user` / `ctx:roles` / `ctx:org_config` grant the matching slice of the ctx_get host import (acting user id+email / the user's role keys / the org's currency, tax, locale and timezone settings); the target is ignored and conventionally `*`. `domain:manage <purpose>` lets the addon manage the organization's domains (package domains: register, verify ownership, read/apply DNS records) whose purposes include <purpose> (glob allowed, e.g. `mail` or `*`); it never reaches domains reserved for other purposes. `smtp:send <host>` grants the smtp_send host import (ABI 1.20): deliver one ready-made RFC 5322 message over SMTP through a mail server the organization configured; the target is a fixed host glob or `connector:<connector>.<credential>` so the host comes from the org's connector, never from the guest. TLS is mandatory and submission ports only. `ai:complete <feature>` grants one AI feature of the host-implemented capability `ai.complete` (LLM completion billed to the org's Pulse Sparks; the addon never holds LLM keys): the target is the feature key (no wildcards) and `reason`, the purpose the admin consents to, is required. Limits live in the top-level `ai` block. It implies `capability:query ai.complete`."
         },
         "target": {
           "type": "string",

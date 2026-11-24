@@ -99,6 +99,10 @@ type Contract struct {
 	// already created (confirm, status, refund, cancel, track, commit,
 	// reverse): Query.Provider is mandatory, selection never guesses.
 	PinRequired bool
+	// HostImplemented marks a contract the HOST answers itself (ai.complete):
+	// no addon may declare it in provides_capabilities, and the host installs
+	// a querier that answers it before provider selection (AIHostQuerier).
+	HostImplemented bool
 	// Input types the input fields (nil = untyped, names only).
 	Input *Schema
 	// Output is the normalized result shape of a query.

@@ -1969,6 +1969,8 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	errs = append(errs, validateOptionMetrics(&m, colsByModel)...)
 	// Provided capability contracts + capability-typed handlers.
 	errs = append(errs, validateCapabilities(&m)...)
+	// ai:complete grants + the ai block (ai.go).
+	errs = append(errs, validateAI(&m)...)
 	// Federated pages, declarative views and detail panels (ui_validate.go).
 	errs = append(errs, validateUI(&m, colsByModel)...)
 	// Item-master primitives: 1:1 extension tables, searchable columns and
