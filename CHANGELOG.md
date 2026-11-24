@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `manifest`, `dynamic` (**widgets de campo de un addon**; aditivo): `columns[].widget` acepta, además de los integrados, `<clave_del_addon>.<nombre>` (p. ej. `products.market_picker`): un widget que el frontend del propio addon registra con `registerFieldWidget` de runtime-react. El espacio de nombres es la clave del manifiesto, así no tapa un integrado ni el de otro addon, y un integrado mal escrito sigue fallando. `DeriveFormFields` lleva ese nombre solo en `widget` y conserva el `type` del almacenamiento: un host sin el widget pinta el campo de siempre. Nuevos `manifest.IsAddonFieldWidget` / `manifest.IsNamespacedWidget`. Schema v3 (ambas copias) documenta la forma.
+
 ### Fixed
 
 - `httpx/metacore` (**`ServeAddonFrontend` respondia 403 en Windows**): con un `FrontendBasePath` absoluto, la ruta lleva la letra de unidad (`C:`) y el servidor de archivos de fasthttp la rechaza con 403 (su guarda contra flujos alternos de NTFS), asi que ningun `remoteEntry.js` de addon cargaba. Ahora se envia el archivo ya validado con `SendStream`; cabeceras (tipo, `nosniff`, no-cache del entry) y la guarda de traversal sin cambios. Prueba: `TestServeAddonFrontend_AbsoluteBasePath` (403 antes, 200 despues en Windows).

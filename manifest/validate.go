@@ -400,7 +400,7 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 			if _, ok := DefaultLiteral(col.Default); !ok {
 				return fmt.Errorf("manifest.model_definitions[%d].columns[%d].default: %v not allowed (use numeric, 'quoted' literal, now(), gen_random_uuid(), true, false, null)", i, j, col.Default)
 			}
-			if err := validateColumnExtensions(col); err != nil {
+			if err := validateColumnExtensions(col, m.Key); err != nil {
 				return fmt.Errorf("manifest.model_definitions[%d].columns[%d]: %w", i, j, err)
 			}
 		}
@@ -1032,10 +1032,32 @@ func validateTriggerSet(where string, set map[string]any) error {
 	return nil
 }
 
+// addonWidgetNameRe is the local part of an addon field widget (`<addon>.<name>`).
+var addonWidgetNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// IsAddonFieldWidget reports whether widget names a FORM widget that the addon
+// `addonKey` itself registers in the host (runtime-react registerFieldWidget):
+// `<addonKey>.<name>`. The built-in set stays closed (a typo there still
+// fails); an addon widget is namespaced by its own key, so it can neither
+// shadow a built-in nor another addon's widget. A host without the widget
+// registered falls back to the column's storage-type input
+// (dynamic.DeriveFormFields keeps that type for addon widgets).
+func IsAddonFieldWidget(widget, addonKey string) bool {
+	if addonKey == "" || !strings.HasPrefix(widget, addonKey+".") {
+		return false
+	}
+	return addonWidgetNameRe.MatchString(strings.TrimPrefix(widget, addonKey+"."))
+}
+
+// IsNamespacedWidget: an addon field widget (`<addon>.<name>`); the built-in
+// widgets never carry a dot. Lets code without the addon key (form derivation)
+// tell the two apart.
+func IsNamespacedWidget(widget string) bool { return strings.Contains(widget, ".") }
+
 // validateColumnExtensions enforces the optional metadata fields on
 // ColumnDef (Visibility, Searchable, Validation, Widget). The function is a
 // no-op for zero-valued columns so legacy manifests keep validating.
-func validateColumnExtensions(col ColumnDef) error {
+func validateColumnExtensions(col ColumnDef, addonKey string) error {
 	if col.Visibility != "" {
 		if _, ok := validVisibility[col.Visibility]; !ok {
 			return fmt.Errorf("visibility %q not allowed (want table|modal|list|all)", col.Visibility)
@@ -1047,8 +1069,8 @@ func validateColumnExtensions(col ColumnDef) error {
 		}
 	}
 	if col.Widget != "" {
-		if _, ok := validWidgets[col.Widget]; !ok {
-			return fmt.Errorf("widget %q not allowed", col.Widget)
+		if _, ok := validWidgets[col.Widget]; !ok && !IsAddonFieldWidget(col.Widget, addonKey) {
+			return fmt.Errorf("widget %q not allowed (built-in, or %q for a widget this addon registers)", col.Widget, addonKey+".<name>")
 		}
 	}
 	// OptionsSource is an OPEN enum (providers are host-registered, so the

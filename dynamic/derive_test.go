@@ -297,3 +297,21 @@ func TestDefaultsCRUDEnabled(t *testing.T) {
 		t.Error("expected CRUD enabled for a def with columns")
 	}
 }
+
+// An addon widget (`<addon>.<name>`) travels in Widget only: the field type
+// stays the storage one, so a host without the widget renders the old input.
+func TestDeriveFormFieldsAddonWidgetKeepsType(t *testing.T) {
+	def := manifest.ModelDefinition{
+		Columns: []manifest.ColumnDef{
+			{Name: "markets", Type: "jsonb", Widget: "products.market_picker"},
+			{Name: "notes", Type: "text", Widget: "textarea"},
+		},
+	}
+	fields := DeriveFormFields(def)
+	if fields[0].Widget != "products.market_picker" || fields[0].Type != FormFieldType("jsonb") {
+		t.Errorf("addon widget: got type=%q widget=%q", fields[0].Type, fields[0].Widget)
+	}
+	if fields[1].Type != "textarea" {
+		t.Errorf("built-in widget still sets the type, got %q", fields[1].Type)
+	}
+}
