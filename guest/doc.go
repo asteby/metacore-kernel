@@ -26,6 +26,10 @@
 //     returns Optional{Rows, Absent}: a missing data source (addon not
 //     installed or disabled, table or column absent) is a typed value, not
 //     an error. Works against hosts with and without source_unavailable.
+//   - AIComplete — the host-implemented ai.complete capability through
+//     metacore_host.capability_query (gated by `ai:complete <feature>`).
+//     No Pulse, a reached cap or the hub down are AIResult statuses, never
+//     errors; *AIError is only forbidden / validation_error.
 //   - ClassifyHostError — pure (no host import): classifies any data_query /
 //     data_mutate / data_batch envelope into HostOutcome{Absent, Err}. It
 //     recognises code=="source_unavailable" and the old db_error whose

@@ -3,6 +3,7 @@ package manifest
 import (
 	"strings"
 
+	"github.com/asteby/metacore-kernel/capability"
 	v3 "github.com/asteby/metacore-kernel/manifest/v3"
 	"github.com/asteby/metacore-kernel/runtime/native"
 )
@@ -149,6 +150,12 @@ type Manifest struct {
 	// prompts the admin for approval and the runtime enforces them.
 	Capabilities []Capability `json:"capabilities,omitempty"`
 
+	// AI limits the features granted by `ai:complete` capabilities (monthly
+	// Sparks caps per addon and feature, max tier, max tokens, personal data).
+	// nil = host defaults. Shared shape with v3; see capability.AISpec and
+	// docs/capabilities-ai.md.
+	AI *capability.AISpec `json:"ai,omitempty"`
+
 	// Permissions is legacy declarative model/scope access. Prefer Capabilities.
 	Permissions []Permission `json:"permissions,omitempty"`
 
@@ -179,12 +186,12 @@ type Manifest struct {
 	// the root v3 blocks of the same names, carried verbatim so the legacy
 	// validator and hosts apply the same role rules (v3.CheckRoles). All
 	// optional: empty for an addon that declares none.
-	Role         string          `json:"role,omitempty"`
-	Deprecated   *v3.Deprecation `json:"deprecated,omitempty"`
-	Contracts    []v3.Contract   `json:"contracts,omitempty"`
-	Implements   []v3.Implements `json:"implements,omitempty"`
+	Role         string           `json:"role,omitempty"`
+	Deprecated   *v3.Deprecation  `json:"deprecated,omitempty"`
+	Contracts    []v3.Contract    `json:"contracts,omitempty"`
+	Implements   []v3.Implements  `json:"implements,omitempty"`
 	ExtendsAddon *v3.ExtendsAddon `json:"extends_addon,omitempty"`
-	Replaces     []string        `json:"replaces,omitempty"`
+	Replaces     []string         `json:"replaces,omitempty"`
 
 	// Connectors / Schedules / Webhooks are the host projection of the v3
 	// pipeline-runtime primitives (see manifest/v3.Connector/Schedule/

@@ -37,6 +37,10 @@ the parser fails closed.
 The mode is still switchable at runtime with `Enforcer.SetMode`.
 See also [permissions.md](permissions.md).
 
+Capability contracts by domain: [commerce](capabilities-commerce.md),
+[geo](capabilities-geo.md), [region](capabilities-region.md) and
+[ai](capabilities-ai.md) (`ai.complete`, host-implemented, billed in Pulse).
+
 ## Política de emisión de eventos
 
 `security.EmitPolicy` decide qué nombres de evento puede publicar un addon

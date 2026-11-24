@@ -236,6 +236,7 @@ Supported `kind` values are exhaustive — the enforcer rejects any other:
 | `event:subscribe`  | Event name or `prefix.*`                  | `events.Bus.Subscribe`                        |
 | `connector:read`   | Connector key (`github`) or `*`           | `connector_get` host import (cross-addon connector dispatch) |
 | `domain:manage`    | Domain purpose (`mail`), glob or `*`      | `Capabilities.CanManageDomain` — host guard for the org-domain primitive (package `domains`) |
+| `ai:complete`      | AI feature key (`ticket_triage`), exact, `reason` required | `Capabilities.CanCompleteAI` and `capability.AIGate` — host-implemented `ai.complete`, billed in Pulse Sparks; implies `capability:query ai.complete`. See [capabilities-ai.md](capabilities-ai.md) |
 
 The contract is in [`manifest/manifest.go`](../manifest/manifest.go) (type
 `Capability`) and the enforcement in

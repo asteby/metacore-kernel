@@ -3,6 +3,7 @@ package manifest
 import (
 	"strings"
 
+	"github.com/asteby/metacore-kernel/capability"
 	v3 "github.com/asteby/metacore-kernel/manifest/v3"
 	"github.com/asteby/metacore-kernel/runtime/native"
 )
@@ -152,6 +153,11 @@ func FromV3(m *v3.Manifest) Manifest {
 	}
 
 	out.Capabilities = mapCapabilities(m.Capabilities)
+	if m.AI != nil {
+		spec := *m.AI
+		spec.Features = append([]capability.AIFeatureSpec(nil), m.AI.Features...)
+		out.AI = &spec
+	}
 	out.ModelDefinitions = mapModels(m.Models)
 	attachRuleGuards(out.ModelDefinitions, m)
 	// Shared tenancy (default): every model is org-scoped at the host layer even

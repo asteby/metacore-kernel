@@ -507,6 +507,9 @@ func (m *Manifest) validateStrict(kernelVersion string) error {
 			return fmt.Errorf("manifest.capabilities[%d].target: wildcard %q not allowed for %s — declare explicit model names", i, c.Target, c.Kind)
 		}
 	}
+	if err := m.validateAI(); err != nil {
+		return err
+	}
 	if err := m.validateBackend(); err != nil {
 		return err
 	}

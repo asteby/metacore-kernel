@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/asteby/metacore-kernel/capability"
 	"github.com/asteby/metacore-kernel/runtime/native"
 )
 
@@ -30,17 +31,20 @@ const (
 
 // Manifest is the top-level v3 contract document.
 type Manifest struct {
-	APIVersion      string           `json:"apiVersion"`
-	Kind            string           `json:"kind"`
-	Metadata        Metadata         `json:"metadata"`
-	Compatibility   Compatibility    `json:"compatibility"`
-	Tenancy         *Tenancy         `json:"tenancy,omitempty"`
-	Capabilities    []Capability     `json:"capabilities,omitempty"`
-	Models          []Model          `json:"models,omitempty"`
-	Frontend        *Frontend        `json:"frontend,omitempty"`
-	Runtime         *Runtime         `json:"runtime,omitempty"`
-	Contributions   *Contributions   `json:"contributions,omitempty"`
-	ExtensionPoints *ExtensionPoints `json:"extension_points,omitempty"`
+	APIVersion    string        `json:"apiVersion"`
+	Kind          string        `json:"kind"`
+	Metadata      Metadata      `json:"metadata"`
+	Compatibility Compatibility `json:"compatibility"`
+	Tenancy       *Tenancy      `json:"tenancy,omitempty"`
+	Capabilities  []Capability  `json:"capabilities,omitempty"`
+	// AI limits the features granted by ai:complete capabilities (shared
+	// shape with the host manifest: capability.AISpec). nil = host defaults.
+	AI              *capability.AISpec `json:"ai,omitempty"`
+	Models          []Model            `json:"models,omitempty"`
+	Frontend        *Frontend          `json:"frontend,omitempty"`
+	Runtime         *Runtime           `json:"runtime,omitempty"`
+	Contributions   *Contributions     `json:"contributions,omitempty"`
+	ExtensionPoints *ExtensionPoints   `json:"extension_points,omitempty"`
 	// UI is the Loom block (RFC 0005): exposed Parts, published Seams and
 	// grafts. Optional; see ui.go.
 	UI *UIBlock `json:"ui,omitempty"`

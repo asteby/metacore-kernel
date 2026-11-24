@@ -2745,6 +2745,7 @@ Pide una capacidad (`commerce.shipping.rates`, `commerce.tax.calculate`, …) si
 - Capacidad requerida: `capability:query <clave>` (admite glob, p. ej. `commerce.*`). Sin ella: `forbidden`.
 - Errores: `no_provider`, `ambiguous_provider`, `validation_error`, `provider_required`, `idempotency_required`, `not_query`, `capability_unavailable` (el host no lo configuró), `capability_depth` (anidamiento > 3), `capability_error`.
 - El anfitrión lo activa con `Host.WithCapabilityQuerier`.
+- **Contratos implementados por el host.** `ai.complete` (IA cobrada en Pulse) no tiene addon proveedor: el host envuelve su querier con `capability.AIHostQuerier`, que la contesta con `capability.AIGate` usando `Query.Caller` (la clave del addon que sella la invocación, nunca el guest) para leer su política. El permiso es `ai:complete <feature>`, que implica `capability:query ai.complete`. Sin saldo o con un tope alcanzado el `output` trae `status` distinto de `ok`; `forbidden` e `invalid_input` son los únicos errores. Ayudante: `guest.AIComplete`. Ver [capabilities-ai.md](capabilities-ai.md). Sin ABI nueva: sigue siendo v1.12.
 
 ## 23. `approval_consume` — redeem a supervisor PIN grant (v1.15)
 
