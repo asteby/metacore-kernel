@@ -48,11 +48,11 @@ func TestFromV3_ReadPermissionRidesThrough(t *testing.T) {
 
 // The legacy (strict) plane enforces the same key shape as the v3 schema.
 func TestValidateColumnExtensions_ReadPermission(t *testing.T) {
-	if err := validateColumnExtensions(ColumnDef{Name: "cost", ReadPermission: "inventory.product.view_cost"}); err != nil {
+	if err := validateColumnExtensions(ColumnDef{Name: "cost", ReadPermission: "inventory.product.view_cost"}, "inventory"); err != nil {
 		t.Fatalf("valid key rejected: %v", err)
 	}
 	for _, bad := range []string{"cost", "*", "Inventory.Cost", "inventory..cost"} {
-		err := validateColumnExtensions(ColumnDef{Name: "cost", ReadPermission: bad})
+		err := validateColumnExtensions(ColumnDef{Name: "cost", ReadPermission: bad}, "inventory")
 		if err == nil || !strings.Contains(err.Error(), "read_permission") {
 			t.Fatalf("%q: err %v", bad, err)
 		}

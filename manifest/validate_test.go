@@ -164,6 +164,25 @@ func TestValidate_ColumnWidgetRejected(t *testing.T) {
 	}
 }
 
+// An addon can name a field widget its own frontend registers, namespaced by
+// its key; another addon's namespace, a bare unknown name or a malformed local
+// part are still rejected.
+func TestValidate_ColumnAddonWidget(t *testing.T) {
+	ok := withColumn(manifest.ColumnDef{Name: "title", Type: "jsonb", Widget: "ext.market_picker"})
+	if err := ok.Validate("2.0.0"); err != nil {
+		t.Fatalf("widget=ext.market_picker should be accepted, got %v", err)
+	}
+	for _, w := range []string{"other.market_picker", "market_picker", "ext.", "ext.Market", "ext.a.b"} {
+		m := withColumn(manifest.ColumnDef{Name: "title", Type: "jsonb", Widget: w})
+		if err := m.Validate("2.0.0"); err == nil || !strings.Contains(err.Error(), "widget") {
+			t.Errorf("widget=%q should be rejected, got %v", w, err)
+		}
+	}
+	if !manifest.IsNamespacedWidget("ext.x") || manifest.IsNamespacedWidget("textarea") {
+		t.Fatal("IsNamespacedWidget: dotted = addon widget, built-ins have no dot")
+	}
+}
+
 func TestValidate_ColumnSearchable(t *testing.T) {
 	// Searchable is a plain bool — there is no invalid state, just
 	// confirm it survives a round trip through Validate without

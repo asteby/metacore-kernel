@@ -461,8 +461,11 @@ func DeriveFormFields(def manifest.ModelDefinition) []modelbase.FieldDef {
 		// opted in, e.g. "textarea"/"email"), else map the storage type, then
 		// promote known image columns (logo/image/photo/…) to a file picker and
 		// long-text columns (description/notes/…) to a textarea.
+		// An addon widget (`<addon>.<name>`, manifest.IsAddonFieldWidget) is carried
+		// in Widget only: the type stays the storage/promoted one so a host
+		// without that widget registered renders the input it always did.
 		ftype := FormFieldType(c.Type)
-		if c.Widget != "" {
+		if c.Widget != "" && !manifest.IsNamespacedWidget(c.Widget) {
 			ftype = c.Widget
 		} else if c.Ref != "" {
 			// A column declaring a FK target renders as a searchable relation
