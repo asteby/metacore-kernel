@@ -13,7 +13,7 @@ Este RFC define **`ai.complete`**: una capacidad **implementada por el host** (n
 
 | # | Decisión |
 |---|---|
-| D1 | **Una sola capacidad, `ai.complete`, implementada por el host.** Mismo registro de contratos que `geo.*` y `commerce.*` (tipos, validación, documentación), con la marca *host-implemented* del ledger de pagos: ningún addon puede declararla en `provides_capabilities`. |
+| D1 | **Una sola capacidad, `ai.complete`, implementada por el host.** Mismo registro de contratos que `geo.*` y `commerce.*` (tipos, validación, documentación), con una marca nueva, `Contract.HostImplemented` (el host contesta, como ya hace el ledger de pagos con sus contratos): ningún addon puede declararla en `provides_capabilities`. |
 | D2 | **Permiso `ai:complete <feature>` en `capabilities[]`**, con `reason` obligatorio (la finalidad, que ve el administrador al instalar). Sin permiso para esa feature no hay llamada. |
 | D3 | **Límites en un bloque `ai` del manifiesto:** tope mensual de Sparks por addon y por feature, tier máximo, `max_tokens` máximo y si la feature manda datos personales. Nada de límites fijos en código: lo que el addon no declara lo pone la configuración del host. |
 | D4 | **Sin saldo no es una excepción.** `insufficient_pulse`, tope del addon, tope de la org, límite de tasa o Hub caído son **resultados** (`status`) que el addon pinta («sin créditos de IA este mes») y con los que sigue funcionando. Solo un error de programación (entrada inválida, feature no declarada) es un error. |
@@ -169,7 +169,7 @@ Reglas de validación (kernel, en el manifiesto del host y en v3):
 - Ningún addon puede declarar `ai.complete` en `provides_capabilities` (es del host).
 - `ai:complete` implica `capability:query ai.complete` para el import wasm: no se pide dos veces.
 
-El tope efectivo es el **menor** entre el del manifiesto y el que fije la organización en la configuración del host; un addon sin `ai` usa los valores por defecto de la configuración del host (no hay números fijos en el kernel).
+El tope efectivo es el **menor** entre el del manifiesto y el que fije la organización en el ajuste de instalación `_ai_monthly_sparks_cap` (`capability.AIMonthlyCapSetting`, junto a los ajustes de selección de proveedor que ya existen; la org solo puede **bajarlo**); un addon sin `ai` usa los valores por defecto de la configuración del host (no hay números fijos en el kernel).
 
 ## 6. Metering, cuotas y patrocinio
 
@@ -183,16 +183,16 @@ El tope efectivo es el **menor** entre el del manifiesto y el que fije la organi
 
 **La fuente de verdad del dinero es el Hub** (`ai_usage_events`, ledger de Sparks). El contador del host es para topes y para mostrar «este addon gastó N este mes»; si difieren, manda el Hub.
 
-**Patrocinio (opcional, apagado por defecto).** Una cuenta patrocinadora paga la IA de otra para una feature concreta. Caso del dueño: la organización **«asteby»** paga la IA de la mesa de atención que corre en su propia org, o la de otra cuenta a la que da soporte. Reglas:
+**Patrocinio (opcional, apagado por defecto).** Una cuenta patrocinadora paga la IA de otra para una feature concreta. La organización **«asteby»** cumple dos papeles posibles, ambos por configuración y nunca por nombre o id en código: (a) **patrocinadora** que paga la IA de otra cuenta (p. ej. el soporte que da a un cliente), apagado por defecto; (b) **org donde corre la mesa de atención**: ahí el addon de soporte está instalado y su IA la paga su propio Pulse sin patrocinio (el patrocinador nunca se patrocina a sí mismo). Reglas:
 
-- Se **configura** en el host (OPS: `AI_SPONSOR_ORG_ID` y `AI_SPONSORED_FEATURES` con pares `addon.feature`); nunca se codifica un id ni un nombre de org.
+- Se **configura** en el host (OPS: `AI_SPONSOR_ORG_ID`, `AI_SPONSORED_FEATURES` con `addon` o `addon.feature` y, opcional, `AI_SPONSORED_ORGS` para limitar las cuentas beneficiarias); nunca se codifica un id ni un nombre de org.
 - El host solo **pide** el patrocinio (`sponsor_org_id` en el request). **El Hub lo autoriza** contra una concesión explícita de la patrocinadora (org beneficiaria, addon, feature, tope); sin concesión responde como si no hubiera patrocinio. Así una instancia no puede cargarle IA a una cuenta ajena.
 - El resultado dice `billed_to: sponsor`. El tope del addon en el host se sigue aplicando.
-- **Pendiente en el Hub:** el campo `sponsor_org_id` y la tabla de concesiones no existen todavía; hasta entonces el host no lo manda y todo lo paga la org.
+- **Pendiente en el Hub:** el campo `sponsor_org_id` y la tabla de concesiones no existen todavía; hasta entonces el Hub ignora el campo aunque el host lo mande (solo si se configuró) y todo lo paga la org; mientras tanto conviene dejarlo apagado.
 
 ## 7. Idempotencia
 
-- El SDK genera una `idempotency_key` por intento lógico (UUID) y la reusa en sus reintentos; el guest wasm la deriva de lo que procesa (p. ej. `ticket:<id>:triage:<versión>`).
+- El SDK genera una `idempotency_key` por llamada (UUID); para reintentos o recargas el addon pasa la suya, derivada de lo que procesa; el guest wasm la deriva de lo que procesa (p. ej. `ticket:<id>:triage:<versión>`).
 - El Hub guarda `(instancia, idempotency_key)` y, si vuelve a llegar, devuelve el mismo resultado con `replay: true` y **sin débito** (extensión aditiva del Hub).
 - Sin clave no hay idempotencia: dos llamadas cobran dos veces. Por eso el contrato la recomienda y el SDK la pone siempre.
 
@@ -289,6 +289,25 @@ Importante: se firma **exactamente** el cuerpo que se manda (por eso `withBody`,
 | F4 | Primer addon (tickets: triage) y cliente 7 Leguas | caso real en una org de prueba con Pulse agotado y con saldo |
 | F5 | Hub: patrocinio (`sponsor_org_id` + concesiones) | la org «asteby» paga una feature de otra cuenta solo con concesión |
 | F6 | OPS: consolidación de transportes (§10) | sin cambios de comportamiento en Aby, BI e imágenes |
+
+### 13.1 Orden de integración (qué se mergea y publica primero)
+
+| # | Paso | Repo / PR | Bloquea a |
+|---|---|---|---|
+| 1 | Contrato extendido de `/v1/ai/complete` desplegado (`addon_key`, `feature`, `idempotency_key` con `replay`, `response_format`, `redact_pii`, `cost_sparks`, `keepText=false` con `addon_key`) | Hub, `feat/soporte-escalado` | que el cobro por addon sea atribuible e idempotente (sin esto todo funciona, pero sin `cost_sparks` los topes del host no suben) |
+| 2 | Este RFC aprobado | metacore-kernel #703 | 3 |
+| 3 | Kernel: contrato, permiso, bloque `ai`, `AIGate`, `guest.AIComplete` → **publicar versión minor** | metacore-kernel #704 | 4, 5, 6 |
+| 4 | OPS: **pin** del kernel publicado en `backend/go.mod` (hoy el PR compila solo con `replace` local) y merge a la rama de despliegue | asteby-ops (PR feat/ai-complete-host) | 6 |
+| 5 | SDK: `pnpm codegen` contra el kernel publicado (tipos del bloque `ai`), merge y publicación con changesets | metacore-sdk #1625 | 6 |
+| 6 | Primer addon (tickets: `ticket_triage`) y cliente 7 Leguas por cable | addons / 7l | — |
+| 7 | Hub: patrocinio (`sponsor_org_id` + concesiones) | Hub | encender `AI_SPONSOR_ORG_ID` |
+| 8 | OPS: consolidación de transportes (§10) | asteby-ops | — |
+
+### 13.2 Implementación de referencia
+
+- Kernel: asteby/metacore-kernel#704 (`capability/ai.go`, `capability/ai_gate.go`, `capability/aitest`, `manifest/ai.go`, `manifest/v3/ai.go`, `security`, `guest/ai.go`, `docs/capabilities-ai.md`, `docs/ai-cable-cliente-no-ops.md`).
+- OPS: rama `feat/ai-complete-host` (`services/ai_capability.go`, `handlers/ai_complete.go`, extensión aditiva de `services/hubai`, columna `addon_manifests.ai`, métricas en `usage_metrics`).
+- SDK: asteby/metacore-sdk#1625 (`createAIClient`, `useAI`).
 
 ## 14. Alternativas descartadas
 
