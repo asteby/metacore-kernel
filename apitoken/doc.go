@@ -16,6 +16,12 @@
 // returned once by Issue / Rotate and never stored or logged; Prefix (its
 // first 12 characters) is kept for display.
 //
+// Options (all off by default; see docs/apitoken.md): WithNamespace("sup") gives
+// "sup_sk_..." prefixes, WithPepper(fn) stores "hmac-sha256$<hex>" keyed by a
+// deployment pepper, WithSchemedHash() stores "sha256$<hex>". The column also
+// reads the legacy bare hex, so tokens issued before schemes existed keep
+// authenticating.
+//
 // Service (framework-agnostic):
 //
 //	svc := apitoken.NewService(apitoken.NewGormStore(db))

@@ -359,7 +359,7 @@ func TestHashUniqueness(t *testing.T) {
 }
 
 func TestKindOf(t *testing.T) {
-	plain, _ := generate(KindPublishable, bytes.NewReader(make([]byte, 32)))
+	plain, _ := generate("", KindPublishable, bytes.NewReader(make([]byte, 32)))
 	if k, ok := KindOf(plain); !ok || k != KindPublishable {
 		t.Fatalf("KindOf(%q) = %v %v", plain, k, ok)
 	}

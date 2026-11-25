@@ -42,6 +42,31 @@ type ScopeStore interface {
 	UpdateScopes(ctx context.Context, id uuid.UUID, scopes []string, now time.Time) (*APIToken, error)
 }
 
+// HashesStore is an optional Store capability: load a token by any of several
+// TokenHash values in one round trip. Authenticate checks up to three stored
+// forms of a plaintext (peppered, "sha256$", bare); MemoryStore and GormStore
+// implement this so an unknown token costs one query, and any other Store is
+// queried once per form.
+type HashesStore interface {
+	// GetByAnyHash returns the token whose TokenHash equals one of hashes, or
+	// ErrNotFound.
+	GetByAnyHash(ctx context.Context, hashes []string) (*APIToken, error)
+}
+
+// getByAnyHash resolves a token from its candidate hashes.
+func getByAnyHash(ctx context.Context, s Store, hashes []string) (*APIToken, error) {
+	if hs, ok := s.(HashesStore); ok {
+		return hs.GetByAnyHash(ctx, hashes)
+	}
+	for _, h := range hashes {
+		t, err := s.GetByHash(ctx, h)
+		if !errors.Is(err, ErrNotFound) {
+			return t, err
+		}
+	}
+	return nil, ErrNotFound
+}
+
 // --- in-memory ------------------------------------------------------------
 
 // MemoryStore is a goroutine-safe in-memory Store for tests and single-node
@@ -99,6 +124,17 @@ func (s *MemoryStore) GetByHash(_ context.Context, hash string) (*APIToken, erro
 		return nil, ErrNotFound
 	}
 	return cloneToken(s.byID[id]), nil
+}
+
+// GetByAnyHash implements HashesStore.
+func (s *MemoryStore) GetByAnyHash(ctx context.Context, hashes []string) (*APIToken, error) {
+	for _, h := range hashes {
+		t, err := s.GetByHash(ctx, h)
+		if !errors.Is(err, ErrNotFound) {
+			return t, err
+		}
+	}
+	return nil, ErrNotFound
 }
 
 // List implements Store.
@@ -202,6 +238,11 @@ func (s *GormStore) Get(ctx context.Context, id uuid.UUID) (*APIToken, error) {
 // GetByHash implements Store.
 func (s *GormStore) GetByHash(ctx context.Context, hash string) (*APIToken, error) {
 	return s.first(ctx, "token_hash = ?", hash)
+}
+
+// GetByAnyHash implements HashesStore.
+func (s *GormStore) GetByAnyHash(ctx context.Context, hashes []string) (*APIToken, error) {
+	return s.first(ctx, "token_hash IN ?", hashes)
 }
 
 func (s *GormStore) first(ctx context.Context, where string, arg any) (*APIToken, error) {

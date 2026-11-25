@@ -34,6 +34,9 @@ type Service struct {
 	rand        io.Reader
 	log         *slog.Logger
 	publishable func(scope string) bool
+	namespace   string        // "" = no namespace
+	pepper      func() []byte // nil = no pepper
+	schemed     bool          // store "sha256$..." instead of the bare legacy hash
 
 	scopesMu sync.Mutex // serializes the SetScopes fallback for non-ScopeStore stores
 
@@ -72,6 +75,42 @@ func WithLogger(l *slog.Logger) Option {
 	}
 }
 
+// WithNamespace prefixes every token this Service issues and accepts with
+// "<ns>_" ahead of the kind ("sup" gives "sup_sk_...", "sup_pk_...",
+// "sup_pt_..."), so a deployment's tokens are recognizable by secret scanners
+// and cannot be confused with another deployment's. ns is 2-8 lowercase
+// letters or digits starting with a letter; anything else panics at
+// construction. A namespaced Service neither issues nor authenticates
+// un-namespaced tokens.
+func WithNamespace(ns string) Option {
+	if !validNamespace(ns) {
+		panic(fmt.Sprintf("apitoken: invalid namespace %q", ns))
+	}
+	return func(s *Service) { s.namespace = ns }
+}
+
+// WithPepper makes the Service store new tokens as "hmac-sha256$<hex>" keyed
+// by the deployment pepper returned by fn (called on every hash, so the host
+// may read it from a secret store). Without the pepper a peppered token cannot
+// be verified. Hashes already stored without a pepper (bare or "sha256$") keep
+// authenticating, so tokens issued before the pepper existed stay valid. If fn
+// returns no key, Issue and Rotate fail with ErrPepperUnavailable and
+// Authenticate only accepts un-peppered hashes. Changing the pepper
+// invalidates every token stored under the old one: roll those tokens with
+// Rotate (grace window) before retiring it.
+func WithPepper(fn func() []byte) Option {
+	return func(s *Service) { s.pepper = fn }
+}
+
+// WithSchemedHash stores new un-peppered tokens as "sha256$<hex>" instead of
+// the legacy bare hex. Off by default so a Service that has not adopted
+// schemes writes exactly what earlier versions wrote (a binary rollback keeps
+// authenticating); verification always reads every form. Peppered tokens
+// always carry a scheme, so this only matters without a pepper.
+func WithSchemedHash() Option {
+	return func(s *Service) { s.schemed = true }
+}
+
 // WithPublishableScopes replaces the default publishable allowlist (any
 // "<area>:read" plus "cart:write") with exactly these scopes.
 func WithPublishableScopes(scopes ...string) Option {
@@ -95,6 +134,41 @@ func DefaultPublishableScope(scope string) bool {
 	}
 	area, verb, ok := strings.Cut(scope, ":")
 	return ok && area != "*" && verb == "read"
+}
+
+// hashNew returns the column value for a new plaintext.
+func (s *Service) hashNew(plain string) (string, error) {
+	if s.pepper != nil {
+		key := s.pepper()
+		if len(key) == 0 {
+			return "", ErrPepperUnavailable
+		}
+		return HashTokenHMAC(plain, key), nil
+	}
+	if s.schemed {
+		return HashTokenSchemed(plain), nil
+	}
+	return HashToken(plain), nil
+}
+
+// currentPepper returns the pepper key, or nil when none is configured or
+// available.
+func (s *Service) currentPepper() []byte {
+	if s.pepper == nil {
+		return nil
+	}
+	return s.pepper()
+}
+
+// looksLikeToken reports whether raw carries one of this Service's token
+// prefixes (cheap pre-filter; Authenticate does the strict check).
+func (s *Service) looksLikeToken(raw string) bool {
+	for _, k := range []Kind{KindPublishable, KindSecret, KindPlatform} {
+		if strings.HasPrefix(raw, kindPrefix(s.namespace, k)) {
+			return true
+		}
+	}
+	return false
 }
 
 // NewService builds a Service over store.
@@ -217,12 +291,14 @@ func (s *Service) validate(t *APIToken, scopes []string, now time.Time) ([]strin
 // A hash collision (astronomically unlikely) is retried once.
 func (s *Service) create(ctx context.Context, t *APIToken) (string, error) {
 	for attempt := 0; ; attempt++ {
-		plain, err := generate(t.Kind, s.rand)
+		plain, err := generate(s.namespace, t.Kind, s.rand)
 		if err != nil {
 			return "", fmt.Errorf("apitoken: generate: %w", err)
 		}
-		t.TokenHash = HashToken(plain)
-		t.Prefix = displayPrefix(plain)
+		if t.TokenHash, err = s.hashNew(plain); err != nil {
+			return "", err
+		}
+		t.Prefix = displayPrefix(s.namespace, plain)
 		err = s.store.Create(ctx, t)
 		if errors.Is(err, ErrDuplicateHash) && attempt == 0 {
 			continue
@@ -239,18 +315,19 @@ func (s *Service) create(ctx context.Context, t *APIToken) (string, error) {
 // On success last_used_at is refreshed at most once per minute per token
 // (best effort: a failed write is logged, never returned).
 func (s *Service) Authenticate(ctx context.Context, plaintext string) (*APIToken, error) {
-	kind, ok := KindOf(plaintext)
+	kind, ok := KindOfIn(s.namespace, plaintext)
 	if !ok {
 		return nil, ErrInvalidToken
 	}
-	t, err := s.store.GetByHash(ctx, HashToken(plaintext))
+	cands := hashCandidates(plaintext, s.currentPepper())
+	t, err := getByAnyHash(ctx, s.store, cands)
 	if errors.Is(err, ErrNotFound) {
 		return nil, ErrInvalidToken
 	}
 	if err != nil {
 		return nil, err
 	}
-	if t.Kind != kind {
+	if !matchesAny(t.TokenHash, cands) || t.Kind != kind {
 		return nil, ErrInvalidToken
 	}
 	now := s.now().UTC()
