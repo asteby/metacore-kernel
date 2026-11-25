@@ -348,3 +348,31 @@ func TestRoles_ContractKeyShapeEnforcedInGo(t *testing.T) {
 		t.Fatalf("key shape errors wrong: %v", errs)
 	}
 }
+
+func TestRoles_RDPrime_ProviderOnlyAttaches(t *testing.T) {
+	nav := func(items ...interface{}) func(map[string]interface{}) {
+		return func(m map[string]interface{}) {
+			asProvider(m)
+			m["contributions"] = mm("navigation", []interface{}{mm("title", "Pay", "key", "acme_pay.pay", "section", "settings", "items", append([]interface{}{}, items...))})
+		}
+	}
+	attached := mm("key", "cfg", "title", "Cfg", "attach_to", "settings.acme", "as", "setting", "page", "p")
+	own := mm("key", "own", "title", "Own", "url", "/x")
+	// own items fail; the finding is the R-D error.
+	if _, err := validateRole(t, roleDoc("acme_pay", "provider", nav(own)), Options{Strict: true}); err == nil || !strings.Contains(err.Error(), "R-D") {
+		t.Fatalf("own item: want R-D, got %v", err)
+	}
+	// mixed own + attached still fails.
+	if _, err := validateRole(t, roleDoc("acme_pay", "provider", nav(attached, own)), Options{Strict: true}); err == nil || !strings.Contains(err.Error(), "R-D") {
+		t.Fatalf("mixed: want R-D, got %v", err)
+	}
+	// only attached items: R-D does not fire (other nav rules may still apply).
+	_, err := validateRole(t, roleDoc("acme_pay", "provider", nav(attached)), Options{Strict: true})
+	if err != nil && strings.Contains(err.Error(), "R-D") {
+		t.Fatalf("attached only: R-D must not fire, got %v", err)
+	}
+	// an empty group is still own navigation.
+	if _, err := validateRole(t, roleDoc("acme_pay", "provider", nav()), Options{Strict: true}); err == nil || !strings.Contains(err.Error(), "R-D") {
+		t.Fatalf("empty group: want R-D, got %v", err)
+	}
+}
