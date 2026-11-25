@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `capability` (**evento canónico `commerce.payments.refund_created`**; aditivo): nuevo `EventContract` en el dominio reservado `commerce.payments` (solo un proveedor de `commerce.payments.*` puede emitirlo). Payload `{provider, refund_id, status (RefundStatuses), amount (decimal), currency, order_id?, order_ref?, payment_id?, provider_ref?, occurred_at?, source?, refund?}`; los suscriptores deduplican por emisor + `refund_id` y tratan `manual_required` como «aún no emitido». Lo consume `storefront_notifications`. Ver `docs/adr/0006-duenos-y-enchufes.md`.
 - `manifest`, `dynamic` (**widgets de campo de un addon**; aditivo): `columns[].widget` acepta, además de los integrados, `<clave_del_addon>.<nombre>` (p. ej. `products.market_picker`): un widget que el frontend del propio addon registra con `registerFieldWidget` de runtime-react. El espacio de nombres es la clave del manifiesto, así no tapa un integrado ni el de otro addon, y un integrado mal escrito sigue fallando. `DeriveFormFields` lleva ese nombre solo en `widget` y conserva el `type` del almacenamiento: un host sin el widget pinta el campo de siempre. Nuevos `manifest.IsAddonFieldWidget` / `manifest.IsNamespacedWidget`. Schema v3 (ambas copias) documenta la forma.
 
 ### Fixed

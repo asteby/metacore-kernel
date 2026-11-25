@@ -97,6 +97,15 @@ const (
 // before acting on it.
 const CommercePaymentsConfirmed = "commerce.payments.confirmed"
 
+// CommercePaymentsRefundCreated is the normalized refund event every payment
+// provider emits when a refund it issued is created or changes status
+// (webhook, poll or staff action): {provider, refund_id, status, amount,
+// currency, order_id?, refund?}. It lies in the reserved commerce.payments
+// domain, so only a provider of a commerce.payments.* capability may emit it;
+// subscribers (notifications, accounting) dedupe on emitter + refund_id and
+// treat status manual_required as "not issued yet".
+const CommercePaymentsRefundCreated = "commerce.payments.refund_created"
+
 // CommercePaymentsTerminalDomain is the capability domain of in-person
 // payment devices (card terminals, cash recyclers). It lies under
 // commerce.payments, so a terminal provider may emit
@@ -577,6 +586,24 @@ func commerceEvents() []EventContract {
 				opt("payment_id", TypeString, "canonical payment id in the payments ledger, when recorded"),
 				opt("document_type", TypeString, "paid document kind in OPS (sales_order, checkout, invoice, ...)"),
 				opt("document_id", TypeString, "paid document id in OPS"),
+			),
+		},
+		{
+			Name: CommercePaymentsRefundCreated, EmittedBy: "commerce.payments",
+			Doc: "a payment provider created a refund or observed a new status of one (webhook, poll or staff action)",
+			Payload: schema(
+				req("provider", TypeString, "addon key of the provider (informative: subscribers trust the host-stamped emitter)"),
+				req("refund_id", TypeString, "refund id inside the provider; dedupe key together with the emitter"),
+				enum(req("status", TypeString, "normalized refund status"), RefundStatuses),
+				req("amount", TypeDecimal, "refunded amount as a decimal string"),
+				req("currency", TypeCurrency, "ISO 4217 currency of amount"),
+				opt("order_id", TypeString, "id of the refunded order / document, when the provider knows it"),
+				opt("order_ref", TypeString, "human order reference (same meaning as the confirm output order_ref)"),
+				opt("payment_id", TypeString, "canonical payment id in the payments ledger, when recorded"),
+				opt("provider_ref", TypeString, "provider id of the refunded payment"),
+				opt("occurred_at", TypeString, "RFC 3339 time the provider observed the refund"),
+				enum(opt("source", TypeString, "how the update was observed"), PaymentEventSources),
+				opt("refund", TypeObject, "provider-neutral refund details (free-form; flat fields above win)"),
 			),
 		},
 	}
