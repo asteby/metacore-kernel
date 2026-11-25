@@ -201,6 +201,10 @@ type InstanceContext struct {
 	Partner         string        `json:"partner,omitempty"`
 	Severity        string        `json:"severity,omitempty"`
 	RecentIncidents []IncidentRef `json:"recent_incidents,omitempty"`
+	// Plan is the commercial plan label of the license; LastHeartbeat is the
+	// RFC 3339 time of the last heartbeat of the instance. Both optional.
+	Plan          string `json:"plan,omitempty"`
+	LastHeartbeat string `json:"last_heartbeat,omitempty"`
 }
 
 // DeskCase is the case as the desk sees it.
@@ -217,6 +221,11 @@ type DeskCase struct {
 	OpenedAt        time.Time        `json:"opened_at"`
 	Severity        string           `json:"severity,omitempty"`
 	InstanceContext *InstanceContext `json:"instance_context,omitempty"`
+	// CaseID, Channel and Requester are the channel fields (see channels.go).
+	// They are optional: a desk that does not know them ignores them.
+	CaseID    string      `json:"case_id,omitempty"`
+	Channel   *ChannelRef `json:"channel,omitempty"`
+	Requester *Requester  `json:"requester,omitempty"`
 }
 
 // DeskMessage is a message of a desk case.

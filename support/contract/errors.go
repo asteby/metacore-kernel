@@ -28,6 +28,16 @@ const (
 	ErrCodeGitHub                  = "github_error"
 	ErrCodeUnavailable             = "unavailable"
 	ErrCodeInternal                = "internal"
+
+	// Channel errors.
+	ErrCodeOriginNotAllowed    = "origin_not_allowed"
+	ErrCodeChannelInactive     = "channel_inactive"
+	ErrCodeSessionExpired      = "session_expired"
+	ErrCodeIdentityInvalid     = "identity_invalid"
+	ErrCodeCaptchaRequired     = "captcha_required"
+	ErrCodeChannelQuotaReached = "channel_quota_exceeded"
+	ErrCodeChannelAICapReached = "channel_ai_cap_reached"
+	ErrCodeDeskNotVerified     = "desk_not_verified"
 )
 
 // Reasons that qualify a not_linked error. The code itself never changes so
@@ -38,8 +48,17 @@ const (
 	ReasonLinkDisabled = "link_disabled"
 )
 
-// ErrorDetail is the body of the error envelope. InstanceID and Reason are
-// only filled for not_linked.
+// Reasons that qualify a channel_inactive error (the channel status reason).
+const (
+	ReasonChannelOwner            = "owner"
+	ReasonChannelLicenseRevoked   = "license_revoked"
+	ReasonChannelAbuse            = "abuse"
+	ReasonChannelAddonUninstalled = "addon_uninstalled"
+	ReasonChannelStaff            = "staff"
+)
+
+// ErrorDetail is the body of the error envelope. InstanceID is only filled
+// for not_linked; Reason qualifies not_linked and channel_inactive.
 type ErrorDetail struct {
 	Code       string `json:"code"`
 	Message    string `json:"message"`
@@ -73,6 +92,15 @@ var codeStatus = map[string]int{
 	ErrCodeGitHub:                  http.StatusBadGateway,
 	ErrCodeUnavailable:             http.StatusServiceUnavailable,
 	ErrCodeInternal:                http.StatusInternalServerError,
+
+	ErrCodeOriginNotAllowed:    http.StatusForbidden,
+	ErrCodeChannelInactive:     http.StatusForbidden,
+	ErrCodeSessionExpired:      http.StatusUnauthorized,
+	ErrCodeIdentityInvalid:     http.StatusUnauthorized,
+	ErrCodeCaptchaRequired:     http.StatusPreconditionRequired,
+	ErrCodeChannelQuotaReached: http.StatusPaymentRequired,
+	ErrCodeChannelAICapReached: http.StatusPaymentRequired,
+	ErrCodeDeskNotVerified:     http.StatusConflict,
 }
 
 // StatusForCode returns the canonical HTTP status of an error code, or 0 when

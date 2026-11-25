@@ -25,6 +25,7 @@ var CallbackEvents = []string{
 // DeskEvents are the events the Hub sends to the desk ingest endpoint.
 var DeskEvents = []string{
 	EventCaseOpened, EventMessage, EventCaseResolved, EventDeskReopened,
+	EventVisitorErased,
 }
 
 // IsCallbackEvent reports whether e is a callback event this contract knows.
