@@ -188,10 +188,24 @@ func (t *SendImageTool) Execute(ctx context.Context, params map[string]interface
 }
 
 // HandoffToHumanTool transfiere la conversación a un humano
-type HandoffToHumanTool struct{}
+type HandoffToHumanTool struct {
+	sink        HandoffSink
+	description string
+	maxTurns    int
+	maxRunes    int
+	redact      func(string) string
+}
 
-func NewHandoffToHumanTool() *HandoffToHumanTool {
-	return &HandoffToHumanTool{}
+// NewHandoffToHumanTool builds the tool. With no options it behaves exactly as
+// it always has; see handoff_sink.go for the opt-in HandoffSink port.
+func NewHandoffToHumanTool(opts ...HandoffOption) *HandoffToHumanTool {
+	t := &HandoffToHumanTool{maxTurns: DefaultHandoffMaxTurns, maxRunes: DefaultHandoffTurnRunes}
+	for _, o := range opts {
+		if o != nil {
+			o(t)
+		}
+	}
+	return t
 }
 
 func (t *HandoffToHumanTool) Name() string {
@@ -203,17 +217,28 @@ func (t *HandoffToHumanTool) Category() string {
 }
 
 func (t *HandoffToHumanTool) Description() string {
+	if t.description != "" {
+		return t.description
+	}
 	return "Transfiere la conversación a un agente humano. Usa esto cuando: 1) El usuario lo solicite explícitamente, 2) No puedas resolver la consulta, 3) La situación requiera atención humana (quejas, problemas complejos)."
 }
 
 func (t *HandoffToHumanTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+	params := map[string]interface{}{
 		"reason": map[string]interface{}{
 			"type":        "string",
 			"description": "Razón del traspaso (para contexto del agente humano)",
 			"required":    true,
 		},
 	}
+	if t.sink != nil {
+		params["severity"] = map[string]interface{}{
+			"type":        "string",
+			"description": "Optional severity: blocker, high, normal or low",
+			"required":    false,
+		}
+	}
+	return params
 }
 
 func (t *HandoffToHumanTool) Execute(ctx context.Context, params map[string]interface{}, agentCtx *contextmgr.ConversationContext) (interface{}, error) {
@@ -222,12 +247,16 @@ func (t *HandoffToHumanTool) Execute(ctx context.Context, params map[string]inte
 		reason = "Usuario solicitó atención humana"
 	}
 
-	return map[string]interface{}{
+	result := map[string]interface{}{
 		"status":  "handoff_initiated",
 		"reason":  reason,
 		"message": "La conversación será transferida a un agente humano",
 		"action":  "DISABLE_BOT", // Tag especial para desactivar bot
-	}, nil
+	}
+	if t.sink == nil {
+		return result, nil
+	}
+	return t.dispatch(ctx, params, agentCtx, reason, result)
 }
 
 // FinalAnswerTool proporciona la respuesta final al usuario
