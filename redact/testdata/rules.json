@@ -1,0 +1,149 @@
+{
+  "rules": [
+    {
+      "name": "private_key",
+      "pattern": "-----BEGIN [A-Z ]*PRIVATE KEY-----[A-Za-z0-9+/=:,.\\s]*(?:-----END [A-Z ]*PRIVATE KEY-----)?",
+      "extra": true,
+      "marker": "[redacted:private_key]"
+    },
+    {
+      "name": "url_credentials",
+      "pattern": "\\b([A-Za-z][A-Za-z0-9+.-]*://)[^\\s/?#@'\"]+(@)",
+      "prefix": "$1",
+      "suffix": "$2",
+      "extra": true,
+      "marker": "[redacted:url_credentials]"
+    },
+    {
+      "name": "url_signature",
+      "pattern": "([?\u0026;](?:x-amz-signature|x-amz-credential|x-amz-security-token|x-goog-signature|x-goog-credential|signature|sig)=)[^\u0026\\s#'\"]+",
+      "flags": "i",
+      "prefix": "$1",
+      "extra": true,
+      "marker": "[redacted:url_signature]"
+    },
+    {
+      "name": "bearer",
+      "pattern": "\\bbearer\\s+[a-z0-9._~+/=-]{8,}",
+      "flags": "i",
+      "prefix": "Bearer ",
+      "legacy_marker": "[REDACTED]",
+      "marker": "[redacted:bearer]"
+    },
+    {
+      "name": "basic_auth",
+      "pattern": "\\bbasic\\s+[a-z0-9+/_-]{8,}={0,2}",
+      "flags": "i",
+      "prefix": "Basic ",
+      "check": "basic_userpass",
+      "extra": true,
+      "marker": "[redacted:basic_auth]"
+    },
+    {
+      "name": "jwt",
+      "pattern": "\\beyJ[A-Za-z0-9_-]{6,}\\.[A-Za-z0-9_-]{6,}\\.[A-Za-z0-9_-]{6,}",
+      "legacy_marker": "[JWT]",
+      "marker": "[redacted:jwt]"
+    },
+    {
+      "name": "conn_string",
+      "pattern": "\\b(postgres(ql)?|mysql|mongodb(\\+srv)?|redis|amqp)://[^\\s'\"]+",
+      "flags": "i",
+      "prefix": "$1://",
+      "legacy_marker": "[REDACTED]",
+      "marker": "[redacted:conn_string]"
+    },
+    {
+      "name": "api_key",
+      "pattern": "\\b(sk|pk|rk|lic|ghp|gho|ghs|xox[bpa]|whsec)_[A-Za-z0-9_-]{8,}",
+      "flags": "i",
+      "legacy_marker": "[KEY]",
+      "marker": "[redacted:api_key]"
+    },
+    {
+      "name": "provider_key",
+      "pattern": "\\b(?:AKIA|ASIA)[A-Z0-9]{16}\\b|\\bAIza[0-9A-Za-z_-]{35}\\b|\\bgithub_pat_[A-Za-z0-9_]{20,}|\\bglpat-[A-Za-z0-9_-]{16,}|\\bsk-[A-Za-z0-9_-]{16,}|\\bnpm_[A-Za-z0-9]{30,}|\\bxapp-[A-Za-z0-9-]{10,}|\\bshp(?:at|ss|ca|pa)_[A-Fa-f0-9]{16,}|\\bSG\\.[A-Za-z0-9_-]{16,}\\.[A-Za-z0-9_-]{16,}",
+      "extra": true,
+      "marker": "[redacted:provider_key]"
+    },
+    {
+      "name": "secret",
+      "pattern": "(\"?(password|passwd|pwd|secret|token|api[_-]?key|authorization|access_token|refresh_token|client_secret)\"?\\s*[:=]\\s*)(\"[^\"]*\"|'[^']*'|[^\\s,\u0026;}]+)",
+      "flags": "i",
+      "prefix": "$1",
+      "legacy_marker": "[REDACTED]",
+      "marker": "[redacted:secret]"
+    },
+    {
+      "name": "secret_ext",
+      "pattern": "(\"?(passphrase|private[_-]?key|x-api-key|id_token|session[_-]?id|set-cookie|cookie|credentials?|auth[_-]?token)\"?\\s*[:=]\\s*)(\"[^\"]*\"|'[^']*'|[^\\s,\u0026;}]+)",
+      "flags": "i",
+      "prefix": "$1",
+      "extra": true,
+      "marker": "[redacted:secret_ext]"
+    },
+    {
+      "name": "email",
+      "pattern": "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}",
+      "legacy_marker": "[EMAIL]",
+      "marker": "[redacted:email]"
+    },
+    {
+      "name": "id_person",
+      "pattern": "\\b[A-Z\\x{00D1}\u0026]{4}\\d{6}[HM][A-Z]{5}[A-Z0-9]\\d\\b",
+      "marker": "[redacted:id_person]"
+    },
+    {
+      "name": "id_entity",
+      "pattern": "\\b[A-Z\\x{00D1}\u0026]{3,4}\\d{6}[A-Z0-9]{3}\\b",
+      "marker": "[redacted:id_entity]"
+    },
+    {
+      "name": "card",
+      "pattern": "\\b(?:\\d[ -]?){12,18}\\d\\b",
+      "check": "luhn",
+      "extra": true,
+      "marker": "[redacted:card]"
+    },
+    {
+      "name": "number",
+      "pattern": "\\b(?:\\d[ -]?){12,18}\\d\\b",
+      "legacy_marker": "[NUMBER]",
+      "marker": "[redacted:number]"
+    },
+    {
+      "name": "ip",
+      "pattern": "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b|(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}",
+      "check": "ip",
+      "extra": true,
+      "optional": true,
+      "marker": "[redacted:ip]"
+    },
+    {
+      "name": "phone",
+      "pattern": "(\\+\\d{1,3}[\\s-]?)?\\(?\\d{2,3}\\)?[\\s-]?\\d{3,4}[\\s-]?\\d{4}\\b",
+      "legacy_marker": "[PHONE]",
+      "marker": "[redacted:phone]"
+    },
+    {
+      "name": "hex",
+      "pattern": "\\b[A-Fa-f0-9]{40,}\\b",
+      "legacy_marker": "[HEX]",
+      "marker": "[redacted:hex]"
+    },
+    {
+      "name": "blob",
+      "pattern": "\\b[A-Za-z0-9+/]{48,}={0,2}",
+      "legacy_marker": "[BLOB]",
+      "marker": "[redacted:blob]"
+    },
+    {
+      "name": "blob_urlsafe",
+      "pattern": "\\b[A-Za-z0-9_-]{48,}",
+      "check": "mixed_alnum",
+      "extra": true,
+      "marker": "[redacted:blob_urlsafe]"
+    }
+  ],
+  "version": 1
+}
