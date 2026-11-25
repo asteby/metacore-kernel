@@ -19,8 +19,21 @@ const (
 	ProfileMaxOffline    = 500
 	ProfileMaxContactURL = 2048
 
+	// Presentation limits of the embed (inclusive; zero means "not set").
+	ProfileMaxInlineTarget = 120
+	ProfileMinInlineHeight = 320
+	ProfileMaxInlineHeight = 1200
+	ProfileMinPanelWidth   = 280
+	ProfileMaxPanelWidth   = 720
+	ProfileMaxOffset       = 120
+
 	BrandColorPattern = `^#[0-9A-Fa-f]{6}$`
 	LocalePattern     = `^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$`
+
+	// InlineTargetPattern is the closed character set of a simple CSS selector
+	// the loader resolves in the host page: no quotes, angle brackets,
+	// backslashes or semicolons.
+	InlineTargetPattern = `^[A-Za-z0-9_#.:>+~*,=()\[\] -]+$`
 )
 
 // Profile appearance and launcher position values.
@@ -33,9 +46,25 @@ const (
 	PositionBottomLeft  = "bottom-left"
 )
 
+// Embed display modes. An empty DisplayMode means DisplayFloating.
+const (
+	DisplayFloating = "floating"
+	DisplayInline   = "inline"
+	DisplayPush     = "push"
+)
+
+// Launcher shapes. An empty LauncherShape means LauncherRound.
+const (
+	LauncherRound   = "round"
+	LauncherRounded = "rounded"
+	LauncherSquare  = "square"
+)
+
 var (
 	brandColorRe = regexp.MustCompile(BrandColorPattern)
 	localeRe     = regexp.MustCompile(LocalePattern)
+
+	inlineTargetRe = regexp.MustCompile(InlineTargetPattern)
 )
 
 // ProfileTexts are the texts of one locale. They are data, not i18n keys.
@@ -64,6 +93,17 @@ type PublicProfile struct {
 	DefaultLocale   string                  `json:"default_locale,omitempty"`
 	Texts           map[string]ProfileTexts `json:"texts,omitempty"`
 	FallbackContact *FallbackContact        `json:"fallback_contact,omitempty"`
+
+	// Presentation of the embed. All optional; an empty value keeps the
+	// floating launcher. InlineTarget is only a selector the loader resolves
+	// in the customer page; the kernel never interprets it.
+	DisplayMode   string `json:"display_mode,omitempty"`
+	InlineTarget  string `json:"inline_target,omitempty"`
+	InlineHeight  int    `json:"inline_height,omitempty"`
+	PanelWidth    int    `json:"panel_width,omitempty"`
+	Offset        int    `json:"offset,omitempty"`
+	LauncherShape string `json:"launcher_shape,omitempty"`
+	LauncherLabel string `json:"launcher_label,omitempty"`
 }
 
 // Profile violation reasons.
@@ -112,6 +152,35 @@ func (p PublicProfile) Validate() error {
 	case "", PositionBottomRight, PositionBottomLeft:
 	default:
 		add("position", ProfileReasonInvalid)
+	}
+	switch p.DisplayMode {
+	case "", DisplayFloating, DisplayInline, DisplayPush:
+	default:
+		add("display_mode", ProfileReasonInvalid)
+	}
+	if p.InlineTarget != "" {
+		if len(p.InlineTarget) > ProfileMaxInlineTarget {
+			add("inline_target", ProfileReasonTooLong)
+		} else if !inlineTargetRe.MatchString(p.InlineTarget) || strings.Contains(strings.ToLower(p.InlineTarget), "javascript:") {
+			add("inline_target", ProfileReasonInvalid)
+		}
+	}
+	if p.InlineHeight != 0 && (p.InlineHeight < ProfileMinInlineHeight || p.InlineHeight > ProfileMaxInlineHeight) {
+		add("inline_height", ProfileReasonInvalid)
+	}
+	if p.PanelWidth != 0 && (p.PanelWidth < ProfileMinPanelWidth || p.PanelWidth > ProfileMaxPanelWidth) {
+		add("panel_width", ProfileReasonInvalid)
+	}
+	if p.Offset < 0 || p.Offset > ProfileMaxOffset {
+		add("offset", ProfileReasonInvalid)
+	}
+	switch p.LauncherShape {
+	case "", LauncherRound, LauncherRounded, LauncherSquare:
+	default:
+		add("launcher_shape", ProfileReasonInvalid)
+	}
+	if utf8.RuneCountInString(p.LauncherLabel) > ProfileMaxLauncher {
+		add("launcher_label", ProfileReasonTooLong)
 	}
 	if p.LogoURL != "" {
 		if r := httpsReason(p.LogoURL); r != "" {

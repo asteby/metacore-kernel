@@ -20,7 +20,7 @@ Standard library only. No I/O. Import path:
 | `version.go` | `ContractV1`, `ContractV2`, `X-Support-Contract` negotiation |
 | `channels.go` | Channel fields of the desk case (`ChannelRef`, `Requester`), thread views (`CaseView`, `MessageView`), `ProjectEvent`, `VisitorErasedEvent` |
 | `embed.go` | `EmbedSessionClaims` and `EmbedSessionPurpose` (`support.embed.session`) |
-| `profile.go` | `PublicProfile` and `Validate()` (colour, https URLs, text limits) |
+| `profile.go` | `PublicProfile` and `Validate()` (colour, https URLs, text limits, embed display modes) |
 | `testdata/*.json` | Golden fixtures, one per request, response and event, plus `signature_vectors.json` |
 
 ## Channels (additive, still contract v2)
@@ -32,7 +32,8 @@ A channel adds only optional fields and new events, so `ContractCurrent` stays 2
 - `ProjectEvent(CallbackEvent)` returns the thread message, the case status the event implies (empty when unchanged) and whether the event is known. Unknown events must still be acknowledged.
 - `PublicProfile.Validate()` returns `ProfileErrors`. The Hub still checks colour contrast and that the logo host is an allowed origin.
 - Channel error codes: `origin_not_allowed` 403, `channel_inactive` 403 (with `reason`), `session_expired` 401, `identity_invalid` 401, `captcha_required` 428, `channel_quota_exceeded` 402, `channel_ai_cap_reached` 402, `desk_not_verified` 409.
-- Fixtures for code generation (SDK): `thread_case.json`, `thread_message.json`, `embed_session_claims.json`, `public_profile.json`, `visitor_erased.json`, `desk_case_opened_channel.json`, `error_channel_inactive.json`.
+- Embed presentation (optional, additive; empty means `floating`): `display_mode` (`floating|inline|push`), `inline_target` (simple CSS selector, closed character set, max 120; only the loader resolves it in the customer page), `inline_height` (320-1200), `panel_width` (280-720), `offset` (0-120), `launcher_shape` (`round|rounded|square`), `launcher_label` (max 60 runes). Zero numbers mean "not set".
+- Fixtures for code generation (SDK): `thread_case.json`, `thread_message.json`, `embed_session_claims.json`, `public_profile.json`, `public_profile_inline.json`, `public_profile_push.json`, `visitor_erased.json`, `desk_case_opened_channel.json`, `error_channel_inactive.json`.
 
 ## Callback signature
 

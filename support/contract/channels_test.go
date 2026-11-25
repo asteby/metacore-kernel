@@ -183,6 +183,22 @@ func TestPublicProfileValidate(t *testing.T) {
 		{"bad locale key", func(p *PublicProfile) { p.Texts = map[string]ProfileTexts{"EN!": {}} }, "texts.EN!", ProfileReasonInvalid},
 		{"contact email", func(p *PublicProfile) { p.FallbackContact = &FallbackContact{Email: "not an email"} }, "fallback_contact.email", ProfileReasonInvalid},
 		{"contact url http", func(p *PublicProfile) { p.FallbackContact = &FallbackContact{URL: "http://x.example"} }, "fallback_contact.url", ProfileReasonNotHTTPS},
+		{"display mode", func(p *PublicProfile) { p.DisplayMode = "modal" }, "display_mode", ProfileReasonInvalid},
+		{"target tag injection", func(p *PublicProfile) { p.InlineTarget = "#a<script>" }, "inline_target", ProfileReasonInvalid},
+		{"target quote", func(p *PublicProfile) { p.InlineTarget = `[x="y"]` }, "inline_target", ProfileReasonInvalid},
+		{"target js", func(p *PublicProfile) { p.InlineTarget = "JavaScript:alert" }, "inline_target", ProfileReasonInvalid},
+		{"target semicolon", func(p *PublicProfile) { p.InlineTarget = "a;b" }, "inline_target", ProfileReasonInvalid},
+		{"target backslash", func(p *PublicProfile) { p.InlineTarget = `#a\3c` }, "inline_target", ProfileReasonInvalid},
+		{"target long", func(p *PublicProfile) { p.InlineTarget = "#" + rep(ProfileMaxInlineTarget) }, "inline_target", ProfileReasonTooLong},
+		{"height low", func(p *PublicProfile) { p.InlineHeight = 319 }, "inline_height", ProfileReasonInvalid},
+		{"height high", func(p *PublicProfile) { p.InlineHeight = 1201 }, "inline_height", ProfileReasonInvalid},
+		{"height negative", func(p *PublicProfile) { p.InlineHeight = -1 }, "inline_height", ProfileReasonInvalid},
+		{"width low", func(p *PublicProfile) { p.PanelWidth = 279 }, "panel_width", ProfileReasonInvalid},
+		{"width high", func(p *PublicProfile) { p.PanelWidth = 721 }, "panel_width", ProfileReasonInvalid},
+		{"offset high", func(p *PublicProfile) { p.Offset = 121 }, "offset", ProfileReasonInvalid},
+		{"offset negative", func(p *PublicProfile) { p.Offset = -1 }, "offset", ProfileReasonInvalid},
+		{"shape", func(p *PublicProfile) { p.LauncherShape = "star" }, "launcher_shape", ProfileReasonInvalid},
+		{"label long", func(p *PublicProfile) { p.LauncherLabel = rep(61) }, "launcher_label", ProfileReasonTooLong},
 		{"too many locales", func(p *PublicProfile) {
 			p.Texts = map[string]ProfileTexts{}
 			for i := 0; i <= ProfileMaxLocales; i++ {
@@ -229,5 +245,46 @@ func TestVisitorErasedAndErrors(t *testing.T) {
 	}
 	if e.Error.Reason != ReasonChannelOwner || StatusForCode(e.Error.Code) != 403 {
 		t.Fatalf("%+v", e)
+	}
+}
+
+func TestPublicProfileDisplayModes(t *testing.T) {
+	for _, name := range []string{"public_profile_inline.json", "public_profile_push.json"} {
+		var p PublicProfile
+		if err := json.Unmarshal(readFixture(t, name), &p); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Validate(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	for _, m := range []string{"", DisplayFloating, DisplayInline, DisplayPush} {
+		if err := (PublicProfile{DisplayMode: m}).Validate(); err != nil {
+			t.Fatalf("mode %q: %v", m, err)
+		}
+	}
+	for _, sel := range []string{"#help", ".a .b > div", "main[data-slot=support]", "div:not(.x), #y"} {
+		if err := (PublicProfile{InlineTarget: sel}).Validate(); err != nil {
+			t.Fatalf("selector %q: %v", sel, err)
+		}
+	}
+	edge := PublicProfile{InlineHeight: ProfileMaxInlineHeight, PanelWidth: ProfileMinPanelWidth, Offset: ProfileMaxOffset}
+	if err := edge.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	// A profile from before the fields existed is valid and re-encodes without
+	// any of the new keys.
+	var p PublicProfile
+	if err := json.Unmarshal(readFixture(t, "public_profile.json"), &p); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := json.Marshal(p)
+	for _, k := range []string{"display_mode", "inline_target", "inline_height", "panel_width", "offset", "launcher_shape", "launcher_label"} {
+		if strings.Contains(string(out), k) {
+			t.Fatalf("old profile re-encoded with %s", k)
+		}
 	}
 }
