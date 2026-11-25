@@ -9,6 +9,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/asteby/metacore-kernel/manifest"
+	v3 "github.com/asteby/metacore-kernel/manifest/v3"
 	"github.com/google/uuid"
 )
 
@@ -107,11 +108,39 @@ type InstalledAddon struct {
 	Version  string
 	Provides []string
 	Requires []manifest.AddonRequirement
+	// Contracts are the contracts this addon OWNS (contracts[]: key and
+	// version); ContractRequires its requires[].contract entries; Implements
+	// the contract keys it implements. Empty for addons that use none.
+	Contracts        []OwnedContract
+	ContractRequires []manifest.ContractRequirement
+	Implements       []string
+}
+
+// OwnedContract is a contract key and version owned by an addon.
+type OwnedContract struct {
+	Key     string
+	Version string
+	// One is true for selection cardinality "one" (or unset).
+	One bool
 }
 
 // InstalledFromManifest builds the resolver view of a manifest.
 func InstalledFromManifest(m manifest.Manifest) InstalledAddon {
-	return InstalledAddon{Key: m.Key, Version: m.Version, Provides: m.Provides, Requires: m.AddonRequires}
+	ia := InstalledAddon{Key: m.Key, Version: m.Version, Provides: m.Provides, Requires: m.AddonRequires, ContractRequires: m.ContractRequires}
+	ia.Contracts, ia.Implements = contractFacts(m)
+	return ia
+}
+
+func contractFacts(m manifest.Manifest) ([]OwnedContract, []string) {
+	var owned []OwnedContract
+	for _, c := range m.Contracts {
+		owned = append(owned, OwnedContract{Key: c.Key, Version: c.Version, One: c.Selection == nil || c.Selection.Cardinality != "many"})
+	}
+	var impls []string
+	for _, im := range m.Implements {
+		impls = append(impls, im.Contract)
+	}
+	return owned, impls
 }
 
 // normReq trims the key and folds the "key?" spelling into Optional, so a
@@ -186,6 +215,66 @@ func lookup(installed []InstalledAddon, key string) (ia InstalledAddon, viaProvi
 	return InstalledAddon{}, false, false
 }
 
+// ErrMissingContract: a non-optional requires[].contract has no installed
+// owner. The cascade plan (PlanContractInstall) installs the owner; the org
+// then picks a provider (A6).
+type ErrMissingContract struct {
+	Addon    string
+	Contract string
+	Range    string
+}
+
+func (e ErrMissingContract) Error() string {
+	return fmt.Sprintf("installer: addon %q requires contract %q %s, whose owner is not installed", e.Addon, e.Contract, rangeOrAny(e.Range))
+}
+
+// ErrIncompatibleContract: the installed owner publishes the contract at a
+// version outside the required range.
+type ErrIncompatibleContract struct {
+	Addon    string
+	Contract string
+	Range    string
+	Owner    string
+	Have     string
+}
+
+func (e ErrIncompatibleContract) Error() string {
+	return fmt.Sprintf("installer: addon %q requires contract %q %s, but %q publishes version %s", e.Addon, e.Contract, rangeOrAny(e.Range), e.Owner, e.Have)
+}
+
+// contractOwner finds the installed addon owning a contract.
+func contractOwner(installed []InstalledAddon, contract string) (InstalledAddon, OwnedContract, bool) {
+	for _, a := range installed {
+		for _, c := range a.Contracts {
+			if c.Key == contract {
+				return a, c, true
+			}
+		}
+	}
+	return InstalledAddon{}, OwnedContract{}, false
+}
+
+func checkContractRequires(installed []InstalledAddon, candidate manifest.Manifest) []error {
+	own := map[string]bool{}
+	for _, c := range candidate.Contracts {
+		own[c.Key] = true
+	}
+	var errs []error
+	for _, r := range candidate.ContractRequires {
+		if r.Optional || own[r.Contract] {
+			continue
+		}
+		owner, c, ok := contractOwner(installed, r.Contract)
+		switch {
+		case !ok:
+			errs = append(errs, ErrMissingContract{Addon: candidate.Key, Contract: r.Contract, Range: r.Range})
+		case !inRange(c.Version, r.Range):
+			errs = append(errs, ErrIncompatibleContract{Addon: candidate.Key, Contract: r.Contract, Range: r.Range, Owner: owner.Key, Have: c.Version})
+		}
+	}
+	return errs
+}
+
 // CheckInstallable verifies every non-optional peer requirement of candidate
 // against the installed set. All violations are returned joined (errors.As
 // finds each ErrMissingDependency / ErrIncompatibleVersion); nil when none. An
@@ -204,6 +293,7 @@ func CheckInstallable(installed []InstalledAddon, candidate manifest.Manifest) e
 			errs = append(errs, ErrIncompatibleVersion{Addon: candidate.Key, Required: r.Key, Range: r.Range, Have: have.Version})
 		}
 	}
+	errs = append(errs, checkContractRequires(installed, candidate)...)
 	return errors.Join(errs...)
 }
 
@@ -232,6 +322,36 @@ func CheckUpgradable(installed []InstalledAddon, candidate manifest.Manifest) er
 				errs = append(errs, ErrIncompatibleVersion{Addon: d.Key, Required: candidate.Key, Range: r.Range, Have: candidate.Version})
 			}
 		}
+		// Dependents through a contract the candidate owns: the new version of
+		// the contract must stay in their range (dropping it is a removal).
+		for _, r := range d.ContractRequires {
+			if r.Optional {
+				continue
+			}
+			wasOwner := false
+			for _, a := range installed {
+				if a.Key == candidate.Key {
+					for _, c := range a.Contracts {
+						wasOwner = wasOwner || c.Key == r.Contract
+					}
+				}
+			}
+			if !wasOwner {
+				continue
+			}
+			found := false
+			for _, c := range candidate.Contracts {
+				if c.Key == r.Contract {
+					found = true
+					if !inRange(c.Version, r.Range) {
+						errs = append(errs, ErrIncompatibleContract{Addon: d.Key, Contract: r.Contract, Range: r.Range, Owner: candidate.Key, Have: c.Version})
+					}
+				}
+			}
+			if !found {
+				errs = append(errs, ErrMissingContract{Addon: d.Key, Contract: r.Contract, Range: r.Range})
+			}
+		}
 	}
 	return errors.Join(errs...)
 }
@@ -248,16 +368,36 @@ func Dependents(installed []InstalledAddon, key string) []string {
 			}
 		}
 	}
+	owned := map[string]bool{}
+	for _, a := range installed {
+		if a.Key == key {
+			for _, c := range a.Contracts {
+				owned[c.Key] = true
+			}
+		}
+	}
 	var out []string
 	for _, d := range installed {
 		if d.Key == key {
 			continue
 		}
+		dep := false
 		for _, r := range peerReqs(d.Requires) {
 			if !r.Optional && provides[r.Key] {
-				out = append(out, d.Key)
+				dep = true
 				break
 			}
+		}
+		// A non-optional consumer of a contract key owns blocks its removal
+		// (RFC SDK-0001 §6.4). Implementers do not (yet): removing an owner
+		// with implementers only warns (warnDanglingContracts).
+		for _, r := range d.ContractRequires {
+			if !r.Optional && owned[r.Contract] {
+				dep = true
+			}
+		}
+		if dep {
+			out = append(out, d.Key)
 		}
 	}
 	sort.Strings(out)
@@ -292,7 +432,7 @@ func UninstallOrder(installed []InstalledAddon, key string) []string {
 	var set []manifest.Manifest
 	for _, a := range installed {
 		if seen[a.Key] {
-			set = append(set, manifest.Manifest{Key: a.Key, Version: a.Version, Provides: a.Provides, AddonRequires: a.Requires})
+			set = append(set, manifest.Manifest{Key: a.Key, Version: a.Version, Provides: a.Provides, AddonRequires: a.Requires, ContractRequires: a.ContractRequires, Contracts: ownedToV3(a.Contracts)})
 		}
 	}
 	order, err := ResolveOrder(set)
@@ -359,6 +499,35 @@ func ResolveOrder(manifests []manifest.Manifest) ([]string, error) {
 				soft = append(soft, [2]string{m.Key, to})
 			} else {
 				hard[m.Key][to] = true
+			}
+		}
+	}
+	// Contract edges: a consumer comes after the member that owns the
+	// contract it requires (hard unless optional); an implementer after the
+	// owner of what it implements (soft: implements never creates a cycle).
+	contractOwnerOf := map[string]string{}
+	for _, m := range manifests {
+		for _, c := range m.Contracts {
+			if _, dup := contractOwnerOf[c.Key]; !dup {
+				contractOwnerOf[c.Key] = m.Key
+			}
+		}
+	}
+	for _, m := range manifests {
+		for _, r := range m.ContractRequires {
+			to, ok := contractOwnerOf[r.Contract]
+			if !ok || to == m.Key {
+				continue
+			}
+			if r.Optional {
+				soft = append(soft, [2]string{m.Key, to})
+			} else {
+				hard[m.Key][to] = true
+			}
+		}
+		for _, im := range m.Implements {
+			if to, ok := contractOwnerOf[im.Contract]; ok && to != m.Key {
+				soft = append(soft, [2]string{m.Key, to})
 			}
 		}
 	}
@@ -538,6 +707,8 @@ func (i *Installer) installedAddons(orgID uuid.UUID) ([]InstalledAddon, error) {
 		if lc, ok := i.Lifecycles.Get(r.AddonKey); ok {
 			m := lc.Manifest()
 			ia.Provides, ia.Requires = m.Provides, m.AddonRequires
+			ia.ContractRequires = m.ContractRequires
+			ia.Contracts, ia.Implements = contractFacts(m)
 		}
 		out = append(out, ia)
 	}
@@ -584,7 +755,11 @@ func (i *Installer) checkRequires(op string, orgID uuid.UUID, m manifest.Manifes
 	if err != nil {
 		return i.lookupFailed(op, orgID, m.Key, err)
 	}
-	return i.applyRequires(op, orgID, m.Key, CheckUpgradable(installed, m))
+	navErr, lookupErr := i.checkNavAnchors(orgID, m)
+	if lookupErr != nil {
+		return i.lookupFailed(op, orgID, m.Key, lookupErr)
+	}
+	return i.applyRequires(op, orgID, m.Key, errors.Join(CheckUpgradable(installed, m), navErr))
 }
 
 // UninstallOptions configures UninstallWithOptions.
@@ -628,4 +803,12 @@ func (i *Installer) checkUninstallRequires(orgID uuid.UUID, addonKey string) err
 		return i.lookupFailed("uninstall", orgID, addonKey, err)
 	}
 	return i.applyRequires("uninstall", orgID, addonKey, CheckUninstallable(installed, addonKey))
+}
+
+func ownedToV3(cs []OwnedContract) []v3.Contract {
+	out := make([]v3.Contract, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, v3.Contract{Key: c.Key, Version: c.Version})
+	}
+	return out
 }
