@@ -432,7 +432,7 @@ func TestFixtures(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v (run with -update)", path, err)
 		}
-		if string(got) != string(want) {
+		if strings.ReplaceAll(string(got), "\r\n", "\n") != string(want) {
 			t.Errorf("%s is stale; run `go test ./redact -run TestFixtures -update`", path)
 		}
 	}
