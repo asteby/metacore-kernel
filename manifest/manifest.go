@@ -914,6 +914,10 @@ type ToolDef struct {
 	Description      string           `json:"description"`        // shown to the LLM — be specific
 	Category         string           `json:"category,omitempty"` // communication | query | action | integration
 	InputSchema      []ToolInputParam `json:"input_schema,omitempty"`
+	// Schema is the v3 tool input_schema as declared (full JSON Schema: enum,
+	// items, nested objects), which InputSchema above flattens lossily. Hosts
+	// hand it to the LLM as-is (agent.ToolDefinition.Schema).
+	Schema map[string]any `json:"schema,omitempty"`
 	TriggerKeywords  []string         `json:"trigger_keywords,omitempty"`
 	TriggerIntents   []string         `json:"trigger_intents,omitempty"`
 	Endpoint         string           `json:"endpoint"`                     // relative or absolute URL

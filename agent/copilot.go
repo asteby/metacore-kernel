@@ -105,8 +105,8 @@ type CopilotConfig struct {
 	Memory MemoryConfig
 	// Conversations reads earlier turns' attachments. Optional.
 	Conversations ConversationStore
-	// Proposals is the pending-mutation store (default GlobalProposalStore).
-	Proposals *ProposalStore
+	// Proposals is the pending-mutation store (default GlobalProposalStore; NewGormProposalStore persists them).
+	Proposals ProposalRepository
 	// PrepareContext stamps the context with what the model layer needs for
 	// this turn (org AI runtime, billing identity, live mode). Optional.
 	PrepareContext func(ctx context.Context, orgID, userID uuid.UUID, live bool) context.Context

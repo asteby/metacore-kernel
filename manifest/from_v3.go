@@ -1,6 +1,9 @@
 package manifest
 
 import (
+	"encoding/json"
+	"fmt"
+	"sort"
 	"strings"
 
 	v3 "github.com/asteby/metacore-kernel/manifest/v3"
@@ -1658,7 +1661,15 @@ func mapTools(m *v3.Manifest) []ToolDef {
 		}
 		if t.Handler.Type == "webhook" {
 			td.Endpoint = t.Handler.URL
+			if td.Endpoint == "" {
+				td.Endpoint = t.Handler.Path
+			}
+			td.Method = t.Handler.Method
+			if t.Handler.TimeoutMS > 0 {
+				td.Timeout = (t.Handler.TimeoutMS + 999) / 1000
+			}
 		}
+		td.Schema, td.InputSchema = projectToolInput(t.InputSchema)
 		td.Trigger = handlerToTrigger(t.Handler)
 		out = append(out, td)
 	}
@@ -2217,4 +2228,47 @@ func peerRequirement(r v3.Requirement) (AddonRequirement, bool) {
 		return AddonRequirement{}, false
 	}
 	return AddonRequirement{Key: key, Range: strings.TrimSpace(r.Version), Optional: optional}, true
+}
+
+// projectToolInput keeps the tool's full JSON Schema (deep-copied) and also
+// flattens its top-level properties into ToolInputParam (type, description,
+// required, default, example), sorted by name, for hosts that normalize inputs.
+// A nil/empty schema yields (nil, nil).
+func projectToolInput(schema map[string]interface{}) (map[string]any, []ToolInputParam) {
+	if len(schema) == 0 {
+		return nil, nil
+	}
+	var full map[string]any
+	if raw, err := json.Marshal(schema); err == nil {
+		_ = json.Unmarshal(raw, &full)
+	}
+	if full == nil {
+		return nil, nil
+	}
+	props, _ := full["properties"].(map[string]any)
+	req := map[string]bool{}
+	if rs, ok := full["required"].([]any); ok {
+		for _, r := range rs {
+			if s, ok := r.(string); ok {
+				req[s] = true
+			}
+		}
+	}
+	names := make([]string, 0, len(props))
+	for n := range props {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var params []ToolInputParam
+	for _, n := range names {
+		p, _ := props[n].(map[string]any)
+		typ, _ := p["type"].(string)
+		desc, _ := p["description"].(string)
+		ip := ToolInputParam{Name: n, Type: typ, Description: desc, Required: req[n]}
+		if d, ok := p["default"]; ok {
+			ip.DefaultValue = fmt.Sprint(d)
+		}
+		params = append(params, ip)
+	}
+	return full, params
 }
