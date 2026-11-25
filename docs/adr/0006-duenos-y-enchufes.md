@@ -56,3 +56,13 @@ Entre manifests (instalación): `navigation.CheckInstalled` da error para dos du
 ## Evento `commerce.payments.refund_created`
 
 Evento canónico aditivo en el dominio reservado `commerce.payments` (solo un proveedor de `commerce.payments.*` puede emitirlo; lo vigila `security.EmitPolicy`). Payload: `provider`, `refund_id`, `status` (`RefundStatuses`), `amount` (decimal en texto), `currency` (obligatorios); `order_id`, `order_ref`, `payment_id`, `provider_ref`, `occurred_at`, `source`, `refund` (objeto libre) opcionales. Los suscriptores deduplican por emisor + `refund_id` y tratan `manual_required` como «aún no emitido». `order_ref` se agregó porque `storefront_notifications` lo lee; `refund` porque ese addon acepta el detalle anidado o plano.
+
+## Addendum: R-D' (sucesores que se enchufan)
+
+Un `provider`/`extension` no puede tener navegación propia, pero SÍ items que se
+enchufan (`attach_to` + `as`) a anchors de un dueño. `RoleFacts.OwnNavItems`
+cuenta los items de primer nivel sin `attach_to` y los grupos sin items; la regla
+R-D solo falla con `OwnNavItems > 0`. Además `navigation.CheckInstalled` rechaza
+que un sucesor (`Addon.Role` provider|extension) se enchufe a un anchor cuyo
+dueño no está en sus `requires` (por clave de addon, o por un contrato que el
+dueño declara y el sucesor requiere). Sin `Role` el chequeo no corre (legado).

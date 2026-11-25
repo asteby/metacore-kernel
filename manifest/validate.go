@@ -2328,6 +2328,17 @@ func (m *Manifest) RoleFacts() v3.RoleFacts {
 		f.ProvidedCapabilities = append(f.ProvidedCapabilities, p.Key)
 	}
 	f.NavigationGroups = len(m.Navigation)
+	for _, g := range m.Navigation {
+		if len(g.Items) == 0 {
+			f.OwnNavItems++
+			continue
+		}
+		for _, it := range g.Items {
+			if it.AttachTo == "" {
+				f.OwnNavItems++
+			}
+		}
+	}
 	return f
 }
 

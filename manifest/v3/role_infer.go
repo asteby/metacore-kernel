@@ -39,6 +39,27 @@ type RoleFacts struct {
 	ProvidedCapabilities []string
 	// NavigationGroups counts contributions.navigation entries.
 	NavigationGroups int
+	// OwnNavItems counts the navigation entries that are the addon's OWN: the
+	// top-level items WITHOUT attach_to, plus one per group that has no items.
+	// Items that plug into an owner's anchor (attach_to) are not own (R-D').
+	OwnNavItems int
+}
+
+// OwnNavCount counts the own (non-attached) entries of v3 navigation groups.
+func OwnNavCount(groups []NavGroup) int {
+	n := 0
+	for _, g := range groups {
+		if len(g.Items) == 0 {
+			n++
+			continue
+		}
+		for _, it := range g.Items {
+			if it.AttachTo == "" {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // RoleRequire is one compatibility.requires entry.
@@ -83,6 +104,7 @@ func (m *Manifest) RoleFacts() RoleFacts {
 	}
 	if m.Contributions != nil {
 		f.NavigationGroups = len(m.Contributions.Navigation)
+		f.OwnNavItems = OwnNavCount(m.Contributions.Navigation)
 	}
 	return f
 }

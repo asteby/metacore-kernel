@@ -35,11 +35,29 @@ type Addon struct {
 	FirstParty bool
 	Anchors    []v3.NavAnchor
 	Groups     []manifest.NavGroup
+	// Role, Requires, RequiresContracts and OwnedContracts feed the successor check of
+	// CheckInstalled (R-D'): a provider/extension only plugs into anchors of an
+	// addon it requires (by key, or by a contract the owner declares). All optional;
+	// an empty Role skips the check.
+	Role              string
+	Requires          []string
+	RequiresContracts []string
+	OwnedContracts    []string
 }
 
 // AddonFromManifest builds the resolver view of a host manifest.
 func AddonFromManifest(m manifest.Manifest, firstParty bool) Addon {
-	return Addon{Key: m.Key, FirstParty: firstParty, Anchors: m.NavAnchors, Groups: m.Navigation}
+	a := Addon{Key: m.Key, FirstParty: firstParty, Anchors: m.NavAnchors, Groups: m.Navigation, Role: m.Role}
+	for _, r := range m.AddonRequires {
+		a.Requires = append(a.Requires, r.Key)
+	}
+	for _, r := range m.ContractRequires {
+		a.RequiresContracts = append(a.RequiresContracts, r.Contract)
+	}
+	for _, c := range m.Contracts {
+		a.OwnedContracts = append(a.OwnedContracts, c.Key)
+	}
+	return a
 }
 
 // Input is everything Resolve reads.
@@ -581,6 +599,9 @@ func CheckInstalled(addons []Addon) (errs, warns []string) {
 				if it.AttachTo == "" || it.As == "" {
 					continue
 				}
+				if a, ok := chosen[it.AttachTo]; ok && (ad.Role == v3.RoleProvider || ad.Role == v3.RoleExtension) && a.owner != ad.Key && !mayPlugInto(ad, a.owner, sorted) {
+					errs = append(errs, fmt.Sprintf("addon %q navigation[%d].items[%d]: a %s only plugs into anchors of an addon or contract it requires; anchor %q belongs to %q", ad.Key, gi, ii, ad.Role, it.AttachTo, a.owner))
+				}
 				if a, ok := chosen[it.AttachTo]; ok && !a.a.AcceptsAs(it.As) {
 					errs = append(errs, fmt.Sprintf("addon %q navigation[%d].items[%d]: anchor %q (owner %q) does not accept as %q (accepts %s)",
 						ad.Key, gi, ii, it.AttachTo, a.owner, it.As, strings.Join(a.a.Accepts, "|")))
@@ -589,4 +610,28 @@ func CheckInstalled(addons []Addon) (errs, warns []string) {
 		}
 	}
 	return errs, warns
+}
+
+// mayPlugInto reports whether a successor may attach to an anchor owned by
+// owner: the owner is one of its required addons, or declares a contract the
+// successor requires.
+func mayPlugInto(ad Addon, owner string, all []Addon) bool {
+	for _, k := range ad.Requires {
+		if k == owner {
+			return true
+		}
+	}
+	for _, o := range all {
+		if o.Key != owner {
+			continue
+		}
+		for _, oc := range o.OwnedContracts {
+			for _, rc := range ad.RequiresContracts {
+				if oc == rc {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

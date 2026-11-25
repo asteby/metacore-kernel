@@ -373,3 +373,41 @@ func TestBuildFor_DropsHiddenAttachments(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckInstalled_SuccessorPlugsOnlyIntoRequired(t *testing.T) {
+	item := manifest.NavItem{Key: "s", Title: "x", AttachTo: "customers.customer", As: "tab", Model: "X"}
+	mk := func(role string, req []string, reqC []string) []Addon {
+		return append(anchoredFleet(), Addon{Key: "acme_pay", Role: role, Requires: req, RequiresContracts: reqC,
+			Groups: []manifest.NavGroup{{Title: "x", Items: []manifest.NavItem{item}}}})
+	}
+	owner := ""
+	for _, a := range anchoredFleet() {
+		for _, an := range a.Anchors {
+			if an.Key == "customers.customer" {
+				owner = a.Key
+			}
+		}
+	}
+	if owner == "" {
+		t.Fatal("fixture has no owner of customers.customer")
+	}
+	if errs, _ := CheckInstalled(mk("provider", nil, nil)); len(errs) != 1 || !strings.Contains(errs[0], "only plugs into anchors") {
+		t.Fatalf("not required: errs = %v", errs)
+	}
+	if errs, _ := CheckInstalled(mk("provider", []string{owner}, nil)); len(errs) != 0 {
+		t.Fatalf("required addon: errs = %v", errs)
+	}
+	if errs, _ := CheckInstalled(mk("", nil, nil)); len(errs) != 0 {
+		t.Fatalf("no role (legacy): errs = %v", errs)
+	}
+	owned := append(anchoredFleet(), Addon{Key: "acme_pay", Role: "extension", RequiresContracts: []string{"sales.order_flow"},
+		Groups: []manifest.NavGroup{{Title: "x", Items: []manifest.NavItem{item}}}})
+	for i := range owned {
+		if owned[i].Key == owner {
+			owned[i].OwnedContracts = []string{"sales.order_flow"}
+		}
+	}
+	if errs, _ := CheckInstalled(owned); len(errs) != 0 {
+		t.Fatalf("required contract: errs = %v", errs)
+	}
+}

@@ -120,9 +120,10 @@ func CheckRoles(f RoleFacts, cat RoleCatalog) (errs, warns []string) {
 	errs = append(errs, checkContracts(f)...)
 	errs, warns = checkImplements(f, cat, declared, errs, warns)
 
-	// R-D: successors have no navigation of their own.
-	if isSuccessor && f.NavigationGroups > 0 {
-		report(fmt.Sprintf("R-D: a %s has no navigation of its own (contributions.navigation); it enters through the contract's provider slot", role))
+	// R-D': successors have no navigation of their own; items that plug into an
+	// owner's anchor (attach_to) are allowed.
+	if isSuccessor && f.OwnNavItems > 0 {
+		report(fmt.Sprintf("R-D: a %s has no navigation of its own (contributions.navigation); it enters through the contract's provider slot or plugs items into an owner's anchor with attach_to", role))
 	}
 	// R-C: a provider only publishes capabilities of the contracts it implements.
 	if role == RoleProvider && len(f.Implements) > 0 {
