@@ -1,0 +1,15 @@
+{
+  "delivery_id": "6d6c5f5e-0000-4000-8000-000000000013",
+  "event": "visitor_erased",
+  "timestamp": 1764066600,
+  "contract": 2,
+  "channel": {
+    "id": "3e8b6a52-7c1d-4f90-b2a6-5d4c9e0f1a77",
+    "public_id": "sch_7K3M9Q2X8V4N1P6R5T0WABCDEF",
+    "name": "Tienda Ejemplo",
+    "kind": "org"
+  },
+  "user_ref": "4f1c9b7a2e8d3056a1b4c7d9e0f23a58",
+  "case_ids": ["9a7d3c1e-4b6f-4e2a-8c35-1f0e7d6b5a44"],
+  "erased_at": "2026-11-25T11:30:00Z"
+}

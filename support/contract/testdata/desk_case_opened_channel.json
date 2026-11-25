@@ -1,0 +1,41 @@
+{
+  "delivery_id": "6d6c5f5e-0000-4000-8000-000000000011",
+  "event": "case_opened",
+  "timestamp": 1764066000,
+  "contract": 2,
+  "case": {
+    "instance_id": "5c0f2a7e-8f43-4b52-9d1c-0a7e3b9f1d22",
+    "instance_name": "Tienda Ejemplo",
+    "company_name": "Ejemplo SA",
+    "folio": "TIENDA-000007",
+    "subject": "Where is my order",
+    "description": "The tracking page shows no updates.",
+    "priority": "normal",
+    "issue_url": "",
+    "issue_number": 0,
+    "opened_at": "2026-11-25T11:00:00Z",
+    "instance_context": {
+      "instance_id": "0b1d1f56-2f5b-4d0d-9a6b-6a1f5f7a0c01",
+      "name": "Acme OPS",
+      "product": "ops",
+      "version": "1.42.0",
+      "license_status": "active",
+      "plan": "pitsline",
+      "last_heartbeat": "2026-11-25T10:59:30Z"
+    },
+    "case_id": "9a7d3c1e-4b6f-4e2a-8c35-1f0e7d6b5a44",
+    "channel": {
+      "id": "3e8b6a52-7c1d-4f90-b2a6-5d4c9e0f1a77",
+      "public_id": "sch_7K3M9Q2X8V4N1P6R5T0WABCDEF",
+      "name": "Tienda Ejemplo",
+      "kind": "org"
+    },
+    "requester": {
+      "kind": "visitor",
+      "verified": true,
+      "display_name": "Ana Lopez",
+      "user_ref": "4f1c9b7a2e8d3056a1b4c7d9e0f23a58",
+      "email": "ana@example.com"
+    }
+  }
+}

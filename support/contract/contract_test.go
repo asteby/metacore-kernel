@@ -54,6 +54,13 @@ func TestFixturesRoundTrip(t *testing.T) {
 		"error_not_linked.json":                func() any { return &ErrorResponse{} },
 		"error_not_linked_v1.json":             func() any { return &ErrorResponse{} },
 		"error_contract_upgrade_required.json": func() any { return &ErrorResponse{} },
+		"error_channel_inactive.json":          func() any { return &ErrorResponse{} },
+		"desk_case_opened_channel.json":        func() any { return &DeskIngestEvent{} },
+		"thread_case.json":                     func() any { return &CaseView{} },
+		"thread_message.json":                  func() any { return &MessageView{} },
+		"embed_session_claims.json":            func() any { return &EmbedSessionClaims{} },
+		"public_profile.json":                  func() any { return &PublicProfile{} },
+		"visitor_erased.json":                  func() any { return &VisitorErasedEvent{} },
 	}
 	// Every fixture file except the vectors must be covered by the table.
 	entries, err := os.ReadDir("testdata")
@@ -280,6 +287,8 @@ func TestWireConstantsFrozen(t *testing.T) {
 		"already_resolved": 409, "state_changed": 409, "callback_mismatch": 400, "callback_invalid": 400,
 		"invalid_request": 400, "not_found": 404, "message_too_large": 413, "rate_limited": 429,
 		"insufficient_sparks": 402, "github_error": 502, "unavailable": 503, "internal": 500,
+		"origin_not_allowed": 403, "channel_inactive": 403, "session_expired": 401, "identity_invalid": 401,
+		"captcha_required": 428, "channel_quota_exceeded": 402, "channel_ai_cap_reached": 402, "desk_not_verified": 409,
 	}
 	for code, status := range codes {
 		if StatusForCode(code) != status || !IsKnownErrorCode(code) {
