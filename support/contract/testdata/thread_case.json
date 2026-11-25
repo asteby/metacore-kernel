@@ -1,0 +1,20 @@
+{
+  "case_id": "9a7d3c1e-4b6f-4e2a-8c35-1f0e7d6b5a44",
+  "folio": "TIENDA-000007",
+  "channel": "sch_7K3M9Q2X8V4N1P6R5T0WABCDEF",
+  "subject": "Where is my order",
+  "description": "The tracking page shows no updates.",
+  "status": "resolved",
+  "severity": "normal",
+  "hub_state": "synced",
+  "solution": "The carrier synced the tracking.",
+  "opened_at": "2026-11-25T11:00:00Z",
+  "updated_at": "2026-11-25T11:20:00Z",
+  "resolved_at": "2026-11-25T11:20:00Z",
+  "messages": [
+    {"id": "v:0f6e1a2b:cm_01", "author_type": "reporter", "author_name": "Ana Lopez", "body": "The tracking page shows no updates.", "created_at": "2026-11-25T11:00:00Z"},
+    {"id": "dm_01", "author_type": "agent", "author_name": "Support", "body": "Checking with the carrier.", "created_at": "2026-11-25T11:10:00Z"},
+    {"id": "6d6c5f5e-0000-4000-8000-000000000012", "author_type": "system", "body": "The carrier synced the tracking.", "created_at": "2026-11-25T11:20:00Z"}
+  ],
+  "messages_older_cursor": "c2VxOjE"
+}

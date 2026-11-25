@@ -1,0 +1,13 @@
+{
+  "version": 3,
+  "brand_color": "#0E7490",
+  "appearance": "auto",
+  "position": "bottom-right",
+  "logo_url": "https://tienda.ejemplo.mx/logo.png",
+  "default_locale": "es-MX",
+  "texts": {
+    "es-MX": {"launcher": "Te ayudamos?", "greeting": "Hola, en que podemos ayudarte?", "offline": "Estamos fuera de servicio."},
+    "en-US": {"launcher": "Need help?", "greeting": "Hi, how can we help?", "offline": "We are out of service."}
+  },
+  "fallback_contact": {"email": "soporte@ejemplo.mx", "url": "https://ejemplo.mx/ayuda"}
+}

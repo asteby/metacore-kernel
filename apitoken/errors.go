@@ -24,4 +24,8 @@ var (
 	ErrInvalidInput = errors.New("apitoken: invalid input")
 	// ErrDuplicateHash — a token with the same hash already exists.
 	ErrDuplicateHash = errors.New("apitoken: duplicate token hash")
+	// ErrPepperUnavailable — the Service has a pepper source but it returned
+	// no key, so a new token cannot be hashed (never silently downgraded to
+	// an unpeppered hash).
+	ErrPepperUnavailable = errors.New("apitoken: pepper unavailable")
 )

@@ -1,0 +1,10 @@
+{
+  "event": "issue_commented",
+  "ticket_folio": "TCK-0042",
+  "issue_url": "https://github.com/asteby/7leguas-v2/issues/12",
+  "issue_number": 12,
+  "comment": "Fixed in the next release.",
+  "solution": "Fixed in the next release.",
+  "delivery_id": "6d6c5f5e-0000-4000-8000-000000000001",
+  "timestamp": 1764065000
+}

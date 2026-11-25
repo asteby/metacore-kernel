@@ -1,0 +1,6 @@
+{
+  "ticket": {"folio": "TCK-0042", "subject": "Cannot print invoice", "description": "The print button does nothing.", "priority": "high"},
+  "summary": "User cannot print an invoice.",
+  "transcript": [{"role": "user", "text": "It does not print"}, {"role": "agent", "text": "Trying again"}],
+  "callback": {"url": "https://7l.example/api/support/hub-callback"}
+}

@@ -1,0 +1,15 @@
+{
+  "event": "desk_message",
+  "ticket_folio": "OPS-000123",
+  "issue_url": "",
+  "issue_number": 0,
+  "comment": "",
+  "solution": "",
+  "body": "Please send the branch id.",
+  "author_name": "Support",
+  "message_id": "dm_01",
+  "attachments": [{"url": "https://hub.example/files/c.png?sig=z", "name": "c.png", "content_type": "image/png", "size": 512}],
+  "delivery_id": "6d6c5f5e-0000-4000-8000-000000000003",
+  "timestamp": 1764065200,
+  "contract": 2
+}

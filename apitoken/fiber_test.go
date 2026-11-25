@@ -290,3 +290,32 @@ func TestHandler_SetScopes(t *testing.T) {
 		t.Fatalf("revoked: %d", st)
 	}
 }
+
+func TestMiddleware_NamespaceAndPepper(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	pepper := func() []byte { return pepperA }
+	svc := newSvc(store, newClock(), WithNamespace("sup"), WithPepper(pepper))
+	sk, tok, _ := svc.Issue(ctx, org, "support", KindSecret, []string{"support:write"}, nil)
+	legacy, _ := seedLegacy(t, store, KindSecret)
+	app := fiber.New()
+	app.Get("/x", Middleware(svc, ResolverConfig{}), func(c fiber.Ctx) error {
+		if p, ok := PrincipalFrom(c); !ok || p.TokenID != tok.ID {
+			return c.SendStatus(500)
+		}
+		return c.SendString("ok")
+	})
+	if status, _, _ := call(t, app, "GET", "/x", "Bearer "+sk, nil); status != 200 {
+		t.Fatalf("namespaced: %d", status)
+	}
+	// An un-namespaced token is not this service's token: Middleware (no
+	// Fallback) answers 401.
+	if status, _, _ := call(t, app, "GET", "/x", "Bearer "+legacy, nil); status != 401 {
+		t.Fatalf("legacy prefix under a namespace: %d", status)
+	}
+	other := fiber.New()
+	other.Get("/x", Middleware(newSvc(store, newClock(), WithNamespace("sup")), ResolverConfig{}), func(c fiber.Ctx) error { return c.SendString("ok") })
+	if status, _, _ := call(t, other, "GET", "/x", "Bearer "+sk, nil); status != 401 {
+		t.Fatalf("namespaced token without pepper: %d", status)
+	}
+}

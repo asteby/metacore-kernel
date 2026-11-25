@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -298,4 +299,24 @@ func advisoryKey(name string) int64 {
 	h := fnv.New64a()
 	h.Write([]byte("metacore:migrate:" + name))
 	return int64(h.Sum64())
+}
+
+// CountLive returns how many unexpired rows (pending or done) have a key
+// starting with prefix. Hosts that reuse the table for bounded workloads
+// (for example delivery de-duplication) use it to enforce a capacity. The
+// prefix is matched literally.
+func (s *GormStore) CountLive(ctx context.Context, prefix string) (int64, error) {
+	var n int64
+	err := s.db.WithContext(ctx).Raw(`SELECT COUNT(*) FROM `+GormStoreTable+
+		` WHERE key_hash LIKE ? ESCAPE '\' AND expires_at > ?`, likePrefix(prefix), s.utcNow()).Scan(&n).Error
+	if err != nil {
+		return 0, fmt.Errorf("idempotency: count live: %w", err)
+	}
+	return n, nil
+}
+
+// likePrefix escapes LIKE wildcards in p and appends the trailing wildcard.
+func likePrefix(p string) string {
+	r := strings.NewReplacer(`\`, `\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(p) + "%"
 }

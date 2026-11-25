@@ -1,0 +1,8 @@
+{
+  "issue_url": "",
+  "issue_number": 0,
+  "status": "open",
+  "case": {"id": "3f1c1b8e-6d1a-4a53-9a43-0f9a6f5b2c11", "folio": "OPS-000123", "channel": "desk"},
+  "link": {"source": "auto", "state": "pending"},
+  "callback_secret": "cbs_example_not_a_real_secret"
+}
