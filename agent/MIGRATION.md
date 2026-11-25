@@ -306,3 +306,25 @@ curated names. Hosts that keep their own tools can call
 `CRUDService.SearchCards`, `ListModelsCompact`, `DescribeModelCard` and
 `QueryTree`, or convert a validated tree to the legacy ports with
 `QueryTree.ToQueryRequest` / `ToAggregateRequest`.
+
+## Addendum: persistent approvals, tool traces, signed tools, full schemas
+
+- **Proposals that survive restarts.** `CopilotConfig.Proposals` is now the
+  `ProposalRepository` interface (`Put/Get/ListPending/SetStatus`). The default
+  stays the in-memory `GlobalProposalStore`; set `NewGormProposalStore(db)`
+  after `MigrateProposals(db)` (or run `ProposalsDDLPostgres`) to persist them
+  in `agent_mutation_proposals`.
+- **Tool traces.** `st := NewGormToolTraceStore(db, 256)` after
+  `MigrateToolTraces(db)` (or `ToolTracesDDLPostgres`); assign
+  `OrchestratorConfig.OnToolTrace = st.Hook()` and `defer st.Close()`. The hook
+  only enqueues; rows land in `agent_tool_traces`.
+- **`metacore-hmac` tool auth.** `ToolDefinition.AuthType = "metacore-hmac"`,
+  `AuthConfig = {"secret": "...", "delivery_id": "<optional>"}` signs
+  `timestamp + "." + delivery_id + "." + body` (HMAC-SHA256) and sends
+  `X-Hub-Signature: sha256=...`, `X-Hub-Timestamp`, `Idempotency-Key`. The
+  secret comes from the tool's config, never from the prompt.
+- **Full input schema.** `manifest.ToolDef.Schema` carries the v3 tool
+  `input_schema` as declared (and `InputSchema` its flattened params);
+  `ToolDefinition.Schema` makes `DynamicTool.Parameters()` hand the complete
+  JSON Schema (enum, items, nested objects) to the LLM. webhook tools also
+  project `method`/`timeout`; wasm/native tools keep using `ToolDef.Trigger`.

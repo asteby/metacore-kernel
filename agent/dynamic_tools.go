@@ -2,6 +2,9 @@ package agent
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,10 +12,12 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/asteby/metacore-kernel/agent/contextmgr"
+	"github.com/google/uuid"
 )
 
 // ToolType is the kind of integration a ToolDefinition describes.
@@ -53,13 +58,18 @@ type ToolDefinition struct {
 	Endpoint   string
 	Method     string
 	Headers    map[string]interface{}
-	AuthType   string // none, bearer, api_key, basic
+	AuthType   string // none, bearer, api_key, basic, metacore-hmac
 	AuthConfig map[string]interface{}
 
 	// Parameters is the body template for requests.
 	Parameters      map[string]interface{}
 	ResponseMapping map[string]interface{}
 	InputSchema     []ToolInputParam
+	// Schema is the FULL JSON Schema of the tool input (type object, properties,
+	// required, enum, items, nested objects). When set it is what the model sees,
+	// instead of the flat InputSchema projection; InputSchema still drives
+	// normalization and the REQUIERE hint.
+	Schema map[string]interface{}
 	BodyTemplate    string // JSON template with {{variables}}
 
 	Timeout    int // seconds
@@ -137,6 +147,9 @@ func (t *DynamicTool) Category() string {
 
 // Parameters genera el JSON Schema para el LLM basado en InputSchema o variables del template
 func (t *DynamicTool) Parameters() map[string]interface{} {
+	if len(t.tool.Schema) > 0 {
+		return fullSchemaParams(t.tool.Schema)
+	}
 	properties := make(map[string]interface{})
 	required := []string{}
 
@@ -439,7 +452,9 @@ func (t *DynamicTool) executeHTTP(ctx context.Context, params map[string]interfa
 	// 5. Auth
 	if tool.AuthType != "" && tool.AuthType != "none" && tool.AuthConfig != nil {
 		log.Printf("[DynamicTool] Applying auth type: %s", tool.AuthType)
-		applyAuth(req, tool.AuthType, tool.AuthConfig)
+		if err := applyAuthBody(req, tool.AuthType, tool.AuthConfig, []byte(bodyStr), time.Now()); err != nil {
+			return nil, err
+		}
 	}
 
 	// 6. Ejecutar
@@ -531,4 +546,84 @@ func applyAuth(req *http.Request, authType string, config map[string]interface{}
 			}
 		}
 	}
+}
+
+// AuthMetacoreHMAC is the AuthType that signs the request body with the
+// metacore Hub callback scheme (the one Hub and 7 Leguas already exchange):
+//
+//	X-Hub-Timestamp: <unix seconds>
+//	X-Hub-Signature: sha256=hex(HMAC-SHA256(secret, timestamp + "." + delivery_id + "." + body))
+//	Idempotency-Key: <delivery_id>
+//
+// AuthConfig carries {"secret": "...", "delivery_id": "<optional>"}; without a
+// delivery_id one is generated per call. The secret lives in the tool's
+// config, never in the prompt or in the model's parameters.
+const AuthMetacoreHMAC = "metacore-hmac"
+
+// Headers of the metacore-hmac scheme.
+const (
+	HeaderHubSignature = "X-Hub-Signature"
+	HeaderHubTimestamp = "X-Hub-Timestamp"
+	HeaderIdempotency  = "Idempotency-Key"
+)
+
+// HubSignature returns "sha256=<hex>" over timestamp + "." + deliveryID + "." + body.
+func HubSignature(secret, timestamp, deliveryID string, body []byte) string {
+	m := hmac.New(sha256.New, []byte(secret))
+	m.Write([]byte(timestamp + "." + deliveryID + "."))
+	m.Write(body)
+	return "sha256=" + hex.EncodeToString(m.Sum(nil))
+}
+
+// applyAuthBody applies the auth that needs the final body (metacore-hmac) and
+// delegates the body-less ones to applyAuth.
+func applyAuthBody(req *http.Request, authType string, config map[string]interface{}, body []byte, now time.Time) error {
+	if authType != AuthMetacoreHMAC {
+		applyAuth(req, authType, config)
+		return nil
+	}
+	secret, _ := config["secret"].(string)
+	if secret == "" {
+		return fmt.Errorf("metacore-hmac: auth_config.secret is required")
+	}
+	delivery, _ := config["delivery_id"].(string)
+	if delivery == "" {
+		delivery = uuid.NewString()
+	}
+	ts := strconv.FormatInt(now.Unix(), 10)
+	req.Header.Set(HeaderHubTimestamp, ts)
+	req.Header.Set(HeaderHubSignature, HubSignature(secret, ts, delivery, body))
+	req.Header.Set(HeaderIdempotency, delivery)
+	return nil
+}
+
+// fullSchemaParams returns the complete JSON Schema as the tool's parameters,
+// as an "object" schema whose "required" is a []string (the shape the
+// providers and AppendToolsSection read), so enum/items/nested objects reach
+// the LLM untouched. A schema without "type" is treated as an object.
+func fullSchemaParams(schema map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(schema)+1)
+	for k, v := range schema {
+		out[k] = v
+	}
+	if _, ok := out["type"]; !ok {
+		out["type"] = "object"
+	}
+	if _, ok := out["properties"]; !ok {
+		out["properties"] = map[string]interface{}{}
+	}
+	switch r := out["required"].(type) {
+	case []interface{}:
+		req := make([]string, 0, len(r))
+		for _, x := range r {
+			if s, ok := x.(string); ok {
+				req = append(req, s)
+			}
+		}
+		out["required"] = req
+	case []string:
+	default:
+		delete(out, "required")
+	}
+	return out
 }
