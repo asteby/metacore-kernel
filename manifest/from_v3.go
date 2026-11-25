@@ -106,6 +106,13 @@ func FromV3(m *v3.Manifest) Manifest {
 	// Key "kernel" → Manifest.Kernel; keys sdk / metacore-sdk /
 	// @asteby/metacore-sdk → Manifest.SDK. First match per field wins.
 	for _, r := range m.Compatibility.Requires {
+		if c := strings.TrimSpace(r.Contract); c != "" && strings.TrimSpace(r.Key) == "" {
+			out.ContractRequires = append(out.ContractRequires, ContractRequirement{
+				Contract: c, Range: strings.TrimSpace(r.Version), Optional: r.Optional,
+				Enables: append([]string(nil), r.Enables...),
+			})
+			continue
+		}
 		if peer, ok := peerRequirement(r); ok {
 			out.AddonRequires = append(out.AddonRequires, peer)
 			continue
@@ -167,6 +174,14 @@ func FromV3(m *v3.Manifest) Manifest {
 		}
 	}
 	out.Navigation = mapNavigation(m)
+	if m.ExtensionPoints != nil && len(m.ExtensionPoints.NavAnchors) > 0 {
+		out.NavAnchors = make([]v3.NavAnchor, len(m.ExtensionPoints.NavAnchors))
+		for i, a := range m.ExtensionPoints.NavAnchors {
+			a.Accepts = append([]string(nil), a.Accepts...)
+			a.Order = copyIntPtr(a.Order)
+			out.NavAnchors[i] = a
+		}
+	}
 	out.Routes = mapRoutes(m)
 	out.Settings = mapSettings(m.Settings)
 	out.Actions = mapActions(m)
@@ -554,9 +569,13 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// Composite indices have no ColumnDef equivalent. Unique ones ride
 				// Indices as informational entries (no Where: the DDL plane skips
 				// them) so the inbound target catalogue can offer them as match keys.
-				if idx.Unique && len(idx.Columns) > 1 {
+				// Non-unique composites ride Indices too (no Unique, no Where):
+				// the transactional DDL plane still skips them, and only
+				// dynamic.EnsureDeclaredIndexes builds them, CONCURRENTLY.
+				if len(idx.Columns) > 1 {
 					def.Indices = append(def.Indices, IndexDef{
-						Name: idx.Name, Columns: append([]string(nil), idx.Columns...), Unique: true,
+						Name: idx.Name, Columns: append([]string(nil), idx.Columns...),
+						Unique: idx.Unique, Method: idx.Method,
 					})
 				}
 				continue
@@ -1136,6 +1155,9 @@ func mapNavigation(m *v3.Manifest) []NavGroup {
 			Title:     g.Title,
 			Icon:      g.Icon,
 			Target:    g.Target,
+			Key:       g.Key,
+			Section:   g.Section,
+			Order:     copyIntPtr(g.Order),
 			Items:     mapNavItems(g.Items, modelTable),
 			Condition: mapCondition(g.Condition),
 		})
@@ -1155,7 +1177,17 @@ func mapNavItems(in []v3.NavItem, modelTable map[string]string) []NavItem {
 				url = "/m/" + table
 			}
 		}
+		page := ""
+		if it.AttachTo != "" {
+			page = it.Page
+		}
 		out = append(out, NavItem{
+			Key:         it.Key,
+			AttachTo:    it.AttachTo,
+			As:          it.As,
+			Fallback:    it.Fallback,
+			Order:       copyIntPtr(it.Order),
+			Page:        page,
 			Title:       it.Title,
 			URL:         url,
 			Icon:        it.Icon,

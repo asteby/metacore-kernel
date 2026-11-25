@@ -26,3 +26,23 @@ func TestIndexStatementsPartialUnique(t *testing.T) {
 		t.Fatalf("emitted an entry it must not:\n%s", got)
 	}
 }
+
+// Composite indices without a where (non-unique ones now carried by FromV3)
+// stay out of the transactional DDL plane: only EnsureDeclaredIndexes builds
+// them, CONCURRENTLY. A plain CREATE INDEX here would block writes.
+func TestIndexStatementsSkipCompositeNonUnique(t *testing.T) {
+	def := manifest.ModelDefinition{
+		TableName: "crm_leads",
+		Columns:   []manifest.ColumnDef{{Name: "customer_id", Type: "uuid"}},
+		Indices: []manifest.IndexDef{
+			{Name: "crm_leads_org_customer_idx", Columns: []string{"organization_id", "customer_id"}},
+			{Name: "crm_leads_org_customer_uq", Columns: []string{"organization_id", "customer_id"}, Unique: true},
+		},
+	}
+	for _, uniquePrefix := range []string{"uniq_", "idx_"} {
+		got := strings.Join(indexStatementsWithPrefix("public", def, true, uniquePrefix), "\n")
+		if strings.Contains(got, "crm_leads_org_customer") || strings.Contains(got, `"customer_id")`) {
+			t.Fatalf("composite declared index leaked into the DDL plane:\n%s", got)
+		}
+	}
+}

@@ -40,6 +40,9 @@ func (m *Manifest) DeclaredContracts() []capability.Declared {
 	out := make([]capability.Declared, 0, len(m.Contracts))
 	for _, c := range m.Contracts {
 		d := capability.Declared{Key: c.Key, Version: c.Version}
+		if c.Selection != nil && c.Selection.Cardinality == "many" {
+			d.Cardinality = capability.All
+		}
 		for _, op := range c.Operations {
 			k := capability.KindAction
 			if op.Kind == "query" {

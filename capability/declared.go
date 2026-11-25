@@ -66,6 +66,9 @@ type Declared struct {
 	// Version is the contract semver.
 	Version    string
 	Operations []DeclaredOperation
+	// Cardinality is the contract's selection cardinality (contracts[].
+	// selection.cardinality: "one" -> One, "many" -> All; empty = One).
+	Cardinality Cardinality
 }
 
 // Family is the first segment of the declared contract key.
@@ -243,6 +246,30 @@ func (r *Registry) Lookup(contractKey string) (d Declared, owner string, ok bool
 	defer r.mu.RUnlock()
 	e, ok := r.declared[contractKey]
 	return e.d, e.owner, ok
+}
+
+// Selectable returns the contract with that key in the shape Select and
+// Eligible take: a kernel contract as registered, or a contract DECLARED by an
+// installed addon (key, version and cardinality; no field schemas). It is what
+// lets a host pick the provider of a manifest-declared contract by market
+// (binding of the market > org default > single provider; one provider
+// required for cardinality One, else ErrAmbiguousProvider) without a
+// hard-coded catalog. A nil registry knows only the kernel contracts.
+func (r *Registry) Selectable(contractKey string) (Contract, bool) {
+	if c, ok := Lookup(contractKey); ok {
+		return c, true
+	}
+	d, _, ok := r.Lookup(contractKey)
+	if !ok {
+		return Contract{}, false
+	}
+	return Contract{Key: d.Key, Version: d.Version, Cardinality: d.Cardinality}, true
+}
+
+// Owner returns the addon that owns a declared contract in this scope.
+func (r *Registry) Owner(contractKey string) (string, bool) {
+	_, owner, ok := r.Lookup(contractKey)
+	return owner, ok
 }
 
 // InstalledContracts is what one installed addon declares: the input of

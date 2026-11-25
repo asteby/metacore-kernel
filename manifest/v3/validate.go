@@ -1548,7 +1548,14 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 		if _, err := semver.NewConstraint(r.Version); err != nil {
 			errs = append(errs, fmt.Sprintf("compatibility.requires[%d].version %q is not a valid semver range: %v", i, r.Version, err))
 		}
-		if r.Key == "" {
+		switch {
+		case r.Key != "" && r.Contract != "":
+			errs = append(errs, fmt.Sprintf("compatibility.requires[%d]: key and contract are exclusive (depend on an addon OR on a contract)", i))
+		case r.Contract != "":
+			if !contractKeyRe.MatchString(r.Contract) {
+				errs = append(errs, fmt.Sprintf("compatibility.requires[%d].contract %q must be \"<family>.<name>\" in lower snake case", i, r.Contract))
+			}
+		case r.Key == "":
 			errs = append(errs, fmt.Sprintf("compatibility.requires[%d].key is empty", i))
 		}
 	}
@@ -1629,7 +1636,9 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	// (the owner of a child model that lives in another manifest) must be one.
 	requiredAddons := make(map[string]struct{}, len(m.Compatibility.Requires))
 	for _, r := range m.Compatibility.Requires {
-		requiredAddons[r.Key] = struct{}{}
+		if r.Key != "" {
+			requiredAddons[r.Key] = struct{}{}
+		}
 	}
 	colsByModel := make(map[string]map[string]struct{}, len(m.Models))
 	for _, mod := range m.Models {
@@ -2126,6 +2135,8 @@ func validateDoc(raw []byte, opts Options, warnings *[]string) error {
 	errs = append(errs, validateEvents(&m, warnOnly)...)
 	validateRBACPermissionResolves(&m, warnOnly)
 	validateSlotsAndPrivate(&m, warnOnly)
+	errs = append(errs, validateNavAnchors(&m, func(msg string) { *warnings = append(*warnings, msg) })...)
+	*warnings = append(*warnings, contractConformanceWarnings(m.Contracts)...)
 	errs = append(errs, validateLoom(&m, warnOnly)...)
 	*warnings = append(*warnings, RoleMissingWarnings(m.RoleFacts())...)
 	roleErrs, roleWarns := CheckRoles(m.RoleFacts(), opts.RoleCatalog)

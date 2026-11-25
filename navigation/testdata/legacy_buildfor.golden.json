@@ -1,0 +1,163 @@
+[
+  {
+    "title": "sidebar.sales",
+    "icon": "ShoppingCart",
+    "target": "sidebar.sales",
+    "items": [
+      {
+        "title": "core.orders",
+        "url": "/m/sales_orders",
+        "owner": "core"
+      },
+      {
+        "title": "nav.pos.register",
+        "url": "/pos",
+        "owner": "addon:pos"
+      },
+      {
+        "title": "nav.pos.sessions",
+        "url": "/m/pos_sessions",
+        "model": "PosSession",
+        "owner": "addon:pos"
+      },
+      {
+        "title": "nav.channel_orders",
+        "url": "/m/channel_orders/",
+        "owner": "addon:storefront_api"
+      },
+      {
+        "title": "nav.storefront.tokens",
+        "url": "/addons/storefront_api/tokens",
+        "owner": "addon:storefront_api"
+      }
+    ]
+  },
+  {
+    "title": "sidebar.finance",
+    "icon": "Landmark",
+    "target": "sidebar.finance",
+    "items": [
+      {
+        "title": "nav.cash_registers",
+        "url": "/m/cash_registers",
+        "model": "CashRegister",
+        "owner": "addon:caja"
+      },
+      {
+        "title": "nav.caja.cuts",
+        "owner": "addon:caja",
+        "items": [
+          {
+            "title": "nav.caja.cuts.open",
+            "url": "/m/cash_cuts?f_status=eq:open",
+            "owner": "addon:caja"
+          }
+        ]
+      },
+      {
+        "title": "nav.fiscal.documents",
+        "url": "/m/fiscal_documents",
+        "model": "FiscalDocument",
+        "owner": "addon:fiscal_mexico"
+      },
+      {
+        "title": "nav.fiscal.pending",
+        "url": "/m/fiscal_documents",
+        "model": "FiscalDocument",
+        "permission": "fiscaldocument.stamp",
+        "filter": {
+          "status": "pending"
+        },
+        "owner": "addon:fiscal_mexico"
+      }
+    ]
+  },
+  {
+    "title": "nav.channel_orders",
+    "icon": "Inbox",
+    "items": [
+      {
+        "title": "nav.channel_orders",
+        "url": "/m/channel_orders",
+        "model": "ChannelOrder",
+        "owner": "addon:channel_orders"
+      }
+    ]
+  },
+  {
+    "title": "nav.link_catalog",
+    "icon": "Link",
+    "items": [
+      {
+        "title": "nav.products",
+        "url": "/m/products",
+        "model": "Product",
+        "owner": "addon:link_catalog"
+      },
+      {
+        "title": "nav.link_catalog.sync",
+        "url": "/addons/link_catalog/sync",
+        "owner": "addon:link_catalog"
+      }
+    ]
+  },
+  {
+    "title": "nav.mail",
+    "icon": "Mail",
+    "items": [
+      {
+        "title": "nav.messages",
+        "url": "/m/messages",
+        "model": "Message",
+        "owner": "addon:mail"
+      }
+    ]
+  },
+  {
+    "title": "nav.catalog",
+    "icon": "Package",
+    "items": [
+      {
+        "title": "nav.products",
+        "url": "/m/products",
+        "model": "Product",
+        "permission": "product.index",
+        "owner": "addon:products"
+      },
+      {
+        "title": "nav.products.board",
+        "url": "/m/products",
+        "model": "Product",
+        "view_type": "kanban",
+        "group_by": "status",
+        "owner": "addon:products"
+      }
+    ]
+  },
+  {
+    "title": "nav.tires",
+    "icon": "Circle",
+    "items": [
+      {
+        "title": "nav.tires",
+        "url": "/m/products",
+        "model": "Product",
+        "filter": {
+          "kind": "tire"
+        },
+        "owner": "addon:products-tires"
+      }
+    ]
+  },
+  {
+    "title": "sidebar.addons",
+    "icon": "Puzzle",
+    "items": [
+      {
+        "title": "nav.inbox",
+        "url": "/m/messages?folder=inbox",
+        "owner": "addon:link-inbox"
+      }
+    ]
+  }
+]

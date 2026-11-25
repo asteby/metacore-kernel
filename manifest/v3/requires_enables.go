@@ -97,7 +97,7 @@ func validateRequiresEnables(m *Manifest) []string {
 		}
 		where := fmt.Sprintf("compatibility.requires[%d].enables", i)
 		if !r.Optional {
-			errs = append(errs, fmt.Sprintf("%s is only valid with optional: true (a mandatory require %q already blocks the install when missing)", where, r.Key))
+			errs = append(errs, fmt.Sprintf("%s is only valid with optional: true (a mandatory require %q already blocks the install when missing)", where, r.Key+r.Contract))
 		}
 		seen := map[string]struct{}{}
 		for j, e := range r.Enables {

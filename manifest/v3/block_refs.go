@@ -98,7 +98,9 @@ func newBlockExpander(m *Manifest, foreign ForeignBlocks, placeholder bool) *blo
 		placeholder: placeholder,
 	}
 	for _, r := range m.Compatibility.Requires {
-		x.requires[r.Key] = struct{}{}
+		if r.Key != "" {
+			x.requires[r.Key] = struct{}{}
+		}
 	}
 	if m.Contributions != nil {
 		for _, b := range m.Contributions.Blocks {
