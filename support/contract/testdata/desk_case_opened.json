@@ -1,0 +1,30 @@
+{
+  "delivery_id": "6d6c5f5e-0000-4000-8000-000000000006",
+  "event": "case_opened",
+  "timestamp": 1764065500,
+  "contract": 2,
+  "case": {
+    "instance_id": "0b1d1f56-2f5b-4d0d-9a6b-6a1f5f7a0c01",
+    "instance_name": "Acme OPS",
+    "company_name": "Acme",
+    "folio": "OPS-000123",
+    "subject": "Stock mismatch",
+    "description": "Counts differ between branches.",
+    "priority": "high",
+    "issue_url": "",
+    "issue_number": 0,
+    "opened_at": "2026-11-25T10:00:06Z",
+    "severity": "high",
+    "instance_context": {
+      "instance_id": "0b1d1f56-2f5b-4d0d-9a6b-6a1f5f7a0c01",
+      "name": "Acme OPS",
+      "product": "ops",
+      "version": "1.42.0",
+      "customer": "Acme",
+      "license_status": "active",
+      "partner": "Partner Co",
+      "severity": "high",
+      "recent_incidents": [{"kind": "sync_failed", "message": "sync failed for [redacted]", "at": "2026-11-25T09:30:00Z"}]
+    }
+  }
+}

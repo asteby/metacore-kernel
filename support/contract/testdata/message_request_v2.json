@@ -1,0 +1,7 @@
+{
+  "ticket": {"folio": "OPS-000123"},
+  "author": {"type": "reporter", "name": "Ana"},
+  "body": "More details attached.",
+  "client_message_id": "cm_01HZX",
+  "attachments": [{"url": "https://ops-x.example/files/b.pdf?sig=y", "name": "b.pdf", "mime_type": "application/pdf", "size": 4096}]
+}

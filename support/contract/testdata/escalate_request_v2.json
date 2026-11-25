@@ -1,0 +1,13 @@
+{
+  "contract": 2,
+  "ticket": {"folio": "OPS-000123", "subject": "Stock mismatch", "description": "Counts differ between branches.", "priority": "high"},
+  "severity": "high",
+  "summary": "Stock differs by branch.",
+  "transcript": [
+    {"role": "user", "text": "Stock is wrong", "at": "2026-11-25T10:00:00Z"},
+    {"role": "ai", "text": "Escalating to support", "at": "2026-11-25T10:00:05Z"}
+  ],
+  "source": {"channel": "aby", "user_ref": "u_9f2c41", "locale": "en-US"},
+  "callback": {"url": "https://ops-x.example/api/support/hub-callback"},
+  "attachments": [{"ref": "att_1", "name": "screen.png", "mime": "image/png", "size": 2048}]
+}

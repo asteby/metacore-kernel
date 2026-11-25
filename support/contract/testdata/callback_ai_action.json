@@ -1,0 +1,14 @@
+{
+  "event": "ai_action",
+  "ticket_folio": "OPS-000123",
+  "issue_url": "",
+  "issue_number": 0,
+  "comment": "",
+  "solution": "",
+  "body": "Reconciled stock for branch 2.",
+  "author_name": "Aby",
+  "action": "reconcile_stock",
+  "delivery_id": "6d6c5f5e-0000-4000-8000-000000000005",
+  "timestamp": 1764065400,
+  "contract": 2
+}

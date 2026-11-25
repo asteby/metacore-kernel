@@ -1,0 +1,4 @@
+{
+  "link": {"source": "auto", "state": "pending", "enabled": true, "callback_url": "https://ops-x.example/api/support/hub-callback"},
+  "callback_secret": "cbs_example_not_a_real_secret"
+}

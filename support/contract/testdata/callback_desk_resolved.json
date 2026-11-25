@@ -1,0 +1,11 @@
+{
+  "event": "desk_resolved",
+  "ticket_folio": "OPS-000123",
+  "issue_url": "",
+  "issue_number": 0,
+  "comment": "",
+  "solution": "Counts were reconciled.",
+  "delivery_id": "6d6c5f5e-0000-4000-8000-000000000004",
+  "timestamp": 1764065300,
+  "contract": 2
+}

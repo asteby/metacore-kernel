@@ -1,0 +1,21 @@
+{
+  "note": "HMAC-SHA256 vectors computed with openssl and PHP hash_hmac, independent of Go. Secrets and ids are test values.",
+  "callback": [
+    {
+      "secret": "cb_secret_123",
+      "body": "{\"event\":\"issue_closed\",\"delivery_id\":\"d-1\",\"timestamp\":1700000000}",
+      "timestamp": 1700000000,
+      "delivery_id": "d-1",
+      "event": "issue_closed",
+      "signature": "sha256=4a4717e6d2f5fa70f259128d3cd4e0d7e27de3c87d30000d2f5b7eadf10dd305"
+    }
+  ],
+  "ack": [
+    {
+      "secret": "cb_secret_123",
+      "instance_id": "inst-123",
+      "ts": "1700000000",
+      "proof": "26d1dc99aec1a62999d2210e36ae522212edabd629dfc55d9f4c467bec2f1f83"
+    }
+  ]
+}
