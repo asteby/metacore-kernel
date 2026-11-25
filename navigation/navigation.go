@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/asteby/metacore-kernel/manifest"
+	v3 "github.com/asteby/metacore-kernel/manifest/v3"
 )
 
 // Item is the serialized sidebar entry returned to the frontend.
@@ -17,6 +18,9 @@ type Item struct {
 	Icon       string `json:"icon,omitempty"`
 	Model      string `json:"model,omitempty"`
 	Permission string `json:"permission,omitempty"`
+	// Page is the declarative page an attached item opens (manifest.NavItem.Page
+	// is only projected on attached items, so legacy entries never carry it).
+	Page string `json:"page,omitempty"`
 	// Filter is a static column→value filter the host applies when rendering
 	// this entry's list view. It lets an addon publish one nav entry per status
 	// (e.g. {"status":"open"} for an "Open" entry pointing at the same model),
@@ -96,7 +100,12 @@ func BuildFor(coreGroups []Group, contributions []Contribution, installed Instal
 			if !ng.Condition.Satisfied(installed) {
 				continue
 			}
-			items := toItems(filterByCondition(ng.Items, installed), c.AddonKey)
+			src := filterByCondition(ng.Items, installed)
+			plain := withoutHiddenAttachments(src)
+			if len(src) > 0 && len(plain) == 0 {
+				continue // every item plugs into an anchor and hides without it
+			}
+			items := toItems(plain, c.AddonKey)
 			if ng.Target != "" {
 				if idx, ok := byTarget[ng.Target]; ok {
 					result[idx].Items = append(result[idx].Items, items...)
@@ -118,6 +127,35 @@ func BuildFor(coreGroups []Group, contributions []Contribution, installed Instal
 		result = append(result, Group{Title: "sidebar.addons", Icon: "Puzzle", Items: orphans})
 	}
 	return result
+}
+
+// withoutHiddenAttachments is how the v1 merger, which knows no anchors,
+// degrades an anchored manifest: an item with attach_to behaves as if its
+// anchor were absent, so fallback "hide" (the default for action, panel and
+// setting) drops it and fallback "section" keeps it as a plain entry. Items
+// without attach_to (every legacy manifest) pass through untouched.
+func withoutHiddenAttachments(src []manifest.NavItem) []manifest.NavItem {
+	hidden := false
+	for _, it := range src {
+		if it.AttachTo != "" && !attachedFallsBack(it) {
+			hidden = true
+			break
+		}
+	}
+	if !hidden {
+		return src
+	}
+	out := make([]manifest.NavItem, 0, len(src))
+	for _, it := range src {
+		if it.AttachTo == "" || attachedFallsBack(it) {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+func attachedFallsBack(it manifest.NavItem) bool {
+	return v3.NavFallbackAllowed(it.As) && v3.EffectiveNavFallback(it.As, it.Fallback) == v3.NavFallbackSection
 }
 
 // filterByCondition drops the nav items whose condition the org does not
@@ -147,6 +185,7 @@ func toItems(src []manifest.NavItem, addonKey string) []Item {
 			Icon:       it.Icon,
 			Model:      it.Model,
 			Permission: it.Permission,
+			Page:       it.Page,
 			Filter:     it.Filter,
 			ViewType:   it.ViewType,
 			GroupBy:    it.GroupBy,
