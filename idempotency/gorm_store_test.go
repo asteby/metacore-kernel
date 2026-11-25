@@ -293,3 +293,27 @@ func readAll(resp *http.Response) string {
 		}
 	}
 }
+
+func TestGormStore_CountLive(t *testing.T) {
+	eachDialect(t, func(t *testing.T, db *gorm.DB) {
+		var clock atomic.Int64
+		clock.Store(time.Now().UnixNano())
+		s := newStore(t, db, func() time.Time { return time.Unix(0, clock.Load()) })
+		ctx := context.Background()
+		for _, k := range []string{"a_b:1", "a_b:2", "axb:1", "a%:1"} {
+			if r, err := s.Reserve(ctx, k, time.Minute); err != nil || !r.Acquired {
+				t.Fatalf("reserve %q = %+v, %v", k, r, err)
+			}
+		}
+		// '_' and '%' in the prefix are literal, not wildcards.
+		for prefix, want := range map[string]int64{"a_b:": 2, "a%:": 1, "a": 4, "zz": 0} {
+			if got, err := s.CountLive(ctx, prefix); err != nil || got != want {
+				t.Fatalf("CountLive(%q) = %d, %v; want %d", prefix, got, err, want)
+			}
+		}
+		clock.Add(int64(2 * time.Minute))
+		if got, _ := s.CountLive(ctx, "a"); got != 0 {
+			t.Fatalf("expired rows must not count, got %d", got)
+		}
+	})
+}
