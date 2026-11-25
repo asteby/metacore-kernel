@@ -738,7 +738,14 @@ type Compatibility struct {
 // when the addon relies on a primitive shipped in that release. All other keys
 // are installable peer addons.
 type Requirement struct {
-	Key      string `json:"key"`
+	// Key names a peer addon (or a reserved host range). Exclusive with
+	// Contract: exactly one of the two is set.
+	Key string `json:"key,omitempty"`
+	// Contract depends on a capability CONTRACT instead of a concrete addon
+	// ("payments.charge"): the installer resolves it to the contract's OWNER
+	// and the organization picks the provider (RFC SDK-0001 §6). Exclusive
+	// with Key; Version is then a range over the contract's semver.
+	Contract string `json:"contract,omitempty"`
 	Version  string `json:"version"`
 	Optional bool   `json:"optional,omitempty"`
 	Reason   string `json:"reason,omitempty"`
@@ -2428,10 +2435,22 @@ type WidgetCompare struct {
 
 // NavGroup is a sidebar group.
 type NavGroup struct {
-	Title  string    `json:"title"`
-	Icon   string    `json:"icon,omitempty"`
+	Title string `json:"title"`
+	Icon  string `json:"icon,omitempty"`
+	// Target is the legacy free-text host group ("sidebar.sales"). Deprecated
+	// in favour of Section; NavSectionForTarget maps one onto the other.
 	Target string    `json:"target,omitempty"`
 	Items  []NavItem `json:"items"`
+
+	// Key is the stable identity of the group, "<addon_key>.<name>" (layouts,
+	// telemetry, dedupe). Optional; empty = identified by position.
+	Key string `json:"key,omitempty"`
+	// Section is one of the closed sidebar sections (NavSections) or
+	// "settings". Replaces Target; when both are set they must agree.
+	Section string `json:"section,omitempty"`
+	// Order places the group inside its section (ascending). Nil =
+	// DefaultNavOrder.
+	Order *int `json:"order,omitempty"`
 
 	// Condition gates this contribution server-side: when set, the host only
 	// serves it to organizations where the predicate holds (e.g. another addon
@@ -2441,6 +2460,25 @@ type NavGroup struct {
 
 // NavItem is a single sidebar entry.
 type NavItem struct {
+	// Key identifies the item inside the addon (unique across its groups).
+	// Optional; required in practice to be addressable in dedupe events.
+	Key string `json:"key,omitempty"`
+	// AttachTo plugs this top-level item into a navigation anchor published by
+	// another (or the same) addon, "<section>.<name>" (e.g. "sales.order"),
+	// instead of making it an entry of the group. Requires As.
+	AttachTo string `json:"attach_to,omitempty"`
+	// As is how the item plugs into the anchor: tab|view|action|panel|filter|
+	// mode|setting (NavAs*). Only with AttachTo.
+	As string `json:"as,omitempty"`
+	// Fallback is what happens when the anchor is absent (owner not installed
+	// or not visible to the user): "section" (own entry in the group, in the
+	// anchor's section; only for tab|view|filter|mode) or "hide". Empty =
+	// DefaultNavFallback(As). Only with AttachTo.
+	Fallback string `json:"fallback,omitempty"`
+	// Order places the item inside its anchor or group (ascending). Nil =
+	// DefaultNavOrder.
+	Order *int `json:"order,omitempty"`
+
 	Title      string    `json:"title"`
 	URL        string    `json:"url,omitempty"`
 	Icon       string    `json:"icon,omitempty"`
@@ -3376,6 +3414,36 @@ type ExtensionPoints struct {
 	Events                  []PublishedEvent `json:"events,omitempty"`
 	SlotKinds               []PublishedSlot  `json:"slot_kinds,omitempty"`
 	ModelExtensionsAccepted []string         `json:"model_extensions_accepted,omitempty"`
+	// NavAnchors are the domain screens this addon OWNS and lets other addons
+	// plug into with contributions.navigation[].items[].attach_to (RFC
+	// SDK-0001 §4). See NavAnchor.
+	NavAnchors []NavAnchor `json:"nav_anchors,omitempty"`
+}
+
+// NavAnchor is a navigation anchor: a domain screen ("sales.order") with an
+// owner, a main resource and the kinds of plug-ins it accepts.
+type NavAnchor struct {
+	// Key is "<section>.<name>" (or a bare section for host anchors).
+	Key string `json:"key"`
+	// Section must equal the prefix of Key and be in the closed registry.
+	Section string `json:"section"`
+	// Title / Icon are the i18n key and lucide icon of the anchor entry.
+	Title string `json:"title"`
+	Icon  string `json:"icon,omitempty"`
+	// Model | Page | URL: exactly one, the main resource (list + detail).
+	Model string `json:"model,omitempty"`
+	Page  string `json:"page,omitempty"`
+	URL   string `json:"url,omitempty"`
+	// Order places the anchor inside its section (ascending). Nil =
+	// DefaultNavOrder.
+	Order *int `json:"order,omitempty"`
+	// Accepts lists the As values plug-ins may use. A minor only adds.
+	Accepts []string `json:"accepts"`
+	// Permission is the capability needed to see the anchor.
+	Permission string `json:"permission,omitempty"`
+	// Provisional marks a temporary owner: a definitive anchor with the same
+	// key wins over it (with a warning) instead of conflicting.
+	Provisional bool `json:"provisional,omitempty"`
 }
 
 // PublishedEvent declares an event this addon emits.

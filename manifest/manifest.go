@@ -71,7 +71,16 @@ type Manifest struct {
 	// runtime range). The installer resolves them (installer.CheckInstallable,
 	// ResolveOrder); a key ending in "?" or Optional=true is a soft dependency.
 	AddonRequires []AddonRequirement `json:"addon_requires,omitempty"`
-	Models        []Module           `json:"models,omitempty"`
+	// ContractRequires are the v3 compatibility.requires[].contract entries:
+	// dependencies on a capability contract, resolved by the installer to the
+	// contract's owner (installer.PlanContractInstall). Empty for a manifest
+	// that depends on addons only.
+	ContractRequires []ContractRequirement `json:"contract_requires,omitempty"`
+	// NavAnchors is the projection of v3 extension_points.nav_anchors: the
+	// domain screens this addon owns (see navigation.Resolve).
+	NavAnchors []v3.NavAnchor `json:"nav_anchors,omitempty"`
+
+	Models []Module `json:"models,omitempty"`
 	// Provides lists other addon keys this package satisfies for install /
 	// marketplace coverage (e.g. full "hr" provides "hr_lite"). Empty = none.
 	Provides []string `json:"provides,omitempty"`
@@ -522,6 +531,12 @@ type NavGroup struct {
 	Icon   string    `json:"icon"`
 	Target string    `json:"target,omitempty"`
 	Items  []NavItem `json:"items"`
+	// Key / Section / Order are the projection of v3 NavGroup.key/section/
+	// order (closed sidebar sections; see v3.NavSections). Empty for legacy
+	// manifests.
+	Key     string `json:"key,omitempty"`
+	Section string `json:"section,omitempty"`
+	Order   *int   `json:"order,omitempty"`
 	// Condition is the host projection of the v3 contribution condition: the
 	// group is only served to orgs satisfying it. See ConditionDef.
 	Condition *ConditionDef `json:"condition,omitempty"`
@@ -529,6 +544,18 @@ type NavGroup struct {
 
 // NavItem is a single sidebar entry. Model, if set, binds to a dynamic CRUD page.
 type NavItem struct {
+	// Key / AttachTo / As / Fallback / Order are the projection of the v3
+	// NavItem anchor fields (see v3.NavItem). Empty for legacy manifests.
+	Key      string `json:"key,omitempty"`
+	AttachTo string `json:"attach_to,omitempty"`
+	As       string `json:"as,omitempty"`
+	Fallback string `json:"fallback,omitempty"`
+	Order    *int   `json:"order,omitempty"`
+	// Page is the projection of v3 NavItem.page, carried ONLY on attached
+	// items (AttachTo set) so the served navigation of a legacy manifest stays
+	// byte-identical (FromV3 never projected page before).
+	Page string `json:"page,omitempty"`
+
 	Title      string    `json:"title"`
 	URL        string    `json:"url,omitempty"`
 	Icon       string    `json:"icon,omitempty"`
@@ -2246,6 +2273,16 @@ type CrossRuleDef struct {
 // AddonRequirement is one peer-addon dependency of a manifest: addon Key must
 // be installed at a version inside Range (a semver constraint; empty = any).
 // Optional dependencies never block an install, upgrade or uninstall.
+// ContractRequirement is a dependency on a capability contract (v3
+// compatibility.requires[].contract). Range is a semver range over the
+// contract version.
+type ContractRequirement struct {
+	Contract string   `json:"contract"`
+	Range    string   `json:"range,omitempty"`
+	Optional bool     `json:"optional,omitempty"`
+	Enables  []string `json:"enables,omitempty"`
+}
+
 type AddonRequirement struct {
 	Key      string `json:"key"`
 	Range    string `json:"range,omitempty"`

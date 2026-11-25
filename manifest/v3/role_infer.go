@@ -60,6 +60,9 @@ func (m *Manifest) RoleFacts() RoleFacts {
 	}
 	for _, r := range m.Compatibility.Requires {
 		k := strings.TrimSpace(r.Key)
+		if k == "" {
+			continue // a contract requirement names no addon
+		}
 		opt := r.Optional
 		if strings.HasSuffix(k, "?") {
 			k, opt = strings.TrimSuffix(k, "?"), true

@@ -935,10 +935,29 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "key",
         "version"
       ],
+      "oneOf": [
+        {
+          "required": [
+            "key"
+          ]
+        },
+        {
+          "required": [
+            "contract"
+          ]
+        }
+      ],
       "properties": {
+        "contract": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+          "description": "Depend on a capability contract instead of a concrete addon (exclusive with key). The installer installs the contract's owner; the organization picks the provider.",
+          "examples": [
+            "payments.charge"
+          ]
+        },
         "key": {
           "type": "string",
           "description": "Dependency identifier. 'kernel' is reserved for the host. Anything else references another addon by metadata.key.",
@@ -3535,7 +3554,31 @@
         },
         "target": {
           "type": "string",
-          "description": "Merges into an existing host group (e.g. 'sidebar.sales')."
+          "description": "Deprecated: legacy host group (e.g. 'sidebar.sales'); mapped to section."
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*\\.[a-z][a-z0-9_]*$",
+          "description": "Stable identity of the group, '<addon_key>.<name>'."
+        },
+        "section": {
+          "type": "string",
+          "enum": [
+            "home",
+            "sales",
+            "customers",
+            "catalog",
+            "operations",
+            "finance",
+            "communication",
+            "insights",
+            "settings"
+          ],
+          "description": "Closed sidebar section (replaces target; both must agree when set)."
+        },
+        "order": {
+          "type": "integer",
+          "description": "Ascending position (default 1000)."
         },
         "items": {
           "type": "array",
@@ -3556,6 +3599,41 @@
         "title"
       ],
       "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Identity of the item inside the addon."
+        },
+        "attach_to": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)?$",
+          "description": "Anchor key this top-level item plugs into (e.g. 'sales.order'). Requires as."
+        },
+        "as": {
+          "type": "string",
+          "enum": [
+            "tab",
+            "view",
+            "action",
+            "panel",
+            "filter",
+            "mode",
+            "setting"
+          ],
+          "description": "How the item plugs into the anchor."
+        },
+        "fallback": {
+          "type": "string",
+          "enum": [
+            "section",
+            "hide"
+          ],
+          "description": "What happens when the anchor is absent; default section for tab|view|filter|mode, hide otherwise."
+        },
+        "order": {
+          "type": "integer",
+          "description": "Ascending position (default 1000)."
+        },
         "title": {
           "type": "string"
         },
@@ -5224,6 +5302,90 @@
           "items": {
             "type": "string"
           }
+        },
+        "nav_anchors": {
+          "type": "array",
+          "description": "Domain screens this addon owns; other addons plug items into them with attach_to.",
+          "items": {
+            "$ref": "#/$defs/NavAnchor"
+          }
+        }
+      }
+    },
+    "NavAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "section",
+        "title",
+        "accepts"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)?$",
+          "examples": [
+            "sales.order"
+          ]
+        },
+        "section": {
+          "type": "string",
+          "enum": [
+            "home",
+            "sales",
+            "customers",
+            "catalog",
+            "operations",
+            "finance",
+            "communication",
+            "insights",
+            "settings"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "page": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "order": {
+          "type": "integer",
+          "description": "Ascending position (default 1000)."
+        },
+        "accepts": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "tab",
+              "view",
+              "action",
+              "panel",
+              "filter",
+              "mode",
+              "setting"
+            ]
+          }
+        },
+        "permission": {
+          "type": "string"
+        },
+        "provisional": {
+          "type": "boolean",
+          "default": false,
+          "description": "Temporary owner: a definitive anchor with the same key wins over it."
         }
       }
     },
