@@ -1,0 +1,13 @@
+{
+  "version": 4,
+  "brand_color": "#0E7490",
+  "appearance": "light",
+  "position": "bottom-right",
+  "default_locale": "en-US",
+  "texts": {
+    "en-US": {"launcher": "Need help?", "greeting": "Hi, how can we help?", "offline": "We are out of service."}
+  },
+  "display_mode": "inline",
+  "inline_target": "#support-panel",
+  "inline_height": 640
+}

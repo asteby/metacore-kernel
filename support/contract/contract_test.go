@@ -60,6 +60,8 @@ func TestFixturesRoundTrip(t *testing.T) {
 		"thread_message.json":                  func() any { return &MessageView{} },
 		"embed_session_claims.json":            func() any { return &EmbedSessionClaims{} },
 		"public_profile.json":                  func() any { return &PublicProfile{} },
+		"public_profile_inline.json":           func() any { return &PublicProfile{} },
+		"public_profile_push.json":             func() any { return &PublicProfile{} },
 		"visitor_erased.json":                  func() any { return &VisitorErasedEvent{} },
 	}
 	// Every fixture file except the vectors must be covered by the table.
