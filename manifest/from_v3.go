@@ -569,9 +569,13 @@ func mapModels(in []v3.Model) []ModelDefinition {
 				// Composite indices have no ColumnDef equivalent. Unique ones ride
 				// Indices as informational entries (no Where: the DDL plane skips
 				// them) so the inbound target catalogue can offer them as match keys.
-				if idx.Unique && len(idx.Columns) > 1 {
+				// Non-unique composites ride Indices too (no Unique, no Where):
+				// the transactional DDL plane still skips them, and only
+				// dynamic.EnsureDeclaredIndexes builds them, CONCURRENTLY.
+				if len(idx.Columns) > 1 {
 					def.Indices = append(def.Indices, IndexDef{
-						Name: idx.Name, Columns: append([]string(nil), idx.Columns...), Unique: true,
+						Name: idx.Name, Columns: append([]string(nil), idx.Columns...),
+						Unique: idx.Unique, Method: idx.Method,
 					})
 				}
 				continue

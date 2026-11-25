@@ -1362,9 +1362,12 @@ type ModelDefinition struct {
 	// are NOT part of Columns, so DDL, validation and forms never see them; only
 	// the derived table metadata (dynamic.DeriveTableColumns) appends them.
 	DisplayColumns []ColumnDef `json:"display_columns,omitempty"`
-	// Indices carries the v3 model's PARTIAL indices (those with a Where). Plain
-	// single-column indices keep riding ColumnDef.Index/Unique; only entries with
-	// a Where are emitted from here (see IndexDef).
+	// Indices carries the v3 model's PARTIAL indices (those with a Where) and
+	// its COMPOSITE indices (unique or not, without a Where). Plain
+	// single-column indices keep riding ColumnDef.Index/Unique; the
+	// transactional DDL plane only emits the entries with a Where. Composite
+	// non-unique entries are built only by dynamic.EnsureDeclaredIndexes
+	// (CREATE INDEX CONCURRENTLY, outside any transaction).
 	Indices []IndexDef `json:"indices,omitempty"`
 	// AttributeClasses carries v3 Model.attribute_classes (extension tables
 	// only): named sets of the table's columns a category can be assigned.
