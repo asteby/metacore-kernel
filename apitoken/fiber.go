@@ -42,11 +42,6 @@ func BearerToken(header string) string {
 	return strings.TrimSpace(tok)
 }
 
-// looksLikeAPIToken reports whether s carries one of the token prefixes.
-func looksLikeAPIToken(s string) bool {
-	return strings.HasPrefix(s, "pk_") || strings.HasPrefix(s, "sk_") || strings.HasPrefix(s, "pt_")
-}
-
 // PrincipalOf converts an authenticated token into the gateway principal:
 // kind token, the token's scopes and id, and its organization (uuid.Nil for a
 // platform token — the host resolves it by domain).
@@ -74,7 +69,7 @@ func NewPrincipalResolver(svc *Service, cfg ResolverConfig) apiroute.PrincipalRe
 	}
 	return func(c fiber.Ctx) (apiroute.Principal, error) {
 		raw := BearerToken(c.Get(fiber.HeaderAuthorization))
-		if !looksLikeAPIToken(raw) {
+		if !svc.looksLikeToken(raw) {
 			if cfg.Fallback != nil {
 				return cfg.Fallback(c)
 			}

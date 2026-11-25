@@ -52,15 +52,16 @@ const (
 const TableName = "metacore_api_tokens"
 
 // APIToken is one issued token. OrganizationID is nil only for KindPlatform.
-// The plaintext is never stored: TokenHash is its SHA-256 (hex) and Prefix
-// its first PrefixLen characters, for display.
+// The plaintext is never stored: TokenHash is "<scheme>$<hex>" (sha256 or
+// hmac-sha256; a bare 64-char hex is the legacy SHA-256) and Prefix its
+// leading characters, for display.
 type APIToken struct {
 	ID                 uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
 	OrganizationID     *uuid.UUID `gorm:"type:uuid;index:idx_mc_api_tokens_org" json:"organization_id,omitempty"`
 	Name               string     `gorm:"size:120;not null" json:"name"`
 	Kind               Kind       `gorm:"size:20;not null" json:"kind"`
 	Prefix             string     `gorm:"size:16;not null" json:"prefix"`
-	TokenHash          string     `gorm:"size:64;not null;uniqueIndex:idx_mc_api_tokens_hash" json:"-"`
+	TokenHash          string     `gorm:"size:96;not null;uniqueIndex:idx_mc_api_tokens_hash" json:"-"`
 	Scopes             []string   `gorm:"serializer:json;type:jsonb" json:"scopes"`
 	Status             Status     `gorm:"size:20;not null;default:active" json:"status"`
 	ExpiresAt          *time.Time `json:"expires_at,omitempty"`
