@@ -315,6 +315,7 @@ For a step-by-step walk-through see
 | `config/`         | Org-scoped config getters (`OrgCurrencyGetter`) + Fiber-context helpers       |
 | `database/`       | GORM helpers incl. the `RegisterCurrencyDefaultCallback` BeforeCreate hook    |
 | `idempotency/`    | Idempotency-key middleware; in-memory or durable (`GormStore`) store with in-flight locking |
+| `support/dedupe/` | Durable `contract.DeliveryDeduper` over `idempotency.GormStore` (see [`docs/support-dedupe.md`](./docs/support-dedupe.md)) |
 | `outbox/`         | Durable background jobs: transactional enqueue, SKIP LOCKED workers, retries, dead-letter |
 | `i18n/`           | String-bundle loading + locale resolution                                     |
 | `vector/`         | pgvector helpers for embedding columns                                        |

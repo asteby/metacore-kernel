@@ -11,7 +11,7 @@
 //   - pure helpers: HMAC signing and verification of callbacks with a +-300 s
 //     window (SignCallback, VerifyCallback), the link acknowledgement proof,
 //     the ticket folio and message id validators, and the DeliveryDeduper port
-//     (with an in-memory implementation) that receivers use to drop repeated
+//     (in-memory here; durable in support/dedupe) that receivers use to drop repeated
 //     delivery ids.
 //
 // Versioning: see README.md. Within a contract version only optional fields
