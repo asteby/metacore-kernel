@@ -171,12 +171,12 @@ func (m *MemoryStore) DeletePending(_ context.Context, org, system, entity, ext 
 	return nil
 }
 
-func (m *MemoryStore) DuePending(_ context.Context, now time.Time, limit int) ([]PendingEnvelope, error) {
+func (m *MemoryStore) DuePending(_ context.Context, org, system string, now time.Time, limit int) ([]PendingEnvelope, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []PendingEnvelope
 	for _, p := range m.pending {
-		if !p.NextAttempt.After(now) {
+		if p.Org == org && p.System == system && !p.NextAttempt.After(now) {
 			out = append(out, p)
 		}
 	}

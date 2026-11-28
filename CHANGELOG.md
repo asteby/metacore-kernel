@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **legacybridge: `PendingStore.DuePending` y `Applier.RetryWaiting` son por
+  origen `(org, system)`.** La cola global ordenada por `next_attempt` dejaba al
+  frente los pendientes de un origen sin configuración y, con 200 o más, los de
+  las demás organizaciones no se reintentaban. Índice nuevo
+  `idx_bridge_pending_org_due (org_id, system, next_attempt)` en `Schema`.
+
 ### Added
 
 - `support/contract` (**modos de presentacion del embed en `PublicProfile`**; ESTRICTAMENTE aditivo y opcional: un perfil existente sigue valido y se re-codifica igual, `ContractCurrent` sigue en 2; campos y constantes exportados nuevos, por eso minor): `display_mode` (`DisplayFloating|DisplayInline|DisplayPush`, vacio = floating), `inline_target` (selector CSS simple con lista cerrada de caracteres, maximo 120, sin comillas, `<`, `;`, barra invertida ni `javascript:`; solo lo resuelve el loader del cliente), `inline_height` (320-1200), `panel_width` (280-720), `offset` (0-120), `launcher_shape` (`LauncherRound|LauncherRounded|LauncherSquare`) y `launcher_label` (<= 60). Errores agregados en `ProfileErrors`. Fixtures `public_profile_inline` y `public_profile_push`. Pruebas: `TestPublicProfileValidate`, `TestPublicProfileDisplayModes`.
