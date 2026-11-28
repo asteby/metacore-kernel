@@ -466,13 +466,14 @@ func (a *Applier) clearPending(ctx context.Context, org string, env Envelope) er
 	return a.cfg.Store.DeletePending(ctx, org, env.Source, env.Entity, env.ExternalID)
 }
 
-// RetryWaiting reintenta los envelopes en espera que ya vencieron. Devuelve
-// los resultados; los que vencen MaxWait van a revisión.
-func (a *Applier) RetryWaiting(ctx context.Context, limit int) ([]Result, error) {
+// RetryWaiting reintenta los envelopes en espera de (org, system) que ya
+// vencieron. Devuelve los resultados; los que vencen MaxWait van a revisión.
+// El host lo llama por cada origen configurado.
+func (a *Applier) RetryWaiting(ctx context.Context, org, system string, limit int) ([]Result, error) {
 	if limit <= 0 {
 		limit = 200
 	}
-	due, err := a.cfg.Store.DuePending(ctx, a.cfg.Now().UTC(), limit)
+	due, err := a.cfg.Store.DuePending(ctx, org, system, a.cfg.Now().UTC(), limit)
 	if err != nil {
 		return nil, err
 	}
