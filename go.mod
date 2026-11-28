@@ -16,7 +16,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.53
 	github.com/pganalyze/pg_query_go/v6 v6.2.5
 	github.com/pgvector/pgvector-go v0.4.1
-	github.com/pressly/goose/v3 v3.30.1
+	github.com/pressly/goose/v3 v3.30.2
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
